@@ -1,7 +1,8 @@
 // Package supervisor is PID 1 in every workload container. It runs one runner
-// process per slot over the local runner protocol, captures each attempt's
-// output, kills a slot's process group on cancellation and reports to the
-// agent over the container's ContainerLink socket.
+// process per slot over the local runner protocol, or a pod's command,
+// captures output, kills a slot's process group on cancellation and reports
+// to the agent over the container's ContainerLink socket. It serves the
+// control API: processes, files, shells, SSH and port tunnels.
 package supervisor
 
 import (
@@ -66,8 +67,11 @@ type Supervisor struct {
 	loaded map[*slot]bool
 	runs   chan *hostproto.RunAttempt
 	// queued maps attempts waiting for a slot to whether they were cancelled.
-	queued         map[string]bool
-	ready          bool
+	queued map[string]bool
+	ready  bool
+	// readySlots is the slot count reported ready: every runner slot, or a
+	// pod's one.
+	readySlots     int32
 	loadFailedSent bool
 	draining       bool
 
@@ -151,6 +155,34 @@ func (s *Supervisor) work(ctx context.Context) error {
 	s.mu.Lock()
 	cfg, slots, runs := s.configure, s.slots, s.runs
 	s.mu.Unlock()
+	if root := cfg.GetPod().GetRoot(); root != "" {
+		if err := enterRoot(root); err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+	}
+	if path := cfg.GetControlSocket(); path != "" {
+		ctl, err := newControl(s.log, s.children, cfg.GetPod().GetSsh())
+		if err == nil {
+			err = ctl.listen(ctx, path)
+		}
+		if err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "SupervisorStartError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+		defer ctl.close()
+	}
+	if cfg.GetDocker() {
+		docker, err := s.startDocker(ctx)
+		if err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "DockerStartError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+		defer docker.stop()
+	}
+	if cfg.GetPod() != nil {
+		return s.runPod(ctx, cfg.GetPod())
+	}
 	s.log.Info("starting runners", "slots", len(slots), "handler", cfg.GetHandler(), "http", cfg.GetHttp() != nil)
 	var front *httpFront
 	if cfg.GetHttp() != nil {
@@ -303,9 +335,14 @@ func (s *Supervisor) onConfigure(c *hostproto.Configure) {
 	if s.configure != nil || s.draining {
 		return
 	}
-	n := max(1, int(c.GetSlots()))
 	s.configure = c
 	s.redact = newRedactor(c.GetSecretEnv())
+	if c.GetPod() != nil {
+		// A pod runs its command instead of runner slots.
+		close(s.configured)
+		return
+	}
+	n := max(1, int(c.GetSlots()))
 	s.runs = make(chan *hostproto.RunAttempt, n)
 	for range n {
 		sl := &slot{sup: s, buf: make([]byte, readChunk), reload: make(chan struct{}, 1)}
@@ -334,7 +371,7 @@ func (s *Supervisor) onRun(run *hostproto.RunAttempt) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := run.GetAttemptId()
-	if s.configure == nil || s.draining || s.configure.GetHttp() != nil {
+	if s.configure == nil || s.draining || s.configure.GetHttp() != nil || s.configure.GetPod() != nil {
 		s.out.push(finishedMessage(crashed(id, "NotAccepting", "the supervisor is not accepting attempts")))
 		return
 	}
@@ -417,7 +454,7 @@ func (s *Supervisor) slotLoaded(sl *slot) {
 	defer s.mu.Unlock()
 	s.loaded[sl] = true
 	if !s.ready && len(s.loaded) == len(s.slots) {
-		s.ready = true
+		s.ready, s.readySlots = true, int32(len(s.slots)) //nolint:gosec // slots come from an int32
 		s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{
 			Ready: &hostproto.SlotsReady{Slots: int32(len(s.slots))}, //nolint:gosec // slots come from an int32
 		}})
@@ -449,7 +486,7 @@ func (s *Supervisor) readyMessage() *hostproto.SupervisorMessage {
 	// outcomes only for attempts it counts as running.
 	running = append(running, s.out.unreportedAttempts()...)
 	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{
-		Slots:           int32(len(s.slots)), //nolint:gosec // slots come from an int32
+		Slots:           s.readySlots,
 		RunningAttempts: running,
 	}}}
 }

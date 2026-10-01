@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/apitypes" //nolint:depguard // the control API bodies are the public schemas; the rule denies internal/api by prefix
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -125,7 +125,7 @@ func (c *control) routes() http.Handler {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			c.handlers.Add(1)
 			defer c.handlers.Done()
-			if err := h(w, r); err != nil {
+			if err := h(w, r); err != nil && !errors.Is(err, errHijacked) {
 				writeError(w, err)
 			}
 		})

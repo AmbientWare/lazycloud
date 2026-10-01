@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/apitypes" //nolint:depguard // the control API bodies are the public schemas; the rule denies internal/api by prefix
 )
 
 const (
@@ -78,7 +78,7 @@ func (c *control) listFiles(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) //nolint:gosec // the control API reads any path in the container
 	if err != nil {
 		return fileError(err)
 	}
@@ -88,7 +88,7 @@ func (c *control) listFiles(w http.ResponseWriter, r *http.Request) error {
 		writeJSON(w, http.StatusOK, list)
 		return nil
 	}
-	dir, err := os.Open(path)
+	dir, err := os.Open(path) //nolint:gosec // see above
 	if err != nil {
 		return fileError(err)
 	}
@@ -105,10 +105,10 @@ func (c *control) listFiles(w http.ResponseWriter, r *http.Request) error {
 	}
 	for _, name := range names {
 		child := filepath.Join(path, name)
-		info, err := os.Stat(child)
+		info, err := os.Stat(child) //nolint:gosec // see above
 		if err != nil {
 			// A link whose target is gone is still an entry.
-			info, err = os.Lstat(child)
+			info, err = os.Lstat(child) //nolint:gosec // see above
 		}
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -127,7 +127,7 @@ func (c *control) statFile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) //nolint:gosec // the control API reads any path in the container
 	if err != nil {
 		return fileError(err)
 	}
@@ -138,7 +138,7 @@ func (c *control) statFile(w http.ResponseWriter, r *http.Request) error {
 // remove deletes path, which must be a directory when dir is set and must
 // not be one otherwise. A missing path is not an error.
 func remove(path string, dir bool) error {
-	info, err := os.Lstat(path)
+	info, err := os.Lstat(path) //nolint:gosec // and deletes any
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -151,9 +151,9 @@ func remove(path string, dir bool) error {
 	case !dir && info.IsDir():
 		return apiErr(http.StatusConflict, apitypes.Conflict, "%s is a directory", path)
 	case dir:
-		err = os.RemoveAll(path)
+		err = os.RemoveAll(path) //nolint:gosec // see above
 	default:
-		err = os.Remove(path)
+		err = os.Remove(path) //nolint:gosec // see above
 	}
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fileError(err)
@@ -198,11 +198,11 @@ func (c *control) createDirectory(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	mode := fileMode(bits)
-	if err := os.MkdirAll(path, mode); err != nil {
+	if err := os.MkdirAll(path, mode); err != nil { //nolint:gosec // the control API writes any path in the container
 		return fileError(err)
 	}
 	// MkdirAll applies the umask and leaves an existing directory alone.
-	if err := os.Chmod(path, mode); err != nil {
+	if err := os.Chmod(path, mode); err != nil { //nolint:gosec // see above
 		return fileError(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -224,7 +224,7 @@ func (c *control) downloadFile(w http.ResponseWriter, r *http.Request) error {
 			return invalid("truncate must be true or false")
 		}
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // the control API reads any path in the container
 	if err != nil {
 		return fileError(err)
 	}
@@ -288,7 +288,7 @@ func (c *control) uploadFile(w http.ResponseWriter, r *http.Request) error {
 // writeFileAtomic writes body to a temporary file beside path and renames it
 // over path, creating the parent directories.
 func writeFileAtomic(path string, body io.Reader, mode os.FileMode) error {
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
+	if info, err := os.Stat(path); err == nil && info.IsDir() { //nolint:gosec // see above
 		return apiErr(http.StatusConflict, apitypes.Conflict, "%s is a directory", path)
 	}
 	dir := filepath.Dir(path)
@@ -299,7 +299,7 @@ func writeFileAtomic(path string, body io.Reader, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("create upload file: %w", err)
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
+	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // see above
 	defer func() { _ = tmp.Close() }()
 	if _, err := io.Copy(tmp, body); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -314,7 +314,7 @@ func writeFileAtomic(path string, body io.Reader, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close upload: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil { //nolint:gosec // see above
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
@@ -343,7 +343,7 @@ func eachTextFile(root string, fn func(path string, info fs.FileInfo, content st
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxSearchedFile {
 			return nil //nolint:nilerr // vanished and unreadable entries are skipped
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // see above
 		if err != nil || !utf8.Valid(data) {
 			return nil //nolint:nilerr // see above
 		}
@@ -426,6 +426,7 @@ func (c *control) replaceInFiles(w http.ResponseWriter, r *http.Request) error {
 			return true, nil
 		}
 		// Rewriting in place keeps the file's owner, mode and links.
+		//nolint:gosec // the control API writes any path in the container
 		if err := os.WriteFile(path, []byte(strings.ReplaceAll(content, req.Pattern, req.Replacement)), info.Mode()); err != nil {
 			return false, fmt.Errorf("rewrite %s: %w", path, err)
 		}
@@ -439,4 +440,3 @@ func (c *control) replaceInFiles(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, http.StatusOK, replaced)
 	return nil
 }
-
