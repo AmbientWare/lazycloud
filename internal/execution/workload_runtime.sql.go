@@ -12,7 +12,7 @@ import (
 )
 
 const containerAuthority = `-- name: ContainerAuthority :one
-select c.state, c.workspace_id, w.name as workspace_name
+select c.state, c.workspace_id, w.name as workspace_name, w.state as workspace_state
 from containers c
 join workspaces w on w.id = c.workspace_id
 where c.id = $1 and c.host_id = $2
@@ -24,16 +24,22 @@ type ContainerAuthorityParams struct {
 }
 
 type ContainerAuthorityRow struct {
-	State         string
-	WorkspaceID   uuid.UUID
-	WorkspaceName string
+	State          string
+	WorkspaceID    uuid.UUID
+	WorkspaceName  string
+	WorkspaceState string
 }
 
 // The container and its workspace, when it is assigned to the host.
 func (q *Queries) ContainerAuthority(ctx context.Context, arg ContainerAuthorityParams) (ContainerAuthorityRow, error) {
 	row := q.db.QueryRow(ctx, containerAuthority, arg.ID, arg.HostID)
 	var i ContainerAuthorityRow
-	err := row.Scan(&i.State, &i.WorkspaceID, &i.WorkspaceName)
+	err := row.Scan(
+		&i.State,
+		&i.WorkspaceID,
+		&i.WorkspaceName,
+		&i.WorkspaceState,
+	)
 	return i, err
 }
 

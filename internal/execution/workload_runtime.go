@@ -36,7 +36,9 @@ func (e *Execution) ContainerPrincipal(ctx context.Context, host compute.HostID,
 	}
 	p := identity.ContainerPrincipal{
 		Container: uuid.UUID(container),
-		Workspace: identity.Workspace{ID: identity.WorkspaceID(row.WorkspaceID), Name: row.WorkspaceName},
+		Workspace: identity.Workspace{
+			ID: identity.WorkspaceID(row.WorkspaceID), Name: row.WorkspaceName, State: identity.WorkspaceState(row.WorkspaceState),
+		},
 	}
 	if task == nil {
 		return p, nil

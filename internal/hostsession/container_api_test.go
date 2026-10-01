@@ -232,3 +232,16 @@ select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id
 		t.Fatalf("the container with the unreadable secret: %s %q", state, message)
 	}
 }
+
+func TestContainerAPIRefusesADeletingWorkspace(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	_, container := h.startingContainer(host)
+	if _, err := h.pool.Exec(t.Context(), "update workspaces set state = 'deleting', deletion_requested_at = now() where name = 'ws'"); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := call(ctx, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil)
+	if err != nil || reply.status != 409 || !bytes.Contains(reply.body, []byte("being deleted")) {
+		t.Fatalf("a deleting workspace: %d %s %v", reply.status, reply.body, err)
+	}
+}

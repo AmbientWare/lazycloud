@@ -1,7 +1,9 @@
-// Package notifications delivers what owners recorded for users to receive.
-// Task callbacks are rows execution writes in the transaction of each retry
-// or terminal transition; delivery here never changes a task.
-package notifications
+// Package callbacks delivers task callbacks: rows execution writes in the
+// transaction of each retry or terminal transition, posted signed to the
+// release's callback_url. Delivery never changes a task. It is apart from
+// notifications because signing reads workspace secrets, which depend on
+// identity, and identity sends its email through notifications.
+package callbacks
 
 import (
 	"bytes"

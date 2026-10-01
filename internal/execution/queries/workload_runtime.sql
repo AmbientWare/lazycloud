@@ -1,6 +1,6 @@
 -- name: ContainerAuthority :one
 -- The container and its workspace, when it is assigned to the host.
-select c.state, c.workspace_id, w.name as workspace_name
+select c.state, c.workspace_id, w.name as workspace_name, w.state as workspace_state
 from containers c
 join workspaces w on w.id = c.workspace_id
 where c.id = @id and c.host_id = @host_id;

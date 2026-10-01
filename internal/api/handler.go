@@ -18,6 +18,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -29,38 +30,72 @@ const maxRequestBytes = 64 << 20
 
 // Owners are the domain owners the API invokes.
 type Owners struct {
-	Identity  *identity.Identity
-	Control   *control.Control
-	Storage   *storage.Storage
-	Execution *execution.Execution
-	Secrets   *secrets.Secrets
-	Schedules *schedules.Schedules
-	Images    *images.Images
+	Identity      *identity.Identity
+	Control       *control.Control
+	Storage       *storage.Storage
+	Execution     *execution.Execution
+	Images        *images.Images
+	Notifications *notifications.Notifications
+	Secrets       *secrets.Secrets
+	Schedules     *schedules.Schedules
 	// Listener wakes waits on task and image build changes. It must listen
 	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
 	Listener *database.Listener
 }
 
+// Config is what the transport needs beyond the owners.
+type Config struct {
+	// PublicURL is the dashboard origin. Cookie-authenticated requests that
+	// change state must send it as their Origin, and device logins point
+	// people at its /activate page.
+	PublicURL string
+	// ResendWebhookSecret verifies delivery reports; empty refuses them.
+	ResendWebhookSecret string
+	// ClientReleaseVersion, when set, is sent on every response so older
+	// CLIs tell their users to run `lazycloud update`.
+	ClientReleaseVersion string
+}
+
+// RecommendedClientHeader carries Config.ClientReleaseVersion.
+const RecommendedClientHeader = "X-Lazycloud-Recommended-Client-Version"
+
 // NewHandler serves the public API: it limits the body, authenticates the
-// bearer token, validates the request against the OpenAPI document and
-// dispatches to the operation.
-func NewHandler(owners Owners, logger *slog.Logger) (http.Handler, error) {
-	return newHandler(owners, logger, (*Server).authenticate)
+// bearer token or session cookie, validates the request against the OpenAPI
+// document and dispatches to the operation. Browser sign-in and provider
+// webhooks are served beside it.
+func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, error) {
+	s, ops, err := newServer(owners, cfg, logger, requireScheme)
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+signInStartPath, s.startSignIn)
+	mux.HandleFunc("GET "+identity.GitHubCallbackPath, s.completeSignIn)
+	mux.HandleFunc("POST /webhooks/resend", s.receiveResendWebhook)
+	mux.Handle("/", s.authenticate(ops))
+	return s.recommendClient(s.limitBody(mux)), nil
 }
 
 // NewContainerHandler serves the same operations to container API requests.
 // Their context carries the container principal from WithContainer; they
-// have no bearer token.
-func NewContainerHandler(owners Owners, logger *slog.Logger) (http.Handler, error) {
-	return newHandler(owners, logger, (*Server).requireContainer)
+// have no bearer token or session.
+func NewContainerHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, error) {
+	s, ops, err := newServer(owners, cfg, logger, requireContainerScheme)
+	if err != nil {
+		return nil, err
+	}
+	return s.limitBody(s.requireContainer(ops)), nil
 }
 
-func newHandler(owners Owners, logger *slog.Logger, authenticate func(*Server, http.Handler) http.Handler) (http.Handler, error) {
+// newServer returns the server and the validated operation handler, whose
+// security requirements authenticated applies.
+func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated openapi3filter.AuthenticationFunc) (*Server, http.Handler, error) {
 	spec, err := GetSwagger()
 	if err != nil {
-		return nil, fmt.Errorf("load openapi document: %w", err)
+		return nil, nil, fmt.Errorf("load openapi document: %w", err)
 	}
-	s := &Server{owners: owners, logger: logger}
+	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
+	s := &Server{owners: owners, cfg: cfg, logger: logger}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
@@ -69,8 +104,10 @@ func newHandler(owners Owners, logger *slog.Logger, authenticate func(*Server, h
 	})
 	validate := middleware.OapiRequestValidatorWithOptions(spec, &middleware.Options{
 		Options: openapi3filter.Options{
-			// authenticate runs first and enforces the bearer scheme.
-			AuthenticationFunc: openapi3filter.NoopAuthenticationFunc,
+			// authenticate resolves credentials first; this applies each
+			// operation's security requirement, so an operation is
+			// authenticated unless the document says otherwise.
+			AuthenticationFunc: authenticated,
 		},
 		SilenceServersWarning: true,
 		ErrorHandlerWithOpts: func(_ context.Context, err error, w http.ResponseWriter, r *http.Request, opts middleware.ErrorHandlerOpts) {
@@ -78,6 +115,8 @@ func newHandler(owners Owners, logger *slog.Logger, authenticate func(*Server, h
 			switch {
 			case errors.As(err, &tooLarge):
 				s.writeError(w, r, err)
+			case opts.StatusCode == http.StatusUnauthorized:
+				s.writeError(w, r, identity.ErrUnauthenticated)
 			case opts.StatusCode == http.StatusNotFound || opts.StatusCode == http.StatusMethodNotAllowed:
 				writeJSONError(w, opts.StatusCode, apitypes.NotFound, "no such operation")
 			case opts.StatusCode >= http.StatusInternalServerError:
@@ -94,7 +133,7 @@ func newHandler(owners Owners, logger *slog.Logger, authenticate func(*Server, h
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
 	})
-	return s.limitBody(authenticate(s, validate(handler))), nil
+	return s, validate(handler), nil
 }
 
 type principalKey struct{}
@@ -116,6 +155,15 @@ func containerFrom(ctx context.Context) (identity.ContainerPrincipal, bool) {
 	return p, ok
 }
 
+// requireContainerScheme lets a container principal through operations a
+// bearer token may call; it holds no browser session.
+func requireContainerScheme(ctx context.Context, input *openapi3filter.AuthenticationInput) error {
+	if _, ok := containerFrom(ctx); ok && input.SecuritySchemeName == "bearer" {
+		return nil
+	}
+	return identity.ErrUnauthenticated
+}
+
 // requireContainer admits only requests carrying a container principal.
 func (s *Server) requireContainer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +175,20 @@ func (s *Server) requireContainer(next http.Handler) http.Handler {
 	})
 }
 
+// requireScheme accepts a security scheme when authenticate resolved a
+// principal from that kind of credential. ctx is the request's context.
+func requireScheme(ctx context.Context, input *openapi3filter.AuthenticationInput) error {
+	p, ok := principalFrom(ctx)
+	switch {
+	case !ok:
+	case input.SecuritySchemeName == "bearer" && p.Token != nil:
+		return nil
+	case input.SecuritySchemeName == "session" && p.Session != nil:
+		return nil
+	}
+	return identity.ErrUnauthenticated
+}
+
 func (s *Server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
@@ -134,21 +196,62 @@ func (s *Server) limitBody(next http.Handler) http.Handler {
 	})
 }
 
-// authenticate resolves the bearer token of every request to a principal.
+func (s *Server) recommendClient(next http.Handler) http.Handler {
+	if s.cfg.ClientReleaseVersion == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(RecommendedClientHeader, s.cfg.ClientReleaseVersion)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authenticate resolves the request's credential to a principal: a bearer
+// token, or else the session cookie. A presented token that does not
+// authenticate is refused at once; an expired session cookie is ignored, so
+// the operation's security requirement decides. A cookie-authenticated
+// request that changes state must come from the dashboard's origin, because
+// browsers attach the cookie to requests other sites start.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-		if !ok || !strings.EqualFold(scheme, "bearer") || token == "" {
-			s.writeError(w, r, identity.ErrUnauthenticated)
+		if header := r.Header.Get("Authorization"); header != "" {
+			scheme, token, ok := strings.Cut(header, " ")
+			if !ok || !strings.EqualFold(scheme, "bearer") || token == "" {
+				s.writeError(w, r, identity.ErrUnauthenticated)
+				return
+			}
+			p, err := s.owners.Identity.Authenticate(r.Context(), token)
+			if err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 			return
 		}
-		p, err := s.owners.Identity.Authenticate(r.Context(), token)
+		cookie, err := r.Cookie(SessionCookie)
+		if err != nil || cookie.Value == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		p, err := s.owners.Identity.AuthenticateSession(r.Context(), cookie.Value)
+		if errors.Is(err, identity.ErrUnauthenticated) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
+		if !safeMethod(r.Method) && (s.cfg.PublicURL == "" || r.Header.Get("Origin") != s.cfg.PublicURL) {
+			writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "a browser request must come from the dashboard")
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	})
+}
+
+func safeMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
 }
 
 // errInvalidRequest marks request problems found outside schema validation.
@@ -162,16 +265,32 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		invalidSpec    *control.InvalidSpecError
 		sourceMissing  *control.SourceMissingError
 		tooLarge       *http.MaxBytesError
+		invalidImage   *images.InvalidError
+		conflict       *identity.ConflictError
+		invalid        *identity.InvalidError
+		roleErr        *identity.RoleError
+		accountErr     *identity.AccountError
 		secretMissing  *secrets.NotFoundError
 		secretExists   *secrets.ExistsError
 		secretReserved *secrets.ReservedNameError
-		invalidImage   *images.InvalidError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
-		writeJSONError(w, http.StatusUnauthorized, apitypes.Unauthenticated, "a valid bearer token is required")
+		writeJSONError(w, http.StatusUnauthorized, apitypes.Unauthenticated, "a valid bearer token or session is required")
 	case errors.Is(err, identity.ErrForbidden):
 		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "the token cannot reach this workspace")
+	case errors.Is(err, identity.ErrAdminRequired):
+		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, identity.ErrAdminRequired.Error())
+	case errors.As(err, &roleErr):
+		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, roleErr.Error())
+	case errors.As(err, &accountErr):
+		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, accountErr.Error())
+	case errors.As(err, &conflict):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
+	case errors.As(err, &invalid):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
+	case errors.Is(err, identity.ErrExists):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
 	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),
 		errors.Is(err, images.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")

@@ -1,4 +1,4 @@
-package notifications
+package callbacks
 
 import (
 	"crypto/rand"

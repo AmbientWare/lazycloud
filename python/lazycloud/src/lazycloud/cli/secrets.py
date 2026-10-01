@@ -37,7 +37,7 @@ def secret_list(
     secrets: list[Secret] = []
     cursor: str | None = None
     while True:
-        page = client.list_secrets(selected, cursor=cursor, limit=1000)
+        page = client.list_secrets(selected, cursor=cursor, limit=100)
         secrets.extend(page.secrets)
         if not page.next_cursor:
             break

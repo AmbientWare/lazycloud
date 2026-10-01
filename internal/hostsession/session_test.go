@@ -64,9 +64,9 @@ func start(t *testing.T) *harness {
 	}
 	vault := secrets.NewSecrets(pool, key)
 	containerAPI, err := api.NewContainerHandler(api.Owners{
-		Identity: identity.NewIdentity(pool), Control: control.NewControl(pool), Storage: store, Execution: e,
+		Identity: identity.NewIdentity(pool, identity.Config{}), Control: control.NewControl(pool), Storage: store, Execution: e,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, e), Listener: listener,
-	}, logger)
+	}, api.Config{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

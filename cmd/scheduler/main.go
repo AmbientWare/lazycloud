@@ -1,6 +1,8 @@
-// Command scheduler runs execution planning, placement and recovery against
-// PostgreSQL. Replicas are safe to run together: advisory locks serialize the
-// planner and the placer, and a replica that finds a lock held skips the pass.
+// Command scheduler runs execution planning, placement, recovery, email
+// delivery and workspace deletion against PostgreSQL. Replicas are safe to
+// run together: advisory locks serialize the planner and the placer, a
+// replica that finds a lock held skips the pass, and email and deletion
+// steps are claimed or idempotent.
 package main
 
 import (
@@ -15,8 +17,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
@@ -77,14 +81,20 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	crons := schedules.NewSchedules(pool, exec)
-	callbacks := notifications.NewCallbacks(pool, secrets.NewSecrets(pool, masterKey), notifications.CallbackConfig{
+	deliverer := callbacks.NewCallbacks(pool, secrets.NewSecrets(pool, masterKey), callbacks.CallbackConfig{
 		AllowPrivateTargets: os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1",
 	}, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, images.Config{}, nil)
-	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild)
+	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
+		notifications.Channel, identity.ChannelWorkspace)
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
+	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
+	if err != nil {
+		return err
+	}
+	defer cancelAccounts()
 	planWake, cancelPlanWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelPlanWake()
 	placeWake, cancelPlaceWake := listener.Subscribe(database.ChannelExecution, "")
@@ -141,12 +151,12 @@ func run(logger *slog.Logger) error {
 	group.Go(func() error {
 		lastPurge := time.Now()
 		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
-			if _, err := callbacks.Deliver(ctx); err != nil {
+			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}
 			if time.Since(lastPurge) > purgeInterval {
 				lastPurge = time.Now()
-				if _, err := callbacks.Purge(ctx); err != nil {
+				if _, err := deliverer.Purge(ctx); err != nil {
 					logger.ErrorContext(ctx, "callback purge", "error", err)
 				}
 			}
@@ -169,6 +179,7 @@ func run(logger *slog.Logger) error {
 			return false
 		})
 	})
+	accounts.start(ctx, group)
 	logger.Info("scheduler started")
 	if err := group.Wait(); err != nil {
 		return fmt.Errorf("scheduler loops: %w", err)

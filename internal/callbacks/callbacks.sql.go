@@ -3,7 +3,7 @@
 //   sqlc v1.31.1
 // source: callbacks.sql
 
-package notifications
+package callbacks
 
 import (
 	"context"
