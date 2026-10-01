@@ -316,7 +316,7 @@ def run_function_failure(value: int = 13) -> dict[str, JsonValue]:
     except Exception as exc:
         return {
             "task_id": handle.task_id,
-            "status": handle.status().status.value,
+            "status": handle.task.view().status.value,
             "error": str(exc),
             "expected_failure": True,
         }
@@ -334,7 +334,7 @@ def run_background_job(value: int = 5, delay_seconds: float = 0) -> dict[str, Js
         result: JsonValue = _json_result(handle.get(timeout_seconds=120))
     except Exception:
         result = None
-    status = handle.status().status.value
+    status = handle.task.view().status.value
     return {
         "task_id": handle.task_id,
         "status": status,
@@ -350,7 +350,7 @@ def run_background_job_failure(value: int = 17) -> dict[str, JsonValue]:
     except Exception as exc:
         return {
             "task_id": handle.task_id,
-            "status": handle.status().status.value,
+            "status": handle.task.view().status.value,
             "error": str(exc),
             "expected_failure": True,
         }
