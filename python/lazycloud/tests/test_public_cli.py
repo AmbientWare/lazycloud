@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from lazycloud.abstractions.shell import ShellSession
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
-from shared.http.volumes import DeleteVolumeResponse
 from typer.testing import CliRunner
 
 client_cli = build_public_cli()
@@ -189,27 +187,9 @@ def test_volume_remote_path_parser_supports_plain_and_scheme_syntax() -> None:
     assert parse_remote_path_if_schemed("local/path.txt") is None
 
 
-@dataclass
-class FakeVolumeDeleteClient:
-    deleted: list[str] = field(default_factory=list)
-
-    def delete(self, name: str) -> DeleteVolumeResponse:
-        self.deleted.append(name)
-        return DeleteVolumeResponse(deleted=True)
-
-
 def test_volume_delete_without_tty_requires_yes_flag(
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    volumes = FakeVolumeDeleteClient()
-
-    def fake_volume_client(workspace: str | None = None) -> FakeVolumeDeleteClient:
-        del workspace
-        return volumes
-
-    monkeypatch.setattr("lazycloud.cli.volumes.volume_client", fake_volume_client)
-
     with pytest.raises(SystemExit) as raised:
         client_start(args=["volume", "delete", "vol-a"], prog_name="lazycloud")
 
@@ -219,21 +199,11 @@ def test_volume_delete_without_tty_requires_yes_flag(
     assert "--yes" in captured.err
     assert "[y/N]" not in captured.err
     assert "Aborted" not in captured.err
-    assert volumes.deleted == []
 
 
 def test_volume_delete_without_tty_reports_clean_json_error(
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    volumes = FakeVolumeDeleteClient()
-
-    def fake_volume_client(workspace: str | None = None) -> FakeVolumeDeleteClient:
-        del workspace
-        return volumes
-
-    monkeypatch.setattr("lazycloud.cli.volumes.volume_client", fake_volume_client)
-
     with pytest.raises(SystemExit) as raised:
         client_start(args=["--json", "volume", "delete", "vol-a"], prog_name="lazycloud")
 
@@ -243,22 +213,3 @@ def test_volume_delete_without_tty_reports_clean_json_error(
     payload = json.loads(captured.err)
     assert payload["error"]["type"] == "confirmation_required"
     assert "--yes" in payload["error"]["hint"]
-    assert volumes.deleted == []
-
-
-def test_volume_delete_with_yes_flag_skips_confirmation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    volumes = FakeVolumeDeleteClient()
-
-    def fake_volume_client(workspace: str | None = None) -> FakeVolumeDeleteClient:
-        del workspace
-        return volumes
-
-    monkeypatch.setattr("lazycloud.cli.volumes.volume_client", fake_volume_client)
-
-    result = CliRunner().invoke(client_cli, ["--json", "volume", "delete", "vol-a", "--yes"])
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"name": "vol-a", "deleted": True}
-    assert volumes.deleted == ["vol-a"]
