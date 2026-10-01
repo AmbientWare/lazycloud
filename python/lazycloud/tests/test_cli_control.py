@@ -1,4 +1,4 @@
-"""The app, deployment, task, logs and container commands against the public API."""
+"""Apps, deployments, tasks, logs and containers through the CLI and SDK handles."""
 
 from __future__ import annotations
 
@@ -9,8 +9,11 @@ from pathlib import Path
 import pytest
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.main import build_public_cli
+from lazycloud.exceptions import UnsupportedFeatureError
+from lazycloud.session.deployment import DeploymentClient
 from typer.testing import CliRunner, Result
 
+import lazycloud
 from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
@@ -286,3 +289,27 @@ def test_unknown_task_ids_are_not_found(fake_api: FakeApi) -> None:
 
     assert result.exit_code != 0
     assert f"task not found: {TASK_ID}" in str(result.exception)
+
+
+def test_deployment_handles_submit_to_the_active_version(fake_api: FakeApi) -> None:
+    fake_api.route("GET", f"{TEAM}/deployments")(
+        lambda _: json_reply({"deployments": [_deployment()]})
+    )
+    submitted = f"{TEAM}/apps/reports/functions/summarize_sales/tasks"
+    fake_api.route("POST", submitted)(lambda _: json_reply({"tasks": [_task("queued")]}, 201))
+    fake_api.route("GET", f"{TEAM}/tasks/{TASK_ID}")(lambda _: json_reply(_task("succeeded")))
+    fake_api.route("GET", f"{TEAM}/tasks/{TASK_ID}/result")(
+        lambda _: json_reply({"encoding": "json", "value": 12})
+    )
+
+    deployment = DeploymentClient().handle("summarize_sales")
+    submission = deployment.submit([5, 7])
+
+    assert isinstance(deployment, lazycloud.Deployment)
+    assert (deployment.id, deployment.stub_id) == (WORKLOAD_ID, RELEASE_ID)
+    assert submission.task_id == TASK_ID
+    assert submission.result(wait=True) == 12
+    (request,) = fake_api.calls("POST", submitted)
+    assert "release_id" not in request.json()
+    with pytest.raises(UnsupportedFeatureError):
+        deployment.invoke_url()

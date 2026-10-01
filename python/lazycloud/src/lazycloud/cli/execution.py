@@ -7,7 +7,6 @@ from typing import Annotated, Any, Protocol, cast, runtime_checkable
 import typer
 from pydantic import JsonValue
 from shared.api import (
-    DeployedWorkload,
     Deployment,
     DeploymentPlan,
     DeploymentPlanRequest,
@@ -47,7 +46,7 @@ from lazycloud.control import (
     require_workspace,
     resolve_control_client_config,
 )
-from lazycloud.session.deployment import AppFunctions, deploy_functions, resolve_deployment
+from lazycloud.session.deployment import AppFunctions, DeploymentClient, deploy_functions
 from lazycloud.terminal_shell import InteractiveShell
 
 deployment_app = typer.Typer(help="Manage deployments.")
@@ -207,19 +206,9 @@ def deployment_list(
 ) -> None:
     client, selected_workspace = api_session(workspace=workspace)
     selected_app = app_name(client, selected_workspace, app) if app else None
-    deployments: list[DeployedWorkload] = []
-    cursor: str | None = None
-    while len(deployments) < limit:
-        page = client.list_deployments(
-            selected_workspace,
-            app=selected_app,
-            limit=min(1000, limit - len(deployments)),
-            cursor=cursor,
-        )
-        deployments.extend(page.deployments)
-        if page.next_cursor is None:
-            break
-        cursor = page.next_cursor
+    deployments = DeploymentClient(workspace=selected_workspace, client=client).list(
+        app=selected_app, limit=limit
+    )
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in deployments])
         return
@@ -235,12 +224,10 @@ def deployment_stop(
     deployment_ids_or_names: Annotated[list[str], typer.Argument()],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected_workspace = api_session(workspace=workspace)
-    responses: list[JsonValue] = []
-    for reference in deployment_ids_or_names:
-        deployment = _active_deployment(client, selected_workspace, reference, action="stop")
-        stopped = client.stop_deployment(selected_workspace, deployment.id)
-        responses.append(stopped.model_dump(mode="json"))
+    deployments = DeploymentClient(workspace=workspace)
+    responses: list[JsonValue] = [
+        deployments.stop(reference).model_dump(mode="json") for reference in deployment_ids_or_names
+    ]
     emit(
         ctx,
         payload=responses,
@@ -257,11 +244,7 @@ def deployment_start(
     deployment_id_or_name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected_workspace = api_session(workspace=workspace)
-    reference = resolve_deployment(client, selected_workspace, deployment_id_or_name)
-    response = client.start_deployment(
-        selected_workspace, reference.deployment.id, version=reference.version
-    )
+    response = DeploymentClient(workspace=workspace).start(deployment_id_or_name)
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -276,8 +259,7 @@ def deployment_scale(
     containers: Annotated[int, typer.Option("--containers", min=0)],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected_workspace = api_session(workspace=workspace)
-    resolve_deployment(client, selected_workspace, deployment_id_or_name)
+    DeploymentClient(workspace=workspace).get(deployment_id_or_name)
     # Every deployment is a function, which scales with its queue.
     raise ClientError(
         "only pod deployments can be scaled directly",
@@ -292,35 +274,12 @@ def deployment_delete(
     deployment_id_or_name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected_workspace = api_session(workspace=workspace)
-    reference = resolve_deployment(client, selected_workspace, deployment_id_or_name)
-    if reference.version is not None:
-        msg = (
-            f"{deployment_id_or_name} names one version; delete {reference.deployment.name} "
-            "to remove the deployment and every version"
-        )
-        raise typer.BadParameter(msg)
-    client.delete_deployment(selected_workspace, reference.deployment.id)
+    DeploymentClient(workspace=workspace).delete(deployment_id_or_name)
     emit(
         ctx,
         payload={"deployment_id": deployment_id_or_name, "deleted": True},
         view=notice_card(f"Deleted {deployment_id_or_name}.", tone="success"),
     )
-
-
-def _active_deployment(
-    client: ApiClient, workspace: str, reference: str, *, action: str
-) -> DeployedWorkload:
-    """The deployment a reference names, refusing a version that is not the active one."""
-    resolved = resolve_deployment(client, workspace, reference)
-    deployment = resolved.deployment
-    if resolved.version is not None and resolved.version != deployment.version:
-        msg = (
-            f"version {resolved.version} of {deployment.name} is not active; "
-            f"{action} {deployment.name} to {action} its active version"
-        )
-        raise typer.BadParameter(msg)
-    return deployment
 
 
 def run(

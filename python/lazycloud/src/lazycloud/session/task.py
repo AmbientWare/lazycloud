@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import base64
+import io
 import pickle
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 from uuid import UUID
 
+import cloudpickle
 from pydantic import JsonValue
-from shared.api import Encoding, LogEntry, Payload, TaskPendingProgress, TaskStatus
+from shared.api import Encoding, LogEntry, Payload, TaskInput, TaskPendingProgress, TaskStatus
 from shared.api import Task as TaskView
+from shared.task_context import current_task_id
 
 from lazycloud.aio import to_thread
 from lazycloud.clients.api import ApiClient, ApiError, is_transient
@@ -23,6 +27,8 @@ T = TypeVar("T")
 
 # The API holds a status read for at most this long.
 WAIT_SECONDS = 30
+# Calls one input may depend on; the API rejects more.
+MAX_DEPENDENCIES = 100
 # How often a wait reads a queued task while a progress callback listens.
 PENDING_POLL_SECONDS = 1
 # How long transient failures may continue, counted from the first one,
@@ -290,6 +296,50 @@ class FunctionCall(Generic[R]):
         return results
 
 
+def task_input(
+    args: tuple[Any, ...] | list[Any], kwargs: Mapping[str, Any], *, workspace: str
+) -> TaskInput:
+    """Cloudpickled arguments, with each FunctionCall written as a reference to its task.
+
+    The runner resolves `("function_call", task_id)` to the call's value, and
+    `depends_on` tells the platform to start the task after those succeed.
+    """
+    depends_on: dict[str, UUID] = {}
+
+    def persistent_id(value: object) -> tuple[str, str] | None:
+        if not isinstance(value, FunctionCall):
+            return None
+        if value.task.workspace != workspace:
+            msg = (
+                f"task {value.task_id} belongs to workspace {value.task.workspace}, not {workspace}"
+            )
+            raise ValueError(msg)
+        depends_on.setdefault(value.task_id, UUID(value.task_id))
+        return ("function_call", value.task_id)
+
+    stream = io.BytesIO()
+    pickler = cloudpickle.CloudPickler(stream)
+    pickler.persistent_id = persistent_id  # type: ignore[method-assign]
+    pickle.Pickler.dump(pickler, {"args": list(args), "kwargs": dict(kwargs)})
+    if len(depends_on) > MAX_DEPENDENCIES:
+        raise ValueError(f"a call can depend on at most {MAX_DEPENDENCIES} other calls")
+    payload: dict[str, Any] = {
+        "encoding": Encoding.cloudpickle,
+        "data": base64.b64encode(stream.getvalue()),
+    }
+    if depends_on:
+        payload["depends_on"] = list(depends_on.values())
+    return TaskInput.model_validate(payload)
+
+
+def parent_task_id() -> UUID | None:
+    """The task this code runs in, which becomes the parent of the calls it makes."""
+    try:
+        return UUID(current_task_id())
+    except ValueError:
+        return None
+
+
 def follow_log_stream(
     open_stream: Callable[[int], Iterator[LogEntry]],
 ) -> Iterator[LogEntry]:
@@ -384,6 +434,8 @@ __all__ = [
     "TaskSubscription",
     "decode_payload",
     "follow_log_stream",
+    "parent_task_id",
     "raise_task_failure",
     "retry_transient",
+    "task_input",
 ]

@@ -24,13 +24,16 @@ from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.cli.components.output import print_json_line
 from lazycloud.clients.api import ApiConnectionError, ApiError
 from lazycloud.exceptions import (
+    AmbiguousDeploymentError,
     ConfigurationError,
+    DeploymentNotFoundError,
     FunctionNotDeployedError,
     RemoteTaskError,
     TaskCancelledError,
     UnsupportedFeatureError,
 )
 from lazycloud.json_contracts import parse_json_value
+from lazycloud.session.deployment import DeploymentOperationError
 
 _TOKEN_PATTERN = re.compile(r"\b(?:rt|lc)_[A-Za-z0-9_-]{8,}\b")
 _BEARER_PATTERN = re.compile(r"(Bearer\s+)([A-Za-z0-9._~+/=-]{12,})", re.IGNORECASE)
@@ -442,6 +445,26 @@ def _client_operation_classifier(
             title="Not supported yet",
             message=message,
             hint="Remove these options to deploy or run on the current platform.",
+        )
+    if isinstance(exc, DeploymentNotFoundError):
+        return ClientErrorDetails(
+            type="not_found",
+            title="Not found",
+            message=message,
+            hint="Run `lazycloud deployment list` to see the deployments in this workspace.",
+        )
+    if isinstance(exc, AmbiguousDeploymentError):
+        return ClientErrorDetails(
+            type="ambiguous_deployment",
+            title="Deployment name is ambiguous",
+            message=message,
+            hint="Pass the deployment id from `lazycloud deployment list --json`.",
+        )
+    if isinstance(exc, DeploymentOperationError):
+        return ClientErrorDetails(
+            type="deployment_failed",
+            title="Deployment failed",
+            message=message,
         )
     if isinstance(exc, FunctionNotDeployedError):
         return ClientErrorDetails(

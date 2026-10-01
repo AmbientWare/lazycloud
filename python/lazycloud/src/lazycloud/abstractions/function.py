@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import base64
-import io
-import pickle
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -23,7 +20,6 @@ from typing import (
 )
 from uuid import UUID
 
-import cloudpickle
 from pydantic import ValidationError
 from shared.api import (
     Encoding,
@@ -57,7 +53,6 @@ from shared.image_building.python import python_minor_version
 from shared.placement import ProductRegion
 from shared.resources import parse_memory_mib
 from shared.serialization import to_json_value
-from shared.task_context import current_task_id
 from shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
 
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
@@ -89,7 +84,7 @@ from lazycloud.exceptions import (
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
-from lazycloud.session.task import FunctionCall, Task
+from lazycloud.session.task import FunctionCall, Task, parent_task_id, task_input
 from lazycloud.terminal import Terminal, TerminalStep
 
 if TYPE_CHECKING:
@@ -98,8 +93,6 @@ if TYPE_CHECKING:
 
 # Inputs per submit request; the API rejects larger batches.
 MAX_SUBMIT_BATCH = 1000
-# Calls one input may depend on; the API rejects more.
-MAX_DEPENDENCIES = 100
 # How often a followed call reads its task while it waits to start.
 QUEUED_POLL_SECONDS = 1.0
 
@@ -533,14 +526,7 @@ class Function(Generic[P, R]):
 
     def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str) -> TaskInput:
         encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
-        data, depends_on = _serialize_invocation(encoded_args, encoded_kwargs, workspace)
-        if len(depends_on) > MAX_DEPENDENCIES:
-            msg = f"a call can depend on at most {MAX_DEPENDENCIES} other calls"
-            raise FunctionOperationError(msg)
-        payload: dict[str, Any] = {"encoding": Encoding.cloudpickle, "data": base64.b64encode(data)}
-        if depends_on:
-            payload["depends_on"] = depends_on
-        return TaskInput.model_validate(payload)
+        return task_input(encoded_args, encoded_kwargs, workspace=workspace)
 
     def _invocation_session(self) -> tuple[ApiClient, str]:
         if called_on_import():
@@ -557,7 +543,7 @@ class Function(Generic[P, R]):
         target: dict[str, UUID] = {}
         if is_local():
             target["release_id"] = self._release_id(workspace)
-        elif parent := _current_task_uuid():
+        elif parent := parent_task_id():
             target["parent_task_id"] = parent
         tasks: list[Task] = []
         for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
@@ -664,42 +650,6 @@ class _QueuedTaskWatcher:
                 if view.status is not TaskStatus.queued:
                     return
             self._stopped.wait(QUEUED_POLL_SECONDS)
-
-
-def _serialize_invocation(
-    args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str
-) -> tuple[bytes, list[UUID]]:
-    """Cloudpickle the arguments, writing each FunctionCall as a reference to its task.
-
-    The runner resolves `("function_call", task_id)` to the call's value, and the
-    returned ids tell the platform to start this task after those succeed.
-    """
-    depends_on: dict[str, UUID] = {}
-
-    def persistent_id(value: object) -> tuple[str, str] | None:
-        if not isinstance(value, FunctionCall):
-            return None
-        if value.task.workspace != workspace:
-            msg = (
-                f"task {value.task_id} belongs to workspace {value.task.workspace}, not {workspace}"
-            )
-            raise FunctionOperationError(msg)
-        depends_on.setdefault(value.task_id, UUID(value.task_id))
-        return ("function_call", value.task_id)
-
-    stream = io.BytesIO()
-    pickler = cloudpickle.CloudPickler(stream)
-    pickler.persistent_id = persistent_id  # type: ignore[method-assign]
-    pickle.Pickler.dump(pickler, {"args": list(args), "kwargs": dict(kwargs)})
-    return stream.getvalue(), list(depends_on.values())
-
-
-def _current_task_uuid() -> UUID | None:
-    """The task this code runs in, which becomes the parent of the calls it makes."""
-    try:
-        return UUID(current_task_id())
-    except ValueError:
-        return None
 
 
 def _map_args(input_value: Any) -> tuple[Any, ...]:

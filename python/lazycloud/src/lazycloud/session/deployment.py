@@ -12,20 +12,34 @@ from uuid import UUID
 
 from shared.api import (
     DeployedWorkload,
-    Deployment,
     DeploymentRequest,
     FunctionSpec,
     Release,
     SourceUploadRequest,
+    SubmitTasksRequest,
 )
+from shared.api import Deployment as AppDeployment
 from shared.image_building.python import python_minor_version
 
 from lazycloud.clients.api import ApiClient
-from lazycloud.exceptions import AmbiguousDeploymentError, DeploymentNotFoundError, SdkError
+from lazycloud.control import api_client, require_workspace, resolve_control_client_config
+from lazycloud.exceptions import (
+    AmbiguousDeploymentError,
+    DeploymentNotFoundError,
+    SdkError,
+    UnsupportedFeatureError,
+)
 from lazycloud.references import (
     HandlerReferenceError,
     dotted_reference,
     source_root_handler_reference,
+)
+from lazycloud.session.task import (
+    Task,
+    TaskSubscription,
+    decode_payload,
+    parent_task_id,
+    task_input,
 )
 from lazycloud.source_sync import (
     SOURCE_IGNORE_FILE_WRITTEN_NOTICE,
@@ -62,6 +76,154 @@ class DeploymentReference:
     version: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DeploymentSubmission:
+    """A task submitted to a deployment's active version."""
+
+    task: Task
+
+    @property
+    def task_id(self) -> str:
+        return self.task.task_id
+
+    def result(self, *, wait: bool = False) -> object:
+        """The task's value; a task that did not succeed raises."""
+        result = self.task.result(wait=wait)
+        if not result.ok:
+            detail = f": {result.error}" if result.error else ""
+            raise DeploymentOperationError(
+                f"deployment task {result.id} is {result.status.value}{detail}"
+            )
+        return decode_payload(result.value) if result.value is not None else None
+
+    def subscribe(self) -> TaskSubscription:
+        return self.task.subscribe()
+
+
+@dataclass(slots=True)
+class Deployment:
+    """A deployed workload, as `DeploymentClient.handle` finds it."""
+
+    deployment: DeployedWorkload
+    client: DeploymentClient
+
+    @property
+    def id(self) -> str:
+        return str(self.deployment.id)
+
+    @property
+    def name(self) -> str:
+        return self.deployment.name
+
+    @property
+    def stub_id(self) -> str:
+        """The active release, which deployed calls run on."""
+        release = self.deployment.release_id
+        return str(release) if release is not None else ""
+
+    def invoke_url(self, *, port: int | None = None, url_type: str | None = None) -> str:
+        raise UnsupportedFeatureError(f"deployment {self.name}", ["invoke_url"])
+
+    def submit(
+        self, *args: object, kwargs: dict[str, object] | None = None
+    ) -> DeploymentSubmission:
+        return self.client.submit(self.deployment, *args, kwargs=kwargs)
+
+    def subscribe(self, *args: object, kwargs: dict[str, object] | None = None) -> TaskSubscription:
+        return self.submit(*args, kwargs=kwargs).subscribe()
+
+
+@dataclass(slots=True)
+class DeploymentClient:
+    """Find and manage deployments in one workspace with the active profile."""
+
+    workspace: str | None = None
+    client: ApiClient | None = None
+
+    def list(
+        self, *, app: str | None = None, name: str | None = None, limit: int = 100
+    ) -> list[DeployedWorkload]:
+        """Deployments by app and name, up to `limit`."""
+        client, workspace = self._session()
+        deployments: list[DeployedWorkload] = []
+        cursor: str | None = None
+        while len(deployments) < limit:
+            page = client.list_deployments(
+                workspace,
+                app=app,
+                name=name,
+                limit=min(1000, limit - len(deployments)),
+                cursor=cursor,
+            )
+            deployments.extend(page.deployments)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        return deployments
+
+    def get(self, deployment_id_or_name: str) -> DeployedWorkload:
+        client, workspace = self._session()
+        return resolve_deployment(client, workspace, deployment_id_or_name).deployment
+
+    def handle(self, deployment_id_or_name: str) -> Deployment:
+        return Deployment(deployment=self.get(deployment_id_or_name), client=self)
+
+    def stop(self, deployment_id_or_name: str) -> DeployedWorkload:
+        """Stop a deployment; `NAME-vN` must name its active version."""
+        client, workspace = self._session()
+        reference = resolve_deployment(client, workspace, deployment_id_or_name)
+        deployment = reference.deployment
+        if reference.version is not None and reference.version != deployment.version:
+            msg = (
+                f"version {reference.version} of {deployment.name} is not active; "
+                f"stop {deployment.name} to stop its active version"
+            )
+            raise DeploymentOperationError(msg)
+        return client.stop_deployment(workspace, deployment.id)
+
+    def start(self, deployment_id_or_name: str) -> DeployedWorkload:
+        """Start a deployment; `NAME-vN` makes version N active first."""
+        client, workspace = self._session()
+        reference = resolve_deployment(client, workspace, deployment_id_or_name)
+        return client.start_deployment(
+            workspace, reference.deployment.id, version=reference.version
+        )
+
+    def delete(self, deployment_id_or_name: str) -> DeployedWorkload:
+        """Delete a deployment and every version of it; a single version cannot be deleted."""
+        client, workspace = self._session()
+        reference = resolve_deployment(client, workspace, deployment_id_or_name)
+        if reference.version is not None:
+            msg = (
+                f"{deployment_id_or_name} names one version; delete "
+                f"{reference.deployment.name} to remove the deployment and every version"
+            )
+            raise DeploymentOperationError(msg)
+        return client.delete_deployment(workspace, reference.deployment.id)
+
+    def submit(
+        self,
+        deployment: DeployedWorkload | str,
+        *args: object,
+        kwargs: dict[str, object] | None = None,
+    ) -> DeploymentSubmission:
+        """Submit one task with these arguments to the deployment's active version."""
+        client, workspace = self._session()
+        selected = self.get(deployment) if isinstance(deployment, str) else deployment
+        request = SubmitTasksRequest(
+            inputs=[task_input(args, kwargs or {}, workspace=workspace)],
+            parent_task_id=parent_task_id(),
+        )
+        response = client.submit_tasks(workspace, selected.app, selected.name, request)
+        return DeploymentSubmission(Task(str(response.tasks[0].id), workspace, client))
+
+    def _session(self) -> tuple[ApiClient, str]:
+        config = resolve_control_client_config(workspace=self.workspace)
+        if self.client is None:
+            self.client = api_client(config)
+        return self.client, require_workspace(config)
+
+
 def deploy_functions(
     targets: Sequence[AppFunctions],
     *,
@@ -69,7 +231,7 @@ def deploy_functions(
     workspace: str,
     source_root: str | Path | None = None,
     terminal: Terminal | None = None,
-) -> list[Deployment]:
+) -> list[AppDeployment]:
     """Upload the source the functions import from and deploy each app.
 
     Every function's options are checked before any bytes move, so an
@@ -80,7 +242,7 @@ def deploy_functions(
     specs = _function_specs(
         functions, client=client, workspace=workspace, source_root=source_root, terminal=terminal
     )
-    deployments: list[Deployment] = []
+    deployments: list[AppDeployment] = []
     for target in targets:
         with ExitStack() as stack:
             steps = [
@@ -252,8 +414,11 @@ def _store_source(
 
 __all__ = [
     "AppFunctions",
+    "Deployment",
+    "DeploymentClient",
     "DeploymentOperationError",
     "DeploymentReference",
+    "DeploymentSubmission",
     "deploy_functions",
     "prepare_function_release",
     "resolve_deployment",
