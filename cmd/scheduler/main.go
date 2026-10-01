@@ -68,7 +68,7 @@ func run(logger *slog.Logger) error {
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
-	im := images.NewImages(pool, exec, images.Config{}, nil)
+	im := images.NewImages(pool, exec, images.Config{})
 	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace)
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")

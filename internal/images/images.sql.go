@@ -14,8 +14,16 @@ import (
 
 const activeBuild = `-- name: ActiveBuild :one
 select id, image_digest, state, failure, created_at, finished_at
-from image_builds where image_digest = $1 and state = 'building'
+from image_builds
+where image_digest = $1 and state = 'building'
+  and forced = $2 and (not $2 or workspace_id = $3)
 `
+
+type ActiveBuildParams struct {
+	ImageDigest []byte
+	Forced      bool
+	WorkspaceID uuid.UUID
+}
 
 type ActiveBuildRow struct {
 	ID          uuid.UUID
@@ -26,8 +34,10 @@ type ActiveBuildRow struct {
 	FinishedAt  *time.Time
 }
 
-func (q *Queries) ActiveBuild(ctx context.Context, imageDigest []byte) (ActiveBuildRow, error) {
-	row := q.db.QueryRow(ctx, activeBuild, imageDigest)
+// The build a request joins: the global one, or the workspace's own forced
+// rebuild.
+func (q *Queries) ActiveBuild(ctx context.Context, arg ActiveBuildParams) (ActiveBuildRow, error) {
+	row := q.db.QueryRow(ctx, activeBuild, arg.ImageDigest, arg.Forced, arg.WorkspaceID)
 	var i ActiveBuildRow
 	err := row.Scan(
 		&i.ID,
@@ -196,6 +206,21 @@ func (q *Queries) BuildsToRecover(ctx context.Context, arg BuildsToRecoverParams
 	return items, nil
 }
 
+const countBuildLogs = `-- name: CountBuildLogs :exec
+update image_builds set log_bytes = log_bytes + $1, log_lines = log_lines + $2 where id = $3
+`
+
+type CountBuildLogsParams struct {
+	Bytes int64
+	Lines int32
+	ID    uuid.UUID
+}
+
+func (q *Queries) CountBuildLogs(ctx context.Context, arg CountBuildLogsParams) error {
+	_, err := q.db.Exec(ctx, countBuildLogs, arg.Bytes, arg.Lines, arg.ID)
+	return err
+}
+
 const failBuild = `-- name: FailBuild :exec
 update image_builds
 set state = 'failed', failure = $1::text, registry_auth = null, finished_at = now()
@@ -228,32 +253,28 @@ func (q *Queries) GrantImage(ctx context.Context, arg GrantImageParams) error {
 	return err
 }
 
-const imageToPull = `-- name: ImageToPull :one
-select reference::text as reference, architecture from images where id = $1 and reference is not null
+const imageArchitecture = `-- name: ImageArchitecture :one
+select architecture from images where id = $1
 `
 
-type ImageToPullRow struct {
-	Reference    string
-	Architecture string
-}
-
-func (q *Queries) ImageToPull(ctx context.Context, id string) (ImageToPullRow, error) {
-	row := q.db.QueryRow(ctx, imageToPull, id)
-	var i ImageToPullRow
-	err := row.Scan(&i.Reference, &i.Architecture)
-	return i, err
+func (q *Queries) ImageArchitecture(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, imageArchitecture, id)
+	var architecture string
+	err := row.Scan(&architecture)
+	return architecture, err
 }
 
 const insertBuild = `-- name: InsertBuild :one
-insert into image_builds (image_digest, state, workspace_id, context_sha256, registry_auth, deadline_at)
-values ($1, 'building', $2, $3, $4,
-        now() + make_interval(secs => $5::float8))
+insert into image_builds (image_digest, state, workspace_id, forced, context_sha256, registry_auth, deadline_at)
+values ($1, 'building', $2, $3, $4, $5,
+        now() + make_interval(secs => $6::float8))
 returning id, image_digest, state, failure, created_at, finished_at
 `
 
 type InsertBuildParams struct {
 	ImageDigest    []byte
 	WorkspaceID    uuid.UUID
+	Forced         bool
 	ContextSha256  []byte
 	RegistryAuth   []byte
 	TimeoutSeconds float64
@@ -272,6 +293,7 @@ func (q *Queries) InsertBuild(ctx context.Context, arg InsertBuildParams) (Inser
 	row := q.db.QueryRow(ctx, insertBuild,
 		arg.ImageDigest,
 		arg.WorkspaceID,
+		arg.Forced,
 		arg.ContextSha256,
 		arg.RegistryAuth,
 		arg.TimeoutSeconds,
@@ -340,7 +362,7 @@ func (q *Queries) LatestBuild(ctx context.Context, imageDigest []byte) (LatestBu
 }
 
 const lockBuild = `-- name: LockBuild :one
-select id, image_digest, state, workspace_id, deadline_at
+select id, image_digest, state, workspace_id, forced, deadline_at, log_bytes, log_lines
 from image_builds where id = $1 for update
 `
 
@@ -349,7 +371,10 @@ type LockBuildRow struct {
 	ImageDigest []byte
 	State       string
 	WorkspaceID uuid.UUID
+	Forced      bool
 	DeadlineAt  time.Time
+	LogBytes    int64
+	LogLines    int32
 }
 
 func (q *Queries) LockBuild(ctx context.Context, id uuid.UUID) (LockBuildRow, error) {
@@ -360,7 +385,10 @@ func (q *Queries) LockBuild(ctx context.Context, id uuid.UUID) (LockBuildRow, er
 		&i.ImageDigest,
 		&i.State,
 		&i.WorkspaceID,
+		&i.Forced,
 		&i.DeadlineAt,
+		&i.LogBytes,
+		&i.LogLines,
 	)
 	return i, err
 }
@@ -406,6 +434,31 @@ type PublishImageParams struct {
 
 func (q *Queries) PublishImage(ctx context.Context, arg PublishImageParams) error {
 	_, err := q.db.Exec(ctx, publishImage, arg.Reference, arg.Digest)
+	return err
+}
+
+const publishWorkspaceImage = `-- name: PublishWorkspaceImage :exec
+update workspace_images set reference = $1::text, ready_at = now()
+where workspace_id = $2 and image_digest = $3
+`
+
+type PublishWorkspaceImageParams struct {
+	Reference   string
+	WorkspaceID uuid.UUID
+	ImageDigest []byte
+}
+
+func (q *Queries) PublishWorkspaceImage(ctx context.Context, arg PublishWorkspaceImageParams) error {
+	_, err := q.db.Exec(ctx, publishWorkspaceImage, arg.Reference, arg.WorkspaceID, arg.ImageDigest)
+	return err
+}
+
+const resetBuildLogCount = `-- name: ResetBuildLogCount :exec
+update image_builds set log_bytes = 0, log_lines = 0 where id = $1
+`
+
+func (q *Queries) ResetBuildLogCount(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resetBuildLogCount, id)
 	return err
 }
 
@@ -530,7 +583,9 @@ func (q *Queries) WorkspaceBuild(ctx context.Context, arg WorkspaceBuildParams) 
 }
 
 const workspaceImage = `-- name: WorkspaceImage :one
-select i.digest, i.id, i.python_version, i.architecture, i.reference, i.created_at, i.ready_at
+select i.digest, i.id, i.python_version, i.architecture,
+       coalesce(w.reference, i.reference) as reference, i.reference as global_reference,
+       i.created_at, coalesce(w.ready_at, i.ready_at) as ready_at
 from images i
 join workspace_images w on w.image_digest = i.digest
 where w.workspace_id = $1 and i.id = $2
@@ -542,15 +597,17 @@ type WorkspaceImageParams struct {
 }
 
 type WorkspaceImageRow struct {
-	Digest        []byte
-	ID            string
-	PythonVersion string
-	Architecture  string
-	Reference     *string
-	CreatedAt     time.Time
-	ReadyAt       *time.Time
+	Digest          []byte
+	ID              string
+	PythonVersion   string
+	Architecture    string
+	Reference       *string
+	GlobalReference *string
+	CreatedAt       time.Time
+	ReadyAt         *time.Time
 }
 
+// The workspace's view of an image: its own rebuild, else the global one.
 func (q *Queries) WorkspaceImage(ctx context.Context, arg WorkspaceImageParams) (WorkspaceImageRow, error) {
 	row := q.db.QueryRow(ctx, workspaceImage, arg.WorkspaceID, arg.ID)
 	var i WorkspaceImageRow
@@ -560,6 +617,7 @@ func (q *Queries) WorkspaceImage(ctx context.Context, arg WorkspaceImageParams) 
 		&i.PythonVersion,
 		&i.Architecture,
 		&i.Reference,
+		&i.GlobalReference,
 		&i.CreatedAt,
 		&i.ReadyAt,
 	)

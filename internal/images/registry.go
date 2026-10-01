@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -53,11 +56,75 @@ type cachedDigest struct {
 	expires time.Time
 }
 
-func newResolver(rt http.RoundTripper) *resolver {
-	if rt == nil {
-		rt = remote.DefaultTransport
+// newResolver returns a resolver whose requests reach only public addresses,
+// except trusted, the platform registry's host[:port]. A user's base image
+// names the registry, and the registry names its token realm, so either
+// could otherwise point lookups at internal services. The check runs on the
+// address actually dialed, after DNS.
+func newResolver(trusted string) *resolver {
+	allowed := map[string]bool{}
+	if trusted != "" {
+		if _, _, err := net.SplitHostPort(trusted); err == nil {
+			allowed[trusted] = true
+		} else {
+			allowed[net.JoinHostPort(trusted, "443")] = true
+			allowed[net.JoinHostPort(trusted, "80")] = true
+		}
 	}
-	return &resolver{transport: rt, cache: map[string]cachedDigest{}}
+	plain := &net.Dialer{Timeout: registryTimeout, KeepAlive: 30 * time.Second}
+	public := &net.Dialer{Timeout: registryTimeout, KeepAlive: 30 * time.Second, Control: refusePrivate}
+	transport, _ := remote.DefaultTransport.(*http.Transport) //nolint:errcheck // Checked below.
+	if transport == nil {
+		transport = &http.Transport{}
+	}
+	transport = transport.Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if allowed[address] {
+			return plain.DialContext(ctx, network, address)
+		}
+		return public.DialContext(ctx, network, address)
+	}
+	return &resolver{transport: transport, cache: map[string]cachedDigest{}}
+}
+
+// errPrivateAddress means a registry lookup would reach a non-public address.
+var errPrivateAddress = errors.New("the registry resolves to a private address")
+
+func refusePrivate(_, address string, _ syscall.RawConn) error {
+	addrPort, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("%w: %s", errPrivateAddress, address)
+	}
+	if !publicAddress(addrPort.Addr()) {
+		return fmt.Errorf("%w: %s", errPrivateAddress, address)
+	}
+	return nil
+}
+
+func publicAddress(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	// 100.64.0.0/10 is carrier-grade NAT space, private in practice.
+	shared := ip.Is4() && ip.As4()[0] == 100 && ip.As4()[1]&0xc0 == 64
+	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !shared
+}
+
+// checkRegistryHost refuses a registry a user names when it is a loopback,
+// private or link-local address or localhost. Hostnames are checked again
+// when dialed.
+func checkRegistryHost(host string) error {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.Trim(name, "[]")
+	if strings.EqualFold(name, "localhost") || strings.HasSuffix(strings.ToLower(name), ".localhost") {
+		return invalid("registry %s is not a public registry", host)
+	}
+	if ip, err := netip.ParseAddr(name); err == nil && !publicAddress(ip) {
+		return invalid("registry %s is not a public registry", host)
+	}
+	return nil
 }
 
 // pinned is a reference with its digest, written registry/repository:tag@digest.
@@ -155,6 +222,9 @@ func registryHost(ref string) (string, error) {
 var ErrRegistryUnavailable = errors.New("registry unavailable")
 
 func registryError(ref string, err error) error {
+	if errors.Is(err, errPrivateAddress) {
+		return invalid("looking up %s reached a private address; images must come from public registries", ref)
+	}
 	var terr *transport.Error
 	if errors.As(err, &terr) {
 		switch terr.StatusCode {

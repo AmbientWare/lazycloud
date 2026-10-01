@@ -3,6 +3,7 @@ package hostsession
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -20,13 +21,16 @@ import (
 // maxBuildLogLine bounds one stored line of build output.
 const maxBuildLogLine = 16 << 10
 
-// imagePull is how a host pulls a function's image: a resolved image by
-// digest, or the platform's image for its Python version.
+// imagePull is how a host pulls a function's image: the image by digest its
+// release pinned, or the platform's image for its Python version.
 func (s *Server) imagePull(ctx context.Context, spec apitypes.ImageSpec) (images.Pull, error) {
 	if spec.ImageId == nil {
 		return images.Pull{Reference: strings.ReplaceAll(s.config.ImageTemplate, "{version}", string(spec.PythonVersion))}, nil
 	}
-	return s.images.PullOf(ctx, *spec.ImageId)
+	if spec.Reference == nil {
+		return images.Pull{}, fmt.Errorf("release names image %s without its reference", *spec.ImageId)
+	}
+	return s.images.PullOf(ctx, *spec.ImageId, *spec.Reference)
 }
 
 func registryAuthOut(auth *images.Auth) *hostproto.RegistryAuth {

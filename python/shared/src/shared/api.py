@@ -643,6 +643,9 @@ class ImageSpec(BaseModel):
         PythonVersion, Field(description="The Python minor version the runtime is mounted for.")
     ]
     image_id: Annotated[str | None, Field(pattern="^img_[0-9a-f]{24}$")] = None
+    reference: Annotated[
+        str | None, Field(description="The image by digest the release runs, set by the server.")
+    ] = None
 
 
 class SubmitTasksRequest(BaseModel):

@@ -1661,6 +1661,10 @@ components:
         # A ready image the workspace resolved, built for python_version.
         # Without one the function runs the platform's image for it.
         image_id: { $ref: "#/components/schemas/ImageId" }
+        reference:
+          description: The image by digest the release runs, set by the server.
+          type: string
+          readOnly: true
 
     Resources:
       description: >-

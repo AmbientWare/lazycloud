@@ -34,7 +34,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	store := storage.NewStorage(pool, storagetest.Config())
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, images.Config{}, nil), storage: store, logger: logger,
+		execution: exec, images: images.NewImages(pool, exec, images.Config{}), storage: store, logger: logger,
 	}
 
 	if _, err := ident.CreateUser(ctx, "admin@example.com", true); err != nil {
@@ -145,7 +145,7 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 	exec := execution.NewExecution(pool)
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, images.Config{}, nil),
+		execution: exec, images: images.NewImages(pool, exec, images.Config{}),
 		storage: storage.NewStorage(pool, storagetest.Config()), logger: logger,
 	}
 	if _, err := ident.CreateUser(ctx, "admin@example.com", true); err != nil {
