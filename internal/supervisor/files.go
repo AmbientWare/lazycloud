@@ -238,7 +238,7 @@ func (c *control) downloadFile(w http.ResponseWriter, r *http.Request) error {
 	}
 	var body io.Reader
 	var size int64
-	if info.Mode().IsRegular() {
+	if info.Mode().IsRegular() && info.Size() > 0 {
 		// The size at open is the download: a file growing while it is read
 		// sends what it held then.
 		size, body = info.Size(), io.LimitReader(file, info.Size())

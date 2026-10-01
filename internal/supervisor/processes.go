@@ -335,8 +335,8 @@ func (t *processTable) close() {
 }
 
 var killSignals = map[apitypes.KillRequestSignal]unix.Signal{ //nolint:gochecknoglobals // constant table
-	apitypes.HUP: unix.SIGHUP, apitypes.INT: unix.SIGINT, apitypes.KILL: unix.SIGKILL, apitypes.QUIT: unix.SIGQUIT,
-	apitypes.TERM: unix.SIGTERM, apitypes.USR1: unix.SIGUSR1, apitypes.USR2: unix.SIGUSR2,
+	"HUP": unix.SIGHUP, "INT": unix.SIGINT, "KILL": unix.SIGKILL, "QUIT": unix.SIGQUIT,
+	"TERM": unix.SIGTERM, "USR1": unix.SIGUSR1, "USR2": unix.SIGUSR2,
 }
 
 func (c *control) startProcess(w http.ResponseWriter, r *http.Request) error {
