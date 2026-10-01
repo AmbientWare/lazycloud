@@ -12,9 +12,18 @@ import { ApiError } from "@/lib/api/client";
  * imports it.
  */
 
+/** The refusal, naming the reference operation for whoever wires it. */
+class UnservedError extends ApiError {
+  readonly operation: string;
+
+  constructor(path: string) {
+    super(404, "not_found", "Not available yet");
+    this.operation = path.split("?", 1)[0];
+  }
+}
+
 function unserved(path: string): ApiError {
-  const operation = path.split("?", 1)[0];
-  return new ApiError(404, "not_found", `Not available yet (${operation})`);
+  return new UnservedError(path);
 }
 
 export function withWorkspace(path: string, workspace: string): string {
