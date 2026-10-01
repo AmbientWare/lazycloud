@@ -1,0 +1,51 @@
+# Wave 0: after the operators whose kinds it declares.
+#
+# One file per deployment, and the file is the deployment's registration. Its
+# name is the namespace it runs in and the branch it reads is the record of
+# what it runs: Deploy writes deploy/helm/lazycloud/values-deployment.yaml
+# there, with the release version and the Terraform descriptor, so what the
+# cluster runs is a commit on that branch.
+#
+# The root Application reads this file from main and ignores
+# spec.syncPolicy.automated.enabled, so an operator's pause survives syncs.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lazycloud-prod
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  # Removing this file removes the deployment, workloads included. Without the
+  # finalizer Argo forgets the Application and leaves everything it created
+  # running with nothing declaring it.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AmbientWare/lazycloud
+    targetRevision: prod
+    path: deploy/helm/lazycloud
+    helm:
+      valueFiles:
+        - values.yaml
+        - environments/prod.yaml
+        - values-deployment.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lazycloud-prod
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      # The migration hook depends on a Secret the operator may not have
+      # materialised yet, and the TCP certificate on a DNS-01 challenge.
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
