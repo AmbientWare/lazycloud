@@ -15,6 +15,8 @@ export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d
 export LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER=garage
 export LAZYCLOUD_GARAGE_ADMIN_URL=http://127.0.0.1:23903
 export LAZYCLOUD_GARAGE_ADMIN_TOKEN=local-garage-admin
+export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
+export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 
 stop() {
   for name in agent scheduler server; do
@@ -27,7 +29,7 @@ stop() {
 
 start() {
   mkdir -p "$state/logs" bin
-  docker compose up -d --wait postgres object-store >/dev/null
+  docker compose up -d --wait postgres object-store registry >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
   CGO_ENABLED=0 go build -o bin/supervisor ./cmd/supervisor
   go build -o bin/server ./cmd/server
@@ -51,7 +53,7 @@ start() {
   join=""
   [ -f "$state/join-token" ] && join=$(cat "$state/join-token")
   bin/agent -server 127.0.0.1:8081 -join-token "$join" -state-dir "$PWD/$state/agent" \
-    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime runc \
+    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime runc -build-network host \
     >"$state/logs/agent.log" 2>&1 &
   echo $! >"$state/agent.pid"
 

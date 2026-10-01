@@ -17,6 +17,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -28,6 +29,9 @@ const (
 	// hostLossTick paces host-loss detection; hosts are lost after
 	// compute.LivenessTimeout, so detection lags by at most this much.
 	hostLossTick = 5 * time.Second
+	// buildRecoveryTick paces build deadlines; container stops wake recovery
+	// at once.
+	buildRecoveryTick = 10 * time.Second
 	// contendedRetry reruns a pass that found its lock held, because the
 	// holder may have read state before this replica's change committed.
 	contendedRetry = 100 * time.Millisecond
@@ -68,7 +72,11 @@ func run(logger *slog.Logger) error {
 	store := storage.NewStorage(pool, objectStore)
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
-	listener := database.NewListener(pool, logger, database.ChannelExecution)
+	// Build recovery needs no registry: it only reads and moves build state.
+	im := images.NewImages(pool, exec, images.Config{}, nil)
+	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild)
+	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
+	defer cancelBuildWake()
 	planWake, cancelPlanWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelPlanWake()
 	placeWake, cancelPlaceWake := listener.Subscribe(database.ChannelExecution, "")
@@ -125,6 +133,14 @@ func run(logger *slog.Logger) error {
 	group.Go(func() error {
 		store.RunSweeper(ctx, sweepTick, logger)
 		return nil
+	})
+	group.Go(func() error {
+		return loop(ctx, buildRecoveryTick, buildWake, nil, func(ctx context.Context) bool {
+			if _, err := im.Recover(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
+			}
+			return false
+		})
 	})
 	logger.Info("scheduler started")
 	if err := group.Wait(); err != nil {

@@ -67,6 +67,9 @@ type Config struct {
 	GeeseFSPath string
 	// MountImage is the image volume mount containers run GeeseFS in.
 	MountImage string
+	// BuildNetwork is the Docker network image builds run on. It must reach
+	// the platform registry and the base images' registries.
+	BuildNetwork string
 	// Capacity is what the host offers; nil detects it.
 	Capacity *hostproto.Capacity
 	// Labels are added to every container the agent creates.
@@ -182,6 +185,9 @@ func Run(ctx context.Context, cfg Config) error {
 		a.log.Warn("docker storage here cannot limit container disk; disk limits are not enforced")
 	}
 	defer a.shutdown()
+	if err := a.removeBuildContainers(ctx); err != nil {
+		return err
+	}
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}

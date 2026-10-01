@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -189,6 +188,9 @@ func (sess *session) sync(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := sess.syncBuilds(ctx, derived); err != nil {
+		return err
+	}
 	for _, stop := range commands.Stop {
 		id := "stop:" + stop.Container.String()
 		derived[id] = true
@@ -253,9 +255,15 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if start.Spec.Resources.DiskMib != nil {
 		diskLimit = int64(*start.Spec.Resources.DiskMib) << 20
 	}
+	image, err := s.imagePull(ctx, start.Spec.Image)
+	if err != nil {
+		return nil, err
+	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   start.Container.String(),
-		Image:         strings.ReplaceAll(s.config.ImageTemplate, "{version}", version),
+		Image:         image.Reference,
+		ImageAuth:     registryAuthOut(image.Auth),
+		ImagePlatform: image.Platform,
 		PythonVersion: version,
 		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)},
 		Resources: &hostproto.Resources{

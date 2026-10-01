@@ -313,7 +313,7 @@ func (v *volumes) startMounter(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := v.a.images.ensure(ctx, v.a.cfg.MountImage); err != nil {
+	if _, err := v.a.images.ensure(ctx, v.a.cfg.MountImage, nil, ""); err != nil {
 		return err
 	}
 	if err := v.a.removeContainer(ctx, mounterName(workspace)); err != nil {

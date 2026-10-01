@@ -60,11 +60,14 @@ type hostServer struct {
 
 	sessions    chan *serverSession
 	completions chan *hostproto.CompleteTaskRequest
+	builds      chan *hostproto.CompleteImageBuildRequest
 
 	mu      sync.Mutex
 	queued  map[string][]*hostproto.ClaimedTask
 	changed chan struct{}
 	logs    []*hostproto.LogLine
+	// buildLogs holds image build output in arrival order.
+	buildLogs []string
 	// appendDelay makes AppendLogs a slow consumer.
 	appendDelay time.Duration
 	// completeOutage fails CompleteTask as unavailable until it passes.
@@ -82,6 +85,7 @@ func newHostServer() *hostServer {
 		joinToken: "lc_join", hostID: uuid.NewString(), hostToken: "lc_host_" + uuid.NewString(),
 		sessions:    make(chan *serverSession, 8),
 		completions: make(chan *hostproto.CompleteTaskRequest, 64),
+		builds:      make(chan *hostproto.CompleteImageBuildRequest, 8),
 		queued:      map[string][]*hostproto.ClaimedTask{},
 		changed:     make(chan struct{}),
 	}
@@ -298,6 +302,7 @@ func (e *env) startAgent() *runningAgent {
 		OCIRuntime:     "runc",
 		GeeseFSPath:    e.geesefs,
 		MountImage:     DefaultMountImage,
+		BuildNetwork:   "host",
 		Capacity:       &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30},
 		Labels:         map[string]string{"lazycloud.agent": e.id},
 		Version:        "test",
