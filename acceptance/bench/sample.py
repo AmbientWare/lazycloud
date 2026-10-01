@@ -34,7 +34,9 @@ def _containers(filter_: str) -> list[dict]:
     ids = _run("docker", "ps", "-q", "--no-trunc", "--filter", filter_).split()
     if not ids:
         return []
-    return json.loads(_run("docker", "inspect", *ids))
+    # A container that exits between ps and inspect is left out.
+    out = subprocess.run(["docker", "inspect", *ids], capture_output=True, text=True).stdout
+    return json.loads(out or "[]")
 
 
 def _new_host_id() -> str:
@@ -44,6 +46,8 @@ def _new_host_id() -> str:
 
 def _cgroup(container_id: str) -> tuple[float, int]:
     base = Path(f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope")
+    if not base.exists():
+        return 0.0, 0
     usage = 0
     for line in (base / "cpu.stat").read_text().splitlines():
         if line.startswith("usage_usec"):
