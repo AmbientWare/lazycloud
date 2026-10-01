@@ -351,7 +351,7 @@ func (p *runnerProcess) load(handler string) *hostproto.RunnerError {
 			if err = frame.Decode(&failed); err == nil {
 				return runnerError(failed.Error)
 			}
-		case runnerproto.FrameLoad, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed:
+		case runnerproto.FrameLoad, runnerproto.FrameDependency, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed:
 			err = fmt.Errorf("unexpected %q frame while loading", frame.Type)
 		default:
 			err = fmt.Errorf("unknown %q frame while loading", frame.Type)
@@ -398,7 +398,7 @@ func attemptOutcome(attempt string, frame runnerproto.Frame) (*hostproto.Attempt
 				Exception: frame.Payload,
 			},
 		}}, nil
-	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke:
+	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameDependency, runnerproto.FrameInvoke:
 		return nil, fmt.Errorf("unexpected %q frame during an attempt", frame.Type)
 	}
 	return nil, fmt.Errorf("unknown %q frame during an attempt", frame.Type)

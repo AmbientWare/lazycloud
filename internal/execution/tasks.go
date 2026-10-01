@@ -87,7 +87,7 @@ func (e *Execution) readTask(ctx context.Context, workspace identity.WorkspaceID
 	if err != nil {
 		return Task{}, fmt.Errorf("read task: %w", err)
 	}
-	task, err := taskFrom(TaskViewRow(row))
+	task, err := taskFrom(row)
 	if err != nil {
 		return Task{}, err
 	}
