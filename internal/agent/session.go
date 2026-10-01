@@ -213,6 +213,14 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		}
 	case *hostproto.ServerMessage_Update:
 		a.update(body.Update)
+	case *hostproto.ServerMessage_Network:
+		if c := a.lookup(body.Network.GetContainerId()); c != nil {
+			c.updateNetwork(body.Network.GetPolicy())
+		}
+	case *hostproto.ServerMessage_Snapshot:
+		a.snapshot(body.Snapshot)
+	case *hostproto.ServerMessage_PublishFilesystem:
+		a.publishFilesystem(body.PublishFilesystem)
 	case *hostproto.ServerMessage_StorageGrant:
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
 			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
@@ -238,6 +246,7 @@ func (a *Agent) start(spec *hostproto.StartContainer) {
 	if !known {
 		c = a.newContainer(id, spec.GetFunction().GetHandler(), int(spec.GetFunction().GetSlots()), spec.GetHttp(), hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING)
 		c.runtime = runtimeOf(spec)
+		c.docker = spec.GetDocker()
 		a.containers[id] = c
 	}
 	a.mu.Unlock()

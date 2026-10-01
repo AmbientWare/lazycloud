@@ -121,7 +121,7 @@ func (c *container) drainNetwork(ctx context.Context, starting bool) error {
 		case starting:
 			return fmt.Errorf("apply network policy: %w", err)
 		case c.hasExited() || ctx.Err() != nil:
-			return nil
+			return nil //nolint:nilerr // an exited container's policy no longer matters
 		default:
 			c.log.Error("applying a network policy update failed; the container keeps its previous policy", "error", err)
 		}

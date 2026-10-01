@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/moby/moby/api/types/mount"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
@@ -344,7 +344,10 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			workspaces = append(workspaces, ws)
 		}
 	}
-	restore := c.prepareRestore(ctx, spec.GetRestore())
+	restore, err := c.prepareRestore(ctx, spec.GetRestore())
+	if err != nil {
+		return err
+	}
 	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus, restore); err != nil {
 		return err
 	}

@@ -299,6 +299,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 				a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.
 			}
 			l.serve()
+			c.resumeNetwork()
 			c.watchUsage(ctx)
 			a.track(c)
 			a.goOwned(c.watch)
