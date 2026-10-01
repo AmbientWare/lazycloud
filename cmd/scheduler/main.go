@@ -73,7 +73,7 @@ func run(logger *slog.Logger) error {
 		notifications.Channel, identity.ChannelWorkspace)
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
-	accounts, cancelAccounts, err := newAccountLoops(pool, exec, listener, logger)
+	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
 	if err != nil {
 		return err
 	}

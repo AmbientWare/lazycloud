@@ -17,6 +17,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -33,7 +34,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	store := storage.NewStorage(pool, storagetest.Config())
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, storage: store, logger: logger,
+		execution: exec, images: images.NewImages(pool, exec, images.Config{}, nil), storage: store, logger: logger,
 	}
 
 	if _, err := ident.CreateUser(ctx, "admin@example.com", true); err != nil {
@@ -131,6 +132,93 @@ func TestWorkspaceDeletion(t *testing.T) {
 	}
 	if upload, err := store.RegisterSource(ctx, keep.ID, keepSource.digest, keepSource.size); err != nil || !upload.Present {
 		t.Fatalf("kept source %+v %v", upload, err)
+	}
+}
+
+// Deleting a workspace fails the builds it is running and waits for their
+// containers, and keeps finished builds another workspace shares.
+func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
+	ctx := t.Context()
+	pool := dbtest.New(t)
+	logger := slog.New(slog.DiscardHandler)
+	ident := identity.NewIdentity(pool, identity.Config{})
+	exec := execution.NewExecution(pool)
+	loops := &accountLoops{
+		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
+		execution: exec, images: images.NewImages(pool, exec, images.Config{}, nil),
+		storage: storage.NewStorage(pool, storagetest.Config()), logger: logger,
+	}
+	if _, err := ident.CreateUser(ctx, "admin@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	doomed, err := ident.CreateWorkspace(ctx, "doomed", "admin@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := ident.CreateWorkspace(ctx, "other", "admin@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _ := ident.CreateToken(ctx, "admin@example.com", "", "admin")
+	admin, err := ident.Authenticate(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two images both workspaces resolved: one finished building, one still
+	// building on a ready container. The doomed workspace started both.
+	var finished, running, host, container uuid.UUID
+	err = pool.QueryRow(ctx, `
+with img as (insert into images (digest, id, dockerfile, python_version, architecture)
+             values (sha256('a'), 'img_aaaaaaaaaaaaaaaaaaaaaaaa', 'FROM a', '3.12', 'amd64'),
+                    (sha256('b'), 'img_bbbbbbbbbbbbbbbbbbbbbbbb', 'FROM b', '3.12', 'amd64') returning digest),
+     grants as (insert into workspace_images (workspace_id, image_digest)
+                select ws, digest from img, unnest(array[$1::uuid, $2::uuid]) ws returning 1),
+     done as (insert into image_builds (image_digest, state, workspace_id, deadline_at, finished_at)
+              values (sha256('a'), 'succeeded', $1, now() + interval '1 hour', now()) returning id),
+     live as (insert into image_builds (image_digest, state, workspace_id, deadline_at)
+              values (sha256('b'), 'building', $1, now() + interval '1 hour') returning id),
+     h as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, last_seen_at)
+           values ('h', sha256('h'), 'online', 4000, 1 << 32, now()) returning id),
+     c as (insert into containers (workspace_id, image_build_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+           select $1, live.id, 'ready', h.id, 1, 1000, 1 << 28, now(), now() from live, h returning id)
+select done.id, live.id, h.id, c.id from done, live, h, c`, uuid.UUID(doomed.ID), uuid.UUID(other.ID)).Scan(&finished, &running, &host, &container)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ident.DeleteWorkspace(ctx, admin, "doomed"); err != nil {
+		t.Fatal(err)
+	}
+	loops.deleteWorkspaces(ctx)
+	var state, containerState string
+	if err := pool.QueryRow(ctx, `select b.state, c.state from image_builds b, containers c where b.id = $1 and c.id = $2`,
+		running, container).Scan(&state, &containerState); err != nil || state != "failed" || containerState != "draining" {
+		t.Fatalf("running build %s, container %s, %v", state, containerState, err)
+	}
+	// The live build container keeps the workspace, even when finishing is
+	// asked for directly.
+	if removed, err := ident.FinishWorkspaceDeletion(ctx, doomed.ID); err != nil || removed {
+		t.Fatalf("finished with a live container: %v %v", removed, err)
+	}
+	if _, err := ident.GetWorkspace(ctx, admin, "doomed"); err != nil {
+		t.Fatalf("workspace gone early: %v", err)
+	}
+	if _, err := exec.ApplyReport(ctx, compute.HostID(host), execution.ContainerReport{
+		Container: execution.ContainerID(container), Phase: execution.ReportExited, ObservedAt: time.Now(),
+		Exit: &execution.ContainerExit{Reason: execution.StopRequested},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loops.deleteWorkspaces(ctx)
+	if _, err := ident.GetWorkspace(ctx, admin, "doomed"); err == nil {
+		t.Fatal("workspace remains")
+	}
+	// Both builds now belong to the workspace that shares the images.
+	var owner uuid.UUID
+	for _, build := range []uuid.UUID{finished, running} {
+		if err := pool.QueryRow(ctx, "select workspace_id from image_builds where id = $1", build).Scan(&owner); err != nil || owner != uuid.UUID(other.ID) {
+			t.Fatalf("build %s owner %s %v", build, owner, err)
+		}
 	}
 }
 

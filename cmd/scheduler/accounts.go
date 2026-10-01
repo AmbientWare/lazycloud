@@ -13,6 +13,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -35,6 +36,7 @@ type accountLoops struct {
 	identity      *identity.Identity
 	notifications *notifications.Notifications
 	execution     *execution.Execution
+	images        *images.Images
 	storage       *storage.Storage
 	deliver       bool
 	emailWake     <-chan struct{}
@@ -44,7 +46,7 @@ type accountLoops struct {
 
 // newAccountLoops reads the Resend and object store settings from the
 // environment. Without LAZYCLOUD_RESEND_API_KEY emails stay queued.
-func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, listener *database.Listener, logger *slog.Logger) (*accountLoops, func(), error) {
+func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.Images, listener *database.Listener, logger *slog.Logger) (*accountLoops, func(), error) {
 	store := storage.Config{
 		Endpoint: os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"), Region: os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
 		Bucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"), AccessKeyID: os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
@@ -69,6 +71,7 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, listener *da
 		identity:      identity.NewIdentity(pool, identity.Config{}),
 		notifications: notifications.NewNotifications(pool, sender, logger),
 		execution:     exec,
+		images:        im,
 		storage:       storage.NewStorage(pool, store),
 		deliver:       sender != nil,
 		emailWake:     emailWake,
@@ -109,8 +112,9 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group) {
 	})
 }
 
-// deleteWorkspaces advances each deleting workspace: execution cancels its
-// running tasks while planning drains its containers, and once none is
+// deleteWorkspaces advances each deleting workspace: images fails the
+// builds it started and hands finished ones to another workspace, execution
+// cancels its running tasks while planning drains its containers, and once none is
 // live, storage deletes its objects and identity removes its rows. Every
 // step is idempotent, so a crash or a second scheduler replica repeats work
 // without harm. An upload presigned before the deletion and finished after
@@ -122,6 +126,10 @@ func (a *accountLoops) deleteWorkspaces(ctx context.Context) {
 		return
 	}
 	for _, ws := range deleting {
+		if err := a.images.ReleaseWorkspace(ctx, ws.ID); err != nil {
+			a.logger.ErrorContext(ctx, "release workspace builds", "workspace", ws.Name, "error", err)
+			continue
+		}
 		live, err := a.execution.StopWorkspace(ctx, ws.ID)
 		if err != nil {
 			a.logger.ErrorContext(ctx, "stop workspace", "workspace", ws.Name, "error", err)
@@ -135,9 +143,13 @@ func (a *accountLoops) deleteWorkspaces(ctx context.Context) {
 			a.logger.ErrorContext(ctx, "delete workspace objects", "workspace", ws.Name, "error", err)
 			continue
 		}
-		if err := a.identity.FinishWorkspaceDeletion(ctx, ws.ID); err != nil {
+		removed, err := a.identity.FinishWorkspaceDeletion(ctx, ws.ID)
+		if err != nil {
 			a.logger.ErrorContext(ctx, "remove workspace", "workspace", ws.Name, "error", err)
 			continue
+		}
+		if !removed {
+			continue // A container became live; the next pass stops it.
 		}
 		a.logger.InfoContext(ctx, "workspace deleted", "workspace", ws.Name, "workspace_id", ws.ID.String(),
 			"objects", objects, "seconds", time.Since(ws.RequestedAt).Seconds())
