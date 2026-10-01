@@ -4,39 +4,39 @@ Parity sections from tasks/parity.md: "Dashboard", plus every dashboard item
 in the other sections. The dashboard in `web/` runs against the public API in
 `contracts/openapi.yaml`.
 
-## Constraint
+## Rewrite rules
 
-The dashboard's styling, layout, components, routes and copy are finished
-work. Every file under `web/src` outside the data layer matches
-origin/go-rewrite. The one component edit is TaskDrawer's cancel button,
-which now calls `cancelTask` from the query layer. Data shapes change only in
-`web/src/lib/api` and `web/src/lib/queries`.
+The dashboard looks and behaves as the reference does: same pages, layout,
+styling, copy and route shapes. Its internals are rewritten for the public
+API. The before and after screenshots of every main page are the guard for
+visual parity.
 
-## Decisions
-
-- openapi-typescript generates types from `contracts/openapi.yaml`
-  (`bun run apigen`). The output in `web/src/lib/api/generated` is checked in,
-  and CI fails if it drifts. Requests go through openapi-fetch. `ok()` returns
-  the success body or throws `ApiError`.
-- Components keep the reference view types (the zod-inferred types in
-  `lib/api/schemas`). The query layer maps API resources into them in
-  `lib/api/views.ts` and parses nothing at runtime. A field the API lacks
-  gets the empty value the component already renders for absence.
-- The session is the HttpOnly `__Host-lazycloud_session` cookie. The sign-in
-  link returns to `/callback#code=<destination>`. The callback page reads
-  `GET /v1/me` and stores a marker in localStorage so the reference AuthGate
-  works unchanged. A 401 clears the marker. A browser that already holds a
-  session and starts sign-in goes straight to `return_to`.
-- Query keys stay keyed by workspace ID, and `workspaceName(id)` resolves the
-  path name from the session read. Routes keep app IDs. `lib/queries/directory.ts`
-  maps app and workload IDs to names with one cached read each.
-- A stub is `app:function:release`, and a deployment row is
-  `workload:version`. Task statuses map to the reference set: queued becomes
-  pending, or retry once an attempt has failed; succeeded becomes complete;
-  a timeout failure becomes timeout.
-- Log views read the NDJSON log streams. `lib/api/sse.ts` translates the
-  reference log and change stream URLs, so `useEventStream` and
-  WorkspaceLiveUpdates are unchanged.
+- Components and hooks consume the generated types directly:
+  `Schemas["X"]` from `@/lib/api/client`, calls through `api` and `ok()`.
+  No hand-written zod schemas for API resources, no view types that map new
+  shapes back into old ones, no compatibility mappings and no old endpoint
+  helpers. `lib/api/schemas`, `lib/api/views.ts`, `lib/api/workspaces.ts`,
+  `lib/api/sse.ts` translation and `lib/queries/directory.ts` go away.
+- The workspace is addressed by name. `useWorkspace().workspace` is
+  `Schemas["Workspace"]`; query functions take the workspace name, and
+  `workspaceQueryKeys` are keyed by it. A rename moves to the new keys.
+- Apps are addressed by name. The route param is `$app`:
+  `/w/$workspace/apps/$app/workloads/$kind/$name`.
+- Status words are the API's: queued, running, succeeded, failed,
+  cancelled. A timeout shows through the task's failure.
+- Live data comes from the change stream (`/v1/workspaces/{name}/changes/stream`)
+  through WorkspaceLiveUpdates, not polling, where the stream has a topic for
+  it. Log views read the NDJSON log streams directly.
+- One API response that answers a page replaces client-side aggregation of
+  several calls. Filtering happens on the server; a missing filter is an API
+  change, never a filter over one client page.
+- Restructure a component or hook where its old structure existed only for
+  the old backend. Keep its rendered markup.
+- Tests prove behavior through the new shapes. Tests that only covered old
+  shapes go.
+- The one allowed UI change is removing an element whose data the API does
+  not keep and the product does not need: the volume "updated" time and the
+  queue write rate are gone.
 
 ## Progress
 
