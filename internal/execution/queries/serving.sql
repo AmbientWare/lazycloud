@@ -8,7 +8,7 @@ with candidates as (
     from containers c
     join releases r on r.id = c.release_id
     join workloads w on w.id = r.workload_id
-    where c.state <> 'stopped' and c.release_id > @after_id and (w.kind <> 'function' or r.version < 0)
+    where c.state <> 'stopped' and c.release_id > @after_id::uuid and (w.kind <> 'function' or r.version < 0)
     union
     select l.release_id from endpoint_loads l where l.expires_at > now() and l.release_id > @after_id
     union
@@ -77,7 +77,7 @@ update containers
 set state = 'draining', drain_started_at = now()
 where id in (
     select d.id from containers d
-    where d.release_id = @release_id and d.state in ('starting', 'ready')
+    where d.release_id = @release_id::uuid and d.state in ('starting', 'ready')
     order by d.created_at desc, d.id desc
     limit @count
     for update skip locked

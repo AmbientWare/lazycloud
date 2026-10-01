@@ -25,6 +25,11 @@ service HostService {
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
   // AppendLogs stores output lines in order per attempt.
   rpc AppendLogs(AppendLogsRequest) returns (AppendLogsResponse);
+  // CompleteImageBuild records the outcome of a build container's attempt.
+  // A container that no longer runs the build returns FAILED_PRECONDITION.
+  rpc CompleteImageBuild(CompleteImageBuildRequest) returns (CompleteImageBuildResponse);
+  // AppendImageBuildLogs stores a build container's output in order.
+  rpc AppendImageBuildLogs(AppendImageBuildLogsRequest) returns (AppendImageBuildLogsResponse);
 }
 
 message EnrollRequest {
@@ -133,6 +138,13 @@ message StartContainer {
   Resources resources = 5;
   FunctionWorkload function = 6;
   map<string, string> environment = 7;
+  // Credentials for pulling image. They go to the pull call only and are
+  // never written to disk or into the container.
+  RegistryAuth image_auth = 20;
+  // Set instead of function for an image build container. image is unused.
+  ImageBuild build = 21;
+  // The OCI platform image is pulled for, such as linux/amd64.
+  string image_platform = 22;
   // Set for endpoint, ASGI and realtime workloads: the slots are workers that
   // serve HTTP instead of claiming tasks.
   HttpServing http = 30;
@@ -154,6 +166,34 @@ enum HttpKind {
 message HttpServing {
   HttpKind kind = 1;
   int32 concurrency = 2;
+}
+
+// RegistryAuth authenticates to one registry.
+message RegistryAuth {
+  string username = 1;
+  string password = 2;
+  // An OAuth refresh token, used instead of a password.
+  string identity_token = 3;
+}
+
+// ImageBuild runs one attempt of an image build. The host builds dockerfile
+// with the extracted context, pushes the result by digest to
+// push_repository and reports it with CompleteImageBuild.
+message ImageBuild {
+  string build_id = 1;
+  int32 attempt = 2;
+  string dockerfile = 3;
+  // The build context archive; unset when the build reads no files.
+  Source context = 4;
+  string platform = 5;
+  string push_repository = 6;
+  // A registry cache reference imported before and exported after the build.
+  string cache_ref = 7;
+  // The push registry and cache speak plain HTTP.
+  bool insecure_registry = 8;
+  // Credentials by registry host for base images, the push and the cache.
+  map<string, RegistryAuth> registry_auth = 9;
+  google.protobuf.Timestamp deadline = 10;
 }
 
 message Source {
@@ -272,3 +312,27 @@ message LogLine {
 }
 
 message AppendLogsResponse {}
+
+message CompleteImageBuildRequest {
+  string container_id = 1;
+  oneof outcome {
+    // The pushed manifest digest, sha256:<hex>.
+    string digest = 2;
+    // Why the build failed, with the end of its output.
+    string failure = 3;
+  }
+}
+
+message CompleteImageBuildResponse {}
+
+message AppendImageBuildLogsRequest {
+  string container_id = 1;
+  repeated BuildLogLine lines = 2;
+}
+
+message BuildLogLine {
+  string data = 1;
+  google.protobuf.Timestamp time = 2;
+}
+
+message AppendImageBuildLogsResponse {}

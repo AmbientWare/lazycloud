@@ -17,6 +17,11 @@ from shared.api import (
     Error,
     ErrorCode,
     Function,
+    Image,
+    ImageBuild,
+    ImageBuildLogEntry,
+    ImageDefinition,
+    ImageResolution,
     LogEntry,
     Me,
     Payload,
@@ -98,18 +103,18 @@ class ApiClient:
             body=request,
         )
 
-    def upload_source(self, target: UploadTarget, archive: Path) -> None:
+    def upload_source(self, target: UploadTarget, archive: Path | bytes) -> None:
         """Send archive bytes to a presigned upload target.
 
         The target URL carries its own authorization, so the bearer token is
         not sent with it.
         """
 
-        size = archive.stat().st_size
+        size = len(archive) if isinstance(archive, bytes) else archive.stat().st_size
         headers = {**target.headers, "Content-Length": str(size)}
 
-        def chunks() -> Iterator[bytes]:
-            with archive.open("rb") as source:
+        def chunks(path: Path) -> Iterator[bytes]:
+            with path.open("rb") as source:
                 while chunk := source.read(_UPLOAD_CHUNK_BYTES):
                     yield chunk
 
@@ -118,7 +123,7 @@ class ApiClient:
                 target.method,
                 target.url,
                 headers=headers,
-                content=chunks(),
+                content=archive if isinstance(archive, bytes) else chunks(archive),
                 timeout=httpx.Timeout(self.timeout_seconds, write=_SOURCE_UPLOAD_TIMEOUT_SECONDS),
             )
         except httpx.HTTPError as exc:
@@ -131,6 +136,28 @@ class ApiClient:
                 code=None,
                 message=f"source upload was rejected: {response.text[:500]}",
             )
+
+    def store_source(self, workspace: str, sha256: str, archive: Path | bytes) -> bool:
+        """Make an archive present by digest; True when its bytes had to be sent."""
+        size = len(archive) if isinstance(archive, bytes) else archive.stat().st_size
+        request = SourceUploadRequest(sha256=sha256, size_bytes=size)
+        state = self.create_source_upload(workspace, request)
+        if state.present:
+            return False
+        if state.upload is None:
+            raise ApiError(
+                status_code=200,
+                code=None,
+                message=f"source {sha256} is missing and the API gave no upload target",
+            )
+        self.upload_source(state.upload, archive)
+        if not self.create_source_upload(workspace, request).present:
+            raise ApiError(
+                status_code=200,
+                code=None,
+                message=f"source {sha256} was not stored after its upload",
+            )
+        return True
 
     def deploy_app(self, workspace: str, app: str, request: DeploymentRequest) -> Deployment:
         return self._send(
@@ -196,6 +223,58 @@ class ApiClient:
         """
 
         path = _path("v1", "workspaces", workspace, "tasks", str(task_id), "logs")
+        return self._stream_lines(LogEntry, path, after=after, follow=follow)
+
+    def resolve_image(self, workspace: str, definition: ImageDefinition) -> ImageResolution:
+        """The image a definition names and any active build; never starts one."""
+        return self._send(
+            ImageResolution,
+            "POST",
+            _path("v1", "workspaces", workspace, "images", "resolve"),
+            body=definition,
+        )
+
+    def build_image(
+        self, workspace: str, definition: ImageDefinition, *, force: bool = False
+    ) -> ImageResolution:
+        """Start or join the image's build unless it is ready; `force` builds again."""
+        return self._send(
+            ImageResolution,
+            "POST",
+            _path("v1", "workspaces", workspace, "images"),
+            body=definition,
+            params={"force": "true"} if force else None,
+        )
+
+    def get_image(self, workspace: str, image_id: str) -> Image:
+        return self._send(Image, "GET", _path("v1", "workspaces", workspace, "images", image_id))
+
+    def get_image_build(
+        self, workspace: str, build_id: UUID, *, wait_seconds: int = 0
+    ) -> ImageBuild:
+        return self._send(
+            ImageBuild,
+            "GET",
+            _path("v1", "workspaces", workspace, "image-builds", str(build_id)),
+            params={"wait_seconds": wait_seconds} if wait_seconds else None,
+            read_timeout=wait_seconds + _WAIT_READ_MARGIN_SECONDS if wait_seconds else None,
+        )
+
+    def stream_image_build_logs(
+        self,
+        workspace: str,
+        build_id: UUID,
+        *,
+        after: int = 0,
+        follow: bool = False,
+    ) -> Iterator[ImageBuildLogEntry]:
+        """Yield build output with ids above `after`, as `stream_task_logs` does."""
+        path = _path("v1", "workspaces", workspace, "image-builds", str(build_id), "logs")
+        return self._stream_lines(ImageBuildLogEntry, path, after=after, follow=follow)
+
+    def _stream_lines(
+        self, model: type[ModelT], path: str, *, after: int, follow: bool
+    ) -> Iterator[ModelT]:
         params: dict[str, str | int] = {"after": after}
         if follow:
             params["follow"] = "true"
@@ -212,7 +291,7 @@ class ApiClient:
                     if not line.strip():
                         continue
                     try:
-                        yield LogEntry.model_validate_json(line)
+                        yield model.model_validate_json(line)
                     except ValidationError as exc:
                         raise ApiError(
                             status_code=response.status_code,
@@ -238,7 +317,7 @@ class ApiClient:
         path: str,
         *,
         body: BaseModel | None = None,
-        params: dict[str, int] | None = None,
+        params: dict[str, int | str] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT:
         content = (

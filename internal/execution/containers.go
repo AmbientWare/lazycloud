@@ -58,6 +58,12 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		}
 	}
 
+	if row.ReleaseID == nil {
+		// A build container: the images owner decides what its stop means.
+		return e.notifyStopped(ctx, tx, row.HostID, database.ChannelImageBuild, row.ImageBuildID.String())
+	}
+	release := *row.ReleaseID
+
 	var failQueued *Failure
 	switch exit.Reason {
 	case StopLoadError:
@@ -65,11 +71,11 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if failQueued == nil {
 			failQueued = &Failure{Kind: FailureLoadError, Message: exit.Message}
 		}
-		if err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: row.ReleaseID, LoadError: &failQueued.Message}); err != nil {
+		if err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: release, LoadError: &failQueued.Message}); err != nil {
 			return fmt.Errorf("record load error: %w", err)
 		}
 	case StopStartFailed:
-		failures, err := q.CountStartFailure(ctx, row.ReleaseID)
+		failures, err := q.CountStartFailure(ctx, release)
 		if err != nil {
 			return fmt.Errorf("count start failure: %w", err)
 		}
@@ -83,7 +89,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if err != nil {
 			return fmt.Errorf("encode failure: %w", err)
 		}
-		failed, err := q.FailQueuedTasksOfRelease(ctx, FailQueuedTasksOfReleaseParams{ReleaseID: row.ReleaseID, Failure: encoded})
+		failed, err := q.FailQueuedTasksOfRelease(ctx, FailQueuedTasksOfReleaseParams{ReleaseID: release, Failure: encoded})
 		if err != nil {
 			return fmt.Errorf("fail queued tasks: %w", err)
 		}
@@ -94,12 +100,17 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		}
 	}
 
-	if row.HostID != nil {
-		if err := database.Notify(ctx, tx, database.ChannelHost, row.HostID.String()); err != nil {
+	return e.notifyStopped(ctx, tx, row.HostID, database.ChannelExecution, release.String())
+}
+
+// notifyStopped wakes the container's host and the container's owner.
+func (e *Execution) notifyStopped(ctx context.Context, tx pgx.Tx, host *uuid.UUID, owner database.Channel, id string) error {
+	if host != nil {
+		if err := database.Notify(ctx, tx, database.ChannelHost, host.String()); err != nil {
 			return err
 		}
 	}
-	return database.Notify(ctx, tx, database.ChannelExecution, row.ReleaseID.String())
+	return database.Notify(ctx, tx, owner, id)
 }
 
 func ptr[T any](v T) *T { return &v }

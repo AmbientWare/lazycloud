@@ -171,7 +171,7 @@ def total(values: list[int], scale: float = 1.0) -> float:
 	url := fmt.Sprintf("http://%s.lazycloud.localhost:%s/?scale=2", control.Subdomain(uuid.UUID(p.workspace.ID), "reports", "total", control.KindFunction), p.port())
 	status, _, body := p.call(http.MethodPost, url, `{"values": [1200, 3500, 800]}`)
 	var out apitypes.Invocation
-	if status != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || out.Task.Status != apitypes.Succeeded || out.Result == nil || string(*out.Result) != "11000.0" {
+	if status != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || out.Task.Status != apitypes.TaskStatusSucceeded || out.Result == nil || string(*out.Result) != "11000.0" {
 		t.Fatalf("invoke over HTTP: %d %s", status, body)
 	}
 	if status, _, _ := p.call(http.MethodGet, url, ""); status != http.StatusMethodNotAllowed {

@@ -37,6 +37,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -142,7 +143,8 @@ func startPlatform(t *testing.T) *platform {
 		},
 		MaxIdleConnsPerHost: 1024,
 	}}
-	hosts := hostsession.NewServer(compute.NewCompute(pool), p.execution, p.storage, listener, hostsession.Config{
+	im := images.NewImages(pool, p.execution, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"}, nil)
+	hosts := hostsession.NewServer(compute.NewCompute(pool), p.execution, p.storage, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim", TouchInterval: 5 * time.Second,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)

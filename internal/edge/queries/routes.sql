@@ -46,4 +46,4 @@ where a.workspace_id = @workspace_id and a.name = @app_name and w.kind = @kind a
 select id from releases where workload_id = @workload_id and version = @version;
 
 -- name: ContainerRelease :one
-select release_id from containers where id = @id and state <> 'stopped';
+select release_id::uuid from containers where id = @id and state <> 'stopped' and release_id is not null;

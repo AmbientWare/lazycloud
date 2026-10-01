@@ -79,6 +79,8 @@ type container struct {
 	loadError  *hostproto.RunnerError
 	link       *link
 	claiming   bool
+	// build marks an image build container, which has no link or slots.
+	isBuild bool
 }
 
 func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostproto.HttpServing, phase hostproto.ContainerPhase) *container {
@@ -204,7 +206,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 
 	began := time.Now()
-	pulled, err := c.a.images.ensure(ctx, spec.GetImage())
+	pulled, err := c.a.images.ensure(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	if err != nil {
 		return err
 	}
@@ -419,7 +421,8 @@ func (c *container) stop(grace time.Duration) {
 	started := c.started
 	c.mu.Unlock()
 	c.cancelClaims()
-	if !started {
+	// A build has nothing to drain; ending its work ends the builder.
+	if !started || c.isBuild {
 		c.cancelWork()
 		return
 	}

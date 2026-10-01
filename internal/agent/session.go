@@ -186,6 +186,10 @@ func (a *Agent) start(spec *hostproto.StartContainer) {
 		a.log.Warn("ignoring start with an invalid container id", "container_id", id)
 		return
 	}
+	if spec.GetBuild() != nil {
+		a.startBuild(spec)
+		return
+	}
 	a.mu.Lock()
 	c, known := a.containers[id]
 	if !known {

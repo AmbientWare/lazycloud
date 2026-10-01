@@ -88,15 +88,18 @@ func (e *Execution) ApplyReport(ctx context.Context, host compute.HostID, report
 				if err := q.MarkContainerReady(ctx, row.ID); err != nil {
 					return fmt.Errorf("mark container ready: %w", err)
 				}
-				if err := q.ResetStartFailures(ctx, row.ReleaseID); err != nil {
+			}
+			// A ready build container runs its build; nothing else waits.
+			if release := row.ReleaseID; state == ContainerStarting && release != nil {
+				if err := q.ResetStartFailures(ctx, *release); err != nil {
 					return fmt.Errorf("reset start failures: %w", err)
 				}
-				if err := database.Notify(ctx, tx, database.ChannelExecution, row.ReleaseID.String()); err != nil {
+				if err := database.Notify(ctx, tx, database.ChannelExecution, release.String()); err != nil {
 					return err
 				}
 				// Claims that arrived while the container was starting
 				// wait on the release's claim channel.
-				if err := database.Notify(ctx, tx, database.ChannelClaim, row.ReleaseID.String()); err != nil {
+				if err := database.Notify(ctx, tx, database.ChannelClaim, release.String()); err != nil {
 					return err
 				}
 			}

@@ -68,7 +68,7 @@ order by r.id;
 
 -- name: CreatePendingContainers :many
 insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select @workspace_id, @release_id, 'pending', @slots, @cpu_millis, @memory_bytes
+select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes
 from generate_series(1, @count::int)
 returning id;
 
@@ -79,7 +79,7 @@ update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'demand ended', stopped_at = now()
 where id in (
     select p.id from containers p
-    where p.release_id = @release_id and p.state = 'pending'
+    where p.release_id = @release_id::uuid and p.state = 'pending'
     order by p.created_at desc, p.id desc
     limit @count
     for update skip locked
@@ -93,7 +93,7 @@ returning id;
 -- to run a task. DrainIdleContainers rechecks idleness after these locks.
 select c.id
 from containers c
-where c.release_id = @release_id
+where c.release_id = @release_id::uuid
   and c.state = 'ready'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
   and coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at)
@@ -117,7 +117,7 @@ returning c.id, c.host_id;
 -- name: StopAllPendingContainers :many
 update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'workload stopped', stopped_at = now()
-where release_id = @release_id and state = 'pending'
+where release_id = @release_id::uuid and state = 'pending'
 returning id;
 
 -- name: DrainAllContainers :many
@@ -125,7 +125,7 @@ returning id;
 -- running attempts finish.
 update containers
 set state = 'draining', drain_started_at = now()
-where release_id = @release_id and state in ('starting', 'ready')
+where release_id = @release_id::uuid and state in ('starting', 'ready')
 returning id, host_id;
 
 -- name: CancelQueuedTasks :many
@@ -133,7 +133,7 @@ update tasks
 set status = 'cancelled', finished_at = now()
 where id in (
     select q.id from tasks q
-    where q.release_id = @release_id and q.status = 'queued'
+    where q.release_id = @release_id::uuid and q.status = 'queued'
     order by q.available_at, q.id
     limit @batch_size
     for update skip locked

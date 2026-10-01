@@ -9,9 +9,9 @@ order by c.id;
 -- An HTTP container has no attempts; its supervisor finishes the requests in
 -- flight, which may take the release's timeout.
 select c.id,
-       (case when r.spec ? 'http' then coalesce((r.spec ->> 'timeout_seconds')::int, 0) else 0 end)::int as grace_seconds
+       (case when coalesce(r.spec ? 'http', false) then coalesce((r.spec ->> 'timeout_seconds')::int, 0) else 0 end)::int as grace_seconds
 from containers c
-join releases r on r.id = c.release_id
+left join releases r on r.id = c.release_id
 where c.host_id = @host_id and c.state = 'draining'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
 order by c.id;

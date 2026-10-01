@@ -13,7 +13,7 @@ import (
 )
 
 const containerRelease = `-- name: ContainerRelease :one
-select release_id from containers where id = $1 and state <> 'stopped'
+select release_id::uuid from containers where id = $1 and state <> 'stopped' and release_id is not null
 `
 
 func (q *Queries) ContainerRelease(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
