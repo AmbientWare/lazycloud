@@ -5,15 +5,18 @@ import { rememberWorkspaces, workspaceName } from "@/lib/api/workspaces";
 
 /**
  * Administrators only: create a workspace owned by the signed-in account. 403 otherwise.
- * A connection id places the workspace, its compute and its bucket, in that connected
- * AWS account for good.
+ * A connection id places the workspace, its compute and its bucket, in the caller's
+ * ready AWS connection for good; the server resolves which connection that is.
  */
 export async function createWorkspace(
   name: string,
   connectionId: string | null,
 ): Promise<Workspace> {
-  void connectionId;
-  const created = await ok(api.POST("/v1/workspaces", { body: { name } }));
+  const created = await ok(
+    api.POST("/v1/workspaces", {
+      body: connectionId === null ? { name } : { name, cloud: "aws" },
+    }),
+  );
   rememberWorkspaces([created]);
   return viewWorkspace(created);
 }
