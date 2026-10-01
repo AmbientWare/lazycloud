@@ -13,6 +13,7 @@ import (
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -38,6 +39,7 @@ type Owners struct {
 	Notifications *notifications.Notifications
 	Secrets       *secrets.Secrets
 	Schedules     *schedules.Schedules
+	Billing       *billing.Billing
 	// Listener wakes waits on task and image build changes. It must listen
 	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
 	Listener *database.Listener
@@ -72,6 +74,7 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 	mux.HandleFunc("GET "+signInStartPath, s.startSignIn)
 	mux.HandleFunc("GET "+identity.GitHubCallbackPath, s.completeSignIn)
 	mux.HandleFunc("POST /webhooks/resend", s.receiveResendWebhook)
+	mux.HandleFunc("POST /webhooks/stripe", s.receiveStripeWebhook)
 	mux.Handle("/", s.authenticate(ops))
 	return s.recommendClient(s.limitBody(mux)), nil
 }
@@ -261,18 +264,22 @@ var errInvalidRequest = errors.New("invalid request")
 // logged and reported without detail.
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
-		tooMany        *execution.TooManyPendingError
-		invalidSpec    *control.InvalidSpecError
-		sourceMissing  *control.SourceMissingError
-		tooLarge       *http.MaxBytesError
-		invalidImage   *images.InvalidError
-		conflict       *identity.ConflictError
-		invalid        *identity.InvalidError
-		roleErr        *identity.RoleError
-		accountErr     *identity.AccountError
-		secretMissing  *secrets.NotFoundError
-		secretExists   *secrets.ExistsError
-		secretReserved *secrets.ReservedNameError
+		tooMany         *execution.TooManyPendingError
+		invalidSpec     *control.InvalidSpecError
+		sourceMissing   *control.SourceMissingError
+		tooLarge        *http.MaxBytesError
+		invalidImage    *images.InvalidError
+		conflict        *identity.ConflictError
+		invalid         *identity.InvalidError
+		roleErr         *identity.RoleError
+		accountErr      *identity.AccountError
+		secretMissing   *secrets.NotFoundError
+		secretExists    *secrets.ExistsError
+		secretReserved  *secrets.ReservedNameError
+		payment         *billing.PaymentRequiredError
+		limit           *billing.LimitError
+		billingConflict *billing.ConflictError
+		billingInvalid  *billing.InvalidError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -324,6 +331,18 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, secretExists.Error())
 	case errors.As(err, &secretReserved):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, secretReserved.Error())
+	case errors.As(err, &payment):
+		writeJSONError(w, http.StatusPaymentRequired, apitypes.PaymentRequired, payment.Error())
+	case errors.As(err, &limit):
+		writeJSONError(w, http.StatusConflict, apitypes.LimitReached, limit.Error())
+	case errors.As(err, &billingConflict):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, billingConflict.Error())
+	case errors.As(err, &billingInvalid):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, billingInvalid.Error())
+	case errors.Is(err, billing.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
+	case errors.Is(err, billing.ErrPaymentsUnavailable):
+		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, billing.ErrPaymentsUnavailable.Error())
 	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
 	default:

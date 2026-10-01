@@ -3,3 +3,32 @@
 //   sqlc v1.31.1
 
 package billing
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type CreditPurchase struct {
+	ID                uuid.UUID
+	UserID            uuid.UUID
+	Kind              string
+	RequestKey        *uuid.UUID
+	AmountNanos       int64
+	Status            string
+	SuccessUrl        string
+	CancelUrl         string
+	CheckoutSessionID *string
+	CheckoutUrl       *string
+	CheckoutExpiresAt *time.Time
+	PaymentIntentID   *string
+	LotID             *uuid.UUID
+	ReversedNanos     int64
+	Attempts          int32
+	NextAttemptAt     time.Time
+	LastError         string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	FundedAt          *time.Time
+}

@@ -819,6 +819,9 @@ paths:
       responses:
         "200":
           description: The pricing catalog
+          headers:
+            Cache-Control:
+              schema: { type: string }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PricingCatalog" }
@@ -1030,6 +1033,37 @@ paths:
               schema: { $ref: "#/components/schemas/UsageCostSeries" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/billing/accounts:
+    get:
+      tags: [billing]
+      operationId: listBillingAccounts
+      summary: Every user with their billing standing and recent spend
+      description: >-
+        Platform administrators only. Users that billing has no account for
+        yet are listed too. search matches the email, display name or GitHub
+        login.
+      parameters:
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: role
+          in: query
+          schema: { $ref: "#/components/schemas/PlatformRole" }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/UserStatus" }
+        - $ref: "#/components/parameters/Cursor"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: One page of accounts ordered by user id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingAccountAdminPage" }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/billing/accounts/{user}/complimentary:
     parameters:
       - name: user
@@ -1039,16 +1073,21 @@ paths:
     put:
       tags: [billing]
       operationId: setComplimentary
-      summary: Waive an account's usage charges, or stop waiving them
-      description: Platform administrators only.
+      summary: Waive a user's usage charges, or stop waiving them
+      description: >-
+        Platform administrators only. Usage keeps its price; while waived it
+        costs nothing and the account has Business limits.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/ComplimentaryRequest" }
       responses:
-        "204":
-          description: Set
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingAccountAdmin" }
         default: { $ref: "#/components/responses/Error" }
 
 components:
@@ -2518,6 +2557,44 @@ components:
       required: [complimentary]
       properties:
         complimentary: { type: boolean }
+
+    PlatformRole:
+      type: string
+      enum: [admin, user]
+
+    UserStatus:
+      type: string
+      enum: [active, disabled]
+
+    BillingAccountAdmin:
+      description: >-
+        One user as an administrator sees them. plan and status are absent
+        for a user billing has no account for yet.
+      type: object
+      required: [user, user_status, payment_method_on_file, recent_cost_nanos, recent_cost_since]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        user_status: { $ref: "#/components/schemas/UserStatus" }
+        plan: { $ref: "#/components/schemas/PlanId" }
+        status: { $ref: "#/components/schemas/BillingStatus" }
+        payment_method_on_file: { type: boolean }
+        complimentary_since: { type: string, format: date-time }
+        recent_cost_nanos:
+          description: Usage cost since recent_cost_since, waived or not.
+          type: integer
+          format: int64
+        recent_cost_since: { type: string, format: date-time }
+
+    BillingAccountAdminPage:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items: { $ref: "#/components/schemas/BillingAccountAdmin" }
+        next_cursor:
+          description: Present when more accounts follow.
+          type: string
 
     UsageCostGroup:
       type: string

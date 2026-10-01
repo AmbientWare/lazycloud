@@ -538,6 +538,24 @@ func (e PlanId) Valid() bool {
 	}
 }
 
+// Defines values for PlatformRole.
+const (
+	PlatformRoleAdmin PlatformRole = "admin"
+	PlatformRoleUser  PlatformRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the PlatformRole enum.
+func (e PlatformRole) Valid() bool {
+	switch e {
+	case PlatformRoleAdmin:
+		return true
+	case PlatformRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RateClass.
 const (
 	Auto                 RateClass = "auto"
@@ -775,6 +793,24 @@ func (e UsageCostGroup) Valid() bool {
 	}
 }
 
+// Defines values for UserStatus.
+const (
+	UserStatusActive   UserStatus = "active"
+	UserStatusDisabled UserStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the UserStatus enum.
+func (e UserStatus) Valid() bool {
+	switch e {
+	case UserStatusActive:
+		return true
+	case UserStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceRole.
 const (
 	WorkspaceRoleAdministrator WorkspaceRole = "administrator"
@@ -879,6 +915,30 @@ type BillingAccount struct {
 	Status      BillingStatus    `json:"status"`
 	Usage       EntitlementUsage `json:"usage"`
 	UsageBudget UsageBudget      `json:"usage_budget"`
+}
+
+// BillingAccountAdmin One user as an administrator sees them. plan and status are absent for a user billing has no account for yet.
+type BillingAccountAdmin struct {
+	ComplimentarySince  *time.Time `json:"complimentary_since,omitempty"`
+	PaymentMethodOnFile bool       `json:"payment_method_on_file"`
+	Plan                *PlanId    `json:"plan,omitempty"`
+
+	// RecentCostNanos Usage cost since recent_cost_since, waived or not.
+	RecentCostNanos int64     `json:"recent_cost_nanos"`
+	RecentCostSince time.Time `json:"recent_cost_since"`
+
+	// Status past_due refuses new work until the card on file is updated.
+	Status     *BillingStatus `json:"status,omitempty"`
+	User       User           `json:"user"`
+	UserStatus UserStatus     `json:"user_status"`
+}
+
+// BillingAccountAdminPage defines model for BillingAccountAdminPage.
+type BillingAccountAdminPage struct {
+	Accounts []BillingAccountAdmin `json:"accounts"`
+
+	// NextCursor Present when more accounts follow.
+	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
 // BillingOwner Who pays for the machine a container ran on: the platform's fleet bills catalog rates, a connected cloud account a management fee, and self-hosted machines nothing.
@@ -1446,6 +1506,9 @@ type PlatformRate struct {
 	StorageMonthSeconds    int   `json:"storage_month_seconds"`
 }
 
+// PlatformRole defines model for PlatformRole.
+type PlatformRole string
+
 // PricingCatalog defines model for PricingCatalog.
 type PricingCatalog struct {
 	ConnectedCloudManagementFeePercent int                 `json:"connected_cloud_management_fee_percent"`
@@ -1857,6 +1920,9 @@ type User struct {
 	IsAdmin bool `json:"is_admin"`
 }
 
+// UserStatus defines model for UserStatus.
+type UserStatus string
+
 // WorkloadName defines model for WorkloadName.
 type WorkloadName = string
 
@@ -1930,6 +1996,17 @@ type UserCodePath = string
 
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
+
+// ListBillingAccountsParams defines parameters for ListBillingAccounts.
+type ListBillingAccountsParams struct {
+	Search *string       `form:"search,omitempty" json:"search,omitempty"`
+	Role   *PlatformRole `form:"role,omitempty" json:"role,omitempty"`
+	Status *UserStatus   `form:"status,omitempty" json:"status,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
 
 // GetCostSeriesParams defines parameters for GetCostSeries.
 type GetCostSeriesParams struct {

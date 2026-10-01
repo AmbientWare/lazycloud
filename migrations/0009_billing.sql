@@ -208,6 +208,9 @@ create table stripe_events (
     id text primary key,
     type text not null,
     object_id text not null,
+    -- The customer the event names, kept because a detached payment
+    -- method no longer names it when fetched again.
+    customer_id text,
     received_at timestamptz not null default now(),
     attempts integer not null default 0,
     next_attempt_at timestamptz not null default now(),

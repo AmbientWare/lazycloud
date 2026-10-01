@@ -136,9 +136,6 @@ type Limit struct {
 
 func limitOf(n int) Limit { return Limit{Max: n} }
 
-// allows reports whether holding n stays within the limit.
-func (l Limit) allows(n int) bool { return l.Unlimited || n <= l.Max }
-
 // Entitlements are the limits and capabilities an account is held to.
 // Concurrency is two pools: a container without a GPU counts against CPU
 // containers, one with GPUs against GPUs by its card count.
@@ -260,8 +257,6 @@ func accountEntitlements(plan Plan, hasCard, complimentary bool) (Entitlements, 
 	}
 	return e, nil
 }
-
-func (e Entitlements) allowsGPU(model GPUType) bool { return slices.Contains(e.GPUTypes, model) }
 
 // ComputeRate is what one kind of container costs an hour, in nanodollars,
 // before the resources it holds are counted.

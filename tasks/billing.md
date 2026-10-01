@@ -73,6 +73,15 @@ recomputed meter totals.
 - [ ] API
 - [ ] Unfunded retention
 
+## Scope decisions
+
+- No admin tooling beyond the server's bootstrap subcommands (user's
+  direction). Published rates ship as versioned data with the code: the
+  reviewed rate history in `internal/billing/ratecard.go`, each publication
+  with its effective time. There is no admin API or UI for complimentary
+  accounts; `server admin set-complimentary -email` is the one operations
+  command.
+
 ## Intentional differences
 
 (filled in as they are decided)
