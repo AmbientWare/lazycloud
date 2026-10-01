@@ -102,12 +102,11 @@ func refusePrivate(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// sharedAddressSpace is carrier-grade NAT space, private in practice.
-var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
-
 func publicAddress(ip netip.Addr) bool {
 	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !sharedAddressSpace.Contains(ip)
+	// 100.64.0.0/10 is carrier-grade NAT space, private in practice.
+	shared := ip.Is4() && ip.As4()[0] == 100 && ip.As4()[1]&0xc0 == 64
+	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !shared
 }
 
 // checkRegistryHost refuses a registry a user names when it is a loopback,

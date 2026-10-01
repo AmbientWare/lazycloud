@@ -6,11 +6,21 @@ servers:
   - url: /
 security:
   - bearer: []
+  - session: []
 paths:
+  # Identity: accounts, sessions, tokens, device login, workspaces, members
+  # and invitations. Browser sign-in (/auth/github/start and
+  # /auth/github/callback) and the Resend delivery webhook
+  # (/webhooks/resend) are redirects and provider-shaped requests served
+  # outside this document.
+
   /v1/me:
     get:
       operationId: getMe
-      summary: The authenticated user and the workspaces the token reaches
+      summary: The authenticated user and the workspaces they are a member of
+      description: >-
+        Workspaces being deleted are listed with state `deleting`. A token
+        restricted to one workspace lists only that one.
       responses:
         "200":
           description: Caller identity
@@ -18,6 +28,376 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
         default: { $ref: "#/components/responses/Error" }
+
+  /v1/sessions/current:
+    delete:
+      operationId: signOut
+      summary: End the browser session that made this request, and no other
+      security:
+        - session: []
+      responses:
+        "204":
+          description: Signed out; the session cookie is cleared
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/tokens:
+    get:
+      operationId: listTokens
+      summary: The caller's unrevoked access tokens, newest first
+      parameters:
+        - name: include_device
+          in: query
+          description: Include tokens minted by `lazycloud login`.
+          schema: { type: boolean, default: true }
+        - $ref: "#/components/parameters/Limit"
+        - name: cursor
+          in: query
+          description: The `next_cursor` of the previous page.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of tokens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createToken
+      summary: Create an access token that reaches every workspace of the account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenCreateRequest" }
+      responses:
+        "201":
+          description: The token; its value is shown only here
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedToken" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/tokens/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: revokeToken
+      summary: Revoke one of the caller's tokens; a token cannot revoke itself
+      responses:
+        "204":
+          description: Revoked
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/device-codes:
+    post:
+      operationId: startDeviceLogin
+      summary: Start a device-code login for a CLI
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceLoginRequest" }
+      responses:
+        "201":
+          description: The codes and where the person approves them
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceLogin" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/device-codes/token:
+    post:
+      operationId: pollDeviceLogin
+      summary: Poll a device-code login until it is approved, denied or expired
+      description: >-
+        Polling sooner than `poll_interval_seconds` after the previous poll
+        answers `slow_down` with a longer interval. The token appears once,
+        on the poll that finds the login approved.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceTokenRequest" }
+      responses:
+        "200":
+          description: Where the login stands
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceTokenResponse" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/device-codes/{user_code}:
+    parameters:
+      - $ref: "#/components/parameters/UserCodePath"
+    get:
+      operationId: getDeviceLogin
+      summary: The device-code login a user code names
+      responses:
+        "200":
+          description: The login
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceCode" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/device-codes/{user_code}/approve:
+    parameters:
+      - $ref: "#/components/parameters/UserCodePath"
+    post:
+      operationId: approveDeviceLogin
+      summary: Approve a waiting CLI for the caller's account
+      responses:
+        "200":
+          description: The approved login
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceCode" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/device-codes/{user_code}/deny:
+    parameters:
+      - $ref: "#/components/parameters/UserCodePath"
+    post:
+      operationId: denyDeviceLogin
+      summary: Refuse a waiting CLI
+      responses:
+        "200":
+          description: The denied login
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceCode" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces:
+    get:
+      operationId: listWorkspaces
+      summary: The workspaces the caller may act on, by name
+      description: >-
+        Platform administrators see every workspace, members their
+        memberships, and a restricted token only its workspace.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          description: The `next_cursor` of the previous page.
+          schema: { $ref: "#/components/schemas/Name" }
+      responses:
+        "200":
+          description: One page of workspaces
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkspaceList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createWorkspace
+      summary: Create a workspace owned by the caller; platform administrators only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkspaceRequest" }
+      responses:
+        "201":
+          description: The workspace
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: getWorkspace
+      summary: One workspace, in any state
+      responses:
+        "200":
+          description: The workspace
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: renameWorkspace
+      summary: Rename a workspace; any member may
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkspaceRequest" }
+      responses:
+        "200":
+          description: The renamed workspace
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteWorkspace
+      summary: Delete a workspace, or resume an unfinished deletion; platform administrators only
+      description: >-
+        The workspace becomes `deleting` at once and refuses every other
+        request. Its tasks are cancelled, its containers stopped and its
+        data removed in the background, after which it disappears.
+      responses:
+        "202":
+          description: Deletion is under way
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/members:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listMembers
+      summary: The workspace's members, owner first
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemberList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/members/{user}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - name: user
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: setMemberRole
+      summary: Change a member's role; administrators only, never the owner's
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemberRoleRequest" }
+      responses:
+        "200":
+          description: The member
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Member" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeMember
+      summary: Remove a member, or leave when the user is the caller
+      responses:
+        "204":
+          description: Removed
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/invitations:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listInvitations
+      summary: Open invitations with their email delivery state; administrators only
+      responses:
+        "200":
+          description: Invitations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createInvitation
+      summary: Invite an email address; administrators only
+      description: >-
+        Returns once the invitation and its email are committed. The email is
+        delivered in the background, so a provider outage delays it rather
+        than refusing the invitation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvitationRequest" }
+      responses:
+        "201":
+          description: The invitation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invitation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/invitations/{invitation}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/InvitationPath"
+    delete:
+      operationId: revokeInvitation
+      summary: Withdraw an invitation and its unsent email
+      responses:
+        "204":
+          description: Revoked
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/invitations/{invitation}/resend:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/InvitationPath"
+    post:
+      operationId: resendInvitation
+      summary: Send the invitation again on a new link; the previous link stops working
+      responses:
+        "200":
+          description: The invitation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invitation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/invitations/{token}:
+    parameters:
+      - $ref: "#/components/parameters/InvitationTokenPath"
+    get:
+      operationId: previewInvitation
+      summary: What an invitation link offers, without answering it
+      responses:
+        "200":
+          description: The offer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationPreview" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/invitations/{token}/accept:
+    parameters:
+      - $ref: "#/components/parameters/InvitationTokenPath"
+    post:
+      operationId: acceptInvitation
+      summary: Join the workspace as the signed-in account
+      responses:
+        "201":
+          description: The membership
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcceptedInvitation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/invitations/{token}/decline:
+    parameters:
+      - $ref: "#/components/parameters/InvitationTokenPath"
+    post:
+      operationId: declineInvitation
+      summary: Refuse an invitation
+      responses:
+        "204":
+          description: Declined
+        default: { $ref: "#/components/responses/Error" }
+
+  # Function execution
 
   /v1/workspaces/{workspace}/sources:
     parameters:
@@ -296,6 +676,14 @@ components:
     bearer:
       type: http
       scheme: bearer
+    session:
+      description: >-
+        The dashboard's browser session, set by GitHub sign-in. Requests
+        that change state with it must send an Origin header naming the
+        dashboard.
+      type: apiKey
+      in: cookie
+      name: __Host-lazycloud_session
 
   parameters:
     WorkspacePath:
@@ -318,6 +706,27 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    UserCodePath:
+      name: user_code
+      in: path
+      required: true
+      description: The code the CLI shows, such as BCDF-GHJK, in any case.
+      schema: { type: string, pattern: "^[A-Za-z]{4}-?[A-Za-z]{4}$" }
+    InvitationPath:
+      name: invitation
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InvitationTokenPath:
+      name: token
+      in: path
+      required: true
+      description: The secret from the invitation link.
+      schema: { type: string, minLength: 1, maxLength: 200 }
     ImagePath:
       name: image
       in: path
@@ -387,17 +796,275 @@ components:
 
     User:
       type: object
-      required: [id, email]
+      required: [id, email, display_name, avatar_url, github_login, is_admin, created_at]
       properties:
         id: { type: string, format: uuid }
-        email: { type: string }
+        email:
+          description: Empty when GitHub reported no verified primary address.
+          type: string
+        display_name: { type: string }
+        avatar_url: { type: string }
+        github_login:
+          description: Empty for accounts that have not signed in with GitHub.
+          type: string
+        is_admin:
+          description: Platform administrators reach every workspace.
+          type: boolean
+        created_at: { type: string, format: date-time }
 
     Workspace:
       type: object
-      required: [id, name]
+      required: [id, name, state, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { $ref: "#/components/schemas/Name" }
+        state: { $ref: "#/components/schemas/WorkspaceState" }
+        role:
+          description: The caller's role; absent for an administrator who is not a member.
+          allOf: [{ $ref: "#/components/schemas/WorkspaceRole" }]
+        created_at: { type: string, format: date-time }
+
+    WorkspaceState:
+      type: string
+      enum: [active, deleting]
+
+    WorkspaceRole:
+      type: string
+      enum: [owner, administrator, member]
+
+    WorkspaceList:
+      type: object
+      required: [workspaces]
+      properties:
+        workspaces:
+          type: array
+          items: { $ref: "#/components/schemas/Workspace" }
+        next_cursor:
+          description: Pass as `cursor` for the next page; absent after the last.
+          allOf: [{ $ref: "#/components/schemas/Name" }]
+
+    WorkspaceRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { $ref: "#/components/schemas/Name" }
+
+    TokenStatus:
+      type: string
+      enum: [active, expired]
+
+    Token:
+      type: object
+      required: [id, name, device, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        device:
+          description: Minted by `lazycloud login`.
+          type: boolean
+        workspace_id:
+          description: Set when the token reaches only this workspace.
+          type: string
+          format: uuid
+        status: { $ref: "#/components/schemas/TokenStatus" }
+        created_at: { type: string, format: date-time }
+        expires_at:
+          description: Absent when the token never expires.
+          type: string
+          format: date-time
+        last_used_at:
+          description: Recorded within 30 seconds of use; absent if never used.
+          type: string
+          format: date-time
+
+    TokenList:
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items: { $ref: "#/components/schemas/Token" }
+        next_cursor:
+          description: Pass as `cursor` for the next page; absent after the last.
+          type: string
+          format: uuid
+
+    TokenCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        expires_in_seconds:
+          description: One to 90 days; omit for a token that never expires.
+          type: integer
+          minimum: 86400
+          maximum: 7776000
+
+    CreatedToken:
+      type: object
+      required: [token, record]
+      properties:
+        token:
+          description: The secret; it is not shown again.
+          type: string
+        record: { $ref: "#/components/schemas/Token" }
+
+    DeviceLoginRequest:
+      type: object
+      properties:
+        client_name:
+          description: Names the device token, such as cli@laptop.
+          type: string
+          maxLength: 200
+          default: cli
+
+    DeviceLogin:
+      type: object
+      required: [device_code, user_code, verification_uri, verification_uri_complete, expires_in_seconds, poll_interval_seconds]
+      properties:
+        device_code:
+          description: The CLI's secret for polling.
+          type: string
+        user_code:
+          description: What the person confirms at the verification page.
+          type: string
+        verification_uri: { type: string }
+        verification_uri_complete:
+          description: The verification page with the code filled in.
+          type: string
+        expires_in_seconds: { type: integer }
+        poll_interval_seconds: { type: integer }
+
+    DeviceTokenRequest:
+      type: object
+      required: [device_code]
+      properties:
+        device_code: { type: string, minLength: 1, maxLength: 200 }
+
+    DeviceTokenStatus:
+      type: string
+      enum: [pending, slow_down, approved, denied, expired]
+
+    DeviceTokenResponse:
+      type: object
+      required: [status, poll_interval_seconds]
+      properties:
+        status: { $ref: "#/components/schemas/DeviceTokenStatus" }
+        token:
+          description: The device token, on the poll that finds the login approved.
+          type: string
+        poll_interval_seconds:
+          description: Wait at least this long before the next poll.
+          type: integer
+
+    DeviceCodeStatus:
+      type: string
+      enum: [pending, approved, denied, expired]
+
+    DeviceCode:
+      type: object
+      required: [user_code, client_name, status, created_at, expires_at]
+      properties:
+        user_code: { type: string }
+        client_name: { type: string }
+        status: { $ref: "#/components/schemas/DeviceCodeStatus" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    Member:
+      type: object
+      required: [user_id, display_name, email, role, created_at]
+      properties:
+        user_id: { type: string, format: uuid }
+        display_name: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/WorkspaceRole" }
+        created_at:
+          description: When the user joined.
+          type: string
+          format: date-time
+
+    MemberList:
+      type: object
+      required: [members]
+      properties:
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/Member" }
+
+    MemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/InvitationRole" }
+
+    InvitationRole:
+      description: The roles an invitation or role change grants; ownership is never offered.
+      type: string
+      enum: [administrator, member]
+
+    DeliveryState:
+      description: >-
+        What became of an email: `queued` until the provider accepts it,
+        then `sent`, and `delivered`, `bounced` or `complained` as the
+        provider reports; `failed` when delivery gave up; `discarded` when
+        it was withdrawn before sending.
+      type: string
+      enum: [queued, sent, delivered, bounced, complained, failed, discarded]
+
+    InvitationRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, minLength: 3, maxLength: 320 }
+        role:
+          allOf: [{ $ref: "#/components/schemas/InvitationRole" }]
+          default: member
+
+    Invitation:
+      type: object
+      required: [id, workspace_id, email, role, invited_by_name, expired, delivery, expires_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/InvitationRole" }
+        invited_by_user_id: { type: string, format: uuid }
+        invited_by_name: { type: string }
+        expired:
+          description: Decided by the server's clock.
+          type: boolean
+        delivery: { $ref: "#/components/schemas/DeliveryState" }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    InvitationList:
+      type: object
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          items: { $ref: "#/components/schemas/Invitation" }
+
+    InvitationPreview:
+      type: object
+      required: [workspace_id, workspace_name, email, role, invited_by_name, expired, expires_at]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        workspace_name: { $ref: "#/components/schemas/Name" }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/InvitationRole" }
+        invited_by_name: { type: string }
+        expired: { type: boolean }
+        expires_at: { type: string, format: date-time }
+
+    AcceptedInvitation:
+      type: object
+      required: [workspace, member]
+      properties:
+        workspace: { $ref: "#/components/schemas/Workspace" }
+        member: { $ref: "#/components/schemas/Member" }
 
     SourceUploadRequest:
       type: object

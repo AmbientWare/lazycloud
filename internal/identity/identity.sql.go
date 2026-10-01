@@ -7,23 +7,26 @@ package identity
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 const authenticateToken = `-- name: AuthenticateToken :one
-select t.user_id, t.workspace_id, u.email, u.is_admin
+select t.id, t.user_id, t.workspace_id, u.email, u.is_admin
 from api_tokens t
 join users u on u.id = t.user_id
 where t.token_hash = $1
   and t.revoked_at is null
   and (t.expires_at is null or t.expires_at > now())
+  and u.status = 'active'
 `
 
 type AuthenticateTokenRow struct {
+	ID          uuid.UUID
 	UserID      uuid.UUID
 	WorkspaceID *uuid.UUID
-	Email       string
+	Email       *string
 	IsAdmin     bool
 }
 
@@ -31,6 +34,7 @@ func (q *Queries) AuthenticateToken(ctx context.Context, tokenHash []byte) (Auth
 	row := q.db.QueryRow(ctx, authenticateToken, tokenHash)
 	var i AuthenticateTokenRow
 	err := row.Scan(
+		&i.ID,
 		&i.UserID,
 		&i.WorkspaceID,
 		&i.Email,
@@ -55,9 +59,9 @@ func (q *Queries) InsertMember(ctx context.Context, arg InsertMemberParams) erro
 }
 
 const insertToken = `-- name: InsertToken :one
-insert into api_tokens (user_id, workspace_id, name, token_hash)
-values ($1, $2, $3, $4)
-returning id
+insert into api_tokens (user_id, workspace_id, name, token_hash, expires_at, device)
+values ($1, $2, $3, $4, $5, $6)
+returning id, name, workspace_id, device, created_at, expires_at, last_used_at
 `
 
 type InsertTokenParams struct {
@@ -65,18 +69,40 @@ type InsertTokenParams struct {
 	WorkspaceID *uuid.UUID
 	Name        string
 	TokenHash   []byte
+	ExpiresAt   *time.Time
+	Device      bool
 }
 
-func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (uuid.UUID, error) {
+type InsertTokenRow struct {
+	ID          uuid.UUID
+	Name        string
+	WorkspaceID *uuid.UUID
+	Device      bool
+	CreatedAt   time.Time
+	ExpiresAt   *time.Time
+	LastUsedAt  *time.Time
+}
+
+func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (InsertTokenRow, error) {
 	row := q.db.QueryRow(ctx, insertToken,
 		arg.UserID,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.TokenHash,
+		arg.ExpiresAt,
+		arg.Device,
 	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+	var i InsertTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.WorkspaceID,
+		&i.Device,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+	)
+	return i, err
 }
 
 const insertUser = `-- name: InsertUser :one
@@ -84,7 +110,7 @@ insert into users (email, is_admin) values ($1, $2) returning id
 `
 
 type InsertUserParams struct {
-	Email   string
+	Email   *string
 	IsAdmin bool
 }
 
@@ -96,54 +122,19 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (uuid.UU
 }
 
 const insertWorkspace = `-- name: InsertWorkspace :one
-insert into workspaces (name) values ($1) returning id
+insert into workspaces (name) values ($1) returning id, created_at
 `
 
-func (q *Queries) InsertWorkspace(ctx context.Context, name string) (uuid.UUID, error) {
+type InsertWorkspaceRow struct {
+	ID        uuid.UUID
+	CreatedAt time.Time
+}
+
+func (q *Queries) InsertWorkspace(ctx context.Context, name string) (InsertWorkspaceRow, error) {
 	row := q.db.QueryRow(ctx, insertWorkspace, name)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const memberWorkspaces = `-- name: MemberWorkspaces :many
-select w.id, w.name
-from workspace_members m
-join workspaces w on w.id = m.workspace_id
-where m.user_id = $1
-  and ($2::uuid is null or w.id = $2::uuid)
-order by w.name
-`
-
-type MemberWorkspacesParams struct {
-	UserID     uuid.UUID
-	RestrictTo *uuid.UUID
-}
-
-type MemberWorkspacesRow struct {
-	ID   uuid.UUID
-	Name string
-}
-
-// restrict_to limits the list to one workspace for a restricted token.
-func (q *Queries) MemberWorkspaces(ctx context.Context, arg MemberWorkspacesParams) ([]MemberWorkspacesRow, error) {
-	rows, err := q.db.Query(ctx, memberWorkspaces, arg.UserID, arg.RestrictTo)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []MemberWorkspacesRow
-	for rows.Next() {
-		var i MemberWorkspacesRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	var i InsertWorkspaceRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
+	return i, err
 }
 
 const userByEmail = `-- name: UserByEmail :one
@@ -152,11 +143,11 @@ select id, email, is_admin from users where email = $1
 
 type UserByEmailRow struct {
 	ID      uuid.UUID
-	Email   string
+	Email   *string
 	IsAdmin bool
 }
 
-func (q *Queries) UserByEmail(ctx context.Context, email string) (UserByEmailRow, error) {
+func (q *Queries) UserByEmail(ctx context.Context, email *string) (UserByEmailRow, error) {
 	row := q.db.QueryRow(ctx, userByEmail, email)
 	var i UserByEmailRow
 	err := row.Scan(&i.ID, &i.Email, &i.IsAdmin)
@@ -164,9 +155,9 @@ func (q *Queries) UserByEmail(ctx context.Context, email string) (UserByEmailRow
 }
 
 const workspaceAccess = `-- name: WorkspaceAccess :one
-select w.id, w.name,
-       exists (select 1 from workspace_members m where m.workspace_id = w.id and m.user_id = $1) as member
+select w.id, w.name, w.state, w.created_at, coalesce(m.role, '')::text as role
 from workspaces w
+left join workspace_members m on m.workspace_id = w.id and m.user_id = $1
 where w.name = $2
 `
 
@@ -176,16 +167,24 @@ type WorkspaceAccessParams struct {
 }
 
 type WorkspaceAccessRow struct {
-	ID     uuid.UUID
-	Name   string
-	Member bool
+	ID        uuid.UUID
+	Name      string
+	State     string
+	CreatedAt time.Time
+	Role      string
 }
 
-// The workspace and whether the user is a member.
+// The workspace and the user's role in it, empty when not a member.
 func (q *Queries) WorkspaceAccess(ctx context.Context, arg WorkspaceAccessParams) (WorkspaceAccessRow, error) {
 	row := q.db.QueryRow(ctx, workspaceAccess, arg.UserID, arg.Name)
 	var i WorkspaceAccessRow
-	err := row.Scan(&i.ID, &i.Name, &i.Member)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.State,
+		&i.CreatedAt,
+		&i.Role,
+	)
 	return i, err
 }
 

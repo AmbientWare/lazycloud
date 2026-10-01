@@ -473,18 +473,48 @@ def test_calling_an_undeployed_function_raises_a_typed_error(
         reports.summarize_sales.spawn([1])
 
 
-def _me(*workspaces: str) -> Reply:
+def _me(*workspaces: str, owned: str = "") -> Reply:
     return json_reply(
         {
-            "user": {"id": APP_ID, "email": "dev@example.com"},
+            "user": {
+                "id": APP_ID,
+                "email": "dev@example.com",
+                "display_name": "Dev",
+                "avatar_url": "",
+                "github_login": "dev",
+                "is_admin": False,
+                "created_at": NOW,
+            },
             "workspaces": [
-                {"id": _task_id(index), "name": name} for index, name in enumerate(workspaces)
+                {
+                    "id": _task_id(index),
+                    "name": name,
+                    "state": "active",
+                    "role": "owner" if name == owned else "member",
+                    "created_at": NOW,
+                }
+                for index, name in enumerate(workspaces)
             ],
         }
     )
 
 
-def test_login_verifies_the_token_and_stores_the_only_workspace(
+def test_every_command_tells_an_out_of_date_client_to_update(fake_api: FakeApi) -> None:
+    def newer(_: ApiRequest) -> Reply:
+        status, headers, body = _me("team")
+        return status, {**headers, "X-Lazycloud-Recommended-Client-Version": "999.0.0"}, body
+
+    fake_api.route("GET", "/v1/me")(newer)
+
+    result = CliRunner().invoke(build_public_cli(), ["login"])
+
+    assert result.exit_code == 0, result.output
+    assert "this server recommends 999.0.0. Run `lazycloud update` to upgrade." in result.stderr
+    (me,) = fake_api.calls("GET", "/v1/me")
+    assert me.headers["user-agent"].startswith("lazycloud/")
+
+
+def test_login_verifies_the_token_and_stores_the_owned_or_only_workspace(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_api: FakeApi
 ) -> None:
     monkeypatch.delenv("LAZYCLOUD_TOKEN")
@@ -500,6 +530,14 @@ def test_login_verifies_the_token_and_stores_the_only_workspace(
     profile = get_profile()
     assert (profile.token, profile.workspace) == ("lc_new-token-value", "analytics")
 
+    # Joining someone else's workspace does not change which one is yours.
+    fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", "billing", owned="billing"))
+    result = CliRunner().invoke(
+        build_public_cli(), ["login", "--profile", "mine", "--token", "lc_mine-token-1"]
+    )
+    assert result.exit_code == 0, result.output
+    assert get_profile("mine").workspace == "billing"
+
     fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", "billing"))
     result = CliRunner().invoke(
         build_public_cli(), ["login", "--profile", "other", "--token", "lc_other-token-1"]
@@ -511,6 +549,98 @@ def test_login_verifies_the_token_and_stores_the_only_workspace(
     with pytest.raises(SystemExit):
         start(args=["--json", "login", "--token", "lc_bad-token-1"], prog_name="lazycloud")
     assert json.loads(capsys.readouterr().err)["error"]["type"] == "authentication_failed"
+
+
+def _device_codes(fake_api: FakeApi, outcomes: list[dict[str, object]]) -> list[float]:
+    """Serve one device login whose polls answer `outcomes` in order."""
+
+    fake_api.route("POST", "/v1/device-codes")(
+        lambda _: json_reply(
+            {
+                "device_code": "dc_secret",
+                "user_code": "BCDF-GHJK",
+                "verification_uri": "https://dash.test/activate",
+                "verification_uri_complete": "https://dash.test/activate?code=BCDF-GHJK",
+                "expires_in_seconds": 900,
+                "poll_interval_seconds": 5,
+            },
+            201,
+        )
+    )
+    answers = iter(outcomes)
+    fake_api.route("POST", "/v1/device-codes/token")(lambda _: json_reply(next(answers)))
+    slept: list[float] = []
+    return slept
+
+
+def test_login_without_a_token_runs_the_device_flow(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_api: FakeApi
+) -> None:
+    from lazycloud.cli import identity as identity_commands
+
+    monkeypatch.delenv("LAZYCLOUD_TOKEN")
+    monkeypatch.delenv("LAZYCLOUD_WORKSPACE")
+    reset_settings_cache()
+    slept = _device_codes(
+        fake_api,
+        [
+            {"status": "pending", "poll_interval_seconds": 5},
+            {"status": "slow_down", "poll_interval_seconds": 10},
+            {"status": "approved", "token": "lc_device-token-1", "poll_interval_seconds": 10},
+        ],
+    )
+    monkeypatch.setattr(identity_commands.time, "sleep", slept.append)
+    monkeypatch.setattr(identity_commands.socket, "gethostname", lambda: "laptop")
+    fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", owned="analytics"))
+
+    result = CliRunner().invoke(build_public_cli(), ["--json", "login"])
+
+    assert result.exit_code == 0, result.output
+    # The card names the profile, the endpoint, the link and the code.
+    card = result.stderr
+    for text in (
+        "Sign in to lazycloud",
+        "Profile default at",
+        fake_api.url,
+        "https://dash.test/activate?code=BCDF-GHJK",
+        "BCDF-GHJK",
+        "15 minutes",
+    ):
+        assert text in card, card
+    assert slept == [5.0, 5.0, 10.0]
+    (started,) = fake_api.calls("POST", "/v1/device-codes")
+    assert started.json() == {"client_name": "cli@laptop"}
+    assert "authorization" not in started.headers
+    polls = fake_api.calls("POST", "/v1/device-codes/token")
+    assert [p.json() for p in polls] == [{"device_code": "dc_secret"}] * 3
+    assert all("authorization" not in p.headers for p in polls)
+    (me,) = fake_api.calls("GET", "/v1/me")
+    assert me.headers["authorization"] == "Bearer lc_device-token-1"
+    payload = json.loads(result.stdout)
+    assert payload["token_source"] == "device"
+    profile = get_profile()
+    assert (profile.token, profile.workspace) == ("lc_device-token-1", "analytics")
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [("denied", "The sign-in request was denied."), ("expired", "The sign-in code expired.")],
+)
+def test_device_login_reports_denied_and_expired(
+    status: str, message: str, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    from lazycloud.cli import identity as identity_commands
+
+    monkeypatch.delenv("LAZYCLOUD_TOKEN")
+    reset_settings_cache()
+    slept = _device_codes(fake_api, [{"status": status, "poll_interval_seconds": 5}])
+    monkeypatch.setattr(identity_commands.time, "sleep", slept.append)
+
+    result = CliRunner().invoke(build_public_cli(), ["login", "--token", ""])
+
+    assert isinstance(result.exception, ClientError)
+    assert str(result.exception) == message
+    assert get_profile().token == ""
 
 
 def test_cli_run_json_and_task_commands_use_the_task_api(

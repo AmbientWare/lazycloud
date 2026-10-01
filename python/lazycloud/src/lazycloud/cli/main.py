@@ -280,7 +280,7 @@ def _register_serve(application: typer.Typer) -> None:
 
 
 def _register_login(application: typer.Typer) -> None:
-    application.command("login", help="Store an access token and verify it.")(login)
+    application.command("login", help="Authenticate the CLI profile.")(login)
 
 
 def _register_update(application: typer.Typer) -> None:
