@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,6 +136,10 @@ type TaskFilter struct {
 	// Function requires App.
 	Function *string
 	Status   *TaskStatus
+	// RootOnly leaves out tasks spawned by other tasks.
+	RootOnly bool
+	// Search matches a task id prefix or part of the function name.
+	Search *string
 }
 
 // TaskPage is one page of tasks, newest first.
@@ -162,6 +167,12 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		s := string(*filter.Status)
 		status = &s
 	}
+	var search *string
+	if filter.Search != nil && *filter.Search != "" {
+		// LIKE wildcards in the search are literal characters.
+		escaped := escapeLike(strings.ToLower(*filter.Search))
+		search = &escaped
+	}
 	size := pageSize(limit)
 	var rows []TaskViewRow
 	if filter.App != nil {
@@ -174,7 +185,7 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		}
 		r, err := e.queries.ListAppTasks(ctx, ListAppTasksParams{
 			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
-			Before: before, MaxRows: size + 1,
+			RootOnly: filter.RootOnly, Search: search, Before: before, MaxRows: size + 1,
 		})
 		if err != nil {
 			return TaskPage{}, fmt.Errorf("list app tasks: %w", err)
@@ -184,7 +195,8 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		}
 	} else {
 		r, err := e.queries.ListTasks(ctx, ListTasksParams{
-			WorkspaceID: uuid.UUID(workspace), Status: status, Before: before, MaxRows: size + 1,
+			WorkspaceID: uuid.UUID(workspace), Status: status, RootOnly: filter.RootOnly, Search: search,
+			Before: before, MaxRows: size + 1,
 		})
 		if err != nil {
 			return TaskPage{}, fmt.Errorf("list tasks: %w", err)
@@ -209,6 +221,11 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		return TaskPage{}, err
 	}
 	return page, nil
+}
+
+// escapeLike makes LIKE's wildcards and its escape character literal.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(s)
 }
 
 // maxPage bounds every page of a listing.

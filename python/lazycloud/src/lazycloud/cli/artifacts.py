@@ -48,7 +48,7 @@ def delete_artifact(
     confirm_destructive(
         ctx,
         subject=f"delete artifact {artifact_id}",
-        consequence="This permanently removes the artifact.",
+        consequence="This permanently removes the artifact and settles its storage charges.",
         yes=yes,
     )
     workspace_storage(workspace=workspace).delete_artifact(selected)

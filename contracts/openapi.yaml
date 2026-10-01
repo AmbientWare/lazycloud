@@ -917,6 +917,14 @@ paths:
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/TaskStatus" }
+        - name: root_only
+          in: query
+          description: Only tasks no other task spawned.
+          schema: { type: boolean, default: false }
+        - name: search
+          in: query
+          description: A task id prefix or part of a function name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -975,6 +983,10 @@ paths:
           in: query
           description: Only containers that have not stopped.
           schema: { type: boolean, default: false }
+        - name: app
+          in: query
+          description: Only the containers of this app's workloads.
+          schema: { $ref: "#/components/schemas/AppName" }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -1496,7 +1508,7 @@ paths:
     get:
       operationId: getArtifactSummary
       tags: [storage]
-      summary: Stored artifact count, bytes and retention
+      summary: Stored artifact count, bytes, cost and retention
       responses:
         "200":
           description: The summary
@@ -1931,6 +1943,94 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/HttpWorkload" }
         default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+    post:
+      operationId: requestEndpointPath
+      summary: Send a request to an endpoint through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
+  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/versions/{version}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: requestEndpointPathVersion
+      summary: Send a request to an endpoint version through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
+  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+    post:
+      operationId: requestAsgiPath
+      summary: Send a request to an ASGI or realtime app through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
+  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/versions/{version}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: requestAsgiPathVersion
+      summary: Send a request to an ASGI or realtime app version through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
 
   /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}:
     parameters:
@@ -3406,10 +3506,13 @@ components:
 
     Token:
       type: object
-      required: [id, name, device, status, created_at]
+      required: [id, name, prefix, device, status, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
+        prefix:
+          description: The token's first characters; empty for older tokens.
+          type: string
         device:
           description: Minted by `lazycloud login`.
           type: boolean
@@ -3910,6 +4013,9 @@ components:
         spec: { $ref: "#/components/schemas/FunctionSpec" }
         url:
           description: Where an HTTP workload answers, following the active release.
+          type: string
+        invoke_path:
+          description: The HTTP workload on the API host, following the active release.
           type: string
 
     Function:
@@ -4632,7 +4738,7 @@ components:
 
     ArtifactSummary:
       type: object
-      required: [count, size_bytes, retention_seconds]
+      required: [count, size_bytes, estimated_monthly_nanos, accrued_nanos, accrued_since, retention_seconds]
       properties:
         count:
           type: integer
@@ -4640,6 +4746,18 @@ components:
         size_bytes:
           type: integer
           format: int64
+        estimated_monthly_nanos:
+          description: size_bytes for 30 days at the volume storage rate.
+          type: integer
+          format: int64
+        accrued_nanos:
+          description: Metered cost since accrued_since, by closed quarter-hour.
+          type: integer
+          format: int64
+        accrued_since:
+          description: The start of the current UTC month.
+          type: string
+          format: date-time
         retention_seconds:
           description: How long new artifacts are kept under the workspace's plan.
           type: integer
@@ -4986,6 +5104,9 @@ components:
           type: integer
         cpu_millis: { type: integer, format: int64 }
         memory_mib: { type: integer, format: int64 }
+        image:
+          description: The image reference the release runs.
+          type: string
         created_at: { type: string, format: date-time }
         ready_at: { type: string, format: date-time }
         stopped_at: { type: string, format: date-time }
@@ -5201,7 +5322,7 @@ components:
 
     HttpWorkload:
       type: object
-      required: [name, app, kind, state, release, url, version_url, release_url]
+      required: [name, app, kind, state, release, url, version_url, release_url, invoke_path, version_invoke_path]
       properties:
         name: { $ref: "#/components/schemas/WorkloadName" }
         app: { $ref: "#/components/schemas/AppName" }
@@ -5219,6 +5340,12 @@ components:
           type: string
         release_url:
           description: Addresses the release by id.
+          type: string
+        invoke_path:
+          description: The workload on the API host; append the request's path.
+          type: string
+        version_invoke_path:
+          description: The API-host path pinned to the release's version.
           type: string
         domain_url:
           description: The custom hostname, once its registration is ready.

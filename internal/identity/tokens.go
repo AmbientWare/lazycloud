@@ -20,6 +20,9 @@ const (
 type Token struct {
 	ID   TokenID
 	Name string
+	// Prefix is the token's first characters, empty for tokens issued
+	// before prefixes were kept.
+	Prefix string
 	// Workspace is set for tokens restricted to one workspace.
 	Workspace *WorkspaceID
 	// Device marks tokens minted by device-code login.
@@ -59,13 +62,13 @@ func mintToken(ctx context.Context, q *Queries, user UserID, name string, expire
 		return "", Token{}, err
 	}
 	row, err := q.InsertToken(ctx, InsertTokenParams{
-		UserID: uuid.UUID(user), Name: name, TokenHash: digest, ExpiresAt: expires, Device: device,
+		UserID: uuid.UUID(user), Name: name, TokenHash: digest, Prefix: DisplayPrefix(secret), ExpiresAt: expires, Device: device,
 	})
 	if err != nil {
 		return "", Token{}, fmt.Errorf("insert token: %w", err)
 	}
 	return secret, Token{
-		ID: TokenID(row.ID), Name: row.Name, Device: row.Device, CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
+		ID: TokenID(row.ID), Name: row.Name, Prefix: row.Prefix, Device: row.Device, CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 	}, nil
 }
 
@@ -90,7 +93,7 @@ func (i *Identity) ListTokens(ctx context.Context, p Principal, includeDevice bo
 			break
 		}
 		page.Tokens = append(page.Tokens, Token{
-			ID: TokenID(row.ID), Name: row.Name, Workspace: (*WorkspaceID)(row.WorkspaceID), Device: row.Device,
+			ID: TokenID(row.ID), Name: row.Name, Prefix: row.Prefix, Workspace: (*WorkspaceID)(row.WorkspaceID), Device: row.Device,
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt, LastUsedAt: row.LastUsedAt,
 		})
 	}

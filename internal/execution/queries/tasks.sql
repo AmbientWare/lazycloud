@@ -29,6 +29,10 @@ join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
 where t.workspace_id = @workspace_id
   and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
+  and (not @root_only::bool or t.parent_task_id is null)
+  and (sqlc.narg(search)::text is null
+       or t.id::text like sqlc.narg(search)::text || '%'
+       or w.name ilike '%' || sqlc.narg(search)::text || '%')
   and t.id < @before
 order by t.id desc
 limit @max_rows;
@@ -50,6 +54,10 @@ cross join lateral (
     select * from tasks t
     where t.workload_id = w.id
       and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
+      and (not @root_only::bool or t.parent_task_id is null)
+      and (sqlc.narg(search)::text is null
+           or t.id::text like sqlc.narg(search)::text || '%'
+           or w.name ilike '%' || sqlc.narg(search)::text || '%')
       and t.id < @before
     order by t.id desc
     limit @max_rows

@@ -128,6 +128,22 @@ SaaS, and the edge routes only verified ones.
   them, and a deploy that serves one needs the workspace owner's; each
   batch of request records carries its response bytes to billing as egress
   per workload and quarter-hour, in the same transaction.
+- A cold endpoint, ASGI or realtime request asks billing first: a refused
+  account gets 402 with billing's reason, an account at a plan limit 409,
+  both as `{"error": ...}` the way the reference answered, at once rather
+  than at the cold-start deadline (`TestRefusedAccountGetsPaymentRequiredAtOnce`).
+
+- The API host serves deployed endpoints and ASGI apps on path routes, as
+  the reference's API did, so the dashboard calls them same-origin with its
+  session: `/v1/workspaces/{ws}/apps/{app}/{endpoints|asgi}/{name}[/versions/{n}]/invoke[/{path}]`,
+  any method, streaming and WebSockets through the edge with its
+  admission, records and billing refusals. The session cookie (Origin
+  checked for mutations) or a bearer token authenticates; neither reaches
+  the workload, which sees `X-Forwarded-Prefix`. `HttpWorkload.invoke_path`,
+  `version_invoke_path` and `Release.invoke_path` give the paths. These
+  routes always authenticate, also for public workloads, whose own hosts
+  stay open; the reference also served `/public/{id}` paths unauthenticated.
+  Functions keep their invoke operations.
 
 ## Handed off
 

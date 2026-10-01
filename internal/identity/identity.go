@@ -189,6 +189,12 @@ func NewIdentity(pool *pgxpool.Pool, cfg Config) *Identity {
 // keeps them from workloads, can recognize them.
 const TokenPrefix = "lc_"
 
+// DisplayPrefix is the part of a token kept to tell tokens apart: the marker
+// and four characters of its 43, too few to help guess the rest.
+func DisplayPrefix(token string) string {
+	return token[:len(TokenPrefix)+4]
+}
+
 // NewToken returns a fresh credential and the digest to store. Tokens carry
 // 32 random bytes, so a plain SHA-256 is a sufficient stored form.
 func NewToken() (token string, digest []byte, err error) {
@@ -374,7 +380,7 @@ func (i *Identity) CreateToken(ctx context.Context, email, workspace, name strin
 		return "", err
 	}
 	if _, err := i.queries.InsertToken(ctx, InsertTokenParams{
-		UserID: user.ID, WorkspaceID: restrict, Name: name, TokenHash: digest,
+		UserID: user.ID, WorkspaceID: restrict, Name: name, TokenHash: digest, Prefix: DisplayPrefix(token),
 	}); err != nil {
 		return "", fmt.Errorf("insert token: %w", err)
 	}

@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -48,16 +50,22 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.fail(w, r, err)
 		return
 	}
-	if !t.workload.accepting {
-		writeError(w, http.StatusNotFound, "the deployment is stopped")
-		return
-	}
-	authorized := t.authorized
-	if authorized {
+	if t.authorized {
 		if err := e.authorize(ctx, r, t.workload); err != nil {
 			e.fail(w, r, err)
 			return
 		}
+	}
+	e.serveTarget(w, r, t, t.authorized)
+}
+
+// serveTarget serves a resolved request whose caller passed t's token
+// policy; authorized says a platform credential was consumed and must not
+// reach the workload.
+func (e *Edge) serveTarget(w http.ResponseWriter, r *http.Request, t target, authorized bool) {
+	if !t.workload.accepting {
+		writeError(w, http.StatusNotFound, "the deployment is stopped")
+		return
 	}
 	switch t.workload.kind {
 	case apitypes.WorkloadKindFunction:
@@ -83,7 +91,15 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // fail maps an error to a response.
 func (e *Edge) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var failed *releaseFailedError
+	var payment *billing.PaymentRequiredError
+	var limit *billing.LimitError
 	switch {
+	// Billing's refusals, with the reference's statuses: the account must
+	// pay, or is at a plan limit it can act on.
+	case errors.As(err, &payment):
+		writeError(w, http.StatusPaymentRequired, payment.Error())
+	case errors.As(err, &limit):
+		writeError(w, http.StatusConflict, limit.Error())
 	case errors.Is(err, errNoRoute):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, identity.ErrUnauthenticated):
