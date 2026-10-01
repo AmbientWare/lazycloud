@@ -4,7 +4,6 @@
 //	server [serve] [flags]      serve HTTP and gRPC (migrates first)
 //	server migrate              apply database migrations
 //	server admin <command>      create-user, create-workspace, create-token, create-join-token
-//	server version              print the build version
 //
 // On SIGTERM the server reports not ready on /readyz, keeps serving for the
 // drain delay so load balancers stop routing to it, then ends host sessions
@@ -48,7 +47,8 @@ import (
 // listeners close. Pod termination grace must cover the drain delay plus this.
 const shutdownGrace = 10 * time.Second
 
-// version is stamped by the image build with -ldflags "-X main.version=...".
+// version is stamped by the image build with -ldflags "-X main.version=..."
+// and logged at start.
 var version = "dev"
 
 func main() {
@@ -78,10 +78,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return withPool(ctx, *dbURL, func(pool *pgxpool.Pool) error { return database.Migrate(ctx, pool) })
 	case "admin":
 		return admin(ctx, args, out)
-	case "version":
-		return printLine(out, version)
 	}
-	return fmt.Errorf("unknown command %q; want serve, migrate, admin or version", command)
+	return fmt.Errorf("unknown command %q; want serve, migrate or admin", command)
 }
 
 func env(name, fallback string) string {
