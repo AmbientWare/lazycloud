@@ -19,6 +19,11 @@ export function useSession(): SessionContextValue {
   return value;
 }
 
+/** What to call an account: an account made outside GitHub sign-in has no display name. */
+export function accountName(user: Schemas["User"]): string {
+  return user.display_name || user.github_login || user.email;
+}
+
 /**
  * Whether the session is being re-read for a workspace it does not list.
  *
