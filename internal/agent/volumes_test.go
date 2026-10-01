@@ -128,11 +128,17 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	if _, err := e.docker.ContainerStop(t.Context(), mounterName(workspace), client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{writer, reader.GetStart().GetContainerId()} {
-		report := s.phase(t, id, exited)
+	// The two exits arrive in either order.
+	pending := map[string]bool{writer: true, reader.GetStart().GetContainerId(): true}
+	for len(pending) > 0 {
+		report := s.until(t, 60*time.Second, func(m *hostproto.HostMessage) bool {
+			r := m.GetContainer()
+			return pending[r.GetContainerId()] && r.GetPhase() == exited
+		}).GetContainer()
 		if !strings.Contains(report.GetExit().GetMessage(), "volume mount") {
 			t.Fatalf("exit of a container on a dead mount: %v", report.GetExit())
 		}
+		delete(pending, report.GetContainerId())
 	}
 
 	t.Cleanup(func() {
