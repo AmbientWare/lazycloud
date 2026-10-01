@@ -48,8 +48,7 @@ which now calls `cancelTask` from the query layer. Data shapes change only in
 - [x] Observability: activity, task metrics, latency, container metrics,
   call graph, lifecycle, account metrics, live changes
 - [x] Admin users (operations), compute, machines, AWS connection, fleet
-- [ ] Billing, usage, pricing, complimentary grants: ready on web-billing and
-  web-admin-users, waiting for #424
+- [x] Billing, usage, pricing, complimentary grants
 - [ ] Invoke URLs, endpoint kinds, domains: ready on web-endpoints, waiting
   for the endpoints packet
 - [x] Stack journeys in `web/tests/e2e/stack.spec.ts` against a private stack
@@ -71,9 +70,6 @@ server's error.
 
 - Pods, devboxes, sandboxes and shells have no API. Their panels show the
   server's "no such operation".
-- Billing, usage and pricing until #424. The Compute "Add cloud" button and
-  its upgrade gate read the billing summary. Admin users show "No plan" and
-  $0.00 usage.
 - Invoke URLs and the HTTP invoke until the endpoints packet. The function
   playground submits a task instead.
 - Containers have no image, command, ports or exit code. Tasks carry no
@@ -83,7 +79,6 @@ server's error.
 - Volumes have no update time, queues have no write rate, and disks have no
   workload reference.
 - `contracts/http_contract_cases.json` stays because a Python test reads it.
-- `/pricing` reads `/api/v1/pricing` until billing serves pricing.
 
 ## Pre-existing UI issues for the user to decide
 

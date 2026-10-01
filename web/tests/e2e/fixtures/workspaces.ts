@@ -28,6 +28,11 @@ export async function signIn(page: Page, workspaces: Schemas["Workspace"][]) {
   await page.addInitScript(() => {
     localStorage.setItem("lazycloud_web_token", "session");
   });
+  // A read the spec does not mock never reaches a real server, whose 401
+  // would sign the page out. Routes added later take precedence.
+  await page.route(/\/v1\//, (route) =>
+    route.fulfill({ status: 404, json: { code: "not_found", message: "not mocked" } }),
+  );
   await page.route("**/v1/me", (route) =>
     route.fulfill({ json: { user: testUser, workspaces } satisfies Schemas["Me"] }),
   );
