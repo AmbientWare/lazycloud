@@ -28,6 +28,7 @@ from shared.api import (
 )
 from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.autoscaling import Autoscaler
+from shared.callbacks import normalize_callback_url
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
@@ -46,6 +47,7 @@ from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionPayloadEncoding
 from shared.gpu import GpuInput, gpu_preference
 from shared.image_building.python import python_minor_version
+from shared.lifecycle import LifecycleHooks
 from shared.placement import ProductRegion
 from shared.resources import parse_memory_mib
 from shared.serialization import to_json_value
@@ -292,31 +294,16 @@ class Function(Generic[P, R]):
             found.append("gpu")
         declared = {
             "disk": self.disk is not None,
-            "secrets": bool(self.secrets),
             "volumes": bool(self.volumes),
-            "cron": bool(self.cron),
-            "callback_url": bool(self.callback_url),
             "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
-            "in_process": self.in_process,
             "docker_enabled": self.docker_enabled,
             "preemptible": self.preemptible is not DEFAULT_WORKLOAD_PREEMPTIBLE,
             "region": self.region is not None,
             "availability_zone": bool(self.availability_zone),
             "machine": self.machine is not None,
             "metadata": bool(self.metadata),
-            "keep_warm=-1": self.keep_warm is not None and self.keep_warm < 0,
         }
         found.extend(name for name, present in declared.items() if present)
-        hooks = {
-            "on_start": self.on_start,
-            "on_running": self.on_running,
-            "on_success": self.on_success,
-            "on_error": self.on_error,
-            "on_retry": self.on_retry,
-            "on_failure": self.on_failure,
-            "on_finish": self.on_finish,
-        }
-        found.extend(name for name, hook in hooks.items() if hook is not None)
         policy = self._retry_policy()
         if policy.retry_on_statuses != DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE:
             found.append("retry_policy.retry_on_statuses")
@@ -362,6 +349,24 @@ class Function(Generic[P, R]):
             spec["max_pending_tasks"] = self.max_pending_tasks
         if self.env:
             spec["environment"] = dict(self.env)
+        if self.cron:
+            spec["cron"] = self.cron
+        if self.secrets:
+            spec["secrets"] = list(dict.fromkeys(self.secrets))
+        if self.in_process:
+            spec["in_process"] = True
+        try:
+            callback_url = normalize_callback_url(self.callback_url)
+            hooks = self._lifecycle_hooks()
+        except (TypeError, ValueError) as exc:
+            msg = f"function {self.resource_name} has invalid options: {exc}"
+            raise FunctionOperationError(msg) from exc
+        if callback_url is not None:
+            spec["callback_url"] = callback_url
+        if hooks.configured:
+            spec["lifecycle_hooks"] = {
+                name: list(refs) for name, refs in hooks.model_dump().items() if refs
+            }
         try:
             return ApiFunctionSpec.model_validate(spec)
         except ValidationError as exc:
@@ -498,6 +503,17 @@ class Function(Generic[P, R]):
         if self.client is None:
             self.client = api_client(config)
         return self.client, require_workspace(config)
+
+    def _lifecycle_hooks(self) -> LifecycleHooks:
+        return lifecycle_hooks(
+            on_start=self.on_start,
+            on_running=self.on_running,
+            on_success=self.on_success,
+            on_error=self.on_error,
+            on_retry=self.on_retry,
+            on_failure=self.on_failure,
+            on_finish=self.on_finish,
+        )
 
     def _retry_policy(self) -> RetryPolicy:
         policy = retry_policy_config(

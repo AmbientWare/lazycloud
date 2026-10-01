@@ -17,12 +17,15 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 const (
@@ -38,6 +41,8 @@ const (
 	// contendedRetry reruns a pass that found its lock held, because the
 	// holder may have read state before this replica's change committed.
 	contendedRetry = 100 * time.Millisecond
+	// purgeInterval paces deletion of finished callbacks.
+	purgeInterval = time.Minute
 )
 
 func main() {
@@ -67,6 +72,18 @@ func run(logger *slog.Logger) error {
 
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
+	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
+	if keyFile == "" {
+		return errors.New("LAZYCLOUD_SECRETS_KEY_FILE is required: callbacks are signed with workspace secrets")
+	}
+	masterKey, err := secrets.LoadFileKey(keyFile)
+	if err != nil {
+		return err
+	}
+	crons := schedules.NewSchedules(pool, exec)
+	deliverer := callbacks.NewCallbacks(pool, secrets.NewSecrets(pool, masterKey), callbacks.CallbackConfig{
+		AllowPrivateTargets: os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1",
+	}, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, images.Config{})
 	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
@@ -119,6 +136,29 @@ func run(logger *slog.Logger) error {
 			}
 			if _, err := exec.TimeOutStarts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "start deadline pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+			if _, err := crons.Fire(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "schedule pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		lastPurge := time.Now()
+		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+			if _, err := deliverer.Deliver(ctx); err != nil {
+				logger.ErrorContext(ctx, "callback pass", "error", err)
+			}
+			if time.Since(lastPurge) > purgeInterval {
+				lastPurge = time.Now()
+				if _, err := deliverer.Purge(ctx); err != nil {
+					logger.ErrorContext(ctx, "callback purge", "error", err)
+				}
 			}
 			return false
 		})

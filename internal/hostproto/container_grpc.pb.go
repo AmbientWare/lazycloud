@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	ContainerLink_Connect_FullMethodName = "/lazycloud.host.v1.ContainerLink/Connect"
+	ContainerLink_API_FullMethodName     = "/lazycloud.host.v1.ContainerLink/API"
 )
 
 // ContainerLinkClient is the client API for ContainerLink service.
@@ -31,6 +32,10 @@ const (
 // the socket identifies the container. Agent and supervisor ship together.
 type ContainerLinkClient interface {
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SupervisorMessage, SupervisorCommand], error)
+	// API forwards one request to the container API, which the agent relays
+	// to HostService.ContainerAPI. The agent sets head.container_id and
+	// bounds body size and concurrent calls per container.
+	API(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error)
 }
 
 type containerLinkClient struct {
@@ -54,6 +59,19 @@ func (c *containerLinkClient) Connect(ctx context.Context, opts ...grpc.CallOpti
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ContainerLink_ConnectClient = grpc.BidiStreamingClient[SupervisorMessage, SupervisorCommand]
 
+func (c *containerLinkClient) API(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ContainerLink_ServiceDesc.Streams[1], ContainerLink_API_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[APIRequest, APIResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ContainerLink_APIClient = grpc.BidiStreamingClient[APIRequest, APIResponse]
+
 // ContainerLinkServer is the server API for ContainerLink service.
 // All implementations must embed UnimplementedContainerLinkServer
 // for forward compatibility.
@@ -63,6 +81,10 @@ type ContainerLink_ConnectClient = grpc.BidiStreamingClient[SupervisorMessage, S
 // the socket identifies the container. Agent and supervisor ship together.
 type ContainerLinkServer interface {
 	Connect(grpc.BidiStreamingServer[SupervisorMessage, SupervisorCommand]) error
+	// API forwards one request to the container API, which the agent relays
+	// to HostService.ContainerAPI. The agent sets head.container_id and
+	// bounds body size and concurrent calls per container.
+	API(grpc.BidiStreamingServer[APIRequest, APIResponse]) error
 	mustEmbedUnimplementedContainerLinkServer()
 }
 
@@ -75,6 +97,9 @@ type UnimplementedContainerLinkServer struct{}
 
 func (UnimplementedContainerLinkServer) Connect(grpc.BidiStreamingServer[SupervisorMessage, SupervisorCommand]) error {
 	return status.Error(codes.Unimplemented, "method Connect not implemented")
+}
+func (UnimplementedContainerLinkServer) API(grpc.BidiStreamingServer[APIRequest, APIResponse]) error {
+	return status.Error(codes.Unimplemented, "method API not implemented")
 }
 func (UnimplementedContainerLinkServer) mustEmbedUnimplementedContainerLinkServer() {}
 func (UnimplementedContainerLinkServer) testEmbeddedByValue()                       {}
@@ -104,6 +129,13 @@ func _ContainerLink_Connect_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ContainerLink_ConnectServer = grpc.BidiStreamingServer[SupervisorMessage, SupervisorCommand]
 
+func _ContainerLink_API_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ContainerLinkServer).API(&grpc.GenericServerStream[APIRequest, APIResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ContainerLink_APIServer = grpc.BidiStreamingServer[APIRequest, APIResponse]
+
 // ContainerLink_ServiceDesc is the grpc.ServiceDesc for ContainerLink service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -115,6 +147,12 @@ var ContainerLink_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Connect",
 			Handler:       _ContainerLink_Connect_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "API",
+			Handler:       _ContainerLink_API_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

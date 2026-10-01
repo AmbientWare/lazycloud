@@ -16,6 +16,11 @@ def handle(action, *args):
         for i in range(args[0]):
             print(f"{i:08d}" + "x" * 1015)
         return args[0]
+    if action in ("big", "split"):
+        return action
+    if action == "echo":
+        print(args[0])
+        raise ValueError(f"failed with {args[0]}")
     if action == "sleep":
         time.sleep(args[0])
         return "slept"

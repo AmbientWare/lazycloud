@@ -44,7 +44,12 @@ type container struct {
 	dir     string
 	handler string
 	slots   int
+	// runtime is how the supervisor runs the slots: in one process, with
+	// which hooks, and which environment variables hold secrets.
+	runtime containerRuntime
 	logs    *logBatcher
+	// apiCalls bounds container API calls in flight.
+	apiCalls chan struct{}
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -90,6 +95,7 @@ func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.Cont
 		cancelled:  cancelledAttempts{at: make(map[string]time.Time)},
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
+		apiCalls:   make(chan struct{}, maxContainerAPICalls),
 	}
 	c.work, c.cancelWork = context.WithCancel(a.ctx)
 	c.claims, c.cancelClaims = context.WithCancel(c.work)
@@ -113,6 +119,9 @@ func (c *container) configure() *hostproto.Configure {
 		Slots:            int32(c.slots), //nolint:gosec // slots come from an int32
 		RunnerCommand:    []string{"python3", "-m", "runner"},
 		WorkingDirectory: containerWorkspace,
+		InProcess:        c.runtime.InProcess,
+		Hooks:            c.runtime.Hooks,
+		SecretEnv:        c.runtime.SecretEnv,
 	}
 }
 
@@ -412,8 +421,8 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		o := body.Output
 		if o.GetAttemptId() == "" {
 			// Output outside an attempt, such as import-time prints, belongs
-			// to no task log; a load error carries its own traceback.
-			c.log.Debug("container output", "stream", o.GetStream(), "data", o.GetData())
+			// to no task log; it stays in the agent's log for the operator.
+			c.log.Info("container output", "stream", o.GetStream(), "data", o.GetData())
 			return
 		}
 		_ = c.logs.append(ctx, &hostproto.LogLine{AttemptId: o.GetAttemptId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime()})
@@ -542,6 +551,10 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		InputEncoding: task.GetInputEncoding(),
 		Input:         task.GetInput(),
 		Deadline:      task.GetDeadline(),
+		AttemptNumber: task.GetAttemptNumber(),
+		MaxAttempts:   task.GetMaxAttempts(),
+		RootTaskId:    task.GetRootTaskId(),
+		ParentTaskId:  task.GetParentTaskId(),
 	}}})
 }
 

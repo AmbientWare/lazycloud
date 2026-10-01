@@ -34,6 +34,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -99,6 +101,7 @@ type serveConfig struct {
 	grpcAddr      string
 	objectStore   storage.Config
 	imageTemplate string
+	secretsKey    string
 	identity      identity.Config
 	api           api.Config
 	images        images.Config
@@ -115,6 +118,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", "docker.io/library/python:{version}-slim"), "container image per Python version (LAZYCLOUD_IMAGE_TEMPLATE)")
+	fs.StringVar(&cfg.secretsKey, "secrets-key-file", env("LAZYCLOUD_SECRETS_KEY_FILE", ""), "32-byte master key file that wraps secret data keys (LAZYCLOUD_SECRETS_KEY_FILE)")
 	fs.StringVar(&cfg.identity.PublicURL, "public-url", env("LAZYCLOUD_PUBLIC_URL", "http://127.0.0.1:8080"), "dashboard origin for sign-in, device login and invitation links (LAZYCLOUD_PUBLIC_URL)")
 	fs.StringVar(&cfg.identity.GitHub.ClientID, "github-client-id", env("LAZYCLOUD_GITHUB_CLIENT_ID", ""), "GitHub App client id for dashboard sign-in (LAZYCLOUD_GITHUB_CLIENT_ID)")
 	fs.StringVar(&cfg.api.ClientReleaseVersion, "client-release-version", env("LAZYCLOUD_CLIENT_RELEASE_VERSION", ""), "CLI version older clients are told to update to (LAZYCLOUD_CLIENT_RELEASE_VERSION)")
@@ -140,6 +144,9 @@ func serve(ctx context.Context, args []string) error {
 		cfg.objectStore.AccessKeyID == "" || cfg.objectStore.SecretAccessKey == "" {
 		return errors.New("the object store endpoint, region, bucket, access key id and LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY are required")
 	}
+	if cfg.secretsKey == "" {
+		return errors.New("the secrets key file is required: set LAZYCLOUD_SECRETS_KEY_FILE or -secrets-key-file")
+	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	return withPool(ctx, cfg.databaseURL, func(pool *pgxpool.Pool) error {
 		if err := database.Migrate(ctx, pool); err != nil {
@@ -153,20 +160,32 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim, database.ChannelImageBuild, database.ChannelImageBuildLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
+	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
+	if err != nil {
+		return err
+	}
+	vault := secrets.NewSecrets(pool, masterKey)
 	im := images.NewImages(pool, exec, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
-	handler, err := api.NewHandler(api.Owners{
+	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
-		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
-	}, cfg.api, logger)
+		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener,
+	}
+	handler, err := api.NewHandler(owners, cfg.api, logger)
+	if err != nil {
+		return err
+	}
+	containerAPI, err := api.NewContainerHandler(owners, cfg.api, logger)
 	if err != nil {
 		return err
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
+		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)

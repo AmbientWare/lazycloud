@@ -17,8 +17,10 @@ with input as materialized (
     select uuidv7() as id, i as ord, (@encodings::text[])[i] as encoding, (@data::bytea[])[i] as data
     from generate_subscripts(@encodings::text[], 1) as i
 ), task as (
-    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts)
-    select input.id, @workspace_id, @workload_id, @release_id, 'queued', @max_attempts
+    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
+                       parent_task_id, root_task_id, scheduled_for)
+    select input.id, @workspace_id, @workload_id, @release_id, 'queued', @max_attempts,
+           sqlc.narg(parent_task_id)::uuid, sqlc.narg(root_task_id)::uuid, sqlc.narg(scheduled_for)::timestamptz
     from input
     order by input.ord
     returning tasks.id, tasks.created_at

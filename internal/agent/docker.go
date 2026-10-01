@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -27,22 +28,36 @@ const (
 	labelHost      = "lazycloud.host-id"
 	labelHandler   = "lazycloud.handler"
 	labelSlots     = "lazycloud.slots"
+	// labelRuntime holds the containerRuntime as JSON, so an agent that
+	// adopts a container can configure a supervisor that has not connected.
+	labelRuntime = "lazycloud.runtime"
 )
 
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
 func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string) error {
-	env := make([]string, 0, len(spec.GetEnvironment())+4)
+	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
+	}
+	// Secrets override user values of the same name, as in the reference.
+	for _, key := range slices.Sorted(maps.Keys(spec.GetSecrets())) {
+		env = append(env, key+"="+spec.GetSecrets()[key])
 	}
 	// Platform variables come last so they win over user values.
 	env = append(env,
 		"PYTHONPATH="+containerRuntimeDir,
 		"PYTHONUNBUFFERED=1",
 		supervisor.SocketEnv+"="+containerLinkDir+"/"+linkSocketName,
+		supervisor.APISocketEnv+"="+containerAPISocket,
+		"LAZYCLOUD_WORKSPACE="+spec.GetWorkspace(),
+		"CONTAINER_ID="+c.id,
 	)
+	runtimeLabel, err := json.Marshal(c.runtime)
+	if err != nil {
+		return fmt.Errorf("encode runtime label: %w", err)
+	}
 	labels := maps.Clone(a.cfg.Labels)
 	if labels == nil {
 		labels = map[string]string{}
@@ -51,6 +66,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	labels[labelHost] = a.identity.HostID
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
+	labels[labelRuntime] = string(runtimeLabel)
 
 	limit := int64(pidsLimit)
 	resources := spec.GetResources()
@@ -72,11 +88,13 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 				{Type: mount.TypeBind, Source: a.cfg.SupervisorPath, Target: containerSupervisor, ReadOnly: true},
 				{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace},
 				{Type: mount.TypeBind, Source: c.linkDir(), Target: containerLinkDir},
+				// Any container user may create the API socket here.
+				{Type: mount.TypeTmpfs, Target: containerAPIDir, TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}},
 			},
 			Resources: containerResources(resources, a.capacity, limit),
 		},
 	}
-	_, err := a.docker.ContainerCreate(ctx, options)
+	_, err = a.docker.ContainerCreate(ctx, options)
 	if cerrdefs.IsConflict(err) {
 		// A container of this id left behind by an earlier failed start.
 		if err := a.removeContainer(ctx, c.dockerName()); err != nil {
@@ -153,6 +171,9 @@ func (a *Agent) adopt(ctx context.Context) error {
 		slots, _ := strconv.Atoi(summary.Labels[labelSlots])
 		if summary.State == containertypes.StateRunning {
 			c := a.newContainer(id, summary.Labels[labelHandler], slots, hostproto.ContainerPhase_CONTAINER_PHASE_STARTING)
+			if err := json.Unmarshal([]byte(summary.Labels[labelRuntime]), &c.runtime); err != nil {
+				c.log.Warn("container has no readable runtime label", "error", err)
+			}
 			l, err := listenLink(ctx, c, c.linkDir())
 			if err != nil {
 				return err

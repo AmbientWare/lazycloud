@@ -1,6 +1,7 @@
 -- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, t.status,
-       t.attempt_count, t.created_at, t.started_at, t.finished_at, t.failure
+       t.attempt_count, t.created_at, t.started_at, t.finished_at, t.failure,
+       t.parent_task_id, coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.scheduled_for
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id

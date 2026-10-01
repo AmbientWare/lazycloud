@@ -159,7 +159,8 @@ func (q *Queries) TaskStatus(ctx context.Context, arg TaskStatusParams) (string,
 
 const taskView = `-- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, t.status,
-       t.attempt_count, t.created_at, t.started_at, t.finished_at, t.failure
+       t.attempt_count, t.created_at, t.started_at, t.finished_at, t.failure,
+       t.parent_task_id, coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.scheduled_for
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
@@ -182,6 +183,9 @@ type TaskViewRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
+	ParentTaskID *uuid.UUID
+	RootTaskID   uuid.UUID
+	ScheduledFor *time.Time
 }
 
 func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow, error) {
@@ -198,6 +202,9 @@ func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.Failure,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.ScheduledFor,
 	)
 	return i, err
 }

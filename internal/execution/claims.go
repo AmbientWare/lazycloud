@@ -25,11 +25,16 @@ var ErrNotAssigned = errors.New("container is not assigned to this host")
 
 // ClaimedTask is a task a container's slot runs as attempt Attempt.
 type ClaimedTask struct {
-	Task     TaskID
-	Attempt  AttemptID
-	Number   int
-	Input    Payload
-	Deadline time.Time
+	Task        TaskID
+	Attempt     AttemptID
+	Number      int
+	MaxAttempts int
+	Input       Payload
+	Deadline    time.Time
+	// Root is the root of the task's call graph, the task itself when no
+	// task spawned it; Parent is set when one did.
+	Root   TaskID
+	Parent *TaskID
 }
 
 // ClaimTasks starts up to max attempts on container, bounded by its free
@@ -134,7 +139,9 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		for n, row := range rows {
 			claimed[n] = ClaimedTask{
 				Task: TaskID(row.TaskID), Attempt: AttemptID(row.AttemptID), Number: int(row.Number),
-				Input: Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
+				MaxAttempts: int(row.MaxAttempts),
+				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
+				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
 			}
 		}
 		return nil

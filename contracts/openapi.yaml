@@ -552,6 +552,134 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         default: { $ref: "#/components/responses/Error" }
 
+  # Workload runtime: secrets and schedules.
+
+  /v1/workspaces/{workspace}/secrets:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listSecrets
+      tags: [secrets]
+      summary: Secret names and update times, without values
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of secrets in name order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecretPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createSecret
+      tags: [secrets]
+      summary: Create a secret; an existing name is a conflict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretCreate" }
+      responses:
+        "201":
+          description: The created secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/secrets/{secret}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/SecretPath"
+    get:
+      operationId: getSecret
+      tags: [secrets]
+      summary: A secret without its value
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setSecret
+      tags: [secrets]
+      summary: Create the secret or replace its value
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretValueUpdate" }
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateSecret
+      tags: [secrets]
+      summary: Replace an existing secret's value
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretValueUpdate" }
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteSecret
+      tags: [secrets]
+      responses:
+        "204":
+          description: Deleted
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/secrets/{secret}/value:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/SecretPath"
+    get:
+      operationId: getSecretValue
+      tags: [secrets]
+      summary: Reveal a secret's value
+      description: >-
+        The only operation that returns a value. Tokens limited to reading
+        cannot call it.
+      responses:
+        "200":
+          description: The secret and its value
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecretValue" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/schedules:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listSchedules
+      tags: [schedules]
+      summary: Scheduled functions with their next and last runs
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of schedules ordered by app and function
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SchedulePage" }
+        default: { $ref: "#/components/responses/Error" }
+
   # Images
 
   /v1/workspaces/{workspace}/images/resolve:
@@ -706,6 +834,16 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    SecretPath:
+      name: secret
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/SecretName" }
+    Cursor:
+      name: cursor
+      in: query
+      description: The next_cursor of the previous page.
+      schema: { type: string, maxLength: 512 }
     Limit:
       name: limit
       in: query
@@ -1169,12 +1307,14 @@ components:
           minimum: 1
           maximum: 256
           default: 1
+        # Defaults: 10, 0 for a scheduled function, and -1 whenever
+        # autoscaler.min_containers is above zero. -1 leaves idle containers
+        # above the minimum to the planner, which stops them at once.
         keep_warm_seconds:
-          description: Idle time before a container above the minimum stops.
+          description: Idle seconds before a container above the minimum stops.
           type: integer
-          minimum: 0
+          minimum: -1
           maximum: 86400
-          default: 10
         autoscaler:
           $ref: "#/components/schemas/Autoscaler"
         max_pending_tasks:
@@ -1185,6 +1325,31 @@ components:
         environment:
           type: object
           additionalProperties: { type: string }
+        # Five cron fields, an alias such as @hourly, or `every N` minutes
+        # (m, at most 59), hours (h, at most 23) or days (d, at most 31).
+        # Deploy stores the normalized expression.
+        cron:
+          description: Run the function on this UTC schedule.
+          type: string
+          minLength: 1
+          maxLength: 160
+        secrets:
+          description: Secrets the container receives as environment variables of the same name.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/SecretName" }
+        # http or https, with a host and without credentials or a fragment.
+        callback_url:
+          description: Receives a signed POST when a task is retried or finishes.
+          type: string
+          maxLength: 2048
+        in_process:
+          description: Run the concurrency slots as threads of one runner process.
+          type: boolean
+          default: false
+        lifecycle_hooks:
+          $ref: "#/components/schemas/LifecycleHooks"
 
     SourceRef:
       type: object
@@ -1297,6 +1462,7 @@ components:
           type: string
           enum: [active, stopped]
         active_release: { $ref: "#/components/schemas/Release" }
+        schedule: { $ref: "#/components/schemas/Schedule" }
 
     Payload:
       description: >-
@@ -1340,8 +1506,20 @@ components:
 
     Task:
       type: object
-      required: [id, app, function, release_id, status, attempts, created_at]
+      required: [id, app, function, release_id, status, attempts, created_at, root_task_id]
       properties:
+        parent_task_id:
+          description: The running task that spawned this one.
+          type: string
+          format: uuid
+        root_task_id:
+          description: The root of the call graph; the task itself when nothing spawned it.
+          type: string
+          format: uuid
+        scheduled_for:
+          description: The cron occurrence that admitted the task.
+          type: string
+          format: date-time
         id: { type: string, format: uuid }
         app: { $ref: "#/components/schemas/AppName" }
         function: { $ref: "#/components/schemas/WorkloadName" }
@@ -1388,6 +1566,123 @@ components:
           type: string
         time: { type: string, format: date-time }
 
+    # Workload runtime
+
+    LifecycleHooks:
+      description: >-
+        Callables the runner invokes with a context object, each a
+        `module:qualname` reference into the source. on_start runs once per
+        runner process after the handler loads, and its failure is a load
+        error. The others run in the container around each attempt, in
+        order; their failures are logged and do not change the outcome.
+      type: object
+      properties:
+        on_start: { $ref: "#/components/schemas/HookReferences" }
+        on_running: { $ref: "#/components/schemas/HookReferences" }
+        on_success: { $ref: "#/components/schemas/HookReferences" }
+        on_error: { $ref: "#/components/schemas/HookReferences" }
+        on_retry: { $ref: "#/components/schemas/HookReferences" }
+        on_failure: { $ref: "#/components/schemas/HookReferences" }
+        on_finish: { $ref: "#/components/schemas/HookReferences" }
+
+    HookReferences:
+      type: array
+      maxItems: 16
+      items:
+        type: string
+        pattern: "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$"
+
+    SecretName:
+      description: An environment variable name; the LAZYCLOUD_ prefix is reserved.
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]{0,239}$"
+
+    SecretText:
+      type: string
+      maxLength: 65536
+
+    SecretCreate:
+      type: object
+      required: [name, value]
+      properties:
+        name: { $ref: "#/components/schemas/SecretName" }
+        value: { $ref: "#/components/schemas/SecretText" }
+
+    SecretValueUpdate:
+      type: object
+      required: [value]
+      properties:
+        value: { $ref: "#/components/schemas/SecretText" }
+
+    Secret:
+      type: object
+      required: [name, created_at, updated_at]
+      properties:
+        name: { $ref: "#/components/schemas/SecretName" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SecretValue:
+      type: object
+      required: [name, value, created_at, updated_at]
+      properties:
+        name: { $ref: "#/components/schemas/SecretName" }
+        value: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SecretPage:
+      type: object
+      required: [secrets]
+      properties:
+        secrets:
+          type: array
+          items: { $ref: "#/components/schemas/Secret" }
+        next_cursor:
+          description: Present when more secrets follow.
+          type: string
+
+    Schedule:
+      type: object
+      required: [cron, timezone, next_run_at]
+      properties:
+        cron:
+          description: The normalized expression.
+          type: string
+        timezone:
+          type: string
+          enum: [UTC]
+        next_run_at: { type: string, format: date-time }
+        last_run_at:
+          description: When the last handled occurrence was due.
+          type: string
+          format: date-time
+        last_task_id:
+          description: The task the last occurrence admitted.
+          type: string
+          format: uuid
+        last_error:
+          description: Why the last occurrence admitted no task.
+          type: string
+
+    ScheduledFunction:
+      type: object
+      required: [app, function, schedule]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        schedule: { $ref: "#/components/schemas/Schedule" }
+
+    SchedulePage:
+      type: object
+      required: [schedules]
+      properties:
+        schedules:
+          type: array
+          items: { $ref: "#/components/schemas/ScheduledFunction" }
+        next_cursor:
+          description: Present when more schedules follow.
+          type: string
     # Images
 
     ImageId:

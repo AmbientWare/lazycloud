@@ -85,6 +85,7 @@ def _task(task_id: str, status: str = "queued", **extra: object) -> dict[str, ob
         "app": "reports",
         "function": "summarize_sales",
         "release_id": RELEASE_ID,
+        "root_task_id": task_id,
         "status": status,
         "attempts": 1 if status != "queued" else 0,
         "created_at": NOW,
@@ -205,13 +206,58 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
     assert len(fake_api.calls("PUT", "/upload/.*")) == 1
 
 
+RUNTIME_OPTIONS = """\
+import lazycloud
+
+app = lazycloud.App("reports")
+
+
+def announce(ctx):
+    print(ctx.hook)
+
+
+@app.function(
+    cron="Every 5m",
+    secrets=["API_TOKEN", "DB_URL", "API_TOKEN"],
+    callback_url=" https://hooks.example.com/tasks ",
+    concurrency=4,
+    in_process=True,
+    keep_warm=-1,
+    autoscaler={"min_containers": 1, "max_containers": 2},
+    on_start=announce,
+    on_retry=[announce, "reports:announce"],
+)
+def nightly() -> None:
+    pass
+"""
+
+
+def test_deploy_maps_workload_runtime_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch, RUNTIME_OPTIONS)
+    _serve_deployment(fake_api, stored=set())
+
+    reports.app.deploy()
+
+    (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    spec = request.json()["functions"][0]
+    assert spec["cron"] == "Every 5m"
+    assert spec["secrets"] == ["API_TOKEN", "DB_URL"]
+    assert spec["callback_url"] == "https://hooks.example.com/tasks"
+    assert spec["in_process"] is True
+    assert spec["keep_warm_seconds"] == -1
+    assert spec["lifecycle_hooks"] == {
+        "on_start": ["reports:announce"],
+        "on_retry": ["reports:announce", "reports:announce"],
+    }
+
+
 @pytest.mark.parametrize(
     ("decorator", "option"),
     [
         ('@app.function(gpu="A10G")', "gpu"),
-        ('@app.function(secrets=["api-key"])', "secrets"),
-        ('@app.function(cron="0 * * * *")', "cron"),
-        ("@app.function(on_start=print)", "on_start"),
+        ("@app.function(docker_enabled=True)", "docker_enabled"),
     ],
 )
 def test_unsupported_options_fail_before_any_request(

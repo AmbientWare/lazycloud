@@ -1,36 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
 
-from shared.http.errors import HttpApiError
-from shared.http.secrets import (
-    CreateSecretResponse,
-    DeleteSecretResponse,
-    GetSecretResponse,
-    SecretMaskedSetResponse,
-    SecretWireRecord,
-    UpdateSecretResponse,
-)
 from shared.secrets import SecretRecord
 
+from lazycloud.clients.api import ApiClient
 from lazycloud.control import (
-    ControlClientConfig,
     ResourceControlBinding,
+    api_client,
+    require_workspace,
     resolve_control_client_config,
 )
-
-
-class SecretClient(Protocol):
-    def create(self, name: str, value: str) -> CreateSecretResponse: ...
-
-    def get(self, name: str) -> GetSecretResponse: ...
-
-    def update(self, name: str, value: str) -> UpdateSecretResponse: ...
-
-    def set(self, name: str, value: str) -> SecretMaskedSetResponse: ...
-
-    def delete(self, name: str) -> DeleteSecretResponse: ...
+from lazycloud.exceptions import SdkError
 
 
 class SecretOperationError(RuntimeError):
@@ -38,99 +19,92 @@ class SecretOperationError(RuntimeError):
 
 
 @dataclass(slots=True)
-class Secret(ResourceControlBinding[SecretClient]):
+class Secret(ResourceControlBinding[ApiClient]):
+    """A workspace secret. Workloads that list it in `secrets=` receive its
+    value as an environment variable of the same name."""
+
     name: str
     workspace: str | None = None
-    client: SecretClient | None = field(default=None, init=False, repr=False)
+    client: ApiClient | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False, repr=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False, repr=False)
 
-    @property
-    def control_client(self) -> SecretClient:
+    def _session(self) -> tuple[ApiClient, str]:
+        config = resolve_control_client_config(
+            workspace=self.workspace,
+            endpoint=self.endpoint,
+            token=self.token,
+            timeout_seconds=self.timeout_seconds,
+        )
         if self.client is None:
-            config = resolve_control_client_config(
-                workspace=self.workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-            )
-            self.client = _default_secret_client(config)
-        return self.client
+            self.client = api_client(config)
+        return self.client, require_workspace(config)
 
     def create(self, value: str) -> SecretRecord:
+        """Create the secret; an existing one is an error."""
+        client, workspace = self._session()
         try:
-            self.control_client.create(self.name, value)
-        except HttpApiError as exc:
+            client.create_secret(workspace, self.name, value)
+        except SdkError as exc:
             raise SecretOperationError(
-                exc.detail or str(exc) or f"failed to create secret: {self.name}"
+                _message(exc, f"failed to create secret: {self.name}")
             ) from exc
         return self.record()
 
     def update(self, value: str) -> SecretRecord:
+        """Replace an existing secret's value."""
+        client, workspace = self._session()
         try:
-            self.control_client.update(self.name, value)
-        except HttpApiError as exc:
+            client.update_secret(workspace, self.name, value)
+        except SdkError as exc:
             raise SecretOperationError(
-                exc.detail or str(exc) or f"failed to update secret: {self.name}"
+                _message(exc, f"failed to update secret: {self.name}")
             ) from exc
         return self.record()
 
     def set(self, value: str) -> SecretRecord:
+        """Create the secret or replace its value."""
+        client, workspace = self._session()
         try:
-            self.control_client.set(self.name, value)
-        except HttpApiError as exc:
-            raise SecretOperationError(
-                exc.detail or str(exc) or f"failed to set secret: {self.name}"
-            ) from exc
+            client.set_secret(workspace, self.name, value)
+        except SdkError as exc:
+            raise SecretOperationError(_message(exc, f"failed to set secret: {self.name}")) from exc
         return self.record()
 
     def get(self) -> str:
         return self.record().value
 
     def record(self) -> SecretRecord:
+        client, workspace = self._session()
         try:
-            response = self.control_client.get(self.name)
-        except HttpApiError as exc:
-            raise SecretOperationError(
-                exc.detail or str(exc) or f"secret not found: {self.name}"
-            ) from exc
-        if response.secret is None:
-            raise SecretOperationError(f"secret not found: {self.name}")
-        return _secret_record(response.secret)
+            secret = client.get_secret_value(workspace, self.name)
+        except SdkError as exc:
+            raise SecretOperationError(_message(exc, f"secret not found: {self.name}")) from exc
+        return SecretRecord(
+            name=secret.name,
+            value=secret.value,
+            created_at=secret.created_at,
+            updated_at=secret.updated_at,
+        )
 
     def delete(self) -> bool:
+        client, workspace = self._session()
         try:
-            self.control_client.delete(self.name)
-        except HttpApiError as exc:
+            client.delete_secret(workspace, self.name)
+        except SdkError as exc:
             raise SecretOperationError(
-                exc.detail or str(exc) or f"failed to delete secret: {self.name}"
+                _message(exc, f"failed to delete secret: {self.name}")
             ) from exc
         return True
 
 
-def _default_secret_client(config: ControlClientConfig) -> SecretClient:
-    from lazycloud.clients.secret.control import SecretControlClient
-
-    return SecretControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
-def _secret_record(record: SecretWireRecord) -> SecretRecord:
-    return SecretRecord(
-        name=record.name,
-        value=record.value,
-        created_at=record.created_at,
-        updated_at=record.updated_at,
-    )
+def _message(exc: SdkError, fallback: str) -> str:
+    message = getattr(exc, "message", "") or str(exc)
+    return message or fallback
 
 
 __all__ = [
     "Secret",
-    "SecretClient",
     "SecretOperationError",
 ]

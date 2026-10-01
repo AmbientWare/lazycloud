@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, overload
 from urllib.parse import quote
 from uuid import UUID
 
@@ -29,6 +29,12 @@ from shared.api import (
     LogEntry,
     Me,
     Payload,
+    SchedulePage,
+    Secret,
+    SecretCreate,
+    SecretPage,
+    SecretValue,
+    SecretValueUpdate,
     SourceUpload,
     SourceUploadRequest,
     SubmitTasksRequest,
@@ -44,6 +50,7 @@ from shared.client_version import (
     client_version,
     report_client_version,
 )
+from shared.task_context import current_task_id
 
 from lazycloud.exceptions import SdkError
 
@@ -57,6 +64,12 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 # Longer than the server's 15-second follow heartbeat.
 _LOG_HEARTBEAT_WINDOW_SECONDS = 45.0
+
+# Inside a container the API is a Unix socket; the host part is unused.
+_CONTAINER_BASE_URL = "http://container"
+# Names the task making a container API call, so a spawned task records it
+# as parent. The server checks that the task runs on the calling container.
+TASK_HEADER = "LazyCloud-Task"
 
 
 class ApiError(SdkError):
@@ -86,12 +99,16 @@ class ApiClient:
 
     Workspace, app and function names are validated by the server; they are
     only escaped here. Device login runs before any token exists, so its two
-    operations are the ones an empty token can call.
+    operations are the ones an empty token can call. With `container_api`
+    set the client talks to the container API socket the platform serves
+    inside every workload container; it carries no token, since the platform
+    knows the container.
     """
 
     endpoint: str
-    token: str = field(repr=False)
+    token: str | None = field(default=None, repr=False)
     timeout_seconds: float = 30.0
+    container_api: str | None = None
     _http: httpx.Client | None = field(default=None, init=False, repr=False)
 
     def close(self) -> None:
@@ -365,9 +382,77 @@ class ApiClient:
         except httpx.HTTPError as exc:
             raise ApiConnectionError("GET", path, str(exc) or type(exc).__name__) from exc
 
+    def list_secrets(
+        self, workspace: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> SecretPage:
+        params: dict[str, str | int] = {}
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._send(
+            SecretPage, "GET", _path("v1", "workspaces", workspace, "secrets"), params=params
+        )
+
+    def create_secret(self, workspace: str, name: str, value: str) -> Secret:
+        return self._send(
+            Secret,
+            "POST",
+            _path("v1", "workspaces", workspace, "secrets"),
+            body=SecretCreate(name=name, value=value),
+        )
+
+    def get_secret(self, workspace: str, name: str) -> Secret:
+        return self._send(Secret, "GET", _path("v1", "workspaces", workspace, "secrets", name))
+
+    def set_secret(self, workspace: str, name: str, value: str) -> Secret:
+        return self._send(
+            Secret,
+            "PUT",
+            _path("v1", "workspaces", workspace, "secrets", name),
+            body=SecretValueUpdate(value=value),
+        )
+
+    def update_secret(self, workspace: str, name: str, value: str) -> Secret:
+        return self._send(
+            Secret,
+            "PATCH",
+            _path("v1", "workspaces", workspace, "secrets", name),
+            body=SecretValueUpdate(value=value),
+        )
+
+    def delete_secret(self, workspace: str, name: str) -> None:
+        self._send(None, "DELETE", _path("v1", "workspaces", workspace, "secrets", name))
+
+    def get_secret_value(self, workspace: str, name: str) -> SecretValue:
+        return self._send(
+            SecretValue, "GET", _path("v1", "workspaces", workspace, "secrets", name, "value")
+        )
+
+    def list_schedules(
+        self, workspace: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> SchedulePage:
+        params: dict[str, str | int] = {}
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._send(
+            SchedulePage, "GET", _path("v1", "workspaces", workspace, "schedules"), params=params
+        )
+
     def _client(self) -> httpx.Client:
         if self._http is None:
             headers = {"User-Agent": f"lazycloud/{client_version()}"}
+            if self.container_api:
+                self._http = httpx.Client(
+                    base_url=_CONTAINER_BASE_URL,
+                    headers=headers,
+                    transport=httpx.HTTPTransport(uds=self.container_api),
+                    timeout=self.timeout_seconds,
+                    event_hooks={"request": [_name_calling_task]},
+                )
+                return self._http
             if self.token:
                 headers["Authorization"] = f"Bearer {self.token}"
             self._http = httpx.Client(
@@ -377,6 +462,7 @@ class ApiClient:
             )
         return self._http
 
+    @overload
     def _send(
         self,
         model: type[ModelT],
@@ -386,7 +472,30 @@ class ApiClient:
         body: BaseModel | None = None,
         params: dict[str, str | int] | None = None,
         read_timeout: float | None = None,
-    ) -> ModelT:
+    ) -> ModelT: ...
+
+    @overload
+    def _send(
+        self,
+        model: None,
+        method: str,
+        path: str,
+        *,
+        body: BaseModel | None = None,
+        params: dict[str, str | int] | None = None,
+        read_timeout: float | None = None,
+    ) -> None: ...
+
+    def _send(
+        self,
+        model: type[ModelT] | None,
+        method: str,
+        path: str,
+        *,
+        body: BaseModel | None = None,
+        params: dict[str, str | int] | None = None,
+        read_timeout: float | None = None,
+    ) -> ModelT | None:
         content = (
             body.model_dump_json(exclude_unset=True, by_alias=True).encode()
             if body is not None
@@ -411,6 +520,8 @@ class ApiClient:
         report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
         if response.status_code >= 300:
             raise _api_error(response)
+        if model is None:
+            return None
         try:
             return model.model_validate_json(response.content)
         except ValidationError as exc:
@@ -419,6 +530,14 @@ class ApiClient:
                 code=None,
                 message=f"{method} {path} returned an invalid {model.__name__}: {exc}",
             ) from exc
+
+
+def _name_calling_task(request: httpx.Request) -> None:
+    """Name the task this thread or coroutine runs for, if any."""
+
+    task_id = current_task_id()
+    if task_id:
+        request.headers[TASK_HEADER] = task_id
 
 
 def is_transient(error: Exception) -> bool:

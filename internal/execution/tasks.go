@@ -36,6 +36,12 @@ type Task struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	Failure    *Failure
+	// Parent is the task that spawned this one; Root is the root of its
+	// call graph, the task itself when nothing spawned it.
+	Parent *TaskID
+	Root   TaskID
+	// ScheduledFor is the cron occurrence that admitted the task.
+	ScheduledFor *time.Time
 }
 
 // GetTask reads a task in workspace. With wait above zero it holds until the
@@ -77,6 +83,7 @@ func (e *Execution) readTask(ctx context.Context, workspace identity.WorkspaceID
 		ID: TaskID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
 		Status: TaskStatus(row.Status), Attempts: int(row.AttemptCount),
 		CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
+		Parent: (*TaskID)(row.ParentTaskID), Root: TaskID(row.RootTaskID), ScheduledFor: row.ScheduledFor,
 	}
 	if row.Failure != nil {
 		task.Failure = &Failure{}
