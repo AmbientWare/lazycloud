@@ -3,3 +3,26 @@
 //   sqlc v1.31.1
 
 package storage
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type Artifact struct {
+	ID               uuid.UUID
+	WorkspaceID      uuid.UUID
+	TaskID           *uuid.UUID
+	AppID            *uuid.UUID
+	AppName          *string
+	Filename         string
+	ContentType      string
+	SizeBytes        int64
+	State            string
+	UploadID         *string
+	RetentionSeconds int64
+	CreatedAt        time.Time
+	StoredAt         *time.Time
+	ExpiresAt        *time.Time
+}

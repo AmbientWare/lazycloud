@@ -28,6 +28,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
+	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
 const (
@@ -43,6 +44,9 @@ const (
 	// contendedRetry reruns a pass that found its lock held, because the
 	// holder may have read state before this replica's change committed.
 	contendedRetry = 100 * time.Millisecond
+	// sweepTick paces storage retention: expired artifacts and map keys,
+	// deleted volumes and disks, expired host keys and volume sizes.
+	sweepTick = 30 * time.Second
 	// purgeInterval paces deletion of finished callbacks.
 	purgeInterval = time.Minute
 	// rollupTick paces folding container metric samples into minute
@@ -93,6 +97,11 @@ func run(logger *slog.Logger) error {
 	timed := newPassTimer(tel)
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 
+	objectStore, err := objectStoreFromEnv()
+	if err != nil {
+		return err
+	}
+	store := storage.NewStorage(pool, objectStore)
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
@@ -206,6 +215,10 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
+		store.RunSweeper(ctx, sweepTick, logger)
+		return nil
+	})
+	group.Go(func() error {
 		return loop(ctx, buildRecoveryTick, buildWake, nil, timed("build_recovery", func(ctx context.Context) bool {
 			if _, err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
@@ -243,4 +256,30 @@ func loop(ctx context.Context, interval time.Duration, wake, alsoWake <-chan str
 		case <-retry:
 		}
 	}
+}
+
+// objectStoreFromEnv reads the object store the server uses; the sweeper
+// deletes bytes there.
+func objectStoreFromEnv() (storage.Config, error) {
+	cfg := storage.Config{
+		Endpoint:        os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"),
+		Region:          os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
+		Bucket:          os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"),
+		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
+		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
+		Workspaces: storage.WorkspaceBuckets{
+			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
+			Prefix:           os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"),
+			GarageAdminURL:   os.Getenv("LAZYCLOUD_GARAGE_ADMIN_URL"),
+			GarageAdminToken: os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN"),
+			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),
+		},
+	}
+	if cfg.Endpoint == "" || cfg.Region == "" || cfg.Bucket == "" || cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
+		return cfg, errors.New("LAZYCLOUD_OBJECT_STORE_ENDPOINT, _REGION, _BUCKET, _ACCESS_KEY_ID and _SECRET_ACCESS_KEY are required")
+	}
+	if cfg.Workspaces.Prefix == "" {
+		cfg.Workspaces.Prefix = "lazycloud-ws"
+	}
+	return cfg, nil
 }

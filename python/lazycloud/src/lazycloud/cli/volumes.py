@@ -6,16 +6,16 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import typer
-from shared.http.volumes import DeletePathRequest, ListPathRequest, MovePathRequest
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
 from lazycloud._terminal.streams import console
-from lazycloud.abstractions.volume import Volume, VolumeOperationError
+from lazycloud.abstractions.volume import Volume, VolumeOperationError, VolumePathInfo
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
-from lazycloud.cli.control import volume_client
+from lazycloud.cli.control import workspace_storage
 from lazycloud.terminal import humanize_bytes
+from shared import api
 
 VOLUME_SCHEME = "lazycloud://"
 
@@ -27,20 +27,22 @@ def volume_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = volume_client(workspace=workspace).list_volumes()
+    client = workspace_storage(workspace=workspace)
+    volumes: list[api.Volume] = []
+    cursor: str | None = None
+    while True:
+        page = client.list_volumes(cursor=cursor)
+        volumes.extend(page.volumes)
+        if not page.next_cursor:
+            break
+        cursor = page.next_cursor
     if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in response.volumes])
+        print_payload(ctx, [item.model_dump(mode="json") for item in volumes])
         return
     rows = [
-        [
-            item.name,
-            "deleting" if item.deletion_requested_at is not None else "active",
-            humanize_bytes(item.size),
-            timestamp(item.updated_at),
-        ]
-        for item in response.volumes
+        [item.name, humanize_bytes(item.size_bytes), timestamp(item.created_at)] for item in volumes
     ]
-    console.print(table("Volumes", ["name", "status", "size", "updated"], rows))
+    console.print(table("Volumes", ["name", "size", "created"], rows))
 
 
 @volume_app.command("create", help="Create a volume.")
@@ -49,14 +51,12 @@ def volume_create(
     name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = volume_client(workspace=workspace).create(name)
-    if response.volume is None:
-        raise typer.BadParameter("volume create failed")
+    volume = workspace_storage(workspace=workspace).create_volume(name)
     emit(
         ctx,
-        payload=response.volume.model_dump(mode="json"),
+        payload=volume.model_dump(mode="json"),
         view=notice_card(
-            f"Created {response.volume.name}.",
+            f"Created {volume.name}.",
             tone="success",
         ),
     )
@@ -75,14 +75,11 @@ def volume_delete(
         consequence="Deleting this volume also removes its files.",
         yes=yes,
     )
-    response = volume_client(workspace=workspace).delete(name)
+    workspace_storage(workspace=workspace).delete_volume(name)
     emit(
         ctx,
-        payload={"name": name, "deleted": response.deleted},
-        view=notice_card(
-            f"Deleted {name}." if response.deleted else f"Deleting {name}. Billing has stopped.",
-            tone="success",
-        ),
+        payload={"name": name, "deleted": True},
+        view=notice_card(f"Deleted {name}.", tone="success"),
     )
 
 
@@ -92,28 +89,24 @@ def volume_ls(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     selected = parse_remote_path(remote_path)
-    response = volume_client(workspace=workspace).list_path(
-        ListPathRequest(path=selected.full_path)
-    )
+    entries = Volume(selected.volume_name, workspace=workspace).list_path(selected.relative_path)
     if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in response.path_infos])
+        print_payload(ctx, [_path_payload(item) for item in entries])
         return
-    total_size = sum(item.size for item in response.path_infos)
+    total_size = sum(item.size for item in entries)
     rows = [
         [
-            Path(item.path).name + ("/" if item.is_dir else ""),
+            PurePosixPath(item.path).name + ("/" if item.is_dir else ""),
             "" if item.is_dir else humanize_bytes(item.size),
-            timestamp(item.mod_time),
+            timestamp(item.modified_at) if item.modified_at is not None else "",
         ]
-        for item in response.path_infos
+        for item in entries
     ]
     output = table(
         "files",
         ["name", "size", "modified"],
         rows,
-        title=(
-            f"{selected.full_path}, {len(response.path_infos)} items, {humanize_bytes(total_size)}"
-        ),
+        title=f"{selected.full_path}, {len(entries)} items, {humanize_bytes(total_size)}",
         empty=f"No files at {selected.full_path}.",
     )
     console.print(output)
@@ -164,14 +157,12 @@ def volume_rm(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     selected = parse_remote_path(remote_path)
-    response = volume_client(workspace=workspace).delete_path(
-        DeletePathRequest(path=selected.full_path)
-    )
+    deleted = Volume(selected.volume_name, workspace=workspace).remove(selected.relative_path)
     emit(
         ctx,
-        payload={"deleted": list(response.deleted)},
+        payload={"deleted": list(deleted)},
         view=notice_card(
-            f"Deleted {len(response.deleted)} path{'s' if len(response.deleted) != 1 else ''}.",
+            f"Deleted {len(deleted)} path{'s' if len(deleted) != 1 else ''}.",
             tone="success",
         ),
     )
@@ -187,16 +178,13 @@ def volume_mv(
     new = parse_remote_path(new_path)
     if original.volume_name != new.volume_name:
         raise typer.BadParameter("volume mv requires paths in the same volume")
-    response = volume_client(workspace=workspace).move_path(
-        MovePathRequest(original_path=original.full_path, new_path=new.full_path)
+    moved = Volume(original.volume_name, workspace=workspace).move(
+        original.relative_path, new.relative_path
     )
     emit(
         ctx,
-        payload={"new_path": response.new_path or new.full_path},
-        view=notice_card(
-            f"Moved to {response.new_path or new.full_path}.",
-            tone="success",
-        ),
+        payload={"new_path": moved},
+        view=notice_card(f"Moved to {moved}.", tone="success"),
     )
 
 
@@ -246,6 +234,15 @@ def _upload_to_remote(
         except VolumeOperationError as exc:
             raise typer.BadParameter(str(exc)) from exc
     return copied
+
+
+def _path_payload(item: VolumePathInfo) -> dict[str, object]:
+    return {
+        "path": item.path,
+        "size": item.size,
+        "mod_time": item.modified_at.isoformat() if item.modified_at is not None else None,
+        "is_dir": item.is_dir,
+    }
 
 
 def _local_matches(source: str) -> list[Path]:

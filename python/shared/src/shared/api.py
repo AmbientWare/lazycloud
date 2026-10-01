@@ -251,6 +251,14 @@ class Resources(BaseModel):
     cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
     memory_mib: Annotated[int, Field(ge=128, le=1572864)]
     memory_limit_mib: Annotated[int | None, Field(ge=128, le=1572864)] = None
+    disk_mib: Annotated[
+        int | None,
+        Field(
+            description="Writable layer limit; enforced where Docker has project quotas.",
+            ge=1024,
+            le=16777216,
+        ),
+    ] = None
 
 
 class Backoff(str, Enum):
@@ -433,6 +441,391 @@ class SchedulePage(BaseModel):
     next_cursor: Annotated[str | None, Field(description="Present when more schedules follow.")] = (
         None
     )
+
+
+class MapKey(RootModel[str]):
+    root: Annotated[str, Field(max_length=1024, min_length=1, pattern="^[^\\x00-\\x1f\\x7f]+$")]
+
+
+class VolumeRelativePath(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A path below the volume root; `.` or empty is the root, `..` is refused.",
+            max_length=1024,
+        ),
+    ]
+
+
+class WorkloadRef(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    kind: Literal["function"]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+
+
+class CloudBucketSpec(BaseModel):
+    bucket: Annotated[str, Field(max_length=63, min_length=3)]
+    prefix: Annotated[
+        str,
+        Field(
+            description="A key prefix ending in `/`, or empty for the whole bucket.",
+            max_length=1024,
+        ),
+    ] = ""
+    region: Annotated[str | None, Field(max_length=64)] = None
+    endpoint: Annotated[
+        str | None,
+        Field(description="An S3-compatible endpoint URL; AWS S3 when absent.", max_length=1024),
+    ] = None
+    force_path_style: bool = False
+    access_key_secret: Annotated[
+        str | None,
+        Field(
+            description="The workspace secret holding the access key id.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ] = None
+    secret_key_secret: Annotated[
+        str | None,
+        Field(
+            description="The workspace secret holding the secret access key.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ] = None
+
+
+class Volume(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+    size_bytes: Annotated[int, Field(description="Bytes stored at the last measurement.")]
+    size_measured_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release mounts the volume.")
+    ]
+
+
+class VolumePage(BaseModel):
+    volumes: list[Volume]
+    next_cursor: str | None = None
+
+
+class CreateVolumeRequest(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+
+
+class VolumeFile(BaseModel):
+    path: Annotated[str, Field(description="The path relative to the volume root.")]
+    is_dir: bool
+    size_bytes: int
+    modified_at: Annotated[AwareDatetime | None, Field(description="Absent for directories.")] = (
+        None
+    )
+
+
+class VolumeFilePage(BaseModel):
+    files: list[VolumeFile]
+    next_cursor: str | None = None
+
+
+class RemovedVolumeFiles(BaseModel):
+    removed: Annotated[
+        list[str], Field(description="Removed file paths relative to the volume root.")
+    ]
+
+
+class MoveVolumeFileRequest(BaseModel):
+    from_: Annotated[
+        str,
+        Field(
+            alias="from",
+            description="A file or directory below the volume root.",
+            max_length=1024,
+            min_length=1,
+        ),
+    ]
+    to: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+
+
+class Method(str, Enum):
+    get = "get"
+    head = "head"
+    put = "put"
+    upload_part = "upload_part"
+
+
+class PresignVolumeFileRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    method: Method
+    expires_seconds: Annotated[int, Field(ge=1, le=604800)] = 3600
+    upload_id: Annotated[
+        str | None, Field(description="Required for `upload_part`.", max_length=1024)
+    ] = None
+    part_number: Annotated[
+        int | None, Field(description="Required for `upload_part`.", ge=1, le=10000)
+    ] = None
+
+
+class PresignedUrl(BaseModel):
+    url: Annotated[str, Field(description="Absolute URL; the request carries no bearer token.")]
+    expires_at: AwareDatetime
+
+
+class UploadPart(BaseModel):
+    number: int
+    offset: int
+    size_bytes: int
+    url: Annotated[
+        str,
+        Field(description="A presigned PUT of these bytes; its ETag completes a multipart upload."),
+    ]
+
+
+class Upload(BaseModel):
+    upload_id: str | None = None
+    part_size_bytes: int | None = None
+    parts: list[UploadPart]
+    expires_at: AwareDatetime
+
+
+class CompletedPart(BaseModel):
+    number: Annotated[int, Field(ge=1, le=10000)]
+    etag: Annotated[str, Field(max_length=1024)]
+
+
+class CreateVolumeUploadRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    size_bytes: Annotated[int, Field(ge=0, le=5497558138880)]
+    part_size_bytes: Annotated[int, Field(ge=5242880, le=5368709120)] = 5242880
+
+
+class MultipartUpload(BaseModel):
+    upload_id: str
+    path: str
+    part_size_bytes: int
+    parts: list[UploadPart]
+    expires_at: AwareDatetime
+
+
+class CompleteVolumeUploadRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    upload_id: Annotated[str, Field(max_length=1024)]
+    parts: Annotated[list[CompletedPart], Field(max_length=10000, min_length=1)]
+
+
+class AbortVolumeUploadRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    upload_id: Annotated[str, Field(max_length=1024)]
+
+
+class DiskStatus(str, Enum):
+    detached = "detached"
+    attached = "attached"
+    saving = "saving"
+
+
+class Disk(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
+    size_bytes: int
+    stored_bytes: Annotated[
+        int, Field(description="Bytes the disk's published generations occupy in the object store.")
+    ]
+    generation: Annotated[
+        int, Field(description="The newest published generation; 0 before the first.")
+    ]
+    status: DiskStatus
+    holder_container_id: Annotated[
+        UUID | None, Field(description="The container holding the disk while attached or saving.")
+    ] = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class DiskPage(BaseModel):
+    disks: list[Disk]
+    next_cursor: str | None = None
+
+
+class State1(str, Enum):
+    uploading = "uploading"
+    stored = "stored"
+
+
+class Artifact(BaseModel):
+    id: UUID
+    task_id: UUID | None = None
+    app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
+    filename: str
+    content_type: str
+    size_bytes: int
+    state: State1
+    created_at: AwareDatetime
+    stored_at: AwareDatetime | None = None
+    expires_at: AwareDatetime | None = None
+
+
+class ArtifactPage(BaseModel):
+    artifacts: list[Artifact]
+    next_cursor: str | None = None
+
+
+class CreateArtifactRequest(BaseModel):
+    task_id: UUID
+    filename: Annotated[
+        str, Field(description="A base name without `/`.", pattern="^[^/\\x00-\\x1f\\x7f]{1,255}$")
+    ]
+    content_type: Annotated[str, Field(max_length=255, min_length=1)] = "application/octet-stream"
+    size_bytes: Annotated[int, Field(ge=0, le=5497558138880)]
+
+
+class ArtifactUpload(BaseModel):
+    artifact: Artifact
+    upload: Upload
+
+
+class CompleteArtifactRequest(BaseModel):
+    parts: Annotated[
+        list[CompletedPart] | None,
+        Field(description="The ETag of every part of a multipart upload.", max_length=10000),
+    ] = None
+
+
+class PresignArtifactRequest(BaseModel):
+    expires_seconds: Annotated[
+        int, Field(description="Capped at the artifact's remaining retention.", ge=1, le=604800)
+    ] = 3600
+    download: Annotated[
+        bool, Field(description="Ask browsers to save the file rather than show it.")
+    ] = False
+
+
+class ArtifactSummary(BaseModel):
+    count: int
+    size_bytes: int
+    retention_seconds: Annotated[
+        int, Field(description="How long new artifacts are kept under the workspace's plan.")
+    ]
+
+
+class DeleteArtifactsRequest(BaseModel):
+    ids: Annotated[list[UUID], Field(max_length=100, min_length=1)]
+
+
+class DeletedArtifacts(BaseModel):
+    deleted: list[UUID]
+
+
+class QueueInfo(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="A queue or map name; any characters except control characters.",
+            pattern="^[^\\x00-\\x1f\\x7f]{1,255}$",
+        ),
+    ]
+    size: int
+    oldest_message_at: AwareDatetime | None = None
+
+
+class QueuePage(BaseModel):
+    queues: list[QueueInfo]
+    next_cursor: str | None = None
+
+
+class PutQueueMessagesRequest(BaseModel):
+    messages: Annotated[
+        list[Base64Bytes],
+        Field(
+            description="Message bodies, base64; each at most 1 MiB.", max_length=1000, min_length=1
+        ),
+    ]
+
+
+class QueueMessageResult(BaseModel):
+    message: Base64Bytes | None = None
+
+
+class MapInfo(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="A queue or map name; any characters except control characters.",
+            pattern="^[^\\x00-\\x1f\\x7f]{1,255}$",
+        ),
+    ]
+    count: int
+    size_bytes: int
+    expiring_count: int
+    next_expiry_at: AwareDatetime | None = None
+
+
+class MapPage(BaseModel):
+    maps: list[MapInfo]
+    next_cursor: str | None = None
+
+
+class MapKeyPage(BaseModel):
+    keys: list[str]
+    next_cursor: str | None = None
+
+
+class MapEntry(BaseModel):
+    key: str
+    value: Annotated[
+        Base64Bytes,
+        Field(description="Base64 bytes; SDK values are JSON, or cloudpickle (first byte 0x80)."),
+    ]
+    revision: Annotated[
+        str,
+        Field(description="Changes on every write; pass it as `if_revision` to compare and set."),
+    ]
+    expires_at: AwareDatetime | None = None
+    updated_at: AwareDatetime
+
+
+class SetMapEntryRequest(BaseModel):
+    value: Annotated[Base64Bytes, Field(description="At most 1 MiB, base64.")]
+    ttl_seconds: Annotated[
+        int | None,
+        Field(
+            description="Seconds to expiry, 0 for never; absent keeps an existing expiry.",
+            ge=0,
+            le=604800,
+        ),
+    ] = None
+    if_revision: Annotated[str | None, Field(pattern="^[0-9]{1,20}$")] = None
+    if_absent: bool = False
+
+
+class MapEntryWrite(BaseModel):
+    revision: str
+    expires_at: AwareDatetime | None = None
 
 
 class AppRef(RootModel[str]):
@@ -1093,6 +1486,19 @@ class LifecycleHooks(BaseModel):
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
 
 
+class VolumeMountSpec(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+    mount_path: Annotated[
+        str | None,
+        Field(
+            description="Absolute, or relative to /volumes; the default is /volumes/<name>.",
+            max_length=1024,
+        ),
+    ] = None
+    read_only: bool = False
+    cloud_bucket: CloudBucketSpec | None = None
+
+
 class AppPage(BaseModel):
     apps: list[App]
     next_cursor: Annotated[str | None, Field(description="Present when another page follows.")] = (
@@ -1229,6 +1635,7 @@ class FunctionSpec(BaseModel):
         bool, Field(description="Run the concurrency slots as threads of one runner process.")
     ] = False
     lifecycle_hooks: LifecycleHooks | None = None
+    volumes: Annotated[list[VolumeMountSpec] | None, Field(max_length=32)] = None
     client_contract: Annotated[
         dict[str, Any] | None,
         Field(description="The signature `lazycloud app export` types clients from."),

@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from typing_extensions import Self
 
 from lazycloud.clients.api import ApiClient
+from lazycloud.clients.storage import StorageClient
 from lazycloud.exceptions import ConfigurationError
 
 # Set by the platform in every workload container.
@@ -134,6 +135,10 @@ def api_client(config: ControlClientConfig) -> ApiClient:
     )
 
 
+def storage_client(config: ControlClientConfig) -> StorageClient:
+    return StorageClient(api_client(config), require_workspace(config))
+
+
 def require_workspace(config: ControlClientConfig) -> str:
     workspace = config.workspace.strip()
     if not workspace:
@@ -191,6 +196,7 @@ __all__ = [
     "endpoint_url",
     "require_workspace",
     "resolve_control_client_config",
+    "storage_client",
     "workspace_path",
     "workspace_query",
 ]
