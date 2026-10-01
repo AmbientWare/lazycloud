@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import _thread
 import base64
 import hashlib
 import importlib
@@ -8,6 +9,7 @@ import json
 import pickle
 import sys
 import threading
+import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -602,6 +604,64 @@ def test_remote_cancels_the_task_when_following_ends_early(
         reports.summarize_sales.remote([1])
 
     assert len(fake_api.calls("POST", f"/v1/workspaces/team/tasks/{task_id}/cancel")) == 1
+
+
+def test_ctrl_c_during_submit_cancels_the_admitted_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    task_id = _task_id(61)
+
+    @fake_api.route("POST", TASKS)
+    def submit(_: ApiRequest) -> Reply:
+        # The user presses Ctrl-C after the server admitted the task.
+        threading.Timer(0.05, _thread.interrupt_main).start()
+        time.sleep(0.3)
+        return json_reply({"tasks": [_task(task_id)]}, 201)
+
+    cancel = f"/v1/workspaces/team/tasks/{task_id}/cancel"
+    fake_api.route("POST", cancel)(lambda _: json_reply(_task(task_id, "cancelled")))
+
+    with pytest.raises(KeyboardInterrupt):
+        reports.summarize_sales.remote([1])
+
+    assert len(fake_api.calls("POST", cancel)) == 1
+
+
+def test_ctrl_c_during_map_cancels_every_unfinished_task_despite_a_second_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    ids = [_task_id(70 + n) for n in range(3)]
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(i) for i in ids]}, 201))
+
+    @fake_api.route("GET", "/v1/workspaces/team/tasks/[^/]+")
+    def wait(_: ApiRequest) -> Reply:
+        threading.Timer(0.05, _thread.interrupt_main).start()
+        time.sleep(0.3)
+        return json_reply(_task(ids[0], "running"))
+
+    interrupted_once: list[bool] = []
+
+    @fake_api.route("POST", "/v1/workspaces/team/tasks/[^/]+/cancel")
+    def cancel(request: ApiRequest) -> Reply:
+        if not interrupted_once:
+            # A second Ctrl-C while the first cancel is in flight.
+            interrupted_once.append(True)
+            threading.Timer(0.05, _thread.interrupt_main).start()
+            time.sleep(0.3)
+        return json_reply(_task(request.path.split("/")[-2], "cancelled"))
+
+    with pytest.raises(KeyboardInterrupt):
+        list(reports.summarize_sales.map([[1], [2], [3]]))
+
+    cancelled = [
+        r.path.split("/")[-2]
+        for r in fake_api.calls("POST", "/v1/workspaces/team/tasks/[^/]+/cancel")
+    ]
+    assert sorted(cancelled) == sorted(ids)
 
 
 def test_remote_reports_why_a_queued_task_waits(

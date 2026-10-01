@@ -98,6 +98,7 @@ QUEUED_POLL_SECONDS = 1.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
+T = TypeVar("T")
 
 
 class FunctionOperationError(SdkError):
@@ -447,7 +448,11 @@ class Function(Generic[P, R]):
     def spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]: ...
 
     def spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]:
-        """Submit one task and return its call without waiting for it."""
+        """Submit one task and return its call without waiting for it.
+
+        The task is detached: Ctrl-C while waiting on the call leaves it running,
+        unlike `.remote()` and `.map()`. Ctrl-C during the submit cancels it.
+        """
         client, workspace = self._invocation_session()
         task = self._submit(client, workspace, [self._input(args, kwargs, workspace)])[0]
         return FunctionCall(task)
@@ -470,13 +475,22 @@ class Function(Generic[P, R]):
         return [FunctionCall(task) for task in self._submit(client, workspace, payloads)]
 
     def map(self, inputs: Sequence[Any]) -> Iterator[R | None]:
-        """Yield each input's value in input order; a failed task yields None."""
-        for call in self.spawn_map(inputs):
+        """Yield each input's value in input order; a failed task yields None.
+
+        Ctrl-C while waiting cancels the tasks whose values were not yielded.
+        """
+        calls = self.spawn_map(inputs)
+        for n, call in enumerate(calls):
             try:
-                yield call.get()
+                value = call.get()
+            except KeyboardInterrupt:
+                _cancel_tasks([c.task for c in calls[n:]])
+                raise
             except Exception as exc:
                 self._error(f"Task failed during map: {exc}")
                 yield None
+                continue
+            yield value
 
     def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
         """Submit one task with JSON arguments; its result comes back as JSON."""
@@ -515,12 +529,11 @@ class Function(Generic[P, R]):
                 self.terminal.flush_remote_output()
             view = task.wait_view()
         except BaseException as exc:
-            try:
-                task.client.cancel_task(task.workspace, UUID(task.task_id))
-            except Exception as cancel_error:
+            failures = _cancel_tasks([task])
+            if failures and not isinstance(exc, KeyboardInterrupt):
                 msg = (
                     f"Connection ended; cancellation of task {task.task_id} "
-                    f"could not be confirmed: {cancel_error}"
+                    f"could not be confirmed: {failures[0]}"
                 )
                 raise FunctionOperationError(msg) from exc
             raise
@@ -553,8 +566,12 @@ class Function(Generic[P, R]):
         for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
             request = SubmitTasksRequest(inputs=inputs[start : start + MAX_SUBMIT_BATCH], **target)
             try:
-                response = client.submit_tasks(
-                    workspace, self._app_slug, self.resource_name, request
+                # Ctrl-C waits for the request, so the tasks it admitted are
+                # known and cancelled rather than left running.
+                response, interrupted = _uninterrupted(
+                    lambda request=request: client.submit_tasks(
+                        workspace, self._app_slug, self.resource_name, request
+                    )
                 )
             except SdkError as exc:
                 error: SdkError = exc
@@ -566,6 +583,9 @@ class Function(Generic[P, R]):
                     [FunctionCall(task) for task in tasks], len(inputs), error
                 ) from exc
             tasks.extend(Task(str(item.id), workspace, client) for item in response.tasks)
+            if interrupted is not None:
+                _cancel_tasks(tasks)
+                raise interrupted
         return tasks
 
     def _release_id(self, workspace: str) -> UUID:
@@ -654,6 +674,56 @@ class _QueuedTaskWatcher:
                 if view.status is not TaskStatus.queued:
                     return
             self._stopped.wait(QUEUED_POLL_SECONDS)
+
+
+def _uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:
+    """Run call to completion even through Ctrl-C, returning the interrupt."""
+    outcome: dict[str, Any] = {}
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            outcome["value"] = call()
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=copy_context().run, args=(run,), daemon=True).start()
+    interrupted: KeyboardInterrupt | None = None
+    while True:
+        try:
+            # An interrupted Event.wait leaves the event usable, unlike an
+            # interrupted Thread.join.
+            if done.wait(0.1):
+                break
+        except KeyboardInterrupt as exc:
+            interrupted = exc
+    if "error" in outcome:
+        raise outcome["error"]
+    return cast(T, outcome["value"]), interrupted
+
+
+def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
+    """Cancel each task, finishing even through repeated Ctrl-C.
+
+    Returns the failures to cancel; an interrupt during cancellation is
+    re-raised once every cancel has been attempted.
+    """
+    failures: list[Exception] = []
+    interrupted: KeyboardInterrupt | None = None
+    for task in tasks:
+        try:
+            _, again = _uninterrupted(
+                lambda task=task: task.client.cancel_task(task.workspace, UUID(task.task_id))
+            )
+        except Exception as exc:
+            failures.append(exc)
+            continue
+        interrupted = interrupted or again
+    if interrupted is not None:
+        raise interrupted
+    return failures
 
 
 def _map_args(input_value: Any) -> tuple[Any, ...]:
