@@ -1,4 +1,4 @@
-import type { ContainerLifecycleMetric } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 export type ExecutionPhase = {
   kind: "queued" | "startup" | "execution";
@@ -31,15 +31,24 @@ export function executionPhaseDomain(task: PhaseInput, nowMs: number): Execution
   return { startMs: created, endMs: Math.max(observedEnd, created + 1_000) };
 }
 
+/** Stages between placement and readiness: what the timeline calls preparation. */
+const PREPARATION: ReadonlySet<Schemas["LifecycleStageKind"]> = new Set([
+  "image",
+  "source",
+  "create",
+  "runtime",
+]);
+
 /**
- * User-facing lifecycle rollup on the task request domain. Internal container
- * events determine when preparation began, but are deliberately collapsed to
- * one preparation phase. Events outside this task are excluded so startup work
- * from a reused container is not attributed to the current task.
+ * User-facing lifecycle rollup on the task request domain. The container's
+ * finished start stages determine when preparation began, but are
+ * deliberately collapsed to one preparation phase. Stages outside this task
+ * are excluded so startup work from a reused container is not attributed to
+ * the current task.
  */
 export function executionPhases(
   task: PhaseInput,
-  lifecycle: ContainerLifecycleMetric[],
+  stages: readonly Schemas["LifecycleStage"][],
   nowMs: number,
   timelineDomain?: ExecutionPhaseDomain,
 ): ExecutionPhase[] {
@@ -52,10 +61,11 @@ export function executionPhases(
   const preparationEnd = Math.min(executionStart ?? taskEnd, taskEnd);
   const phases: Array<Omit<ExecutionPhase, "leftPct" | "widthPct">> = [];
 
-  const preparationStarts = lifecycle.flatMap((metric) => {
-    const startMs = parseMs(metric.start_time);
-    const endMs = parseMs(metric.end_time);
+  const preparationStarts = stages.flatMap((stage) => {
+    const startMs = parseMs(stage.started_at);
+    const endMs = parseMs(stage.finished_at);
     if (
+      !PREPARATION.has(stage.stage) ||
       startMs === null ||
       endMs === null ||
       endMs <= startMs ||

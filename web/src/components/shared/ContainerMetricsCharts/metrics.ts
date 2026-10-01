@@ -1,6 +1,6 @@
 import { format, parseISO } from "date-fns";
 
-import type { ContainerMetricsPoint } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 export type MetricDatum = {
   timestamp: string;
@@ -12,9 +12,6 @@ export type MetricDatum = {
   memoryTotal: number;
   gpuMemoryUsed: number;
   gpuMemoryTotal: number;
-  /** Null where the sample has no reading, drawn as a gap. */
-  diskUsed: number | null;
-  diskTotal: number | null;
   /** Bytes per second over the sample interval; null for samples without one. */
   networkRecvRate: number | null;
   networkSentRate: number | null;
@@ -23,27 +20,26 @@ export type MetricDatum = {
 };
 
 /**
- * Chronological chart data from raw worker samples. Network/disk counters are
- * per-interval deltas, so rates divide by the sample interval; samples recorded
- * before the interval existed get null rates (a gap, not a fake zero).
+ * Chronological chart data from a container's samples, against its CPU and
+ * memory reservation. Network/disk counters are per-interval deltas, so rates
+ * divide by the sample interval; a sample without one gets null rates (a gap,
+ * not a fake zero).
  */
-export function buildMetricData(points: ContainerMetricsPoint[]): MetricDatum[] {
-  return [...points]
+export function buildMetricData(metrics: Schemas["ContainerMetrics"]): MetricDatum[] {
+  return [...metrics.points]
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
     .map((point) => {
-      const intervalSeconds = point.sample_interval_ms > 0 ? point.sample_interval_ms / 1000 : null;
+      const intervalSeconds = point.interval_ms > 0 ? point.interval_ms / 1000 : null;
       return {
         timestamp: point.timestamp,
         label: formatSampleTime(point.timestamp),
-        cpuPercent: cpuPercent(point.cpu_millicores, point.cpu_total_millicores),
+        cpuPercent: cpuPercent(point.cpu_millicores, metrics.cpu_total_millicores),
         cpuUsed: point.cpu_millicores,
-        cpuTotal: point.cpu_total_millicores,
+        cpuTotal: metrics.cpu_total_millicores,
         memoryUsed: point.memory_rss_bytes,
-        memoryTotal: point.memory_total_bytes,
-        gpuMemoryUsed: point.gpu_memory_used_bytes,
-        gpuMemoryTotal: point.gpu_memory_total_bytes,
-        diskUsed: point.disk_used_bytes,
-        diskTotal: point.disk_total_bytes,
+        memoryTotal: metrics.memory_total_bytes,
+        gpuMemoryUsed: point.gpu_memory_used_bytes ?? 0,
+        gpuMemoryTotal: point.gpu_memory_total_bytes ?? 0,
         networkRecvRate: perSecond(point.network_recv_bytes, intervalSeconds),
         networkSentRate: perSecond(point.network_sent_bytes, intervalSeconds),
         diskReadRate: perSecond(point.disk_read_bytes, intervalSeconds),
@@ -53,8 +49,8 @@ export function buildMetricData(points: ContainerMetricsPoint[]): MetricDatum[] 
 }
 
 /** Whether any sample carries an interval, i.e. was recorded with I/O counters. */
-export function hasIoSamples(points: ContainerMetricsPoint[]): boolean {
-  return points.some((point) => point.sample_interval_ms > 0);
+export function hasIoSamples(points: Schemas["ContainerMetricPoint"][]): boolean {
+  return points.some((point) => point.interval_ms > 0);
 }
 
 export type ComputeReadout = {

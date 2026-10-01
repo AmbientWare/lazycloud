@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Download, Pause, Play, Search } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
@@ -7,70 +7,63 @@ import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEventStream } from "@/hooks/useEventStream";
-import { logRecordSchema, type LogRecord } from "@/lib/api/schemas";
-import { withWorkspace } from "@/lib/api/client";
+import { useReconnectingStream, type EventStreamStatus } from "@/hooks/useEventStream";
+import { followLogs, type LogLine, type LogSource } from "@/lib/api/logs";
 import { downloadBlob } from "@/lib/files";
-import {
-  logHistoryQueryOptions,
-  logScopeParams,
-  selectLogHistory,
-  type LogScope,
-} from "@/lib/queries/logs";
+import { logHistoryQueryOptions } from "@/lib/queries/logs";
 import { cn } from "@/lib/utils";
 
 const MAX_RENDERED_LINES = 1_000;
-const MAX_LIVE_RECORDS = 2_000;
+const MAX_LIVE_LINES = 2_000;
 
+/**
+ * A task's, container's or request's output: the newest stored lines, then,
+ * while following, each new line of a task or container. A request's output
+ * is complete, so there is nothing to follow.
+ */
 export function LogViewer({
-  workspaceId,
-  scope,
+  workspace,
+  source,
   className,
 }: {
-  workspaceId: string;
-  scope: LogScope;
+  workspace: string;
+  source: LogSource;
   className?: string;
 }) {
   const [follow, setFollow] = useState(true);
   const [filter, setFilter] = useState("");
-  const [liveRecords, setLiveRecords] = useState<LogRecord[]>([]);
+  const [liveLines, setLiveLines] = useState<LogLine[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const history = useInfiniteQuery(logHistoryQueryOptions(workspaceId, scope));
-  const historyList = useMemo(
-    () => selectLogHistory(history.data, history.hasNextPage),
-    [history.data, history.hasNextPage],
-  );
+  const history = useQuery(logHistoryQueryOptions(workspace, source));
+  const historyEnd = history.data?.at(-1)?.id ?? 0;
 
-  const streamParams = logScopeParams(scope);
-  streamParams.set("follow", "true");
-  streamParams.set("limit", "200");
-  const streamUrl = withWorkspace(`/api/v1/logs/stream?${streamParams.toString()}`, workspaceId);
-
-  const streamStatus = useEventStream(follow ? streamUrl : null, {
-    enabled: follow,
-    onEvent: (event) => {
-      const parsed = parseLogEvent(event.data);
-      if (!parsed) return;
-      setLiveRecords((previous) => {
-        if (previous.some((record) => recordKey(record) === recordKey(parsed))) return previous;
-        const next = [...previous, parsed];
-        return next.length > MAX_LIVE_RECORDS ? next.slice(-MAX_LIVE_RECORDS) : next;
-      });
-    },
+  // Followed from the end of the history, so the stream sends only new lines.
+  const streamKey = follow && history.isSuccess ? `${workspace}/${JSON.stringify(source)}` : null;
+  const streamStatus = useReconnectingStream(streamKey, ({ signal, cursor, onOpen }) => {
+    if ("request" in source) return Promise.resolve("done" as const);
+    const after = cursor.value ? Number(cursor.value) : historyEnd;
+    return followLogs(workspace, source, after, {
+      signal,
+      onOpen,
+      onLine: (line) => {
+        cursor.value = String(line.id);
+        setLiveLines((previous) => {
+          if (previous.some((known) => known.id === line.id)) return previous;
+          const next = [...previous, line];
+          return next.length > MAX_LIVE_LINES ? next.slice(-MAX_LIVE_LINES) : next;
+        });
+      },
+    }).then((outcome) => (outcome === "finished" ? "done" : "reconnect"));
   });
 
-  const records = useMemo(() => {
-    return mergeLogRecords(historyList.items, liveRecords);
-  }, [historyList.items, liveRecords]);
+  const lines = useMemo(() => mergeLines(history.data ?? [], liveLines), [history.data, liveLines]);
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    const filtered = needle
-      ? records.filter((record) => logSearchText(record).includes(needle))
-      : records;
+    const filtered = needle ? lines.filter((line) => searchText(line).includes(needle)) : lines;
     return filtered.slice(-MAX_RENDERED_LINES);
-  }, [filter, records]);
+  }, [filter, lines]);
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
@@ -118,20 +111,20 @@ export function LogViewer({
           </span>
         ) : null}
         <CopyButton
-          value={() => formatLogRecords(visible)}
+          value={() => formatLines(visible)}
           label="visible logs"
           disabled={visible.length === 0}
         />
-        {records.length > MAX_RENDERED_LINES && !filter ? (
+        {lines.length > MAX_RENDERED_LINES && !filter ? (
           <span className="text-[11px] text-muted-foreground">Latest 1,000 lines</span>
         ) : null}
         <Button
           variant="ghost"
           size="icon"
-          disabled={records.length === 0}
+          disabled={lines.length === 0}
           aria-label="Download loaded logs"
           title="Download loaded logs"
-          onClick={() => downloadLogs(records)}
+          onClick={() => downloadLines(lines)}
         >
           <Download className="size-3.5" />
         </Button>
@@ -141,32 +134,13 @@ export function LogViewer({
         data-log-scroll=""
         className="min-h-0 flex-1 overflow-auto bg-background/60"
       >
-        {!history.isPending &&
-        (!history.isError || history.isFetchNextPageError) &&
-        historyList.nextCursor ? (
-          <div className="flex justify-center border-b border-border/60 p-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={history.isFetchingNextPage}
-              onClick={() => void history.fetchNextPage()}
-            >
-              {history.isFetchNextPageError
-                ? "Retry loading older logs"
-                : history.isFetchingNextPage
-                  ? "Loading older logs"
-                  : "Load older logs"}
-            </Button>
-          </div>
-        ) : null}
         {history.isPending ? (
           <div className="space-y-1.5 p-2" aria-hidden="true">
             {[80, 60, 90, 45, 70].map((width, index) => (
               <Skeleton key={index} className="h-4" style={{ width: `${width}%` }} />
             ))}
           </div>
-        ) : history.isError && !history.isFetchNextPageError ? (
+        ) : history.isError ? (
           <ApiErrorNotice
             error={history.error}
             title="Logs could not be loaded"
@@ -181,11 +155,11 @@ export function LogViewer({
             role="list"
             aria-label="Log output"
           >
-            {visible.map((record, index) => (
-              <LogLine
-                key={recordKey(record)}
-                record={record}
-                showDate={index === 0 || logDateKey(record) !== logDateKey(visible[index - 1])}
+            {visible.map((line, index) => (
+              <LogLineRow
+                key={line.id}
+                line={line}
+                showDate={index === 0 || dateKey(line) !== dateKey(visible[index - 1])}
               />
             ))}
           </div>
@@ -195,7 +169,7 @@ export function LogViewer({
   );
 }
 
-function streamStatusLabel(status: ReturnType<typeof useEventStream>): string {
+function streamStatusLabel(status: EventStreamStatus): string {
   if (status === "open") return "Live";
   if (status === "reconnecting") return "Reconnecting · loaded logs";
   if (status === "connecting") return "Connecting";
@@ -203,17 +177,16 @@ function streamStatusLabel(status: ReturnType<typeof useEventStream>): string {
   return status === "closed" ? "Closed" : "Paused";
 }
 
-function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean }) {
-  const stream = record.stream.trim().toLowerCase();
-  const showStream = Boolean(stream && stream !== "stdout");
-  const stderr = stream === "stderr";
-  const system = stream === "system";
+function LogLineRow({ line, showDate }: { line: LogLine; showDate: boolean }) {
+  const showStream = line.stream !== "stdout";
+  const stderr = line.stream === "stderr";
+  const system = line.stream === "system";
 
   return (
     <div role="listitem">
       {showDate ? (
         <div className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-muted-foreground">
-          <span className="shrink-0">{formatLogDate(record.timestamp)}</span>
+          <span className="shrink-0">{formatLogDate(line.time)}</span>
           <span className="h-px min-w-4 flex-1 bg-border/70" aria-hidden="true" />
         </div>
       ) : null}
@@ -225,12 +198,12 @@ function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean })
         )}
       >
         <time
-          dateTime={record.timestamp}
-          title={record.timestamp}
-          aria-label={`Log timestamp ${record.timestamp}`}
+          dateTime={line.time}
+          title={line.time}
+          aria-label={`Log timestamp ${line.time}`}
           className="shrink-0 tabular-nums text-muted-foreground"
         >
-          {formatLogClock(record.timestamp)}
+          {formatLogClock(line.time)}
         </time>
         <span className="min-w-0">
           {showStream ? (
@@ -241,10 +214,10 @@ function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean })
                 system && "text-brand",
               )}
             >
-              {stream}
+              {line.stream}
             </span>
           ) : null}
-          <span>{record.message}</span>
+          <span>{line.data}</span>
         </span>
       </div>
     </div>
@@ -268,79 +241,30 @@ function formatLogDate(timestamp: string): string {
   }).format(parsed);
 }
 
-function logDateKey(record: LogRecord | undefined): string {
-  if (!record) return "";
-  const parsed = new Date(record.timestamp);
-  return Number.isNaN(parsed.getTime())
-    ? record.timestamp.split("T", 1)[0]
-    : parsed.toISOString().slice(0, 10);
+function dateKey(line: LogLine | undefined): string {
+  if (!line) return "";
+  const parsed = new Date(line.time);
+  return Number.isNaN(parsed.getTime()) ? line.time.split("T", 1)[0] : parsed.toISOString().slice(0, 10);
 }
 
-function logSearchText(record: LogRecord): string {
-  return [
-    record.timestamp,
-    record.stream,
-    record.message,
-    record.app_id,
-    record.stub_id,
-    record.task_id,
-    record.container_id,
-  ]
-    .join(" ")
-    .toLowerCase();
+function searchText(line: LogLine): string {
+  return `${line.time} ${line.stream} ${line.data}`.toLowerCase();
 }
 
-function parseLogEvent(data: string): LogRecord | null {
-  try {
-    const parsed = logRecordSchema.safeParse(JSON.parse(data));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+/** History and live lines in id order, each once. */
+function mergeLines(history: LogLine[], live: LogLine[]): LogLine[] {
+  const byId = new Map<number, LogLine>();
+  for (const line of [...history, ...live]) byId.set(line.id, line);
+  return [...byId.values()].sort((a, b) => a.id - b.id);
 }
 
-function mergeLogRecords(history: LogRecord[], live: LogRecord[]): LogRecord[] {
-  const seen = new Set<string>();
-  const merged: LogRecord[] = [];
-  for (const record of [...history, ...live]) {
-    const key = recordKey(record);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(record);
-  }
-  merged.sort(compareLogRecords);
-  return merged;
+function formatLines(lines: LogLine[]): string {
+  return lines.map((line) => `${line.time} ${line.stream} ${line.data}`).join("\n");
 }
 
-function recordKey(record: LogRecord): string {
-  return record.id || `${record.timestamp}-${record.seq_num}-${record.message}`;
-}
-
-function compareLogRecords(a: LogRecord, b: LogRecord): number {
-  if (a.timestamp !== b.timestamp) return a.timestamp.localeCompare(b.timestamp);
-  return a.seq_num - b.seq_num;
-}
-
-function formatLogRecords(records: LogRecord[]): string {
-  return records
-    .map((record) => {
-      const context = [
-        record.stream,
-        record.app_id,
-        record.stub_id,
-        record.task_id,
-        record.container_id,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      return `${record.timestamp}${context ? ` ${context}` : ""} ${record.message}`;
-    })
-    .join("\n");
-}
-
-function downloadLogs(records: LogRecord[]): void {
+function downloadLines(lines: LogLine[]): void {
   downloadBlob(
     "task-logs.txt",
-    new Blob([formatLogRecords(records)], { type: "text/plain;charset=utf-8" }),
+    new Blob([formatLines(lines)], { type: "text/plain;charset=utf-8" }),
   );
 }

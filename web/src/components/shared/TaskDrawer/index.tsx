@@ -6,7 +6,6 @@ import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
-import { ShellButton } from "@/components/shared/ShellDialog";
 import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { TaskPendingNotice } from "@/components/shared/TaskPendingNotice";
@@ -15,9 +14,18 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { isTerminalTaskStatus, type Task } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { startupBetween } from "@/lib/format";
-import { cancelTask, rerunTask, taskQueryOptions } from "@/lib/queries/tasks";
+import {
+  cancelTask,
+  isRequest,
+  requestQueryOptions,
+  rerunTask,
+  rowFacts,
+  taskFinished,
+  taskQueryOptions,
+  type TaskRow,
+} from "@/lib/queries/tasks";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -25,18 +33,24 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { Artifacts } from "@/components/shared/Artifacts";
 import { ContainerTab } from "@/components/shared/TaskDrawer/ContainerTab";
 import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
-import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
+import { failureText, ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { TaskTimeline } from "@/components/shared/TaskDrawer/TaskTimeline";
 import { PhaseBar } from "@/components/shared/TaskDrawer/TaskTimeline/PhaseBar";
 import { StatCell } from "@/components/shared/TaskDrawer/StatCell";
 
-/** Slide-over task detail; rendered by nested routes over app and deployment pages. */
+/**
+ * Slide-over task detail; rendered by nested routes over app and deployment
+ * pages. An endpoint's or ASGI app's row opens its request record instead.
+ */
 export function TaskDrawer({
   taskId,
+  request = false,
   taskLink,
   onClose,
 }: {
   taskId: string;
+  /** The id names an endpoint or ASGI request record rather than a task. */
+  request?: boolean;
   /** Builds the drawer route for related tasks (timeline rows) in this page context. */
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   onClose: () => void;
@@ -44,22 +58,25 @@ export function TaskDrawer({
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const task = useQuery(taskQueryOptions(workspace.id, taskId));
+  const task = useQuery({ ...taskQueryOptions(workspace.name, taskId), enabled: !request });
+  const record = useQuery({ ...requestQueryOptions(workspace.name, taskId), enabled: request });
+  const read = request ? record : task;
+  const row: TaskRow | undefined = request ? record.data : task.data?.task;
 
   const cancel = useMutation({
-    mutationFn: () => cancelTask(workspace.id, taskId),
+    mutationFn: () => cancelTask(workspace.name, taskId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.tasks.detail(workspace.id, taskId),
+        queryKey: workspaceQueryKeys.tasks.detail(workspace.name, taskId),
       });
     },
   });
 
   const rerun = useMutation({
-    mutationFn: () => rerunTask(workspace.id, taskId),
+    mutationFn: () => rerunTask(workspace.name, taskId),
     onSuccess: (created) => {
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.tasks.lists(workspace.id),
+        queryKey: workspaceQueryKeys.tasks.lists(workspace.name),
       });
       // Move the drawer to the freshly submitted task in the same page context.
       void navigate(taskLink(created.id));
@@ -73,28 +90,27 @@ export function TaskDrawer({
         aria-label="Task detail"
         className="gap-0 bg-background max-sm:left-0 max-sm:right-0 max-sm:max-w-none max-sm:border-l-0 sm:max-w-3xl xl:max-w-4xl"
       >
-        {task.isPending && !task.data ? (
+        {read.isPending && !row ? (
           <TaskDrawerSkeleton />
-        ) : !task.data ? (
+        ) : !row ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <SheetTitle className="sr-only">Task</SheetTitle>
             <div className="flex min-h-0 flex-1 items-center justify-center p-4">
               <ApiErrorNotice
-                error={task.error ?? new Error("Task could not be loaded")}
+                error={read.error ?? new Error("Task could not be loaded")}
                 title="Task could not be loaded"
-                onRetry={() => void task.refetch()}
-                retrying={task.isFetching}
+                onRetry={() => void read.refetch()}
+                retrying={read.isFetching}
                 className="panel w-full max-w-lg rounded-md"
               />
             </div>
           </div>
         ) : (
           <TaskDrawerBody
-            key={task.data.id}
-            record={task.data}
-            terminal={isTerminalTaskStatus(task.data.status)}
-            workspace={workspace}
-            taskId={taskId}
+            key={row.id}
+            row={row}
+            result={task.data?.result ?? null}
+            workspace={workspace.name}
             taskLink={taskLink}
             onCancel={() => cancel.mutate()}
             cancelPending={cancel.isPending}
@@ -102,9 +118,9 @@ export function TaskDrawer({
             onRerun={() => rerun.mutate()}
             rerunPending={rerun.isPending}
             rerunError={rerun.isError ? rerun.error.message : null}
-            refreshError={task.isError ? task.error : null}
-            refreshPending={task.isFetching}
-            onRefresh={() => void task.refetch()}
+            refreshError={read.isError ? read.error : null}
+            refreshPending={read.isFetching}
+            onRefresh={() => void read.refetch()}
           />
         )}
       </SheetContent>
@@ -159,10 +175,9 @@ function TaskDrawerSkeleton() {
 }
 
 function TaskDrawerBody({
-  record,
-  terminal,
+  row,
+  result,
   workspace,
-  taskId,
   taskLink,
   onCancel,
   cancelPending,
@@ -174,10 +189,9 @@ function TaskDrawerBody({
   refreshPending,
   onRefresh,
 }: {
-  record: Task;
-  terminal: boolean;
-  workspace: { id: string; name: string };
-  taskId: string;
+  row: TaskRow;
+  result: Schemas["Payload"] | null;
+  workspace: string;
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   onCancel: () => void;
   cancelPending: boolean;
@@ -189,21 +203,26 @@ function TaskDrawerBody({
   refreshPending: boolean;
   onRefresh: () => void;
 }) {
-  const kind = record.workload?.kind;
+  const workspaceId = useWorkspace().workspace.id;
+  const facts = rowFacts(row);
+  const task = isRequest(row) ? null : row;
+  const finished = taskFinished(facts.status);
+  const error = task?.failure
+    ? failureText(task.failure)
+    : isRequest(row) && row.status >= 500
+      ? `${row.method} ${row.path} answered ${row.status}`
+      : null;
 
   return (
     <div className="content-transition flex min-h-0 flex-1 flex-col">
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-          <SheetTitle className="min-w-0 truncate">{record.name}</SheetTitle>
+          <SheetTitle className="min-w-0 truncate">{facts.name}</SheetTitle>
           <span aria-live="polite">
-            <StatusChip status={record.status} live={record.status === "running"} />
+            <StatusChip status={facts.status} live={facts.status === "running"} />
           </span>
           <div className="ml-auto flex shrink-0 items-center gap-2 max-sm:w-full max-sm:justify-end">
-            {record.actions.can_shell && record.container_id ? (
-              <ShellButton containerId={record.container_id} running />
-            ) : null}
-            {record.actions.can_rerun ? (
+            {task && finished ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -219,7 +238,7 @@ function TaskDrawerBody({
                 {rerunPending ? "Starting" : "Re-run"}
               </Button>
             ) : null}
-            {record.actions.can_cancel ? (
+            {task && !finished ? (
               <Button
                 variant="destructive"
                 size="sm"
@@ -241,7 +260,7 @@ function TaskDrawerBody({
           <p className="mt-1.5 text-xs text-destructive">{cancelError ?? rerunError}</p>
         ) : null}
       </DrawerHeader>
-      <TaskPendingNotice task={record} />
+      {task ? <TaskPendingNotice task={task} /> : null}
 
       {refreshError ? (
         <ApiErrorNotice
@@ -261,83 +280,68 @@ function TaskDrawerBody({
           aria-label="Task summary"
         >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs text-muted-foreground">
-            {record.workload && kind ? (
-              <span className="flex items-center gap-1.5">
-                <StubKindIcon kind={kind} className="size-3" />
-                {record.app_id ? (
-                  <Link
-                    to="/w/$workspace/apps/$app/workloads/$kind/$name"
-                    params={{
-                      workspace: workspace.name,
-                      app: record.app?.name ?? "",
-                      kind: record.workload.kind,
-                      name: record.workload.name,
-                    }}
-                    className="text-brand hover:underline"
-                  >
-                    {record.workload.name}
-                  </Link>
-                ) : (
-                  record.workload.name
-                )}
-                <span>{kind}</span>
-              </span>
-            ) : record.handler ? (
-              <span className="mono">{record.handler}</span>
-            ) : null}
-            {record.app_id ? (
+            <span className="flex items-center gap-1.5">
+              <StubKindIcon kind={facts.kind} className="size-3" />
               <Link
-                to="/w/$workspace/apps/$app"
-                params={{ workspace: workspace.name, app: record.app?.name ?? "" }}
+                to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                params={{ workspace, app: row.app, kind: facts.kind, name: facts.name }}
                 className="text-brand hover:underline"
               >
-                {record.app?.name ?? "App"}
+                {facts.name}
               </Link>
-            ) : null}
-            {record.deployment ? <span>v{record.deployment.version}</span> : null}
-            <span>
-              Requested <LiveRelativeTime value={record.created_at} />
+              <span>{facts.kind}</span>
             </span>
-            {record.exit_code !== null && record.exit_code !== undefined ? (
-              <span>Exit {record.exit_code}</span>
-            ) : null}
+            <Link
+              to="/w/$workspace/apps/$app"
+              params={{ workspace, app: row.app }}
+              className="text-brand hover:underline"
+            >
+              {row.app}
+            </Link>
+            {row.version ? <span>v{row.version}</span> : null}
+            <span>
+              Requested <LiveRelativeTime value={facts.createdAt} />
+            </span>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4">
             <StatCell
               label="Queued"
-              value={startupBetween(record.created_at, record.started_at) ?? "—"}
+              value={startupBetween(facts.createdAt, facts.startedAt) ?? "—"}
               className="border-b border-r border-border sm:border-b-0"
             />
             <StatCell
               label="Execution"
-              value={<LiveDuration startedAt={record.started_at} finishedAt={record.finished_at} />}
+              value={<LiveDuration startedAt={facts.startedAt} finishedAt={facts.finishedAt} />}
               className="border-b border-border sm:border-b-0 sm:border-r"
             />
             <StatCell
               label="Total"
-              value={<LiveDuration startedAt={record.created_at} finishedAt={record.finished_at} />}
+              value={<LiveDuration startedAt={facts.createdAt} finishedAt={facts.finishedAt} />}
               className="border-r border-border"
             />
             <StatCell
               label="Attempt"
-              value={`${Math.max(record.attempt_number, 1)}/${record.max_attempts}`}
+              value={task ? `${Math.max(task.attempts, 1)}/${task.max_attempts}` : "1/1"}
             />
           </div>
 
           <div className="border-t border-border">
             <div className="micro-label px-3 pt-2.5">Lifecycle</div>
-            <PhaseBar workspaceId={workspace.id} task={record} />
+            <PhaseBar
+              workspace={workspace}
+              containerId={row.container_id}
+              createdAt={facts.createdAt}
+              startedAt={facts.startedAt}
+              finishedAt={facts.finishedAt}
+              live={!finished}
+            />
           </div>
         </section>
 
         <Tabs
           data-task-inspector=""
-          defaultValue={
-            record.error || (record.result !== null && record.result !== undefined)
-              ? "result"
-              : "logs"
-          }
+          defaultValue={error || result ? "result" : "logs"}
           className="panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md"
         >
           <LinearTabsList ariaLabel="Task inspector views" className="shrink-0 bg-card px-2">
@@ -348,36 +352,37 @@ function TaskDrawerBody({
             <LinearTab value="container">Container</LinearTab>
           </LinearTabsList>
           <TabsContent value="logs" className="m-0 min-h-0 flex-1 overflow-hidden">
-            <PanelErrorBoundary key={taskId} title="Logs could not be displayed">
+            <PanelErrorBoundary key={row.id} title="Logs could not be displayed">
               <LogViewer
-                workspaceId={workspace.id}
-                scope={{ taskId, stubId: record.stub_id ?? undefined }}
+                workspace={workspace}
+                source={task ? { task: row.id } : { request: row.id }}
                 className="h-full min-h-0"
               />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="result" className="m-0 min-h-0 flex-1 overflow-auto">
-            <PanelErrorBoundary key={taskId} title="Result could not be displayed">
-              <ResultBody error={record.error} result={record.result} />
+            <PanelErrorBoundary key={row.id} title="Result could not be displayed">
+              <ResultBody error={error} result={result} />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="artifacts" className="m-0 min-h-0 flex-1 overflow-auto">
-            <PanelErrorBoundary key={taskId} title="Artifacts could not be displayed">
-              <Artifacts
-                key={`${workspace.id}/${taskId}`}
-                workspaceId={workspace.id}
-                taskId={taskId}
-              />
+            <PanelErrorBoundary key={row.id} title="Artifacts could not be displayed">
+              <Artifacts key={`${workspace}/${row.id}`} workspaceId={workspaceId} taskId={row.id} />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="trace" className="m-0 min-h-0 flex-1 overflow-auto">
-            <PanelErrorBoundary key={taskId} title="Trace could not be displayed">
-              <TaskTimeline workspaceId={workspace.id} taskLink={taskLink} task={record} />
+            <PanelErrorBoundary key={row.id} title="Trace could not be displayed">
+              <TaskTimeline workspace={workspace} taskLink={taskLink} row={row} />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="container" className="m-0 min-h-0 flex-1 overflow-auto">
-            <PanelErrorBoundary key={taskId} title="Container details could not be displayed">
-              <ContainerTab record={record} workspaceId={workspace.id} live={!terminal} />
+            <PanelErrorBoundary key={row.id} title="Container details could not be displayed">
+              <ContainerTab
+                workspace={workspace}
+                containerId={row.container_id}
+                waiting={!finished}
+                live={!finished}
+              />
             </PanelErrorBoundary>
           </TabsContent>
         </Tabs>
