@@ -34,9 +34,15 @@ test.skip(!stack, "WEB_E2E_STACK=1 and a running platform are required");
 // A first call may wait for a cold container and an image pull.
 test.setTimeout(90_000);
 
-async function signIn(context: BrowserContext, baseURL: string, value = session) {
+const startSignIn = `/auth/github/start?return_to=${encodeURIComponent("/callback#code=%2Fdashboard")}`;
+
+/**
+ * Open a session in the browser the way a returning visitor does: with the
+ * cookie set, starting sign-in skips GitHub and lands on the callback page.
+ */
+async function signIn(page: Page, baseURL: string, value = session) {
   const { hostname } = new URL(baseURL);
-  await context.addCookies([
+  await page.context().addCookies([
     {
       name: "__Host-lazycloud_session",
       value,
@@ -47,6 +53,21 @@ async function signIn(context: BrowserContext, baseURL: string, value = session)
       sameSite: "Lax",
     },
   ]);
+  await page.goto(startSignIn);
+  await page.waitForURL(
+    (url) => !url.pathname.startsWith("/auth/") && url.pathname !== "/callback",
+  );
+}
+
+/** The dashboard addresses apps by ID; the journeys know the app by name. */
+async function appId(page: Page, name = app): Promise<string> {
+  const response = await page.request.get(`/v1/workspaces/${workspace}/apps?limit=1000`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const { apps } = (await response.json()) as { apps: { id: string; name: string }[] };
+  const found = apps.find((item) => item.name === name);
+  if (!found) throw new Error(`app ${name} is not deployed to ${workspace}`);
+  return found.id;
 }
 
 function watchFailures(page: Page): string[] {
@@ -63,12 +84,14 @@ function watchFailures(page: Page): string[] {
 
 test("a signed-out visitor is sent to sign in, and a session opens the dashboard", async ({
   page,
-  context,
   baseURL,
 }) => {
   await page.goto("/dashboard");
   const signInLink = page.getByRole("link", { name: "Continue with GitHub" });
-  await expect(signInLink).toHaveAttribute("href", "/auth/github/start?return_to=%2Fdashboard");
+  await expect(signInLink).toHaveAttribute(
+    "href",
+    `/auth/github/start?return_to=${encodeURIComponent("/callback#code=%2Fdashboard")}`,
+  );
   await signInLink.click();
   // No GitHub App is configured on a local platform, which the server reports.
   await expect(page).toHaveURL(/\/signin\?error=provider_unavailable$/);
@@ -76,20 +99,18 @@ test("a signed-out visitor is sent to sign in, and a session opens the dashboard
     "Signing in is unavailable right now. Try again shortly.",
   );
 
-  await signIn(context, baseURL!);
   // A live session skips GitHub entirely.
-  await page.goto("/auth/github/start?return_to=%2Fdashboard");
+  await signIn(page, baseURL!);
   await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps$`));
   await expect(page.getByRole("heading", { name: "Apps", exact: true })).toBeVisible();
 });
 
 test("an administrator creates, renames, invites to and deletes a workspace", async ({
   page,
-  context,
   baseURL,
 }) => {
   const failures = watchFailures(page);
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   const name = `e2e-${Date.now().toString(36)}`;
   await page.goto(`/w/${workspace}/apps`);
 
@@ -132,15 +153,15 @@ test("an administrator creates, renames, invites to and deletes a workspace", as
 
 test("a deployed app is listed, invoked from the playground and its task opened with logs", async ({
   page,
-  context,
   baseURL,
 }) => {
   const failures = watchFailures(page);
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   await page.goto(`/w/${workspace}/apps`);
 
+  const id = await appId(page);
   await page.getByRole("link", { name: app, exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps/${app}$`));
+  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps/${id}$`));
   await page.getByRole("link", { name: /greet/ }).first().click();
   await expect(page.getByRole("heading", { name: "greet" })).toBeVisible();
 
@@ -152,7 +173,7 @@ test("a deployed app is listed, invoked from the playground and its task opened 
 
   await page.getByRole("link", { name: "Open task" }).click();
   const drawer = page.getByRole("dialog", { name: "greet" });
-  await expect(drawer.getByText("succeeded", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("complete", { exact: true })).toBeVisible();
   await drawer.getByRole("tab", { name: "Logs" }).click();
   await expect(drawer.getByRole("list", { name: "Log output" })).toContainText(`greeting ${who}`);
   await drawer.getByRole("tab", { name: "Container" }).click();
@@ -165,8 +186,8 @@ test("a deployed app is listed, invoked from the playground and its task opened 
   expect(failures).toEqual([]);
 });
 
-test("an access token is created, shown once and deleted", async ({ page, context, baseURL }) => {
-  await signIn(context, baseURL!);
+test("an access token is created, shown once and deleted", async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
   await page.goto(`/w/${workspace}/apps?settings=tokens`);
   const name = `e2e-${Date.now().toString(36)}`;
   await page.getByRole("button", { name: "Create token" }).first().click();
@@ -184,12 +205,12 @@ test("an access token is created, shown once and deleted", async ({ page, contex
   await expect(page.getByRole("button", { name: `Delete ${name}` })).toHaveCount(0);
 });
 
-test("a waiting CLI is approved at /activate", async ({ page, context, baseURL, request }) => {
+test("a waiting CLI is approved at /activate", async ({ page, baseURL, request }) => {
   const start = await request.post("/v1/device-codes", { data: { client_name: "cli@e2e" } });
   expect(start.status()).toBe(201);
   const login = (await start.json()) as { device_code: string; user_code: string };
 
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   await page.goto(`/activate?code=${login.user_code}`);
   await expect(page.getByText("cli@e2e")).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();
@@ -206,12 +227,8 @@ test("a waiting CLI is approved at /activate", async ({ page, context, baseURL, 
   expect(me.status()).toBe(200);
 });
 
-test("a secret is created masked, revealed on request and deleted", async ({
-  page,
-  context,
-  baseURL,
-}) => {
-  await signIn(context, baseURL!);
+test("a secret is created masked, revealed on request and deleted", async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
   const name = `E2E_${Date.now().toString(36).toUpperCase()}`;
   await page.goto(`/w/${workspace}/storage?view=secrets`);
   await page.getByRole("button", { name: "New secret" }).click();
@@ -237,11 +254,10 @@ test("a secret is created masked, revealed on request and deleted", async ({
 
 test("a volume is created, a file uploaded, listed, downloaded and removed", async ({
   page,
-  context,
   baseURL,
 }) => {
   const failures = watchFailures(page);
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   const name = `e2e-${Date.now().toString(36)}`;
   await page.goto(`/w/${workspace}/storage?view=volumes`);
   await page.getByRole("button", { name: "New volume" }).click();
@@ -268,13 +284,9 @@ test("a volume is created, a file uploaded, listed, downloaded and removed", asy
   expect(failures).toEqual([]);
 });
 
-test("a queue takes a message, shows its head and gives it up", async ({
-  page,
-  context,
-  baseURL,
-}) => {
+test("a queue takes a message, shows its head and gives it up", async ({ page, baseURL }) => {
   const failures = watchFailures(page);
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   const name = `e2e-${Date.now().toString(36)}`;
   await page.goto(`/w/${workspace}/storage?view=queues`);
   await page.getByRole("button", { name: "New queue" }).click();
@@ -291,13 +303,9 @@ test("a queue takes a message, shows its head and gives it up", async ({
   expect(failures).toEqual([]);
 });
 
-test("a map key is added, edited with a revision check and deleted", async ({
-  page,
-  context,
-  baseURL,
-}) => {
+test("a map key is added, edited with a revision check and deleted", async ({ page, baseURL }) => {
   const failures = watchFailures(page);
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   const name = `e2e-${Date.now().toString(36)}`;
   await page.goto(`/w/${workspace}/storage?view=maps`);
   await page.getByRole("button", { name: "New map" }).click();
@@ -323,19 +331,18 @@ test("a map key is added, edited with a revision check and deleted", async ({
 
 test("an artifact a task saved is previewed from the task and listed in storage", async ({
   page,
-  context,
   baseURL,
 }) => {
   const failures = watchFailures(page);
-  await signIn(context, baseURL!);
+  await signIn(page, baseURL!);
   const title = `e2e ${Date.now().toString(36)}`;
-  await page.goto(`/w/${workspace}/apps/${app}/workloads/function/report`);
+  await page.goto(`/w/${workspace}/apps/${await appId(page)}/workloads/function/report`);
   await page.getByLabel("title").fill(title);
   await page.getByRole("button", { name: "Invoke" }).click();
   const outcome = page
     .locator("section")
     .filter({ has: page.getByRole("link", { name: "Open task" }) });
-  await expect(outcome.getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(outcome.getByText("complete", { exact: true })).toBeVisible({ timeout: 60_000 });
   await page.getByRole("link", { name: "Open task" }).click();
 
   const drawer = page.getByRole("dialog", { name: "report" });
@@ -352,11 +359,10 @@ test("an artifact a task saved is previewed from the task and listed in storage"
 
 test("an invited account previews the invitation and joins the workspace", async ({
   page,
-  context,
   baseURL,
 }) => {
   test.skip(!invitation || !guestSession, "WEB_E2E_INVITATION and WEB_E2E_GUEST_SESSION");
-  await signIn(context, baseURL!, guestSession);
+  await signIn(page, baseURL!, guestSession);
   await page.goto(new URL(invitation).pathname);
   await expect(page.getByRole("heading", { name: `Join ${workspace}` })).toBeVisible();
   await expect(page.getByText("You will join as the account you are signed in as")).toBeVisible();
