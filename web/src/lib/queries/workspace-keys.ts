@@ -87,7 +87,15 @@ export const workspaceQueryKeys = {
     metrics: (workspaceId: string, hours: number, app: string | null) =>
       [...workspaceRoot(workspaceId), "tasks", "aggregate", "metrics", hours, app] as const,
     buckets: (workspaceId: string, windowSeconds: number, app: string | null, fn: string | null) =>
-      [...workspaceRoot(workspaceId), "tasks", "aggregate", "buckets", windowSeconds, app, fn] as const,
+      [
+        ...workspaceRoot(workspaceId),
+        "tasks",
+        "aggregate",
+        "buckets",
+        windowSeconds,
+        app,
+        fn,
+      ] as const,
     latency: (
       workspaceId: string,
       stubIds: string,

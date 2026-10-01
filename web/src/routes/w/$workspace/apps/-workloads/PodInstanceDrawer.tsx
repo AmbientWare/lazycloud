@@ -13,12 +13,13 @@ import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHe
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+import type { ContainerDetail, Deployment } from "@/lib/api/schemas";
 import { StopCause } from "@/components/shared/StopCause";
 import { resourceAllocation } from "@/lib/format";
 import {
-  containerMetricsTimeseriesQueryOptions,
-  containerQueryOptions,
+  containerDetailQueryOptions,
+  containerMetricsQueryOptions,
 } from "@/lib/queries/containers";
 import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 
@@ -40,7 +41,7 @@ export function PodInstanceDrawer({
   containerId: string;
   onClose: () => void;
 }) {
-  const container = useQuery(containerQueryOptions(workspaceId, containerId));
+  const container = useQuery(containerDetailQueryOptions(workspaceId, containerId));
   const deployments = useInfiniteQuery(
     deploymentsInfiniteQueryOptions(workspaceId, {
       appId: app,
@@ -55,11 +56,7 @@ export function PodInstanceDrawer({
     container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,
   );
   const metrics = useQuery({
-    ...containerMetricsTimeseriesQueryOptions(
-      workspaceId,
-      containerId,
-      container.data?.status === "running",
-    ),
+    ...containerMetricsQueryOptions(workspaceId, containerId, container.data?.status === "running"),
     enabled: member,
   });
 
@@ -115,7 +112,7 @@ function PodInstanceDrawerBody({
   record: ContainerDetail;
   deployment: Deployment;
   workloadName: string;
-  metrics: UseQueryResult<ContainerMetricsTimeseries, Error>;
+  metrics: UseQueryResult<Schemas["ContainerMetrics"], Error>;
 }) {
   const running = record.status === "running";
   const resources = deployment.spec.resources;
@@ -177,8 +174,7 @@ function PodInstanceDrawerBody({
             ) : null}
           </FactGrid>
           <StopCause
-            terminationReason={record.termination_reason}
-            status={record.status}
+            reason={record.termination_reason}
             className="border-t border-border/80 px-4 py-3"
           />
           {record.actions.can_shell && running ? (
@@ -221,7 +217,7 @@ function PodInstanceDrawerBody({
               <PanelError message={metrics.error.message} layout="centered" />
             ) : (
               <PanelErrorBoundary title="Instance metrics could not be displayed">
-                <ContainerMetricsCharts points={metrics.data?.points} />
+                <ContainerMetricsCharts metrics={metrics.data} />
               </PanelErrorBoundary>
             )}
           </div>

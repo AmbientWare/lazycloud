@@ -34,11 +34,9 @@ function AppDetailPage() {
   const deployments = useInfiniteQuery(
     deploymentsInfiniteQueryOptions(workspace.id, { appId: app }),
   );
-  const containers = useInfiniteQuery(containersQueryOptions(workspace.id, { appId: app }));
-  const activity = useQuery(taskBucketsQueryOptions(workspace.id, 3600, { appId: app }));
-  const tasks = useQuery(
-    tasksQueryOptions(workspace.id, { limit: 15, appId: app, rootOnly: true }),
-  );
+  const containers = useInfiniteQuery(containersQueryOptions(workspace.name, { app }));
+  const activity = useQuery(taskBucketsQueryOptions(workspace.name, 3600, app));
+  const tasks = useQuery(tasksQueryOptions(workspace.name, { app, root_only: true }, 15));
   const sandboxes = useQuery(sandboxesQueryOptions(workspace.id, { limit: 50, appId: app }));
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
@@ -48,7 +46,7 @@ function AppDetailPage() {
   const latestDeployment = newestDeployment(deploymentRows, app);
   const containerList = selectContainerList(containers.data, containers.hasNextPage);
   const runningContainers = containerList.items.filter(
-    (item) => item.container.status === "running",
+    (container) => container.state === "ready",
   ).length;
   const continuingDeployments = Boolean(deploymentList.nextCursor);
   const continuationCursor = continuingDeployments
@@ -96,7 +94,7 @@ function AppDetailPage() {
               workspaceName={workspace.name}
               app={app}
               deployments={deploymentRows}
-              containers={containerList.items.map((item) => item.container)}
+              containers={containerList.items}
               pending={deployments.isPending || containers.isPending}
               error={
                 queryError(deployments.isFetchNextPageError ? null : deployments.error) ??
@@ -113,7 +111,7 @@ function AppDetailPage() {
             />
             <div className="grid min-h-0 gap-3 lg:grid-rows-[minmax(7rem,0.8fr)_minmax(10rem,1.25fr)_minmax(7rem,0.9fr)] lg:overflow-hidden">
               <AppActivitySection
-                buckets={activity.data?.items}
+                buckets={activity.data}
                 runningContainers={runningContainers}
                 pending={activity.isPending}
                 error={queryError(activity.error)}
@@ -121,7 +119,7 @@ function AppDetailPage() {
               <AppRecentTasksSection
                 workspaceName={workspace.name}
                 app={app}
-                tasks={tasks.data?.data}
+                tasks={tasks.data}
                 pending={tasks.isPending}
                 error={queryError(tasks.error)}
               />

@@ -16,7 +16,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Container, Deployment } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+import type { Deployment } from "@/lib/api/schemas";
 import { formatKind } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
@@ -40,7 +41,7 @@ export function AppWorkloadsSection({
   workspaceName: string;
   app: string;
   deployments: Deployment[] | undefined;
-  containers: Container[] | undefined;
+  containers: Schemas["Container"][] | undefined;
   pending: boolean;
   error: string | undefined;
   nextCursor: string | undefined;
@@ -125,10 +126,10 @@ export function AppWorkloadsSection({
             <div className="divide-y divide-border/80">
               {rows.map((group) => {
                 const groupContainers = (containers ?? []).filter(
-                  (container) => container.stub_id && group.stubIds.includes(container.stub_id),
+                  (container) => container.function === group.name,
                 );
                 const running = groupContainers.filter(
-                  (container) => container.status === "running",
+                  (container) => container.state === "ready",
                 ).length;
                 return (
                   <Link

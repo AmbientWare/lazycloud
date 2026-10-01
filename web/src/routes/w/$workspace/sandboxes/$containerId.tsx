@@ -19,7 +19,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { ContainerDetail } from "@/lib/api/schemas";
-import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
+import {
+  containerDetailQueryOptions,
+  stopContainerMutationOptions,
+} from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
   sandboxUrlsQueryOptions,
@@ -42,9 +45,9 @@ function SandboxDetailPage() {
   const { containerId } = Route.useParams();
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const container = useQuery(containerQueryOptions(workspace.id, containerId));
+  const container = useQuery(containerDetailQueryOptions(workspace.id, containerId));
   const stop = useMutation({
-    ...stopContainerMutationOptions(workspace.id, containerId),
+    ...stopContainerMutationOptions(workspace.name, containerId),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: workspaceQueryKeys.containers.detail(workspace.id, containerId),
@@ -241,11 +244,7 @@ function SandboxFacts({ record }: { record: ContainerDetail }) {
         <Fact label="Created" value={<LiveRelativeTime value={record.created_at} />} />
         <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
       </FactGrid>
-      <StopCause
-        terminationReason={record.termination_reason}
-        status={record.status}
-        className="mt-3 text-xs"
-      />
+      <StopCause reason={record.termination_reason} className="mt-3 text-xs" />
     </>
   );
 }

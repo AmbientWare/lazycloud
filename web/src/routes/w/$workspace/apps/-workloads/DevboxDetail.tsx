@@ -22,7 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { Devbox, DevboxPhase } from "@/lib/api/schemas";
 import { formatBytes } from "@/lib/format";
-import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
+import { containerMetricsQueryOptions } from "@/lib/queries/containers";
 import {
   devboxQueryOptions,
   startDevboxMutationOptions,
@@ -305,8 +305,8 @@ function StartLogs({ workspaceId, containerId }: { workspaceId: string; containe
           {open ? (
             <PanelErrorBoundary key={containerId} title="Logs could not be displayed">
               <LogViewer
-                workspaceId={workspaceId}
-                scope={{ containerId }}
+                workspace={workspaceId}
+                source={{ container: containerId }}
                 className="min-h-0 flex-1"
               />
             </PanelErrorBoundary>
@@ -464,7 +464,7 @@ function DevboxMetrics({
   containerId: string;
   live: boolean;
 }) {
-  const metrics = useQuery(containerMetricsTimeseriesQueryOptions(workspaceId, containerId, live));
+  const metrics = useQuery(containerMetricsQueryOptions(workspaceId, containerId, live));
   if (metrics.isPending) {
     return (
       <div className="grid gap-y-5">
@@ -476,18 +476,14 @@ function DevboxMetrics({
   if (metrics.isError) return <PanelError message={metrics.error.message} layout="centered" />;
   return (
     <PanelErrorBoundary title="Metrics could not be displayed">
-      <ContainerMetricsCharts
-        points={metrics.data.points}
-        showIo={false}
-        className="lg:grid-cols-1"
-      />
+      <ContainerMetricsCharts metrics={metrics.data} showIo={false} className="lg:grid-cols-1" />
     </PanelErrorBoundary>
   );
 }
 
 function MetricsUpdated({ workspaceId, devbox }: { workspaceId: string; devbox: Devbox }) {
   const metrics = useQuery(
-    containerMetricsTimeseriesQueryOptions(
+    containerMetricsQueryOptions(
       workspaceId,
       devbox.container_id ?? "",
       devbox.state === "running",

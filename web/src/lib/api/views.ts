@@ -1,15 +1,5 @@
 import type { Schemas } from "@/lib/api/client";
-import type {
-  App,
-  Container,
-  Deployment,
-  FunctionResult,
-  Stub,
-  Task,
-  TaskSummary,
-  User,
-  Workspace,
-} from "@/lib/api/schemas";
+import type { App, Container, Deployment, Stub, User, Workspace } from "@/lib/api/schemas";
 
 /*
  * The public API's resources as the dashboard's components read them. The
@@ -212,39 +202,6 @@ export function viewStub(
   };
 }
 
-/** The reference's task status vocabulary. */
-export function viewTaskStatus(task: Schemas["Task"]): string {
-  switch (task.status) {
-    case "queued":
-      return task.attempts > 0 && task.next_attempt_at ? "retry" : "pending";
-    case "running":
-      return "running";
-    case "succeeded":
-      return "complete";
-    case "failed":
-      return task.failure?.kind === "timeout" ? "timeout" : "failed";
-    case "cancelled":
-      return "cancelled";
-  }
-}
-
-/**
- * A status without the attempt detail `viewTaskStatus` reads: queued work is
- * pending and a failure is failed, whether or not it retries or timed out.
- */
-export function viewStatus(status: Schemas["TaskStatus"]): string {
-  switch (status) {
-    case "queued":
-      return "pending";
-    case "succeeded":
-      return "complete";
-    case "running":
-    case "failed":
-    case "cancelled":
-      return status;
-  }
-}
-
 /** Task counts by status, keyed by the reference's statuses. */
 export function viewStatusCounts(counts: Schemas["TaskStatusCounts"]): Record<string, number> {
   return {
@@ -256,165 +213,10 @@ export function viewStatusCounts(counts: Schemas["TaskStatusCounts"]): Record<st
   };
 }
 
-/** The API status a reference status filter asks for. */
-export function apiTaskStatus(status: string | undefined): Schemas["TaskStatus"] | undefined {
-  switch (status) {
-    case "pending":
-    case "retry":
-      return "queued";
-    case "running":
-      return "running";
-    case "complete":
-      return "succeeded";
-    case "failed":
-    case "timeout":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-    default:
-      return undefined;
-  }
-}
-
-export function viewTaskSummary(
-  task: Schemas["Task"],
-  workspaceId: string,
-  appId: string | null,
-  workloadId: string | null,
-): TaskSummary {
-  const status = viewTaskStatus(task);
-  const terminal = ["complete", "failed", "timeout", "cancelled"].includes(status);
-  return {
-    id: task.id,
-    name: task.function,
-    status,
-    pending_progress: task.status === "queued" ? (task.pending ?? null) : null,
-    workspace_id: workspaceId,
-    app_id: appId,
-    stub_id: stubId(task.app, task.function, task.release_id),
-    deployment_id: workloadId && task.version ? deploymentId(workloadId, task.version) : null,
-    container_id: task.container_id ?? null,
-    parent_task_id: task.parent_task_id ?? null,
-    root_task_id: task.root_task_id,
-    handler: null,
-    attempt_number: task.attempts,
-    max_attempts: task.max_attempts,
-    next_retry_at: task.next_attempt_at ?? null,
-    exit_code: null,
-    created_at: task.created_at,
-    started_at: task.started_at ?? null,
-    finished_at: task.finished_at ?? null,
-    app: { name: task.app },
-    workload: { name: task.function, kind: "function" },
-    deployment: task.version ? { name: task.function, version: task.version } : null,
-    actions: { can_cancel: !terminal, can_rerun: terminal, can_shell: false },
-  };
-}
-
-export function viewTask(
-  task: Schemas["Task"],
-  workspaceId: string,
-  appId: string | null,
-  workloadId: string | null,
-  extras: { result: FunctionResult | null; container: Container | null },
-): Task {
-  return {
-    ...viewTaskSummary(task, workspaceId, appId, workloadId),
-    command: [],
-    args: [],
-    kwargs: {},
-    result: extras.result,
-    error: task.failure ? failureText(task.failure) : null,
-    container: extras.container,
-  };
-}
-
-/**
- * An endpoint or ASGI request as the task row the reference listed for it.
- * The edge records a request once it ends: failed when the workload answered
- * with a server error, cancelled when the caller left first (499), otherwise
- * complete.
+/*
+ * The sandbox and pod pages read a container in the reference's shape until
+ * the workloads packet rewrites them.
  */
-function requestStatus(status: number): string {
-  if (status === 499) return "cancelled";
-  return status >= 500 ? "failed" : "complete";
-}
-
-export function viewRequestSummary(
-  request: Schemas["HttpRequest"],
-  workspaceId: string,
-  appId: string | null,
-  workloadId: string | null,
-): TaskSummary {
-  const finished = new Date(Date.parse(request.started_at) + request.duration_ms).toISOString();
-  return {
-    id: request.id,
-    name: request.name,
-    status: requestStatus(request.status),
-    pending_progress: null,
-    workspace_id: workspaceId,
-    app_id: appId,
-    stub_id: stubId(request.app, request.name, request.release_id),
-    deployment_id: workloadId && request.version ? deploymentId(workloadId, request.version) : null,
-    container_id: request.container_id ?? null,
-    parent_task_id: null,
-    root_task_id: request.id,
-    handler: null,
-    attempt_number: 1,
-    max_attempts: 1,
-    next_retry_at: null,
-    exit_code: null,
-    created_at: request.started_at,
-    started_at: request.started_at,
-    finished_at: finished,
-    app: { name: request.app },
-    workload: { name: request.name, kind: request.kind },
-    deployment: request.version ? { name: request.name, version: request.version } : null,
-    actions: { can_cancel: false, can_rerun: false, can_shell: false },
-  };
-}
-
-export function viewRequest(
-  request: Schemas["HttpRequest"],
-  workspaceId: string,
-  appId: string | null,
-  workloadId: string | null,
-  container: Container | null,
-): Task {
-  return {
-    ...viewRequestSummary(request, workspaceId, appId, workloadId),
-    command: [request.method, request.path],
-    args: [],
-    kwargs: {},
-    result: null,
-    error:
-      request.status >= 500 ? `${request.method} ${request.path} answered ${request.status}` : null,
-    container,
-  };
-}
-
-function failureText(failure: Schemas["TaskFailure"]): string {
-  const heading = failure.type ? `${failure.type}: ${failure.message}` : failure.message;
-  return failure.traceback ? `${failure.traceback.trimEnd()}` : heading;
-}
-
-/** A stored result in the reference's function result shape. */
-export async function viewResult(payload: Schemas["Payload"]): Promise<FunctionResult> {
-  if (payload.encoding === "json") {
-    return { version: 1, encoding: "json", value: (payload.value ?? null) as never };
-  }
-  const data = payload.data ?? "";
-  const bytes = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  return {
-    version: 1,
-    encoding: "cloudpickle",
-    value_base64: data,
-    size_bytes: bytes.byteLength,
-    sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
-    display: null,
-  };
-}
 
 const STOP_REASONS: Partial<Record<Schemas["StopReason"], string>> = {
   out_of_memory: "MEMORY_EVICTED",

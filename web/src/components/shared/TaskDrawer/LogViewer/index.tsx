@@ -244,7 +244,9 @@ function formatLogDate(timestamp: string): string {
 function dateKey(line: LogLine | undefined): string {
   if (!line) return "";
   const parsed = new Date(line.time);
-  return Number.isNaN(parsed.getTime()) ? line.time.split("T", 1)[0] : parsed.toISOString().slice(0, 10);
+  return Number.isNaN(parsed.getTime())
+    ? line.time.split("T", 1)[0]
+    : parsed.toISOString().slice(0, 10);
 }
 
 function searchText(line: LogLine): string {

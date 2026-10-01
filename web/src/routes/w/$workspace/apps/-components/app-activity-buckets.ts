@@ -1,4 +1,4 @@
-import type { TaskTimeWindowBucket } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { taskActivityBand, type TaskActivityBand } from "@/lib/format";
 
 const HOUR_MS = 60 * 60 * 1_000;
@@ -14,7 +14,7 @@ export type AppRunActivity = {
 
 /** Maps sparse server-owned hourly buckets onto the current 24 UTC hours. */
 export function appRunActivity(
-  buckets: TaskTimeWindowBucket[] | undefined,
+  buckets: Schemas["ActivityBucket"][] | undefined,
   now = new Date(),
 ): AppRunActivity {
   const tasks = Array.from({ length: HOUR_COUNT }, () => 0);
@@ -29,10 +29,10 @@ export function appRunActivity(
     const index = Math.floor((hour - firstHour) / HOUR_MS);
     if (index < 0 || index >= HOUR_COUNT) continue;
 
-    tasks[index] += Math.max(Math.trunc(bucket.count), 0);
     for (const [status, value] of Object.entries(bucket.status_counts)) {
       const amount = Math.max(Math.trunc(value), 0);
       if (amount === 0) continue;
+      tasks[index] += amount;
       bands[taskActivityBand(status)][index] += amount;
     }
   }

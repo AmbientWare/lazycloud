@@ -116,7 +116,11 @@ export async function followLogs(
   workspace: string,
   source: { task: string } | { container: string },
   after: number,
-  { signal, onOpen, onLine }: { signal: AbortSignal; onOpen: () => void; onLine: (line: LogLine) => void },
+  {
+    signal,
+    onOpen,
+    onLine,
+  }: { signal: AbortSignal; onOpen: () => void; onLine: (line: LogLine) => void },
 ): Promise<"finished" | "reconnect"> {
   const body = await openStream(
     workspace,

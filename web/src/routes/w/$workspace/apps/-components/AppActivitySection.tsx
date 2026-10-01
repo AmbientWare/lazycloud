@@ -1,6 +1,6 @@
 import { Panel } from "@/components/shared/Panel";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { TaskTimeWindowBucket } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -13,7 +13,7 @@ export function AppActivitySection({
   pending,
   error,
 }: {
-  buckets: TaskTimeWindowBucket[] | undefined;
+  buckets: Schemas["ActivityBucket"][] | undefined;
   runningContainers: number;
   pending: boolean;
   error: string | undefined;

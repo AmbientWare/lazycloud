@@ -9,12 +9,6 @@ import { base64ToBytes, downloadBlob } from "@/lib/files";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-/** A task failure as the text a person reads: the traceback, else the exception. */
-export function failureText(failure: Schemas["TaskFailure"]): string {
-  if (failure.traceback) return failure.traceback.trimEnd();
-  return failure.type ? `${failure.type}: ${failure.message}` : failure.message;
-}
-
 /**
  * A task's recorded outcome. A JSON result shows as text; a Python object is
  * only ever offered as a file.

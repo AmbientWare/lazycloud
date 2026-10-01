@@ -8,6 +8,8 @@ import { stubSchema } from "./stubs";
 // shared.http.operations. These schemas intentionally omit provider secrets
 // and agent installation credentials from list responses.
 
+// The reference's container, which the sandbox and pod pages read until the
+// workloads packet rewrites them.
 export const containerSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -49,19 +51,6 @@ export const containerDetailSchema = containerSchema.extend({
   actions: containerActionCapabilitiesSchema,
 });
 export type ContainerDetail = z.infer<typeof containerDetailSchema>;
-
-export const containerWithAppPageSchema = z.object({
-  data: z
-    .array(
-      z.object({
-        container: containerSchema,
-        app_id: z.string().default(""),
-      }),
-    )
-    .default([]),
-  next: z.string().default(""),
-});
-export type ContainerWithAppPage = z.infer<typeof containerWithAppPageSchema>;
 
 export const machineJoinCommandResponseSchema = z
   .object({

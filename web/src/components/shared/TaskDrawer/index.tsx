@@ -18,6 +18,7 @@ import type { Schemas } from "@/lib/api/client";
 import { startupBetween } from "@/lib/format";
 import {
   cancelTask,
+  failureText,
   isRequest,
   requestQueryOptions,
   rerunTask,
@@ -33,7 +34,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { Artifacts } from "@/components/shared/Artifacts";
 import { ContainerTab } from "@/components/shared/TaskDrawer/ContainerTab";
 import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
-import { failureText, ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
+import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { TaskTimeline } from "@/components/shared/TaskDrawer/TaskTimeline";
 import { PhaseBar } from "@/components/shared/TaskDrawer/TaskTimeline/PhaseBar";
 import { StatCell } from "@/components/shared/TaskDrawer/StatCell";

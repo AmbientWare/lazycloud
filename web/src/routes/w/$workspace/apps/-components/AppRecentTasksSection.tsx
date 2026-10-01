@@ -6,7 +6,7 @@ import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import type { TaskSummary } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { startupBetween } from "@/lib/format";
 
 export function AppRecentTasksSection({
@@ -18,7 +18,7 @@ export function AppRecentTasksSection({
 }: {
   workspaceName: string;
   app: string;
-  tasks: TaskSummary[] | undefined;
+  tasks: Schemas["Task"][] | undefined;
   pending: boolean;
   error: string | undefined;
 }) {
@@ -56,7 +56,7 @@ function RecentRunsList({
   workspaceName,
   app,
 }: {
-  tasks: TaskSummary[];
+  tasks: Schemas["Task"][];
   workspaceName: string;
   app: string;
 }) {
@@ -73,31 +73,18 @@ function RecentRunsList({
               params={{ workspace: workspaceName, app, taskId: task.id }}
               className="interactive-link block min-w-0 truncate text-sm font-medium text-foreground"
             >
-              {task.name}
+              {task.function}
             </Link>
             <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-              {task.workload ? (
-                <>
-                  <StubKindIcon kind={task.workload.kind} className="size-3" />
-                  <Link
-                    to="/w/$workspace/apps/$app/workloads/$kind/$name"
-                    params={{
-                      workspace: workspaceName,
-                      app,
-                      kind: task.workload.kind,
-                      name: task.workload.name,
-                    }}
-                    className="interactive-link min-w-0 truncate"
-                  >
-                    {task.workload.name}
-                  </Link>
-                  {task.deployment ? (
-                    <span className="mono shrink-0">v{task.deployment.version}</span>
-                  ) : null}
-                </>
-              ) : (
-                <span>Workload unavailable</span>
-              )}
+              <StubKindIcon kind="function" className="size-3" />
+              <Link
+                to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                params={{ workspace: workspaceName, app, kind: "function", name: task.function }}
+                className="interactive-link min-w-0 truncate"
+              >
+                {task.function}
+              </Link>
+              {task.version ? <span className="mono shrink-0">v{task.version}</span> : null}
             </span>
           </span>
           <StatusChip status={task.status} live={task.status === "running"} />

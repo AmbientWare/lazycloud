@@ -150,7 +150,7 @@ function VersionRow({
         <Link
           to="/w/$workspace/tasks"
           params={{ workspace: workspaceName }}
-          search={{ app: app, deployment: deployment.id }}
+          search={{ app, workload: deployment.name, version: deployment.version }}
           className="interactive-link text-brand"
         >
           Tasks

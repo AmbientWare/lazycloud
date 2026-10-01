@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { invokeDeployment, invokeFunctionTask, type InvokeResult } from "@/lib/api/invoke";
 import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
-import { taskQueryOptions } from "@/lib/queries/tasks";
+import { failureText, taskQueryOptions } from "@/lib/queries/tasks";
 
 import {
   buildBody,
@@ -172,7 +172,6 @@ function PlaygroundForm({
         <InvokeOutcome
           result={invoke.data}
           error={invoke.isError ? invoke.error : null}
-          workspaceId={workspaceId}
           workspaceName={workspaceName}
           app={app}
           workloadName={workloadName}
@@ -230,7 +229,6 @@ function FieldInput({
 function InvokeOutcome({
   result,
   error,
-  workspaceId,
   workspaceName,
   app,
   workloadName,
@@ -238,7 +236,6 @@ function InvokeOutcome({
 }: {
   result: InvokeResult | undefined;
   error: Error | null;
-  workspaceId: string;
   workspaceName: string;
   app: string;
   workloadName: string;
@@ -260,7 +257,6 @@ function InvokeOutcome({
       <TaskInvokeOutcome
         taskId={result.taskId}
         meta={meta}
-        workspaceId={workspaceId}
         workspaceName={workspaceName}
         app={app}
         workloadName={workloadName}
@@ -278,11 +274,11 @@ function DirectInvokeOutcome({ result, meta }: { result: InvokeResult; meta: Rea
     <section className="overflow-hidden rounded-md border border-border bg-muted/20">
       <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         {meta}
-        <StatusChip status={result.ok ? "complete" : "failed"} />
+        <StatusChip status={result.ok ? "succeeded" : "failed"} />
       </div>
       <ResultBody
         error={result.ok ? null : result.bodyText || "Request failed"}
-        result={result.ok ? response : null}
+        result={result.ok ? { encoding: "json", value: response } : null}
       />
     </section>
   );
@@ -291,7 +287,6 @@ function DirectInvokeOutcome({ result, meta }: { result: InvokeResult; meta: Rea
 function TaskInvokeOutcome({
   taskId,
   meta,
-  workspaceId,
   workspaceName,
   app,
   workloadName,
@@ -299,20 +294,19 @@ function TaskInvokeOutcome({
 }: {
   taskId: string;
   meta: ReactNode;
-  workspaceId: string;
   workspaceName: string;
   app: string;
   workloadName: string;
   workloadKind: string;
 }) {
-  const task = useQuery(taskQueryOptions(workspaceId, taskId));
+  const task = useQuery(taskQueryOptions(workspaceName, taskId));
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-muted/20">
       <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         {meta}
         {task.data ? (
-          <StatusChip status={task.data.status} live={task.data.status === "running"} />
+          <StatusChip status={task.data.task.status} live={task.data.task.status === "running"} />
         ) : null}
         <Link
           to="/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId"
@@ -337,11 +331,16 @@ function TaskInvokeOutcome({
           </div>
         ) : task.isError ? (
           <PanelError message={task.error.message} />
-        ) : task.data.error || (task.data.result !== null && task.data.result !== undefined) ? (
-          <ResultBody error={task.data.error} result={task.data.result} />
+        ) : task.data.task.failure || task.data.result ? (
+          <ResultBody
+            error={task.data.task.failure ? failureText(task.data.task.failure) : null}
+            result={task.data.result}
+          />
         ) : (
           <p className="p-3 text-xs text-muted-foreground">
-            {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
+            {task.data.task.status === "succeeded"
+              ? "The task returned no result."
+              : "Result pending."}
           </p>
         )}
       </ContentTransition>

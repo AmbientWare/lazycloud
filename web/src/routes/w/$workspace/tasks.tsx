@@ -14,8 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
-import { taskStatuses, workloadKinds } from "@/lib/api/schemas";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import {
   selectTaskList,
@@ -25,22 +25,36 @@ import {
 import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
 import { useWorkspace } from "@/lib/workspace-context";
 
+const TASK_STATUSES: readonly Schemas["TaskStatus"][] = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+];
+
+/** Every task runs a function; endpoint and ASGI requests are listed on their workload. */
+const TASK_KINDS = ["function"] as const;
+
 type TasksSearch = {
-  status?: string;
-  kind?: string;
+  status?: Schemas["TaskStatus"];
+  kind?: (typeof TASK_KINDS)[number];
+  /** App and workload by name; a version narrows the workload. */
   app?: string;
   workload?: string;
-  deployment?: string;
+  version?: number;
 };
 
 export const Route = createFileRoute("/w/$workspace/tasks")({
   validateSearch: (search: Record<string, unknown>): TasksSearch => ({
-    status: pickOption(search.status, taskStatuses),
-    kind: pickOption(search.kind, workloadKinds),
+    status: pickOption(search.status, TASK_STATUSES),
+    kind: pickOption(search.kind, TASK_KINDS),
     app: typeof search.app === "string" && search.app ? search.app : undefined,
     workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
-    deployment:
-      typeof search.deployment === "string" && search.deployment ? search.deployment : undefined,
+    version:
+      typeof search.version === "number" && Number.isInteger(search.version) && search.version > 0
+        ? search.version
+        : undefined,
   }),
   component: TasksPage,
   errorComponent: RouteErrorFallback,
@@ -59,21 +73,27 @@ function TasksPage() {
   const navigate = Route.useNavigate();
 
   const tasks = useInfiniteQuery(
-    tasksInfiniteQueryOptions(workspace.id, {
-      limit: 100,
-      status: search.status,
-      appId: search.app,
-      stubIds: search.workload ? [search.workload] : undefined,
-      deploymentId: search.deployment,
-      kind: search.kind,
-    }),
+    tasksInfiniteQueryOptions(
+      workspace.name,
+      {
+        status: search.status,
+        app: search.app,
+        function: search.workload,
+        version: search.version,
+      },
+      100,
+    ),
   );
   const apps = useQuery(appSummariesQueryOptions(workspace.id));
-  const workloads = useQuery(deployedStubsQueryOptions(workspace.id, search.app));
-  const metrics = useQuery(taskMetricsQueryOptions(workspace.id));
+  const appNames = (apps.data?.items ?? []).map((item) => item.app.name);
+  const appId = apps.data?.items.find((item) => item.app.name === search.app)?.app.id;
+  const workloads = useQuery({
+    ...deployedStubsQueryOptions(workspace.id, appId),
+    enabled: !search.app || Boolean(appId),
+  });
+  const workloadNames = [...new Set((workloads.data?.stubs ?? []).map((stub) => stub.name))];
+  const metrics = useQuery(taskMetricsQueryOptions(workspace.name));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
-  const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)
-    ?.deployment?.name;
 
   const setSearch = (patch: Partial<TasksSearch>) => {
     void navigate({ search: (previous: TasksSearch) => ({ ...previous, ...patch }) });
@@ -88,7 +108,7 @@ function TasksPage() {
             <PageFacts
               items={[
                 countLabel(metrics.data.total, "task"),
-                countLabel(metrics.data.failed, "failed", "failed"),
+                countLabel(metrics.data.status_counts.failed, "failed", "failed"),
                 "last 24 hours",
               ]}
             />
@@ -107,44 +127,38 @@ function TasksPage() {
               <FilterSelect
                 label="Status"
                 value={search.status}
-                options={taskStatuses}
+                options={TASK_STATUSES}
                 allLabel="All statuses"
                 onChange={(status) => setSearch({ status })}
               />
               <FilterSelect
                 label="Type"
                 value={search.kind}
-                options={workloadKinds}
+                options={TASK_KINDS}
                 allLabel="All types"
                 onChange={(kind) => setSearch({ kind })}
               />
               <FilterSelect
                 label="App"
                 value={search.app}
-                options={(apps.data?.items ?? []).map((item) => item.app.id)}
-                optionLabel={(appId) =>
-                  apps.data?.items.find((item) => item.app.id === appId)?.app.name ?? appId
-                }
+                options={appNames}
                 allLabel="All apps"
-                onChange={(app) => setSearch({ app, workload: undefined })}
+                onChange={(app) => setSearch({ app, workload: undefined, version: undefined })}
               />
               <FilterSelect
                 label="Workload"
                 value={search.workload}
-                options={(workloads.data?.stubs ?? []).map((workload) => workload.id)}
-                optionLabel={(stubId) =>
-                  workloads.data?.stubs.find((workload) => workload.id === stubId)?.name ?? stubId
-                }
+                options={workloadNames}
                 allLabel="All workloads"
-                onChange={(workload) => setSearch({ workload })}
+                onChange={(workload) => setSearch({ workload, version: undefined })}
               />
-              {search.deployment ? (
+              {search.version ? (
                 <div className="flex shrink-0 items-center gap-2 border-l border-border pl-3 text-xs text-muted-foreground">
-                  <span>Version {selectedDeployment ?? search.deployment}</span>
+                  <span>Version {search.version}</span>
                   <button
                     type="button"
                     className="text-brand hover:underline"
-                    onClick={() => setSearch({ deployment: undefined })}
+                    onClick={() => setSearch({ version: undefined })}
                   >
                     Clear
                   </button>
@@ -164,7 +178,7 @@ function TasksPage() {
                   search,
                 })}
                 emptyMessage={
-                  search.status || search.kind || search.app || search.workload || search.deployment
+                  search.status || search.app || search.workload || search.version
                     ? "No tasks match these filters"
                     : "No tasks yet"
                 }
@@ -189,25 +203,23 @@ function TasksPage() {
   );
 }
 
-function FilterSelect({
+function FilterSelect<T extends string>({
   label,
   value,
   options,
-  optionLabel,
   allLabel,
   onChange,
 }: {
   label: string;
-  value: string | undefined;
-  options: readonly string[];
-  optionLabel?: (value: string) => string;
+  value: T | undefined;
+  options: readonly T[];
   allLabel: string;
-  onChange: (value: string | undefined) => void;
+  onChange: (value: T | undefined) => void;
 }) {
   return (
     <Select
       value={value ?? "all"}
-      onValueChange={(next) => onChange(next === "all" ? undefined : next)}
+      onValueChange={(next) => onChange(next === "all" ? undefined : (next as T))}
     >
       <SelectTrigger aria-label={label} className="h-7 w-36 text-xs">
         <SelectValue />
@@ -216,7 +228,7 @@ function FilterSelect({
         <SelectItem value="all">{allLabel}</SelectItem>
         {options.map((option) => (
           <SelectItem key={option} value={option}>
-            {optionLabel ? optionLabel(option) : option}
+            {option}
           </SelectItem>
         ))}
       </SelectContent>

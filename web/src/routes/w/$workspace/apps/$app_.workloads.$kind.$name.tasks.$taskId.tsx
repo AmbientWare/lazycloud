@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { TaskDrawer } from "@/components/shared/TaskDrawer";
+import { servesRequests } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
 export const Route = createFileRoute(
@@ -19,6 +20,7 @@ function WorkloadTaskDrawerRoute() {
   return (
     <TaskDrawer
       taskId={taskId}
+      request={servesRequests(kind)}
       taskLink={(nextTaskId) => ({
         to: "/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId",
         params: {

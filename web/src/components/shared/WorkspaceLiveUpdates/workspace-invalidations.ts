@@ -27,10 +27,7 @@ export function workspaceInvalidationTargets(
 
   switch (change.topic) {
     case "apps":
-      return [
-        appSummaries,
-        { queryKey: keys.apps.details(workspace) },
-      ];
+      return [appSummaries, { queryKey: keys.apps.details(workspace) }];
     case "deployments":
       return [
         { queryKey: keys.deployments.root(workspace) },

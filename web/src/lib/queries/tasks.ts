@@ -32,6 +32,12 @@ export function requestStatus(request: Schemas["HttpRequest"]): Schemas["TaskSta
   return request.status >= 500 ? "failed" : "succeeded";
 }
 
+/** A task failure as the text a person reads: the traceback, else the exception. */
+export function failureText(failure: Schemas["TaskFailure"]): string {
+  if (failure.traceback) return failure.traceback.trimEnd();
+  return failure.type ? `${failure.type}: ${failure.message}` : failure.message;
+}
+
 /** The row's status, name and times, read from whichever record it is. */
 export function rowFacts(row: TaskRow) {
   if (!isRequest(row)) {

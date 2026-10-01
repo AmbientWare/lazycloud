@@ -53,7 +53,7 @@ export function GlobalSearch({
   const apps = useQuery({ ...appSummariesQueryOptions(workspace.id), enabled: open });
   const workloads = useQuery({ ...deployedStubsQueryOptions(workspace.id), enabled: open });
   const tasks = useQuery({
-    ...tasksQueryOptions(workspace.id, { limit: 10, search: deferredQuery }),
+    ...tasksQueryOptions(workspace.name, { search: deferredQuery }, 10),
     enabled: open && deferredQuery.length >= 2,
   });
   const sandboxes = useQuery({ ...sandboxesQueryOptions(workspace.id), enabled: open });
@@ -136,11 +136,11 @@ export function GlobalSearch({
       });
     }
 
-    for (const task of tasks.data?.data ?? []) {
+    for (const task of tasks.data ?? []) {
       next.push({
         key: `task-${task.id}`,
         group: "Tasks",
-        label: task.name || "Task",
+        label: task.function,
         detail: `${formatKind(task.status)} · ${task.id.slice(0, 8)}`,
         href: `${base}/tasks/${encodeURIComponent(task.id)}`,
         icon: Activity,

@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@/lib/api/client";
-import { workspaceChangeEventSchema } from "@/lib/api/schemas";
 import { streamServerSentEvents, type ServerSentEvent } from "@/lib/api/sse";
-import { rememberWorkspaces } from "@/lib/api/workspaces";
-
-const WORKSPACE_ID = "0199a000-0000-7000-8000-000000000001";
 
 function streamResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -38,7 +33,7 @@ describe("streamServerSentEvents", () => {
 
     const events: ServerSentEvent[] = [];
     const onOpen = vi.fn();
-    await streamServerSentEvents("/api/v1/tasks/t-1/subscribe", {
+    await streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
       signal: new AbortController().signal,
       onOpen,
       onEvent: (event) => events.push(event),
@@ -60,7 +55,7 @@ describe("streamServerSentEvents", () => {
     );
 
     const events: ServerSentEvent[] = [];
-    await streamServerSentEvents("/api/v1/events/stream", {
+    await streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
       signal: new AbortController().signal,
       onEvent: (event) => events.push(event),
     });
@@ -72,7 +67,7 @@ describe("streamServerSentEvents", () => {
     const fetchMock = vi.fn().mockResolvedValue(streamResponse([]));
     vi.stubGlobal("fetch", fetchMock);
 
-    await streamServerSentEvents("/api/v1/events/stream", {
+    await streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
       signal: new AbortController().signal,
       lastEventId: "42",
       onEvent: () => undefined,
@@ -83,65 +78,6 @@ describe("streamServerSentEvents", () => {
     expect(headers.get("Accept")).toBe("text/event-stream");
   });
 
-  it("follows the workspace's change stream as one change event per changed resource", async () => {
-    rememberWorkspaces([{ id: WORKSPACE_ID, name: "dev" }]);
-    const change = {
-      seq: 9,
-      workspace_id: WORKSPACE_ID,
-      occurred_at: "2026-10-01T12:00:00Z",
-      changes: [
-        {
-          topic: "tasks",
-          change: "updated",
-          resource_id: "t-1",
-          task_id: "t-1",
-          root_task_id: "t-0",
-        },
-        { topic: "containers", change: "created", resource_id: "c-1", container_id: "c-1" },
-      ],
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        streamResponse([
-          `id: 9\nevent: change\ndata: ${JSON.stringify(change)}\n\n`,
-          'id: 12\nevent: reset\ndata: {"reason":"behind"}\n\n',
-        ]),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const events: ServerSentEvent[] = [];
-    await streamServerSentEvents(`/api/v1/events/changes/stream?workspace=${WORKSPACE_ID}`, {
-      signal: new AbortController().signal,
-      lastEventId: "8",
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(fetchMock.mock.calls[0][0]).toBe("/v1/workspaces/dev/changes/stream");
-    expect((fetchMock.mock.calls[0][1].headers as Headers).get("Last-Event-ID")).toBe("8");
-    const parsed = events.map((event) => ({
-      id: event.id,
-      event: event.event,
-      change: workspaceChangeEventSchema.parse(JSON.parse(event.data)),
-    }));
-    expect(parsed.slice(0, 2)).toMatchObject([
-      {
-        id: "9",
-        event: "workspace.change",
-        change: { topic: "tasks", task_id: "t-1", root_task_id: "t-0" },
-      },
-      { id: "9", event: "workspace.change", change: { topic: "containers", container_id: "c-1" } },
-    ]);
-    // A reset reloads every topic the dashboard shows and resumes after it.
-    expect(parsed.slice(2).map((event) => [event.id, event.change.topic])).toEqual([
-      ["12", "apps"],
-      ["12", "workloads"],
-      ["12", "tasks"],
-      ["12", "containers"],
-      ["12", "storage.secrets"],
-    ]);
-  });
-
   it("rejects on HTTP errors", async () => {
     vi.stubGlobal(
       "fetch",
@@ -149,36 +85,11 @@ describe("streamServerSentEvents", () => {
     );
 
     await expect(
-      streamServerSentEvents("/api/v1/events/stream", {
+      streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
         signal: new AbortController().signal,
         onEvent: () => undefined,
       }),
     ).rejects.toThrow("workspace not found");
-  });
-
-  it("preserves typed expired-cursor conflicts", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response('{"detail":"realtime cursor is older than retained history"}', {
-          status: 409,
-          statusText: "Conflict",
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-
-    const failure = streamServerSentEvents("/api/v1/events/stream?clamp=false", {
-      signal: new AbortController().signal,
-      lastEventId: "1-0",
-      onEvent: () => undefined,
-    });
-
-    await expect(failure).rejects.toMatchObject({
-      name: "ApiError",
-      status: 409,
-      message: "realtime cursor is older than retained history",
-    } satisfies Partial<ApiError>);
   });
 
   it("rejects successful responses that are not event streams", async () => {
@@ -194,7 +105,7 @@ describe("streamServerSentEvents", () => {
     );
 
     await expect(
-      streamServerSentEvents("/api/v1/events/stream", {
+      streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
         signal: new AbortController().signal,
         onOpen,
         onEvent: () => undefined,

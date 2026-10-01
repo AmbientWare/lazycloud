@@ -19,7 +19,7 @@ import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 import { deployedStubsQueryOptions, taskLatencyQueryOptions } from "@/lib/queries/stubs";
-import { tasksQueryOptions } from "@/lib/queries/tasks";
+import { requestsQueryOptions, servesRequests, tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { currentDeployment, findWorkloadGroup, type WorkloadGroup } from "./-workloads/grouping";
@@ -28,11 +28,7 @@ import { DevboxActions, DevboxConnect, DevboxWorkspace } from "./-workloads/Devb
 import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
-import {
-  ACTIVE_POD_CONTAINER_STATUSES,
-  PodInstances,
-  type PodInstanceStatusFilter,
-} from "./-workloads/PodInstances";
+import { PodInstances, type PodInstanceStatusFilter } from "./-workloads/PodInstances";
 import { VersionHistory } from "./-workloads/VersionHistory";
 import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
@@ -67,18 +63,14 @@ function WorkloadDetailPage() {
   const group = findWorkloadGroup(deploymentList.items, app, kind, name);
   const selectedDeployment = group ? currentDeployment(group) : undefined;
   const isDevbox = selectedDeployment?.role === "devbox";
-  const containerStubIds =
-    group?.kind === "pod" && selectedDeployment?.stub_id
-      ? [selectedDeployment.stub_id]
-      : group?.stubIds;
   const containers = useInfiniteQuery(
-    containersQueryOptions(workspace.id, {
-      appId: app,
-      stubIds: containerStubIds,
+    containersQueryOptions(workspace.name, {
+      app,
+      function: name,
       // Only a Pod lists its containers; every other kind reports how many are
       // running, and asking the server for those is what makes the count right
       // rather than right about the newest page of a long history.
-      statuses: podContainerStatuses(group?.kind, podInstanceStatus),
+      live: group?.kind !== "pod" || podInstanceStatus === "active",
       // A devbox is one machine; its status endpoint names the container.
       enabled: Boolean(group) && !isDevbox,
     }),
@@ -98,12 +90,7 @@ function WorkloadDetailPage() {
   const current = currentDeployment(group);
   const currentStub = stubs.data?.stubs.find((stub) => stub.id === current.stub_id);
   const containerList = selectContainerList(containers.data, containers.hasNextPage);
-  const workloadContainers = containerList.items
-    .map((item) => item.container)
-    .sort((left, right) => right.created_at.localeCompare(left.created_at));
-  const runningContainers = workloadContainers.filter(
-    (container) => container.status === "running",
-  );
+  const runningContainers = containerList.items.filter((container) => container.state === "ready");
   const isPublic = Boolean(appRecord.data?.public || currentStub?.public);
   const isPod = group.kind === "pod";
   const kindFact = (
@@ -234,7 +221,8 @@ function WorkloadDetailPage() {
               deployment={current}
               statusFilter={podInstanceStatus}
               onStatusFilterChange={setPodInstanceStatus}
-              containers={workloadContainers}
+              // Pods have no API until the workloads packet.
+              containers={[]}
               loading={containers.isPending}
               error={containers.isFetchNextPageError ? null : containers.error}
               nextCursor={containerList.nextCursor}
@@ -289,12 +277,10 @@ function WorkloadDetailPage() {
         >
           <WorkloadLatency workspaceId={workspace.id} group={group} />
           <WorkloadRuns
-            workspaceId={workspace.id}
             workspaceName={workspace.name}
             app={app}
             workloadName={group.name}
             workloadKind={group.kind}
-            stubIds={group.stubIds}
           />
         </Panel>
       ) : null}
@@ -331,27 +317,32 @@ function WorkloadLatency({ workspaceId, group }: { workspaceId: string; group: W
 }
 
 function WorkloadRuns({
-  workspaceId,
   workspaceName,
   app,
   workloadName,
   workloadKind,
-  stubIds,
 }: {
-  workspaceId: string;
   workspaceName: string;
   app: string;
   workloadName: string;
   workloadKind: string;
-  stubIds: string[];
 }) {
-  const tasks = useQuery(tasksQueryOptions(workspaceId, { limit: 50, appId: app, stubIds }));
-  if (tasks.isError) {
-    return <PanelError message={tasks.error.message} />;
+  const requests = servesRequests(workloadKind);
+  const tasks = useQuery({
+    ...tasksQueryOptions(workspaceName, { app, function: workloadName }),
+    enabled: !requests,
+  });
+  const served = useQuery({
+    ...requestsQueryOptions(workspaceName, app, workloadName),
+    enabled: requests,
+  });
+  const rows = requests ? served : tasks;
+  if (rows.isError) {
+    return <PanelError message={rows.error.message} />;
   }
   return (
     <TaskTable
-      tasks={tasks.isPending ? undefined : tasks.data?.data}
+      tasks={rows.isPending ? undefined : rows.data}
       showApp={false}
       showWorkload={false}
       taskLink={(taskId) => ({
@@ -383,14 +374,6 @@ function defaultInspectorTab(group: WorkloadGroup, showsInvoke: boolean): string
   if (group.kind === "pod") return "instances";
   if (showsInvoke && !group.latest.spec?.cron) return "invoke";
   return "versions";
-}
-
-function podContainerStatuses(
-  kind: string | undefined,
-  filter: PodInstanceStatusFilter,
-): ("pending" | "running")[] | undefined {
-  if (kind !== "pod") return ["running"];
-  return filter === "active" ? [...ACTIVE_POD_CONTAINER_STATUSES] : undefined;
 }
 
 function kindLabel(group: WorkloadGroup): string {

@@ -72,7 +72,7 @@ function ReadingStrip() {
   const { workspace } = useWorkspace();
   const held = useQuery(accountContainerCountsQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
-  const tasks = useQuery(taskMetricsQueryOptions(workspace.id, TASK_METRICS_HOURS));
+  const tasks = useQuery(taskMetricsQueryOptions(workspace.name, TASK_METRICS_HOURS));
 
   const entitlements = billing.data?.entitlements;
   const usage = billing.data?.usage;
@@ -116,15 +116,15 @@ function ReadingStrip() {
         value={tasks.data?.total}
         detail={
           tasks.data
-            ? `${tasks.data.completed.toLocaleString()} completed in ${workspace.name}`
+            ? `${tasks.data.status_counts.succeeded.toLocaleString()} completed in ${workspace.name}`
             : undefined
         }
       />
       <Reading
         label="Failures · 24h"
         query={tasks}
-        value={tasks.data?.failed}
-        tone={tasks.data && tasks.data.failed > 0 ? "danger" : "neutral"}
+        value={tasks.data?.status_counts.failed}
+        tone={tasks.data && tasks.data.status_counts.failed > 0 ? "danger" : "neutral"}
         detail={
           tasks.data
             ? `${shareLabel(tasks.data.failure_rate)} of tasks in ${workspace.name}`
