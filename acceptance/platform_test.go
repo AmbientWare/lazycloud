@@ -89,6 +89,8 @@ type platform struct {
 	socketDir string
 	// api is the public API's base URL.
 	api string
+	// geesefs is the GeeseFS binary the agent mounts volumes with, if any.
+	geesefs string
 }
 
 func (p *platform) port() string {
@@ -238,6 +240,16 @@ func startPlatform(t *testing.T) *platform {
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	p.socketDir = socketDir
 	stateDir := t.TempDir()
+	// Volumes mount with the pinned GeeseFS deploy/local/fetch-geesefs.sh
+	// installs; without it they are unavailable.
+	geesefs, err := filepath.Abs("../bin/geesefs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(geesefs); err != nil {
+		geesefs = ""
+	}
+	p.geesefs = geesefs
 	// Cleanups run last first: this one stops everything before the
 	// database and directories go.
 	t.Cleanup(func() {
@@ -249,7 +261,8 @@ func startPlatform(t *testing.T) *platform {
 		err := agent.Run(ctx, agent.Config{
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			Capacity: &hostproto.Capacity{CpuMillis: 16000, MemoryBytes: 16 << 30},
+			GeeseFSPath: geesefs, MountImage: agent.DefaultMountImage,
+			Capacity:    &hostproto.Capacity{CpuMillis: 16000, MemoryBytes: 16 << 30},
 			Labels:   map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
 		})
 		if err != nil && ctx.Err() == nil {
@@ -274,6 +287,14 @@ func removeContainers(t *testing.T) {
 	if err != nil {
 		t.Logf("list containers: %v", err)
 		return
+	}
+	// Volume mount containers stop first and gracefully, so GeeseFS
+	// unmounts and leaves no dead FUSE mount in the test's directories.
+	timeout := 10
+	for _, c := range list.Items {
+		if c.Labels["lazycloud.kind"] != "" {
+			_, _ = docker.ContainerStop(ctx, c.ID, client.ContainerStopOptions{Timeout: &timeout})
+		}
 	}
 	for _, c := range list.Items {
 		_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})

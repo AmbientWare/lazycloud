@@ -214,3 +214,40 @@ func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
 		t.Fatalf("public app: %d %s", resp.StatusCode, body)
 	}
 }
+
+const volumeApp = `
+from pathlib import Path
+
+
+def hits() -> int:
+    path = Path("/volumes/data/hits")
+    count = int(path.read_text()) + 1 if path.exists() else 1
+    path.write_text(str(count))
+    return count
+`
+
+// An endpoint mounts its volumes like a function: what one request writes
+// the next reads, in a redeployed container too.
+func TestEndpointMountsItsVolumes(t *testing.T) {
+	p := startPlatform(t)
+	if p.geesefs == "" {
+		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
+	}
+	source := p.upload(map[string]string{"app.py": volumeApp})
+	s := endpointSpec(source, "hits", "app:hits", "/")
+	s.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
+	p.deploy("volumes", s)
+	w := p.describe("volumes", apitypes.WorkloadKindEndpoint, "hits")
+	for want := 1; want <= 2; want++ {
+		if status, _, body := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK || body != fmt.Sprint(want) {
+			t.Fatalf("request %d: %d %s", want, status, body)
+		}
+	}
+	// A new release runs in a new container on the same volume.
+	timeout := 90
+	s.TimeoutSeconds = &timeout
+	p.deploy("volumes", s)
+	if status, _, body := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK || body != "3" {
+		t.Fatalf("after redeploy: %d %s", status, body)
+	}
+}
