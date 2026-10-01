@@ -13,11 +13,13 @@ where c.host_id = @host_id and c.state = 'draining'
 order by c.id;
 
 -- name: EndedAttemptsOnHost :many
--- Attempts that ended without their slot knowing: the host kills them.
+-- Attempts that ended without their slot knowing: the host kills them. A
+-- lost attempt on a live container was stopped by request or omitted from a
+-- report, and its slot must not keep running it.
 select a.id, a.container_id, a.state
 from containers c
 join attempts a on a.container_id = c.id
 where c.host_id = @host_id and c.state in ('ready', 'draining')
-  and a.state in ('cancelled', 'timed_out')
+  and a.state in ('cancelled', 'timed_out', 'lost')
   and a.finished_at > now() - make_interval(secs => @within_seconds::float8)
 order by a.id;
