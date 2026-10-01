@@ -16,7 +16,7 @@ update tasks
 set status = 'cancelled', finished_at = now()
 where id in (
     select q.id from tasks q
-    where q.release_id = $1 and q.status = 'queued'
+    where q.release_id = $1::uuid and q.status = 'queued'
     order by q.available_at, q.id
     limit $2
     for update skip locked
@@ -52,7 +52,7 @@ func (q *Queries) CancelQueuedTasks(ctx context.Context, arg CancelQueuedTasksPa
 
 const createPendingContainers = `-- name: CreatePendingContainers :many
 insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select $1, $2, 'pending', $3, $4, $5
+select $1, $2::uuid, 'pending', $3, $4, $5
 from generate_series(1, $6::int)
 returning id
 `
@@ -96,7 +96,7 @@ func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePending
 const drainAllContainers = `-- name: DrainAllContainers :many
 update containers
 set state = 'draining', drain_started_at = now()
-where release_id = $1 and state in ('starting', 'ready')
+where release_id = $1::uuid and state in ('starting', 'ready')
 returning id, host_id
 `
 
@@ -173,7 +173,7 @@ func (q *Queries) DrainIdleContainers(ctx context.Context, arg DrainIdleContaine
 const lockIdleContainers = `-- name: LockIdleContainers :many
 select c.id
 from containers c
-where c.release_id = $1
+where c.release_id = $1::uuid
   and c.state = 'ready'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
   and coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at)
@@ -339,7 +339,7 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 const stopAllPendingContainers = `-- name: StopAllPendingContainers :many
 update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'workload stopped', stopped_at = now()
-where release_id = $1 and state = 'pending'
+where release_id = $1::uuid and state = 'pending'
 returning id
 `
 
@@ -368,7 +368,7 @@ update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'demand ended', stopped_at = now()
 where id in (
     select p.id from containers p
-    where p.release_id = $1 and p.state = 'pending'
+    where p.release_id = $1::uuid and p.state = 'pending'
     order by p.created_at desc, p.id desc
     limit $2
     for update skip locked

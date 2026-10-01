@@ -1,4 +1,4 @@
-"""Deploy app functions: one source archive upload, then one deployment per app."""
+"""Deploy app functions: ready their images, upload source once, then deploy each app."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from shared.api import Deployment, DeploymentRequest, FunctionSpec, SourceUploadRequest
+from shared.api import Deployment, DeploymentRequest, FunctionSpec
 
 from lazycloud.clients.api import ApiClient
 from lazycloud.exceptions import SdkError
@@ -18,7 +18,6 @@ from lazycloud.references import (
 )
 from lazycloud.source_sync import (
     SOURCE_IGNORE_FILE_WRITTEN_NOTICE,
-    SourcePackageArchive,
     build_source_package_archive,
     ensure_source_ignore_file,
 )
@@ -26,6 +25,7 @@ from lazycloud.terminal import Terminal, humanize_bytes
 
 if TYPE_CHECKING:
     from lazycloud.abstractions.function import Function
+    from lazycloud.abstractions.image import ImageBuildResult
 
 
 class DeploymentOperationError(SdkError):
@@ -49,7 +49,7 @@ def deploy_functions(
     source_root: str | Path | None = None,
     terminal: Terminal | None = None,
 ) -> list[Deployment]:
-    """Upload the source the functions import from and deploy each app.
+    """Ready the functions' images, upload the source they import from and deploy each app.
 
     Every function's options are checked before any bytes move, so an
     unsupported option never leaves a half-deployed app.
@@ -66,6 +66,12 @@ def deploy_functions(
         for target in targets
         for function in target.functions
     }
+    images = _prepare_images(
+        [function for target in targets for function in target.functions],
+        client=client,
+        workspace=workspace,
+        terminal=terminal,
+    )
     if ensure_source_ignore_file(root):
         terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
     sources: dict[tuple[str, ...], str] = {}
@@ -78,7 +84,11 @@ def deploy_functions(
         specs: list[FunctionSpec] = []
         for function in target.functions:
             handler, prefix = placements[id(function)]
-            specs.append(function.function_spec(handler=handler, source_sha256=sources[prefix]))
+            specs.append(
+                function.function_spec(
+                    handler=handler, source_sha256=sources[prefix], image=images[id(function)]
+                )
+            )
         with terminal.step("Deploy", target.app) as step:
             deployment = client.deploy_app(
                 workspace,
@@ -121,25 +131,35 @@ def _upload_source(
         plural = "s" if len(archive.files) != 1 else ""
         description = f"{len(archive.files):,} file{plural}, {humanize_bytes(archive.size)}"
         step.update(f"uploading {description}")
-        uploaded = _store_source(client, workspace, archive)
+        uploaded = client.store_source(workspace, archive.sha256, archive.path)
         step.done(f"{description} {'uploaded' if uploaded else 'already stored'}")
         return archive.sha256
 
 
-def _store_source(client: ApiClient, workspace: str, archive: SourcePackageArchive) -> bool:
-    """Make the archive present by digest; True when its bytes had to be sent."""
-    request = SourceUploadRequest(sha256=archive.sha256, size_bytes=archive.size)
-    state = client.create_source_upload(workspace, request)
-    if state.present:
-        return False
-    if state.upload is None:
-        msg = f"the API reported source {archive.sha256} missing without an upload target"
-        raise DeploymentOperationError(msg)
-    client.upload_source(state.upload, archive.path)
-    if not client.create_source_upload(workspace, request).present:
-        msg = f"source {archive.sha256} was not stored after its upload"
-        raise DeploymentOperationError(msg)
-    return True
+def _prepare_images(
+    functions: Sequence[Function[..., Any]],
+    *,
+    client: ApiClient,
+    workspace: str,
+    terminal: Terminal,
+) -> dict[int, ImageBuildResult]:
+    """Make each distinct image ready once, keyed by the function's id()."""
+    by_definition: dict[str, ImageBuildResult] = {}
+    results: dict[int, ImageBuildResult] = {}
+    for function in functions:
+        image = function.image
+        key = image.explicit_image_id or image.definition().model_dump_json()
+        result = by_definition.get(key)
+        if result is None:
+            result = image.build(client, workspace=workspace, terminal=terminal)
+            if not result.success:
+                build = f" build {result.build_id}" if result.build_id else ""
+                image_name = f" {result.image_id}" if result.image_id else ""
+                msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
+                raise DeploymentOperationError(msg)
+            by_definition[key] = result
+        results[id(function)] = result
+    return results
 
 
 __all__ = ["AppFunctions", "DeploymentOperationError", "deploy_functions"]

@@ -32,6 +32,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -100,6 +101,7 @@ type serveConfig struct {
 	objectStore   storage.Config
 	imageTemplate string
 	secretsKey    string
+	images        images.Config
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -114,10 +116,20 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", "docker.io/library/python:{version}-slim"), "container image per Python version (LAZYCLOUD_IMAGE_TEMPLATE)")
 	fs.StringVar(&cfg.secretsKey, "secrets-key-file", env("LAZYCLOUD_SECRETS_KEY_FILE", ""), "32-byte master key file that wraps secret data keys (LAZYCLOUD_SECRETS_KEY_FILE)")
+	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
+	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
+	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
-	// The secret stays out of the process arguments.
+	if cfg.images.Registry == "" {
+		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
+	}
+	cfg.images.ManagedBase = cfg.imageTemplate
+	if user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); user != "" {
+		cfg.images.Auth = &images.Auth{Username: user, Password: os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_PASSWORD")}
+	}
+	// The secrets stay out of the process arguments.
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
 	if cfg.objectStore.Endpoint == "" || cfg.objectStore.Region == "" || cfg.objectStore.Bucket == "" ||
 		cfg.objectStore.AccessKeyID == "" || cfg.objectStore.SecretAccessKey == "" {
@@ -136,7 +148,7 @@ func serve(ctx context.Context, args []string) error {
 }
 
 func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger) error {
-	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim)
+	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim, database.ChannelImageBuild, database.ChannelImageBuildLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
 	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
@@ -144,9 +156,10 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 		return err
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
+	im := images.NewImages(pool, exec, cfg.images, nil)
 	owners := api.Owners{
 		Identity: identity.NewIdentity(pool), Control: control.NewControl(pool), Storage: store,
-		Execution: exec, Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener,
+		Execution: exec, Images: im, Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener,
 	}
 	handler, err := api.NewHandler(owners, logger)
 	if err != nil {
@@ -156,7 +169,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	if err != nil {
 		return err
 	}
-	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, listener, hostsession.Config{
+	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
 		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)

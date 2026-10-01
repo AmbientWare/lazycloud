@@ -28,6 +28,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -69,7 +70,8 @@ func start(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := hostsession.NewServer(c, e, store, listener, hostsession.Config{
+	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"}, nil)
+	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim",
 		TouchInterval: 100 * time.Millisecond,
 		Secrets:       vault,

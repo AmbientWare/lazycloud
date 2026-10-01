@@ -17,6 +17,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
@@ -30,6 +31,9 @@ const (
 	// hostLossTick paces host-loss detection; hosts are lost after
 	// compute.LivenessTimeout, so detection lags by at most this much.
 	hostLossTick = 5 * time.Second
+	// buildRecoveryTick paces build deadlines; container stops wake recovery
+	// at once.
+	buildRecoveryTick = 10 * time.Second
 	// contendedRetry reruns a pass that found its lock held, because the
 	// holder may have read state before this replica's change committed.
 	contendedRetry = 100 * time.Millisecond
@@ -76,7 +80,11 @@ func run(logger *slog.Logger) error {
 	callbacks := notifications.NewCallbacks(pool, secrets.NewSecrets(pool, masterKey), notifications.CallbackConfig{
 		AllowPrivateTargets: os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1",
 	}, logger)
-	listener := database.NewListener(pool, logger, database.ChannelExecution)
+	// Build recovery needs no registry: it only reads and moves build state.
+	im := images.NewImages(pool, exec, images.Config{}, nil)
+	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild)
+	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
+	defer cancelBuildWake()
 	planWake, cancelPlanWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelPlanWake()
 	placeWake, cancelPlaceWake := listener.Subscribe(database.ChannelExecution, "")
@@ -149,6 +157,14 @@ func run(logger *slog.Logger) error {
 		return loop(ctx, hostLossTick, nil, nil, func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, buildRecoveryTick, buildWake, nil, func(ctx context.Context) bool {
+			if _, err := im.Recover(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false
 		})

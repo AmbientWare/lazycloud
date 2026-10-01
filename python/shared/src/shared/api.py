@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Annotated, Any, Literal
 from pydantic import AwareDatetime, Base64Bytes, BaseModel, Field, RootModel
 from uuid import UUID
+from typing_extensions import TypeAliasType
 
 
 class ErrorCode(str, Enum):
@@ -18,6 +19,7 @@ class ErrorCode(str, Enum):
     unsupported = "unsupported"
     too_many_pending_tasks = "too_many_pending_tasks"
     task_not_finished = "task_not_finished"
+    unavailable = "unavailable"
     internal = "internal"
 
 
@@ -73,10 +75,6 @@ class PythonVersion(str, Enum):
     field_3_12 = "3.12"
     field_3_13 = "3.13"
     field_3_14 = "3.14"
-
-
-class ImageSpec(BaseModel):
-    python_version: PythonVersion
 
 
 class Resources(BaseModel):
@@ -255,6 +253,105 @@ class SchedulePage(BaseModel):
     )
 
 
+class ImageArchitecture(str, Enum):
+    amd64 = "amd64"
+    arm64 = "arm64"
+
+
+BaseImageCredentialsAdditionalProperty = TypeAliasType(
+    "BaseImageCredentialsAdditionalProperty", Annotated[str, Field(max_length=65536)]
+)
+
+
+class Architecture(str, Enum):
+    amd64 = "amd64"
+    arm64 = "arm64"
+
+
+class PythonPackage(RootModel[str]):
+    root: Annotated[str, Field(max_length=1024, min_length=1)]
+
+
+class Command(RootModel[str]):
+    root: Annotated[str, Field(max_length=65536, min_length=1)]
+
+
+EnvAdditionalProperty = TypeAliasType(
+    "EnvAdditionalProperty", Annotated[str, Field(max_length=65536)]
+)
+
+
+class Secret1(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_]{0,127}$")]
+
+
+class ImageStepKind(str, Enum):
+    shell = "shell"
+    pip = "pip"
+    micromamba = "micromamba"
+    uv_project = "uv_project"
+    poetry_project = "poetry_project"
+    pyproject = "pyproject"
+    micromamba_environment = "micromamba_environment"
+
+
+class Arg(RootModel[str]):
+    root: Annotated[str, Field(max_length=1024)]
+
+
+class Group(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
+
+
+class ImageStep(BaseModel):
+    kind: ImageStepKind
+    command: Annotated[str | None, Field(max_length=65536)] = None
+    args: Annotated[list[Arg] | None, Field(max_length=1000)] = None
+    groups: Annotated[list[Group] | None, Field(max_length=64)] = None
+
+
+class Image(BaseModel):
+    id: Annotated[str, Field(pattern="^img_[0-9a-f]{24}$")]
+    python_version: str
+    architecture: ImageArchitecture
+    ready: Annotated[bool, Field(description="The image is published and can be deployed.")]
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+
+
+class ImageBuildStatus(str, Enum):
+    building = "building"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
+class ImageBuildPhase(str, Enum):
+    queued = "queued"
+    starting = "starting"
+    building = "building"
+    finished = "finished"
+
+
+class ImageBuild(BaseModel):
+    id: UUID
+    image_id: Annotated[str, Field(pattern="^img_[0-9a-f]{24}$")]
+    status: ImageBuildStatus
+    phase: ImageBuildPhase
+    attempt: Annotated[int, Field(description="Build containers started so far, at most 2.")]
+    failure: str | None = None
+    created_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+
+
+class ImageBuildLogEntry(BaseModel):
+    id: int
+    attempt: int
+    data: Annotated[
+        str, Field(description="One line of build output without its trailing newline.")
+    ]
+    time: AwareDatetime
+
+
 class Error(BaseModel):
     code: ErrorCode
     message: str
@@ -271,6 +368,13 @@ class SourceUpload(BaseModel):
     ]
     present: Annotated[bool, Field(description="The archive is stored and can be deployed.")]
     upload: UploadTarget | None = None
+
+
+class ImageSpec(BaseModel):
+    python_version: Annotated[
+        PythonVersion, Field(description="The Python minor version the runtime is mounted for.")
+    ]
+    image_id: Annotated[str | None, Field(pattern="^img_[0-9a-f]{24}$")] = None
 
 
 class Task(BaseModel):
@@ -304,6 +408,52 @@ class LifecycleHooks(BaseModel):
     on_retry: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_failure: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+
+
+class ImageDefinition(BaseModel):
+    python_version: Annotated[
+        str,
+        Field(
+            description="A supported minor release or an exact patch release.",
+            pattern="^3\\.(10|11|12|13|14)(\\.[0-9]{1,3})?$",
+        ),
+    ]
+    micromamba: Annotated[
+        bool, Field(description="Micromamba provides Python and the base environment.")
+    ] = False
+    base_image: Annotated[
+        str | None,
+        Field(description="A registry image to start from.", max_length=512, min_length=1),
+    ] = None
+    base_image_credentials: Annotated[
+        dict[str, BaseImageCredentialsAdditionalProperty] | None,
+        Field(description="Registry credentials by environment variable name.", max_length=32),
+    ] = None
+    architecture: Architecture = Architecture.amd64
+    python_packages: Annotated[list[PythonPackage] | None, Field(max_length=1000)] = None
+    steps: Annotated[list[ImageStep] | None, Field(max_length=1000)] = None
+    commands: Annotated[list[Command] | None, Field(max_length=1000)] = None
+    env: Annotated[dict[str, EnvAdditionalProperty] | None, Field(max_length=256)] = None
+    dockerfile: Annotated[
+        str | None,
+        Field(
+            description="A Dockerfile that replaces the base image and Python setup.",
+            max_length=1048576,
+        ),
+    ] = None
+    context: SourceRef | None = None
+    secrets: Annotated[
+        list[Secret1] | None,
+        Field(description="Workspace secrets the build reads as build arguments.", max_length=64),
+    ] = None
+    gpu: Annotated[
+        str | None, Field(description="The GPU model the build runs on.", max_length=64)
+    ] = None
+
+
+class ImageResolution(BaseModel):
+    image: Image
+    build: ImageBuild | None = None
 
 
 class FunctionSpec(BaseModel):

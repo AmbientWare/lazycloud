@@ -16,6 +16,8 @@ export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d
 export LAZYCLOUD_SECRETS_KEY_FILE="$PWD/$state/secrets.key"
 # Local callbacks may target this machine.
 export LAZYCLOUD_CALLBACK_ALLOW_PRIVATE=1
+export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
+export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 
 stop() {
   for name in agent scheduler server; do
@@ -31,7 +33,7 @@ start() {
   if [ ! -f "$LAZYCLOUD_SECRETS_KEY_FILE" ]; then
     (umask 077 && head -c 32 /dev/urandom >"$LAZYCLOUD_SECRETS_KEY_FILE")
   fi
-  docker compose up -d --wait postgres object-store >/dev/null
+  docker compose up -d --wait postgres object-store registry >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
   CGO_ENABLED=0 go build -o bin/supervisor ./cmd/supervisor
   go build -o bin/server ./cmd/server
@@ -54,7 +56,7 @@ start() {
   join=""
   [ -f "$state/join-token" ] && join=$(cat "$state/join-token")
   bin/agent -server 127.0.0.1:8081 -join-token "$join" -state-dir "$PWD/$state/agent" \
-    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -oci-runtime runc \
+    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -oci-runtime runc -build-network host \
     >"$state/logs/agent.log" 2>&1 &
   echo $! >"$state/agent.pid"
 

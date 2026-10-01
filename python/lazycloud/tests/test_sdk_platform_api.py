@@ -22,6 +22,8 @@ from lazycloud.exceptions import (
     RemoteTaskError,
     UnsupportedFeatureError,
 )
+from lazycloud.session.deployment import DeploymentOperationError
+from lazycloud.terminal import output
 from lazycloud.values import cloudpickle_bytes
 from typer.testing import CliRunner
 
@@ -40,6 +42,8 @@ pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 APP_ID = "0192f0a0-0000-7000-8000-000000000001"
 RELEASE_ID = "0192f0a0-0000-7000-8000-000000000002"
+IMAGE_ID = "img_0123456789abcdef01234567"
+BUILD_ID = "0192f0a0-0000-7000-8000-0000000000b1"
 NOW = "2026-09-30T12:00:00Z"
 TASKS = "/v1/workspaces/team/apps/reports/functions/summarize_sales/tasks"
 
@@ -106,7 +110,23 @@ def _inputs(request: ApiRequest) -> list[dict[str, Any]]:
     return decoded
 
 
+def _image(ready: bool, python_version: str = "3.11") -> dict[str, object]:
+    return {
+        "id": IMAGE_ID,
+        "python_version": python_version,
+        "architecture": "amd64",
+        "ready": ready,
+        "created_at": NOW,
+    }
+
+
 def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
+    api.route("POST", "/v1/workspaces/team/images/resolve")(
+        lambda request: json_reply(
+            {"image": _image(True, python_version=request.json()["python_version"])}
+        )
+    )
+
     @api.route("POST", "/v1/workspaces/team/sources")
     def sources(request: ApiRequest) -> Reply:
         sha: str = request.json()["sha256"]
@@ -167,7 +187,7 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
                 "name": "summarize_sales",
                 "handler": "reports:summarize_sales",
                 "source": {"sha256": sha},
-                "image": {"python_version": "3.11"},
+                "image": {"python_version": "3.11", "image_id": IMAGE_ID},
                 "resources": {"cpu_millis": 500, "memory_mib": 1024},
                 "retry_policy": {"max_attempts": 3, "delay_seconds": 1.5, "backoff": "fixed"},
                 "concurrency": 4,
@@ -238,7 +258,6 @@ def test_deploy_maps_workload_runtime_options(
     [
         ('@app.function(gpu="A10G")', "gpu"),
         ("@app.function(docker_enabled=True)", "docker_enabled"),
-        ('@app.function(image=lazycloud.Image(python_packages=["numpy"]))', "image packages"),
     ],
 )
 def test_unsupported_options_fail_before_any_request(
@@ -257,6 +276,89 @@ def test_unsupported_options_fail_before_any_request(
         reports.job.remote()
 
     assert fake_api.requests == []
+
+
+IMAGE_APP = """\
+import lazycloud
+
+app = lazycloud.App("reports")
+image = lazycloud.Image(python_packages=["numpy"])
+
+
+@app.function(image=image)
+def first(): pass
+
+
+@app.function(image=lazycloud.Image(python_packages=["numpy"]))
+def second(): pass
+"""
+
+
+def _serve_image_build(api: FakeApi, final: dict[str, object]) -> None:
+    build: dict[str, object] = {
+        "id": BUILD_ID,
+        "image_id": IMAGE_ID,
+        "status": "building",
+        "phase": "queued",
+        "attempt": 1,
+        "created_at": NOW,
+    }
+    api.route("POST", "/v1/workspaces/team/images/resolve")(
+        lambda _: json_reply({"image": _image(False, "3.12")})
+    )
+    api.route("POST", "/v1/workspaces/team/images")(
+        lambda _: json_reply({"image": _image(False, "3.12"), "build": build})
+    )
+    log: dict[str, object] = {
+        "id": 1,
+        "attempt": 1,
+        "data": "#5 [2/3] RUN pip install numpy",
+        "time": NOW,
+    }
+    api.route("GET", f"/v1/workspaces/team/image-builds/{BUILD_ID}/logs")(
+        lambda _: (200, {"Content-Type": "application/x-ndjson"}, json.dumps(log).encode())
+    )
+    api.route("GET", f"/v1/workspaces/team/image-builds/{BUILD_ID}")(
+        lambda _: json_reply({**build, **final})
+    )
+
+
+def test_deploy_builds_each_distinct_image_once_and_sends_its_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fake_api: FakeApi,
+) -> None:
+    reports = _project(tmp_path, monkeypatch, IMAGE_APP)
+    _serve_deployment(fake_api, stored=set())
+    _serve_image_build(fake_api, {"status": "succeeded", "phase": "finished"})
+
+    with output(enabled=True):
+        reports.app.deploy()
+
+    (resolve,) = fake_api.calls("POST", "/v1/workspaces/team/images/resolve")
+    assert resolve.json()["python_packages"] == ["numpy"]
+    assert len(fake_api.calls("POST", "/v1/workspaces/team/images")) == 1
+    (deploy,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    assert [spec["image"] for spec in deploy.json()["functions"]] == [
+        {"python_version": "3.12", "image_id": IMAGE_ID}
+    ] * 2
+    assert "python 3.12 · built" in capsys.readouterr().err
+
+
+def test_deploy_fails_with_the_build_id_when_an_image_build_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch, IMAGE_APP)
+    _serve_deployment(fake_api, stored=set())
+    _serve_image_build(
+        fake_api, {"status": "failed", "phase": "finished", "failure": "pip exited with 1"}
+    )
+
+    with pytest.raises(DeploymentOperationError, match=f"build {BUILD_ID} failed: pip exited"):
+        reports.app.deploy()
+
+    assert fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments") == []
 
 
 def test_an_app_with_an_endpoint_names_it_instead_of_deploying(

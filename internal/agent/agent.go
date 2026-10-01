@@ -65,6 +65,9 @@ type Config struct {
 	// OCIRuntime is the Docker runtime name, runc locally and runsc in
 	// production.
 	OCIRuntime string
+	// BuildNetwork is the Docker network image builds run on. It must reach
+	// the platform registry and the base images' registries.
+	BuildNetwork string
 	// Capacity is what the host offers; nil detects it.
 	Capacity *hostproto.Capacity
 	// Labels are added to every container the agent creates.
@@ -163,6 +166,9 @@ func Run(ctx context.Context, cfg Config) error {
 		containers: make(map[string]*container),
 	}
 	defer a.shutdown()
+	if err := a.removeBuildContainers(ctx); err != nil {
+		return err
+	}
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}

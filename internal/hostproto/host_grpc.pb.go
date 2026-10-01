@@ -19,12 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HostService_Enroll_FullMethodName       = "/lazycloud.host.v1.HostService/Enroll"
-	HostService_Session_FullMethodName      = "/lazycloud.host.v1.HostService/Session"
-	HostService_ClaimTasks_FullMethodName   = "/lazycloud.host.v1.HostService/ClaimTasks"
-	HostService_CompleteTask_FullMethodName = "/lazycloud.host.v1.HostService/CompleteTask"
-	HostService_AppendLogs_FullMethodName   = "/lazycloud.host.v1.HostService/AppendLogs"
-	HostService_ContainerAPI_FullMethodName = "/lazycloud.host.v1.HostService/ContainerAPI"
+	HostService_Enroll_FullMethodName               = "/lazycloud.host.v1.HostService/Enroll"
+	HostService_Session_FullMethodName              = "/lazycloud.host.v1.HostService/Session"
+	HostService_ClaimTasks_FullMethodName           = "/lazycloud.host.v1.HostService/ClaimTasks"
+	HostService_CompleteTask_FullMethodName         = "/lazycloud.host.v1.HostService/CompleteTask"
+	HostService_AppendLogs_FullMethodName           = "/lazycloud.host.v1.HostService/AppendLogs"
+	HostService_ContainerAPI_FullMethodName         = "/lazycloud.host.v1.HostService/ContainerAPI"
+	HostService_CompleteImageBuild_FullMethodName   = "/lazycloud.host.v1.HostService/CompleteImageBuild"
+	HostService_AppendImageBuildLogs_FullMethodName = "/lazycloud.host.v1.HostService/AppendImageBuildLogs"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -55,6 +57,11 @@ type HostServiceClient interface {
 	// the host half-closes after the body. The server answers with the head,
 	// then body chunks, and ends the stream after the last one.
 	ContainerAPI(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error)
+	// CompleteImageBuild records the outcome of a build container's attempt.
+	// A container that no longer runs the build returns FAILED_PRECONDITION.
+	CompleteImageBuild(ctx context.Context, in *CompleteImageBuildRequest, opts ...grpc.CallOption) (*CompleteImageBuildResponse, error)
+	// AppendImageBuildLogs stores a build container's output in order.
+	AppendImageBuildLogs(ctx context.Context, in *AppendImageBuildLogsRequest, opts ...grpc.CallOption) (*AppendImageBuildLogsResponse, error)
 }
 
 type hostServiceClient struct {
@@ -131,6 +138,26 @@ func (c *hostServiceClient) ContainerAPI(ctx context.Context, opts ...grpc.CallO
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostService_ContainerAPIClient = grpc.BidiStreamingClient[APIRequest, APIResponse]
 
+func (c *hostServiceClient) CompleteImageBuild(ctx context.Context, in *CompleteImageBuildRequest, opts ...grpc.CallOption) (*CompleteImageBuildResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteImageBuildResponse)
+	err := c.cc.Invoke(ctx, HostService_CompleteImageBuild_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) AppendImageBuildLogs(ctx context.Context, in *AppendImageBuildLogsRequest, opts ...grpc.CallOption) (*AppendImageBuildLogsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AppendImageBuildLogsResponse)
+	err := c.cc.Invoke(ctx, HostService_AppendImageBuildLogs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -159,6 +186,11 @@ type HostServiceServer interface {
 	// the host half-closes after the body. The server answers with the head,
 	// then body chunks, and ends the stream after the last one.
 	ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error
+	// CompleteImageBuild records the outcome of a build container's attempt.
+	// A container that no longer runs the build returns FAILED_PRECONDITION.
+	CompleteImageBuild(context.Context, *CompleteImageBuildRequest) (*CompleteImageBuildResponse, error)
+	// AppendImageBuildLogs stores a build container's output in order.
+	AppendImageBuildLogs(context.Context, *AppendImageBuildLogsRequest) (*AppendImageBuildLogsResponse, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -186,6 +218,12 @@ func (UnimplementedHostServiceServer) AppendLogs(context.Context, *AppendLogsReq
 }
 func (UnimplementedHostServiceServer) ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error {
 	return status.Error(codes.Unimplemented, "method ContainerAPI not implemented")
+}
+func (UnimplementedHostServiceServer) CompleteImageBuild(context.Context, *CompleteImageBuildRequest) (*CompleteImageBuildResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteImageBuild not implemented")
+}
+func (UnimplementedHostServiceServer) AppendImageBuildLogs(context.Context, *AppendImageBuildLogsRequest) (*AppendImageBuildLogsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AppendImageBuildLogs not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -294,6 +332,42 @@ func _HostService_ContainerAPI_Handler(srv interface{}, stream grpc.ServerStream
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostService_ContainerAPIServer = grpc.BidiStreamingServer[APIRequest, APIResponse]
 
+func _HostService_CompleteImageBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteImageBuildRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).CompleteImageBuild(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_CompleteImageBuild_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).CompleteImageBuild(ctx, req.(*CompleteImageBuildRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_AppendImageBuildLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AppendImageBuildLogsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).AppendImageBuildLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_AppendImageBuildLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).AppendImageBuildLogs(ctx, req.(*AppendImageBuildLogsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -316,6 +390,14 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AppendLogs",
 			Handler:    _HostService_AppendLogs_Handler,
+		},
+		{
+			MethodName: "CompleteImageBuild",
+			Handler:    _HostService_CompleteImageBuild_Handler,
+		},
+		{
+			MethodName: "AppendImageBuildLogs",
+			Handler:    _HostService_AppendImageBuildLogs_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
