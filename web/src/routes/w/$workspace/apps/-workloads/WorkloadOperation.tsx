@@ -1,92 +1,43 @@
-import { useQuery } from "@tanstack/react-query";
-
 import { CopyButton } from "@/components/shared/CopyButton";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
-import { PanelError } from "@/components/shared/PanelError";
-import { Skeleton } from "@/components/ui/skeleton";
-import type { CronJob, Deployment } from "@/lib/api/schemas";
-import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
-import { cronJobsQueryOptions } from "@/lib/queries/cron";
-
-import type { WorkloadGroup } from "./grouping";
-
-const INVOKABLE_KINDS = new Set(["function", "endpoint", "asgi"]);
+import type { Schemas } from "@/lib/api/client";
+import { invokeUrl, workloadRunning, type Workload } from "@/lib/queries/deployments";
 
 export function WorkloadOperation({
-  workspaceId,
-  deployment,
-  group,
+  workspace,
+  workload,
 }: {
-  workspaceId: string;
-  deployment: Deployment;
-  group: WorkloadGroup;
+  workspace: string;
+  workload: Workload;
 }) {
-  const kind = group.kind;
-  // A schedule is a property of the workload, not a kind of it.
-  const isScheduled = Boolean(group.latest.spec?.cron);
+  const { deployment, release } = workload;
+  const kind = deployment.kind;
+  const invokable = kind === "function" || kind === "endpoint" || kind === "asgi";
 
   return (
     <div className="flex min-w-0 flex-wrap items-start gap-x-8 gap-y-3">
-      {INVOKABLE_KINDS.has(kind) ? (
-        group.active ? (
-          <InvokeTarget workspaceId={workspaceId} deploymentId={deployment.id} />
+      {invokable ? (
+        workloadRunning(deployment) ? (
+          <InvokeTarget url={invokeUrl(workspace, workload)} />
         ) : (
           <p className="text-sm text-muted-foreground">
             This version is stopped and cannot accept requests.
           </p>
         )
       ) : null}
-      {isScheduled ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
-      {kind === "pod" ? <PodFacts deployment={deployment} /> : null}
-      {kind === "endpoint" || kind === "asgi" ? <HttpFacts deployment={deployment} /> : null}
+      {/* A schedule is a property of the workload, not a kind of it. */}
+      {release.spec.cron ? <ScheduleFacts workload={workload} /> : null}
+      {kind === "pod" ? <PodFacts pod={release.spec.pod} /> : null}
+      {kind === "endpoint" || kind === "asgi" ? <HttpFacts workload={workload} /> : null}
     </div>
   );
 }
 
-function InvokeTarget({
-  workspaceId,
-  deploymentId,
-}: {
-  workspaceId: string;
-  deploymentId: string;
-}) {
-  const query = useQuery(deploymentUrlQueryOptions(workspaceId, deploymentId));
-
-  if (query.isPending) return <Skeleton className="h-14 w-full" />;
-  if (query.isError) return <PanelError message={query.error.message} />;
-
-  return (
-    <div className="content-transition min-w-[18rem] flex-1 basis-[32rem]">
-      <div className="micro-label mb-1.5">Invoke URL</div>
-      <div className="flex min-w-0 items-start gap-1.5">
-        <code className="mono min-w-0 flex-1 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs break-all">
-          {query.data.url}
-        </code>
-        <CopyButton value={query.data.url} label="invoke URL" className="shrink-0" />
-      </div>
-    </div>
-  );
-}
-
-function HttpFacts({ deployment }: { deployment: Deployment }) {
-  return (
-    <FactGrid columns={2} className="max-w-xl">
-      <Fact label="Route" value={deployment.spec.route || "/"} mono />
-      <Fact
-        label="Methods"
-        value={
-          deployment.kind === "asgi" ? "All" : deployment.spec.methods.join(", ") || "GET, POST"
-        }
-        mono
-      />
-    </FactGrid>
-  );
-}
-
-function PodFacts({ deployment }: { deployment: Deployment }) {
-  const ports = Object.entries(deployment.spec.ports);
+function PodFacts({ pod }: { pod: Schemas["PodSpec"] | undefined }) {
+  const ports = Object.entries(pod?.ports ?? {});
+  const command = pod?.command ?? [];
   return (
     <FactGrid columns={2} className="max-w-3xl">
       <Fact
@@ -94,44 +45,62 @@ function PodFacts({ deployment }: { deployment: Deployment }) {
         value={ports.length ? ports.map(([name, port]) => `${name}:${port}`).join(", ") : "None"}
         mono
       />
+      <Fact label="Command" value={command.length ? command.join(" ") : "Image default"} mono />
+    </FactGrid>
+  );
+}
+
+function InvokeTarget({ url }: { url: string }) {
+  return (
+    <div className="content-transition min-w-[18rem] flex-1 basis-[32rem]">
+      <div className="micro-label mb-1.5">Invoke URL</div>
+      <div className="flex min-w-0 items-start gap-1.5">
+        <code className="mono min-w-0 flex-1 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs break-all">
+          {url}
+        </code>
+        <CopyButton value={url} label="invoke URL" className="shrink-0" />
+      </div>
+    </div>
+  );
+}
+
+function HttpFacts({ workload }: { workload: Workload }) {
+  const http = workload.release.spec.http;
+  return (
+    <FactGrid columns={2} className="max-w-xl">
+      <Fact label="Route" value={http?.route || "/"} mono />
       <Fact
-        label="Command"
-        value={deployment.spec.command.length ? deployment.spec.command.join(" ") : "Image default"}
+        label="Methods"
+        value={
+          workload.deployment.kind === "asgi" ? "All" : http?.methods?.join(", ") || "GET, POST"
+        }
         mono
       />
     </FactGrid>
   );
 }
 
-function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: WorkloadGroup }) {
-  const cronJobs = useQuery(cronJobsQueryOptions(workspaceId));
-  const deploymentIds = new Set(group.deployments.map((deployment) => deployment.id));
-  const job: CronJob | undefined = (cronJobs.data?.cron_jobs ?? []).find((item) =>
-    deploymentIds.has(item.deployment_id),
-  );
-
-  if (cronJobs.isPending) return <Skeleton className="h-12 w-full" />;
-  if (cronJobs.isError) return <PanelError message={cronJobs.error.message} />;
-
+function ScheduleFacts({ workload }: { workload: Workload }) {
+  const { schedule, deployment } = workload;
   return (
     <FactGrid columns={4} className="content-transition max-w-3xl">
-      <Fact label="Schedule" value={job?.cron ?? "Not registered"} mono />
+      <Fact label="Schedule" value={schedule?.cron ?? "Not registered"} mono />
       <Fact label="Timezone" value="UTC" />
       <Fact
         label="Next run"
         value={
-          job?.enabled === false ? (
-            "Disabled"
-          ) : job?.next_run_at ? (
-            <LiveRelativeTime value={job.next_run_at} />
-          ) : (
+          !schedule ? (
             "-"
+          ) : deployment.state !== "active" ? (
+            "Disabled"
+          ) : (
+            <LiveRelativeTime value={schedule.next_run_at} />
           )
         }
       />
       <Fact
         label="Last run"
-        value={job?.last_run_at ? <LiveRelativeTime value={job.last_run_at} /> : "-"}
+        value={schedule?.last_run_at ? <LiveRelativeTime value={schedule.last_run_at} /> : "-"}
       />
     </FactGrid>
   );

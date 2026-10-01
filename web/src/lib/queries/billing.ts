@@ -1,122 +1,81 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  billingHostedSessionResponseSchema,
-  billingSummarySchema,
-  creditPurchaseSchema,
-  creditBalanceSchema,
-  billingPreferencesSchema,
-  usageBudgetSchema,
-  automaticReloadStatusSchema,
-  type BillingPreferences,
-  type BillingPlanId,
-  type BillingTermsVersion,
-  type BillingSummary,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { accountQueryKeys } from "./workspace-keys";
 
-// Provider callbacks can arrive after the hosted page redirects back.
-const BILLING_SUMMARY_POLL_INTERVAL_MS = 5_000;
+// Provider callbacks can arrive after the hosted page redirects back, and usage
+// moves the balance; the change stream carries neither.
+const BILLING_POLL_INTERVAL_MS = 5_000;
 
-export function billingSummaryQueryOptions() {
+function settling(account: Schemas["BillingAccount"] | undefined): boolean {
+  return Boolean(
+    account &&
+    (!account.payment_method_on_file ||
+      account.plan_change_pending ||
+      account.plan.scheduled_change_at),
+  );
+}
+
+/**
+ * `GET /v1/billing` answers the plan, balance, spending controls and reload
+ * state together, so one cache entry holds the account. Every billing command
+ * answers the same account, which replaces it.
+ *
+ * Views that show the balance pass `balance` and poll it; the rest poll only
+ * while a payment or plan change is settling.
+ */
+export function billingAccountQueryOptions({ balance = false }: { balance?: boolean } = {}) {
   return queryOptions({
     queryKey: accountQueryKeys.billing(),
-    queryFn: () => apiRequest("/api/v1/billing/summary", billingSummarySchema),
+    queryFn: () => ok(api.GET("/v1/billing")),
     staleTime: 30_000,
     refetchInterval: (query) =>
-      query.state.data?.payment_method_on_file === false ||
-      query.state.data?.plan_change_pending ||
-      query.state.data?.plan?.terms_version === null ||
-      Boolean(query.state.data?.plan?.scheduled_change_at)
-        ? BILLING_SUMMARY_POLL_INTERVAL_MS
-        : false,
+      balance || settling(query.state.data) ? BILLING_POLL_INTERVAL_MS : false,
   });
 }
 
-export function creditBalanceQueryOptions() {
-  return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "credits"],
-    queryFn: () => apiRequest("/api/v1/billing/credits", creditBalanceSchema),
-    refetchInterval: 5_000,
-  });
-}
-
-export function billingPreferencesQueryOptions() {
-  return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "preferences"],
-    queryFn: () => apiRequest("/api/v1/billing/preferences", billingPreferencesSchema),
-  });
-}
-
-export function usageBudgetQueryOptions() {
-  return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "usage-budget"],
-    queryFn: () => apiRequest("/api/v1/billing/usage-budget", usageBudgetSchema),
-    refetchInterval: 5_000,
-  });
-}
-
-export function saveBillingPreferences(preferences: BillingPreferences) {
-  return apiRequest("/api/v1/billing/preferences", billingPreferencesSchema, {
-    method: "PUT",
-    body: JSON.stringify(preferences),
-  });
-}
-
-export function automaticReloadStatusQueryOptions() {
-  return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "automatic-reload"],
-    queryFn: () => apiRequest("/api/v1/billing/automatic-reload", automaticReloadStatusSchema),
-    refetchInterval: 5_000,
-  });
+export function saveBillingPreferences(preferences: Schemas["BillingPreferences"]) {
+  return ok(api.PUT("/v1/billing/preferences", { body: preferences }));
 }
 
 export function resumeAutomaticReload() {
-  return apiRequest("/api/v1/billing/automatic-reload/resume", automaticReloadStatusSchema, {
-    method: "POST",
-  });
+  return ok(api.POST("/v1/billing/automatic-reload/resume"));
 }
 
-async function openHostedSession(path: string): Promise<void> {
+export function changeBillingPlan(selection: Schemas["PlanChangeRequest"]) {
+  return ok(api.PUT("/v1/billing/plan", { body: selection }));
+}
+
+function hostedSessionRequest() {
   const returnUrl = window.location.href;
-  const session = await apiRequest(path, billingHostedSessionResponseSchema, {
-    method: "POST",
-    body: JSON.stringify({ return_url: returnUrl, cancel_url: returnUrl }),
-  });
+  return { return_url: returnUrl, cancel_url: returnUrl };
+}
+
+export async function startCardSetup(): Promise<void> {
+  const session = await ok(
+    api.POST("/v1/billing/payment-method-sessions", { body: hostedSessionRequest() }),
+  );
   window.location.assign(session.url);
 }
 
-export function startCardSetup(): Promise<void> {
-  return openHostedSession("/api/v1/billing/card-session");
-}
-
-export function openBillingPortal(): Promise<void> {
-  return openHostedSession("/api/v1/billing/portal-session");
+export async function openBillingPortal(): Promise<void> {
+  const session = await ok(
+    api.POST("/v1/billing/portal-sessions", { body: hostedSessionRequest() }),
+  );
+  window.location.assign(session.url);
 }
 
 export async function purchaseCredit(request: { requestKey: string; amountCents: number }) {
-  const returnUrl = window.location.href;
-  const purchase = await apiRequest("/api/v1/billing/credit-purchases", creditPurchaseSchema, {
-    method: "POST",
-    body: JSON.stringify({
-      request_key: request.requestKey,
-      amount_cents: request.amountCents,
-      return_url: returnUrl,
-      cancel_url: returnUrl,
+  const purchase = await ok(
+    api.POST("/v1/billing/credit-purchases", {
+      body: {
+        request_key: request.requestKey,
+        amount_cents: request.amountCents,
+        ...hostedSessionRequest(),
+      },
     }),
-  });
+  );
   if (purchase.checkout_url) window.location.assign(purchase.checkout_url);
   return purchase;
-}
-
-export function changeBillingPlan(selection: {
-  plan: BillingPlanId;
-  terms_version: BillingTermsVersion;
-}): Promise<BillingSummary> {
-  return apiRequest("/api/v1/billing/subscription", billingSummarySchema, {
-    method: "POST",
-    body: JSON.stringify(selection),
-  });
 }

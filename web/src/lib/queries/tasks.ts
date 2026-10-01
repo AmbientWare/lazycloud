@@ -1,124 +1,222 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import {
-  callGraphSchema,
-  taskMetricsSummarySchema,
-  taskPageSchema,
-  taskSchema,
-  taskTimeWindowBucketListSchema,
-  type Task,
-  type TaskSummary,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
+import type { operations } from "@/lib/api/generated/openapi";
 
-import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
-import {
-  workspaceLiveQueryMeta,
-  workspaceQueryKeys,
-  type TaskListKeyParts,
-} from "./workspace-keys";
+import { LIVE_LIST_MAX_PAGES, nextListCursor, selectInfiniteList } from "./infinite-list";
+import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-/** Re-submit a finished task with the same payload as a new task. */
-export function rerunTask(workspaceId: string, taskId: string): Promise<Task> {
-  return postJson(withWorkspace(`/api/v1/tasks/${taskId}/rerun`, workspaceId), taskSchema);
+/** A row of a task list: a task, or an endpoint or ASGI request record. */
+export type TaskRow = Schemas["Task"] | Schemas["HttpRequest"];
+
+export function isRequest(row: TaskRow): row is Schemas["HttpRequest"] {
+  return "method" in row;
 }
 
-export type TaskListOptions = {
-  limit?: number;
-  status?: string;
-  deploymentId?: string;
-  appId?: string;
-  stubIds?: string[];
-  kind?: string;
-  createdAfter?: string;
-  createdBefore?: string;
-  createdWithinSeconds?: number;
-  search?: string;
-  rootOnly?: boolean;
-  live?: boolean;
-};
+/** Endpoint and ASGI workloads serve request records, not tasks. */
+export function servesRequests(kind: string): boolean {
+  return kind === "endpoint" || kind === "asgi";
+}
 
-export function tasksQueryOptions(workspaceId: string, options: TaskListOptions = {}) {
-  const params = taskListParams(options);
+export function taskFinished(status: Schemas["TaskStatus"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
 
-  return queryOptions({
-    queryKey: taskListKey(workspaceId, options, "page"),
-    queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/tasks?${params.toString()}`, workspaceId), taskPageSchema),
-    meta: workspaceLiveQueryMeta(true, options.live !== false),
+/**
+ * A request in the task status words. The edge records a request once it
+ * ends: failed when the workload answered with a server error, cancelled when
+ * the caller left first (499).
+ */
+export function requestStatus(request: Schemas["HttpRequest"]): Schemas["TaskStatus"] {
+  if (request.status === 499) return "cancelled";
+  return request.status >= 500 ? "failed" : "succeeded";
+}
+
+/** A task failure as the text a person reads: the traceback, else the exception. */
+export function failureText(failure: Schemas["TaskFailure"]): string {
+  if (failure.traceback) return failure.traceback.trimEnd();
+  return failure.type ? `${failure.type}: ${failure.message}` : failure.message;
+}
+
+/** The row's status, name and times, read from whichever record it is. */
+export function rowFacts(row: TaskRow) {
+  if (!isRequest(row)) {
+    return {
+      name: row.function,
+      kind: "function" as Schemas["WorkloadKind"],
+      status: row.status,
+      createdAt: row.created_at,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+    };
+  }
+  return {
+    name: row.name,
+    kind: row.kind,
+    status: requestStatus(row),
+    createdAt: row.started_at,
+    startedAt: row.started_at,
+    finishedAt: new Date(Date.parse(row.started_at) + row.duration_ms).toISOString(),
+  };
+}
+
+const taskPath = (workspace: string, task: string) => ({
+  params: { path: { workspace, task } },
+});
+
+/** Re-submit a finished task with the same payload as a new task. */
+export function rerunTask(workspace: string, taskId: string): Promise<Schemas["Task"]> {
+  return ok(api.POST("/v1/workspaces/{workspace}/tasks/{task}/rerun", taskPath(workspace, taskId)));
+}
+
+/** Cancel a queued or running task. */
+export function cancelTask(workspace: string, taskId: string): Promise<Schemas["Task"]> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/tasks/{task}/cancel", taskPath(workspace, taskId)),
+  );
+}
+
+type TaskListQuery = NonNullable<operations["listTasks"]["parameters"]["query"]>;
+
+export type TaskFilter = Omit<TaskListQuery, "limit" | "cursor">;
+
+const TASK_PAGE_SIZE = 50;
+
+async function listTasks(
+  workspace: string,
+  filter: TaskFilter,
+  limit: number,
+  cursor: string,
+  signal: AbortSignal,
+): Promise<{ data: Schemas["Task"][]; next: string }> {
+  // A function narrows an app, and a version narrows a function.
+  const fn = filter.app ? filter.function : undefined;
+  const query: TaskListQuery = {
+    ...filter,
+    function: fn,
+    version: fn ? filter.version : undefined,
+    search: filter.search?.slice(0, 100) || undefined,
+    root_only: filter.root_only || undefined,
+    limit,
+    cursor: cursor || undefined,
+  };
+  const page = await ok(
+    api.GET("/v1/workspaces/{workspace}/tasks", {
+      params: { path: { workspace }, query },
+      signal,
+    }),
+  );
+  return { data: page.tasks, next: page.next_cursor ?? "" };
+}
+
+function taskListKey(
+  workspace: string,
+  filter: TaskFilter,
+  limit: number,
+  mode: "page" | "infinite",
+) {
+  return workspaceQueryKeys.tasks.list(workspace, {
+    mode,
+    limit,
+    app: filter.app ?? null,
+    function: filter.function ?? null,
+    status: filter.status ?? null,
+    version: filter.version ?? null,
+    search: filter.search || null,
+    rootOnly: filter.root_only ?? false,
   });
 }
 
-export function tasksInfiniteQueryOptions(workspaceId: string, options: TaskListOptions = {}) {
+/** The newest page of tasks the filter selects. */
+export function tasksQueryOptions(
+  workspace: string,
+  filter: TaskFilter = {},
+  limit = TASK_PAGE_SIZE,
+) {
+  return queryOptions({
+    queryKey: taskListKey(workspace, filter, limit, "page"),
+    queryFn: async ({ signal }) => (await listTasks(workspace, filter, limit, "", signal)).data,
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+export function tasksInfiniteQueryOptions(
+  workspace: string,
+  filter: TaskFilter = {},
+  limit = TASK_PAGE_SIZE,
+) {
   return infiniteQueryOptions({
-    queryKey: taskListKey(workspaceId, options, "infinite"),
+    queryKey: taskListKey(workspace, filter, limit, "infinite"),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = taskListParams(options, pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/tasks?${params.toString()}`, workspaceId),
-        taskPageSchema,
-      );
-    },
-    getNextPageParam: (page) => page.next || undefined,
+    queryFn: ({ pageParam, signal }) => listTasks(workspace, filter, limit, pageParam, signal),
+    getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
-    meta: workspaceLiveQueryMeta(true, options.live !== false),
+    meta: workspaceLiveQueryMeta(true),
   });
 }
 
 export function selectTaskList(
-  data: InfiniteListQueryData<TaskSummary> | undefined,
+  data: { pages: readonly { data: readonly Schemas["Task"][]; next: string }[] } | undefined,
   hasNextPage: boolean | undefined,
 ) {
   return selectInfiniteList(data, hasNextPage, (task) => task.id);
 }
 
-function taskListParams(options: TaskListOptions, cursor = ""): URLSearchParams {
-  const params = new URLSearchParams();
-  params.set("limit", String(options.limit ?? 50));
-  if (cursor) params.set("cursor", cursor);
-  if (options.status) params.set("status", options.status);
-  if (options.deploymentId) params.set("deployment_id", options.deploymentId);
-  if (options.appId) params.set("app_id", options.appId);
-  for (const stubId of options.stubIds ?? []) params.append("stub_id", stubId);
-  if (options.kind) params.set("kind", options.kind);
-  if (options.createdAfter) params.set("created_after", options.createdAfter);
-  if (options.createdBefore) params.set("created_before", options.createdBefore);
-  if (options.createdWithinSeconds) {
-    params.set("created_within_seconds", String(options.createdWithinSeconds));
-  }
-  if (options.search) params.set("q", options.search);
-  if (options.rootOnly) params.set("root_only", "true");
-  return params;
-}
-
-function taskListKey(
-  workspaceId: string,
-  options: TaskListOptions,
-  mode: TaskListKeyParts["mode"],
-) {
-  const parts: TaskListKeyParts = {
-    mode,
-    limit: options.limit ?? 50,
-    status: options.status ?? null,
-    deploymentId: options.deploymentId ?? null,
-    appId: options.appId ?? null,
-    stubIds: options.stubIds?.join(",") ?? null,
-    kind: options.kind ?? null,
-    createdAfter: options.createdAfter ?? null,
-    createdBefore: options.createdBefore ?? null,
-    createdWithinSeconds: options.createdWithinSeconds ?? null,
-    search: options.search ?? null,
-    rootOnly: options.rootOnly ?? false,
-  };
-  return workspaceQueryKeys.tasks.list(workspaceId, parts);
-}
-
-export function taskQueryOptions(workspaceId: string, taskId: string) {
+/**
+ * The newest requests one endpoint or ASGI workload served. The change stream
+ * carries no request records, and the edge writes one about a second after
+ * the request ends, so the list is reread while it is shown.
+ */
+export function requestsQueryOptions(workspace: string, app: string, name: string, limit = 50) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.detail(workspaceId, taskId),
-    queryFn: () => apiRequest(withWorkspace(`/api/v1/tasks/${taskId}`, workspaceId), taskSchema),
+    queryKey: workspaceQueryKeys.tasks.requests(workspace, app, name, limit),
+    queryFn: async ({ signal }) =>
+      (
+        await ok(
+          api.GET("/v1/workspaces/{workspace}/apps/{app}/requests", {
+            params: { path: { workspace, app }, query: { name, limit } },
+            signal,
+          }),
+        )
+      ).data,
+    refetchInterval: 10_000,
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+export type TaskDetail = {
+  task: Schemas["Task"];
+  result: Schemas["Payload"] | null;
+};
+
+export function taskQueryOptions(workspace: string, taskId: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.tasks.detail(workspace, taskId),
+    // A running task is read with the API's wait, which answers as soon as it
+    // finishes; the change stream refreshes a queued one when it starts.
+    queryFn: async ({ client, queryKey, signal }): Promise<TaskDetail> => {
+      const known = client.getQueryData<TaskDetail>(queryKey);
+      const task = await ok(
+        api.GET("/v1/workspaces/{workspace}/tasks/{task}", {
+          params: {
+            path: { workspace, task: taskId },
+            query: { wait_seconds: known?.task.status === "running" ? 25 : 0 },
+          },
+          signal,
+        }),
+      );
+      const result =
+        task.status === "succeeded"
+          ? await ok(
+              api.GET("/v1/workspaces/{workspace}/tasks/{task}/result", {
+                ...taskPath(workspace, taskId),
+                signal,
+              }),
+            )
+          : null;
+      return { task, result };
+    },
+    refetchInterval: (query) => (query.state.data?.task.status === "running" ? 1_000 : false),
     // Rate-limited drawer reads preserve their explicit Retry-After recovery
     // instead of being retried by an unrelated workspace reconnect.
     retry: false,
@@ -126,67 +224,67 @@ export function taskQueryOptions(workspaceId: string, taskId: string) {
   });
 }
 
-export function callGraphQueryOptions(workspaceId: string, taskId: string) {
+/** An endpoint or ASGI request record, which is complete once it exists. */
+export function requestQueryOptions(workspace: string, requestId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.callGraph(workspaceId, taskId),
-    queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/tasks/${taskId}/call-graph`, workspaceId), callGraphSchema),
-    meta: workspaceLiveQueryMeta(true),
+    queryKey: workspaceQueryKeys.tasks.request(workspace, requestId),
+    queryFn: ({ signal }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/requests/{http_request}", {
+          params: { path: { workspace, http_request: requestId } },
+          signal,
+        }),
+      ),
+    retry: false,
+    meta: workspaceLiveQueryMeta(false),
   });
 }
 
-export function taskMetricsQueryOptions(workspaceId: string, hours = 24, appId?: string) {
+export type CallGraphNode = Schemas["CallGraphNode"] & { children: CallGraphNode[] };
+
+/**
+ * The task's call graph as trees: each task under the task that spawned it,
+ * oldest first. A graph past the API's 2,000 tasks ends there.
+ */
+export function callGraphQueryOptions(workspace: string, rootTaskId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.metrics(workspaceId, hours, appId ?? null),
-    queryFn: () => {
-      const endedAt = Math.floor(Date.now() / 1000);
-      const startedAt = endedAt - hours * 3600;
-      const appParam = appId ? `&app_id=${encodeURIComponent(appId)}` : "";
-      return apiRequest(
-        withWorkspace(
-          `/api/v1/tasks/metrics?started_at=${startedAt}&ended_at=${endedAt}${appParam}`,
-          workspaceId,
-        ),
-        taskMetricsSummarySchema,
+    queryKey: workspaceQueryKeys.tasks.callGraph(workspace, rootTaskId),
+    queryFn: async ({ signal }): Promise<CallGraphNode[]> => {
+      const graph = await ok(
+        api.GET("/v1/workspaces/{workspace}/tasks/{task}/call-graph", {
+          ...taskPath(workspace, rootTaskId),
+          signal,
+        }),
       );
+      const nodes = new Map<string, CallGraphNode>();
+      const roots: CallGraphNode[] = [];
+      for (const node of graph.nodes) {
+        const tree: CallGraphNode = { ...node, children: [] };
+        nodes.set(node.task_id, tree);
+        // Parents precede their children, so a parent not seen is outside the graph.
+        const parent = node.parent_task_id ? nodes.get(node.parent_task_id) : undefined;
+        if (parent) parent.children.push(tree);
+        else roots.push(tree);
+      }
+      return roots;
     },
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-/** Buckets the activity chart renders; it slices to this and discards the rest. */
-const BUCKETS_DRAWN = 24;
-
-export function taskBucketsQueryOptions(
-  workspaceId: string,
-  windowSeconds = 3600,
-  scope: { appId?: string; stubId?: string } = {},
-) {
+export function taskMetricsQueryOptions(workspace: string, hours = 24, app?: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.buckets(
-      workspaceId,
-      windowSeconds,
-      scope.appId ?? null,
-      scope.stubId ?? null,
-    ),
-    queryFn: () => {
-      // The span is computed per fetch and deliberately left out of the query
-      // key: in the key every refetch would be a new key and nothing would ever
-      // be served from cache. Asking for the buckets the chart draws is the
-      // point of sending it at all, since without a span the server reads the
-      // workspace's whole task history to answer for one day of it.
-      const endedAt = Math.floor(Date.now() / 1000);
-      const params = new URLSearchParams();
-      params.set("window_seconds", String(windowSeconds));
-      params.set("started_at", String(endedAt - windowSeconds * BUCKETS_DRAWN));
-      params.set("ended_at", String(endedAt));
-      if (scope.appId) params.set("app_id", scope.appId);
-      if (scope.stubId) params.set("stub_id", scope.stubId);
-      return apiRequest(
-        withWorkspace(`/api/v1/tasks/aggregate-by-time-window?${params.toString()}`, workspaceId),
-        taskTimeWindowBucketListSchema,
-      );
-    },
+    queryKey: workspaceQueryKeys.tasks.metrics(workspace, hours, app ?? null),
+    queryFn: ({ signal }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/metrics/tasks", {
+          params: {
+            path: { workspace },
+            query: { start: new Date(Date.now() - hours * 3_600_000).toISOString(), app },
+          },
+          signal,
+        }),
+      ),
     meta: workspaceLiveQueryMeta(true),
   });
 }

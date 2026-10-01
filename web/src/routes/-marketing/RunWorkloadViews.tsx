@@ -104,7 +104,7 @@ export function CloudWorkloadView({ example }: { example: RunModeExample }) {
           <span>test_auth.py</span>
           <span>···</span>
         </div>
-        <div className="run-test-checks" aria-label="8 tests passed">
+        <div className="run-test-checks" role="img" aria-label="8 tests passed">
           {Array.from({ length: 8 }, (_, i) => (
             <i key={i} style={{ animationDelay: `${i * 0.12}s` }} />
           ))}

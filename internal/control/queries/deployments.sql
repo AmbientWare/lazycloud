@@ -1,7 +1,11 @@
 -- name: ListDeployments :many
 -- Deployed live workloads of live apps by app and name after the cursor.
+-- state <> 'stopped' lets the running count read the live-container index.
 select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from apps a
 join workloads w on w.app_id = a.id
 join releases r on r.id = w.active_release_id
@@ -10,16 +14,28 @@ where a.workspace_id = @workspace_id
   and w.desired_state <> 'deleted'
   and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
   and (sqlc.narg(name)::text is null or w.name = sqlc.narg(name)::text)
+  and (sqlc.narg(search)::text is null
+       or strpos(a.name, sqlc.narg(search)::text) > 0 or strpos(lower(w.name), sqlc.narg(search)::text) > 0)
   and (a.name, w.name) > (@after_app::text, @after_name::text)
 order by a.name, w.name
 limit @max_rows;
 
 -- name: WorkloadView :one
 select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id
+where a.workspace_id = @workspace_id and w.id = @id;
+
+-- name: WorkloadActiveRelease :one
+select r.id, w.name, r.version, r.created_at, r.spec
+from workloads w
+join apps a on a.id = w.app_id
+join releases r on r.id = w.active_release_id
 where a.workspace_id = @workspace_id and w.id = @id;
 
 -- name: LockWorkload :one

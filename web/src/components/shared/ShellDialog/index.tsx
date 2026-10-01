@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useMutation } from "@tanstack/react-query";
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { TerminalSquare, X } from "lucide-react";
 
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { Terminal } from "@/components/shared/Terminal";
 import { Button } from "@/components/ui/button";
-import { createContainerShell, shellWebSocketUrl } from "@/lib/queries/shells";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type ShellButtonProps = {
@@ -50,14 +48,6 @@ export function ShellButton({
 
 function ShellDialog({ containerId }: { containerId: string }) {
   const { workspace } = useWorkspace();
-  const session = useMutation({
-    mutationFn: () => createContainerShell(workspace.id, containerId),
-  });
-
-  const mutate = session.mutate;
-  useEffect(() => {
-    mutate();
-  }, [mutate]);
 
   return (
     <Dialog.Portal>
@@ -70,33 +60,13 @@ function ShellDialog({ containerId }: { containerId: string }) {
         </DrawerHeader>
 
         <div className="flex min-h-0 flex-1 flex-col bg-background p-3 sm:p-4">
-          {session.isPending ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              Connecting…
-            </div>
-          ) : session.isError ? (
-            <div
-              className="m-auto w-full max-w-xl rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-              role="alert"
-            >
-              {session.error.message}
-            </div>
-          ) : session.data ? (
-            <PanelErrorBoundary key={containerId} title="Terminal could not be displayed">
-              <Terminal
-                socketUrl={shellWebSocketUrl(
-                  session.data.stub_id,
-                  containerId,
-                  session.data.websocket_ticket,
-                )}
-                credentials={{
-                  username: session.data.username,
-                  password: session.data.password,
-                }}
-                className="h-full min-h-0 flex-1"
-              />
-            </PanelErrorBoundary>
-          ) : null}
+          <PanelErrorBoundary key={containerId} title="Terminal could not be displayed">
+            <Terminal
+              workspace={workspace.name}
+              containerId={containerId}
+              className="h-full min-h-0 flex-1"
+            />
+          </PanelErrorBoundary>
         </div>
 
         <Dialog.Close className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">

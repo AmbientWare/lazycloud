@@ -337,6 +337,9 @@ func TestAccountTokens(t *testing.T) {
 			t.Fatal(err)
 		}
 		secrets[name], ids[name] = secret, token.ID
+		if token.Prefix != DisplayPrefix(secret) {
+			t.Fatalf("issued prefix %q of %q", token.Prefix, secret)
+		}
 	}
 	// Pages are newest first and end with no cursor; owner's own test
 	// token is the oldest.
@@ -347,6 +350,10 @@ func TestAccountTokens(t *testing.T) {
 	second, _ := f.id.ListTokens(ctx, owner, true, first.Next, 2)
 	if len(second.Tokens) != 2 || second.Tokens[0].Name != "a" || second.Tokens[1].Name != "test" || second.Next != nil {
 		t.Fatalf("second page %+v", second)
+	}
+	// A listed token shows the prefix it was issued with, and no more of it.
+	if first.Tokens[0].Prefix != DisplayPrefix(secrets["c"]) || len(first.Tokens[0].Prefix) != len(TokenPrefix)+3 {
+		t.Fatalf("listed prefix %q", first.Tokens[0].Prefix)
 	}
 	if first.Tokens[1].ExpiresAt == nil || time.Until(*first.Tokens[1].ExpiresAt) < week-time.Minute {
 		t.Fatalf("expiry %+v", first.Tokens[1])

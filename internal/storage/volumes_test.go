@@ -108,6 +108,62 @@ func TestVolumeFiles(t *testing.T) {
 	}
 }
 
+// TestBrowserUploadsFromTheDashboard: a workspace bucket answers the
+// dashboard's CORS preflight for a presigned PUT and refuses other origins,
+// so uploads go from the page straight to the store, and a download URL
+// makes the browser save the file.
+func TestBrowserUploadsFromTheDashboard(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t, volumeSpec)
+	cfg := storagetest.Config()
+	cfg.BrowserOrigin = "https://dashboard.test/"
+	s := NewStorage(f.pool, cfg)
+	if _, err := s.CreateVolume(ctx, f.ws, "data"); err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{Path: "a.txt", Method: apitypes.PresignVolumeFileRequestMethodPut})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// preflight returns the status and allowed origin of a browser's CORS
+	// preflight for the presigned PUT.
+	preflight := func(origin string) (int, string) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodOptions, target.Url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodPut)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin")
+	}
+	if status, allowed := preflight("https://dashboard.test"); status != http.StatusOK || allowed != "https://dashboard.test" {
+		t.Fatalf("dashboard preflight: %d %q", status, allowed)
+	}
+	if status, _ := preflight("https://elsewhere.test"); status != http.StatusForbidden {
+		t.Fatalf("another origin's preflight: %d", status)
+	}
+
+	// A download link makes the browser save the file rather than show it.
+	f.storage = s
+	putFile(t, s, f, "dir/notes.txt", []byte("notes"))
+	download := true
+	saved, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{
+		Path: "dir/notes.txt", Method: apitypes.PresignVolumeFileRequestMethodGet, Download: &download,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, body, header := get(t, saved.Url); status != http.StatusOK || string(body) != "notes" ||
+		header.Get("Content-Disposition") != `attachment; filename=notes.txt` {
+		t.Fatalf("download: %d %q %q", status, body, header.Get("Content-Disposition"))
+	}
+}
+
 // TestMoveKeepsNamesThatLookEscaped: copy sources are URL paths, so a file
 // named "a%20b" must not copy "a b".
 func TestMoveKeepsNamesThatLookEscaped(t *testing.T) {

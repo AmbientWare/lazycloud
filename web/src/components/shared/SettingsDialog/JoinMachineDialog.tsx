@@ -8,16 +8,14 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { UnitMachine } from "@/lib/api/schemas";
-import {
-  createMachineJoinCommand,
-  machinesQueryOptions,
-  type MachineJoinCommandInput,
-} from "@/lib/queries/compute";
+import type { Schemas } from "@/lib/api/client";
+import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/compute";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { WorkspaceChecklist } from "./MachineWorkspaces";
+
+type Machine = Schemas["Machine"];
 
 /** Mirrors the name rule on the join-command contract. */
 const MACHINE_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -46,21 +44,12 @@ export function JoinMachineDialog({
 }
 
 function JoinMachineFlow() {
-  const machinesQuery = useQuery(machinesQueryOptions());
-  const [generatedAt, setGeneratedAt] = useState<number | null>(null);
-  const [baselineMachineIds, setBaselineMachineIds] = useState<ReadonlySet<string>>(new Set());
-  const join = useMutation({
-    mutationFn: (input: MachineJoinCommandInput) => createMachineJoinCommand(input),
-    onMutate: () => {
-      setGeneratedAt(Date.now());
-      setBaselineMachineIds(new Set((machinesQuery.data?.data ?? []).map((machine) => machine.id)));
-    },
-  });
-  const targetMachine = findJoinedMachine(
-    machinesQuery.data?.data ?? [],
-    baselineMachineIds,
-    generatedAt,
-  );
+  const join = useMutation({ mutationFn: createMachineJoinCommand });
+  const joining = join.data?.machine;
+  const machinesQuery = useQuery(machinesQueryOptions(joining?.id));
+  const targetMachine = joining
+    ? (machinesQuery.data?.machines.find(({ id }) => id === joining.id) ?? joining)
+    : undefined;
   const queryError = machinesQuery.error;
 
   return (
@@ -108,7 +97,7 @@ function GenerateCommandStep({
   pending,
   error,
 }: {
-  onGenerate: (input: MachineJoinCommandInput) => void;
+  onGenerate: (input: Schemas["MachineJoinRequest"]) => void;
   pending: boolean;
   error: Error | null;
 }) {
@@ -189,7 +178,7 @@ function JoinProgress({
 }: {
   command: string;
   expiresAt: string;
-  machine: UnitMachine | undefined;
+  machine: Machine | undefined;
 }) {
   const joined = machine !== undefined && machine.lifecycle !== "requested";
   const ready = machine?.lifecycle === "ready";
@@ -307,23 +296,4 @@ function ProgressRow({
       </p>
     </div>
   );
-}
-
-function findJoinedMachine(
-  machines: UnitMachine[],
-  baselineMachineIds: ReadonlySet<string>,
-  generatedAt: number | null,
-): UnitMachine | undefined {
-  if (generatedAt === null) return undefined;
-  return machines
-    .filter((machine) => {
-      if (!baselineMachineIds.has(machine.id)) return true;
-      if (!machine.last_seen_at) return false;
-      return new Date(machine.last_seen_at).getTime() >= generatedAt;
-    })
-    .sort((left, right) => {
-      const leftSeen = new Date(left.last_seen_at ?? 0).getTime();
-      const rightSeen = new Date(right.last_seen_at ?? 0).getTime();
-      return rightSeen - leftSeen;
-    })[0];
 }

@@ -1,4 +1,4 @@
-import { useSession } from "@/components/shared/AuthGate/session";
+import { accountName, useSession } from "@/components/shared/AuthGate/session";
 
 export function AccountSettings() {
   const { user } = useSession();
@@ -10,7 +10,7 @@ export function AccountSettings() {
           <img src={user.avatar_url} alt="" className="size-8 shrink-0 rounded-md" />
         ) : null}
         <div className="min-w-0 sm:flex sm:items-baseline sm:gap-3">
-          <h2 className="truncate text-base font-semibold tracking-tight">{user.display_name}</h2>
+          <h2 className="truncate text-base font-semibold tracking-tight">{accountName(user)}</h2>
           {user.email ? (
             <p className="truncate text-sm text-muted-foreground">{user.email}</p>
           ) : null}

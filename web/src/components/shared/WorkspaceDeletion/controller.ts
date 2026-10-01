@@ -1,11 +1,13 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { deleteWorkspace } from "@/lib/queries/workspace";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { workspaceDeleteAvailability } from "@/lib/workspace-deletion";
+
+type Workspace = Schemas["Workspace"];
 
 export type WorkspaceDeletionTarget = {
   workspace: Workspace;
@@ -18,7 +20,7 @@ type WorkspaceDeletionControllerOptions = {
   rememberWorkspaceName: (workspaceName: string) => void;
   replacePath: (path: string) => void;
   workspaces: Workspace[];
-  deleteCommand?: (workspaceId: string) => Promise<null>;
+  deleteCommand?: (workspaceName: string) => Promise<null>;
 };
 
 export function useWorkspaceDeletionController({
@@ -35,10 +37,10 @@ export function useWorkspaceDeletionController({
   const [confirmation, setConfirmation] = useState("");
 
   const remove = useMutation({
-    mutationFn: (requested: WorkspaceDeletionTarget) => deleteCommand(requested.workspace.id),
+    mutationFn: (requested: WorkspaceDeletionTarget) => deleteCommand(requested.workspace.name),
     onSuccess: async (_result, requested) => {
       const workspaceId = requested.workspace.id;
-      const rootKey = workspaceQueryKeys.root(workspaceId);
+      const rootKey = workspaceQueryKeys.root(requested.workspace.name);
       const sessionKey = currentSessionQueryOptions().queryKey;
 
       await queryClient.cancelQueries({ queryKey: rootKey });
@@ -46,18 +48,18 @@ export function useWorkspaceDeletionController({
 
       // The session owns the account's workspace list, so the deleted one has to
       // leave it before anything navigates.
-      const session = queryClient.getQueryData<CurrentSession>(sessionKey);
+      const session = queryClient.getQueryData<Schemas["Me"]>(sessionKey);
       const remaining = (session?.workspaces ?? workspaces).filter(
         (item) => item.id !== workspaceId,
       );
       if (session) {
-        queryClient.setQueryData<CurrentSession>(sessionKey, {
+        queryClient.setQueryData<Schemas["Me"]>(sessionKey, {
           ...session,
           workspaces: remaining,
         });
       }
 
-      const nextWorkspace = remaining.find((item) => item.status === "active") ?? remaining[0];
+      const nextWorkspace = remaining.find((item) => item.state === "active") ?? remaining[0];
       if (nextWorkspace && (requested.selected || lastWorkspaceName === requested.workspace.name)) {
         rememberWorkspaceName(nextWorkspace.name);
       }
@@ -81,10 +83,10 @@ export function useWorkspaceDeletionController({
         reason: "Administrator access is required",
       };
     }
-    if (workspace.status === "deleting") {
+    if (workspace.state === "deleting") {
       return { allowed: true as const };
     }
-    const activeWorkspaceCount = workspaces.filter((item) => item.status === "active").length;
+    const activeWorkspaceCount = workspaces.filter((item) => item.state === "active").length;
     return workspaceDeleteAvailability(workspace, activeWorkspaceCount);
   };
 

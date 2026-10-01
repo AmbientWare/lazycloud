@@ -17,7 +17,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PodFileInfo } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { exactTime, formatBytes, relativeTime } from "@/lib/format";
 import {
   CONTAINER_FILE_LIST_LIMIT,
@@ -32,7 +32,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 import { ContainerFilePreviewDialog, type PreviewTarget } from "./FilePreviewDialog";
 
-/** Browse a running container's filesystem through its pod file API. */
+/** Browse a running container's filesystem through its file API. */
 export function ContainerFileBrowser({
   containerId,
   rootPath,
@@ -64,33 +64,33 @@ export function ContainerFileBrowser({
   const columns = writable
     ? "grid-cols-[minmax(0,1fr)_4.5rem_7rem_3.75rem]"
     : "grid-cols-[minmax(0,1fr)_4.5rem_7rem_1.75rem]";
-  const query = useQuery(containerFilesQueryOptions(workspace.id, containerId, path));
+  const query = useQuery(containerFilesQueryOptions(workspace.name, containerId, path));
   const invalidateFiles = () =>
     queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.containers.files(workspace.id, containerId),
+      queryKey: workspaceQueryKeys.containers.files(workspace.name, containerId),
     });
   const upload = useMutation({
-    ...uploadContainerFileMutationOptions(workspace.id, containerId),
+    ...uploadContainerFileMutationOptions(workspace.name, containerId),
     onSuccess: invalidateFiles,
   });
   const remove = useMutation({
-    ...deleteContainerFileMutationOptions(workspace.id, containerId),
+    ...deleteContainerFileMutationOptions(workspace.name, containerId),
     onSuccess: async () => {
       setDeleteTarget(null);
       await invalidateFiles();
     },
   });
 
-  const openFile = (file: PodFileInfo, opener: HTMLElement) => {
+  const openFile = (file: Schemas["ContainerFile"], opener: HTMLElement) => {
     previewOpener.current = opener;
     setPreview({ path: joinPath(path, file.name), file });
   };
 
-  const downloadFile = async (file: PodFileInfo) => {
+  const downloadFile = async (file: Schemas["ContainerFile"]) => {
     const target = joinPath(path, file.name);
     setDownloadError(null);
     try {
-      await saveContainerFile(workspace.id, containerId, target, file.name);
+      await saveContainerFile(workspace.name, containerId, target, file.name);
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Failed to download file");
     }
@@ -282,7 +282,7 @@ export function ContainerFileBrowser({
       {preview ? (
         <ContainerFilePreviewDialog
           key={preview.path}
-          workspaceId={workspace.id}
+          workspace={workspace.name}
           containerId={containerId}
           target={preview}
           onClose={() => setPreview(null)}
@@ -306,7 +306,7 @@ function FileSkeleton() {
   );
 }
 
-function byDirThenName(a: PodFileInfo, b: PodFileInfo): number {
+function byDirThenName(a: Schemas["ContainerFile"], b: Schemas["ContainerFile"]): number {
   if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
   return a.name.localeCompare(b.name);
 }

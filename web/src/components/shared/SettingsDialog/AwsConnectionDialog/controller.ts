@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { AwsConnection } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   cancelAwsConnectionReconnect,
   createAwsConnection,
@@ -16,19 +16,13 @@ import type { AwsConnectionDialogRecoveryAction } from "./lifecycle";
 
 export type AwsConnectionDialogAction = "create" | AwsConnectionDialogRecoveryAction | "remove";
 
-type AuthorizationCommand =
-  | {
-      action: "create";
-      accountId: string;
-    }
-  | { action: "reconnect" };
-
 type AwsConnectionCommand =
-  AuthorizationCommand | { action: "validate" | "cancel_reconnect" | "retry" | "remove" };
+  | { action: "create"; accountId: string }
+  | { action: Exclude<AwsConnectionDialogAction, "create"> };
 
 type AwsConnectionMutationOutcome = {
   action: AwsConnectionDialogAction;
-  connection: AwsConnection | null;
+  connection: Schemas["AwsConnection"] | null;
 };
 
 export type AwsConnectionController = {
@@ -59,31 +53,20 @@ export function useAwsConnectionController({
 
   const mutation = useMutation({
     mutationFn: async (command: AwsConnectionCommand): Promise<AwsConnectionMutationOutcome> => {
-      switch (command.action) {
-        case "create": {
-          const result = await createAwsConnection({
-            accountId: command.accountId,
-          });
-          return {
-            action: command.action,
-            connection: result.connection,
-          };
-        }
+      const { action } = command;
+      switch (action) {
+        case "create":
+          return { action, connection: (await createAwsConnection(command.accountId)).connection };
+        case "reconnect":
+          return { action, connection: (await reconnectAwsConnection()).connection };
         case "validate":
-          return connectionOutcome(command.action, await validateAwsConnection());
-        case "reconnect": {
-          const result = await reconnectAwsConnection();
-          return {
-            action: command.action,
-            connection: result.connection,
-          };
-        }
+          return { action, connection: await validateAwsConnection() };
         case "cancel_reconnect":
-          return connectionOutcome(command.action, await cancelAwsConnectionReconnect());
+          return { action, connection: await cancelAwsConnectionReconnect() };
         case "retry":
-          return connectionOutcome(command.action, await retryAwsConnection());
+          return { action, connection: await retryAwsConnection() };
         case "remove":
-          return connectionOutcome(command.action, await removeAwsConnection());
+          return { action, connection: await removeAwsConnection() };
       }
     },
     onSuccess: (outcome) => {
@@ -129,15 +112,5 @@ export function useAwsConnectionController({
     cancelReconnect: () => run({ action: "cancel_reconnect" }),
     retry: () => run({ action: "retry" }),
     remove: () => run({ action: "remove" }),
-  };
-}
-
-function connectionOutcome(
-  action: Exclude<AwsConnectionDialogAction, "create" | "reconnect">,
-  connection: AwsConnection | null,
-): AwsConnectionMutationOutcome {
-  return {
-    action,
-    connection,
   };
 }

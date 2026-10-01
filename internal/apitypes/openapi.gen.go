@@ -2401,7 +2401,10 @@ type App struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 	Name      AppName            `json:"name"`
-	State     AppState           `json:"state"`
+
+	// RunningContainers Containers of the app that are ready or draining.
+	RunningContainers int      `json:"running_containers"`
+	State             AppState `json:"state"`
 
 	// Workloads Deployed workloads that are not deleted.
 	Workloads int `json:"workloads"`
@@ -2961,6 +2964,9 @@ type Container struct {
 	Host *string            `json:"host,omitempty"`
 	Id   openapi_types.UUID `json:"id"`
 
+	// Image The image reference the release runs.
+	Image *string `json:"image,omitempty"`
+
 	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
 	Kind      *WorkloadKind `json:"kind,omitempty"`
 	MemoryMib int64         `json:"memory_mib"`
@@ -3221,9 +3227,11 @@ type DeliveryState string
 
 // DeployedWorkload defines model for DeployedWorkload.
 type DeployedWorkload struct {
-	App       AppName   `json:"app"`
-	AppState  *AppState `json:"app_state,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	// ActiveRelease The definition the active version runs; only getDeployment answers it.
+	ActiveRelease *Release  `json:"active_release,omitempty"`
+	App           AppName   `json:"app"`
+	AppState      *AppState `json:"app_state,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 
 	// DeployedAt When the active version was deployed.
 	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
@@ -3236,6 +3244,9 @@ type DeployedWorkload struct {
 	// ReleaseId The active release.
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
 	Role      *PodRole            `json:"role,omitempty"`
+
+	// RunningContainers Containers of the workload's releases that are ready or draining.
+	RunningContainers int `json:"running_containers"`
 
 	// Scaling The containers a pod keeps, from min to max; a scale sets both.
 	Scaling *Scaling `json:"scaling,omitempty"`
@@ -3419,6 +3430,9 @@ type Disk struct {
 
 	// Generation The newest published generation; 0 before the first.
 	Generation int64 `json:"generation"`
+
+	// Holder The workload whose container holds the disk.
+	Holder *WorkloadRef `json:"holder,omitempty"`
 
 	// HolderContainerId The container holding the disk while attached or saving.
 	HolderContainerId *openapi_types.UUID `json:"holder_container_id,omitempty"`
@@ -4455,6 +4469,8 @@ type PresignArtifactRequest struct {
 
 // PresignVolumeFileRequest defines model for PresignVolumeFileRequest.
 type PresignVolumeFileRequest struct {
+	// Download For `get`, have a browser save the file instead of showing it.
+	Download       *bool                          `json:"download,omitempty"`
 	ExpiresSeconds *int                           `json:"expires_seconds,omitempty"`
 	Method         PresignVolumeFileRequestMethod `json:"method"`
 
@@ -4809,6 +4825,9 @@ type Secret struct {
 	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
 	Name      SecretName `json:"name"`
 	UpdatedAt time.Time  `json:"updated_at"`
+
+	// UsedBy Workloads whose active release receives the secret.
+	UsedBy []WorkloadRef `json:"used_by"`
 }
 
 // SecretCreate defines model for SecretCreate.
@@ -5150,9 +5169,12 @@ type Token struct {
 	Id        openapi_types.UUID `json:"id"`
 
 	// LastUsedAt Recorded within 30 seconds of use; absent if never used.
-	LastUsedAt *time.Time  `json:"last_used_at,omitempty"`
-	Name       string      `json:"name"`
-	Status     TokenStatus `json:"status"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// Prefix The token's first characters; empty for older tokens.
+	Prefix string      `json:"prefix"`
+	Status TokenStatus `json:"status"`
 
 	// WorkspaceId Set when the token reaches only this workspace.
 	WorkspaceId *openapi_types.UUID `json:"workspace_id,omitempty"`
@@ -5729,7 +5751,10 @@ type ListWorkspacesParams struct {
 type ListAppsParams struct {
 	// State Only apps in this state. Omitted lists active and paused apps.
 	State *LiveAppState `form:"state,omitempty" json:"state,omitempty"`
-	Limit *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Search Part of the app name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -5808,6 +5833,12 @@ type ListComputeWorkloadsParams struct {
 type ListContainersParams struct {
 	// Live Only containers that have not stopped.
 	Live *bool `form:"live,omitempty" json:"live,omitempty"`
+
+	// App Only the containers of this app's workloads.
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// Function Only the containers of this workload of `app`; requires it.
+	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 
 	// Deployment Only containers of this workload's releases.
 	Deployment *openapi_types.UUID `form:"deployment,omitempty" json:"deployment,omitempty"`
@@ -5918,9 +5949,12 @@ type OpenContainerShellParams struct {
 
 // ListDeploymentsParams defines parameters for ListDeployments.
 type ListDeploymentsParams struct {
-	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
-	Name  *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
-	Limit *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+	App  *AppName      `form:"app,omitempty" json:"app,omitempty"`
+	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+
+	// Search Part of the app or workload name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -6115,7 +6149,16 @@ type ListTasksParams struct {
 	// Function Requires `app`.
 	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 	Status   *TaskStatus   `form:"status,omitempty" json:"status,omitempty"`
-	Limit    *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Version A deployed version of `function`; requires it.
+	Version *int `form:"version,omitempty" json:"version,omitempty"`
+
+	// RootOnly Only tasks no other task spawned.
+	RootOnly *bool `form:"root_only,omitempty" json:"root_only,omitempty"`
+
+	// Search A task id prefix or part of a function name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`

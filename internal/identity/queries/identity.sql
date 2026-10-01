@@ -34,6 +34,6 @@ insert into workspace_members (workspace_id, user_id, role) values (@workspace_i
 select id, name from workspaces where name = @name;
 
 -- name: InsertToken :one
-insert into api_tokens (user_id, workspace_id, name, token_hash, expires_at, device)
-values (@user_id, sqlc.narg(workspace_id), @name, @token_hash, sqlc.narg(expires_at), @device)
-returning id, name, workspace_id, device, created_at, expires_at, last_used_at;
+insert into api_tokens (user_id, workspace_id, name, token_hash, prefix, expires_at, device)
+values (@user_id, sqlc.narg(workspace_id), @name, @token_hash, @prefix, sqlc.narg(expires_at), @device)
+returning id, name, workspace_id, prefix, device, created_at, expires_at, last_used_at;

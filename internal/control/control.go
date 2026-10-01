@@ -257,12 +257,12 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 				}
 			}
 		}
-		workloads, err := q.CountDeployedWorkloads(ctx, appRow.ID)
+		view, err := c.appView(ctx, q, workspace, appRow.ID)
 		if err != nil {
-			return fmt.Errorf("count workloads: %w", err)
+			return err
 		}
 		out = apitypes.Deployment{
-			App:             appOut(appRow.ID, appRow.Name, appRow.State, workloads, appRow.CreatedAt),
+			App:             view,
 			Releases:        releases,
 			Pruned:          pruned,
 			RemovedVersions: removed,

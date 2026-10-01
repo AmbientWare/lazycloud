@@ -2,86 +2,83 @@ import { testQueryClient } from "@/test/query-client";
 import { InfiniteQueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ContainerWithAppPage } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 import { containersQueryOptions } from "./containers";
 
+function container(id: string, app = "shop", fn = "checkout"): Schemas["Container"] {
+  return {
+    id,
+    app,
+    function: fn,
+    release_id: "release-1",
+    state: "ready",
+    slots: 1,
+    running_tasks: 0,
+    cpu_millis: 125,
+    memory_mib: 128,
+    created_at: "2026-07-10T12:00:00Z",
+  };
+}
+
+function api(handle: (url: URL) => unknown) {
+  const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    const url = new URL((input as Request).url);
+    return Response.json(handle(url));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 describe("container pagination", () => {
-  it("sends workspace, app, repeated statuses, and cursor to the API", async () => {
-    const fetchMock = vi.fn<typeof fetch>();
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ data: [], next: "" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+  it("asks the server for one workload's live containers and keeps what it answers", async () => {
+    const fetchMock = api(() => ({ containers: [container("one"), container("two")] }));
+    const page = await testQueryClient().fetchInfiniteQuery(
+      containersQueryOptions("workspace", { app: "shop", function: "checkout", live: true }),
     );
-    vi.stubGlobal("fetch", fetchMock);
 
-    const options = containersQueryOptions("workspace-1", {
-      appId: "app-1",
-      stubIds: ["stub-1"],
-      statuses: ["pending", "running"],
+    const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url);
+    expect(request.pathname).toBe("/v1/workspaces/workspace/containers");
+    expect(Object.fromEntries(request.searchParams)).toEqual({
+      app: "shop",
+      function: "checkout",
+      live: "true",
+      limit: "100",
     });
-    if (typeof options.queryFn !== "function") throw new Error("container query is missing");
+    expect(page.pages[0]?.data.map((item) => item.id)).toEqual(["one", "two"]);
+  });
 
-    await options.queryFn({
-      client: testQueryClient(),
-      direction: "forward",
-      meta: undefined,
-      pageParam: "cursor-1",
-      queryKey: options.queryKey,
-      signal: new AbortController().signal,
+  it("asks the server for one deployment's containers, stopped ones included", async () => {
+    const fetchMock = api(() => ({ containers: [container("one")] }));
+    await testQueryClient().fetchInfiniteQuery(
+      containersQueryOptions("workspace", { deployment: "deployment-1" }),
+    );
+
+    const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url);
+    expect(Object.fromEntries(request.searchParams)).toEqual({
+      deployment: "deployment-1",
+      live: "false",
+      limit: "100",
     });
-
-    const requestUrl = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
-    expect(requestUrl.searchParams.getAll("status")).toEqual(["pending", "running"]);
-    expect(requestUrl.searchParams.getAll("stub_id")).toEqual(["stub-1"]);
-    expect(requestUrl.searchParams.get("cursor")).toBe("cursor-1");
-    expect(requestUrl.searchParams.get("workspace")).toBe("workspace-1");
-    expect(requestUrl.searchParams.get("app_id")).toBe("app-1");
   });
 
   it("bounds retained pages and refresh requests after scrolling through a long list", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const cursor = new URL(String(input), "http://localhost").searchParams.get("cursor");
-      const page = Number(cursor ?? 0);
-      return Response.json(containerPage([`container-${page}`], String(page + 1)));
+    const fetchMock = api((url) => {
+      const page = Number(url.searchParams.get("cursor") ?? 0);
+      return { containers: [container(`container-${page}`)], next_cursor: String(page + 1) };
     });
-    vi.stubGlobal("fetch", fetchMock);
     const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
-    const observer = new InfiniteQueryObserver(client, containersQueryOptions("workspace-1"));
+    const observer = new InfiniteQueryObserver(client, containersQueryOptions("workspace"));
     try {
       for (let page = 0; page < 12; page++) await observer.fetchNextPage();
       const beforeRefresh = fetchMock.mock.calls.length;
       const refreshed = await observer.refetch();
 
       expect(refreshed.data?.pages.length).toBeLessThanOrEqual(5);
-      expect(refreshed.data?.pages.at(-1)?.data[0]?.container.id).toBe("container-11");
+      expect(refreshed.data?.pages.at(-1)?.data[0]?.id).toBe("container-11");
       expect(fetchMock.mock.calls.length - beforeRefresh).toBeLessThanOrEqual(5);
     } finally {
       observer.destroy();
     }
   });
 });
-
-function containerPage(ids: string[], next: string): ContainerWithAppPage {
-  return {
-    data: ids.map((id) => ({
-      app_id: "",
-      container: {
-        id,
-        name: id,
-        image: "python:3.12",
-        workspace_id: "workspace-1",
-        runtime_machine_id: "",
-        runtime_worker_id: "",
-        status: "stopped",
-        termination_reason: "UNKNOWN",
-        command: [],
-        ports: {},
-        created_at: "2026-07-10T12:00:00Z",
-      },
-    })),
-    next,
-  };
-}

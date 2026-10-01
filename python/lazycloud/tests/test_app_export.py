@@ -58,6 +58,7 @@ def _workload(index: int, name: str, state: str = "active") -> dict[str, object]
         "name": name,
         "kind": "function",
         "state": state,
+        "running_containers": 0,
         "version": 1,
         "release_id": _uuid(100 + index),
         "created_at": NOW,

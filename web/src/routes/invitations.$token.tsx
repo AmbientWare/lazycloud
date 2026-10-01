@@ -51,13 +51,10 @@ function InvitationPage() {
 
   const accept = useMutation({
     mutationFn: () => acceptInvitation(token),
-    onSuccess: async () => {
-      const name = preview.data?.workspace_name;
-      toast.success(name ? `You joined ${name}` : "Invitation accepted");
+    onSuccess: async ({ workspace }) => {
+      toast.success(`You joined ${workspace.name}`);
       await settle();
-      await navigate(
-        name ? { to: "/w/$workspace", params: { workspace: name } } : { to: "/dashboard" },
-      );
+      await navigate({ to: "/w/$workspace", params: { workspace: workspace.name } });
     },
     onError: (error) => toast.error("Could not accept", { description: error.message }),
   });

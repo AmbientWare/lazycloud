@@ -10,48 +10,54 @@ import { flattenCallGraph, statusColor, timelineDomain, type TimelineRow } from 
 import { LifecycleStrip } from "./LifecycleStrip";
 import { executionPhases } from "./phases";
 import { useWorkspaceLiveUpdates } from "@/lib/workspace-context";
-import {
-  isTerminalTaskStatus,
-  type CallGraphNode,
-  type ContainerLifecycleMetric,
-  type Task,
-} from "@/lib/api/schemas";
-import { callGraphLifecycleQueryOptions } from "@/lib/queries/events";
+import type { Schemas } from "@/lib/api/client";
+import { containerLifecyclesQueryOptions } from "@/lib/queries/containers";
 import { formatDuration } from "@/lib/format";
-import { callGraphQueryOptions } from "@/lib/queries/tasks";
+import {
+  callGraphQueryOptions,
+  isRequest,
+  rowFacts,
+  taskFinished,
+  type CallGraphNode,
+  type TaskRow,
+} from "@/lib/queries/tasks";
 import { cn } from "@/lib/utils";
 
-/** Parent and child tasks aligned on one elapsed-time axis. */
+/**
+ * Parent and child tasks aligned on one elapsed-time axis. A request has no
+ * call graph and shows as its one row.
+ */
 export function TaskTimeline({
-  workspaceId,
+  workspace,
   taskLink,
-  task,
+  row: record,
 }: {
-  workspaceId: string;
+  workspace: string;
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
-  task: Task;
+  row: TaskRow;
 }) {
-  const rootId = task.root_task_id || task.id;
-  const graph = useQuery(callGraphQueryOptions(workspaceId, rootId));
+  const request = isRequest(record);
+  const rootId = request ? record.id : record.root_task_id;
+  const graph = useQuery({ ...callGraphQueryOptions(workspace, rootId), enabled: !request });
   const rows = useMemo<TimelineRow[]>(() => {
-    const flattened = flattenCallGraph(graph.data?.nodes ?? []);
+    const flattened = flattenCallGraph(graph.data ?? []);
     return flattened.length > 0
       ? flattened
-      : [{ node: taskAsNode(task), depth: 0, ancestorContinues: [], isLastSibling: true }];
-  }, [graph.data, task]);
-  const live = rows.some((row) => !isTerminalTaskStatus(row.node.status));
+      : [{ node: rowAsNode(record), depth: 0, ancestorContinues: [], isLastSibling: true }];
+  }, [graph.data, record]);
+  const live = rows.some((row) => !taskFinished(row.node.status));
   const containerIds = rows.flatMap(({ node }) => (node.container_id ? [node.container_id] : []));
-  const summaries = useQuery({
-    ...callGraphLifecycleQueryOptions(workspaceId, rootId, containerIds, live),
-    enabled: !graph.isPending && containerIds.length > 0,
+  const lifecycles = useQuery({
+    ...containerLifecyclesQueryOptions(workspace, rootId, containerIds, live),
+    enabled: (request || !graph.isPending) && containerIds.length > 0,
   });
-  const lifecycleByContainer = new Map(
-    summaries.data?.items.map((item) => [item.container_id, item.lifecycle]),
+  const stagesByContainer = new Map(
+    lifecycles.data?.map((lifecycle) => [lifecycle.container_id, lifecycle.stages]),
   );
   const nowMs = useLiveNow(live);
   const { status: streamStatus } = useWorkspaceLiveUpdates();
   const domain = timelineDomain(rows, nowMs);
-  if (graph.isPending || (containerIds.length > 0 && summaries.isPending)) {
+  if ((!request && graph.isPending) || (containerIds.length > 0 && lifecycles.isPending)) {
     return (
       <ContentTransition pending className="space-y-3 p-4">
         <Skeleton className="h-4 w-24" />
@@ -61,7 +67,9 @@ export function TaskTimeline({
     );
   }
   if (graph.isError && !graph.data) return <PanelError message={graph.error.message} />;
-  if (summaries.isError && !summaries.data) return <PanelError message={summaries.error.message} />;
+  if (lifecycles.isError && !lifecycles.data) {
+    return <PanelError message={lifecycles.error.message} />;
+  }
   if (!domain) {
     return <div className="p-3 text-sm text-muted-foreground">Not scheduled yet</div>;
   }
@@ -84,11 +92,11 @@ export function TaskTimeline({
           <TimelineBarRow
             key={row.node.task_id}
             row={row}
-            highlighted={row.node.task_id === task.id}
+            highlighted={row.node.task_id === record.id}
             taskLink={taskLink}
             domain={domain}
             nowMs={nowMs}
-            lifecycle={lifecycleByContainer.get(row.node.container_id ?? "") ?? []}
+            stages={stagesByContainer.get(row.node.container_id ?? "") ?? []}
           />
         ))}
       </div>
@@ -102,19 +110,18 @@ function TimelineBarRow({
   taskLink,
   domain,
   nowMs,
-  lifecycle,
+  stages,
 }: {
   row: TimelineRow;
   highlighted: boolean;
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   domain: NonNullable<ReturnType<typeof timelineDomain>>;
   nowMs: number;
-  lifecycle: ContainerLifecycleMetric[];
+  stages: readonly Schemas["LifecycleStage"][];
 }) {
   const { node, depth, ancestorContinues, isLastSibling } = row;
-  const phases = executionPhases(node, lifecycle, nowMs, domain);
-  const sourceLabel = node.function_name || node.name || "Task";
-  const label = taskLabel(sourceLabel);
+  const phases = executionPhases(node, stages, nowMs, domain);
+  const label = node.function || "Task";
   const status = statusLabel(node.status);
 
   return (
@@ -129,7 +136,7 @@ function TimelineBarRow({
           {...taskLink(node.task_id)}
           aria-current={highlighted ? "page" : undefined}
           className="interactive-link mono min-w-0 truncate text-xs font-medium"
-          title={sourceLabel}
+          title={label}
         >
           {label}
         </Link>
@@ -182,28 +189,21 @@ function TreeBranch({
 }
 
 function statusLabel(status: string): string {
-  if (!status) return "Unknown";
-  return status.charAt(0).toUpperCase() + status.slice(1).replaceAll("_", " ");
+  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function taskLabel(value: string): string {
-  const handler = value.includes(":") ? (value.split(":").at(-1) ?? value) : value;
-  return handler.replace(/^function[-_:]/, "") || "Task";
-}
-
-function taskAsNode(task: Task): CallGraphNode {
+function rowAsNode(row: TaskRow): CallGraphNode {
+  const facts = rowFacts(row);
   return {
-    task_id: task.id,
-    container_id: task.container_id ?? null,
-    parent_task_id: task.parent_task_id ?? "",
-    root_task_id: task.root_task_id ?? task.id,
-    status: task.status,
-    name: task.name,
-    function_name: "",
-    created_at: task.created_at,
-    started_at: task.started_at ?? null,
-    finished_at: task.finished_at ?? null,
-    dependencies: [],
+    task_id: row.id,
+    app: row.app,
+    function: facts.name,
+    status: facts.status,
+    container_id: row.container_id,
+    created_at: facts.createdAt,
+    started_at: facts.startedAt,
+    finished_at: facts.finishedAt,
+    depends_on: [],
     children: [],
   };
 }

@@ -80,6 +80,9 @@ class TokenStatus(str, Enum):
 class Token(BaseModel):
     id: UUID
     name: str
+    prefix: Annotated[
+        str, Field(description="The token's first characters; empty for older tokens.")
+    ]
     device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
     workspace_id: Annotated[
         UUID | None, Field(description="Set when the token reaches only this workspace.")
@@ -384,18 +387,6 @@ class SecretValueUpdate(BaseModel):
     value: Annotated[str, Field(max_length=65536)]
 
 
-class Secret(BaseModel):
-    name: Annotated[
-        str,
-        Field(
-            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
-            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
-        ),
-    ]
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-
-
 class SecretValue(BaseModel):
     name: Annotated[
         str,
@@ -407,13 +398,6 @@ class SecretValue(BaseModel):
     value: str
     created_at: AwareDatetime
     updated_at: AwareDatetime
-
-
-class SecretPage(BaseModel):
-    secrets: list[Secret]
-    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
-        None
-    )
 
 
 class Schedule(BaseModel):
@@ -575,6 +559,9 @@ class PresignVolumeFileRequest(BaseModel):
     part_number: Annotated[
         int | None, Field(description="Required for `upload_part`.", ge=1, le=10000)
     ] = None
+    download: Annotated[
+        bool, Field(description="For `get`, have a browser save the file instead of showing it.")
+    ] = False
 
 
 class PresignedUrl(BaseModel):
@@ -663,6 +650,9 @@ class Disk(BaseModel):
     status: DiskStatus
     holder_container_id: Annotated[
         UUID | None, Field(description="The container holding the disk while attached or saving.")
+    ] = None
+    holder: Annotated[
+        WorkloadRef | None, Field(description="The workload whose container holds the disk.")
     ] = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
@@ -2816,6 +2806,9 @@ class App(BaseModel):
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     state: AppState
     workloads: Annotated[int, Field(description="Deployed workloads that are not deleted.")]
+    running_containers: Annotated[
+        int, Field(description="Containers of the app that are ready or draining.", ge=0)
+    ]
     created_at: AwareDatetime
 
 
@@ -2888,6 +2881,28 @@ class LifecycleHooks(BaseModel):
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
 
 
+class Secret(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release receives the secret.")
+    ]
+
+
+class SecretPage(BaseModel):
+    secrets: list[Secret]
+    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
+        None
+    )
+
+
 class VolumeMountSpec(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
     mount_path: Annotated[
@@ -2922,29 +2937,6 @@ class DeploymentPlan(BaseModel):
     ]
 
 
-class DeployedWorkload(BaseModel):
-    id: UUID
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    kind: WorkloadKind
-    state: WorkloadState
-    app_state: AppState | None = None
-    version: Annotated[int | None, Field(description="The active version.")] = None
-    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
-    created_at: AwareDatetime
-    deployed_at: Annotated[
-        AwareDatetime | None, Field(description="When the active version was deployed.")
-    ] = None
-    role: PodRole | None = None
-    scaling: Scaling | None = None
-    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
-
-
-class DeploymentPage(BaseModel):
-    deployments: list[DeployedWorkload]
-    next_cursor: str | None = None
-
-
 class Container(BaseModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -2963,6 +2955,7 @@ class Container(BaseModel):
     running_tasks: Annotated[int, Field(description="Attempts running now.")]
     cpu_millis: int
     memory_mib: int
+    image: Annotated[str | None, Field(description="The image reference the release runs.")] = None
     created_at: AwareDatetime
     ready_at: AwareDatetime | None = None
     stopped_at: AwareDatetime | None = None
@@ -3364,6 +3357,39 @@ class Task(BaseModel):
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     failure: TaskFailure | None = None
+
+
+class DeployedWorkload(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    state: WorkloadState
+    app_state: AppState | None = None
+    running_containers: Annotated[
+        int,
+        Field(
+            description="Containers of the workload's releases that are ready or draining.", ge=0
+        ),
+    ]
+    version: Annotated[int | None, Field(description="The active version.")] = None
+    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
+    created_at: AwareDatetime
+    deployed_at: Annotated[
+        AwareDatetime | None, Field(description="When the active version was deployed.")
+    ] = None
+    role: PodRole | None = None
+    scaling: Scaling | None = None
+    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
+    active_release: Annotated[
+        Release | None,
+        Field(description="The definition the active version runs; only getDeployment answers it."),
+    ] = None
+
+
+class DeploymentPage(BaseModel):
+    deployments: list[DeployedWorkload]
+    next_cursor: str | None = None
 
 
 class TaskPage(BaseModel):

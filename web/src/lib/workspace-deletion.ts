@@ -1,4 +1,4 @@
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 type DeleteAvailability = { allowed: true } | { allowed: false; reason: string };
 
@@ -10,7 +10,7 @@ type DeleteAvailability = { allowed: true } | { allowed: false; reason: string }
  * so offering the button never depends on a second request resolving first.
  */
 export function workspaceDeleteAvailability(
-  candidate: Workspace,
+  candidate: Schemas["Workspace"],
   workspaceCount: number,
 ): DeleteAvailability {
   if (candidate.name === "default") {

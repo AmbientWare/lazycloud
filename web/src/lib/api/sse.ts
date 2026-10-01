@@ -1,4 +1,3 @@
-import { getStoredAuthToken } from "@/lib/auth";
 import { ApiError } from "@/lib/api/client";
 
 export type ServerSentEvent = {
@@ -8,9 +7,9 @@ export type ServerSentEvent = {
 };
 
 /**
- * Consume a `text/event-stream` response over fetch so the bearer token can be
- * sent as a header (EventSource cannot set Authorization). Resolves when the
- * server closes the stream; rejects on network or HTTP errors.
+ * Consume a `text/event-stream` response over fetch, authenticated by the
+ * session cookie. Resolves when the server closes the stream; rejects on
+ * network or HTTP errors.
  */
 export async function streamServerSentEvents(
   url: string,
@@ -27,11 +26,9 @@ export async function streamServerSentEvents(
   },
 ): Promise<void> {
   const headers = new Headers({ Accept: "text/event-stream" });
-  const token = getStoredAuthToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (lastEventId) headers.set("Last-Event-ID", lastEventId);
 
-  const response = await fetch(url, { headers, signal, credentials: "include" });
+  const response = await fetch(url, { headers, signal, credentials: "same-origin" });
   if (!response.ok || !response.body) {
     const body = await response.text().catch(() => "");
     throw new ApiError(response.status, response.statusText, body, {

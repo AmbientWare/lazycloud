@@ -13,7 +13,7 @@ import (
 )
 
 const listUserTokens = `-- name: ListUserTokens :many
-select id, name, workspace_id, device, created_at, expires_at, last_used_at
+select id, name, workspace_id, prefix, device, created_at, expires_at, last_used_at
 from api_tokens
 where user_id = $1
   and revoked_at is null
@@ -34,6 +34,7 @@ type ListUserTokensRow struct {
 	ID          uuid.UUID
 	Name        string
 	WorkspaceID *uuid.UUID
+	Prefix      string
 	Device      bool
 	CreatedAt   time.Time
 	ExpiresAt   *time.Time
@@ -59,6 +60,7 @@ func (q *Queries) ListUserTokens(ctx context.Context, arg ListUserTokensParams) 
 			&i.ID,
 			&i.Name,
 			&i.WorkspaceID,
+			&i.Prefix,
 			&i.Device,
 			&i.CreatedAt,
 			&i.ExpiresAt,

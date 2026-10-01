@@ -5,16 +5,17 @@ import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBounda
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
-import type { UsageCostRow } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatDuration } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
-import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import {
   accountCostsQueryOptions,
   type UsageCostWindow,
   type UsageCostScope,
 } from "@/lib/queries/usage";
 import { CostComponents } from "./CostComponents";
+
+type UsageCostRow = Schemas["UsageCostRow"];
 
 export function UsageRows({
   window,
@@ -26,7 +27,9 @@ export function UsageRows({
   currency: string;
 }) {
   const costs = useInfiniteQuery(accountCostsQueryOptions(window, scope));
-  const { items: rows, nextCursor } = selectInfiniteList(costs.data, costs.hasNextPage, rowKey);
+  const pages = costs.data?.pages ?? [];
+  const rows = pages.flatMap((page) => page.rows);
+  const nextCursor = costs.hasNextPage ? pages.at(-1)?.next_cursor : undefined;
   if (costs.isPending) return <RowsSkeleton rows={3} height="h-9" />;
   if (costs.isError && !costs.isFetchNextPageError)
     return <PanelError message={costs.error.message} />;
@@ -103,5 +106,5 @@ function runtime(row: UsageCostRow): string {
   return seconds ? formatDuration(seconds * 1000) : "—";
 }
 function rowKey(row: UsageCostRow): string {
-  return `${row.workspace_id}|${row.app_id}|${row.workload_id}|${row.task_id}`;
+  return [row.workspace_id, row.app_id, row.workload_id, row.task_id].join("|");
 }

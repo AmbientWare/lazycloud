@@ -190,6 +190,7 @@ def _app(*, workloads: int = 1, state: str = "active") -> dict[str, object]:
         "name": "reports",
         "state": state,
         "workloads": workloads,
+        "running_containers": 0,
         "created_at": NOW,
     }
 

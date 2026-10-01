@@ -44,7 +44,8 @@ func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListA
 		st := control.AppState(*req.Params.State)
 		state = &st
 	}
-	page, err := s.owners.Control.ListApps(ctx, ws.ID, state, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Control.ListApps(ctx, ws.ID, control.AppFilter{State: state, Search: req.Params.Search},
+		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,7 @@ func (s *Server) ListDeployments(ctx context.Context, req ListDeploymentsRequest
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Control.ListDeployments(ctx, ws.ID, control.DeploymentFilter{App: req.Params.App, Name: req.Params.Name},
+	page, err := s.owners.Control.ListDeployments(ctx, ws.ID, control.DeploymentFilter{App: req.Params.App, Name: req.Params.Name, Search: req.Params.Search},
 		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
@@ -165,6 +166,13 @@ func (s *Server) GetDeployment(ctx context.Context, req GetDeploymentRequestObje
 	}
 	if err := s.podDeployment(ctx, &d); err != nil {
 		return nil, err
+	}
+	if d.ReleaseId != nil {
+		release, err := s.owners.Control.ActiveRelease(ctx, ws.ID, control.WorkloadID(req.Deployment))
+		if err != nil {
+			return nil, err
+		}
+		d.ActiveRelease = &release
 	}
 	return GetDeployment200JSONResponse(d), nil
 }
@@ -238,7 +246,10 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 	if err != nil {
 		return nil, err
 	}
-	filter := execution.TaskFilter{App: req.Params.App, Function: req.Params.Function}
+	filter := execution.TaskFilter{
+		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search, Version: req.Params.Version,
+		RootOnly: req.Params.RootOnly != nil && *req.Params.RootOnly,
+	}
 	if req.Params.Status != nil {
 		st := execution.TaskStatus(*req.Params.Status)
 		filter.Status = &st
@@ -298,8 +309,11 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 	if err != nil {
 		return nil, err
 	}
-	live := req.Params.Live != nil && *req.Params.Live
-	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, req.Params.Deployment, live, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	filter := execution.ContainerFilter{
+		Live: req.Params.Live != nil && *req.Params.Live, App: req.Params.App, Function: req.Params.Function,
+		Workload: req.Params.Deployment,
+	}
+	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +372,9 @@ func containerOut(c execution.Container) apitypes.Container {
 	if c.StopReason != nil {
 		r := apitypes.StopReason(*c.StopReason)
 		out.StopReason = &r
+	}
+	if c.Image != "" {
+		out.Image = &c.Image
 	}
 	return out
 }

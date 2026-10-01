@@ -61,6 +61,10 @@ type Config struct {
 	SecretAccessKey string
 	// Workspaces configures the buckets that hold volumes and disks.
 	Workspaces WorkspaceBuckets
+	// BrowserOrigin is the dashboard's origin. When set, buckets let pages
+	// from it send and read presigned requests: uploads, downloads and
+	// previews go from the browser to the store, not through the API.
+	BrowserOrigin string
 }
 
 // Storage is the storage owner.

@@ -31,7 +31,11 @@ func (q *Queries) AppByName(ctx context.Context, arg AppByNameParams) (uuid.UUID
 const appView = `-- name: AppView :one
 select a.id, a.name, a.state, a.created_at,
        (select count(*) from workloads w
-        where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)::int as workloads
+        where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)::int as workloads,
+       (select count(*) from workloads w
+        join releases r on r.workload_id = w.id
+        join containers c on c.release_id = r.id
+        where w.app_id = a.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from apps a
 where a.workspace_id = $1 and a.id = $2
 `
@@ -42,11 +46,12 @@ type AppViewParams struct {
 }
 
 type AppViewRow struct {
-	ID        uuid.UUID
-	Name      string
-	State     string
-	CreatedAt time.Time
-	Workloads int32
+	ID                uuid.UUID
+	Name              string
+	State             string
+	CreatedAt         time.Time
+	Workloads         int32
+	RunningContainers int32
 }
 
 func (q *Queries) AppView(ctx context.Context, arg AppViewParams) (AppViewRow, error) {
@@ -58,6 +63,7 @@ func (q *Queries) AppView(ctx context.Context, arg AppViewParams) (AppViewRow, e
 		&i.State,
 		&i.CreatedAt,
 		&i.Workloads,
+		&i.RunningContainers,
 	)
 	return i, err
 }
@@ -65,39 +71,48 @@ func (q *Queries) AppView(ctx context.Context, arg AppViewParams) (AppViewRow, e
 const listApps = `-- name: ListApps :many
 select a.id, a.name, a.state, a.created_at,
        (select count(*) from workloads w
-        where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)::int as workloads
+        where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)::int as workloads,
+       (select count(*) from workloads w
+        join releases r on r.workload_id = w.id
+        join containers c on c.release_id = r.id
+        where w.app_id = a.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from apps a
 where a.workspace_id = $1
   and a.state <> 'deleted'
   and ($2::text is null or a.state = $2::text)
-  and a.name > $3
+  and ($3::text is null or strpos(a.name, $3::text) > 0)
+  and a.name > $4
   and exists (select 1 from workloads w
               where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)
 order by a.name
-limit $4
+limit $5
 `
 
 type ListAppsParams struct {
 	WorkspaceID uuid.UUID
 	State       *string
+	Search      *string
 	After       string
 	MaxRows     int32
 }
 
 type ListAppsRow struct {
-	ID        uuid.UUID
-	Name      string
-	State     string
-	CreatedAt time.Time
-	Workloads int32
+	ID                uuid.UUID
+	Name              string
+	State             string
+	CreatedAt         time.Time
+	Workloads         int32
+	RunningContainers int32
 }
 
 // Live apps with a deployed workload, by name after the cursor. Reads the
-// live-name index of the workspace.
+// live-name index of the workspace. state <> 'stopped' lets the running
+// count read the live-container index of each release.
 func (q *Queries) ListApps(ctx context.Context, arg ListAppsParams) ([]ListAppsRow, error) {
 	rows, err := q.db.Query(ctx, listApps,
 		arg.WorkspaceID,
 		arg.State,
+		arg.Search,
 		arg.After,
 		arg.MaxRows,
 	)
@@ -114,6 +129,7 @@ func (q *Queries) ListApps(ctx context.Context, arg ListAppsParams) ([]ListAppsR
 			&i.State,
 			&i.CreatedAt,
 			&i.Workloads,
+			&i.RunningContainers,
 		); err != nil {
 			return nil, err
 		}

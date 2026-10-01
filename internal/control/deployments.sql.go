@@ -14,7 +14,10 @@ import (
 
 const listDeployments = `-- name: ListDeployments :many
 select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from apps a
 join workloads w on w.app_id = a.id
 join releases r on r.id = w.active_release_id
@@ -23,39 +26,45 @@ where a.workspace_id = $1
   and w.desired_state <> 'deleted'
   and ($2::text is null or a.name = $2::text)
   and ($3::text is null or w.name = $3::text)
-  and (a.name, w.name) > ($4::text, $5::text)
+  and ($4::text is null
+       or strpos(a.name, $4::text) > 0 or strpos(lower(w.name), $4::text) > 0)
+  and (a.name, w.name) > ($5::text, $6::text)
 order by a.name, w.name
-limit $6
+limit $7
 `
 
 type ListDeploymentsParams struct {
 	WorkspaceID uuid.UUID
 	App         *string
 	Name        *string
+	Search      *string
 	AfterApp    string
 	AfterName   string
 	MaxRows     int32
 }
 
 type ListDeploymentsRow struct {
-	ID           uuid.UUID
-	AppName      string
-	Name         string
-	Kind         string
-	DesiredState string
-	AppState     string
-	Version      *int32
-	ReleaseID    uuid.UUID
-	CreatedAt    time.Time
-	DeployedAt   time.Time
+	ID                uuid.UUID
+	AppName           string
+	Name              string
+	Kind              string
+	DesiredState      string
+	AppState          string
+	Version           *int32
+	ReleaseID         uuid.UUID
+	CreatedAt         time.Time
+	DeployedAt        time.Time
+	RunningContainers int32
 }
 
 // Deployed live workloads of live apps by app and name after the cursor.
+// state <> 'stopped' lets the running count read the live-container index.
 func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]ListDeploymentsRow, error) {
 	rows, err := q.db.Query(ctx, listDeployments,
 		arg.WorkspaceID,
 		arg.App,
 		arg.Name,
+		arg.Search,
 		arg.AfterApp,
 		arg.AfterName,
 		arg.MaxRows,
@@ -78,6 +87,7 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 			&i.ReleaseID,
 			&i.CreatedAt,
 			&i.DeployedAt,
+			&i.RunningContainers,
 		); err != nil {
 			return nil, err
 		}
@@ -253,9 +263,46 @@ func (q *Queries) SetWorkloadState(ctx context.Context, arg SetWorkloadStatePara
 	return err
 }
 
+const workloadActiveRelease = `-- name: WorkloadActiveRelease :one
+select r.id, w.name, r.version, r.created_at, r.spec
+from workloads w
+join apps a on a.id = w.app_id
+join releases r on r.id = w.active_release_id
+where a.workspace_id = $1 and w.id = $2
+`
+
+type WorkloadActiveReleaseParams struct {
+	WorkspaceID uuid.UUID
+	ID          uuid.UUID
+}
+
+type WorkloadActiveReleaseRow struct {
+	ID        uuid.UUID
+	Name      string
+	Version   *int32
+	CreatedAt time.Time
+	Spec      []byte
+}
+
+func (q *Queries) WorkloadActiveRelease(ctx context.Context, arg WorkloadActiveReleaseParams) (WorkloadActiveReleaseRow, error) {
+	row := q.db.QueryRow(ctx, workloadActiveRelease, arg.WorkspaceID, arg.ID)
+	var i WorkloadActiveReleaseRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Version,
+		&i.CreatedAt,
+		&i.Spec,
+	)
+	return i, err
+}
+
 const workloadView = `-- name: WorkloadView :one
 select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id
@@ -268,16 +315,17 @@ type WorkloadViewParams struct {
 }
 
 type WorkloadViewRow struct {
-	ID           uuid.UUID
-	AppName      string
-	Name         string
-	Kind         string
-	DesiredState string
-	AppState     string
-	Version      *int32
-	ReleaseID    *uuid.UUID
-	CreatedAt    time.Time
-	DeployedAt   *time.Time
+	ID                uuid.UUID
+	AppName           string
+	Name              string
+	Kind              string
+	DesiredState      string
+	AppState          string
+	Version           *int32
+	ReleaseID         *uuid.UUID
+	CreatedAt         time.Time
+	DeployedAt        *time.Time
+	RunningContainers int32
 }
 
 func (q *Queries) WorkloadView(ctx context.Context, arg WorkloadViewParams) (WorkloadViewRow, error) {
@@ -294,6 +342,7 @@ func (q *Queries) WorkloadView(ctx context.Context, arg WorkloadViewParams) (Wor
 		&i.ReleaseID,
 		&i.CreatedAt,
 		&i.DeployedAt,
+		&i.RunningContainers,
 	)
 	return i, err
 }

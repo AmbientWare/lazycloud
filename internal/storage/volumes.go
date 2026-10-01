@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"path"
 	"strings"
 	"time"
@@ -430,7 +431,11 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 	var url string
 	switch req.Method {
 	case apitypes.PresignVolumeFileRequestMethodGet:
-		r, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: key}, expires)
+		input := &s3.GetObjectInput{Bucket: aws.String(bucket), Key: key}
+		if req.Download != nil && *req.Download {
+			input.ResponseContentDisposition = aws.String(mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)}))
+		}
+		r, err := s.presign.PresignGetObject(ctx, input, expires)
 		if err != nil {
 			return apitypes.PresignedUrl{}, fmt.Errorf("presign get: %w", err)
 		}

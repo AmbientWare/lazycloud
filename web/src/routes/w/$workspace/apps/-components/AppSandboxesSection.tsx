@@ -6,21 +6,23 @@ import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
-import type { SandboxRow } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { countLabel, formatDuration } from "@/lib/format";
 
 export function AppSandboxesSection({
   workspaceName,
   sandboxes,
+  stats,
   pending,
   error,
 }: {
   workspaceName: string;
-  sandboxes: SandboxRow[] | undefined;
+  sandboxes: Schemas["Sandbox"][] | undefined;
+  stats: Schemas["SandboxStats"] | undefined;
   pending: boolean;
   error: string | undefined;
 }) {
-  const running = sandboxes?.filter((sandbox) => sandbox.status === "running").length ?? 0;
+  const running = stats?.status_counts.running ?? 0;
 
   return (
     <div
@@ -32,7 +34,7 @@ export function AppSandboxesSection({
         pending={pending}
         title={<span id="app-sandboxes-heading">Sandboxes</span>}
         action={
-          sandboxes ? (
+          sandboxes && stats ? (
             <span className="whitespace-nowrap text-[11px] text-muted-foreground">
               {countLabel(running, "running", "running")} ·{" "}
               {countLabel(sandboxes.length, "recent", "recent")}
@@ -52,26 +54,17 @@ export function AppSandboxesSection({
           <PanelEmpty message="No sandboxes for this app" className="min-h-32" />
         ) : (
           <div className="divide-y divide-border/80">
-            {sandboxes?.map((sandbox, index) => {
-              return sandbox.container_id ? (
-                <Link
-                  key={sandbox.id}
-                  to="/w/$workspace/sandboxes/$containerId"
-                  params={{ workspace: workspaceName, containerId: sandbox.container_id }}
-                  aria-label={`${sandbox.status === "running" ? "Open" : "View"} ${sandbox.name} sandbox${index > 0 ? ` ${index + 1}` : ""}`}
-                  className="interactive-row grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
-                >
-                  <SandboxRowContent sandbox={sandbox} linked />
-                </Link>
-              ) : (
-                <div
-                  key={sandbox.id}
-                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
-                >
-                  <SandboxRowContent sandbox={sandbox} linked={false} />
-                </div>
-              );
-            })}
+            {sandboxes?.map((sandbox, index) => (
+              <Link
+                key={sandbox.id}
+                to="/w/$workspace/sandboxes/$containerId"
+                params={{ workspace: workspaceName, containerId: sandbox.id }}
+                aria-label={`${sandbox.status === "running" ? "Open" : "View"} ${sandbox.name} sandbox${index > 0 ? ` ${index + 1}` : ""}`}
+                className="interactive-row grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3"
+              >
+                <SandboxRowContent sandbox={sandbox} />
+              </Link>
+            ))}
           </div>
         )}
       </Panel>
@@ -79,7 +72,7 @@ export function AppSandboxesSection({
   );
 }
 
-function SandboxRowContent({ sandbox, linked }: { sandbox: SandboxRow; linked: boolean }) {
+function SandboxRowContent({ sandbox }: { sandbox: Schemas["Sandbox"] }) {
   const startup =
     sandbox.time_to_started_ms == null ? "—" : formatDuration(sandbox.time_to_started_ms);
   const lifetime = sandbox.lifetime_ms == null ? "—" : formatDuration(sandbox.lifetime_ms);
@@ -96,12 +89,10 @@ function SandboxRowContent({ sandbox, linked }: { sandbox: SandboxRow; linked: b
       </span>
       <span className="flex items-center justify-end gap-2">
         <StatusChip status={sandbox.status} live={sandbox.status === "running"} />
-        {linked ? (
-          <ArrowUpRight
-            className="interactive-row-indicator size-3.5 text-muted-foreground"
-            aria-hidden="true"
-          />
-        ) : null}
+        <ArrowUpRight
+          className="interactive-row-indicator size-3.5 text-muted-foreground"
+          aria-hidden="true"
+        />
       </span>
       <span className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
         <span>Startup {startup}</span>

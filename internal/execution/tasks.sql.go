@@ -27,24 +27,32 @@ cross join lateral (
     select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for, traceparent from tasks t
     where t.workload_id = w.id
       and ($1::text is null or t.status = $1::text)
-      and t.id < $2
+      and (not $2::bool or t.parent_task_id is null)
+      and ($3::text is null
+           or starts_with(t.id::text, $3::text)
+           or strpos(lower(w.name), $3::text) > 0)
+      and t.id < $4
     order by t.id desc
-    limit $3
+    limit $5
 ) t
 join releases r on r.id = t.release_id
-where a.workspace_id = $4 and a.id = $5
-  and ($6::text is null or w.name = $6::text)
+where a.workspace_id = $6 and a.id = $7
+  and ($8::text is null or w.name = $8::text)
+  and ($9::int is null or r.version = $9::int)
 order by t.id desc
-limit $3
+limit $5
 `
 
 type ListAppTasksParams struct {
 	Status      *string
+	RootOnly    bool
+	Search      *string
 	Before      uuid.UUID
 	MaxRows     int32
 	WorkspaceID uuid.UUID
 	AppID       uuid.UUID
 	Function    *string
+	Version     *int32
 }
 
 type ListAppTasksRow struct {
@@ -72,11 +80,14 @@ type ListAppTasksRow struct {
 func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]ListAppTasksRow, error) {
 	rows, err := q.db.Query(ctx, listAppTasks,
 		arg.Status,
+		arg.RootOnly,
+		arg.Search,
 		arg.Before,
 		arg.MaxRows,
 		arg.WorkspaceID,
 		arg.AppID,
 		arg.Function,
+		arg.Version,
 	)
 	if err != nil {
 		return nil, err
@@ -129,14 +140,20 @@ join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
 where t.workspace_id = $1
   and ($2::text is null or t.status = $2::text)
-  and t.id < $3
+  and (not $3::bool or t.parent_task_id is null)
+  and ($4::text is null
+       or starts_with(t.id::text, $4::text)
+       or strpos(lower(w.name), $4::text) > 0)
+  and t.id < $5
 order by t.id desc
-limit $4
+limit $6
 `
 
 type ListTasksParams struct {
 	WorkspaceID uuid.UUID
 	Status      *string
+	RootOnly    bool
+	Search      *string
 	Before      uuid.UUID
 	MaxRows     int32
 }
@@ -166,6 +183,8 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 	rows, err := q.db.Query(ctx, listTasks,
 		arg.WorkspaceID,
 		arg.Status,
+		arg.RootOnly,
+		arg.Search,
 		arg.Before,
 		arg.MaxRows,
 	)

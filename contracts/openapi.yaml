@@ -645,6 +645,10 @@ paths:
           in: query
           description: Only apps in this state. Omitted lists active and paused apps.
           schema: { $ref: "#/components/schemas/LiveAppState" }
+        - name: search
+          in: query
+          description: Part of the app name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -779,6 +783,10 @@ paths:
         - name: name
           in: query
           schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: search
+          in: query
+          description: Part of the app or workload name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -796,9 +804,10 @@ paths:
     get:
       operationId: getDeployment
       tags: [control]
+      summary: The deployment with the definition its active version runs
       responses:
         "200":
-          description: The deployment
+          description: The deployment and its active release
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeployedWorkload" }
@@ -917,6 +926,18 @@ paths:
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/TaskStatus" }
+        - name: version
+          in: query
+          description: A deployed version of `function`; requires it.
+          schema: { type: integer, minimum: 1 }
+        - name: root_only
+          in: query
+          description: Only tasks no other task spawned.
+          schema: { type: boolean, default: false }
+        - name: search
+          in: query
+          description: A task id prefix or part of a function name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -975,6 +996,14 @@ paths:
           in: query
           description: Only containers that have not stopped.
           schema: { type: boolean, default: false }
+        - name: app
+          in: query
+          description: Only the containers of this app's workloads.
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: function
+          in: query
+          description: Only the containers of this workload of `app`; requires it.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
         - name: deployment
           in: query
           description: Only containers of this workload's releases.
@@ -4151,10 +4180,13 @@ components:
 
     Token:
       type: object
-      required: [id, name, device, status, created_at]
+      required: [id, name, prefix, device, status, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
+        prefix:
+          description: The token's first characters; empty for older tokens.
+          type: string
         device:
           description: Minted by `lazycloud login`.
           type: boolean
@@ -4432,7 +4464,7 @@ components:
 
     App:
       type: object
-      required: [id, name, state, workloads, created_at]
+      required: [id, name, state, workloads, running_containers, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { $ref: "#/components/schemas/AppName" }
@@ -4440,6 +4472,10 @@ components:
         workloads:
           description: Deployed workloads that are not deleted.
           type: integer
+        running_containers:
+          description: Containers of the app that are ready or draining.
+          type: integer
+          minimum: 0
         created_at: { type: string, format: date-time }
 
     FunctionSpec:
@@ -4909,11 +4945,15 @@ components:
 
     Secret:
       type: object
-      required: [name, created_at, updated_at]
+      required: [name, created_at, updated_at, used_by]
       properties:
         name: { $ref: "#/components/schemas/SecretName" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        used_by:
+          description: Workloads whose active release receives the secret.
+          type: array
+          items: { $ref: "#/components/schemas/WorkloadRef" }
 
     SecretValue:
       type: object
@@ -5160,6 +5200,10 @@ components:
           type: integer
           minimum: 1
           maximum: 10000
+        download:
+          description: For `get`, have a browser save the file instead of showing it.
+          type: boolean
+          default: false
 
     PresignedUrl:
       type: object
@@ -5293,6 +5337,9 @@ components:
           description: The container holding the disk while attached or saving.
           type: string
           format: uuid
+        holder:
+          description: The workload whose container holds the disk.
+          allOf: [{ $ref: "#/components/schemas/WorkloadRef" }]
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -5633,7 +5680,7 @@ components:
 
     DeployedWorkload:
       type: object
-      required: [id, app, name, kind, state, created_at]
+      required: [id, app, name, kind, state, running_containers, created_at]
       properties:
         id: { type: string, format: uuid }
         app: { $ref: "#/components/schemas/AppName" }
@@ -5641,6 +5688,10 @@ components:
         kind: { $ref: "#/components/schemas/WorkloadKind" }
         state: { $ref: "#/components/schemas/WorkloadState" }
         app_state: { $ref: "#/components/schemas/AppState" }
+        running_containers:
+          description: Containers of the workload's releases that are ready or draining.
+          type: integer
+          minimum: 0
         version:
           description: The active version.
           type: integer
@@ -5658,6 +5709,9 @@ components:
         url:
           description: Where a pod or HTTP workload answers.
           type: string
+        active_release:
+          description: The definition the active version runs; only getDeployment answers it.
+          allOf: [{ $ref: "#/components/schemas/Release" }]
 
     DeploymentPage:
       type: object
@@ -5756,6 +5810,9 @@ components:
           type: integer
         cpu_millis: { type: integer, format: int64 }
         memory_mib: { type: integer, format: int64 }
+        image:
+          description: The image reference the release runs.
+          type: string
         created_at: { type: string, format: date-time }
         ready_at: { type: string, format: date-time }
         stopped_at: { type: string, format: date-time }

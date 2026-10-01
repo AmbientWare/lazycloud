@@ -42,6 +42,18 @@ type Container struct {
 	// ExpiresAt is when an instance with a timeout stops unless it is used
 	// again.
 	ExpiresAt *time.Time
+	// Image is the image reference the release runs, empty when the
+	// release names none.
+	Image string
+}
+
+// ContainerFilter narrows a container listing by app and function name, or
+// by workload. Function requires App.
+type ContainerFilter struct {
+	Live     bool
+	App      *string
+	Function *string
+	Workload *uuid.UUID
 }
 
 // ContainerPage is one page of containers, newest first.
@@ -51,8 +63,8 @@ type ContainerPage struct {
 }
 
 // ListContainers returns the workspace's containers newest first, only live
-// ones when live is set and only workload's when it is set.
-func (e *Execution) ListContainers(ctx context.Context, workspace identity.WorkspaceID, workload *uuid.UUID, live bool, limit int, cursor string) (ContainerPage, error) {
+// ones or one app's or workload's when the filter says so.
+func (e *Execution) ListContainers(ctx context.Context, workspace identity.WorkspaceID, filter ContainerFilter, limit int, cursor string) (ContainerPage, error) {
 	before := uuid.Max
 	if cursor != "" {
 		id, err := uuid.Parse(cursor)
@@ -61,10 +73,16 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 		}
 		before = id
 	}
+	if filter.Function != nil && filter.App == nil {
+		return ContainerPage{}, fmt.Errorf("%w: function needs app", ErrInvalidFilter)
+	}
 	size := pageSize(limit)
 	var rows []ContainerViewRow
-	if live {
-		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, WorkloadID: workload, MaxRows: size + 1})
+	if filter.Live {
+		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{
+			WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function, Before: before,
+			WorkloadID: filter.Workload, MaxRows: size + 1,
+		})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list live containers: %w", err)
 		}
@@ -72,7 +90,10 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 			rows = append(rows, ContainerViewRow(row))
 		}
 	} else {
-		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, WorkloadID: workload, MaxRows: size + 1})
+		r, err := e.queries.ListContainers(ctx, ListContainersParams{
+			WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function, Before: before,
+			WorkloadID: filter.Workload, MaxRows: size + 1,
+		})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list containers: %w", err)
 		}
@@ -111,7 +132,7 @@ func containerFrom(row ContainerViewRow) Container {
 		Slots: int(row.Slots), RunningTasks: int(row.Running), CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
 		CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt, StoppedAt: row.StoppedAt,
 		Kind: apitypes.WorkloadKind(row.Kind), Purpose: ContainerPurpose(row.Purpose), ExitCode: intOf(row.ExitCode),
-		GPUCount: int(row.GpuCount), Host: row.HostName,
+		GPUCount: int(row.GpuCount), Host: row.HostName, Image: row.Image,
 	}
 	if row.StopReason != nil {
 		r := StopReason(*row.StopReason)

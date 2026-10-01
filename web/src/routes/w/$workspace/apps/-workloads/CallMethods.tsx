@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
-import { PanelError } from "@/components/shared/PanelError";
 import { highlight, type CodeLanguage } from "@/components/ui/code-syntax";
-import { Skeleton } from "@/components/ui/skeleton";
-import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
+import { invokeUrl, type Workload } from "@/lib/queries/deployments";
+
 import {
+  clientContract,
   curlSnippet,
   exampleBody,
   pythonOnlyReason,
@@ -16,33 +15,17 @@ import {
 } from "./playground-form";
 import { pythonCall, sourceImport, sourceSnippet } from "./call-snippets";
 
-export function CallMethods({
-  workspaceId,
-  workspaceName,
-  deploymentId,
-  handler,
-}: {
-  workspaceId: string;
-  workspaceName: string;
-  deploymentId: string;
-  handler?: string | null;
-}) {
-  const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
-  if (manifest.isPending)
-    return (
-      <div className="space-y-2 p-4" aria-hidden="true">
-        {Array.from({ length: 4 }, (_, i) => (
-          <Skeleton key={i} className="h-9 w-full" />
-        ))}
-      </div>
-    );
-  if (manifest.isError) return <PanelError message={manifest.error.message} />;
-  const resource = manifest.data;
-  const asgi = resource.kind === "asgi";
-  const body = asgi ? undefined : exampleBody(resource);
-  const method = asgi && resource.methods.includes("GET") ? "GET" : "POST";
-  const source = handler ? sourceImport(handler) : null;
-  const pythonRequired = pythonOnlyReason(resource);
+export function CallMethods({ workspace, workload }: { workspace: string; workload: Workload }) {
+  const { deployment, release } = workload;
+  const kind = deployment.kind;
+  const contract = clientContract(release.spec.client_contract);
+  const methods = release.spec.http?.methods ?? [];
+  const asgi = kind === "asgi";
+  const body = asgi ? undefined : exampleBody(contract);
+  const method = asgi && methods.includes("GET") ? "GET" : "POST";
+  const source = release.spec.handler ? sourceImport(release.spec.handler) : null;
+  const pythonRequired = pythonOnlyReason(contract);
+  const url = invokeUrl(workspace, workload);
 
   return (
     <div className="content-transition min-w-0 divide-y divide-border/70 px-4 py-1">
@@ -51,7 +34,7 @@ export function CallMethods({
       ) : (
         <CallSection title="Typed Python package">
           <Code
-            text={`lazycloud app export ${shellSingleQuote(resource.app)} --workspace ${shellSingleQuote(workspaceName)}`}
+            text={`lazycloud app export ${shellSingleQuote(deployment.app)} --workspace ${shellSingleQuote(workspace)}`}
             language="shell"
             label="Export typed package"
           />
@@ -59,13 +42,13 @@ export function CallMethods({
       )}
       {source && (
         <CallSection title="Python SDK">
-          <Code text={sourceSnippet(resource, source)} language="python" label="SDK calls" />
+          <Code text={sourceSnippet(kind, contract, source)} language="python" label="SDK calls" />
         </CallSection>
       )}
       {source && !asgi && (
         <CallSection title="Local Python">
           <Code
-            text={`${source.importLine}\n\n${pythonCall("result", `${source.reference}.local`, resource)}\nprint(result)`}
+            text={`${source.importLine}\n\n${pythonCall("result", `${source.reference}.local`, contract)}\nprint(result)`}
             language="python"
             label="Local Python call"
           />
@@ -73,17 +56,13 @@ export function CallMethods({
       )}
       {!pythonRequired && (
         <CallSection title="curl">
-          <Code
-            text={curlSnippet(resource.invoke_url, body, method)}
-            language="shell"
-            label="curl command"
-          />
+          <Code text={curlSnippet(url, body, method)} language="shell" label="curl command" />
         </CallSection>
       )}
       {!pythonRequired && (
         <CallSection title="Python requests">
           <Code
-            text={pythonSnippet(resource.invoke_url, body, method)}
+            text={pythonSnippet(url, body, method)}
             language="python"
             label="Python HTTP request"
           />

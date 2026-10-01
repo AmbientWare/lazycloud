@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -37,6 +38,8 @@ var ErrVersionNotFound = errors.New("version not found")
 type DeploymentFilter struct {
 	App  *string
 	Name *string
+	// Search matches part of the app or workload name.
+	Search *string
 }
 
 // DeploymentPage is one page of deployed workloads by app and name.
@@ -53,7 +56,7 @@ func (c *Control) ListDeployments(ctx context.Context, workspace identity.Worksp
 	}
 	size := pageSize(limit)
 	rows, err := c.queries.ListDeployments(ctx, ListDeploymentsParams{
-		WorkspaceID: uuid.UUID(workspace), App: filter.App, Name: filter.Name,
+		WorkspaceID: uuid.UUID(workspace), App: filter.App, Name: filter.Name, Search: lowered(filter.Search),
 		AfterApp: afterApp, AfterName: afterName, MaxRows: size + 1,
 	})
 	if err != nil {
@@ -72,6 +75,7 @@ func (c *Control) ListDeployments(ctx context.Context, workspace identity.Worksp
 		page.Deployments[n] = workloadOut(WorkloadViewRow{
 			ID: row.ID, AppName: row.AppName, Name: row.Name, Kind: row.Kind, DesiredState: row.DesiredState,
 			AppState: row.AppState, Version: row.Version, ReleaseID: &release, CreatedAt: row.CreatedAt, DeployedAt: &deployed,
+			RunningContainers: row.RunningContainers,
 		})
 	}
 	return page, nil
@@ -92,6 +96,23 @@ func parseDeploymentCursor(cursor string) (string, string, error) {
 // GetDeployment reads a workload, deleted ones included.
 func (c *Control) GetDeployment(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.DeployedWorkload, error) {
 	return c.workloadView(ctx, c.queries, workspace, id)
+}
+
+// ActiveRelease reads the release a workload of any kind runs; ErrNotFound
+// when it has none.
+func (c *Control) ActiveRelease(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Release, error) {
+	row, err := c.queries.WorkloadActiveRelease(ctx, WorkloadActiveReleaseParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apitypes.Release{}, ErrNotFound
+	}
+	if err != nil {
+		return apitypes.Release{}, fmt.Errorf("read active release: %w", err)
+	}
+	var spec apitypes.FunctionSpec
+	if err := json.Unmarshal(row.Spec, &spec); err != nil {
+		return apitypes.Release{}, fmt.Errorf("decode release spec: %w", err)
+	}
+	return apitypes.Release{Id: row.ID, Function: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec}, nil
 }
 
 // StopDeployment stops admission to the workload. Planning drains its
@@ -198,7 +219,7 @@ func workloadOut(row WorkloadViewRow) apitypes.DeployedWorkload {
 		Id: row.ID, App: row.AppName, Name: row.Name, Kind: apitypes.WorkloadKind(row.Kind),
 		State: apitypes.WorkloadState(row.DesiredState), AppState: &appState,
 		Version: versionOf(row.Version), ReleaseId: row.ReleaseID,
-		CreatedAt: row.CreatedAt, DeployedAt: row.DeployedAt,
+		RunningContainers: int(row.RunningContainers), CreatedAt: row.CreatedAt, DeployedAt: row.DeployedAt,
 	}
 }
 

@@ -15,8 +15,8 @@ SECRETS = "/v1/workspaces/team/secrets"
 NOW = "2026-09-30T12:00:00Z"
 
 
-def _secret(name: str) -> dict[str, str]:
-    return {"name": name, "created_at": NOW, "updated_at": NOW}
+def _secret(name: str) -> dict[str, object]:
+    return {"name": name, "created_at": NOW, "updated_at": NOW, "used_by": []}
 
 
 @pytest.fixture
@@ -54,7 +54,9 @@ def secrets_api(fake_api: FakeApi) -> FakeApi:
         name = request.path.split("/")[-2]
         if name not in values:
             return error_reply("not_found", f"secret not found: {name}", 404)
-        return json_reply({**_secret(name), "value": values[name]})
+        return json_reply(
+            {"name": name, "value": values[name], "created_at": NOW, "updated_at": NOW}
+        )
 
     @fake_api.route("PUT", SECRETS + r"/\w+")
     def put(request: ApiRequest) -> Reply:

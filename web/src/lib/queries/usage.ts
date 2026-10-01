@@ -1,13 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  usageCostListSchema,
-  usageCostSeriesSchema,
-  type UsageCostBucket,
-  type UsageCostGroupKey,
-  type UsageCostCategory,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { accountQueryKeys } from "./workspace-keys";
 
@@ -17,10 +10,10 @@ export type UsageCostWindow = {
 };
 
 export type UsageCostScope = {
-  groupBy: UsageCostGroupKey;
+  groupBy: Schemas["UsageCostGroup"];
   appId?: string;
   workspaceId?: string;
-  category?: UsageCostCategory;
+  category?: Schemas["UsageCostCategory"];
   limit?: number;
 };
 
@@ -42,45 +35,45 @@ export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCo
       workspaceId: workspaceId ?? null,
       category: category ?? null,
     }),
-    initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({
-        start: window.start,
-        end: window.end,
-        group_by: groupBy,
-        limit: String(limit),
-      });
-      if (appId !== undefined) params.set("app_id", appId);
-      if (workspaceId !== undefined) params.set("workspace_id", workspaceId);
-      if (category !== undefined) params.set("category", category);
-      if (pageParam) params.set("cursor", pageParam);
-      return apiRequest(`/api/v1/billing/costs?${params.toString()}`, usageCostListSchema);
-    },
-    getNextPageParam: (page) => page.next || undefined,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/billing/costs", {
+          params: {
+            query: {
+              start: window.start,
+              end: window.end,
+              group_by: groupBy,
+              limit,
+              app_id: appId,
+              workspace_id: workspaceId,
+              category,
+              cursor: pageParam,
+            },
+          },
+        }),
+      ),
+    getNextPageParam: (page) => page.next_cursor,
     staleTime: 30_000,
   });
 }
 
 /**
- * The same account's spend, cut into the intervals a chart is drawn from.
- *
- * One request for the whole window rather than one per bar: a month is thirty
- * questions with the same answer, and asking them separately is thirty scans of
- * the same index and thirty chances for two of them to land either side of a
- * metering write. Every interval comes back, including the ones nothing ran in,
- * so the chart never has to invent the gaps.
+ * The same account's spend, cut into the intervals a chart is drawn from. One
+ * request answers the whole window, including the intervals nothing ran in.
  */
-export function accountCostSeriesQueryOptions(window: UsageCostWindow, bucket: UsageCostBucket) {
+export function accountCostSeriesQueryOptions(
+  window: UsageCostWindow,
+  bucket: Schemas["UsageCostBucket"],
+) {
   return queryOptions({
     queryKey: accountQueryKeys.usage.series({ start: window.start, end: window.end, bucket }),
-    queryFn: () => {
-      const params = new URLSearchParams({
-        start: window.start,
-        end: window.end,
-        bucket,
-      });
-      return apiRequest(`/api/v1/billing/cost-series?${params.toString()}`, usageCostSeriesSchema);
-    },
+    queryFn: () =>
+      ok(
+        api.GET("/v1/billing/cost-series", {
+          params: { query: { start: window.start, end: window.end, bucket } },
+        }),
+      ),
     staleTime: 30_000,
   });
 }

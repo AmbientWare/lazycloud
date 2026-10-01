@@ -16,12 +16,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { FleetCapacity, FleetMarket, FleetNode, FleetState } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { fleetNodesQueryOptions, fleetSummaryQueryOptions } from "@/lib/queries/fleet";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-const states: Record<FleetState, string> = {
+type FleetCapacity = Schemas["FleetCapacity"];
+
+const states: Record<Schemas["FleetState"], string> = {
   serving: "Serving",
   starting: "Starting",
   draining: "Draining",
@@ -64,7 +66,7 @@ export function FleetSettings() {
     );
     return () => window.clearTimeout(timeout);
   }, [plan]);
-  const expired = plan !== null && plan !== undefined && now >= Date.parse(plan.expires_at);
+  const expired = plan !== undefined && now >= Date.parse(plan.expires_at);
 
   return (
     <Panel
@@ -146,7 +148,7 @@ export function FleetSettings() {
   );
 }
 
-function CapacityTable({ markets }: { markets: FleetMarket[] }) {
+function CapacityTable({ markets }: { markets: Schemas["FleetMarket"][] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   return (
     <Table>
@@ -244,7 +246,7 @@ function CapacityTable({ markets }: { markets: FleetMarket[] }) {
   );
 }
 
-function NodeTable({ nodes }: { nodes: FleetNode[] }) {
+function NodeTable({ nodes }: { nodes: Schemas["FleetNode"][] }) {
   return (
     <Table className="min-w-[42rem]">
       <TableHeader>

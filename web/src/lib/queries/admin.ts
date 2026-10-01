@@ -1,89 +1,58 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  billingAccountAdminListSchema,
-  billingAccountAdminSchema,
-  billingComplimentaryRequestSchema,
-  userRoleRequestSchema,
-  userSchema,
-  userStatusRequestSchema,
-  type BillingAccountAdmin,
-  type PlatformRole,
-  type User,
-  type UserStatus,
-} from "@/lib/api/schemas";
-import {
-  nextListCursor,
-  selectInfiniteList,
-  type InfiniteListQueryData,
-} from "@/lib/queries/infinite-list";
-import {
-  accountQueryKeys,
-  EVERY_ACCOUNT,
-  type AdminAccountsKeyParts,
-} from "@/lib/queries/workspace-keys";
+import { api, ok, type Schemas } from "@/lib/api/client";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-const ACCOUNTS = "/api/v1/billing/accounts";
-const USERS = "/api/v1/users";
 const PAGE_SIZE = 50;
 
+export type AccountScope = {
+  search: string;
+  role: Schemas["PlatformRole"] | null;
+  status: Schemas["UserStatus"] | null;
+};
+
+export const EVERY_ACCOUNT: AccountScope = { search: "", role: null, status: null };
+
 /**
- * Every account on the platform, as an administrator sees it.
- *
- * Admin-only on the server, which answers a member with 403. That is an
- * authorization decision rather than a dead token, so the client keeps the
- * session and the tab shows the refusal.
+ * Every account on the platform, as an administrator sees it, narrowed by the
+ * server. Admin-only: a member gets 403, an authorization decision that keeps
+ * the session and shows the refusal in the tab.
  */
-export function billingAccountsQueryOptions(scope: AdminAccountsKeyParts = EVERY_ACCOUNT) {
+export function billingAccountsQueryOptions(scope: AccountScope = EVERY_ACCOUNT) {
   return infiniteQueryOptions({
     queryKey: accountQueryKeys.admin.accounts(scope),
-    initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
-      if (pageParam) params.set("cursor", pageParam);
-      // Narrowed by the server. The list pages, so filtering what arrived would
-      // hide every match that had not been fetched yet.
-      if (scope.search) params.set("search", scope.search);
-      if (scope.role) params.set("role", scope.role);
-      if (scope.status) params.set("status", scope.status);
-      return apiRequest(`${ACCOUNTS}?${params.toString()}`, billingAccountAdminListSchema);
-    },
-    getNextPageParam: nextListCursor,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/billing/accounts", {
+          params: {
+            query: {
+              limit: PAGE_SIZE,
+              cursor: pageParam,
+              search: scope.search || undefined,
+              role: scope.role ?? undefined,
+              status: scope.status ?? undefined,
+            },
+          },
+        }),
+      ),
+    getNextPageParam: (page) => page.next_cursor,
   });
 }
 
-export function selectBillingAccountList(
-  data: InfiniteListQueryData<BillingAccountAdmin> | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectInfiniteList(data, hasNextPage, (account) => account.user.id);
+export function setUserRole(user: string, role: Schemas["PlatformRole"]) {
+  return ok(api.PUT("/v1/users/{user}/role", { params: { path: { user } }, body: { role } }));
 }
 
-export function setUserRole(userId: string, role: PlatformRole): Promise<User> {
-  const request = userRoleRequestSchema.parse({ role });
-  return apiRequest(`${USERS}/${encodeURIComponent(userId)}/role`, userSchema, {
-    method: "PUT",
-    body: JSON.stringify(request),
-  });
+export function setUserStatus(user: string, status: Schemas["UserStatus"]) {
+  return ok(api.PUT("/v1/users/{user}/status", { params: { path: { user } }, body: { status } }));
 }
 
-export function setUserStatus(userId: string, status: UserStatus): Promise<User> {
-  const request = userStatusRequestSchema.parse({ status });
-  return apiRequest(`${USERS}/${encodeURIComponent(userId)}/status`, userSchema, {
-    method: "PUT",
-    body: JSON.stringify(request),
-  });
-}
-
-export function setComplimentary(
-  userId: string,
-  complimentary: boolean,
-): Promise<BillingAccountAdmin> {
-  const request = billingComplimentaryRequestSchema.parse({ complimentary });
-  return apiRequest(
-    `${ACCOUNTS}/${encodeURIComponent(userId)}/complimentary`,
-    billingAccountAdminSchema,
-    { method: "PUT", body: JSON.stringify(request) },
+export function setComplimentary(user: string, complimentary: boolean) {
+  return ok(
+    api.PUT("/v1/billing/accounts/{user}/complimentary", {
+      params: { path: { user } },
+      body: { complimentary },
+    }),
   );
 }

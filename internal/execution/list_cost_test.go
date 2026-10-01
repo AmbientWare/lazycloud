@@ -29,10 +29,13 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 		query string
 		args  []any
 	}{
-		{"tasks", listTasks, []any{f.workspace, nil, uuid.Max, page}},
-		{"app tasks", listAppTasks, []any{nil, uuid.Max, page, f.workspace, f.app, nil}},
-		{"containers", listContainers, []any{f.workspace, uuid.Max, nil, page}},
-		{"live containers", listLiveContainers, []any{f.workspace, uuid.Max, nil, page}},
+		{"tasks", listTasks, []any{f.workspace, nil, false, nil, uuid.Max, page}},
+		{"root tasks searched", listTasks, []any{f.workspace, nil, true, "fn", uuid.Max, page}},
+		{"app tasks", listAppTasks, []any{nil, false, nil, uuid.Max, page, f.workspace, f.app, nil, nil}},
+		{"version tasks", listAppTasks, []any{nil, false, nil, uuid.Max, page, f.workspace, f.app, "fn", 1}},
+		{"containers", listContainers, []any{f.workspace, nil, nil, uuid.Max, nil, page}},
+		{"function containers", listContainers, []any{f.workspace, "app", "fn", uuid.Max, nil, page}},
+		{"live containers", listLiveContainers, []any{f.workspace, nil, nil, uuid.Max, nil, page}},
 		{"pending facts", pendingFacts, []any{[]uuid.UUID{queued}}},
 	}
 	for _, history := range []int{0, 10_000} {

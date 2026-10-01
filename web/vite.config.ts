@@ -214,6 +214,11 @@ export default defineConfig({
     host: true,
     allowedHosts: devAllowedHosts,
     proxy: {
+      "/v1": {
+        target: viteEnv.VITE_API_TARGET,
+        changeOrigin: true,
+        ws: true,
+      },
       "/api": {
         target: viteEnv.VITE_API_TARGET,
         changeOrigin: true,

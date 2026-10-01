@@ -3,31 +3,25 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
-import {
-  encodeJsonFrame,
-  encodeShellFrame,
-  ShellFrameDecoder,
-  ShellFrameType,
-} from "@/lib/shell-protocol";
 import { cn } from "@/lib/utils";
 
-type ShellCredentials = { username: string; password: string };
+type ConnectionState = "connecting" | "open" | "closed" | "error";
 
-type ConnectionState = "connecting" | "authenticating" | "open" | "closed" | "error";
+/** A text message the shell sends; binary messages are terminal bytes. */
+type ShellMessage = { type: "exit"; code: number } | { type: "error"; message: string };
 
 /**
- * xterm.js terminal wired to the gateway shell WebSocket. The connection opens,
- * waits for the proxy "OK" preface, authenticates with the per-session
- * credentials, then streams framed PTY bytes both ways. No fake streaming: the
- * terminal renders exactly what the container shell emits.
+ * xterm.js terminal on a container's shell WebSocket. Binary messages carry
+ * terminal bytes both ways; resizes go up and the exit or a start failure come
+ * down as JSON text. The terminal renders exactly what the shell emits.
  */
 export function Terminal({
-  socketUrl,
-  credentials,
+  workspace,
+  containerId,
   className,
 }: {
-  socketUrl: string;
-  credentials: ShellCredentials;
+  workspace: string;
+  containerId: string;
   className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -55,65 +49,43 @@ export function Terminal({
     term.open(host);
     fit.fit();
 
-    const decoder = new ShellFrameDecoder();
-    const socket = new WebSocket(socketUrl);
+    const socket = new WebSocket(
+      containerShellUrl(workspace, containerId, { cols: term.cols, rows: term.rows }),
+    );
     socket.binaryType = "arraybuffer";
-    let authenticated = false;
+    const encoder = new TextEncoder();
     let disposed = false;
 
     const sendResize = () => {
-      if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-      socket.send(
-        encodeJsonFrame(ShellFrameType.Resize, {
-          cols: term.cols,
-          rows: term.rows,
-        }),
-      );
+      if (socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     };
 
-    const authenticate = () => {
-      setState("authenticating");
-      socket.send(
-        encodeJsonFrame(ShellFrameType.Auth, {
-          username: credentials.username,
-          password: credentials.password,
-          term: "xterm-256color",
-          cols: term.cols,
-          rows: term.rows,
-        }),
-      );
-    };
-
-    const handleServerFrames = (bytes: Uint8Array) => {
-      for (const frame of decoder.feed(bytes)) {
-        if (frame.type === ShellFrameType.Ready) {
-          authenticated = true;
-          setState("open");
-          term.focus();
-          sendResize();
-        } else if (frame.type === ShellFrameType.Data) {
-          term.write(frame.payload);
-        } else if (frame.type === ShellFrameType.Error) {
-          setErrorMessage(new TextDecoder().decode(frame.payload) || "shell error");
-          setState("error");
-          socket.close();
-        } else if (frame.type === ShellFrameType.Exit) {
-          const code = new TextDecoder().decode(frame.payload) || "0";
-          term.write(`\r\n\x1b[90m[session ended, exit ${code}]\x1b[0m\r\n`);
-          setState("closed");
-          socket.close();
-        }
-      }
+    socket.onopen = () => {
+      setState("open");
+      term.focus();
+      // The terminal may have been fitted again while the socket opened.
+      sendResize();
     };
 
     socket.onmessage = (event) => {
-      // The proxy sends a text "OK" preface once the backend socket is dialed;
-      // authenticate only after it arrives. Everything else is binary frames.
-      if (typeof event.data === "string") {
-        if (!authenticated && event.data.includes("OK")) authenticate();
+      if (typeof event.data !== "string") {
+        term.write(new Uint8Array(event.data as ArrayBuffer));
         return;
       }
-      handleServerFrames(new Uint8Array(event.data as ArrayBuffer));
+      let message: ShellMessage;
+      try {
+        message = JSON.parse(event.data) as ShellMessage;
+      } catch {
+        return;
+      }
+      if (message.type === "exit") {
+        term.write(`\r\n\x1b[90m[session ended, exit ${message.code}]\x1b[0m\r\n`);
+        setState("closed");
+      } else if (message.type === "error") {
+        setErrorMessage(message.message || "shell error");
+        setState("error");
+      }
     };
 
     socket.onerror = () => {
@@ -124,9 +96,7 @@ export function Terminal({
 
     socket.onclose = (event) => {
       if (disposed) return;
-      // The tunnel reports backend dial failures in the close frame reason
-      // (code 1011 from the shells router); surface it instead of a silent
-      // disconnect.
+      // A refused or failed shell names its cause in the close reason.
       if (event.code !== 1000 && event.reason) {
         setErrorMessage((current) => current ?? event.reason);
         setState("error");
@@ -136,9 +106,7 @@ export function Terminal({
     };
 
     const inputDisposable = term.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN && authenticated) {
-        socket.send(encodeShellFrame(ShellFrameType.Data, new TextEncoder().encode(data)));
-      }
+      if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -159,7 +127,7 @@ export function Terminal({
       socket.close();
       term.dispose();
     };
-  }, [socketUrl, credentials.username, credentials.password]);
+  }, [workspace, containerId]);
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
@@ -187,12 +155,29 @@ export function Terminal({
   );
 }
 
+/**
+ * The shell's WebSocket URL. The session cookie and the page's Origin
+ * authenticate the upgrade, so the URL carries no credential.
+ */
+function containerShellUrl(
+  workspace: string,
+  containerId: string,
+  size: { cols: number; rows: number },
+): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const path = `/v1/workspaces/${encodeURIComponent(workspace)}/containers/${encodeURIComponent(containerId)}/shell`;
+  const query = new URLSearchParams({
+    cols: String(size.cols),
+    rows: String(size.rows),
+    term: "xterm-256color",
+  });
+  return `${protocol}//${window.location.host}${path}?${query.toString()}`;
+}
+
 function connectionLabel(state: ConnectionState): string {
   switch (state) {
     case "connecting":
       return "connecting";
-    case "authenticating":
-      return "authenticating";
     case "open":
       return "connected";
     case "closed":
