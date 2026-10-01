@@ -67,9 +67,14 @@ outbox, resent, revoked, previewed, accepted and declined.
   last active workspace stays), revokes its restricted tokens and deletes its
   invitations and their unsent emails; every request but `GET`/`DELETE` of
   it is refused. Planning treats its releases as stopping, the coordinator
-  cancels its running tasks through `Execution.CancelTask`, and once no
-  container is live, storage deletes its objects and identity deletes the
-  row (cascading). `DELETE` again resumes it. Every step is idempotent.
+  cancels its running tasks through `Execution.CancelTask`, and images fails
+  the builds it started and hands finished ones to another workspace that
+  resolved the image. Once no workload or build container is live, storage
+  deletes its objects and identity deletes the row (cascading) under the
+  workspace row lock, re-checking for live containers so a concurrent
+  container insert keeps it for a later pass. `DELETE` again resumes it.
+  Every step is idempotent. Answers to invitations lock the workspace before
+  the invitation, as deletion does.
 - Plan limits belong to billing: `admitMember` (invite and accept) and
   `admitWorkspace` (creation) run inside those transactions and admit
   everything today.
@@ -120,12 +125,12 @@ identity): `internal/identity` TestGitHubSignIn, TestSignInRefusals,
 TestConcurrentFirstSignIn, TestSignOutEndsOnlyThatSession, TestDeviceLogin,
 TestAccountTokens, TestWorkspaceAuthorization, TestWorkspaceLifecycle,
 TestConcurrentDeletionKeepsOneWorkspace, TestMembers, TestInvitations,
-TestConcurrentAcceptIsSingleUse; `internal/notifications`
+TestConcurrentAcceptIsSingleUse, TestAnswerRacingDeletionDoesNotDeadlock; `internal/notifications`
 TestDeliveryRetriesAndFailures, TestBackoffIsCapped, TestLeaseFencesStaleSettle,
 TestDiscardPurgeAndNoSender, TestWebhookSignature; `internal/api`
 TestBrowserSessionAndDeviceLogin, TestSignInFailuresRedirect,
 TestIdentityOperationsOverHTTP, TestResendWebhook; `cmd/scheduler`
-TestWorkspaceDeletion. GitHub and Resend are httptest stubs at the provider
+TestWorkspaceDeletion, TestWorkspaceDeletionWithImageBuilds. GitHub and Resend are httptest stubs at the provider
 boundary only (`internal/identity/identitytest`).
 
 Python (`pytest -x python`, 356 passed after merging go-rewrite): test_sdk_workspace_cli.py (all on
