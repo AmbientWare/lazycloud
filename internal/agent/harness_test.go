@@ -313,20 +313,21 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &runningAgent{cancel: cancel, done: make(chan error, 1)}
 	cfg := Config{
-		Server:         e.address,
-		StateDir:       e.stateDir,
-		SocketDir:      filepath.Join(e.stateDir, "s"),
-		JoinToken:      e.server.joinToken,
-		RuntimeDir:     runtimeDir,
-		SupervisorPath: supervisorBinary,
-		OCIRuntime:     "runc",
-		GeeseFSPath:    e.geesefs,
-		MountImage:     DefaultMountImage,
-		BuildNetwork:   "host",
-		Limits:         Limits{CPUMillis: 4000, MemoryBytes: 8 << 30},
-		Labels:         map[string]string{"lazycloud.agent": e.id},
-		Version:        "test",
-		Logger:         slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		Server:          e.address,
+		ServerPlaintext: true,
+		StateDir:        e.stateDir,
+		SocketDir:       filepath.Join(e.stateDir, "s"),
+		JoinToken:       e.server.joinToken,
+		RuntimeDir:      runtimeDir,
+		SupervisorPath:  supervisorBinary,
+		OCIRuntime:      "runc",
+		GeeseFSPath:     e.geesefs,
+		MountImage:      DefaultMountImage,
+		BuildNetwork:    "host",
+		Limits:          Limits{CPUMillis: 4000, MemoryBytes: 8 << 30},
+		Labels:          map[string]string{"lazycloud.agent": e.id},
+		Version:         "test",
+		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	for _, fn := range configure {
 		fn(&cfg)

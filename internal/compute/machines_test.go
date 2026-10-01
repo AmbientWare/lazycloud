@@ -11,7 +11,7 @@ import (
 )
 
 func machineConfig() compute.Config {
-	return compute.Config{InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", ServerTLS: true}
+	return compute.Config{InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443"}
 }
 
 var machineCapacity = compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib} //nolint:gochecknoglobals // Test constant.

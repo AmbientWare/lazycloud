@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -106,6 +107,8 @@ type serveConfig struct {
 	api           api.Config
 	images        images.Config
 	compute       compute.Config
+	grpcCert      string
+	grpcKey       string
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -131,7 +134,8 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
 	fs.StringVar(&cfg.compute.ServerAddress, "agent-server-addr", env("LAZYCLOUD_AGENT_SERVER_ADDR", ""), "host:port agents dial; defaults to -grpc-addr (LAZYCLOUD_AGENT_SERVER_ADDR)")
-	fs.BoolVar(&cfg.compute.ServerTLS, "agent-server-tls", env("LAZYCLOUD_AGENT_SERVER_TLS", "") == "true", "agents dial the host connection with TLS (LAZYCLOUD_AGENT_SERVER_TLS)")
+	fs.StringVar(&cfg.grpcCert, "grpc-tls-cert", env("LAZYCLOUD_GRPC_TLS_CERT", ""), "PEM certificate chain the host connection serves; empty serves plaintext for loopback or a TLS-terminating ingress (LAZYCLOUD_GRPC_TLS_CERT)")
+	fs.StringVar(&cfg.grpcKey, "grpc-tls-key", env("LAZYCLOUD_GRPC_TLS_KEY", ""), "PEM private key for -grpc-tls-cert (LAZYCLOUD_GRPC_TLS_KEY)")
 	fs.StringVar(&cfg.compute.InstallURL, "install-url", env("LAZYCLOUD_INSTALL_URL", ""), "origin hosts download the agent from; defaults to -public-url (LAZYCLOUD_INSTALL_URL)")
 	fs.StringVar(&cfg.api.AgentDistDir, "agent-dist-dir", env("LAZYCLOUD_AGENT_DIST_DIR", ""), "agent release archives by version (LAZYCLOUD_AGENT_DIST_DIR)")
 	if err := fs.Parse(args); err != nil {
@@ -140,6 +144,10 @@ func serve(ctx context.Context, args []string) error {
 	if cfg.compute.ServerAddress == "" {
 		cfg.compute.ServerAddress = cfg.grpcAddr
 	}
+	if (cfg.grpcCert == "") != (cfg.grpcKey == "") {
+		return errors.New("set both -grpc-tls-cert and -grpc-tls-key, or neither")
+	}
+	cfg.compute.ServerPlaintext = compute.PlaintextAgents(cfg.compute.ServerAddress, cfg.grpcCert != "")
 	if cfg.compute.InstallURL == "" {
 		cfg.compute.InstallURL = cfg.identity.PublicURL
 	}
@@ -210,7 +218,15 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
 		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)
-	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
+	grpcOptions := hosts.ServerOptions()
+	if cfg.grpcCert != "" {
+		creds, err := credentials.NewServerTLSFromFile(cfg.grpcCert, cfg.grpcKey)
+		if err != nil {
+			return fmt.Errorf("load host connection certificate: %w", err)
+		}
+		grpcOptions = append(grpcOptions, grpc.Creds(creds))
+	}
+	grpcServer := grpc.NewServer(grpcOptions...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 

@@ -17,7 +17,8 @@ READY_TIMEOUT_SECONDS=180
 
 GATEWAY=""
 SERVER=""
-SERVER_TLS=0
+SERVER_PLAINTEXT=0
+SERVER_CA=""
 JOIN_TOKEN=""
 CLOUD_HOST_ID=""
 AGENT_VERSION=""
@@ -49,7 +50,8 @@ main() {
   install_release
 
   set -- --server "$SERVER" --state-dir "$STATE_DIR"
-  [ "$SERVER_TLS" = 0 ] || set -- "$@" --server-tls
+  [ "$SERVER_PLAINTEXT" = 0 ] || set -- "$@" --server-plaintext
+  [ -z "$SERVER_CA" ] || set -- "$@" --server-ca "$SERVER_CA"
   [ -z "$JOIN_TOKEN" ] || set -- "$@" --join-token "$JOIN_TOKEN"
   [ -z "$CLOUD_HOST_ID" ] || set -- "$@" --cloud-host-id "$CLOUD_HOST_ID"
   [ -z "$MAX_CPU" ] || set -- "$@" --max-cpu "$MAX_CPU"
@@ -69,7 +71,8 @@ parse_args() {
     case "$1" in
       --gateway) need_value "$@"; GATEWAY="$2"; shift 2 ;;
       --server) need_value "$@"; SERVER="$2"; shift 2 ;;
-      --server-tls) SERVER_TLS=1; shift ;;
+      --server-plaintext) SERVER_PLAINTEXT=1; shift ;;
+      --server-ca) need_value "$@"; SERVER_CA="$2"; shift 2 ;;
       --join-token) need_value "$@"; JOIN_TOKEN="$2"; shift 2 ;;
       --cloud-host-id) need_value "$@"; CLOUD_HOST_ID="$2"; shift 2 ;;
       --agent-version) need_value "$@"; AGENT_VERSION="$2"; shift 2 ;;

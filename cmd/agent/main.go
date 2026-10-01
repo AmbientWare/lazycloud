@@ -129,7 +129,8 @@ func newJoinFlags(name string) *joinFlags {
 	j.cfg = agent.Config{Labels: map[string]string{}, Version: version(), Executable: executable, AgentRoot: os.Getenv("LAZYCLOUD_AGENT_ROOT")}
 	f, cfg := j.set, &j.cfg
 	f.StringVar(&cfg.Server, "server", os.Getenv("LAZYCLOUD_SERVER"), "control plane gRPC address, host:port")
-	f.BoolVar(&cfg.ServerTLS, "server-tls", os.Getenv("LAZYCLOUD_SERVER_TLS") == "true", "dial the control plane with TLS")
+	f.StringVar(&cfg.ServerCA, "server-ca", os.Getenv("LAZYCLOUD_SERVER_CA"), "PEM bundle trusted for the server's certificate besides the system roots")
+	f.BoolVar(&cfg.ServerPlaintext, "server-plaintext", os.Getenv("LAZYCLOUD_SERVER_PLAINTEXT") == "true", "dial a loopback server without TLS")
 	f.StringVar(&cfg.StateDir, "state-dir", envOr("LAZYCLOUD_AGENT_STATE_DIR", "/var/lib/lazycloud/agent"), "host identity, source cache and container state")
 	f.StringVar(&cfg.SocketDir, "socket-dir", envOr("LAZYCLOUD_AGENT_SOCKET_DIR", defaultSocketDir()), "short directory for per-container link sockets")
 	f.StringVar(&cfg.JoinToken, "join-token", os.Getenv("LAZYCLOUD_JOIN_TOKEN"), "single-use token that enrolls the host on first start")

@@ -93,7 +93,8 @@ func run(logger *slog.Logger) error {
 	}
 	comp := compute.NewCompute(pool, exec, compute.Config{
 		InstallURL: os.Getenv("LAZYCLOUD_INSTALL_URL"), ServerAddress: os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"),
-		ServerTLS: os.Getenv("LAZYCLOUD_AGENT_SERVER_TLS") == "true", Fleet: fleet,
+		ServerPlaintext: compute.PlaintextAgents(os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"), os.Getenv("LAZYCLOUD_GRPC_TLS_CERT") != ""),
+		Fleet:           fleet,
 	})
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
 	if keyFile == "" {

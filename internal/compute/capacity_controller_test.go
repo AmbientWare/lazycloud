@@ -36,7 +36,7 @@ func fleetConfig(f compute.Fleet) compute.Config {
 	f.AccountID = "111122223333"
 	f.NodeRoleARN = "arn:aws:iam::111122223333:role/lazycloud-node"
 	f.InstanceProfile = "lazycloud-node"
-	return compute.Config{InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", ServerTLS: true, Fleet: f}
+	return compute.Config{InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: f}
 }
 
 func planCapacity(t *testing.T, o owners) compute.CapacityResult {

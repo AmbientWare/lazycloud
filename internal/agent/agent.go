@@ -7,9 +7,11 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,10 +58,13 @@ const exitRetention = 10 * time.Minute
 
 // Config configures an agent.
 type Config struct {
-	// Server is the control plane's gRPC address, host:port. ServerTLS dials
-	// it with TLS verified against the system roots.
-	Server    string
-	ServerTLS bool
+	// Server is the control plane's gRPC address, host:port. The agent dials
+	// it with TLS and verifies the server's certificate against the system
+	// roots and ServerCA, a PEM bundle, when set. ServerPlaintext dials
+	// without TLS and is accepted only for a loopback server.
+	Server          string
+	ServerCA        string
+	ServerPlaintext bool
 	// StateDir holds the host identity, the source cache and per-container
 	// workspaces and sockets.
 	StateDir string
@@ -365,8 +370,7 @@ func (a *Agent) pruneExited(ctx context.Context) {
 	}
 }
 
-// hostToken attaches the host token to every call. Local stacks dial in
-// plaintext; remote servers use ServerTLS.
+// hostToken attaches the host token to every call.
 type hostToken string
 
 func (t hostToken) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
@@ -375,10 +379,46 @@ func (t hostToken) GetRequestMetadata(context.Context, ...string) (map[string]st
 
 func (hostToken) RequireTransportSecurity() bool { return false }
 
+// ErrPlaintextRemote refuses a plaintext connection to a server that is not
+// on this host: host tokens and workload data would cross the network in
+// the clear.
+var ErrPlaintextRemote = errors.New("plaintext is only allowed to a loopback server; use TLS")
+
+// serverTransport is TLS verified against the system roots and the
+// configured CA bundle, or plaintext to a loopback server.
+func serverTransport(cfg Config) (credentials.TransportCredentials, error) {
+	if cfg.ServerPlaintext {
+		host, _, err := net.SplitHostPort(cfg.Server)
+		if err != nil {
+			host = cfg.Server
+		}
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return nil, fmt.Errorf("server %s: %w", cfg.Server, ErrPlaintextRemote)
+		}
+		return insecure.NewCredentials(), nil
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	if cfg.ServerCA != "" {
+		pem, err := os.ReadFile(cfg.ServerCA)
+		if err != nil {
+			return nil, fmt.Errorf("read server CA bundle: %w", err)
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("server CA bundle %s holds no certificate", cfg.ServerCA)
+		}
+	}
+	return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}), nil
+}
+
+// dialServer connects to the control plane. Every agent connection to the
+// server goes through it, so all of them share one transport policy.
 func dialServer(cfg Config, token string) (*grpc.ClientConn, error) {
-	transport := insecure.NewCredentials()
-	if cfg.ServerTLS {
-		transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	transport, err := serverTransport(cfg)
+	if err != nil {
+		return nil, err
 	}
 	address := cfg.Server
 	options := []grpc.DialOption{

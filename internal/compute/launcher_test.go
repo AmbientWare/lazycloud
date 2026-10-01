@@ -94,7 +94,7 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 		}
 		for _, arg := range []string{
 			"--cloud-host-id '" + host.String() + "'", "--agent-version '1.0.0'",
-			"--agent-sha256 '" + release.SHA256["amd64"] + "'", "--server 'hosts.lazycloud.test:443'", "--server-tls",
+			"--agent-sha256 '" + release.SHA256["amd64"] + "'", "--server 'hosts.lazycloud.test:443'",
 		} {
 			if !strings.Contains(string(data), arg) {
 				t.Errorf("user data lacks %s:\n%s", arg, data)

@@ -59,7 +59,7 @@ start() {
   echo $! >"$state/scheduler.pid"
   join=""
   [ -f "$state/join-token" ] && join=$(cat "$state/join-token")
-  bin/agent join -server 127.0.0.1:8081 -join-token "$join" -state-dir "$PWD/$state/agent" \
+  bin/agent join -server 127.0.0.1:8081 -server-plaintext -join-token "$join" -state-dir "$PWD/$state/agent" \
     -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime runc -build-network host \
     >"$state/logs/agent.log" 2>&1 &
   echo $! >"$state/agent.pid"

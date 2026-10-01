@@ -228,8 +228,8 @@ func (c *Compute) bootstrap(host uuid.UUID, release AgentRelease) string {
 		"--cloud-host-id", shellQuote(host.String()), "--background",
 		"--agent-version", shellQuote(release.Version),
 	}
-	if c.config.ServerTLS {
-		args = append(args, "--server-tls")
+	if c.config.ServerPlaintext {
+		args = append(args, "--server-plaintext")
 	}
 	if digest, ok := release.SHA256["amd64"]; ok {
 		args = append(args, "--agent-sha256", shellQuote(digest))

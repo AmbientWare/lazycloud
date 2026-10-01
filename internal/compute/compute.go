@@ -64,8 +64,10 @@ type Config struct {
 	InstallURL string
 	// ServerAddress is the host:port agents dial for the host connection.
 	ServerAddress string
-	// ServerTLS means agents dial ServerAddress with TLS.
-	ServerTLS bool
+	// ServerPlaintext means agents dial ServerAddress without TLS, which
+	// they accept only for a loopback address. Otherwise they dial with TLS
+	// and verify the server's certificate.
+	ServerPlaintext bool
 	// Fleet is the platform's AWS capacity.
 	Fleet Fleet
 }

@@ -170,8 +170,8 @@ func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinC
 func (c *Compute) joinCommand(token string, release TargetReleaseRow) string {
 	gateway := strings.TrimRight(c.config.InstallURL, "/")
 	args := []string{"--gateway", shellQuote(gateway), "--server", shellQuote(c.config.ServerAddress)}
-	if c.config.ServerTLS {
-		args = append(args, "--server-tls")
+	if c.config.ServerPlaintext {
+		args = append(args, "--server-plaintext")
 	}
 	args = append(args, "--join-token", shellQuote(token), "--agent-version", shellQuote(release.Version))
 	if release.Sha256Amd64 != nil {
@@ -186,6 +186,22 @@ func (c *Compute) joinCommand(token string, release TargetReleaseRow) string {
 	}
 	return fetch + `sh -c 'if [ "$(id -u)" -eq 0 ]; then exec sh -s -- "$@"; else exec sudo sh -s -- "$@"; fi' -- ` +
 		strings.Join(args, " ")
+}
+
+// PlaintextAgents reports whether agents dial address without TLS: only
+// when the server terminates no TLS itself and the address is loopback.
+// Behind an ingress that terminates TLS the address is not loopback, so
+// agents use TLS.
+func PlaintextAgents(address string, serverTLS bool) bool {
+	if serverTLS {
+		return false
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
 func loopback(rawURL string) bool {
