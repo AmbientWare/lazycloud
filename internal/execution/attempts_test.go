@@ -46,6 +46,7 @@ select att.task_id, att.id, host.id from att, host`, spec, maxAttempts).Scan(&f.
 	if err != nil {
 		t.Fatalf("insert fixture: %v", err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	if _, err := pool.Exec(ctx, "update tasks set current_attempt_id = $1 where id = $2", attemptID, f.task); err != nil {
 		t.Fatal(err)
 	}

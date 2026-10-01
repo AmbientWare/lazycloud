@@ -1958,6 +1958,255 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Published plans, limits and metered rates */
+        get: operations["getPricing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's plan, payment standing, credit and limits */
+        get: operations["getBilling"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the monthly usage limit and automatic reload
+         * @description Turning automatic reload on needs a saved payment method. A limit of 0 blocks new work.
+         */
+        put: operations["setBillingPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/automatic-reload/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume automatic reload after a declined or unauthenticated payment */
+        post: operations["resumeAutomaticReload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Move the account onto published plan terms
+         * @description A dearer plan applies at once and charges the prorated difference; a cheaper one, Free included, applies at renewal. Choosing the current terms cancels a scheduled change. Responds 409 while another change is being settled and 402 when the payment method is refused.
+         */
+        put: operations["changePlan"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/payment-method-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open Stripe's page for saving a card */
+        post: operations["startPaymentMethodSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/portal-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open Stripe's page for invoices and the saved card
+         * @description Responds 404 for an account with no Stripe customer yet.
+         */
+        post: operations["startBillingPortal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/credit-purchases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Buy prepaid credit through Stripe Checkout
+         * @description Needs a saved payment method. Repeating a request_key returns the same purchase.
+         */
+        post: operations["createCreditPurchase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/credit-purchases/{purchase}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                purchase: string;
+            };
+            cookie?: never;
+        };
+        /** One credit purchase */
+        get: operations["getCreditPurchase"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/costs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the account's usage cost, grouped by app, workload or task
+         * @description Covers every workspace the account pays for. Rows are ordered by cost, most first; cost_nanos totals the whole window.
+         */
+        get: operations["listCosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/cost-series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's spend over a window, interval by interval
+         * @description Intervals are whole buckets from start; every interval is present, including empty ones, and the last ends at end.
+         */
+        get: operations["getCostSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every user with their billing standing and recent spend
+         * @description Platform administrators only. Users that billing has no account for yet are listed too. search matches the email, display name or GitHub login.
+         */
+        get: operations["listBillingAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/accounts/{user}/complimentary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Waive a user's usage charges, or stop waiving them
+         * @description Platform administrators only. Usage keeps its price; while waived it costs nothing and the account has Business limits.
+         */
+        put: operations["setComplimentary"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/compute": {
         parameters: {
             query?: never;
@@ -2222,7 +2471,7 @@ export interface components {
             message: string;
         };
         /** @enum {string} */
-        ErrorCode: "invalid_request" | "unauthenticated" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "unsupported" | "too_many_pending_tasks" | "task_not_finished" | "unavailable" | "internal";
+        ErrorCode: "invalid_request" | "unauthenticated" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "unsupported" | "too_many_pending_tasks" | "task_not_finished" | "unavailable" | "internal" | "payment_required" | "limit_reached";
         Name: string;
         AppName: string;
         WorkloadName: string;
@@ -4088,6 +4337,410 @@ export interface components {
             /** Format: date-time */
             observed_at: string;
         };
+        /** @enum {string} */
+        PlanId: "free" | "team" | "business";
+        /**
+         * @description The published terms of a plan; a change names the exact terms chosen.
+         * @enum {string}
+         */
+        TermsVersion: "free-v2" | "team-v3" | "business-v2";
+        /**
+         * @description Who pays for the machine a container ran on: the platform's fleet bills catalog rates, a connected cloud account a management fee, and self-hosted machines nothing.
+         * @enum {string}
+         */
+        BillingOwner: "platform_fleet" | "connected_cloud" | "self_hosted";
+        /** @enum {string} */
+        RateClass: "auto" | "pinned" | "non_preemptible" | "pinned_non_preemptible";
+        PlanEntitlements: {
+            max_concurrent_cpu_containers: number;
+            max_concurrent_gpus: number;
+            /** @description The GPU models the account may ask for. */
+            gpu_types: string[];
+            /** @description Absent when unlimited. */
+            max_workspaces?: number;
+            /** @description People in the account's workspaces, owner included; absent if unlimited. */
+            max_members?: number;
+            connected_cloud: boolean;
+            custom_domains: boolean;
+            self_hosted: boolean;
+            /** @description Log and artifact retention. */
+            retention_days: number;
+            region_selection: boolean;
+            /** @description Declared disk size one workspace may hold; 0 is no disks. */
+            max_workspace_disk_gib: number;
+        };
+        PublishedPlan: {
+            id: components["schemas"]["PlanId"];
+            terms_version: components["schemas"]["TermsVersion"];
+            name: string;
+            summary: string;
+            /** Format: int64 */
+            monthly_nanos: number;
+            /**
+             * Format: int64
+             * @description Usage credit each month.
+             */
+            included_nanos: number;
+            entitlements: components["schemas"]["PlanEntitlements"];
+            terms: string[];
+        };
+        ShapeRate: {
+            billing_owner: components["schemas"]["BillingOwner"];
+            /** Format: int64 */
+            nanos_per_container_hour: number;
+            /** Format: int64 */
+            nanos_per_cpu_core_hour: number;
+            /** Format: int64 */
+            nanos_per_memory_gib_hour: number;
+        };
+        GpuRate: {
+            gpu_type: string;
+            nanos_per_card_hour: components["schemas"]["CardRates"];
+        };
+        /** @description What one card costs an hour on each kind of capacity. */
+        CardRates: {
+            /** Format: int64 */
+            platform_fleet: number;
+            /** Format: int64 */
+            connected_cloud: number;
+            /** Format: int64 */
+            self_hosted: number;
+        };
+        ComputeRate: {
+            billing_owner: components["schemas"]["BillingOwner"];
+            /** @description Absent for containers without a GPU. */
+            gpu_type?: string;
+            /** Format: int64 */
+            nanos_per_container_hour: number;
+            /** Format: int64 */
+            nanos_per_cpu_core_hour: number;
+            /** Format: int64 */
+            nanos_per_memory_gib_hour: number;
+            /** Format: int64 */
+            nanos_per_gpu_card_hour: number;
+        };
+        PlacementRate: {
+            rate_class: components["schemas"]["RateClass"];
+            /** Format: date-time */
+            effective_at: string;
+            pinned: boolean;
+            preemptible: boolean;
+            name: string;
+            cpu_memory_multiplier: number;
+            gpu_multiplier: number;
+            compute_rates: components["schemas"]["ComputeRate"][];
+        };
+        TrialTerms: {
+            /** Format: int64 */
+            amount_nanos: number;
+            duration_days: number;
+            one_time: boolean;
+        };
+        /** @description The limits of an account without a saved card. */
+        NoPaymentMethodTerms: {
+            max_concurrent_cpu_containers: number;
+            max_concurrent_gpus: number;
+            gpu_types: string[];
+        };
+        PlatformRate: {
+            /** Format: int64 */
+            nanos_per_egress_gib: number;
+            /** Format: int64 */
+            nanos_per_volume_gib_month: number;
+            storage_month_seconds: number;
+        };
+        DiskRate: {
+            /** Format: int64 */
+            nanos_per_stored_gib_month: number;
+            /** Format: int64 */
+            nanos_per_attached_gib_month: number;
+        };
+        CreditPurchaseTerms: {
+            minimum_cents: number;
+            maximum_cents: number;
+        };
+        PricingCatalog: {
+            trial: components["schemas"]["TrialTerms"];
+            pricing_version: string;
+            /** Format: date-time */
+            metered_rates_effective_at: string;
+            currency: string;
+            connected_cloud_management_fee_percent: number;
+            no_payment_method: components["schemas"]["NoPaymentMethodTerms"];
+            plans: components["schemas"]["PublishedPlan"][];
+            /** @description Automatic placement rates for containers without a GPU. */
+            shape_rates: components["schemas"]["ShapeRate"][];
+            gpu_rates: components["schemas"]["GpuRate"][];
+            platform_rate: components["schemas"]["PlatformRate"];
+            disk_rate?: components["schemas"]["DiskRate"];
+            placement_rates: components["schemas"]["PlacementRate"][];
+            credit_purchase: components["schemas"]["CreditPurchaseTerms"];
+        };
+        /**
+         * @description past_due refuses new work until the card on file is updated.
+         * @enum {string}
+         */
+        BillingStatus: "active" | "past_due";
+        BillingPlan: {
+            id: components["schemas"]["PlanId"];
+            name: string;
+            terms_version: components["schemas"]["TermsVersion"];
+            /** Format: int64 */
+            monthly_nanos: number;
+            /** Format: int64 */
+            included_nanos: number;
+            scheduled_terms_version?: components["schemas"]["TermsVersion"];
+            /** Format: date-time */
+            scheduled_change_at?: string;
+            /**
+             * Format: date-time
+             * @description The subscription's billing period; absent on Free.
+             */
+            period_started_at?: string;
+            /** Format: date-time */
+            period_ended_at?: string;
+        };
+        EntitlementUsage: {
+            concurrent_cpu_containers: number;
+            concurrent_gpus: number;
+            workspaces: number;
+            members: number;
+            connected_clouds: number;
+            custom_domains: number;
+        };
+        UsageBudget: {
+            /** Format: date-time */
+            month_started_at: string;
+            /** Format: date-time */
+            month_ended_at: string;
+            /**
+             * Format: int64
+             * @description Absent without a monthly usage limit.
+             */
+            limit_nanos?: number;
+            /** Format: int64 */
+            spent_nanos: number;
+            /** Format: int64 */
+            available_nanos?: number;
+        };
+        BillingPreferences: {
+            /**
+             * Format: int64
+             * @description Stops new work once reached; resets monthly, UTC. Absent for none.
+             */
+            monthly_usage_limit_nanos?: number;
+            reload_enabled: boolean;
+            reload_threshold_cents: number;
+            reload_amount_cents: number;
+        };
+        /** @enum {string} */
+        ReloadPauseReason: "declined" | "action_required";
+        AutomaticReload: {
+            /** Format: uuid */
+            paused_purchase_id?: string;
+            pause_reason?: components["schemas"]["ReloadPauseReason"];
+            /** Format: uuid */
+            pending_purchase_id?: string;
+            /** Format: date-time */
+            month_started_at: string;
+            /** Format: date-time */
+            month_ended_at: string;
+            /** Format: int64 */
+            monthly_payment_committed_cents: number;
+        };
+        BillingAccount: {
+            status: components["schemas"]["BillingStatus"];
+            currency: string;
+            plan: components["schemas"]["BillingPlan"];
+            /** @description Stripe holds a customer for the account, so invoices can be shown. */
+            portal_available: boolean;
+            payment_method_on_file: boolean;
+            /**
+             * Format: date-time
+             * @description When an administrator waived the account's usage charges.
+             */
+            complimentary_since?: string;
+            entitlements: components["schemas"]["PlanEntitlements"];
+            usage: components["schemas"]["EntitlementUsage"];
+            /**
+             * Format: int64
+             * @description Prepaid credit left; negative is usage the next credit covers first.
+             */
+            balance_nanos: number;
+            usage_budget: components["schemas"]["UsageBudget"];
+            preferences: components["schemas"]["BillingPreferences"];
+            automatic_reload: components["schemas"]["AutomaticReload"];
+            /** @description A plan change is waiting on Stripe's answer. */
+            plan_change_pending: boolean;
+        };
+        PlanChangeRequest: {
+            plan: components["schemas"]["PlanId"];
+            terms_version: components["schemas"]["TermsVersion"];
+        };
+        HostedSessionRequest: {
+            /** @description A dashboard page; other origins are refused. */
+            return_url: string;
+            /** @description Where to return on abandoning the page; defaults to return_url. */
+            cancel_url?: string;
+        };
+        HostedSession: {
+            url: string;
+        };
+        CreditPurchaseRequest: {
+            /** Format: uuid */
+            request_key: string;
+            amount_cents: number;
+            return_url: string;
+            cancel_url?: string;
+        };
+        /** @enum {string} */
+        CreditPaymentStatus: "pending" | "action_required" | "succeeded" | "declined" | "cancelled";
+        CreditPurchase: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "manual" | "automatic";
+            /** Format: int64 */
+            amount_nanos: number;
+            status: components["schemas"]["CreditPaymentStatus"];
+            /** @description Stripe Checkout, while the purchase is pending. */
+            checkout_url?: string;
+            /** Format: date-time */
+            funded_at?: string;
+            /**
+             * Format: int64
+             * @description Refunded or disputed credit taken back.
+             */
+            reversed_nanos: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ComplimentaryRequest: {
+            complimentary: boolean;
+        };
+        /** @description One user as an administrator sees them. plan and status are absent for a user billing has no account for yet. */
+        BillingAccountAdmin: {
+            user: components["schemas"]["User"];
+            plan?: components["schemas"]["PlanId"];
+            status?: components["schemas"]["BillingStatus"];
+            payment_method_on_file: boolean;
+            /** Format: date-time */
+            complimentary_since?: string;
+            /**
+             * Format: int64
+             * @description Usage cost since recent_cost_since, waived or not.
+             */
+            recent_cost_nanos: number;
+            /** Format: date-time */
+            recent_cost_since: string;
+        };
+        BillingAccountAdminPage: {
+            accounts: components["schemas"]["BillingAccountAdmin"][];
+            /** @description Present when more accounts follow. */
+            next_cursor?: string;
+        };
+        /**
+         * @default app
+         * @enum {string}
+         */
+        UsageCostGroup: "app" | "workload" | "task";
+        /**
+         * @description Usage no app explains: image builds, and usage of resources outside any app.
+         * @enum {string}
+         */
+        UsageCostCategory: "image-build" | "disk" | "unattributed";
+        /**
+         * @default day
+         * @enum {string}
+         */
+        UsageCostBucket: "hour" | "day";
+        /**
+         * @description The invoice line a component rolls up into.
+         * @enum {string}
+         */
+        BilledDimension: "compute_runtime" | "network_egress" | "volume_storage" | "disk";
+        /**
+         * @description What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds, egress in GiB. A disk's cost includes its declared size while held.
+         * @enum {string}
+         */
+        UsageCostComponentKind: "container_time" | "cpu" | "memory" | "gpu" | "volume_storage" | "disk" | "egress";
+        UsageCostComponent: {
+            dimension: components["schemas"]["BilledDimension"];
+            component: components["schemas"]["UsageCostComponentKind"];
+            quantity: number;
+            /** Format: int64 */
+            cost_nanos: number;
+        };
+        /** @description One app, workload or task over the window. Every level carries the ids above it. A name is absent when its app or workload was deleted. */
+        UsageCostRow: {
+            /** Format: uuid */
+            workspace_id: string;
+            workspace_name?: string;
+            /** Format: uuid */
+            app_id?: string;
+            app_name?: string;
+            /** Format: uuid */
+            workload_id?: string;
+            workload_name?: string;
+            workload_kind?: string;
+            /** Format: uuid */
+            task_id?: string;
+            /** Format: uuid */
+            disk_id?: string;
+            /** @description Absent when the disk was deleted. */
+            disk_name?: string;
+            category?: components["schemas"]["UsageCostCategory"];
+            /** Format: int64 */
+            cost_nanos: number;
+            components: components["schemas"]["UsageCostComponent"][];
+        };
+        UsageCostPage: {
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            currency: string;
+            group_by: components["schemas"]["UsageCostGroup"];
+            /**
+             * Format: int64
+             * @description The whole window's cost, not the page's.
+             */
+            cost_nanos: number;
+            rows: components["schemas"]["UsageCostRow"][];
+            /** @description Present when more rows follow. */
+            next_cursor?: string;
+        };
+        UsageCostInterval: {
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            ended_at: string;
+            /** Format: int64 */
+            cost_nanos: number;
+            /** @description Only the invoice lines metered in the interval. */
+            dimensions: components["schemas"]["UsageCostDimension"][];
+        };
+        UsageCostDimension: {
+            dimension: components["schemas"]["BilledDimension"];
+            /** Format: int64 */
+            cost_nanos: number;
+        };
+        UsageCostSeries: {
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            currency: string;
+            bucket: components["schemas"]["UsageCostBucket"];
+            /** Format: int64 */
+            cost_nanos: number;
+            /**
+             * Format: int64
+             * @description Usage in the window that subscription credit covered.
+             */
+            subscription_credit_nanos: number;
+            intervals: components["schemas"]["UsageCostInterval"][];
+        };
     };
     responses: {
         /** @description A typed error */
@@ -4139,6 +4792,9 @@ export interface components {
         QueuePath: components["schemas"]["CollectionName"];
         MapPath: components["schemas"]["CollectionName"];
         MapKeyPath: components["schemas"]["MapKey"];
+        CostStart: string;
+        /** @description After start, and at most 400 days later. */
+        CostEnd: string;
     };
     requestBodies: never;
     headers: never;
@@ -7188,6 +7844,334 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountActivity"];
+                };
+            };
+        };
+    };
+    getPricing: {
+        parameters: {
+            query?: {
+                /** @description Answer with the rates in force at this instant. */
+                at?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pricing catalog */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricingCatalog"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getBilling: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The billing account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setBillingPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingPreferences"];
+            };
+        };
+        responses: {
+            /** @description The billing account with the new preferences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeAutomaticReload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The billing account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    changePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description The billing account. plan_change_pending is true when the provider's answer is not known yet; the change is retried. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startPaymentMethodSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostedSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Where to send the person */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostedSession"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startBillingPortal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostedSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Where to send the person */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostedSession"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createCreditPurchase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditPurchaseRequest"];
+            };
+        };
+        responses: {
+            /** @description The purchase and its checkout page */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditPurchase"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCreditPurchase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                purchase: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The purchase */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditPurchase"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCosts: {
+        parameters: {
+            query: {
+                start: components["parameters"]["CostStart"];
+                /** @description After start, and at most 400 days later. */
+                end: components["parameters"]["CostEnd"];
+                group_by?: components["schemas"]["UsageCostGroup"];
+                workspace_id?: string;
+                /** @description Only this app's usage. */
+                app_id?: string;
+                category?: components["schemas"]["UsageCostCategory"];
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of cost rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageCostPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCostSeries: {
+        parameters: {
+            query: {
+                start: components["parameters"]["CostStart"];
+                /** @description After start, and at most 400 days later. */
+                end: components["parameters"]["CostEnd"];
+                bucket?: components["schemas"]["UsageCostBucket"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageCostSeries"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBillingAccounts: {
+        parameters: {
+            query?: {
+                search?: string;
+                role?: components["schemas"]["PlatformRole"];
+                status?: components["schemas"]["UserStatus"];
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of accounts ordered by user id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccountAdminPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setComplimentary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComplimentaryRequest"];
+            };
+        };
+        responses: {
+            /** @description The account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccountAdmin"];
                 };
             };
             default: components["responses"]["Error"];

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -28,8 +29,13 @@ type BuildContainer struct {
 }
 
 // CreateBuildContainer requests a container for build in tx and wakes
-// placement. workspace is charged for its capacity.
+// placement. workspace is charged for its capacity, so billing admits it
+// first and refuses it when the account cannot pay or runs the most
+// containers its plan allows.
 func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis, memoryBytes int64) (ContainerID, error) {
+	if _, err := billing.Admit(ctx, tx, billing.Request{Workspace: uuid.UUID(workspace), Start: 1, Cold: true}); err != nil {
+		return ContainerID{}, err
+	}
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
 	})

@@ -3,7 +3,7 @@
 //
 //	server [serve] [flags]      serve HTTP and gRPC (migrates first)
 //	server migrate              apply database migrations
-//	server admin <command>      create-user, create-workspace, create-token, create-join-token
+//	server admin <command>      create-user, create-workspace, create-token, set-complimentary, create-join-token
 //
 // On SIGTERM the server reports not ready on /readyz, keeps serving for the
 // drain delay so load balancers stop routing to it, then ends host sessions
@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/AmbientWare/lazycloud/internal/api"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -92,6 +93,14 @@ func env(name, fallback string) string {
 	return fallback
 }
 
+// billingConfig reads the Stripe credentials from the environment, so they
+// stay out of the process arguments.
+func billingConfig(publicURL string) billing.Config {
+	return billing.Config{PublicURL: publicURL, Stripe: billing.StripeConfig{
+		SecretKey: os.Getenv("LAZYCLOUD_STRIPE_API_KEY"), WebhookSecret: os.Getenv("LAZYCLOUD_STRIPE_WEBHOOK_SECRET"),
+	}}
+}
+
 func databaseFlag(fs *flag.FlagSet) *string {
 	return fs.String("database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
 }
@@ -119,6 +128,7 @@ type serveConfig struct {
 	identity      identity.Config
 	api           api.Config
 	images        images.Config
+	billing       billing.Config
 	compute       compute.Config
 	grpcCert      string
 	grpcKey       string
@@ -189,6 +199,7 @@ func serve(ctx context.Context, args []string) error {
 	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	cfg.api.ResendWebhookSecret = os.Getenv("LAZYCLOUD_RESEND_WEBHOOK_SECRET")
 	cfg.api.PublicURL = cfg.identity.PublicURL
+	cfg.billing = billingConfig(cfg.identity.PublicURL)
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
 	cfg.objectStore.Workspaces.GarageAdminToken = os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN")
 	if err := cfg.objectStore.Validate(); err != nil {
@@ -277,10 +288,14 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
+	bill := billing.NewBilling(pool, cfg.billing, logger)
+	if cfg.billing.Stripe.SecretKey == "" {
+		logger.WarnContext(ctx, "payments are unavailable: set LAZYCLOUD_STRIPE_API_KEY and LAZYCLOUD_STRIPE_WEBHOOK_SECRET")
+	}
 	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener, Compute: comp,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
 		Observability: obs, Changes: changes,
 	}
 	handler, err := api.NewHandler(owners, cfg.api, logger)

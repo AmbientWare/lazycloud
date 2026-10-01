@@ -331,6 +331,69 @@ func (e AwsStackActionRequestOnFailure) Valid() bool {
 	}
 }
 
+// Defines values for BilledDimension.
+const (
+	BilledDimensionComputeRuntime BilledDimension = "compute_runtime"
+	BilledDimensionDisk           BilledDimension = "disk"
+	BilledDimensionNetworkEgress  BilledDimension = "network_egress"
+	BilledDimensionVolumeStorage  BilledDimension = "volume_storage"
+)
+
+// Valid indicates whether the value is a known member of the BilledDimension enum.
+func (e BilledDimension) Valid() bool {
+	switch e {
+	case BilledDimensionComputeRuntime:
+		return true
+	case BilledDimensionDisk:
+		return true
+	case BilledDimensionNetworkEgress:
+		return true
+	case BilledDimensionVolumeStorage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BillingOwner.
+const (
+	ConnectedCloud BillingOwner = "connected_cloud"
+	PlatformFleet  BillingOwner = "platform_fleet"
+	SelfHosted     BillingOwner = "self_hosted"
+)
+
+// Valid indicates whether the value is a known member of the BillingOwner enum.
+func (e BillingOwner) Valid() bool {
+	switch e {
+	case ConnectedCloud:
+		return true
+	case PlatformFleet:
+		return true
+	case SelfHosted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BillingStatus.
+const (
+	BillingStatusActive  BillingStatus = "active"
+	BillingStatusPastDue BillingStatus = "past_due"
+)
+
+// Valid indicates whether the value is a known member of the BillingStatus enum.
+func (e BillingStatus) Valid() bool {
+	switch e {
+	case BillingStatusActive:
+		return true
+	case BillingStatusPastDue:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CapacityState.
 const (
 	CapacityStateAvailable  CapacityState = "available"
@@ -514,6 +577,51 @@ func (e ContainerState) Valid() bool {
 	}
 }
 
+// Defines values for CreditPaymentStatus.
+const (
+	CreditPaymentStatusActionRequired CreditPaymentStatus = "action_required"
+	CreditPaymentStatusCancelled      CreditPaymentStatus = "cancelled"
+	CreditPaymentStatusDeclined       CreditPaymentStatus = "declined"
+	CreditPaymentStatusPending        CreditPaymentStatus = "pending"
+	CreditPaymentStatusSucceeded      CreditPaymentStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the CreditPaymentStatus enum.
+func (e CreditPaymentStatus) Valid() bool {
+	switch e {
+	case CreditPaymentStatusActionRequired:
+		return true
+	case CreditPaymentStatusCancelled:
+		return true
+	case CreditPaymentStatusDeclined:
+		return true
+	case CreditPaymentStatusPending:
+		return true
+	case CreditPaymentStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreditPurchaseKind.
+const (
+	Automatic CreditPurchaseKind = "automatic"
+	Manual    CreditPurchaseKind = "manual"
+)
+
+// Valid indicates whether the value is a known member of the CreditPurchaseKind enum.
+func (e CreditPurchaseKind) Valid() bool {
+	switch e {
+	case Automatic:
+		return true
+	case Manual:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeliveryState.
 const (
 	DeliveryStateBounced    DeliveryState = "bounced"
@@ -649,8 +757,10 @@ const (
 	Forbidden           ErrorCode = "forbidden"
 	Internal            ErrorCode = "internal"
 	InvalidRequest      ErrorCode = "invalid_request"
+	LimitReached        ErrorCode = "limit_reached"
 	NotFound            ErrorCode = "not_found"
 	PayloadTooLarge     ErrorCode = "payload_too_large"
+	PaymentRequired     ErrorCode = "payment_required"
 	TaskNotFinished     ErrorCode = "task_not_finished"
 	TooManyPendingTasks ErrorCode = "too_many_pending_tasks"
 	Unauthenticated     ErrorCode = "unauthenticated"
@@ -669,9 +779,13 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case InvalidRequest:
 		return true
+	case LimitReached:
+		return true
 	case NotFound:
 		return true
 	case PayloadTooLarge:
+		return true
+	case PaymentRequired:
 		return true
 	case TaskNotFinished:
 		return true
@@ -1207,6 +1321,27 @@ func (e PayloadEncoding) Valid() bool {
 	}
 }
 
+// Defines values for PlanId.
+const (
+	Business PlanId = "business"
+	Free     PlanId = "free"
+	Team     PlanId = "team"
+)
+
+// Valid indicates whether the value is a known member of the PlanId enum.
+func (e PlanId) Valid() bool {
+	switch e {
+	case Business:
+		return true
+	case Free:
+		return true
+	case Team:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlatformRole.
 const (
 	PlatformRoleAdministrator PlatformRole = "administrator"
@@ -1270,6 +1405,30 @@ func (e PresignVolumeFileRequestMethod) Valid() bool {
 	}
 }
 
+// Defines values for RateClass.
+const (
+	Auto                 RateClass = "auto"
+	NonPreemptible       RateClass = "non_preemptible"
+	Pinned               RateClass = "pinned"
+	PinnedNonPreemptible RateClass = "pinned_non_preemptible"
+)
+
+// Valid indicates whether the value is a known member of the RateClass enum.
+func (e RateClass) Valid() bool {
+	switch e {
+	case Auto:
+		return true
+	case NonPreemptible:
+		return true
+	case Pinned:
+		return true
+	case PinnedNonPreemptible:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Region.
 const (
 	ApSoutheast Region = "ap-southeast"
@@ -1291,6 +1450,24 @@ func (e Region) Valid() bool {
 	case UsEast:
 		return true
 	case UsWest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReloadPauseReason.
+const (
+	ReloadPauseReasonActionRequired ReloadPauseReason = "action_required"
+	ReloadPauseReasonDeclined       ReloadPauseReason = "declined"
+)
+
+// Valid indicates whether the value is a known member of the ReloadPauseReason enum.
+func (e ReloadPauseReason) Valid() bool {
+	switch e {
+	case ReloadPauseReasonActionRequired:
+		return true
+	case ReloadPauseReasonDeclined:
 		return true
 	default:
 		return false
@@ -1468,6 +1645,27 @@ func (e TaskStatus) Valid() bool {
 	}
 }
 
+// Defines values for TermsVersion.
+const (
+	BusinessV2 TermsVersion = "business-v2"
+	FreeV2     TermsVersion = "free-v2"
+	TeamV3     TermsVersion = "team-v3"
+)
+
+// Valid indicates whether the value is a known member of the TermsVersion enum.
+func (e TermsVersion) Valid() bool {
+	switch e {
+	case BusinessV2:
+		return true
+	case FreeV2:
+		return true
+	case TeamV3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TokenStatus.
 const (
 	TokenStatusActive  TokenStatus = "active"
@@ -1495,6 +1693,99 @@ const (
 func (e UploadTargetMethod) Valid() bool {
 	switch e {
 	case PUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UsageCostBucket.
+const (
+	Day  UsageCostBucket = "day"
+	Hour UsageCostBucket = "hour"
+)
+
+// Valid indicates whether the value is a known member of the UsageCostBucket enum.
+func (e UsageCostBucket) Valid() bool {
+	switch e {
+	case Day:
+		return true
+	case Hour:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UsageCostCategory.
+const (
+	UsageCostCategoryDisk         UsageCostCategory = "disk"
+	UsageCostCategoryImageBuild   UsageCostCategory = "image-build"
+	UsageCostCategoryUnattributed UsageCostCategory = "unattributed"
+)
+
+// Valid indicates whether the value is a known member of the UsageCostCategory enum.
+func (e UsageCostCategory) Valid() bool {
+	switch e {
+	case UsageCostCategoryDisk:
+		return true
+	case UsageCostCategoryImageBuild:
+		return true
+	case UsageCostCategoryUnattributed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UsageCostComponentKind.
+const (
+	UsageCostComponentKindContainerTime UsageCostComponentKind = "container_time"
+	UsageCostComponentKindCpu           UsageCostComponentKind = "cpu"
+	UsageCostComponentKindDisk          UsageCostComponentKind = "disk"
+	UsageCostComponentKindEgress        UsageCostComponentKind = "egress"
+	UsageCostComponentKindGpu           UsageCostComponentKind = "gpu"
+	UsageCostComponentKindMemory        UsageCostComponentKind = "memory"
+	UsageCostComponentKindVolumeStorage UsageCostComponentKind = "volume_storage"
+)
+
+// Valid indicates whether the value is a known member of the UsageCostComponentKind enum.
+func (e UsageCostComponentKind) Valid() bool {
+	switch e {
+	case UsageCostComponentKindContainerTime:
+		return true
+	case UsageCostComponentKindCpu:
+		return true
+	case UsageCostComponentKindDisk:
+		return true
+	case UsageCostComponentKindEgress:
+		return true
+	case UsageCostComponentKindGpu:
+		return true
+	case UsageCostComponentKindMemory:
+		return true
+	case UsageCostComponentKindVolumeStorage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UsageCostGroup.
+const (
+	UsageCostGroupApp      UsageCostGroup = "app"
+	UsageCostGroupTask     UsageCostGroup = "task"
+	UsageCostGroupWorkload UsageCostGroup = "workload"
+)
+
+// Valid indicates whether the value is a known member of the UsageCostGroup enum.
+func (e UsageCostGroup) Valid() bool {
+	switch e {
+	case UsageCostGroupApp:
+		return true
+	case UsageCostGroupTask:
+		return true
+	case UsageCostGroupWorkload:
 		return true
 	default:
 		return false
@@ -1774,6 +2065,16 @@ type ArtifactUpload struct {
 // AttemptOutcome defines model for AttemptOutcome.
 type AttemptOutcome string
 
+// AutomaticReload defines model for AutomaticReload.
+type AutomaticReload struct {
+	MonthEndedAt                 time.Time           `json:"month_ended_at"`
+	MonthStartedAt               time.Time           `json:"month_started_at"`
+	MonthlyPaymentCommittedCents int64               `json:"monthly_payment_committed_cents"`
+	PauseReason                  *ReloadPauseReason  `json:"pause_reason,omitempty"`
+	PausedPurchaseId             *openapi_types.UUID `json:"paused_purchase_id,omitempty"`
+	PendingPurchaseId            *openapi_types.UUID `json:"pending_purchase_id,omitempty"`
+}
+
 // Autoscaler defines model for Autoscaler.
 type Autoscaler struct {
 	MaxContainers     *int `json:"max_containers,omitempty"`
@@ -1916,6 +2217,93 @@ type AwsStackParameter struct {
 	ParameterValue string `json:"ParameterValue"`
 }
 
+// BilledDimension The invoice line a component rolls up into.
+type BilledDimension string
+
+// BillingAccount defines model for BillingAccount.
+type BillingAccount struct {
+	AutomaticReload AutomaticReload `json:"automatic_reload"`
+
+	// BalanceNanos Prepaid credit left; negative is usage the next credit covers first.
+	BalanceNanos int64 `json:"balance_nanos"`
+
+	// ComplimentarySince When an administrator waived the account's usage charges.
+	ComplimentarySince  *time.Time       `json:"complimentary_since,omitempty"`
+	Currency            string           `json:"currency"`
+	Entitlements        PlanEntitlements `json:"entitlements"`
+	PaymentMethodOnFile bool             `json:"payment_method_on_file"`
+	Plan                BillingPlan      `json:"plan"`
+
+	// PlanChangePending A plan change is waiting on Stripe's answer.
+	PlanChangePending bool `json:"plan_change_pending"`
+
+	// PortalAvailable Stripe holds a customer for the account, so invoices can be shown.
+	PortalAvailable bool               `json:"portal_available"`
+	Preferences     BillingPreferences `json:"preferences"`
+
+	// Status past_due refuses new work until the card on file is updated.
+	Status      BillingStatus    `json:"status"`
+	Usage       EntitlementUsage `json:"usage"`
+	UsageBudget UsageBudget      `json:"usage_budget"`
+}
+
+// BillingAccountAdmin One user as an administrator sees them. plan and status are absent for a user billing has no account for yet.
+type BillingAccountAdmin struct {
+	ComplimentarySince  *time.Time `json:"complimentary_since,omitempty"`
+	PaymentMethodOnFile bool       `json:"payment_method_on_file"`
+	Plan                *PlanId    `json:"plan,omitempty"`
+
+	// RecentCostNanos Usage cost since recent_cost_since, waived or not.
+	RecentCostNanos int64     `json:"recent_cost_nanos"`
+	RecentCostSince time.Time `json:"recent_cost_since"`
+
+	// Status past_due refuses new work until the card on file is updated.
+	Status *BillingStatus `json:"status,omitempty"`
+	User   User           `json:"user"`
+}
+
+// BillingAccountAdminPage defines model for BillingAccountAdminPage.
+type BillingAccountAdminPage struct {
+	Accounts []BillingAccountAdmin `json:"accounts"`
+
+	// NextCursor Present when more accounts follow.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// BillingOwner Who pays for the machine a container ran on: the platform's fleet bills catalog rates, a connected cloud account a management fee, and self-hosted machines nothing.
+type BillingOwner string
+
+// BillingPlan defines model for BillingPlan.
+type BillingPlan struct {
+	Id            PlanId     `json:"id"`
+	IncludedNanos int64      `json:"included_nanos"`
+	MonthlyNanos  int64      `json:"monthly_nanos"`
+	Name          string     `json:"name"`
+	PeriodEndedAt *time.Time `json:"period_ended_at,omitempty"`
+
+	// PeriodStartedAt The subscription's billing period; absent on Free.
+	PeriodStartedAt   *time.Time `json:"period_started_at,omitempty"`
+	ScheduledChangeAt *time.Time `json:"scheduled_change_at,omitempty"`
+
+	// ScheduledTermsVersion The published terms of a plan; a change names the exact terms chosen.
+	ScheduledTermsVersion *TermsVersion `json:"scheduled_terms_version,omitempty"`
+
+	// TermsVersion The published terms of a plan; a change names the exact terms chosen.
+	TermsVersion TermsVersion `json:"terms_version"`
+}
+
+// BillingPreferences defines model for BillingPreferences.
+type BillingPreferences struct {
+	// MonthlyUsageLimitNanos Stops new work once reached; resets monthly, UTC. Absent for none.
+	MonthlyUsageLimitNanos *int64 `json:"monthly_usage_limit_nanos,omitempty"`
+	ReloadAmountCents      int    `json:"reload_amount_cents"`
+	ReloadEnabled          bool   `json:"reload_enabled"`
+	ReloadThresholdCents   int    `json:"reload_threshold_cents"`
+}
+
+// BillingStatus past_due refuses new work until the card on file is updated.
+type BillingStatus string
+
 // CallGraphNode defines model for CallGraphNode.
 type CallGraphNode struct {
 	App AppName `json:"app"`
@@ -1936,6 +2324,13 @@ type CallGraphNode struct {
 
 // CapacityState defines model for CapacityState.
 type CapacityState string
+
+// CardRates What one card costs an hour on each kind of capacity.
+type CardRates struct {
+	ConnectedCloud int64 `json:"connected_cloud"`
+	PlatformFleet  int64 `json:"platform_fleet"`
+	SelfHosted     int64 `json:"self_hosted"`
+}
 
 // ChangeEvent The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id.
 type ChangeEvent struct {
@@ -2002,6 +2397,11 @@ type CompletedPart struct {
 	Number int    `json:"number"`
 }
 
+// ComplimentaryRequest defines model for ComplimentaryRequest.
+type ComplimentaryRequest struct {
+	Complimentary bool `json:"complimentary"`
+}
+
 // ComputeInstance defines model for ComputeInstance.
 type ComputeInstance struct {
 	AvailabilityZone string `json:"availability_zone"`
@@ -2043,6 +2443,19 @@ type ComputeInstanceProvider string
 type ComputeInstancePage struct {
 	Instances  []ComputeInstance `json:"instances"`
 	NextCursor *string           `json:"next_cursor,omitempty"`
+}
+
+// ComputeRate defines model for ComputeRate.
+type ComputeRate struct {
+	// BillingOwner Who pays for the machine a container ran on: the platform's fleet bills catalog rates, a connected cloud account a management fee, and self-hosted machines nothing.
+	BillingOwner BillingOwner `json:"billing_owner"`
+
+	// GpuType Absent for containers without a GPU.
+	GpuType               *string `json:"gpu_type,omitempty"`
+	NanosPerContainerHour int64   `json:"nanos_per_container_hour"`
+	NanosPerCpuCoreHour   int64   `json:"nanos_per_cpu_core_hour"`
+	NanosPerGpuCardHour   int64   `json:"nanos_per_gpu_card_hour"`
+	NanosPerMemoryGibHour int64   `json:"nanos_per_memory_gib_hour"`
 }
 
 // ComputeSummary defines model for ComputeSummary.
@@ -2247,6 +2660,42 @@ type CreatedToken struct {
 	Token string `json:"token"`
 }
 
+// CreditPaymentStatus defines model for CreditPaymentStatus.
+type CreditPaymentStatus string
+
+// CreditPurchase defines model for CreditPurchase.
+type CreditPurchase struct {
+	AmountNanos int64 `json:"amount_nanos"`
+
+	// CheckoutUrl Stripe Checkout, while the purchase is pending.
+	CheckoutUrl *string            `json:"checkout_url,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	FundedAt    *time.Time         `json:"funded_at,omitempty"`
+	Id          openapi_types.UUID `json:"id"`
+	Kind        CreditPurchaseKind `json:"kind"`
+
+	// ReversedNanos Refunded or disputed credit taken back.
+	ReversedNanos int64               `json:"reversed_nanos"`
+	Status        CreditPaymentStatus `json:"status"`
+}
+
+// CreditPurchaseKind defines model for CreditPurchase.Kind.
+type CreditPurchaseKind string
+
+// CreditPurchaseRequest defines model for CreditPurchaseRequest.
+type CreditPurchaseRequest struct {
+	AmountCents int                `json:"amount_cents"`
+	CancelUrl   *string            `json:"cancel_url,omitempty"`
+	RequestKey  openapi_types.UUID `json:"request_key"`
+	ReturnUrl   string             `json:"return_url"`
+}
+
+// CreditPurchaseTerms defines model for CreditPurchaseTerms.
+type CreditPurchaseTerms struct {
+	MaximumCents int `json:"maximum_cents"`
+	MinimumCents int `json:"minimum_cents"`
+}
+
 // DeleteArtifactsRequest defines model for DeleteArtifactsRequest.
 type DeleteArtifactsRequest struct {
 	Ids []openapi_types.UUID `json:"ids"`
@@ -2426,8 +2875,24 @@ type DiskPage struct {
 	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
+// DiskRate defines model for DiskRate.
+type DiskRate struct {
+	NanosPerAttachedGibMonth int64 `json:"nanos_per_attached_gib_month"`
+	NanosPerStoredGibMonth   int64 `json:"nanos_per_stored_gib_month"`
+}
+
 // DiskStatus defines model for DiskStatus.
 type DiskStatus string
+
+// EntitlementUsage defines model for EntitlementUsage.
+type EntitlementUsage struct {
+	ConcurrentCpuContainers int `json:"concurrent_cpu_containers"`
+	ConcurrentGpus          int `json:"concurrent_gpus"`
+	ConnectedClouds         int `json:"connected_clouds"`
+	CustomDomains           int `json:"custom_domains"`
+	Members                 int `json:"members"`
+	Workspaces              int `json:"workspaces"`
+}
 
 // Error defines model for Error.
 type Error struct {
@@ -2598,11 +3063,33 @@ type FunctionSpec struct {
 	Volumes        *[]VolumeMountSpec `json:"volumes,omitempty"`
 }
 
+// GpuRate defines model for GpuRate.
+type GpuRate struct {
+	GpuType string `json:"gpu_type"`
+
+	// NanosPerCardHour What one card costs an hour on each kind of capacity.
+	NanosPerCardHour CardRates `json:"nanos_per_card_hour"`
+}
+
 // GpuType A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80.
 type GpuType string
 
 // HookReferences defines model for HookReferences.
 type HookReferences = []string
+
+// HostedSession defines model for HostedSession.
+type HostedSession struct {
+	Url string `json:"url"`
+}
+
+// HostedSessionRequest defines model for HostedSessionRequest.
+type HostedSessionRequest struct {
+	// CancelUrl Where to return on abandoning the page; defaults to return_url.
+	CancelUrl *string `json:"cancel_url,omitempty"`
+
+	// ReturnUrl A dashboard page; other origins are refused.
+	ReturnUrl string `json:"return_url"`
+}
 
 // Image defines model for Image.
 type Image struct {
@@ -2985,6 +3472,13 @@ type MultipartUpload struct {
 // Name defines model for Name.
 type Name = string
 
+// NoPaymentMethodTerms The limits of an account without a saved card.
+type NoPaymentMethodTerms struct {
+	GpuTypes                   []string `json:"gpu_types"`
+	MaxConcurrentCpuContainers int      `json:"max_concurrent_cpu_containers"`
+	MaxConcurrentGpus          int      `json:"max_concurrent_gpus"`
+}
+
 // Payload A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
 type Payload struct {
 	Data     *[]byte          `json:"data,omitempty"`
@@ -3020,6 +3514,61 @@ type Placement struct {
 
 	// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
 	Region *Region `json:"region,omitempty"`
+}
+
+// PlacementRate defines model for PlacementRate.
+type PlacementRate struct {
+	ComputeRates        []ComputeRate `json:"compute_rates"`
+	CpuMemoryMultiplier float32       `json:"cpu_memory_multiplier"`
+	EffectiveAt         time.Time     `json:"effective_at"`
+	GpuMultiplier       float32       `json:"gpu_multiplier"`
+	Name                string        `json:"name"`
+	Pinned              bool          `json:"pinned"`
+	Preemptible         bool          `json:"preemptible"`
+	RateClass           RateClass     `json:"rate_class"`
+}
+
+// PlanChangeRequest defines model for PlanChangeRequest.
+type PlanChangeRequest struct {
+	Plan PlanId `json:"plan"`
+
+	// TermsVersion The published terms of a plan; a change names the exact terms chosen.
+	TermsVersion TermsVersion `json:"terms_version"`
+}
+
+// PlanEntitlements defines model for PlanEntitlements.
+type PlanEntitlements struct {
+	ConnectedCloud bool `json:"connected_cloud"`
+	CustomDomains  bool `json:"custom_domains"`
+
+	// GpuTypes The GPU models the account may ask for.
+	GpuTypes                   []string `json:"gpu_types"`
+	MaxConcurrentCpuContainers int      `json:"max_concurrent_cpu_containers"`
+	MaxConcurrentGpus          int      `json:"max_concurrent_gpus"`
+
+	// MaxMembers People in the account's workspaces, owner included; absent if unlimited.
+	MaxMembers *int `json:"max_members,omitempty"`
+
+	// MaxWorkspaceDiskGib Declared disk size one workspace may hold; 0 is no disks.
+	MaxWorkspaceDiskGib int `json:"max_workspace_disk_gib"`
+
+	// MaxWorkspaces Absent when unlimited.
+	MaxWorkspaces   *int `json:"max_workspaces,omitempty"`
+	RegionSelection bool `json:"region_selection"`
+
+	// RetentionDays Log and artifact retention.
+	RetentionDays int  `json:"retention_days"`
+	SelfHosted    bool `json:"self_hosted"`
+}
+
+// PlanId defines model for PlanId.
+type PlanId string
+
+// PlatformRate defines model for PlatformRate.
+type PlatformRate struct {
+	NanosPerEgressGib      int64 `json:"nanos_per_egress_gib"`
+	NanosPerVolumeGibMonth int64 `json:"nanos_per_volume_gib_month"`
+	StorageMonthSeconds    int   `json:"storage_month_seconds"`
 }
 
 // PlatformRole An account's standing on the platform; administrators reach every workspace.
@@ -3074,6 +3623,43 @@ type PresignedUrl struct {
 	Url string `json:"url"`
 }
 
+// PricingCatalog defines model for PricingCatalog.
+type PricingCatalog struct {
+	ConnectedCloudManagementFeePercent int                 `json:"connected_cloud_management_fee_percent"`
+	CreditPurchase                     CreditPurchaseTerms `json:"credit_purchase"`
+	Currency                           string              `json:"currency"`
+	DiskRate                           *DiskRate           `json:"disk_rate,omitempty"`
+	GpuRates                           []GpuRate           `json:"gpu_rates"`
+	MeteredRatesEffectiveAt            time.Time           `json:"metered_rates_effective_at"`
+
+	// NoPaymentMethod The limits of an account without a saved card.
+	NoPaymentMethod NoPaymentMethodTerms `json:"no_payment_method"`
+	PlacementRates  []PlacementRate      `json:"placement_rates"`
+	Plans           []PublishedPlan      `json:"plans"`
+	PlatformRate    PlatformRate         `json:"platform_rate"`
+	PricingVersion  string               `json:"pricing_version"`
+
+	// ShapeRates Automatic placement rates for containers without a GPU.
+	ShapeRates []ShapeRate `json:"shape_rates"`
+	Trial      TrialTerms  `json:"trial"`
+}
+
+// PublishedPlan defines model for PublishedPlan.
+type PublishedPlan struct {
+	Entitlements PlanEntitlements `json:"entitlements"`
+	Id           PlanId           `json:"id"`
+
+	// IncludedNanos Usage credit each month.
+	IncludedNanos int64    `json:"included_nanos"`
+	MonthlyNanos  int64    `json:"monthly_nanos"`
+	Name          string   `json:"name"`
+	Summary       string   `json:"summary"`
+	Terms         []string `json:"terms"`
+
+	// TermsVersion The published terms of a plan; a change names the exact terms chosen.
+	TermsVersion TermsVersion `json:"terms_version"`
+}
+
 // PutQueueMessagesRequest defines model for PutQueueMessagesRequest.
 type PutQueueMessagesRequest struct {
 	// Messages Message bodies, base64; each at most 1 MiB.
@@ -3099,6 +3685,9 @@ type QueuePage struct {
 	Queues     []QueueInfo `json:"queues"`
 }
 
+// RateClass defines model for RateClass.
+type RateClass string
+
 // Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
 type Region string
 
@@ -3112,6 +3701,9 @@ type Release struct {
 	// Version The deployed version; absent for a release only working-tree calls use.
 	Version *int `json:"version,omitempty"`
 }
+
+// ReloadPauseReason defines model for ReloadPauseReason.
+type ReloadPauseReason string
 
 // RemovedVolumeFiles defines model for RemovedVolumeFiles.
 type RemovedVolumeFiles struct {
@@ -3261,6 +3853,15 @@ type SetMapEntryRequest struct {
 
 // Sha256 Lowercase hex SHA-256 digest
 type Sha256 = string
+
+// ShapeRate defines model for ShapeRate.
+type ShapeRate struct {
+	// BillingOwner Who pays for the machine a container ran on: the platform's fleet bills catalog rates, a connected cloud account a management fee, and self-hosted machines nothing.
+	BillingOwner          BillingOwner `json:"billing_owner"`
+	NanosPerContainerHour int64        `json:"nanos_per_container_hour"`
+	NanosPerCpuCoreHour   int64        `json:"nanos_per_cpu_core_hour"`
+	NanosPerMemoryGibHour int64        `json:"nanos_per_memory_gib_hour"`
+}
 
 // SourceRef defines model for SourceRef.
 type SourceRef struct {
@@ -3488,6 +4089,9 @@ type TaskTimeline struct {
 	TaskId openapi_types.UUID `json:"task_id"`
 }
 
+// TermsVersion The published terms of a plan; a change names the exact terms chosen.
+type TermsVersion string
+
 // Token defines model for Token.
 type Token struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -3525,6 +4129,13 @@ type TokenList struct {
 // TokenStatus defines model for TokenStatus.
 type TokenStatus string
 
+// TrialTerms defines model for TrialTerms.
+type TrialTerms struct {
+	AmountNanos  int64 `json:"amount_nanos"`
+	DurationDays int   `json:"duration_days"`
+	OneTime      bool  `json:"one_time"`
+}
+
 // Upload Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT.
 type Upload struct {
 	ExpiresAt     time.Time    `json:"expires_at"`
@@ -3555,6 +4166,106 @@ type UploadTarget struct {
 
 // UploadTargetMethod defines model for UploadTarget.Method.
 type UploadTargetMethod string
+
+// UsageBudget defines model for UsageBudget.
+type UsageBudget struct {
+	AvailableNanos *int64 `json:"available_nanos,omitempty"`
+
+	// LimitNanos Absent without a monthly usage limit.
+	LimitNanos     *int64    `json:"limit_nanos,omitempty"`
+	MonthEndedAt   time.Time `json:"month_ended_at"`
+	MonthStartedAt time.Time `json:"month_started_at"`
+	SpentNanos     int64     `json:"spent_nanos"`
+}
+
+// UsageCostBucket defines model for UsageCostBucket.
+type UsageCostBucket string
+
+// UsageCostCategory Usage no app explains: image builds, and usage of resources outside any app.
+type UsageCostCategory string
+
+// UsageCostComponent defines model for UsageCostComponent.
+type UsageCostComponent struct {
+	// Component What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds, egress in GiB. A disk's cost includes its declared size while held.
+	Component UsageCostComponentKind `json:"component"`
+	CostNanos int64                  `json:"cost_nanos"`
+
+	// Dimension The invoice line a component rolls up into.
+	Dimension BilledDimension `json:"dimension"`
+	Quantity  float32         `json:"quantity"`
+}
+
+// UsageCostComponentKind What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds, egress in GiB. A disk's cost includes its declared size while held.
+type UsageCostComponentKind string
+
+// UsageCostDimension defines model for UsageCostDimension.
+type UsageCostDimension struct {
+	CostNanos int64 `json:"cost_nanos"`
+
+	// Dimension The invoice line a component rolls up into.
+	Dimension BilledDimension `json:"dimension"`
+}
+
+// UsageCostGroup defines model for UsageCostGroup.
+type UsageCostGroup string
+
+// UsageCostInterval defines model for UsageCostInterval.
+type UsageCostInterval struct {
+	CostNanos int64 `json:"cost_nanos"`
+
+	// Dimensions Only the invoice lines metered in the interval.
+	Dimensions []UsageCostDimension `json:"dimensions"`
+	EndedAt    time.Time            `json:"ended_at"`
+	StartedAt  time.Time            `json:"started_at"`
+}
+
+// UsageCostPage defines model for UsageCostPage.
+type UsageCostPage struct {
+	// CostNanos The whole window's cost, not the page's.
+	CostNanos int64          `json:"cost_nanos"`
+	Currency  string         `json:"currency"`
+	End       time.Time      `json:"end"`
+	GroupBy   UsageCostGroup `json:"group_by"`
+
+	// NextCursor Present when more rows follow.
+	NextCursor *string        `json:"next_cursor,omitempty"`
+	Rows       []UsageCostRow `json:"rows"`
+	Start      time.Time      `json:"start"`
+}
+
+// UsageCostRow One app, workload or task over the window. Every level carries the ids above it. A name is absent when its app or workload was deleted.
+type UsageCostRow struct {
+	AppId   *openapi_types.UUID `json:"app_id,omitempty"`
+	AppName *string             `json:"app_name,omitempty"`
+
+	// Category Usage no app explains: image builds, and usage of resources outside any app.
+	Category   *UsageCostCategory   `json:"category,omitempty"`
+	Components []UsageCostComponent `json:"components"`
+	CostNanos  int64                `json:"cost_nanos"`
+	DiskId     *openapi_types.UUID  `json:"disk_id,omitempty"`
+
+	// DiskName Absent when the disk was deleted.
+	DiskName      *string             `json:"disk_name,omitempty"`
+	TaskId        *openapi_types.UUID `json:"task_id,omitempty"`
+	WorkloadId    *openapi_types.UUID `json:"workload_id,omitempty"`
+	WorkloadKind  *string             `json:"workload_kind,omitempty"`
+	WorkloadName  *string             `json:"workload_name,omitempty"`
+	WorkspaceId   openapi_types.UUID  `json:"workspace_id"`
+	WorkspaceName *string             `json:"workspace_name,omitempty"`
+}
+
+// UsageCostSeries defines model for UsageCostSeries.
+type UsageCostSeries struct {
+	Bucket    UsageCostBucket     `json:"bucket"`
+	CostNanos int64               `json:"cost_nanos"`
+	Currency  string              `json:"currency"`
+	End       time.Time           `json:"end"`
+	Intervals []UsageCostInterval `json:"intervals"`
+	Start     time.Time           `json:"start"`
+
+	// SubscriptionCreditNanos Usage in the window that subscription credit covered.
+	SubscriptionCreditNanos int64 `json:"subscription_credit_nanos"`
+}
 
 // User defines model for User.
 type User struct {
@@ -3740,6 +4451,12 @@ type ArtifactPath = openapi_types.UUID
 // ContainerPath defines model for ContainerPath.
 type ContainerPath = openapi_types.UUID
 
+// CostEnd defines model for CostEnd.
+type CostEnd = time.Time
+
+// CostStart defines model for CostStart.
+type CostStart = time.Time
+
 // Cursor defines model for Cursor.
 type Cursor = string
 
@@ -3812,6 +4529,44 @@ type WindowSeconds = int
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
 
+// ListBillingAccountsParams defines parameters for ListBillingAccounts.
+type ListBillingAccountsParams struct {
+	Search *string       `form:"search,omitempty" json:"search,omitempty"`
+	Role   *PlatformRole `form:"role,omitempty" json:"role,omitempty"`
+	Status *UserStatus   `form:"status,omitempty" json:"status,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetCostSeriesParams defines parameters for GetCostSeries.
+type GetCostSeriesParams struct {
+	Start CostStart `form:"start" json:"start"`
+
+	// End After start, and at most 400 days later.
+	End    CostEnd          `form:"end" json:"end"`
+	Bucket *UsageCostBucket `form:"bucket,omitempty" json:"bucket,omitempty"`
+}
+
+// ListCostsParams defines parameters for ListCosts.
+type ListCostsParams struct {
+	Start CostStart `form:"start" json:"start"`
+
+	// End After start, and at most 400 days later.
+	End         CostEnd             `form:"end" json:"end"`
+	GroupBy     *UsageCostGroup     `form:"group_by,omitempty" json:"group_by,omitempty"`
+	WorkspaceId *openapi_types.UUID `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+
+	// AppId Only this app's usage.
+	AppId    *openapi_types.UUID `form:"app_id,omitempty" json:"app_id,omitempty"`
+	Category *UsageCostCategory  `form:"category,omitempty" json:"category,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListComputeInstancesParams defines parameters for ListComputeInstances.
 type ListComputeInstancesParams struct {
 	// Cursor The next_cursor of the previous page.
@@ -3846,6 +4601,12 @@ type GetAccountActivityParams struct {
 	// End The end of the range, exclusive; defaults to now.
 	End   *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
 	Limit *int      `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetPricingParams defines parameters for GetPricing.
+type GetPricingParams struct {
+	// At Answer with the rates in force at this instant.
+	At *time.Time `form:"at,omitempty" json:"at,omitempty"`
 }
 
 // ListTokensParams defines parameters for ListTokens.
@@ -4167,6 +4928,24 @@ type ConnectAwsJSONRequestBody = AwsConnectionRequest
 
 // ReconnectAwsJSONRequestBody defines body for ReconnectAws for application/json ContentType.
 type ReconnectAwsJSONRequestBody = AwsReconnectRequest
+
+// SetComplimentaryJSONRequestBody defines body for SetComplimentary for application/json ContentType.
+type SetComplimentaryJSONRequestBody = ComplimentaryRequest
+
+// CreateCreditPurchaseJSONRequestBody defines body for CreateCreditPurchase for application/json ContentType.
+type CreateCreditPurchaseJSONRequestBody = CreditPurchaseRequest
+
+// StartPaymentMethodSetupJSONRequestBody defines body for StartPaymentMethodSetup for application/json ContentType.
+type StartPaymentMethodSetupJSONRequestBody = HostedSessionRequest
+
+// ChangePlanJSONRequestBody defines body for ChangePlan for application/json ContentType.
+type ChangePlanJSONRequestBody = PlanChangeRequest
+
+// StartBillingPortalJSONRequestBody defines body for StartBillingPortal for application/json ContentType.
+type StartBillingPortalJSONRequestBody = HostedSessionRequest
+
+// SetBillingPreferencesJSONRequestBody defines body for SetBillingPreferences for application/json ContentType.
+type SetBillingPreferencesJSONRequestBody = BillingPreferences
 
 // StartDeviceLoginJSONRequestBody defines body for StartDeviceLogin for application/json ContentType.
 type StartDeviceLoginJSONRequestBody = DeviceLoginRequest

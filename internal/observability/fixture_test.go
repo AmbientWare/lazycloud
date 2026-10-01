@@ -61,6 +61,7 @@ select ws.id, app.id, wl.id, rel.id from ws, app, wl, rel`, workspace, app, name
 	if _, err := f.pool.Exec(f.t.Context(), "update workloads set active_release_id = $1, next_version = 2 where id = $2", rel, wl); err != nil {
 		f.t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(f.t, f.pool)
 	return identity.WorkspaceID(ws), appID, wl, rel
 }
 

@@ -37,6 +37,11 @@ jobs:
           --health-cmd "pg_isready -U lazycloud -d postgres"
           --health-interval 1s
           --health-retries 30
+      # Billing's Stripe tests fail without it rather than skip.
+      stripe-mock:
+        image: stripe/stripe-mock:v0.205.0@sha256:ff32647993847be491e68533e2881c90434fa8d5df40246ee5f7d41253422081
+        ports:
+          - 12111:12111
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6

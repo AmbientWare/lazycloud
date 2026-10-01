@@ -39,6 +39,7 @@ select id from ws`, source).Scan(&ws)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	return fixture{
 		pool: pool, workspace: identity.WorkspaceID(ws), control: control.NewControl(pool),
 		schedules: schedules.NewSchedules(pool, execution.NewExecution(pool)),

@@ -114,46 +114,53 @@ func containerFrom(row ContainerViewRow) Container {
 // Planning starts a replacement when the release still has work.
 func (e *Execution) StopContainer(ctx context.Context, workspace identity.WorkspaceID, id ContainerID) (Container, error) {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		q := e.queries.WithTx(tx)
-		row, err := q.LockContainerInWorkspace(ctx, LockContainerInWorkspaceParams{ID: uuid.UUID(id), WorkspaceID: uuid.UUID(workspace)})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("lock container: %w", err)
-		}
-		switch ContainerState(row.State) {
-		case ContainerStopped:
-			return nil
-		case ContainerPending:
-			return e.containerExited(ctx, tx, id, ContainerExit{Reason: StopRequested, Message: "stopped by request"})
-		case ContainerStarting, ContainerReady, ContainerDraining:
-		}
-		if err := q.DrainContainer(ctx, row.ID); err != nil {
-			return fmt.Errorf("drain container: %w", err)
-		}
-		attempts, err := q.RunningAttemptsOnContainer(ctx, row.ID)
-		if err != nil {
-			return fmt.Errorf("list running attempts: %w", err)
-		}
-		for _, attempt := range attempts {
-			err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{
-				Attempt: AttemptID(attempt), State: AttemptLost,
-				Failure: &Failure{Kind: FailureLost, Message: "the container was stopped by request"},
-			})
-			if err != nil && !errors.Is(err, ErrStaleAttempt) {
-				return err
-			}
-		}
-		if row.HostID != nil {
-			if err := database.Notify(ctx, tx, database.ChannelHost, row.HostID.String()); err != nil {
-				return err
-			}
-		}
-		return database.Notify(ctx, tx, database.ChannelExecution, row.ReleaseID.String())
+		return e.stopContainer(ctx, tx, workspace, id, stopCause{exit: "stopped by request", lost: "the container was stopped by request"})
 	})
 	if err != nil {
 		return Container{}, fmt.Errorf("stop container %s: %w", id, err)
 	}
 	return e.GetContainer(ctx, workspace, id)
+}
+
+// stopCause is what a stop tells the container's exit and its attempts.
+type stopCause struct{ exit, lost string }
+
+func (e *Execution) stopContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, id ContainerID, cause stopCause) error {
+	q := e.queries.WithTx(tx)
+	row, err := q.LockContainerInWorkspace(ctx, LockContainerInWorkspaceParams{ID: uuid.UUID(id), WorkspaceID: uuid.UUID(workspace)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock container: %w", err)
+	}
+	switch ContainerState(row.State) {
+	case ContainerStopped:
+		return nil
+	case ContainerPending:
+		return e.containerExited(ctx, tx, id, ContainerExit{Reason: StopRequested, Message: cause.exit})
+	case ContainerStarting, ContainerReady, ContainerDraining:
+	}
+	if err := q.DrainContainer(ctx, row.ID); err != nil {
+		return fmt.Errorf("drain container: %w", err)
+	}
+	attempts, err := q.RunningAttemptsOnContainer(ctx, row.ID)
+	if err != nil {
+		return fmt.Errorf("list running attempts: %w", err)
+	}
+	for _, attempt := range attempts {
+		err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{
+			Attempt: AttemptID(attempt), State: AttemptLost,
+			Failure: &Failure{Kind: FailureLost, Message: cause.lost},
+		})
+		if err != nil && !errors.Is(err, ErrStaleAttempt) {
+			return err
+		}
+	}
+	if row.HostID != nil {
+		if err := database.Notify(ctx, tx, database.ChannelHost, row.HostID.String()); err != nil {
+			return err
+		}
+	}
+	return database.Notify(ctx, tx, database.ChannelExecution, row.ReleaseID.String())
 }

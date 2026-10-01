@@ -190,7 +190,7 @@ func (i *Identity) CompleteSignIn(ctx context.Context, cookie, state, code strin
 			if err != nil {
 				return err
 			}
-			if _, err := addWorkspace(ctx, q, name, user); err != nil {
+			if _, err := addWorkspace(ctx, tx, name, user); err != nil {
 				return err
 			}
 		} else if err != nil {
