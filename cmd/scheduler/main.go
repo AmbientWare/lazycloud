@@ -27,8 +27,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
-	"github.com/AmbientWare/lazycloud/internal/telemetry"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (

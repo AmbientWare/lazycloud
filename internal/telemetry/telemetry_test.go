@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	collector "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/telemetry"

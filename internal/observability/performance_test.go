@@ -1,6 +1,7 @@
 package observability_test
 
 import (
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestDeploymentPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 		t.Fatalf("second bucket %+v", b)
 	}
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
-	if _, err := f.obs.DeploymentPerformance(t.Context(), otherWS, f.workload, observability.RangeQuery{}); err != observability.ErrNotFound {
+	if _, err := f.obs.DeploymentPerformance(t.Context(), otherWS, f.workload, observability.RangeQuery{}); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("another workspace read the deployment: %v", err)
 	}
 	start, end := hour.Add(-48*time.Hour), hour

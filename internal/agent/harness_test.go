@@ -233,7 +233,7 @@ type env struct {
 	source   *hostproto.Source
 	// metricsInterval overrides the agent's sampling interval.
 	metricsInterval time.Duration
-	geesefs  string
+	geesefs         string
 }
 
 func newEnv(t *testing.T) *env {

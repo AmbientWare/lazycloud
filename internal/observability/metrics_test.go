@@ -1,6 +1,7 @@
 package observability_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func TestMetricSamplesComeOnlyFromTheAssignedHost(t *testing.T) {
 	if p := metrics.Points[1]; p.CpuMillicores != 1000 || p.MemoryRssBytes != 96<<20 || p.NetworkRecvBytes != 100 || p.GpuUtilizationPct != nil {
 		t.Fatalf("second point %+v", p)
 	}
-	if _, err := f.obs.ContainerMetrics(t.Context(), f.workspace, execution.ContainerID(uuid.New()), observability.MetricsQuery{}); err != observability.ErrNotFound {
+	if _, err := f.obs.ContainerMetrics(t.Context(), f.workspace, execution.ContainerID(uuid.New()), observability.MetricsQuery{}); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("unknown container: %v", err)
 	}
 }
@@ -173,7 +174,7 @@ func TestLifecycleCombinesTransitionsAndHostStages(t *testing.T) {
 		t.Fatalf("draining lifecycle %+v", lifecycle)
 	}
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
-	if _, err := f.obs.ContainerLifecycle(t.Context(), otherWS, container); err != observability.ErrNotFound {
+	if _, err := f.obs.ContainerLifecycle(t.Context(), otherWS, container); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("another workspace read the lifecycle: %v", err)
 	}
 }

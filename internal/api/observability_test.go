@@ -19,7 +19,8 @@ type sseEvent struct {
 }
 
 // openStream opens the workspace change stream; lastEventID may be empty.
-func (e *env) openStream(token, lastEventID string) (*http.Response, <-chan sseEvent) {
+// It returns the response head; the body closes when the test ends.
+func (e *env) openStream(token, lastEventID string) (streamHead, <-chan sseEvent) {
 	e.t.Helper()
 	req, err := http.NewRequestWithContext(e.t.Context(), "GET", e.url+"/v1/workspaces/acme/changes/stream", nil)
 	if err != nil {
@@ -34,10 +35,11 @@ func (e *env) openStream(token, lastEventID string) (*http.Response, <-chan sseE
 		e.t.Fatal(err)
 	}
 	e.t.Cleanup(func() { _ = resp.Body.Close() })
+	head := streamHead{status: resp.StatusCode, contentType: resp.Header.Get("Content-Type")}
 	events := make(chan sseEvent, 64)
 	if resp.StatusCode != http.StatusOK {
 		close(events)
-		return resp, events
+		return head, events
 	}
 	go func() {
 		defer close(events)
@@ -60,7 +62,12 @@ func (e *env) openStream(token, lastEventID string) (*http.Response, <-chan sseE
 			}
 		}
 	}()
-	return resp, events
+	return head, events
+}
+
+type streamHead struct {
+	status      int
+	contentType string
 }
 
 // nextChange returns the next change event that has a change of topic.
@@ -96,15 +103,15 @@ func (e *env) nextChange(events <-chan sseEvent, topic apitypes.ChangeTopic) (ss
 // Last-Event-ID.
 func TestChangeStreamOverHTTP(t *testing.T) {
 	e := newEnv(t)
-	if resp, _ := e.openStream(e.outsider, ""); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("outsider stream: %d", resp.StatusCode)
+	if head, _ := e.openStream(e.outsider, ""); head.status != http.StatusForbidden {
+		t.Fatalf("outsider stream: %d", head.status)
 	}
-	if resp, _ := e.openStream(e.owner, "not-an-id"); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("malformed Last-Event-ID: %d", resp.StatusCode)
+	if head, _ := e.openStream(e.owner, "not-an-id"); head.status != http.StatusBadRequest {
+		t.Fatalf("malformed Last-Event-ID: %d", head.status)
 	}
-	resp, events := e.openStream(e.owner, "")
-	if resp.Header.Get("Content-Type") != "text/event-stream" {
-		t.Fatalf("content type %q", resp.Header.Get("Content-Type"))
+	head, events := e.openStream(e.owner, "")
+	if head.contentType != "text/event-stream" {
+		t.Fatalf("content type %q", head.contentType)
 	}
 	e.deploy()
 	e.nextChange(events, apitypes.ChangeTopicDeployments)

@@ -31,9 +31,9 @@ func TestMeasureChangeFanout(t *testing.T) {
 	goroutines := runtime.NumGoroutine()
 	all := make([]<-chan sseEvent, streams)
 	for i := range all {
-		resp, events := e.openStream(e.owner, "")
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("stream %d: %d", i, resp.StatusCode)
+		head, events := e.openStream(e.owner, "")
+		if head.status != http.StatusOK {
+			t.Fatalf("stream %d: %d", i, head.status)
 		}
 		all[i] = events
 	}

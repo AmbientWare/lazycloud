@@ -87,7 +87,7 @@ func newEnv(t *testing.T) *env {
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
-		Images: images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
+		Images:        images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9"}, logger)
 	if err != nil {

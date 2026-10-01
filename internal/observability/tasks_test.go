@@ -1,6 +1,7 @@
 package observability_test
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -78,7 +79,7 @@ func TestTaskTimelineFollowsAttemptsAndRetries(t *testing.T) {
 	if done.Status != apitypes.TaskStatusSucceeded || done.Events[3].DueAt != nil || *done.Events[6].Status != apitypes.TaskStatusSucceeded {
 		t.Fatalf("finished timeline %+v", done)
 	}
-	if _, err := f.obs.TaskTimeline(t.Context(), f.workspace, execution.TaskID(uuid.New())); err != observability.ErrNotFound {
+	if _, err := f.obs.TaskTimeline(t.Context(), f.workspace, execution.TaskID(uuid.New())); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("unknown task: %v", err)
 	}
 }
@@ -126,7 +127,7 @@ func TestCallGraphReadsTheWholeGraphFromAnyTask(t *testing.T) {
 	if last.TaskId != uuid.UUID(grandchild[0].ID) || len(last.DependsOn) != 1 || last.DependsOn[0] != uuid.UUID(children[0].ID) {
 		t.Fatalf("grandchild node %+v", last)
 	}
-	if _, err := f.obs.TaskCallGraph(t.Context(), otherWS, root.ID); err != observability.ErrNotFound {
+	if _, err := f.obs.TaskCallGraph(t.Context(), otherWS, root.ID); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("another workspace read the graph: %v", err)
 	}
 }
