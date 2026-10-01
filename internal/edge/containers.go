@@ -199,6 +199,12 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 		cold := !any
 		check := cold && load.dueFailureCheck(time.Now())
 		changed := ws.changed
+		// A container the edge keeps off for a moment frees nothing when the
+		// moment passes, so the wait ends then too.
+		var avoided <-chan time.Time
+		if until := avoidedUntilLocked(ws); !until.IsZero() {
+			avoided = time.After(time.Until(until))
+		}
 		e.mu.Unlock()
 		if cold {
 			// No container of the release runs: publish now so planning
@@ -212,6 +218,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 		}
 		select {
 		case <-changed:
+		case <-avoided:
 		case <-timer.C:
 			return nil, errNoCapacity
 		case <-ctx.Done():
@@ -261,6 +268,19 @@ func (e *Edge) pickLocked(ws *workloadState, t target) (*slot, bool) {
 		return nil, false
 	}
 	return candidates(func(s *slot) bool { return s.version == newest })
+}
+
+// avoidedUntilLocked is when the last container the edge keeps off becomes
+// eligible again, or zero.
+func avoidedUntilLocked(ws *workloadState) time.Time {
+	now := time.Now()
+	var until time.Time
+	for _, s := range ws.containers {
+		if s.avoid.After(now) && s.avoid.After(until) {
+			until = s.avoid
+		}
+	}
+	return until
 }
 
 // capacityLocked is the requests a container admits, from its own
