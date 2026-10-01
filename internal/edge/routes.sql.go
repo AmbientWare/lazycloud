@@ -174,7 +174,7 @@ func (q *Queries) Routes(ctx context.Context) ([]RoutesRow, error) {
 }
 
 const workloadRoute = `-- name: WorkloadRoute :one
-select r.subdomain, r.hostname, coalesce(d.phase = 'ready', false)::bool as hostname_ready
+select w.kind, r.subdomain, r.hostname, coalesce(d.phase = 'ready', false)::bool as hostname_ready
 from http_routes r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
@@ -186,16 +186,22 @@ where r.workload_id = $1
 `
 
 type WorkloadRouteRow struct {
+	Kind          string
 	Subdomain     string
 	Hostname      *string
 	HostnameReady bool
 }
 
-// Where a deployed HTTP workload answers: its subdomain and, once ready, its
-// custom hostname.
+// Where a deployed HTTP workload answers: its kind, which the API path names,
+// its subdomain and, once ready, its custom hostname.
 func (q *Queries) WorkloadRoute(ctx context.Context, workloadID uuid.UUID) (WorkloadRouteRow, error) {
 	row := q.db.QueryRow(ctx, workloadRoute, workloadID)
 	var i WorkloadRouteRow
-	err := row.Scan(&i.Subdomain, &i.Hostname, &i.HostnameReady)
+	err := row.Scan(
+		&i.Kind,
+		&i.Subdomain,
+		&i.Hostname,
+		&i.HostnameReady,
+	)
 	return i, err
 }

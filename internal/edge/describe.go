@@ -51,7 +51,7 @@ func (e *Edge) HTTPUrls(ctx context.Context, workspace, app string, workload uui
 	if err != nil {
 		return apitypes.HttpUrls{}, fmt.Errorf("read workload route: %w", err)
 	}
-	path, kind := route(release.Spec), release.Spec.Kind
+	path, kind := route(release.Spec), apitypes.WorkloadKind(row.Kind)
 	out := apitypes.HttpUrls{
 		Url:               e.urls.Deployment(row.Subdomain, path),
 		VersionUrl:        e.urls.Version(row.Subdomain, *release.Version, path),

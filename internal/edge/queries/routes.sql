@@ -37,9 +37,9 @@ left join releases ar on ar.id = w.active_release_id
 where rel.id = @id;
 
 -- name: WorkloadRoute :one
--- Where a deployed HTTP workload answers: its subdomain and, once ready, its
--- custom hostname.
-select r.subdomain, r.hostname, coalesce(d.phase = 'ready', false)::bool as hostname_ready
+-- Where a deployed HTTP workload answers: its kind, which the API path names,
+-- its subdomain and, once ready, its custom hostname.
+select w.kind, r.subdomain, r.hostname, coalesce(d.phase = 'ready', false)::bool as hostname_ready
 from http_routes r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
