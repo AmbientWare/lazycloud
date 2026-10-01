@@ -125,7 +125,10 @@ func (sl *slot) invoke(p *runnerProcess, run *hostproto.RunAttempt) bool {
 	if err != nil {
 		return sl.finish(crashed(run.GetAttemptId(), "InvalidInput", err.Error()))
 	}
-	err = p.send(invoke, run.GetInput())
+	err = p.sendDependencies(run.GetDependencies())
+	if err == nil {
+		err = p.send(invoke, run.GetInput())
+	}
 	var frame runnerproto.Frame
 	if err == nil {
 		frame, err = p.read()
@@ -334,6 +337,22 @@ func (p *runnerProcess) send(header any, payload []byte) error {
 	return closedAsRunnerClosed(runnerproto.WriteFrame(p.conn, header, payload))
 }
 
+// sendDependencies sends one dependency frame per upstream result ahead of
+// the invoke that refers to them.
+func (p *runnerProcess) sendDependencies(deps []*hostproto.DependencyResult) error {
+	for _, dep := range deps {
+		encoding, err := runnerEncoding(dep.GetEncoding())
+		if err != nil {
+			return fmt.Errorf("dependency %s: %w", dep.GetTaskId(), err)
+		}
+		header := runnerproto.Dependency{Type: runnerproto.DependencyTypeDependency, TaskId: dep.GetTaskId(), Encoding: encoding}
+		if err := p.send(header, dep.GetData()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *runnerProcess) read() (runnerproto.Frame, error) {
 	frame, err := runnerproto.ReadFrame(p.reader)
 	return frame, closedAsRunnerClosed(err)
@@ -367,7 +386,7 @@ func (p *runnerProcess) load(cfg *hostproto.Configure, concurrency int) *hostpro
 			if err = frame.Decode(&failed); err == nil {
 				return runnerError(failed.Error)
 			}
-		case runnerproto.FrameLoad, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed, runnerproto.FrameOutput:
+		case runnerproto.FrameLoad, runnerproto.FrameDependency, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed, runnerproto.FrameOutput:
 			err = fmt.Errorf("unexpected %q frame while loading", frame.Type)
 		default:
 			err = fmt.Errorf("unknown %q frame while loading", frame.Type)
@@ -414,7 +433,7 @@ func attemptOutcome(attempt string, frame runnerproto.Frame) (*hostproto.Attempt
 				Exception: frame.Payload,
 			},
 		}}, nil
-	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke, runnerproto.FrameOutput:
+	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameDependency, runnerproto.FrameInvoke, runnerproto.FrameOutput:
 		return nil, fmt.Errorf("unexpected %q frame during an attempt", frame.Type)
 	}
 	return nil, fmt.Errorf("unknown %q frame during an attempt", frame.Type)

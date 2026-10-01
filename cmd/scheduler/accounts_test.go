@@ -65,7 +65,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	// queued one; its release keeps one warm container.
 	tasks, err := exec.Submit(ctx, execution.SubmitRequest{
 		Workspace: doomed.ID, App: "reports", Function: "summarize",
-		Inputs: []execution.Payload{{Encoding: execution.EncodingJSON, Data: []byte(`{"args":[],"kwargs":{}}`)}, {Encoding: execution.EncodingJSON, Data: []byte(`{"args":[],"kwargs":{}}`)}},
+		Inputs: []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args":[],"kwargs":{}}`)}}, {Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args":[],"kwargs":{}}`)}}},
 	})
 	if err != nil {
 		t.Fatal(err)

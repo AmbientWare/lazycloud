@@ -26,6 +26,10 @@ import (
 // ErrNotFound means the app or function does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrNothingToDeploy rejects a deploy that lists no function and does not
+// prune.
+var ErrNothingToDeploy = errors.New("a deploy needs at least one function unless it prunes")
+
 // InvalidSpecError rejects a function definition the schema cannot express.
 type InvalidSpecError struct {
 	Function string
@@ -138,33 +142,65 @@ type resolvedFunction struct {
 	source  storage.Digest
 }
 
+func resolveFunction(spec apitypes.FunctionSpec) (resolvedFunction, error) {
+	resolved, err := Resolve(spec)
+	if err != nil {
+		return resolvedFunction{}, err
+	}
+	encoded, digest, err := Digest(resolved)
+	if err != nil {
+		return resolvedFunction{}, err
+	}
+	source, err := storage.ParseDigest(spec.Source.Sha256)
+	if err != nil {
+		return resolvedFunction{}, &InvalidSpecError{Function: spec.Name, Reason: "source.sha256 is not a lowercase hex digest"}
+	}
+	return resolvedFunction{spec: resolved, encoded: encoded, digest: digest, source: source}, nil
+}
+
+// requireSources fails unless the workspace registered every function's
+// source archive.
+func requireSources(ctx context.Context, q *Queries, workspace identity.WorkspaceID, functions []resolvedFunction) error {
+	digests := make([][]byte, len(functions))
+	for n, f := range functions {
+		digests[n] = f.source[:]
+	}
+	registered, err := q.RegisteredSources(ctx, RegisteredSourcesParams{WorkspaceID: uuid.UUID(workspace), Digests: digests})
+	if err != nil {
+		return fmt.Errorf("read registered sources: %w", err)
+	}
+	have := map[string]bool{}
+	for _, d := range registered {
+		have[string(d)] = true
+	}
+	for _, f := range functions {
+		if !have[string(f.source[:])] {
+			return &SourceMissingError{Function: f.spec.Name, Sha256: f.source.String()}
+		}
+	}
+	return nil
+}
+
 // Deploy makes the app's functions match req in one transaction. Each
 // function whose resolved spec differs from its active release gets the next
 // version, which becomes active in the same commit; an identical spec keeps
-// the active release. With prune, unlisted functions stop.
+// the active release. With prune, unlisted deployed functions are deleted.
 func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, app string, req apitypes.DeploymentRequest) (apitypes.Deployment, error) {
+	if len(req.Functions) == 0 && (req.Prune == nil || !*req.Prune) {
+		return apitypes.Deployment{}, ErrNothingToDeploy
+	}
 	functions := make([]resolvedFunction, len(req.Functions))
 	seen := map[string]bool{}
-	digests := make([][]byte, 0, len(req.Functions))
 	for n, spec := range req.Functions {
 		if seen[spec.Name] {
 			return apitypes.Deployment{}, &InvalidSpecError{Function: spec.Name, Reason: "listed more than once"}
 		}
 		seen[spec.Name] = true
-		resolved, err := Resolve(spec)
+		f, err := resolveFunction(spec)
 		if err != nil {
 			return apitypes.Deployment{}, err
 		}
-		encoded, digest, err := Digest(resolved)
-		if err != nil {
-			return apitypes.Deployment{}, err
-		}
-		source, err := storage.ParseDigest(spec.Source.Sha256)
-		if err != nil {
-			return apitypes.Deployment{}, &InvalidSpecError{Function: spec.Name, Reason: "source.sha256 is not a lowercase hex digest"}
-		}
-		functions[n] = resolvedFunction{spec: resolved, encoded: encoded, digest: digest, source: source}
-		digests = append(digests, source[:])
+		functions[n] = f
 	}
 	// Workloads lock in name order, although the app row already
 	// serializes deploys of one app.
@@ -181,18 +217,8 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 		if err != nil {
 			return fmt.Errorf("upsert app: %w", err)
 		}
-		registered, err := q.RegisteredSources(ctx, RegisteredSourcesParams{WorkspaceID: uuid.UUID(workspace), Digests: digests})
-		if err != nil {
-			return fmt.Errorf("read registered sources: %w", err)
-		}
-		have := map[string]bool{}
-		for _, d := range registered {
-			have[string(d)] = true
-		}
-		for _, f := range functions {
-			if !have[string(f.source[:])] {
-				return &SourceMissingError{Function: f.spec.Name, Sha256: f.source.String()}
-			}
+		if err := requireSources(ctx, q, workspace, functions); err != nil {
+			return err
 		}
 
 		releases := make([]apitypes.Release, len(functions))
@@ -205,6 +231,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 		}
 
 		pruned := []string{}
+		removed := 0
 		if req.Prune != nil && *req.Prune {
 			keep := make([]string, len(functions))
 			for n, f := range functions {
@@ -216,20 +243,25 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 			}
 			for _, row := range rows {
 				pruned = append(pruned, row.Name)
-				if row.ActiveReleaseID != nil {
-					if err := database.Notify(ctx, tx, database.ChannelExecution, row.ActiveReleaseID.String()); err != nil {
-						return err
-					}
-				}
+				removed += int(row.Versions)
 			}
 			sort.Strings(pruned)
+			if len(rows) > 0 {
+				// Planning retires the deleted workloads' releases.
+				if err := database.Notify(ctx, tx, database.ChannelExecution, appRow.ID.String()); err != nil {
+					return err
+				}
+			}
+		}
+		workloads, err := q.CountDeployedWorkloads(ctx, appRow.ID)
+		if err != nil {
+			return fmt.Errorf("count workloads: %w", err)
 		}
 		out = apitypes.Deployment{
-			App: apitypes.App{
-				Id: appRow.ID, Name: appRow.Name, State: apitypes.AppState(appRow.State), CreatedAt: appRow.CreatedAt,
-			},
-			Releases: releases,
-			Pruned:   pruned,
+			App:             appOut(appRow.ID, appRow.Name, appRow.State, workloads, appRow.CreatedAt),
+			Releases:        releases,
+			Pruned:          pruned,
+			RemovedVersions: removed,
 		}
 		return nil
 	})
@@ -261,12 +293,12 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, app
 		}
 		if bytes.Equal(active.SpecDigest, f.digest) {
 			return apitypes.Release{
-				Id: active.ID, Function: f.spec.Name, Version: int(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
+				Id: active.ID, Function: f.spec.Name, Version: versionOf(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
 			}, nil
 		}
 	}
 	inserted, err := q.InsertRelease(ctx, InsertReleaseParams{
-		WorkloadID: workload.ID, Version: workload.NextVersion,
+		WorkloadID: workload.ID, Version: &workload.NextVersion,
 		Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:],
 	})
 	if err != nil {
@@ -279,8 +311,17 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, app
 		return apitypes.Release{}, err
 	}
 	return apitypes.Release{
-		Id: inserted.ID, Function: f.spec.Name, Version: int(inserted.Version), CreatedAt: inserted.CreatedAt, Spec: f.spec,
+		Id: inserted.ID, Function: f.spec.Name, Version: versionOf(inserted.Version), CreatedAt: inserted.CreatedAt, Spec: f.spec,
 	}, nil
+}
+
+// versionOf is a release's deployed version; working-tree releases have none.
+func versionOf(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
 }
 
 // GetFunction returns a function and its active release.
@@ -301,7 +342,7 @@ func (c *Control) GetFunction(ctx context.Context, workspace identity.WorkspaceI
 		App:   row.AppName,
 		State: apitypes.FunctionState(row.DesiredState),
 		ActiveRelease: apitypes.Release{
-			Id: row.ID, Function: row.Name, Version: int(row.Version), CreatedAt: row.CreatedAt, Spec: spec,
+			Id: row.ID, Function: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec,
 		},
 	}, nil
 }

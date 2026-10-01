@@ -60,7 +60,7 @@ insert into workspace_images (workspace_id, image_digest) select ws.id, img.dige
 	if err := e.pool.QueryRow(ctx, "select spec -> 'image' ->> 'reference' from releases where id = $1", v1.Id).Scan(&stored); err != nil || stored != first {
 		t.Fatalf("a published rebuild leaves the release alone: %q %v", stored, err)
 	}
-	if v2 := deploy(); v2.Version != 2 || *v2.Spec.Image.Reference != second {
+	if v2 := deploy(); v2.Version == nil || *v2.Version != 2 || *v2.Spec.Image.Reference != second {
 		t.Fatalf("redeploying picks up the new image as a new release: %+v", v2)
 	}
 }

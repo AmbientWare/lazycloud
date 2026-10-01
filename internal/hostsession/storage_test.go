@@ -146,7 +146,7 @@ func TestContainerStorageCallsActForTheirTask(t *testing.T) {
 	}
 	tasks, err := h.execution.Submit(t.Context(), execution.SubmitRequest{
 		Workspace: ws, App: "reports", Function: "summarize",
-		Inputs: []execution.Payload{{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}},
+		Inputs: []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}}},
 	})
 	if err != nil {
 		t.Fatal(err)

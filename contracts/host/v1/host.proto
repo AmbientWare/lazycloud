@@ -333,6 +333,16 @@ message ClaimedTask {
   string root_task_id = 10;
   string parent_task_id = 11;
   int32 max_attempts = 12;
+  // The results of the upstream tasks the input refers to.
+  repeated DependencyResult dependencies = 60;
+}
+
+// DependencyResult is an upstream task's result that a dependent's input
+// refers to by task id.
+message DependencyResult {
+  string task_id = 1;
+  PayloadEncoding encoding = 2;
+  bytes data = 3;
 }
 
 message CompleteTaskRequest {
