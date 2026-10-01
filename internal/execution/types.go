@@ -101,6 +101,9 @@ const (
 	FailureLost        FailureKind = "lost"
 	FailureStartFailed FailureKind = "start_failed"
 	FailureSystem      FailureKind = "system"
+	// FailureDependencyFailed: an upstream task the input refers to did not
+	// succeed, or the upstream results were too large to deliver.
+	FailureDependencyFailed FailureKind = "dependency_failed"
 )
 
 // Retryable reports whether another attempt may follow a failure of kind.
@@ -108,7 +111,7 @@ func (k FailureKind) Retryable() bool {
 	switch k {
 	case FailureUserError, FailureTimeout, FailureLost:
 		return true
-	case FailureLoadError, FailureStartFailed, FailureSystem:
+	case FailureLoadError, FailureStartFailed, FailureSystem, FailureDependencyFailed:
 		return false
 	}
 	return false

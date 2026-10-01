@@ -90,6 +90,7 @@ message RunAttempt {
   int32 max_attempts = 11;
   string root_task_id = 12;
   string parent_task_id = 13;
+  repeated DependencyResult dependencies = 60;
 }
 
 // CancelSlot kills the process running the attempt and starts a replacement.

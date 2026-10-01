@@ -33,15 +33,22 @@ with candidate as (
     select t.id, t.attempt_count, t.available_at
     from tasks t
     where t.release_id = $1 and t.status = 'queued' and t.available_at <= now()
+      and t.unmet_dependencies = 0
     order by t.available_at, t.id
     limit $2
     for update skip locked
 ), sized as (
     select c.id, c.attempt_count,
            row_number() over w as turn,
-           sum(octet_length(i.data)) over w as total_bytes
+           sum(octet_length(i.data) + coalesce(dep.bytes, 0)) over w as total_bytes
     from candidate c
     join task_inputs i on i.task_id = c.id
+    cross join lateral (
+        select sum(octet_length(r.data)) as bytes
+        from task_dependencies d
+        join task_results r on r.task_id = d.depends_on
+        where d.task_id = c.id
+    ) dep
     window w as (order by c.available_at, c.id)
 ), picked as (
     select id, attempt_count from sized
@@ -174,7 +181,7 @@ func (q *Queries) LockContainerForClaim(ctx context.Context, id uuid.UUID) (Lock
 
 const nextQueuedAt = `-- name: NextQueuedAt :one
 select available_at from tasks
-where release_id = $1 and status = 'queued'
+where release_id = $1 and status = 'queued' and unmet_dependencies = 0
 order by available_at
 limit 1
 `

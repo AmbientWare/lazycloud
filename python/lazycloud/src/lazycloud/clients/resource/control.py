@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
-from urllib.parse import urlencode
 
 from pydantic import BaseModel, JsonValue
-from shared.containers import ContainerStatus
 from shared.http.compute import (
-    ContainerResponse,
-    ContainerWithAppPageResponse,
     MachineListResponse,
     UnitListResponse,
     WorkerListResponse,
@@ -22,7 +17,7 @@ from shared.http.errors import HttpResponseDecodeError
 from shared.http_transport import HttpChannel
 from shared.urls import url_path_segment
 
-from lazycloud.control import workspace_path, workspace_query
+from lazycloud.control import workspace_path
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -77,37 +72,6 @@ class ResourceControlClient:
             DevboxResponse,
             self.channel.get(
                 self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}/devbox")
-            ),
-        )
-
-    def list_containers(
-        self,
-        *,
-        stub_ids: Sequence[str] = (),
-        statuses: Sequence[ContainerStatus] = (),
-        app_id: str | None = None,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> ContainerWithAppPageResponse:
-        query: list[tuple[str, str | int]] = [
-            *workspace_query(self.workspace).items(),
-            ("limit", limit),
-            *(("stub_id", stub_id) for stub_id in stub_ids),
-            *(("status", status.value) for status in statuses),
-        ]
-        if app_id is not None:
-            query.append(("app_id", app_id))
-        if cursor is not None:
-            query.append(("cursor", cursor))
-        return _validate_response(
-            ContainerWithAppPageResponse, self.channel.get(f"/api/v1/containers?{urlencode(query)}")
-        )
-
-    def stop_container(self, container_id: str) -> ContainerResponse:
-        return _validate_response(
-            ContainerResponse,
-            self.channel.post(
-                self._path(f"/api/v1/containers/{url_path_segment(container_id)}/stop")
             ),
         )
 

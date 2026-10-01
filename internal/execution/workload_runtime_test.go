@@ -76,14 +76,14 @@ func TestSpawnedTasksRecordTheirLineage(t *testing.T) {
 	}
 	children, err := e.Submit(ctx, SubmitRequest{
 		Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: jsonInputs(2),
-		Parent: &root.ID, Root: &root.ID,
+		Parent: &root.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	grandchild, err := e.Submit(ctx, SubmitRequest{
 		Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: jsonInputs(1),
-		Parent: &children[0].ID, Root: &root.ID,
+		Parent: &children[0].ID,
 	})
 	if err != nil {
 		t.Fatal(err)

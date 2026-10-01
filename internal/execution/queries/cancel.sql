@@ -1,7 +1,8 @@
 -- name: LockTaskForCancel :one
+-- Without a workspace the caller already knows the task, as planning does.
 select id, status, current_attempt_id, release_id
 from tasks
-where id = @id and workspace_id = @workspace_id
+where id = @id and (sqlc.narg(workspace_id)::uuid is null or workspace_id = sqlc.narg(workspace_id)::uuid)
 for update;
 
 -- name: CancelTask :exec

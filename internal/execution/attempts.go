@@ -85,6 +85,9 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 		if err := recordCallbacks(ctx, q, CallbackSucceeded, []uuid.UUID{task.ID}, nil); err != nil {
 			return err
 		}
+		if err := e.resolveDependents(ctx, tx, []uuid.UUID{task.ID}, upstreamSucceeded); err != nil {
+			return err
+		}
 	case AttemptFailed, AttemptTimedOut, AttemptLost:
 		if outcome.Failure == nil {
 			return fmt.Errorf("%s attempt without a failure", outcome.State)
@@ -104,8 +107,13 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 			if err := database.Notify(ctx, tx, database.ChannelClaim, task.ReleaseID.String()); err != nil {
 				return err
 			}
-		} else if err := e.failTask(ctx, q, task.ID, *outcome.Failure); err != nil {
-			return err
+		} else {
+			if err := e.failTask(ctx, q, task.ID, *outcome.Failure); err != nil {
+				return err
+			}
+			if err := e.resolveDependents(ctx, tx, []uuid.UUID{task.ID}, upstreamUnsuccessful); err != nil {
+				return err
+			}
 		}
 	case AttemptCancelled:
 		// Cancellation finishes the task itself before cancelling the attempt.

@@ -143,8 +143,13 @@ func (sp *sharedProcess) call(run *hostproto.RunAttempt) (*hostproto.AttemptFini
 		delete(sp.waiting, attempt)
 		sp.mu.Unlock()
 	}()
+	// Dependency frames apply to the next invoke, so they go out with it
+	// under the write lock.
 	sp.writeMu.Lock()
-	err = sp.p.send(invoke, run.GetInput())
+	err = sp.p.sendDependencies(run.GetDependencies())
+	if err == nil {
+		err = sp.p.send(invoke, run.GetInput())
+	}
 	sp.writeMu.Unlock()
 	if err == nil {
 		select {
@@ -229,7 +234,7 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 			}
 			flushHeld(header.AttemptID)
 			reply <- frame
-		case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke:
+		case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameDependency, runnerproto.FrameInvoke:
 			sp.readErr = fmt.Errorf("unexpected %q frame from a shared runner", frame.Type)
 			return
 		default:

@@ -40,6 +40,12 @@ class LoadFailed(BaseModel):
     error: RunnerError
 
 
+class Dependency(BaseModel):
+    type: Literal["dependency"]
+    task_id: str
+    encoding: Encoding
+
+
 class Invoke(BaseModel):
     type: Literal["invoke"]
     task_id: str

@@ -16,7 +16,7 @@ select a.id, a.container_id, a.state
 from containers c
 join attempts a on a.container_id = c.id
 where c.host_id = $1 and c.state in ('ready', 'draining')
-  and a.state in ('cancelled', 'timed_out')
+  and a.state in ('cancelled', 'timed_out', 'lost')
   and a.finished_at > now() - make_interval(secs => $2::float8)
 order by a.id
 `
@@ -32,7 +32,9 @@ type EndedAttemptsOnHostRow struct {
 	State       string
 }
 
-// Attempts that ended without their slot knowing: the host kills them.
+// Attempts that ended without their slot knowing: the host kills them. A
+// lost attempt on a live container was stopped by request or omitted from a
+// report, and its slot must not keep running it.
 func (q *Queries) EndedAttemptsOnHost(ctx context.Context, arg EndedAttemptsOnHostParams) ([]EndedAttemptsOnHostRow, error) {
 	rows, err := q.db.Query(ctx, endedAttemptsOnHost, arg.HostID, arg.WithinSeconds)
 	if err != nil {

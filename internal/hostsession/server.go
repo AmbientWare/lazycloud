@@ -234,6 +234,11 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 		if c.Parent != nil {
 			out.Tasks[n].ParentTaskId = c.Parent.String()
 		}
+		for _, dep := range c.Dependencies {
+			out.Tasks[n].Dependencies = append(out.Tasks[n].Dependencies, &hostproto.DependencyResult{
+				TaskId: dep.Task.String(), Encoding: encodingOut(dep.Result.Encoding), Data: dep.Result.Data,
+			})
+		}
 	}
 	return out, nil
 }

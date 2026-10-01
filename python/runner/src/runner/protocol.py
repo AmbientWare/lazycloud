@@ -9,6 +9,7 @@ protocol errors are reported on stderr only when the runner is about to exit.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import pickle
@@ -33,6 +34,7 @@ from runner.hooks import hooks_from_frame, run_startup_hooks, run_task_hooks, st
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
+    Dependency,
     Encoding,
     Failed,
     Invoke,
@@ -51,9 +53,13 @@ MAX_PAYLOAD_BYTES = 64 << 20
 PROTOCOL_ERROR_EXIT = 2
 LOAD_FAILED_EXIT = 1
 
-_INBOUND: TypeAdapter[Load | Invoke] = TypeAdapter(
-    Annotated[Load | Invoke, Field(discriminator="type")]
+_INBOUND: TypeAdapter[Load | Dependency | Invoke] = TypeAdapter(
+    Annotated[Load | Dependency | Invoke, Field(discriminator="type")]
 )
+_FUNCTION_CALL = "function_call"
+
+# Upstream results by task id, for the invoke that follows them.
+Dependencies = dict[str, tuple[Encoding, bytearray]]
 
 
 class ProtocolError(Exception):
@@ -68,7 +74,7 @@ class Connection:
         # Attempt threads send concurrently; a frame is never interleaved.
         self._send_lock = threading.Lock()
 
-    def receive(self) -> tuple[Load | Invoke, bytearray] | None:
+    def receive(self) -> tuple[Load | Dependency | Invoke, bytearray] | None:
         """Read one frame, or None when the supervisor closed between frames."""
 
         prefix = self._read_prefix()
@@ -144,11 +150,16 @@ def serve(connection: Connection) -> int:
     attempt = _Attempts(handler, hooks, load.handler)
     if load.concurrency > 1:
         return _serve_threads(connection, attempt, load.concurrency)
+    dependencies: Dependencies = {}
     while (frame := connection.receive()) is not None:
         invoke, payload = frame
+        if isinstance(invoke, Dependency):
+            dependencies[invoke.task_id] = (invoke.encoding, payload)
+            continue
         if not isinstance(invoke, Invoke):
             raise ProtocolError("load after the handler loaded")
-        reply, result = attempt.run(invoke, payload)
+        reply, result = attempt.run(invoke, payload, dependencies)
+        dependencies = {}
         _flush_output()
         connection.send(reply, result)
     return 0
@@ -163,26 +174,33 @@ def _serve_threads(connection: Connection, attempt: _Attempts, concurrency: int)
         for chunk in routed_output.utf8_chunks(data):
             connection.send(Output(type="output", attempt_id=attempt_id, stream=stream), chunk)
 
-    def run(invoke: Invoke, payload: bytearray) -> None:
+    def run(invoke: Invoke, payload: bytearray, dependencies: Dependencies) -> None:
         with routed_output.attempt_output(invoke.attempt_id, send_output):
-            reply, result = attempt.run(invoke, payload)
+            reply, result = attempt.run(invoke, payload, dependencies)
         connection.send(reply, result)
 
     running = threading.BoundedSemaphore(concurrency)
+    dependencies: Dependencies = {}
     while (frame := connection.receive()) is not None:
         invoke, payload = frame
+        if isinstance(invoke, Dependency):
+            dependencies[invoke.task_id] = (invoke.encoding, payload)
+            continue
         if not isinstance(invoke, Invoke):
             raise ProtocolError("load after the handler loaded")
         if not running.acquire(blocking=False):
             raise ProtocolError(f"more than {concurrency} attempts at once")
 
-        def worker(invoke: Invoke = invoke, payload: bytearray = payload) -> None:
+        def worker(
+            invoke: Invoke = invoke, payload: bytearray = payload, deps: Dependencies = dependencies
+        ) -> None:
             try:
-                run(invoke, payload)
+                run(invoke, payload, deps)
             finally:
                 running.release()
 
         threading.Thread(target=worker, name=f"attempt-{invoke.attempt_id}", daemon=True).start()
+        dependencies = {}
     return 0
 
 
@@ -194,7 +212,9 @@ class _Attempts:
         self._hooks = hooks
         self._startup = startup_context(reference)
 
-    def run(self, invoke: Invoke, payload: bytearray) -> tuple[Succeeded | Failed, bytes]:
+    def run(
+        self, invoke: Invoke, payload: bytearray, dependencies: Dependencies
+    ) -> tuple[Succeeded | Failed, bytes]:
         """Run the handler between its hooks: on_running; then on_success or
         on_error followed by on_retry or on_failure; then on_finish. Hooks run
         before the outcome is sent, so their output is the attempt's and the
@@ -219,10 +239,10 @@ class _Attempts:
         with task_context(invoke.task_id, root):
             run_task_hooks(self._hooks, LifecycleHookName.Running, context)
             try:
-                args, kwargs = _decode_arguments(encoding, payload)
+                args, kwargs = _decode_arguments(encoding, payload, dependencies)
                 result = invoke_handler(self._handler, args, kwargs, encoding=encoding)
                 encoded = _encode_result(result, encoding)
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, ProtocolError):
                 raise
             except BaseException as exc:
                 self._failed(context, exc, time.monotonic() - started)
@@ -272,16 +292,43 @@ def _message(exc: BaseException) -> str:
 
 
 def _decode_arguments(
-    encoding: Encoding, payload: bytearray
+    encoding: Encoding,
+    payload: bytearray,
+    dependencies: Dependencies,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     try:
         if encoding is Encoding.json:
             arguments = Arguments.model_validate_json(payload)
         else:
-            arguments = Arguments.model_validate(pickle.loads(payload))
+            unpickler = _DependencyUnpickler(io.BytesIO(payload), dependencies)
+            arguments = Arguments.model_validate(unpickler.load())
+    except ProtocolError:
+        raise
     except Exception as exc:
         raise InvalidInputError(f"invalid {encoding.value} arguments: {exc}") from exc
     return tuple(arguments.args), arguments.kwargs
+
+
+class _DependencyUnpickler(pickle.Unpickler):
+    """Resolves `("function_call", task_id)` to the upstream task's decoded result."""
+
+    def __init__(self, file: io.BytesIO, dependencies: Dependencies) -> None:
+        super().__init__(file)
+        self._dependencies = dependencies
+
+    def persistent_load(self, pid: Any) -> Any:
+        match pid:
+            case (str(kind), str(task_id)) if kind == _FUNCTION_CALL:
+                pass
+            case _:
+                raise ProtocolError(f"unsupported persistent id {pid!r}")
+        try:
+            encoding, payload = self._dependencies[task_id]
+        except KeyError:
+            raise ProtocolError(f"input refers to task {task_id} without its dependency") from None
+        if encoding is Encoding.json:
+            return json.loads(payload)
+        return pickle.loads(payload)
 
 
 def _encode_result(result: Any, encoding: Encoding) -> bytes:

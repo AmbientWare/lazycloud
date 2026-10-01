@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -107,7 +109,7 @@ func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
 	got := make(chan []LogEntry, 16)
 	done := make(chan error, 1)
 	go func() {
-		done <- e.StreamLogs(t.Context(), l, f.workspace, tasks[0].ID, 0, true, time.Hour, func(batch []LogEntry) error {
+		done <- e.StreamLogs(t.Context(), l, f.workspace, LogSource{Kind: LogsOfTask, ID: uuid.UUID(tasks[0].ID)}, LogQuery{Follow: true, Heartbeat: time.Hour}, func(batch []LogEntry) error {
 			got <- batch
 			return nil
 		})
@@ -166,7 +168,7 @@ func TestFollowLogsHeartbeatsWhileIdle(t *testing.T) {
 	beats := make(chan int, 16)
 	done := make(chan error, 1)
 	go func() {
-		done <- e.StreamLogs(ctx, l, f.workspace, tasks[0].ID, 0, true, 50*time.Millisecond, func(batch []LogEntry) error {
+		done <- e.StreamLogs(ctx, l, f.workspace, LogSource{Kind: LogsOfTask, ID: uuid.UUID(tasks[0].ID)}, LogQuery{Follow: true, Heartbeat: 50 * time.Millisecond}, func(batch []LogEntry) error {
 			select {
 			case beats <- len(batch):
 			default:

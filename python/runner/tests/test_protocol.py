@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import pickle
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -16,7 +18,7 @@ import dataclasses
 import sys
 
 from pydantic import BaseModel
-from shared.task_context import current_task_id
+from shared.task_context import current_root_task_id, current_task_id
 
 
 class Point(BaseModel):
@@ -57,6 +59,10 @@ async def task_id_later():
     return current_task_id()
 
 
+def lineage():
+    return [current_task_id(), current_root_task_id()]
+
+
 NOT_CALLABLE = 3
 """
 
@@ -88,6 +94,23 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _json(args: list[object], kwargs: dict[str, object] | None = None) -> bytes:
     return json.dumps({"args": args, "kwargs": kwargs or {}}).encode()
+
+
+class _Upstream:
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+
+
+def _with_upstream(value: object) -> bytes:
+    """Cloudpickle arguments the way the SDK refers to a pending call."""
+
+    stream = io.BytesIO()
+    pickler = cloudpickle.CloudPickler(stream)
+    pickler.persistent_id = lambda item: (  # type: ignore[method-assign]
+        ("function_call", item.task_id) if isinstance(item, _Upstream) else None
+    )
+    pickle.Pickler.dump(pickler, value)
+    return stream.getvalue()
 
 
 def test_json_invocation_coerces_arguments_and_keeps_output_off_the_socket(
@@ -173,6 +196,54 @@ def test_async_handler_sees_its_task_id(workdir: Path, start_runner: StartRunner
     assert (second["type"], json.loads(second_payload)) == ("succeeded", "task-8")
 
 
+def test_handler_sees_its_root_task(workdir: Path, start_runner: StartRunner) -> None:
+    runner = start_runner(workdir)
+    runner.load("handlers:lineage")
+
+    _, spawned = runner.invoke(_json([]), task_id="task-child", root_task_id="task-root")
+    _, root = runner.invoke(_json([]), task_id="task-root")
+
+    assert json.loads(spawned) == ["task-child", "task-root"]
+    assert json.loads(root) == ["task-root", "task-root"]
+
+
+def test_dependency_frames_resolve_upstream_results_for_the_next_invoke(
+    workdir: Path, start_runner: StartRunner
+) -> None:
+    runner = start_runner(workdir)
+    runner.load("handlers:echo")
+    arguments: dict[str, object] = {
+        "args": [[_Upstream("up-1"), {"nested": _Upstream("up-2")}]],
+        "kwargs": {},
+    }
+
+    header, payload = runner.invoke(
+        _with_upstream(arguments),
+        encoding="cloudpickle",
+        dependencies={
+            "up-1": ("json", b'{"total": 3}'),
+            "up-2": ("cloudpickle", cloudpickle_bytes({1, 2})),
+        },
+    )
+
+    assert header["type"] == "succeeded", header
+    assert cloudpickle.loads(payload) == [{"total": 3}, {"nested": {1, 2}}]
+
+    runner.send(
+        {
+            "type": "invoke",
+            "task_id": "task-2",
+            "root_task_id": "task-2",
+            "attempt_id": "task-2-attempt",
+            "input_encoding": "cloudpickle",
+        },
+        _with_upstream(arguments),
+    )
+    code, _, stderr = runner.close()
+    assert code == 2
+    assert "without its dependency" in stderr
+
+
 def test_sdk_function_runs_with_its_task_id(workdir: Path, start_runner: StartRunner) -> None:
     runner = start_runner(workdir)
     assert runner.load("sdk_handlers:whoami") == {"type": "loaded"}
@@ -211,7 +282,8 @@ def test_load_failure_is_reported_before_exit(
     "frame",
     [
         (1 << 20) + 1,
-        b'{"type": "invoke", "task_id": "t", "attempt_id": "a", "input_encoding": "json"}',
+        b'{"type": "invoke", "task_id": "t", "root_task_id": "t", "attempt_id": "a",'
+        b' "input_encoding": "json"}',
         b'{"type": "shutdown"}',
     ],
     ids=["oversized-header", "invoke-before-load", "unknown-type"],

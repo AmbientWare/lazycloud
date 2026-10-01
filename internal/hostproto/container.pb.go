@@ -617,6 +617,7 @@ type RunAttempt struct {
 	MaxAttempts   int32                  `protobuf:"varint,11,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
 	RootTaskId    string                 `protobuf:"bytes,12,opt,name=root_task_id,json=rootTaskId,proto3" json:"root_task_id,omitempty"`
 	ParentTaskId  string                 `protobuf:"bytes,13,opt,name=parent_task_id,json=parentTaskId,proto3" json:"parent_task_id,omitempty"`
+	Dependencies  []*DependencyResult    `protobuf:"bytes,60,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -712,6 +713,13 @@ func (x *RunAttempt) GetParentTaskId() string {
 		return x.ParentTaskId
 	}
 	return ""
+}
+
+func (x *RunAttempt) GetDependencies() []*DependencyResult {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
 }
 
 // CancelSlot kills the process running the attempt and starts a replacement.
@@ -843,7 +851,7 @@ const file_host_v1_container_proto_rawDesc = "" +
 	" \x01(\bR\tinProcess\x127\n" +
 	"\x05hooks\x18\v \x01(\v2!.lazycloud.host.v1.LifecycleHooksR\x05hooks\x12\x1d\n" +
 	"\n" +
-	"secret_env\x18\f \x03(\tR\tsecretEnv\"\xef\x02\n" +
+	"secret_env\x18\f \x03(\tR\tsecretEnv\"\xb8\x03\n" +
 	"\n" +
 	"RunAttempt\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
@@ -857,7 +865,8 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"\fmax_attempts\x18\v \x01(\x05R\vmaxAttempts\x12 \n" +
 	"\froot_task_id\x18\f \x01(\tR\n" +
 	"rootTaskId\x12$\n" +
-	"\x0eparent_task_id\x18\r \x01(\tR\fparentTaskId\"+\n" +
+	"\x0eparent_task_id\x18\r \x01(\tR\fparentTaskId\x12G\n" +
+	"\fdependencies\x18< \x03(\v2#.lazycloud.host.v1.DependencyResultR\fdependencies\"+\n" +
 	"\n" +
 	"CancelSlot\x12\x1d\n" +
 	"\n" +
@@ -898,8 +907,9 @@ var file_host_v1_container_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 	(*LifecycleHooks)(nil),        // 15: lazycloud.host.v1.LifecycleHooks
 	(PayloadEncoding)(0),          // 16: lazycloud.host.v1.PayloadEncoding
-	(*APIRequest)(nil),            // 17: lazycloud.host.v1.APIRequest
-	(*APIResponse)(nil),           // 18: lazycloud.host.v1.APIResponse
+	(*DependencyResult)(nil),      // 17: lazycloud.host.v1.DependencyResult
+	(*APIRequest)(nil),            // 18: lazycloud.host.v1.APIRequest
+	(*APIResponse)(nil),           // 19: lazycloud.host.v1.APIResponse
 }
 var file_host_v1_container_proto_depIdxs = []int32{
 	1,  // 0: lazycloud.host.v1.SupervisorMessage.ready:type_name -> lazycloud.host.v1.SlotsReady
@@ -918,15 +928,16 @@ var file_host_v1_container_proto_depIdxs = []int32{
 	15, // 13: lazycloud.host.v1.Configure.hooks:type_name -> lazycloud.host.v1.LifecycleHooks
 	16, // 14: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
 	14, // 15: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
-	0,  // 16: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
-	17, // 17: lazycloud.host.v1.ContainerLink.API:input_type -> lazycloud.host.v1.APIRequest
-	5,  // 18: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
-	18, // 19: lazycloud.host.v1.ContainerLink.API:output_type -> lazycloud.host.v1.APIResponse
-	18, // [18:20] is the sub-list for method output_type
-	16, // [16:18] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	17, // 16: lazycloud.host.v1.RunAttempt.dependencies:type_name -> lazycloud.host.v1.DependencyResult
+	0,  // 17: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
+	18, // 18: lazycloud.host.v1.ContainerLink.API:input_type -> lazycloud.host.v1.APIRequest
+	5,  // 19: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
+	19, // 20: lazycloud.host.v1.ContainerLink.API:output_type -> lazycloud.host.v1.APIResponse
+	19, // [19:21] is the sub-list for method output_type
+	17, // [17:19] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_container_proto_init() }

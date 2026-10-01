@@ -184,7 +184,7 @@ func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
 			out.Category = &c
 		}
 	}
-	compute := apitypes.ComputeRuntime
+	compute := apitypes.BilledDimensionComputeRuntime
 	out.Components = []apitypes.UsageCostComponent{
 		{Dimension: compute, Component: apitypes.ContainerTime, Quantity: float32(r.Seconds), CostNanos: r.ContainerNanos},
 		{Dimension: compute, Component: apitypes.Cpu, Quantity: float32(r.CoreSeconds), CostNanos: r.CpuNanos},
@@ -235,7 +235,7 @@ func (b *Billing) CostSeries(ctx context.Context, user uuid.UUID, start, end tim
 		interval := apitypes.UsageCostInterval{StartedAt: from, EndedAt: minTime(from.Add(width), end), Dimensions: []apitypes.UsageCostDimension{}}
 		if cost, ok := costs[int32(n)]; ok { //nolint:gosec // Bounded by maxCostIntervals.
 			interval.CostNanos = cost
-			interval.Dimensions = append(interval.Dimensions, apitypes.UsageCostDimension{Dimension: apitypes.ComputeRuntime, CostNanos: cost})
+			interval.Dimensions = append(interval.Dimensions, apitypes.UsageCostDimension{Dimension: apitypes.BilledDimensionComputeRuntime, CostNanos: cost})
 		}
 		out.CostNanos += interval.CostNanos
 		out.Intervals[n] = interval

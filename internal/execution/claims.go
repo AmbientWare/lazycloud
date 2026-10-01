@@ -35,6 +35,15 @@ type ClaimedTask struct {
 	// task spawned it; Parent is set when one did.
 	Root   TaskID
 	Parent *TaskID
+	// Dependencies are the results of the upstream tasks the input refers
+	// to.
+	Dependencies []DependencyResult
+}
+
+// DependencyResult is an upstream task's result.
+type DependencyResult struct {
+	Task   TaskID
+	Result Payload
 }
 
 // ClaimTasks starts up to max attempts on container, bounded by its free
@@ -136,6 +145,8 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 			return nil
 		}
 		claimed = make([]ClaimedTask, len(rows))
+		ids := make([]uuid.UUID, len(rows))
+		index := make(map[uuid.UUID]int, len(rows))
 		for n, row := range rows {
 			claimed[n] = ClaimedTask{
 				Task: TaskID(row.TaskID), Attempt: AttemptID(row.AttemptID), Number: int(row.Number),
@@ -143,6 +154,18 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
 				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
 			}
+			ids[n] = row.TaskID
+			index[row.TaskID] = n
+		}
+		deps, err := q.DependencyResults(ctx, ids)
+		if err != nil {
+			return fmt.Errorf("read dependency results: %w", err)
+		}
+		for _, dep := range deps {
+			task := &claimed[index[dep.TaskID]]
+			task.Dependencies = append(task.Dependencies, DependencyResult{
+				Task: TaskID(dep.DependsOn), Result: Payload{Encoding: Encoding(dep.Encoding), Data: dep.Data},
+			})
 		}
 		return nil
 	})
