@@ -13,7 +13,7 @@ import (
 )
 
 const assignedContainerRelease = `-- name: AssignedContainerRelease :one
-select release_id from containers where id = $1 and host_id = $2
+select release_id::uuid as release_id from containers where id = $1 and host_id = $2 and release_id is not null
 `
 
 type AssignedContainerReleaseParams struct {
@@ -134,7 +134,7 @@ func (q *Queries) CountRunningAttemptsOnContainer(ctx context.Context, container
 }
 
 const lockContainerForClaim = `-- name: LockContainerForClaim :one
-select c.state, c.host_id, c.slots, c.release_id, r.spec
+select c.state, c.host_id, c.slots, c.release_id::uuid as release_id, r.spec
 from containers c
 join releases r on r.id = c.release_id
 where c.id = $1
