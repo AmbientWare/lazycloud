@@ -978,6 +978,7 @@ const (
 	UsageCostComponentKindContainerTime UsageCostComponentKind = "container_time"
 	UsageCostComponentKindCpu           UsageCostComponentKind = "cpu"
 	UsageCostComponentKindDisk          UsageCostComponentKind = "disk"
+	UsageCostComponentKindEgress        UsageCostComponentKind = "egress"
 	UsageCostComponentKindGpu           UsageCostComponentKind = "gpu"
 	UsageCostComponentKindMemory        UsageCostComponentKind = "memory"
 	UsageCostComponentKindVolumeStorage UsageCostComponentKind = "volume_storage"
@@ -991,6 +992,8 @@ func (e UsageCostComponentKind) Valid() bool {
 	case UsageCostComponentKindCpu:
 		return true
 	case UsageCostComponentKindDisk:
+		return true
+	case UsageCostComponentKindEgress:
 		return true
 	case UsageCostComponentKindGpu:
 		return true
@@ -2618,7 +2621,7 @@ type UsageCostCategory string
 
 // UsageCostComponent defines model for UsageCostComponent.
 type UsageCostComponent struct {
-	// Component What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds. A disk's cost includes its declared size while held.
+	// Component What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds, egress in GiB. A disk's cost includes its declared size while held.
 	Component UsageCostComponentKind `json:"component"`
 	CostNanos int64                  `json:"cost_nanos"`
 
@@ -2627,7 +2630,7 @@ type UsageCostComponent struct {
 	Quantity  float32         `json:"quantity"`
 }
 
-// UsageCostComponentKind What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds. A disk's cost includes its declared size while held.
+// UsageCostComponentKind What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds, egress in GiB. A disk's cost includes its declared size while held.
 type UsageCostComponentKind string
 
 // UsageCostDimension defines model for UsageCostDimension.

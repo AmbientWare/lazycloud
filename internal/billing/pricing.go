@@ -39,11 +39,14 @@ type Charge struct {
 	AttachedBytes int64
 	StorageNanos  int64
 	AttachedNanos int64
+	// EgressBytes left for the internet; EgressNanos is their price.
+	EgressBytes int64
+	EgressNanos int64
 }
 
 // Total is the interval's cost.
 func (c Charge) Total() int64 {
-	return c.ContainerNanos + c.CPUNanos + c.MemoryNanos + c.GPUNanos + c.StorageNanos + c.AttachedNanos
+	return c.ContainerNanos + c.CPUNanos + c.MemoryNanos + c.GPUNanos + c.StorageNanos + c.AttachedNanos + c.EgressNanos
 }
 
 // price is the cost of holding shape for d under card. The arithmetic is

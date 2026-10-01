@@ -201,6 +201,11 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 	if err := flush(); err != nil {
 		return result, err
 	}
+	egress, err := b.meterEgress(ctx, now)
+	result.Entries += egress
+	if err != nil {
+		return result, err
+	}
 
 	users := make([]uuid.UUID, 0, len(accrued))
 	nanos := make([]int64, 0, len(accrued))
@@ -452,6 +457,18 @@ func (b *Billing) entries(src source, start, end time.Time) ([]entry, error) {
 // writeMetering commits one batch: accounts for every owner, the entries
 // with their hourly totals, and the cursors.
 func (b *Billing) writeMetering(ctx context.Context, batch []sourcePlan) error {
+	users, p, cursors := ledgerParams(batch)
+	err := pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
+		return writeLedger(ctx, b.queries.WithTx(tx), users, p, cursors)
+	})
+	if err != nil {
+		return fmt.Errorf("write metering batch: %w", err)
+	}
+	return nil
+}
+
+// ledgerParams lays a batch out as the columns the insert takes.
+func ledgerParams(batch []sourcePlan) ([]uuid.UUID, InsertLedgerEntriesParams, AdvanceCursorsParams) {
 	var p InsertLedgerEntriesParams
 	var cursors AdvanceCursorsParams
 	owners := map[uuid.UUID]bool{}
@@ -487,6 +504,8 @@ func (b *Billing) writeMetering(ctx context.Context, batch []sourcePlan) error {
 			p.AttachedBytes = append(p.AttachedBytes, e.charge.AttachedBytes)
 			p.StorageNanos = append(p.StorageNanos, e.charge.StorageNanos)
 			p.AttachedNanos = append(p.AttachedNanos, e.charge.AttachedNanos)
+			p.EgressBytes = append(p.EgressBytes, e.charge.EgressBytes)
+			p.EgressNanos = append(p.EgressNanos, e.charge.EgressNanos)
 		}
 		if plan.advance {
 			cursors.Kinds = append(cursors.Kinds, src.kind)
@@ -499,27 +518,118 @@ func (b *Billing) writeMetering(ctx context.Context, batch []sourcePlan) error {
 	for user := range owners {
 		users = append(users, user)
 	}
+	return users, p, cursors
+}
+
+// writeLedger writes entries and cursors in the caller's transaction,
+// creating the accounts they charge first.
+func writeLedger(ctx context.Context, q *Queries, users []uuid.UUID, p InsertLedgerEntriesParams, cursors AdvanceCursorsParams) error {
+	if err := q.EnsureAccounts(ctx, EnsureAccountsParams{UserIds: users, TrialNanos: TrialNanos, TrialDays: TrialDays}); err != nil {
+		return fmt.Errorf("ensure accounts: %w", err)
+	}
+	if len(p.SourceIds) > 0 {
+		if err := q.InsertLedgerEntries(ctx, p); err != nil {
+			return fmt.Errorf("insert ledger entries: %w", err)
+		}
+	}
+	if len(cursors.Ids) > 0 {
+		if err := q.AdvanceCursors(ctx, cursors); err != nil {
+			return fmt.Errorf("advance cursors: %w", err)
+		}
+	}
+	return nil
+}
+
+// Egress is internet traffic the edge sent for a workload.
+type Egress struct {
+	Workspace uuid.UUID
+	App       *uuid.UUID
+	Workload  *uuid.UUID
+	Bytes     int64
+	At        time.Time
+}
+
+// egressLag is how long after a quarter-hour closes the edge may still add
+// to it.
+const egressLag = 5 * time.Minute
+
+// RecordEgress adds traffic to its workload's quarter-hour. The edge calls
+// it with what it counted since its last flush.
+func RecordEgress(ctx context.Context, db DBTX, e Egress) error {
+	if e.Bytes <= 0 {
+		return nil
+	}
+	err := New(db).RecordEgress(ctx, RecordEgressParams{
+		WorkspaceID: e.Workspace, AppID: orNil(e.App), WorkloadID: orNil(e.Workload),
+		Quarter: e.At.UTC().Truncate(MeteringPeriod), Bytes: e.Bytes,
+	})
+	if err != nil {
+		return fmt.Errorf("record egress: %w", err)
+	}
+	return nil
+}
+
+// meterEgress prices every closed quarter of egress into the ledger and
+// removes it, one batch per transaction.
+func (b *Billing) meterEgress(ctx context.Context, now time.Time) (int, error) {
+	written := 0
+	for {
+		n, err := b.meterEgressBatch(ctx, now)
+		written += n
+		if err != nil || n < meteringWriteBatch {
+			return written, err
+		}
+	}
+}
+
+func (b *Billing) meterEgressBatch(ctx context.Context, now time.Time) (int, error) {
+	n := 0
 	err := pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
 		q := b.queries.WithTx(tx)
-		if err := q.EnsureAccounts(ctx, EnsureAccountsParams{UserIds: users, TrialNanos: TrialNanos, TrialDays: TrialDays}); err != nil {
-			return fmt.Errorf("ensure accounts: %w", err)
+		rows, err := q.ClosedEgress(ctx, ClosedEgressParams{Before: now.Add(-egressLag - MeteringPeriod), RowLimit: meteringWriteBatch})
+		if err != nil {
+			return fmt.Errorf("read closed egress: %w", err)
 		}
-		if len(p.SourceIds) > 0 {
-			if err := q.InsertLedgerEntries(ctx, p); err != nil {
-				return fmt.Errorf("insert ledger entries: %w", err)
-			}
+		n = len(rows)
+		if n == 0 {
+			return nil
 		}
-		if len(cursors.Ids) > 0 {
-			if err := q.AdvanceCursors(ctx, cursors); err != nil {
-				return fmt.Errorf("advance cursors: %w", err)
+		var batch []sourcePlan
+		var del DeleteEgressParams
+		for _, r := range rows {
+			card, err := b.rates.cardAt(r.Quarter)
+			if err != nil {
+				return err
 			}
+			src := source{kind: "egress", id: r.WorkspaceID, owner: r.OwnerID, workspace: r.WorkspaceID}
+			if r.AppID != uuid.Nil {
+				app := r.AppID
+				src.app, src.id = &app, app
+			}
+			if r.WorkloadID != uuid.Nil {
+				workload := r.WorkloadID
+				src.workload, src.id = &workload, workload
+			}
+			charge := Charge{Version: card.Version, EgressBytes: r.Bytes, EgressNanos: costOver(card.Platform.EgressGiB, r.Bytes, bytesPerGiB, 1, 1)}
+			batch = append(batch, sourcePlan{src: src, entries: []entry{{start: r.Quarter, end: r.Quarter.Add(MeteringPeriod), charge: charge}}})
+			del.WorkspaceIds = append(del.WorkspaceIds, r.WorkspaceID)
+			del.AppIds = append(del.AppIds, r.AppID)
+			del.WorkloadIds = append(del.WorkloadIds, r.WorkloadID)
+			del.Quarters = append(del.Quarters, r.Quarter)
+		}
+		users, entries, cursors := ledgerParams(batch)
+		if err := writeLedger(ctx, q, users, entries, cursors); err != nil {
+			return err
+		}
+		if err := q.DeleteEgress(ctx, del); err != nil {
+			return fmt.Errorf("delete priced egress: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("write metering batch: %w", err)
+		return 0, fmt.Errorf("meter egress: %w", err)
 	}
-	return nil
+	return n, nil
 }
 
 func orNil(id *uuid.UUID) uuid.UUID {

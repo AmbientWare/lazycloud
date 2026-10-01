@@ -1409,6 +1409,7 @@ class UsageCostComponentKind(str, Enum):
     gpu = "gpu"
     volume_storage = "volume_storage"
     disk = "disk"
+    egress = "egress"
 
 
 class UsageCostComponent(BaseModel):

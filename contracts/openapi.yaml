@@ -4582,9 +4582,10 @@ components:
       description: >-
         What a quantity counts: container_time in seconds, cpu in
         core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in
-        card-seconds. A disk's cost includes its declared size while held.
+        card-seconds, egress in GiB. A disk's cost includes its declared size
+        while held.
       type: string
-      enum: [container_time, cpu, memory, gpu, volume_storage, disk]
+      enum: [container_time, cpu, memory, gpu, volume_storage, disk, egress]
 
     UsageCostComponent:
       type: object

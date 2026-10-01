@@ -198,6 +198,42 @@ func TestStorageIsMeteredAndShownOnTheUsagePage(t *testing.T) {
 	}
 }
 
+func TestEgressIsPricedOncePerClosedQuarter(t *testing.T) {
+	f := newFixture(t)
+	owner := f.user()
+	ws := f.workspace(owner)
+	rel := f.release(ws)
+	old := time.Now().UTC().Add(-time.Hour)
+	for range 2 {
+		if err := RecordEgress(t.Context(), f.pool, Egress{Workspace: ws, App: &rel.app, Workload: &rel.workload, Bytes: 1 << 30, At: old}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The current quarter is still open to the edge.
+	if err := RecordEgress(t.Context(), f.pool, Egress{Workspace: ws, Bytes: 1 << 30, At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	f.meter()
+	f.meter()
+	var bytes, nanos int64
+	var entries int
+	if err := f.pool.QueryRow(t.Context(), "select count(*), coalesce(sum(egress_bytes), 0), coalesce(sum(egress_nanos), 0) from ledger_entries where source_kind = 'egress'").
+		Scan(&entries, &bytes, &nanos); err != nil {
+		t.Fatal(err)
+	}
+	card, err := f.billing.rates.cardAt(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries != 1 || bytes != 2<<30 || nanos != 2*card.Platform.EgressGiB {
+		t.Fatalf("%d egress entries of %d bytes costing %d, want one of 2 GiB costing %d", entries, bytes, nanos, 2*card.Platform.EgressGiB)
+	}
+	var pending int
+	if err := f.pool.QueryRow(t.Context(), "select count(*) from egress_quarters").Scan(&pending); err != nil || pending != 1 {
+		t.Fatalf("%d open egress quarters, want the current one: %v", pending, err)
+	}
+}
+
 func TestHeldDisksPayForTheirSizeAndRetainedDataIsFree(t *testing.T) {
 	f := newFixture(t)
 	owner := f.user()

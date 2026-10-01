@@ -69,14 +69,15 @@ with entry as (
     insert into ledger_entries (
         source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
         billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
-        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos)
+        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos,
+        egress_bytes, egress_nanos)
     select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
            nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
            e.cpu_millis, e.memory_bytes, e.pricing_version,
            e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
-           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos
+           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos
     from (
         select unnest(@source_kinds::text[]) as source_kind, unnest(@source_ids::uuid[]) as source_id, unnest(@started_ats::timestamptz[]) as started_at,
                unnest(@ended_ats::timestamptz[]) as ended_at, unnest(@user_ids::uuid[]) as user_id,
@@ -89,7 +90,8 @@ with entry as (
                unnest(@container_nanos::bigint[]) as container_nanos, unnest(@cpu_nanos::bigint[]) as cpu_nanos,
                unnest(@memory_nanos::bigint[]) as memory_nanos, unnest(@gpu_nanos::bigint[]) as gpu_nanos,
                unnest(@stored_bytes::bigint[]) as stored_bytes, unnest(@attached_bytes::bigint[]) as attached_bytes,
-               unnest(@storage_nanos::bigint[]) as storage_nanos, unnest(@attached_nanos::bigint[]) as attached_nanos
+               unnest(@storage_nanos::bigint[]) as storage_nanos, unnest(@attached_nanos::bigint[]) as attached_nanos,
+               unnest(@egress_bytes::bigint[]) as egress_bytes, unnest(@egress_nanos::bigint[]) as egress_nanos
     ) e
     on conflict (source_kind, source_id, started_at) do nothing
     returning user_id, started_at, cost_nanos
@@ -177,3 +179,25 @@ join workspace_members o on o.workspace_id = a.workspace_id and o.role = 'owner'
 left join usage_cursors u on u.source_kind = 'artifacts' and u.source_id = coalesce(a.app_id, a.workspace_id)
 where a.state = 'stored'
 group by a.workspace_id, a.app_id, o.user_id, u.billed_through;
+
+-- name: RecordEgress :exec
+insert into egress_quarters (workspace_id, app_id, workload_id, quarter, bytes)
+values (@workspace_id, @app_id, @workload_id, @quarter, @bytes)
+on conflict (workspace_id, app_id, workload_id, quarter) do update set bytes = egress_quarters.bytes + excluded.bytes;
+
+-- name: ClosedEgress :many
+-- Quarters that closed before the edge's lag, locked so one pass prices
+-- them; the pass deletes them with their entries.
+select q.workspace_id, q.app_id, q.workload_id, q.quarter, q.bytes, o.user_id as owner_id
+from egress_quarters q
+join workspace_members o on o.workspace_id = q.workspace_id and o.role = 'owner'
+where q.quarter < @before::timestamptz
+order by q.quarter
+limit @row_limit
+for update of q skip locked;
+
+-- name: DeleteEgress :exec
+delete from egress_quarters q
+using (select unnest(@workspace_ids::uuid[]) as workspace_id, unnest(@app_ids::uuid[]) as app_id,
+              unnest(@workload_ids::uuid[]) as workload_id, unnest(@quarters::timestamptz[]) as quarter) d
+where q.workspace_id = d.workspace_id and q.app_id = d.app_id and q.workload_id = d.workload_id and q.quarter = d.quarter;

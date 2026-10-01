@@ -240,6 +240,12 @@ func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
 			Quantity: float32(r.DiskGibSeconds), CostNanos: r.DiskNanos,
 		})
 	}
+	if r.EgressGib > 0 || r.EgressNanos > 0 {
+		out.Components = append(out.Components, apitypes.UsageCostComponent{
+			Dimension: apitypes.BilledDimensionNetworkEgress, Component: apitypes.UsageCostComponentKindEgress,
+			Quantity: float32(r.EgressGib), CostNanos: r.EgressNanos,
+		})
+	}
 	if out.Components == nil {
 		out.Components = []apitypes.UsageCostComponent{}
 	}

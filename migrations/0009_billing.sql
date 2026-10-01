@@ -65,7 +65,7 @@ create index credit_lots_unspent on credit_lots (user_id, expires_at) where spen
 -- the charge outlives what incurred it.
 create table ledger_entries (
     id bigint generated always as identity primary key,
-    source_kind text not null check (source_kind in ('container', 'volume', 'artifacts', 'disk')),
+    source_kind text not null check (source_kind in ('container', 'volume', 'artifacts', 'disk', 'egress')),
     source_id uuid not null,
     started_at timestamptz not null,
     ended_at timestamptz not null,
@@ -89,8 +89,10 @@ create table ledger_entries (
     attached_bytes bigint not null default 0 check (attached_bytes >= 0),
     storage_nanos bigint not null default 0 check (storage_nanos >= 0),
     attached_nanos bigint not null default 0 check (attached_nanos >= 0),
+    egress_bytes bigint not null default 0 check (egress_bytes >= 0),
+    egress_nanos bigint not null default 0 check (egress_nanos >= 0),
     cost_nanos bigint generated always as (
-        container_nanos + cpu_nanos + memory_nanos + gpu_nanos + storage_nanos + attached_nanos) stored,
+        container_nanos + cpu_nanos + memory_nanos + gpu_nanos + storage_nanos + attached_nanos + egress_nanos) stored,
     unique (source_kind, source_id, started_at),
     check (ended_at > started_at)
 );
@@ -110,6 +112,20 @@ create table usage_cursors (
 );
 
 create index usage_cursors_complete on usage_cursors (updated_at) where complete;
+
+-- Internet egress the edge counted, per workload and UTC quarter-hour.
+-- Metering prices a quarter once it has closed and removes its rows in the
+-- same transaction. Absent app and workload are the nil uuid.
+create table egress_quarters (
+    workspace_id uuid not null,
+    app_id uuid not null,
+    workload_id uuid not null,
+    quarter timestamptz not null,
+    bytes bigint not null check (bytes >= 0),
+    primary key (workspace_id, app_id, workload_id, quarter)
+);
+
+create index egress_quarters_quarter on egress_quarters (quarter);
 
 -- The metering pass's look-back over stopped containers starts here.
 create table metering_state (

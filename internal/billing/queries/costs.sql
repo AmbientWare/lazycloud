@@ -14,6 +14,8 @@ select g.workspace_id, g.app_key::uuid as app_key, g.workload_key::uuid as workl
        sum(g.gpu_nanos)::bigint as gpu_nanos,
        sum(g.volume_nanos)::bigint as volume_nanos,
        sum(g.disk_nanos)::bigint as disk_nanos,
+       sum(g.egress_nanos)::bigint as egress_nanos,
+       sum(g.egress_gib)::float8 as egress_gib,
        sum(g.seconds)::float8 as seconds,
        sum(g.core_seconds)::float8 as core_seconds,
        sum(g.gib_seconds)::float8 as gib_seconds,
@@ -33,6 +35,7 @@ from (
            e.cost_nanos, e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
            (case when e.source_kind in ('volume', 'artifacts') then e.storage_nanos else 0 end) as volume_nanos,
            (case when e.source_kind = 'disk' then e.storage_nanos + e.attached_nanos else 0 end) as disk_nanos,
+           e.egress_nanos, e.egress_bytes / 1073741824.0 as egress_gib,
            (case when e.source_kind = 'container' then extract(epoch from e.ended_at - e.started_at) else 0 end) as seconds,
            e.cpu_millis / 1000.0 * extract(epoch from e.ended_at - e.started_at) as core_seconds,
            e.memory_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) as gib_seconds,
@@ -75,7 +78,7 @@ where e.user_id = @user_id and e.started_at >= @start_at and e.started_at < @end
 -- buckets with cost.
 select floor(extract(epoch from e.started_at - @start_at::timestamptz) / @width_seconds::float8)::int as bucket,
        (case e.source_kind when 'container' then 'compute_runtime' when 'disk' then 'disk'
-             else 'volume_storage' end)::text as dimension,
+             when 'egress' then 'network_egress' else 'volume_storage' end)::text as dimension,
        sum(e.cost_nanos)::bigint as cost_nanos
 from ledger_entries e
 where e.user_id = @user_id and e.started_at >= @start_at::timestamptz and e.started_at < @end_at::timestamptz

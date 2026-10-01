@@ -40,6 +40,83 @@ func (q *Queries) AdvanceCursors(ctx context.Context, arg AdvanceCursorsParams) 
 	return err
 }
 
+const closedEgress = `-- name: ClosedEgress :many
+select q.workspace_id, q.app_id, q.workload_id, q.quarter, q.bytes, o.user_id as owner_id
+from egress_quarters q
+join workspace_members o on o.workspace_id = q.workspace_id and o.role = 'owner'
+where q.quarter < $1::timestamptz
+order by q.quarter
+limit $2
+for update of q skip locked
+`
+
+type ClosedEgressParams struct {
+	Before   time.Time
+	RowLimit int32
+}
+
+type ClosedEgressRow struct {
+	WorkspaceID uuid.UUID
+	AppID       uuid.UUID
+	WorkloadID  uuid.UUID
+	Quarter     time.Time
+	Bytes       int64
+	OwnerID     uuid.UUID
+}
+
+// Quarters that closed before the edge's lag, locked so one pass prices
+// them; the pass deletes them with their entries.
+func (q *Queries) ClosedEgress(ctx context.Context, arg ClosedEgressParams) ([]ClosedEgressRow, error) {
+	rows, err := q.db.Query(ctx, closedEgress, arg.Before, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ClosedEgressRow
+	for rows.Next() {
+		var i ClosedEgressRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.AppID,
+			&i.WorkloadID,
+			&i.Quarter,
+			&i.Bytes,
+			&i.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteEgress = `-- name: DeleteEgress :exec
+delete from egress_quarters q
+using (select unnest($1::uuid[]) as workspace_id, unnest($2::uuid[]) as app_id,
+              unnest($3::uuid[]) as workload_id, unnest($4::timestamptz[]) as quarter) d
+where q.workspace_id = d.workspace_id and q.app_id = d.app_id and q.workload_id = d.workload_id and q.quarter = d.quarter
+`
+
+type DeleteEgressParams struct {
+	WorkspaceIds []uuid.UUID
+	AppIds       []uuid.UUID
+	WorkloadIds  []uuid.UUID
+	Quarters     []time.Time
+}
+
+func (q *Queries) DeleteEgress(ctx context.Context, arg DeleteEgressParams) error {
+	_, err := q.db.Exec(ctx, deleteEgress,
+		arg.WorkspaceIds,
+		arg.AppIds,
+		arg.WorkloadIds,
+		arg.Quarters,
+	)
+	return err
+}
+
 const ensureAccounts = `-- name: EnsureAccounts :exec
 with created as (
     insert into billing_accounts (user_id)
@@ -75,14 +152,15 @@ with entry as (
     insert into ledger_entries (
         source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
         billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
-        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos)
+        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos,
+        egress_bytes, egress_nanos)
     select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
            nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
            e.cpu_millis, e.memory_bytes, e.pricing_version,
            e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
-           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos
+           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos
     from (
         select unnest($1::text[]) as source_kind, unnest($2::uuid[]) as source_id, unnest($3::timestamptz[]) as started_at,
                unnest($4::timestamptz[]) as ended_at, unnest($5::uuid[]) as user_id,
@@ -95,7 +173,8 @@ with entry as (
                unnest($17::bigint[]) as container_nanos, unnest($18::bigint[]) as cpu_nanos,
                unnest($19::bigint[]) as memory_nanos, unnest($20::bigint[]) as gpu_nanos,
                unnest($21::bigint[]) as stored_bytes, unnest($22::bigint[]) as attached_bytes,
-               unnest($23::bigint[]) as storage_nanos, unnest($24::bigint[]) as attached_nanos
+               unnest($23::bigint[]) as storage_nanos, unnest($24::bigint[]) as attached_nanos,
+               unnest($25::bigint[]) as egress_bytes, unnest($26::bigint[]) as egress_nanos
     ) e
     on conflict (source_kind, source_id, started_at) do nothing
     returning user_id, started_at, cost_nanos
@@ -136,6 +215,8 @@ type InsertLedgerEntriesParams struct {
 	AttachedBytes   []int64
 	StorageNanos    []int64
 	AttachedNanos   []int64
+	EgressBytes     []int64
+	EgressNanos     []int64
 }
 
 // Entries already written are skipped, so a repeated batch adds nothing to
@@ -166,6 +247,8 @@ func (q *Queries) InsertLedgerEntries(ctx context.Context, arg InsertLedgerEntri
 		arg.AttachedBytes,
 		arg.StorageNanos,
 		arg.AttachedNanos,
+		arg.EgressBytes,
+		arg.EgressNanos,
 	)
 	return err
 }
@@ -453,6 +536,31 @@ func (q *Queries) PruneCursors(ctx context.Context, arg PruneCursorsParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const recordEgress = `-- name: RecordEgress :exec
+insert into egress_quarters (workspace_id, app_id, workload_id, quarter, bytes)
+values ($1, $2, $3, $4, $5)
+on conflict (workspace_id, app_id, workload_id, quarter) do update set bytes = egress_quarters.bytes + excluded.bytes
+`
+
+type RecordEgressParams struct {
+	WorkspaceID uuid.UUID
+	AppID       uuid.UUID
+	WorkloadID  uuid.UUID
+	Quarter     time.Time
+	Bytes       int64
+}
+
+func (q *Queries) RecordEgress(ctx context.Context, arg RecordEgressParams) error {
+	_, err := q.db.Exec(ctx, recordEgress,
+		arg.WorkspaceID,
+		arg.AppID,
+		arg.WorkloadID,
+		arg.Quarter,
+		arg.Bytes,
+	)
+	return err
 }
 
 const releaseMeteringLock = `-- name: ReleaseMeteringLock :exec
