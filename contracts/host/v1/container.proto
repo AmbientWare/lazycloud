@@ -24,7 +24,13 @@ message SupervisorMessage {
     LoadFailed load_failed = 2;
     AttemptFinished finished = 3;
     OutputChunk output = 4;
+    // A pod's command ended on its own; the supervisor exits with its code.
+    CommandExited command_exited = 90;
   }
+}
+
+message CommandExited {
+  int32 exit_code = 1;
 }
 
 // SlotsReady reports that every slot loaded its handler. The supervisor sends
@@ -87,6 +93,31 @@ message Configure {
   // forwards each request to a worker with a free slot.
   HttpServing http = 30;
   string http_socket = 31;
+  // Set for pods, devboxes, sandboxes and shell containers: the supervisor
+  // runs this instead of runner slots, and is ready once it runs and any
+  // health check passes. handler and slots are unused.
+  PodProcess pod = 90;
+  // Where the supervisor serves its control API: processes, files, shells,
+  // SSH and port tunnels. Every container serves it.
+  string control_socket = 91;
+  // Start a Docker daemon before any runner or command.
+  bool docker = 92;
+}
+
+message PodProcess {
+  // The command to run. Empty runs no workload process: the container idles
+  // for shells, SSH and API processes until it is stopped.
+  repeated string command = 1;
+  string working_directory = 2;
+  HealthCheck health = 3;
+  // Serve SSH with this identity.
+  SshServer ssh = 4;
+  // A devbox's root disk mounted at this directory: the supervisor seeds it
+  // from the image on first use and runs everything with it as /.
+  string root = 5;
+  // Ports the command listens on, which readiness waits for when there is no
+  // health check.
+  repeated int32 ports = 6;
 }
 
 message RunAttempt {

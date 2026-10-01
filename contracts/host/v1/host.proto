@@ -47,6 +47,10 @@ service HostService {
   rpc CompleteImageBuild(CompleteImageBuildRequest) returns (CompleteImageBuildResponse);
   // AppendImageBuildLogs stores a build container's output in order.
   rpc AppendImageBuildLogs(AppendImageBuildLogsRequest) returns (AppendImageBuildLogsResponse);
+  // CompleteSnapshot reports how a SnapshotContainer ended.
+  rpc CompleteSnapshot(CompleteSnapshotRequest) returns (CompleteSnapshotResponse);
+  // CompleteFilesystemImage reports how a PublishFilesystem ended.
+  rpc CompleteFilesystemImage(CompleteFilesystemImageRequest) returns (CompleteFilesystemImageResponse);
 }
 
 message EnrollRequest {
@@ -154,6 +158,8 @@ enum ExitReason {
   // The container or supervisor died unexpectedly.
   EXIT_REASON_CRASHED = 4;
   EXIT_REASON_OUT_OF_MEMORY = 5;
+  // A pod's command ended on its own; exit_code is its status.
+  EXIT_REASON_EXITED = 90;
 }
 
 message ContainerReport {
@@ -167,6 +173,8 @@ message ContainerReport {
   // How long each finished stage of the start took, restated in every
   // report once known.
   repeated StartupStage startup = 80;
+  // The snapshot the start could not restore; the container started cold.
+  string restore_failed = 90;
 }
 
 enum StartupStageKind {
@@ -179,6 +187,8 @@ enum StartupStageKind {
   STARTUP_STAGE_KIND_CREATE = 3;
   // The supervisor loading the handler in every slot.
   STARTUP_STAGE_KIND_RUNTIME = 4;
+  // Leasing and restoring the container's disks.
+  STARTUP_STAGE_KIND_DISK = 90;
 }
 
 message StartupStage {
@@ -250,7 +260,48 @@ message ServerMessage {
     CancelAttempt cancel = 4;
     StorageGrant storage_grant = 40;
     UpdateAgent update = 70;
+    UpdateNetwork network = 90;
+    SnapshotContainer snapshot = 91;
+    PublishFilesystem publish_filesystem = 92;
   }
+}
+
+// UpdateNetwork replaces a running container's outbound policy.
+message UpdateNetwork {
+  string container_id = 1;
+  NetworkPolicy policy = 2;
+}
+
+// SnapshotContainer checkpoints a running container's memory and writable
+// filesystem, leaving it running, and uploads the archive to upload_url.
+// The host reports the outcome with CompleteSnapshot.
+message SnapshotContainer {
+  string container_id = 1;
+  string snapshot_id = 2;
+  // A presigned PUT URL for the archive.
+  string upload_url = 3;
+  google.protobuf.Timestamp deadline = 4;
+  // Checkpoint only once this answers, for a pod's automatic snapshot.
+  ReadinessProbe ready = 5;
+}
+
+message ReadinessProbe {
+  string path = 1;
+  int32 port = 2;
+  int32 timeout_seconds = 3;
+  float interval_seconds = 4;
+}
+
+// PublishFilesystem pushes the container's filesystem, without its mounts,
+// as a single-layer image to repository, and reports it with
+// CompleteFilesystemImage.
+message PublishFilesystem {
+  string container_id = 1;
+  string request_id = 2;
+  string repository = 3;
+  bool insecure_registry = 4;
+  RegistryAuth registry_auth = 5;
+  google.protobuf.Timestamp deadline = 6;
 }
 
 // StorageGrant is a short-lived credential for one workspace's bucket of
@@ -303,6 +354,61 @@ message StartContainer {
   HttpServing http = 30;
   repeated VolumeMount volumes = 40;
   repeated DiskAttachment disks = 41;
+  // Set instead of function for pods, devboxes, sandboxes and shell
+  // containers: the container runs a command, not a handler.
+  PodWorkload pod = 90;
+  // Run a Docker daemon in the container.
+  bool docker = 91;
+  // Start from this memory snapshot. A failed restore of a deployed
+  // workload's automatic snapshot starts the container cold and reports
+  // restore_failed; any other failed restore fails the start.
+  SnapshotRestore restore = 92;
+}
+
+message PodWorkload {
+  // The command; empty runs the image's own entrypoint and command.
+  repeated string command = 1;
+  // Run no workload process, as for a shell container.
+  bool idle = 2;
+  // Ports the command listens on.
+  repeated int32 ports = 3;
+  HealthCheck health = 4;
+  SshServer ssh = 5;
+  NetworkPolicy network = 6;
+  // The disk mounted at / is the root filesystem; the source is not mounted
+  // and the working directory is /root.
+  bool devbox = 7;
+}
+
+// HealthCheck is an HTTP GET on a port that must answer 2xx or 3xx.
+message HealthCheck {
+  string path = 1;
+  int32 port = 2;
+}
+
+// SshServer is the container's SSH identity. Clients log in as root with a
+// certificate the workspace's user authority signed.
+message SshServer {
+  // The OpenSSH PEM ed25519 host key.
+  bytes host_key = 1;
+  // The user certificate authority, an authorized_keys line.
+  string user_authority = 2;
+}
+
+// NetworkPolicy limits a container's outbound traffic. An allow list wins
+// over block: only those CIDR ranges are reachable.
+message NetworkPolicy {
+  bool block = 1;
+  repeated string allow = 2;
+}
+
+message SnapshotRestore {
+  string snapshot_id = 1;
+  // A presigned GET URL for the snapshot archive.
+  string url = 2;
+  string sha256 = 3;
+  // An automatic snapshot of a deployed workload falls back to a cold start.
+  bool automatic = 4;
 }
 
 // VolumeMount bind-mounts a volume into the container. A platform volume is
@@ -651,3 +757,27 @@ message BuildLogLine {
 }
 
 message AppendImageBuildLogsResponse {}
+
+message CompleteSnapshotRequest {
+  string container_id = 1;
+  string snapshot_id = 2;
+  int64 size_bytes = 3;
+  string sha256 = 4;
+  // Set when the snapshot failed.
+  string failure = 5;
+  // The host cannot checkpoint, such as a runc host without CRIU.
+  bool unsupported = 6;
+}
+
+message CompleteSnapshotResponse {}
+
+message CompleteFilesystemImageRequest {
+  string container_id = 1;
+  string request_id = 2;
+  // The pushed image by digest.
+  string reference = 3;
+  string architecture = 4;
+  string failure = 5;
+}
+
+message CompleteFilesystemImageResponse {}

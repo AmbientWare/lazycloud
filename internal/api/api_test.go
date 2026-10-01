@@ -211,7 +211,7 @@ func (e *env) deploy() {
 		e.t.Fatalf("source registration: %d %+v", status, upload)
 	}
 	spec := apitypes.FunctionSpec{
-		Name: "summarize_sales", Handler: "reports:summarize_sales",
+		Name: "summarize_sales", Handler: new("reports:summarize_sales"),
 		Source: apitypes.SourceRef{Sha256: digest}, Image: apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 	}

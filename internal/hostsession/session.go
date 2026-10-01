@@ -388,7 +388,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			GpuCount:       gpusOf(start.Spec.Resources),
 		},
 		Function: &hostproto.FunctionWorkload{
-			Handler:   start.Spec.Handler,
+			Handler:   deref(start.Spec.Handler),
 			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
 			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
 			Hooks:     hooksOut(start.Spec.LifecycleHooks),

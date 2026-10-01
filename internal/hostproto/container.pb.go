@@ -30,6 +30,7 @@ type SupervisorMessage struct {
 	//	*SupervisorMessage_LoadFailed
 	//	*SupervisorMessage_Finished
 	//	*SupervisorMessage_Output
+	//	*SupervisorMessage_CommandExited
 	Body          isSupervisorMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -108,6 +109,15 @@ func (x *SupervisorMessage) GetOutput() *OutputChunk {
 	return nil
 }
 
+func (x *SupervisorMessage) GetCommandExited() *CommandExited {
+	if x != nil {
+		if x, ok := x.Body.(*SupervisorMessage_CommandExited); ok {
+			return x.CommandExited
+		}
+	}
+	return nil
+}
+
 type isSupervisorMessage_Body interface {
 	isSupervisorMessage_Body()
 }
@@ -128,6 +138,11 @@ type SupervisorMessage_Output struct {
 	Output *OutputChunk `protobuf:"bytes,4,opt,name=output,proto3,oneof"`
 }
 
+type SupervisorMessage_CommandExited struct {
+	// A pod's command ended on its own; the supervisor exits with its code.
+	CommandExited *CommandExited `protobuf:"bytes,90,opt,name=command_exited,json=commandExited,proto3,oneof"`
+}
+
 func (*SupervisorMessage_Ready) isSupervisorMessage_Body() {}
 
 func (*SupervisorMessage_LoadFailed) isSupervisorMessage_Body() {}
@@ -135,6 +150,52 @@ func (*SupervisorMessage_LoadFailed) isSupervisorMessage_Body() {}
 func (*SupervisorMessage_Finished) isSupervisorMessage_Body() {}
 
 func (*SupervisorMessage_Output) isSupervisorMessage_Body() {}
+
+func (*SupervisorMessage_CommandExited) isSupervisorMessage_Body() {}
+
+type CommandExited struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExitCode      int32                  `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandExited) Reset() {
+	*x = CommandExited{}
+	mi := &file_host_v1_container_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandExited) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandExited) ProtoMessage() {}
+
+func (x *CommandExited) ProtoReflect() protoreflect.Message {
+	mi := &file_host_v1_container_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandExited.ProtoReflect.Descriptor instead.
+func (*CommandExited) Descriptor() ([]byte, []int) {
+	return file_host_v1_container_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CommandExited) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
 
 // SlotsReady reports that every slot loaded its handler. The supervisor sends
 // it again whenever it reconnects, so a restarted agent learns which attempts
@@ -149,7 +210,7 @@ type SlotsReady struct {
 
 func (x *SlotsReady) Reset() {
 	*x = SlotsReady{}
-	mi := &file_host_v1_container_proto_msgTypes[1]
+	mi := &file_host_v1_container_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -161,7 +222,7 @@ func (x *SlotsReady) String() string {
 func (*SlotsReady) ProtoMessage() {}
 
 func (x *SlotsReady) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[1]
+	mi := &file_host_v1_container_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -174,7 +235,7 @@ func (x *SlotsReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SlotsReady.ProtoReflect.Descriptor instead.
 func (*SlotsReady) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{1}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SlotsReady) GetSlots() int32 {
@@ -200,7 +261,7 @@ type LoadFailed struct {
 
 func (x *LoadFailed) Reset() {
 	*x = LoadFailed{}
-	mi := &file_host_v1_container_proto_msgTypes[2]
+	mi := &file_host_v1_container_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -212,7 +273,7 @@ func (x *LoadFailed) String() string {
 func (*LoadFailed) ProtoMessage() {}
 
 func (x *LoadFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[2]
+	mi := &file_host_v1_container_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -225,7 +286,7 @@ func (x *LoadFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoadFailed.ProtoReflect.Descriptor instead.
 func (*LoadFailed) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{2}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *LoadFailed) GetError() *RunnerError {
@@ -249,7 +310,7 @@ type AttemptFinished struct {
 
 func (x *AttemptFinished) Reset() {
 	*x = AttemptFinished{}
-	mi := &file_host_v1_container_proto_msgTypes[3]
+	mi := &file_host_v1_container_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -261,7 +322,7 @@ func (x *AttemptFinished) String() string {
 func (*AttemptFinished) ProtoMessage() {}
 
 func (x *AttemptFinished) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[3]
+	mi := &file_host_v1_container_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -274,7 +335,7 @@ func (x *AttemptFinished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttemptFinished.ProtoReflect.Descriptor instead.
 func (*AttemptFinished) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{3}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AttemptFinished) GetAttemptId() string {
@@ -341,7 +402,7 @@ type OutputChunk struct {
 
 func (x *OutputChunk) Reset() {
 	*x = OutputChunk{}
-	mi := &file_host_v1_container_proto_msgTypes[4]
+	mi := &file_host_v1_container_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -353,7 +414,7 @@ func (x *OutputChunk) String() string {
 func (*OutputChunk) ProtoMessage() {}
 
 func (x *OutputChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[4]
+	mi := &file_host_v1_container_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -366,7 +427,7 @@ func (x *OutputChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OutputChunk.ProtoReflect.Descriptor instead.
 func (*OutputChunk) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{4}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *OutputChunk) GetAttemptId() string {
@@ -420,7 +481,7 @@ type SupervisorCommand struct {
 
 func (x *SupervisorCommand) Reset() {
 	*x = SupervisorCommand{}
-	mi := &file_host_v1_container_proto_msgTypes[5]
+	mi := &file_host_v1_container_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -432,7 +493,7 @@ func (x *SupervisorCommand) String() string {
 func (*SupervisorCommand) ProtoMessage() {}
 
 func (x *SupervisorCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[5]
+	mi := &file_host_v1_container_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -445,7 +506,7 @@ func (x *SupervisorCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SupervisorCommand.ProtoReflect.Descriptor instead.
 func (*SupervisorCommand) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{5}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SupervisorCommand) GetBody() isSupervisorCommand_Body {
@@ -552,15 +613,24 @@ type Configure struct {
 	SecretEnv []string `protobuf:"bytes,12,rep,name=secret_env,json=secretEnv,proto3" json:"secret_env,omitempty"`
 	// Set for HTTP workloads. The supervisor serves HTTP on http_socket and
 	// forwards each request to a worker with a free slot.
-	Http          *HttpServing `protobuf:"bytes,30,opt,name=http,proto3" json:"http,omitempty"`
-	HttpSocket    string       `protobuf:"bytes,31,opt,name=http_socket,json=httpSocket,proto3" json:"http_socket,omitempty"`
+	Http       *HttpServing `protobuf:"bytes,30,opt,name=http,proto3" json:"http,omitempty"`
+	HttpSocket string       `protobuf:"bytes,31,opt,name=http_socket,json=httpSocket,proto3" json:"http_socket,omitempty"`
+	// Set for pods, devboxes, sandboxes and shell containers: the supervisor
+	// runs this instead of runner slots, and is ready once it runs and any
+	// health check passes. handler and slots are unused.
+	Pod *PodProcess `protobuf:"bytes,90,opt,name=pod,proto3" json:"pod,omitempty"`
+	// Where the supervisor serves its control API: processes, files, shells,
+	// SSH and port tunnels. Every container serves it.
+	ControlSocket string `protobuf:"bytes,91,opt,name=control_socket,json=controlSocket,proto3" json:"control_socket,omitempty"`
+	// Start a Docker daemon before any runner or command.
+	Docker        bool `protobuf:"varint,92,opt,name=docker,proto3" json:"docker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Configure) Reset() {
 	*x = Configure{}
-	mi := &file_host_v1_container_proto_msgTypes[6]
+	mi := &file_host_v1_container_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -572,7 +642,7 @@ func (x *Configure) String() string {
 func (*Configure) ProtoMessage() {}
 
 func (x *Configure) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[6]
+	mi := &file_host_v1_container_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -585,7 +655,7 @@ func (x *Configure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Configure.ProtoReflect.Descriptor instead.
 func (*Configure) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{6}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Configure) GetHandler() string {
@@ -651,6 +721,118 @@ func (x *Configure) GetHttpSocket() string {
 	return ""
 }
 
+func (x *Configure) GetPod() *PodProcess {
+	if x != nil {
+		return x.Pod
+	}
+	return nil
+}
+
+func (x *Configure) GetControlSocket() string {
+	if x != nil {
+		return x.ControlSocket
+	}
+	return ""
+}
+
+func (x *Configure) GetDocker() bool {
+	if x != nil {
+		return x.Docker
+	}
+	return false
+}
+
+type PodProcess struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The command to run. Empty runs no workload process: the container idles
+	// for shells, SSH and API processes until it is stopped.
+	Command          []string     `protobuf:"bytes,1,rep,name=command,proto3" json:"command,omitempty"`
+	WorkingDirectory string       `protobuf:"bytes,2,opt,name=working_directory,json=workingDirectory,proto3" json:"working_directory,omitempty"`
+	Health           *HealthCheck `protobuf:"bytes,3,opt,name=health,proto3" json:"health,omitempty"`
+	// Serve SSH with this identity.
+	Ssh *SshServer `protobuf:"bytes,4,opt,name=ssh,proto3" json:"ssh,omitempty"`
+	// A devbox's root disk mounted at this directory: the supervisor seeds it
+	// from the image on first use and runs everything with it as /.
+	Root string `protobuf:"bytes,5,opt,name=root,proto3" json:"root,omitempty"`
+	// Ports the command listens on, which readiness waits for when there is no
+	// health check.
+	Ports         []int32 `protobuf:"varint,6,rep,packed,name=ports,proto3" json:"ports,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PodProcess) Reset() {
+	*x = PodProcess{}
+	mi := &file_host_v1_container_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PodProcess) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PodProcess) ProtoMessage() {}
+
+func (x *PodProcess) ProtoReflect() protoreflect.Message {
+	mi := &file_host_v1_container_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PodProcess.ProtoReflect.Descriptor instead.
+func (*PodProcess) Descriptor() ([]byte, []int) {
+	return file_host_v1_container_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PodProcess) GetCommand() []string {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+func (x *PodProcess) GetWorkingDirectory() string {
+	if x != nil {
+		return x.WorkingDirectory
+	}
+	return ""
+}
+
+func (x *PodProcess) GetHealth() *HealthCheck {
+	if x != nil {
+		return x.Health
+	}
+	return nil
+}
+
+func (x *PodProcess) GetSsh() *SshServer {
+	if x != nil {
+		return x.Ssh
+	}
+	return nil
+}
+
+func (x *PodProcess) GetRoot() string {
+	if x != nil {
+		return x.Root
+	}
+	return ""
+}
+
+func (x *PodProcess) GetPorts() []int32 {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
 type RunAttempt struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -669,7 +851,7 @@ type RunAttempt struct {
 
 func (x *RunAttempt) Reset() {
 	*x = RunAttempt{}
-	mi := &file_host_v1_container_proto_msgTypes[7]
+	mi := &file_host_v1_container_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +863,7 @@ func (x *RunAttempt) String() string {
 func (*RunAttempt) ProtoMessage() {}
 
 func (x *RunAttempt) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[7]
+	mi := &file_host_v1_container_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +876,7 @@ func (x *RunAttempt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunAttempt.ProtoReflect.Descriptor instead.
 func (*RunAttempt) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{7}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RunAttempt) GetTaskId() string {
@@ -777,7 +959,7 @@ type CancelSlot struct {
 
 func (x *CancelSlot) Reset() {
 	*x = CancelSlot{}
-	mi := &file_host_v1_container_proto_msgTypes[8]
+	mi := &file_host_v1_container_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -789,7 +971,7 @@ func (x *CancelSlot) String() string {
 func (*CancelSlot) ProtoMessage() {}
 
 func (x *CancelSlot) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[8]
+	mi := &file_host_v1_container_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -802,7 +984,7 @@ func (x *CancelSlot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelSlot.ProtoReflect.Descriptor instead.
 func (*CancelSlot) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{8}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CancelSlot) GetAttemptId() string {
@@ -822,7 +1004,7 @@ type Drain struct {
 
 func (x *Drain) Reset() {
 	*x = Drain{}
-	mi := &file_host_v1_container_proto_msgTypes[9]
+	mi := &file_host_v1_container_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -834,7 +1016,7 @@ func (x *Drain) String() string {
 func (*Drain) ProtoMessage() {}
 
 func (x *Drain) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[9]
+	mi := &file_host_v1_container_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -847,7 +1029,7 @@ func (x *Drain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Drain.ProtoReflect.Descriptor instead.
 func (*Drain) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{9}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{11}
 }
 
 type Reload struct {
@@ -858,7 +1040,7 @@ type Reload struct {
 
 func (x *Reload) Reset() {
 	*x = Reload{}
-	mi := &file_host_v1_container_proto_msgTypes[10]
+	mi := &file_host_v1_container_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -870,7 +1052,7 @@ func (x *Reload) String() string {
 func (*Reload) ProtoMessage() {}
 
 func (x *Reload) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_container_proto_msgTypes[10]
+	mi := &file_host_v1_container_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -883,21 +1065,24 @@ func (x *Reload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Reload.ProtoReflect.Descriptor instead.
 func (*Reload) Descriptor() ([]byte, []int) {
-	return file_host_v1_container_proto_rawDescGZIP(), []int{10}
+	return file_host_v1_container_proto_rawDescGZIP(), []int{12}
 }
 
 var File_host_v1_container_proto protoreflect.FileDescriptor
 
 const file_host_v1_container_proto_rawDesc = "" +
 	"\n" +
-	"\x17host/v1/container.proto\x12\x11lazycloud.host.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12host/v1/host.proto\"\x90\x02\n" +
+	"\x17host/v1/container.proto\x12\x11lazycloud.host.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12host/v1/host.proto\"\xdb\x02\n" +
 	"\x11SupervisorMessage\x125\n" +
 	"\x05ready\x18\x01 \x01(\v2\x1d.lazycloud.host.v1.SlotsReadyH\x00R\x05ready\x12@\n" +
 	"\vload_failed\x18\x02 \x01(\v2\x1d.lazycloud.host.v1.LoadFailedH\x00R\n" +
 	"loadFailed\x12@\n" +
 	"\bfinished\x18\x03 \x01(\v2\".lazycloud.host.v1.AttemptFinishedH\x00R\bfinished\x128\n" +
-	"\x06output\x18\x04 \x01(\v2\x1e.lazycloud.host.v1.OutputChunkH\x00R\x06outputB\x06\n" +
-	"\x04body\"M\n" +
+	"\x06output\x18\x04 \x01(\v2\x1e.lazycloud.host.v1.OutputChunkH\x00R\x06output\x12I\n" +
+	"\x0ecommand_exited\x18Z \x01(\v2 .lazycloud.host.v1.CommandExitedH\x00R\rcommandExitedB\x06\n" +
+	"\x04body\",\n" +
+	"\rCommandExited\x12\x1b\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"M\n" +
 	"\n" +
 	"SlotsReady\x12\x14\n" +
 	"\x05slots\x18\x01 \x01(\x05R\x05slots\x12)\n" +
@@ -925,7 +1110,7 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"\x06cancel\x18\x03 \x01(\v2\x1d.lazycloud.host.v1.CancelSlotH\x00R\x06cancel\x120\n" +
 	"\x05drain\x18\x04 \x01(\v2\x18.lazycloud.host.v1.DrainH\x00R\x05drain\x123\n" +
 	"\x06reload\x18\x1e \x01(\v2\x19.lazycloud.host.v1.ReloadH\x00R\x06reloadB\x06\n" +
-	"\x04body\"\xdb\x02\n" +
+	"\x04body\"\xcb\x03\n" +
 	"\tConfigure\x12\x18\n" +
 	"\ahandler\x18\x01 \x01(\tR\ahandler\x12\x14\n" +
 	"\x05slots\x18\x02 \x01(\x05R\x05slots\x12%\n" +
@@ -939,7 +1124,18 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"secret_env\x18\f \x03(\tR\tsecretEnv\x122\n" +
 	"\x04http\x18\x1e \x01(\v2\x1e.lazycloud.host.v1.HttpServingR\x04http\x12\x1f\n" +
 	"\vhttp_socket\x18\x1f \x01(\tR\n" +
-	"httpSocket\"\xb8\x03\n" +
+	"httpSocket\x12/\n" +
+	"\x03pod\x18Z \x01(\v2\x1d.lazycloud.host.v1.PodProcessR\x03pod\x12%\n" +
+	"\x0econtrol_socket\x18[ \x01(\tR\rcontrolSocket\x12\x16\n" +
+	"\x06docker\x18\\ \x01(\bR\x06docker\"\xe5\x01\n" +
+	"\n" +
+	"PodProcess\x12\x18\n" +
+	"\acommand\x18\x01 \x03(\tR\acommand\x12+\n" +
+	"\x11working_directory\x18\x02 \x01(\tR\x10workingDirectory\x126\n" +
+	"\x06health\x18\x03 \x01(\v2\x1e.lazycloud.host.v1.HealthCheckR\x06health\x12.\n" +
+	"\x03ssh\x18\x04 \x01(\v2\x1c.lazycloud.host.v1.SshServerR\x03ssh\x12\x12\n" +
+	"\x04root\x18\x05 \x01(\tR\x04root\x12\x14\n" +
+	"\x05ports\x18\x06 \x03(\x05R\x05ports\"\xb8\x03\n" +
 	"\n" +
 	"RunAttempt\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
@@ -977,60 +1173,68 @@ func file_host_v1_container_proto_rawDescGZIP() []byte {
 	return file_host_v1_container_proto_rawDescData
 }
 
-var file_host_v1_container_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_host_v1_container_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_host_v1_container_proto_goTypes = []any{
 	(*SupervisorMessage)(nil),     // 0: lazycloud.host.v1.SupervisorMessage
-	(*SlotsReady)(nil),            // 1: lazycloud.host.v1.SlotsReady
-	(*LoadFailed)(nil),            // 2: lazycloud.host.v1.LoadFailed
-	(*AttemptFinished)(nil),       // 3: lazycloud.host.v1.AttemptFinished
-	(*OutputChunk)(nil),           // 4: lazycloud.host.v1.OutputChunk
-	(*SupervisorCommand)(nil),     // 5: lazycloud.host.v1.SupervisorCommand
-	(*Configure)(nil),             // 6: lazycloud.host.v1.Configure
-	(*RunAttempt)(nil),            // 7: lazycloud.host.v1.RunAttempt
-	(*CancelSlot)(nil),            // 8: lazycloud.host.v1.CancelSlot
-	(*Drain)(nil),                 // 9: lazycloud.host.v1.Drain
-	(*Reload)(nil),                // 10: lazycloud.host.v1.Reload
-	(*RunnerError)(nil),           // 11: lazycloud.host.v1.RunnerError
-	(*TaskSuccess)(nil),           // 12: lazycloud.host.v1.TaskSuccess
-	(*TaskFailure)(nil),           // 13: lazycloud.host.v1.TaskFailure
-	(LogStream)(0),                // 14: lazycloud.host.v1.LogStream
-	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
-	(*LifecycleHooks)(nil),        // 16: lazycloud.host.v1.LifecycleHooks
-	(*HttpServing)(nil),           // 17: lazycloud.host.v1.HttpServing
-	(PayloadEncoding)(0),          // 18: lazycloud.host.v1.PayloadEncoding
-	(*DependencyResult)(nil),      // 19: lazycloud.host.v1.DependencyResult
-	(*APIRequest)(nil),            // 20: lazycloud.host.v1.APIRequest
-	(*APIResponse)(nil),           // 21: lazycloud.host.v1.APIResponse
+	(*CommandExited)(nil),         // 1: lazycloud.host.v1.CommandExited
+	(*SlotsReady)(nil),            // 2: lazycloud.host.v1.SlotsReady
+	(*LoadFailed)(nil),            // 3: lazycloud.host.v1.LoadFailed
+	(*AttemptFinished)(nil),       // 4: lazycloud.host.v1.AttemptFinished
+	(*OutputChunk)(nil),           // 5: lazycloud.host.v1.OutputChunk
+	(*SupervisorCommand)(nil),     // 6: lazycloud.host.v1.SupervisorCommand
+	(*Configure)(nil),             // 7: lazycloud.host.v1.Configure
+	(*PodProcess)(nil),            // 8: lazycloud.host.v1.PodProcess
+	(*RunAttempt)(nil),            // 9: lazycloud.host.v1.RunAttempt
+	(*CancelSlot)(nil),            // 10: lazycloud.host.v1.CancelSlot
+	(*Drain)(nil),                 // 11: lazycloud.host.v1.Drain
+	(*Reload)(nil),                // 12: lazycloud.host.v1.Reload
+	(*RunnerError)(nil),           // 13: lazycloud.host.v1.RunnerError
+	(*TaskSuccess)(nil),           // 14: lazycloud.host.v1.TaskSuccess
+	(*TaskFailure)(nil),           // 15: lazycloud.host.v1.TaskFailure
+	(LogStream)(0),                // 16: lazycloud.host.v1.LogStream
+	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	(*LifecycleHooks)(nil),        // 18: lazycloud.host.v1.LifecycleHooks
+	(*HttpServing)(nil),           // 19: lazycloud.host.v1.HttpServing
+	(*HealthCheck)(nil),           // 20: lazycloud.host.v1.HealthCheck
+	(*SshServer)(nil),             // 21: lazycloud.host.v1.SshServer
+	(PayloadEncoding)(0),          // 22: lazycloud.host.v1.PayloadEncoding
+	(*DependencyResult)(nil),      // 23: lazycloud.host.v1.DependencyResult
+	(*APIRequest)(nil),            // 24: lazycloud.host.v1.APIRequest
+	(*APIResponse)(nil),           // 25: lazycloud.host.v1.APIResponse
 }
 var file_host_v1_container_proto_depIdxs = []int32{
-	1,  // 0: lazycloud.host.v1.SupervisorMessage.ready:type_name -> lazycloud.host.v1.SlotsReady
-	2,  // 1: lazycloud.host.v1.SupervisorMessage.load_failed:type_name -> lazycloud.host.v1.LoadFailed
-	3,  // 2: lazycloud.host.v1.SupervisorMessage.finished:type_name -> lazycloud.host.v1.AttemptFinished
-	4,  // 3: lazycloud.host.v1.SupervisorMessage.output:type_name -> lazycloud.host.v1.OutputChunk
-	11, // 4: lazycloud.host.v1.LoadFailed.error:type_name -> lazycloud.host.v1.RunnerError
-	12, // 5: lazycloud.host.v1.AttemptFinished.success:type_name -> lazycloud.host.v1.TaskSuccess
-	13, // 6: lazycloud.host.v1.AttemptFinished.failure:type_name -> lazycloud.host.v1.TaskFailure
-	14, // 7: lazycloud.host.v1.OutputChunk.stream:type_name -> lazycloud.host.v1.LogStream
-	15, // 8: lazycloud.host.v1.OutputChunk.time:type_name -> google.protobuf.Timestamp
-	6,  // 9: lazycloud.host.v1.SupervisorCommand.configure:type_name -> lazycloud.host.v1.Configure
-	7,  // 10: lazycloud.host.v1.SupervisorCommand.run:type_name -> lazycloud.host.v1.RunAttempt
-	8,  // 11: lazycloud.host.v1.SupervisorCommand.cancel:type_name -> lazycloud.host.v1.CancelSlot
-	9,  // 12: lazycloud.host.v1.SupervisorCommand.drain:type_name -> lazycloud.host.v1.Drain
-	10, // 13: lazycloud.host.v1.SupervisorCommand.reload:type_name -> lazycloud.host.v1.Reload
-	16, // 14: lazycloud.host.v1.Configure.hooks:type_name -> lazycloud.host.v1.LifecycleHooks
-	17, // 15: lazycloud.host.v1.Configure.http:type_name -> lazycloud.host.v1.HttpServing
-	18, // 16: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
-	15, // 17: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
-	19, // 18: lazycloud.host.v1.RunAttempt.dependencies:type_name -> lazycloud.host.v1.DependencyResult
-	0,  // 19: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
-	20, // 20: lazycloud.host.v1.ContainerLink.API:input_type -> lazycloud.host.v1.APIRequest
-	5,  // 21: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
-	21, // 22: lazycloud.host.v1.ContainerLink.API:output_type -> lazycloud.host.v1.APIResponse
-	21, // [21:23] is the sub-list for method output_type
-	19, // [19:21] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	2,  // 0: lazycloud.host.v1.SupervisorMessage.ready:type_name -> lazycloud.host.v1.SlotsReady
+	3,  // 1: lazycloud.host.v1.SupervisorMessage.load_failed:type_name -> lazycloud.host.v1.LoadFailed
+	4,  // 2: lazycloud.host.v1.SupervisorMessage.finished:type_name -> lazycloud.host.v1.AttemptFinished
+	5,  // 3: lazycloud.host.v1.SupervisorMessage.output:type_name -> lazycloud.host.v1.OutputChunk
+	1,  // 4: lazycloud.host.v1.SupervisorMessage.command_exited:type_name -> lazycloud.host.v1.CommandExited
+	13, // 5: lazycloud.host.v1.LoadFailed.error:type_name -> lazycloud.host.v1.RunnerError
+	14, // 6: lazycloud.host.v1.AttemptFinished.success:type_name -> lazycloud.host.v1.TaskSuccess
+	15, // 7: lazycloud.host.v1.AttemptFinished.failure:type_name -> lazycloud.host.v1.TaskFailure
+	16, // 8: lazycloud.host.v1.OutputChunk.stream:type_name -> lazycloud.host.v1.LogStream
+	17, // 9: lazycloud.host.v1.OutputChunk.time:type_name -> google.protobuf.Timestamp
+	7,  // 10: lazycloud.host.v1.SupervisorCommand.configure:type_name -> lazycloud.host.v1.Configure
+	9,  // 11: lazycloud.host.v1.SupervisorCommand.run:type_name -> lazycloud.host.v1.RunAttempt
+	10, // 12: lazycloud.host.v1.SupervisorCommand.cancel:type_name -> lazycloud.host.v1.CancelSlot
+	11, // 13: lazycloud.host.v1.SupervisorCommand.drain:type_name -> lazycloud.host.v1.Drain
+	12, // 14: lazycloud.host.v1.SupervisorCommand.reload:type_name -> lazycloud.host.v1.Reload
+	18, // 15: lazycloud.host.v1.Configure.hooks:type_name -> lazycloud.host.v1.LifecycleHooks
+	19, // 16: lazycloud.host.v1.Configure.http:type_name -> lazycloud.host.v1.HttpServing
+	8,  // 17: lazycloud.host.v1.Configure.pod:type_name -> lazycloud.host.v1.PodProcess
+	20, // 18: lazycloud.host.v1.PodProcess.health:type_name -> lazycloud.host.v1.HealthCheck
+	21, // 19: lazycloud.host.v1.PodProcess.ssh:type_name -> lazycloud.host.v1.SshServer
+	22, // 20: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
+	17, // 21: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
+	23, // 22: lazycloud.host.v1.RunAttempt.dependencies:type_name -> lazycloud.host.v1.DependencyResult
+	0,  // 23: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
+	24, // 24: lazycloud.host.v1.ContainerLink.API:input_type -> lazycloud.host.v1.APIRequest
+	6,  // 25: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
+	25, // 26: lazycloud.host.v1.ContainerLink.API:output_type -> lazycloud.host.v1.APIResponse
+	25, // [25:27] is the sub-list for method output_type
+	23, // [23:25] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_container_proto_init() }
@@ -1044,12 +1248,13 @@ func file_host_v1_container_proto_init() {
 		(*SupervisorMessage_LoadFailed)(nil),
 		(*SupervisorMessage_Finished)(nil),
 		(*SupervisorMessage_Output)(nil),
+		(*SupervisorMessage_CommandExited)(nil),
 	}
-	file_host_v1_container_proto_msgTypes[3].OneofWrappers = []any{
+	file_host_v1_container_proto_msgTypes[4].OneofWrappers = []any{
 		(*AttemptFinished_Success)(nil),
 		(*AttemptFinished_Failure)(nil),
 	}
-	file_host_v1_container_proto_msgTypes[5].OneofWrappers = []any{
+	file_host_v1_container_proto_msgTypes[6].OneofWrappers = []any{
 		(*SupervisorCommand_Configure)(nil),
 		(*SupervisorCommand_Run)(nil),
 		(*SupervisorCommand_Cancel)(nil),
@@ -1062,7 +1267,7 @@ func file_host_v1_container_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_host_v1_container_proto_rawDesc), len(file_host_v1_container_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

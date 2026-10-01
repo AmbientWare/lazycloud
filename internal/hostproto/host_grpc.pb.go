@@ -19,18 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HostService_Enroll_FullMethodName               = "/lazycloud.host.v1.HostService/Enroll"
-	HostService_Session_FullMethodName              = "/lazycloud.host.v1.HostService/Session"
-	HostService_ClaimTasks_FullMethodName           = "/lazycloud.host.v1.HostService/ClaimTasks"
-	HostService_CompleteTask_FullMethodName         = "/lazycloud.host.v1.HostService/CompleteTask"
-	HostService_AppendLogs_FullMethodName           = "/lazycloud.host.v1.HostService/AppendLogs"
-	HostService_AcquireDisk_FullMethodName          = "/lazycloud.host.v1.HostService/AcquireDisk"
-	HostService_RecordDiskGeneration_FullMethodName = "/lazycloud.host.v1.HostService/RecordDiskGeneration"
-	HostService_RecordDiskCollection_FullMethodName = "/lazycloud.host.v1.HostService/RecordDiskCollection"
-	HostService_ReleaseDisk_FullMethodName          = "/lazycloud.host.v1.HostService/ReleaseDisk"
-	HostService_ContainerAPI_FullMethodName         = "/lazycloud.host.v1.HostService/ContainerAPI"
-	HostService_CompleteImageBuild_FullMethodName   = "/lazycloud.host.v1.HostService/CompleteImageBuild"
-	HostService_AppendImageBuildLogs_FullMethodName = "/lazycloud.host.v1.HostService/AppendImageBuildLogs"
+	HostService_Enroll_FullMethodName                  = "/lazycloud.host.v1.HostService/Enroll"
+	HostService_Session_FullMethodName                 = "/lazycloud.host.v1.HostService/Session"
+	HostService_ClaimTasks_FullMethodName              = "/lazycloud.host.v1.HostService/ClaimTasks"
+	HostService_CompleteTask_FullMethodName            = "/lazycloud.host.v1.HostService/CompleteTask"
+	HostService_AppendLogs_FullMethodName              = "/lazycloud.host.v1.HostService/AppendLogs"
+	HostService_AcquireDisk_FullMethodName             = "/lazycloud.host.v1.HostService/AcquireDisk"
+	HostService_RecordDiskGeneration_FullMethodName    = "/lazycloud.host.v1.HostService/RecordDiskGeneration"
+	HostService_RecordDiskCollection_FullMethodName    = "/lazycloud.host.v1.HostService/RecordDiskCollection"
+	HostService_ReleaseDisk_FullMethodName             = "/lazycloud.host.v1.HostService/ReleaseDisk"
+	HostService_ContainerAPI_FullMethodName            = "/lazycloud.host.v1.HostService/ContainerAPI"
+	HostService_CompleteImageBuild_FullMethodName      = "/lazycloud.host.v1.HostService/CompleteImageBuild"
+	HostService_AppendImageBuildLogs_FullMethodName    = "/lazycloud.host.v1.HostService/AppendImageBuildLogs"
+	HostService_CompleteSnapshot_FullMethodName        = "/lazycloud.host.v1.HostService/CompleteSnapshot"
+	HostService_CompleteFilesystemImage_FullMethodName = "/lazycloud.host.v1.HostService/CompleteFilesystemImage"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -77,6 +79,10 @@ type HostServiceClient interface {
 	CompleteImageBuild(ctx context.Context, in *CompleteImageBuildRequest, opts ...grpc.CallOption) (*CompleteImageBuildResponse, error)
 	// AppendImageBuildLogs stores a build container's output in order.
 	AppendImageBuildLogs(ctx context.Context, in *AppendImageBuildLogsRequest, opts ...grpc.CallOption) (*AppendImageBuildLogsResponse, error)
+	// CompleteSnapshot reports how a SnapshotContainer ended.
+	CompleteSnapshot(ctx context.Context, in *CompleteSnapshotRequest, opts ...grpc.CallOption) (*CompleteSnapshotResponse, error)
+	// CompleteFilesystemImage reports how a PublishFilesystem ended.
+	CompleteFilesystemImage(ctx context.Context, in *CompleteFilesystemImageRequest, opts ...grpc.CallOption) (*CompleteFilesystemImageResponse, error)
 }
 
 type hostServiceClient struct {
@@ -213,6 +219,26 @@ func (c *hostServiceClient) AppendImageBuildLogs(ctx context.Context, in *Append
 	return out, nil
 }
 
+func (c *hostServiceClient) CompleteSnapshot(ctx context.Context, in *CompleteSnapshotRequest, opts ...grpc.CallOption) (*CompleteSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteSnapshotResponse)
+	err := c.cc.Invoke(ctx, HostService_CompleteSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) CompleteFilesystemImage(ctx context.Context, in *CompleteFilesystemImageRequest, opts ...grpc.CallOption) (*CompleteFilesystemImageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteFilesystemImageResponse)
+	err := c.cc.Invoke(ctx, HostService_CompleteFilesystemImage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -257,6 +283,10 @@ type HostServiceServer interface {
 	CompleteImageBuild(context.Context, *CompleteImageBuildRequest) (*CompleteImageBuildResponse, error)
 	// AppendImageBuildLogs stores a build container's output in order.
 	AppendImageBuildLogs(context.Context, *AppendImageBuildLogsRequest) (*AppendImageBuildLogsResponse, error)
+	// CompleteSnapshot reports how a SnapshotContainer ended.
+	CompleteSnapshot(context.Context, *CompleteSnapshotRequest) (*CompleteSnapshotResponse, error)
+	// CompleteFilesystemImage reports how a PublishFilesystem ended.
+	CompleteFilesystemImage(context.Context, *CompleteFilesystemImageRequest) (*CompleteFilesystemImageResponse, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -302,6 +332,12 @@ func (UnimplementedHostServiceServer) CompleteImageBuild(context.Context, *Compl
 }
 func (UnimplementedHostServiceServer) AppendImageBuildLogs(context.Context, *AppendImageBuildLogsRequest) (*AppendImageBuildLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AppendImageBuildLogs not implemented")
+}
+func (UnimplementedHostServiceServer) CompleteSnapshot(context.Context, *CompleteSnapshotRequest) (*CompleteSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteSnapshot not implemented")
+}
+func (UnimplementedHostServiceServer) CompleteFilesystemImage(context.Context, *CompleteFilesystemImageRequest) (*CompleteFilesystemImageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteFilesystemImage not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -518,6 +554,42 @@ func _HostService_AppendImageBuildLogs_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_CompleteSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).CompleteSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_CompleteSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).CompleteSnapshot(ctx, req.(*CompleteSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_CompleteFilesystemImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteFilesystemImageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).CompleteFilesystemImage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_CompleteFilesystemImage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).CompleteFilesystemImage(ctx, req.(*CompleteFilesystemImageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -564,6 +636,14 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AppendImageBuildLogs",
 			Handler:    _HostService_AppendImageBuildLogs_Handler,
+		},
+		{
+			MethodName: "CompleteSnapshot",
+			Handler:    _HostService_CompleteSnapshot_Handler,
+		},
+		{
+			MethodName: "CompleteFilesystemImage",
+			Handler:    _HostService_CompleteFilesystemImage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
