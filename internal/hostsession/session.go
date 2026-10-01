@@ -360,7 +360,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes,
 			CpuLimitMillis: start.CPULimitMillis, MemoryLimitBytes: start.MemoryLimitBytes,
 			DiskLimitBytes: diskLimit,
-			GpuCount: gpusOf(start.Spec.Resources),
+			GpuCount:       gpusOf(start.Spec.Resources),
 		},
 		Function: &hostproto.FunctionWorkload{
 			Handler:   start.Spec.Handler,
