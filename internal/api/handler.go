@@ -334,6 +334,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())
 	case errors.Is(err, images.ErrNotReady):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
+	case errors.Is(err, observability.ErrTooManyStreams):
+		writeJSONError(w, http.StatusTooManyRequests, apitypes.Unavailable, err.Error())
 	case errors.Is(err, observability.ErrTooManySubscribers):
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
 	case errors.Is(err, images.ErrRegistryUnavailable):

@@ -27,7 +27,7 @@ func BenchmarkPublishToThousandSubscribers(b *testing.B) {
 		if i%2 == 1 {
 			target = identity.WorkspaceID(uuid.New())
 		}
-		sub, _, err := hub.Subscribe(target, nil)
+		sub, _, err := hub.Subscribe(target, "test", nil)
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -1,11 +1,40 @@
 package observability_test
 
 import (
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/observability"
 )
+
+// One caller may hold MaxPerPrincipal streams; closing one frees its place.
+func TestStreamsPerCallerAreCapped(t *testing.T) {
+	cfg := observability.ChangesConfig{Retained: 8, Buffer: 8, MaxSubscribers: 10, MaxPerPrincipal: 2}
+	hub := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler))
+	ws := identity.WorkspaceID(uuid.New())
+	first, _, err := hub.Subscribe(ws, "user:a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := hub.Subscribe(ws, "user:a", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := hub.Subscribe(ws, "user:a", nil); !errors.Is(err, observability.ErrTooManyStreams) {
+		t.Fatalf("third stream of one caller: %v", err)
+	}
+	if _, _, err := hub.Subscribe(ws, "user:b", nil); err != nil {
+		t.Fatalf("another caller: %v", err)
+	}
+	first.Close()
+	if _, _, err := hub.Subscribe(ws, "user:a", nil); err != nil {
+		t.Fatalf("after a close: %v", err)
+	}
+}
 
 // An idle listener checks its connection without losing it; a lost
 // connection resets every stream, and changes flow again after the hub

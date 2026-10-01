@@ -24,7 +24,7 @@ func TestChangeStreamDeliversCommittedChangesOfItsWorkspace(t *testing.T) {
 	f := newFixture(t, `{"max_pending_tasks": 5000}`)
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
 	hub, sub := runHub(t, f.pool, smallHub(), f.workspace)
-	other, _, err := hub.Subscribe(otherWS, nil)
+	other, _, err := hub.Subscribe(otherWS, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestChangeStreamResumesAfterLastEventIDOrResets(t *testing.T) {
 	f.submit(1)
 	third, _ := nextEvent(t, sub)
 
-	resumed, resume, err := hub.Subscribe(f.workspace, &first.Seq)
+	resumed, resume, err := hub.Subscribe(f.workspace, "test", &first.Seq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestChangeStreamResumesAfterLastEventIDOrResets(t *testing.T) {
 		t.Fatalf("resume after the first event: %+v", resume)
 	}
 	stale := int64(-1)
-	_, resume, err = hub.Subscribe(f.workspace, &stale)
+	_, resume, err = hub.Subscribe(f.workspace, "test", &stale)
 	if err != nil {
 		t.Fatal(err)
 	}

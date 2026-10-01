@@ -65,9 +65,10 @@ func (r *receiver) Export(_ context.Context, req *collector.ExportTraceServiceRe
 	return &collector.ExportTraceServiceResponse{}, nil
 }
 
+
 // Without an endpoint nothing is traced; with one, request spans named by
-// their operation export over OTLP inside the caller's trace, and /metrics
-// reports the request.
+// their operation export over OTLP, linked to the caller's trace, and
+// /metrics reports the request.
 func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	off, err := telemetry.New(t.Context(), telemetry.Config{Service: "server"})
 	if err != nil {
@@ -129,7 +130,10 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	recv.mu.Lock()
 	spans := recv.spans
 	recv.mu.Unlock()
-	if len(spans) != 1 || spans[0].GetName() != "getTask" || hex.EncodeToString(spans[0].GetTraceId()) != traceID {
+	// The caller's trace is a link, not the parent: a public caller does
+	// not decide sampling.
+	if len(spans) != 1 || spans[0].GetName() != "getTask" || hex.EncodeToString(spans[0].GetTraceId()) == traceID ||
+		len(spans[0].GetLinks()) != 1 || hex.EncodeToString(spans[0].GetLinks()[0].GetTraceId()) != traceID {
 		t.Fatalf("exported spans %v", spans)
 	}
 

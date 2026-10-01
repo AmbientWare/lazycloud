@@ -110,7 +110,7 @@ func (f *fixture) exec1(sql string, args ...any) {
 func runHub(t *testing.T, pool *pgxpool.Pool, cfg observability.ChangesConfig, ws identity.WorkspaceID) (*observability.Changes, *observability.Subscription) {
 	t.Helper()
 	hub := observability.NewChanges(pool, cfg, nil, slog.New(slog.DiscardHandler))
-	sub, _, err := hub.Subscribe(ws, nil)
+	sub, _, err := hub.Subscribe(ws, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

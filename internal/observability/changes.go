@@ -32,8 +32,10 @@ type ChangesConfig struct {
 	// Buffer is how many events one subscriber may fall behind before it
 	// is told to reset.
 	Buffer int
-	// MaxSubscribers bounds open streams per server.
-	MaxSubscribers int
+	// MaxSubscribers bounds open streams per server, and MaxPerPrincipal
+	// those of one user or container.
+	MaxSubscribers  int
+	MaxPerPrincipal int
 	// Idle is how long the listener waits without a notification before
 	// it checks the connection; zero means 30 s.
 	Idle time.Duration
@@ -46,13 +48,20 @@ func (c ChangesConfig) idle() time.Duration {
 	return c.Idle
 }
 
-// DefaultChangesConfig keeps about a minute of a busy cluster's changes.
+// DefaultChangesConfig keeps 4,096 events: a few seconds of a busy cluster,
+// enough to resume after a reconnect. Frames are typically under 1 KiB and
+// at most 8 KiB, so the ring holds 32 MiB at worst; subscribers share its
+// frames.
 func DefaultChangesConfig() ChangesConfig {
-	return ChangesConfig{Retained: 16384, Buffer: 256, MaxSubscribers: 20000}
+	return ChangesConfig{Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32}
 }
 
-// ErrTooManySubscribers means the server holds MaxSubscribers streams.
-var ErrTooManySubscribers = errors.New("too many open change streams")
+var (
+	// ErrTooManySubscribers means the server holds MaxSubscribers streams.
+	ErrTooManySubscribers = errors.New("too many open change streams on this server")
+	// ErrTooManyStreams means the caller holds MaxPerPrincipal streams.
+	ErrTooManyStreams = errors.New("too many open change streams for this caller")
+)
 
 // ChangeEvent is one notification as subscribers receive it: the changes
 // one statement committed in one workspace.
@@ -93,6 +102,8 @@ type Changes struct {
 	index map[int64]uint64
 	subs  map[identity.WorkspaceID]map[*Subscription]struct{}
 	count int
+	// streams counts open subscriptions per principal.
+	streams map[string]int
 	// done is closed when Run returns, which ends every stream.
 	done chan struct{}
 }
@@ -129,10 +140,11 @@ func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Reg
 	}
 	return &Changes{
 		pool: pool, cfg: cfg, logger: logger, metrics: m,
-		ring:  make([]ChangeEvent, cfg.Retained),
-		index: make(map[int64]uint64, cfg.Retained),
-		subs:  map[identity.WorkspaceID]map[*Subscription]struct{}{},
-		done:  make(chan struct{}),
+		ring:    make([]ChangeEvent, cfg.Retained),
+		index:   make(map[int64]uint64, cfg.Retained),
+		subs:    map[identity.WorkspaceID]map[*Subscription]struct{}{},
+		streams: map[string]int{},
+		done:    make(chan struct{}),
 	}
 }
 
@@ -305,6 +317,7 @@ const (
 type Subscription struct {
 	hub       *Changes
 	workspace identity.WorkspaceID
+	principal string
 	events    chan ChangeEvent
 	// wake signals that reset was set.
 	wake chan struct{}
@@ -370,6 +383,9 @@ func (s *Subscription) Close() {
 		delete(c.subs, s.workspace)
 	}
 	c.count--
+	if c.streams[s.principal]--; c.streams[s.principal] <= 0 {
+		delete(c.streams, s.principal)
+	}
 	c.metrics.subscribers.Dec()
 }
 
@@ -386,17 +402,25 @@ type Resume struct {
 	Latest int64
 }
 
-// Subscribe opens a stream of ws's changes. With after set, it replays the
+// Subscribe opens a stream of ws's changes for principal, which names the
+// user or container holding it. With after set, it replays the
 // retained events that followed it, or reports a reset when after is no
 // longer retained. Registration and replay happen under one lock, so no
 // event falls between them.
-func (c *Changes) Subscribe(ws identity.WorkspaceID, after *int64) (*Subscription, Resume, error) {
+func (c *Changes) Subscribe(ws identity.WorkspaceID, principal string, after *int64) (*Subscription, Resume, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.count >= c.cfg.MaxSubscribers {
 		return nil, Resume{}, ErrTooManySubscribers
 	}
-	sub := &Subscription{hub: c, workspace: ws, events: make(chan ChangeEvent, c.cfg.Buffer), wake: make(chan struct{}, 1)}
+	if c.cfg.MaxPerPrincipal > 0 && c.streams[principal] >= c.cfg.MaxPerPrincipal {
+		return nil, Resume{}, ErrTooManyStreams
+	}
+	c.streams[principal]++
+	sub := &Subscription{
+		hub: c, workspace: ws, principal: principal,
+		events: make(chan ChangeEvent, c.cfg.Buffer), wake: make(chan struct{}, 1),
+	}
 	set, ok := c.subs[ws]
 	if !ok {
 		set = map[*Subscription]struct{}{}

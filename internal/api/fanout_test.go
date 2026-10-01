@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 )
 
 // TestMeasureChangeFanout opens 1,000 change streams on one workspace and
@@ -21,7 +22,9 @@ func TestMeasureChangeFanout(t *testing.T) {
 		t.Skip("set LAZYCLOUD_MEASURE=1 to measure")
 	}
 	const streams = 1000
-	e := newEnv(t)
+	cfg := observability.DefaultChangesConfig()
+	cfg.MaxPerPrincipal = streams
+	e := newEnvWith(t, cfg)
 	e.deploy()
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = streams
 

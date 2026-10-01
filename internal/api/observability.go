@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -39,11 +41,21 @@ func (s *Server) StreamChanges(ctx context.Context, req StreamChangesRequestObje
 		}
 		after = &seq
 	}
-	sub, resume, err := s.owners.Changes.Subscribe(ws.ID, after)
+	sub, resume, err := s.owners.Changes.Subscribe(ws.ID, s.streamOwner(ctx), after)
 	if err != nil {
 		return nil, err
 	}
 	return changeStream{ctx: ctx, hub: s.owners.Changes, sub: sub, resume: resume}, nil
+}
+
+// streamOwner names who holds a stream, for the per-caller limit: the
+// user, or the container.
+func (s *Server) streamOwner(ctx context.Context) string {
+	if c, ok := containerFrom(ctx); ok {
+		return "container:" + c.Container.String()
+	}
+	p, _ := principalFrom(ctx)
+	return "user:" + uuid.UUID(p.User).String()
 }
 
 // changeStream writes the subscription as text/event-stream.

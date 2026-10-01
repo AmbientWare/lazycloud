@@ -73,7 +73,9 @@ func (t *Telemetry) HTTPHandler(next http.Handler, metrics *HTTPMetrics) http.Ha
 		}()
 		next.ServeHTTP(recorder, r.WithContext(ctx))
 	})
-	return otelhttp.NewHandler(inner, "http",
+	// The API is public: a caller's trace context becomes a link, so
+	// callers cannot choose what is sampled or join their spans to ours.
+	return otelhttp.NewHandler(inner, "http", otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true }),
 		otelhttp.WithTracerProvider(t.provider), otelhttp.WithPropagators(t.propagator))
 }
 
