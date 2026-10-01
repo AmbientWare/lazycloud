@@ -30,9 +30,9 @@ import (
 const (
 	// maxRecvBytes admits a 16 MiB result with generous envelope room.
 	maxRecvBytes = 64 << 20
-	// maxSendBytes matches the agent's receive limit, so a claim of several
-	// large inputs still fits.
-	maxSendBytes  = 512 << 20
+	// maxSendBytes admits a claim of execution.MaxClaimInputBytes of inputs
+	// with generous envelope room, well under the agent's receive limit.
+	maxSendBytes  = execution.MaxClaimInputBytes + 16<<20
 	maxClaimWait  = 60 * time.Second
 	maxClaimTasks = 256
 )

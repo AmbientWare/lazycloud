@@ -29,17 +29,27 @@ func (q *Queries) AssignedContainerRelease(ctx context.Context, arg AssignedCont
 }
 
 const claimQueuedTasks = `-- name: ClaimQueuedTasks :many
-with picked as (
-    select t.id, t.attempt_count
+with candidate as (
+    select t.id, t.attempt_count, t.available_at
     from tasks t
     where t.release_id = $1 and t.status = 'queued' and t.available_at <= now()
     order by t.available_at, t.id
     limit $2
     for update skip locked
+), sized as (
+    select c.id, c.attempt_count,
+           row_number() over w as turn,
+           sum(octet_length(i.data)) over w as total_bytes
+    from candidate c
+    join task_inputs i on i.task_id = c.id
+    window w as (order by c.available_at, c.id)
+), picked as (
+    select id, attempt_count from sized
+    where turn = 1 or total_bytes <= $3::bigint
 ), attempt as (
     insert into attempts (task_id, number, container_id, state, deadline_at)
-    select picked.id, picked.attempt_count + 1, $3, 'running',
-           now() + make_interval(secs => $4::float8)
+    select picked.id, picked.attempt_count + 1, $4, 'running',
+           now() + make_interval(secs => $5::float8)
     from picked
     returning attempts.id, attempts.task_id, attempts.number, attempts.deadline_at
 ), claimed as (
@@ -61,6 +71,7 @@ order by attempt.id
 type ClaimQueuedTasksParams struct {
 	ReleaseID      uuid.UUID
 	MaxTasks       int32
+	MaxInputBytes  int64
 	ContainerID    uuid.UUID
 	TimeoutSeconds float64
 }
@@ -75,11 +86,14 @@ type ClaimQueuedTasksRow struct {
 }
 
 // Due queued tasks of the release become running attempts on the container.
-// Concurrent claimers skip each other's rows.
+// Concurrent claimers skip each other's rows. The claim takes the longest
+// prefix whose inputs total at most max_input_bytes, and always the first
+// task, so the response stays within the host message limit.
 func (q *Queries) ClaimQueuedTasks(ctx context.Context, arg ClaimQueuedTasksParams) ([]ClaimQueuedTasksRow, error) {
 	rows, err := q.db.Query(ctx, claimQueuedTasks,
 		arg.ReleaseID,
 		arg.MaxTasks,
+		arg.MaxInputBytes,
 		arg.ContainerID,
 		arg.TimeoutSeconds,
 	)
