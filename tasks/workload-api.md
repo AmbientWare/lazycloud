@@ -48,7 +48,14 @@ No old route remains.
 - `--json` dumps of API models follow the renamed fields. `deploy --json`
   shows `releases[].name` instead of `function`, and workload dumps no longer
   carry `active_release: null`. Human output is unchanged.
-- An unknown kind in a path is a 400 from schema validation rather than a 404.
+- An unknown kind in an API path is a 400 from schema validation. The
+  dashboard checks the kind against the generated `WorkloadKind` values first
+  and shows its not-found page.
+- Releases stored before this change have no `kind` in their spec. Nothing of
+  the rewrite is deployed, so a local stack from before it needs a reset
+  (`docker compose down -v` and a fresh `.lazycloud`); there is no
+  compatibility code. Invoke paths come from the workload row's kind, not the
+  stored spec.
 
 ## Evidence
 
@@ -75,9 +82,6 @@ No old route remains.
   a root agent. They are covered by the updated owner and API tests. The
   live `test_ssh_config_makes_plain_ssh_reach_a_devbox` fails locally for the
   same reason.
-- `execution.ContainerFilter.Function` and its SQL filter no longer have an
-  API caller. They were left for the execution owner while `perf-fixes`
-  changes those queries.
 - Live tests that failed for reasons this packet does not touch: artifact
   uploads from containers (the presigned URL points at host loopback), hook
   log lines joined in `test_workload_runtime_end_to_end`, and account activity
