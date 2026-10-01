@@ -5,7 +5,7 @@ import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { PanelError } from "@/components/shared/PanelError";
 import { appActivityQueryOptions, appQueryOptions } from "@/lib/queries/apps";
 import { deployedAt, deploymentsQueryOptions, workloadRunning } from "@/lib/queries/deployments";
-import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
+import { sandboxesQueryOptions, sandboxStatsQueryOptions } from "@/lib/queries/sandboxes";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -31,7 +31,8 @@ function AppDetailPage() {
   const workloads = useQuery(deploymentsQueryOptions(workspace.name, app));
   const activity = useQuery(appActivityQueryOptions(workspace.name, app));
   const tasks = useQuery(tasksQueryOptions(workspace.name, { app, root_only: true }, 15));
-  const sandboxes = useQuery(sandboxesQueryOptions(workspace.id, { limit: 50, appId: app }));
+  const sandboxes = useQuery(sandboxesQueryOptions(workspace.name, app));
+  const sandboxStats = useQuery(sandboxStatsQueryOptions(workspace.name, app));
 
   const latest = workloads.data?.[0];
 
@@ -88,7 +89,8 @@ function AppDetailPage() {
               />
               <AppSandboxesSection
                 workspaceName={workspace.name}
-                sandboxes={sandboxes.data?.data}
+                sandboxes={sandboxes.data}
+                stats={sandboxStats.data}
                 pending={sandboxes.isPending}
                 error={sandboxes.error?.message}
               />

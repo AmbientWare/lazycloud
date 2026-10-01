@@ -10,6 +10,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import { Terminal } from "@/components/shared/Terminal";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
@@ -18,14 +19,11 @@ import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import type { ContainerDetail } from "@/lib/api/schemas";
-import {
-  containerDetailQueryOptions,
-  stopContainerMutationOptions,
-} from "@/lib/queries/containers";
+import type { Schemas } from "@/lib/api/client";
+import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
-  sandboxUrlsQueryOptions,
+  sandboxPortsQueryOptions,
   snapshotSandboxMemoryMutationOptions,
 } from "@/lib/queries/sandboxes";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -34,7 +32,6 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { ContainerLifecycle } from "./-components/ContainerLifecycle";
 import { ContainerLineage } from "./-components/ContainerLineage";
 import { SandboxProcessList } from "./-components/SandboxProcessList";
-import { SandboxTerminal } from "./-components/SandboxTerminal";
 
 export const Route = createFileRoute("/w/$workspace/sandboxes/$containerId")({
   component: SandboxDetailPage,
@@ -45,13 +42,14 @@ function SandboxDetailPage() {
   const { containerId } = Route.useParams();
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const container = useQuery(containerDetailQueryOptions(workspace.name, containerId));
+  const container = useQuery(containerQueryOptions(workspace.name, containerId));
   const stop = useMutation({
     ...stopContainerMutationOptions(workspace.name, containerId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.containers.detail(workspace.id, containerId),
-      }),
+    onSuccess: (stopped) =>
+      queryClient.setQueryData(
+        workspaceQueryKeys.containers.detail(workspace.name, containerId),
+        stopped,
+      ),
   });
 
   if (container.isPending) return <SandboxSkeleton />;
@@ -60,15 +58,15 @@ function SandboxDetailPage() {
   }
 
   const record = container.data;
-  const running = record.status === "running";
+  const running = record.state === "ready";
 
   return (
     <WorkspacePage
-      title={<span className="mono">{record.name}</span>}
+      title={<span className="mono">{record.function}</span>}
       description={<ContainerLineage record={record} workspaceName={workspace.name} />}
       actions={
         <>
-          <StatusChip status={record.status} live={running} />
+          <StatusChip status={record.state} live={running} />
           <SandboxActions record={record} onStop={() => stop.mutate()} stopping={stop.isPending} />
           {stop.isError ? <p className="text-xs text-destructive">{stop.error.message}</p> : null}
         </>
@@ -80,8 +78,8 @@ function SandboxDetailPage() {
           <Panel title="Lifecycle" contentClassName="px-4 py-3">
             <ContainerLifecycle
               createdAt={record.created_at}
-              startedAt={record.started_at}
-              finishedAt={record.finished_at}
+              startedAt={record.ready_at}
+              finishedAt={record.stopped_at}
               running={running}
             />
           </Panel>
@@ -104,18 +102,16 @@ function SandboxDetailPage() {
             <LinearTab value="network">Network</LinearTab>
           </LinearTabsList>
           <TabsContent value="terminal" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
-            {record.actions.can_shell ? (
+            {running ? (
               <PanelErrorBoundary key={containerId} title="Terminal could not be displayed">
-                <SandboxTerminal
+                <Terminal
+                  workspace={workspace.name}
                   containerId={containerId}
                   className="h-full min-h-[28rem] lg:min-h-0"
                 />
               </PanelErrorBoundary>
             ) : (
-              <PanelEmpty
-                message={running ? "Shell access is unavailable" : "Sandbox is not running"}
-                className="h-56"
-              />
+              <PanelEmpty message="Sandbox is not running" className="h-56" />
             )}
           </TabsContent>
           <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
@@ -143,7 +139,7 @@ function SandboxDetailPage() {
           </TabsContent>
           <TabsContent value="network" className="m-0 min-h-0 flex-1 overflow-auto p-3">
             <PanelErrorBoundary key={containerId} title="Network details could not be displayed">
-              <SandboxNetwork record={record} workspaceId={workspace.id} />
+              <SandboxNetwork record={record} workspace={workspace.name} />
             </PanelErrorBoundary>
           </TabsContent>
         </Tabs>
@@ -157,18 +153,18 @@ function SandboxActions({
   onStop,
   stopping,
 }: {
-  record: ContainerDetail;
+  record: Schemas["Container"];
   onStop: () => void;
   stopping: boolean;
 }) {
   const { workspace } = useWorkspace();
-  const stubId = record.workload?.id ?? "";
-  const image = useMutation(createSandboxImageMutationOptions(workspace.id, record.id, stubId));
-  const memory = useMutation(snapshotSandboxMemoryMutationOptions(workspace.id, record.id, stubId));
+  const image = useMutation(createSandboxImageMutationOptions(workspace.name, record.id));
+  const memory = useMutation(snapshotSandboxMemoryMutationOptions(workspace.name, record.id));
   const actionError = image.error || memory.error;
+  const running = record.state === "ready";
   return (
     <div className="flex max-w-full flex-wrap justify-end gap-2">
-      {record.actions.can_create_image ? (
+      {running ? (
         <Button
           type="button"
           variant="outline"
@@ -180,7 +176,7 @@ function SandboxActions({
           Save image
         </Button>
       ) : null}
-      {record.actions.can_snapshot_memory ? (
+      {running ? (
         <Button
           type="button"
           variant="outline"
@@ -192,7 +188,7 @@ function SandboxActions({
           Snapshot memory
         </Button>
       ) : null}
-      {record.actions.can_stop ? (
+      {record.state !== "stopped" ? (
         <Button type="button" variant="destructive" size="sm" disabled={stopping} onClick={onStop}>
           <Square className="fill-current" />
           {stopping ? "Stopping" : "Stop"}
@@ -205,7 +201,7 @@ function SandboxActions({
       ) : null}
       {memory.data ? (
         <span className="flex basis-full items-center justify-end gap-1 text-xs text-muted-foreground">
-          Checkpoint <CopyId value={memory.data.checkpoint_id} />
+          Checkpoint <CopyId value={memory.data.id} />
         </span>
       ) : null}
       {actionError ? (
@@ -217,51 +213,56 @@ function SandboxActions({
   );
 }
 
-function SandboxFacts({ record }: { record: ContainerDetail }) {
+function SandboxFacts({ record }: { record: Schemas["Container"] }) {
   return (
     <>
       <FactGrid columns={2} className="gap-x-5 gap-y-3 text-xs">
-        <Fact label="Image" value={record.image} mono />
+        <Fact label="Image" value={record.image ?? "None"} mono />
         <Fact
           label="Uptime"
           value={
             <LiveDuration
-              startedAt={record.started_at}
-              finishedAt={record.finished_at}
+              startedAt={record.ready_at}
+              finishedAt={record.stopped_at}
               fallback="None"
             />
           }
         />
         <Fact
-          label="Expires"
-          value={record.expires_at ? <LiveRelativeTime value={record.expires_at} /> : "No expiry"}
-        />
-        <Fact
           label="Version"
-          value={record.deployment ? `v${record.deployment.version}` : "None"}
+          value={record.version === undefined ? "None" : `v${record.version}`}
           mono
         />
         <Fact label="Created" value={<LiveRelativeTime value={record.created_at} />} />
         <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
       </FactGrid>
-      <StopCause reason={record.termination_reason} className="mt-3 text-xs" />
+      <StopCause
+        reason={record.stop_reason}
+        message={record.exit_message}
+        className="mt-3 text-xs"
+      />
     </>
   );
 }
 
-function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; workspaceId: string }) {
-  const running = record.status === "running";
-  const urls = useQuery(sandboxUrlsQueryOptions(workspaceId, record.id, running));
-  const configuredPorts = [...new Set(Object.values(record.ports))].sort((a, b) => a - b);
+function SandboxNetwork({
+  record,
+  workspace,
+}: {
+  record: Schemas["Container"];
+  workspace: string;
+}) {
+  const running = record.state === "ready";
+  const ports = useQuery(sandboxPortsQueryOptions(workspace, record.id, running));
 
   if (!running) return <PanelEmpty message="Sandbox is not running" className="h-56" />;
-  if (urls.isPending) {
+  if (ports.isPending) {
     return <Skeleton className="h-24 w-full" />;
   }
-  if (urls.isError) {
-    return <PanelError message={urls.error.message} />;
+  if (ports.isError) {
+    return <PanelError message={ports.error.message} />;
   }
-  const exposed = Object.entries(urls.data.urls).sort(([a], [b]) => Number(a) - Number(b));
+  const exposed = [...ports.data].sort((a, b) => a.port - b.port);
   return (
     <div className="content-transition h-full min-h-0 overflow-auto">
       <div className="sticky top-0 grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border bg-card px-3 py-2 text-[11px] uppercase text-muted-foreground sm:grid-cols-[7rem_minmax(0,1fr)]">
@@ -269,7 +270,7 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
         <span>Endpoint</span>
       </div>
       {exposed.length ? (
-        exposed.map(([port, url]) => (
+        exposed.map(({ port, url }) => (
           <div
             key={port}
             className="grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border/60 px-3 py-2 text-xs last:border-0 sm:grid-cols-[7rem_minmax(0,1fr)]"
@@ -283,16 +284,6 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
             >
               {url}
             </a>
-          </div>
-        ))
-      ) : configuredPorts.length ? (
-        configuredPorts.map((port) => (
-          <div
-            key={port}
-            className="grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border/60 px-3 py-2 text-xs last:border-0 sm:grid-cols-[7rem_minmax(0,1fr)]"
-          >
-            <span className="mono">{port}</span>
-            <span className="text-muted-foreground">Not published</span>
           </div>
         ))
       ) : (
