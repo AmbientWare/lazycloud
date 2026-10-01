@@ -29,6 +29,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -129,6 +130,8 @@ func (s *Server) authenticate(ctx context.Context) (context.Context, error) {
 	if err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
+	// Logs of the host's calls carry its id.
+	ctx = telemetry.With(ctx, slog.String(telemetry.KeyHost, host.String()))
 	return context.WithValue(ctx, hostKey{}, host), nil
 }
 
@@ -258,6 +261,7 @@ func (s *Server) CompleteTask(ctx context.Context, req *hostproto.CompleteTaskRe
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "attempt_id is not a UUID")
 	}
+	ctx = telemetry.With(ctx, slog.String(telemetry.KeyContainer, container.String()), slog.String(telemetry.KeyAttempt, attempt.String()))
 	outcome := execution.AttemptOutcome{Attempt: execution.AttemptID(attempt)}
 	switch o := req.GetOutcome().(type) {
 	case *hostproto.CompleteTaskRequest_Success:
