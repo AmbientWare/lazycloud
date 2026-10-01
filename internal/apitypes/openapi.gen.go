@@ -1045,24 +1045,6 @@ func (e FleetState) Valid() bool {
 	}
 }
 
-// Defines values for FunctionState.
-const (
-	FunctionStateActive  FunctionState = "active"
-	FunctionStateStopped FunctionState = "stopped"
-)
-
-// Valid indicates whether the value is a known member of the FunctionState enum.
-func (e FunctionState) Valid() bool {
-	switch e {
-	case FunctionStateActive:
-		return true
-	case FunctionStateStopped:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for GpuType.
 const (
 	A10040 GpuType = "A100-40"
@@ -1153,24 +1135,6 @@ func (e HttpMethod) Valid() bool {
 	case HttpMethodPUT:
 		return true
 	case HttpMethodTRACE:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for HttpWorkloadState.
-const (
-	HttpWorkloadStateActive  HttpWorkloadState = "active"
-	HttpWorkloadStateStopped HttpWorkloadState = "stopped"
-)
-
-// Valid indicates whether the value is a known member of the HttpWorkloadState enum.
-func (e HttpWorkloadState) Valid() bool {
-	switch e {
-	case HttpWorkloadStateActive:
-		return true
-	case HttpWorkloadStateStopped:
 		return true
 	default:
 		return false
@@ -3225,67 +3189,16 @@ type DeletedArtifacts struct {
 // DeliveryState What became of an email: `queued` until the provider accepts it, then `sent`, and `delivered`, `bounced` or `complained` as the provider reports; `failed` when delivery gave up; `discarded` when it was withdrawn before sending.
 type DeliveryState string
 
-// DeployedWorkload defines model for DeployedWorkload.
-type DeployedWorkload struct {
-	// ActiveRelease The definition the active version runs; only getDeployment answers it.
-	ActiveRelease *Release  `json:"active_release,omitempty"`
-	App           AppName   `json:"app"`
-	AppState      *AppState `json:"app_state,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-
-	// DeployedAt When the active version was deployed.
-	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
-	Id         openapi_types.UUID `json:"id"`
-
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
-	Kind WorkloadKind `json:"kind"`
-	Name WorkloadName `json:"name"`
-
-	// ReleaseId The active release.
-	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
-	Role      *PodRole            `json:"role,omitempty"`
-
-	// RunningContainers Containers of the workload's releases that are ready or draining.
-	RunningContainers int `json:"running_containers"`
-
-	// Scaling The containers a pod keeps, from min to max; a scale sets both.
-	Scaling *Scaling `json:"scaling,omitempty"`
-
-	// State Desired state. A paused app stops its active workloads too.
-	State WorkloadState `json:"state"`
-
-	// Url Where a pod or HTTP workload answers.
-	Url *string `json:"url,omitempty"`
-
-	// Version The active version.
-	Version *int `json:"version,omitempty"`
-}
-
 // Deployment defines model for Deployment.
 type Deployment struct {
 	App App `json:"app"`
 
-	// Pruned Functions the prune deleted.
+	// Pruned Workloads the prune deleted.
 	Pruned   []WorkloadName `json:"pruned"`
 	Releases []Release      `json:"releases"`
 
-	// RemovedVersions Versions of the pruned functions.
+	// RemovedVersions Versions of the pruned workloads.
 	RemovedVersions int `json:"removed_versions"`
-}
-
-// DeploymentPage defines model for DeploymentPage.
-type DeploymentPage struct {
-	Deployments []DeployedWorkload `json:"deployments"`
-	NextCursor  *string            `json:"next_cursor,omitempty"`
-}
-
-// DeploymentPerformance defines model for DeploymentPerformance.
-type DeploymentPerformance struct {
-	Buckets       []PerformanceBucket `json:"buckets"`
-	DeploymentId  openapi_types.UUID  `json:"deployment_id"`
-	End           time.Time           `json:"end"`
-	Start         time.Time           `json:"start"`
-	WindowSeconds int                 `json:"window_seconds"`
 }
 
 // DeploymentPlan defines model for DeploymentPlan.
@@ -3321,11 +3234,11 @@ type DeploymentPlanRequest struct {
 
 // DeploymentRequest defines model for DeploymentRequest.
 type DeploymentRequest struct {
-	// Functions At least one, unless prune deletes every deployed function.
-	Functions []FunctionSpec `json:"functions"`
-
-	// Prune Delete every function of the app that is not listed.
+	// Prune Delete every workload of the app that is not listed.
 	Prune *bool `json:"prune,omitempty"`
+
+	// Workloads At least one, unless prune deletes every deployed workload.
+	Workloads []WorkloadSpec `json:"workloads"`
 }
 
 // Devbox defines model for Devbox.
@@ -3674,81 +3587,6 @@ type FleetSummary struct {
 	} `json:"release,omitempty"`
 }
 
-// Function defines model for Function.
-type Function struct {
-	ActiveRelease Release       `json:"active_release"`
-	App           AppName       `json:"app"`
-	Name          WorkloadName  `json:"name"`
-	Schedule      *Schedule     `json:"schedule,omitempty"`
-	State         FunctionState `json:"state"`
-}
-
-// FunctionState defines model for Function.State.
-type FunctionState string
-
-// FunctionSpec defines model for FunctionSpec.
-type FunctionSpec struct {
-	// Authorized Whether requests to the workload's URLs need a token.
-	Authorized *bool       `json:"authorized,omitempty"`
-	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
-
-	// CallbackUrl Receives a signed POST when a task is retried or finishes.
-	CallbackUrl *string `json:"callback_url,omitempty"`
-
-	// Checkpoint Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers.
-	Checkpoint *CheckpointSpec `json:"checkpoint,omitempty"`
-
-	// ClientContract The signature `lazycloud app export` types clients from.
-	ClientContract *json.RawMessage `json:"client_contract,omitempty"`
-
-	// Concurrency Tasks one container runs at once, one process per slot.
-	Concurrency *int `json:"concurrency,omitempty"`
-
-	// Cron Run the function on this UTC schedule.
-	Cron *string `json:"cron,omitempty"`
-
-	// Disks Durable disks; a workload with one runs at most one container.
-	Disks *[]DiskMountSpec `json:"disks,omitempty"`
-
-	// DockerEnabled Run a Docker daemon in each container; the image must include Docker.
-	DockerEnabled *bool              `json:"docker_enabled,omitempty"`
-	Environment   *map[string]string `json:"environment,omitempty"`
-
-	// Handler module:qualname within the source archive; pods have none
-	Handler *string `json:"handler,omitempty"`
-
-	// Http Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
-	Http  *HttpSpec `json:"http,omitempty"`
-	Image ImageSpec `json:"image"`
-
-	// InProcess Run the concurrency slots as threads of one runner process.
-	InProcess *bool `json:"in_process,omitempty"`
-
-	// KeepWarmSeconds Idle seconds before a container above the minimum stops.
-	KeepWarmSeconds *int `json:"keep_warm_seconds,omitempty"`
-
-	// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
-	LifecycleHooks  *LifecycleHooks `json:"lifecycle_hooks,omitempty"`
-	MaxPendingTasks *int            `json:"max_pending_tasks,omitempty"`
-	Name            WorkloadName    `json:"name"`
-
-	// Placement Where a workload's containers may run.
-	Placement *Placement `json:"placement,omitempty"`
-
-	// Pod Makes the workload run a command instead of a handler: a pod, a devbox or a sandbox. keep_warm_seconds is the idle time before a container stops; deploy fills 600 for pods and sandboxes and 1800 for devboxes.
-	Pod *PodSpec `json:"pod,omitempty"`
-
-	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
-	Resources   Resources    `json:"resources"`
-	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
-
-	// Secrets Secrets the container receives as environment variables of the same name.
-	Secrets        *[]SecretName      `json:"secrets,omitempty"`
-	Source         SourceRef          `json:"source"`
-	TimeoutSeconds *int               `json:"timeout_seconds,omitempty"`
-	Volumes        *[]VolumeMountSpec `json:"volumes,omitempty"`
-}
-
 // GpuRate defines model for GpuRate.
 type GpuRate struct {
 	GpuType string `json:"gpu_type"`
@@ -3835,22 +3673,16 @@ type HttpSpec struct {
 	Workers *int    `json:"workers,omitempty"`
 }
 
-// HttpWorkload defines model for HttpWorkload.
-type HttpWorkload struct {
-	App AppName `json:"app"`
-
+// HttpUrls Where an endpoint or ASGI app answers, for the release a describe names.
+type HttpUrls struct {
 	// DomainUrl The custom hostname, once its registration is ready.
 	DomainUrl *string `json:"domain_url,omitempty"`
 
 	// InvokePath The workload on the API host; append the request's path.
-	InvokePath string       `json:"invoke_path"`
-	Kind       HttpKind     `json:"kind"`
-	Name       WorkloadName `json:"name"`
-	Release    Release      `json:"release"`
+	InvokePath string `json:"invoke_path"`
 
 	// ReleaseUrl Addresses the release by id.
-	ReleaseUrl string            `json:"release_url"`
-	State      HttpWorkloadState `json:"state"`
+	ReleaseUrl string `json:"release_url"`
 
 	// Url Follows the active release across deploys.
 	Url string `json:"url"`
@@ -3861,9 +3693,6 @@ type HttpWorkload struct {
 	// VersionUrl Pinned to the release's version.
 	VersionUrl string `json:"version_url"`
 }
-
-// HttpWorkloadState defines model for HttpWorkload.State.
-type HttpWorkloadState string
 
 // Image defines model for Image.
 type Image struct {
@@ -4515,7 +4344,8 @@ type PreviewKind string
 
 // PreviewRequest defines model for PreviewRequest.
 type PreviewRequest struct {
-	Spec FunctionSpec `json:"spec"`
+	// Spec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
+	Spec WorkloadSpec `json:"spec"`
 
 	// TimeoutSeconds Stop after this long; 0 runs until stopped.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
@@ -4640,14 +4470,16 @@ type Region string
 // Release defines model for Release.
 type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
-	Function  WorkloadName       `json:"function"`
 	Id        openapi_types.UUID `json:"id"`
 
 	// InvokePath The HTTP workload on the API host, following the active release.
 	InvokePath *string      `json:"invoke_path,omitempty"`
-	Spec       FunctionSpec `json:"spec"`
+	Name       WorkloadName `json:"name"`
 
-	// Url Where an HTTP workload answers, following the active release.
+	// Spec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
+	Spec WorkloadSpec `json:"spec"`
+
+	// Url Where a pod or HTTP workload answers, following the active release.
 	Url *string `json:"url,omitempty"`
 
 	// Version The deployed version; absent for a release only working-tree calls use.
@@ -4953,8 +4785,8 @@ type SshHostPage struct {
 	NextCursor *string   `json:"next_cursor,omitempty"`
 }
 
-// StartDeploymentRequest defines model for StartDeploymentRequest.
-type StartDeploymentRequest struct {
+// StartWorkloadRequest defines model for StartWorkloadRequest.
+type StartWorkloadRequest struct {
 	// Version Make this deployed version active before starting.
 	Version *int `json:"version,omitempty"`
 }
@@ -5459,6 +5291,55 @@ type VolumePage struct {
 // VolumeRelativePath A path below the volume root; `.` or empty is the root, `..` is refused.
 type VolumeRelativePath = string
 
+// Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.
+type Workload struct {
+	App       AppName   `json:"app"`
+	AppState  *AppState `json:"app_state,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeployedAt When the active version was deployed.
+	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
+	Id         openapi_types.UUID `json:"id"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
+
+	// ReleaseId The active release.
+	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
+	Role      *PodRole            `json:"role,omitempty"`
+
+	// RunningContainers Containers of the workload's releases that are ready or draining.
+	RunningContainers int `json:"running_containers"`
+
+	// Scaling The containers a pod keeps, from min to max; a scale sets both.
+	Scaling *Scaling `json:"scaling,omitempty"`
+
+	// State Desired state. A paused app stops its active workloads too.
+	State WorkloadState `json:"state"`
+
+	// Url Where a pod or HTTP workload answers.
+	Url *string `json:"url,omitempty"`
+
+	// Version The active version.
+	Version *int `json:"version,omitempty"`
+}
+
+// WorkloadDetail defines model for WorkloadDetail.
+type WorkloadDetail struct {
+	// Http Where an endpoint or ASGI app answers, for the release a describe names.
+	Http *HttpUrls `json:"http,omitempty"`
+
+	// Release The definition the active version runs, or the version the request names.
+	Release Release `json:"release"`
+
+	// Schedule When a scheduled function runs.
+	Schedule *Schedule `json:"schedule,omitempty"`
+
+	// Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.
+	Workload Workload `json:"workload"`
+}
+
 // WorkloadIdentity defines model for WorkloadIdentity.
 type WorkloadIdentity struct {
 	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
@@ -5472,6 +5353,21 @@ type WorkloadKind string
 // WorkloadName defines model for WorkloadName.
 type WorkloadName = string
 
+// WorkloadPage defines model for WorkloadPage.
+type WorkloadPage struct {
+	NextCursor *string    `json:"next_cursor,omitempty"`
+	Workloads  []Workload `json:"workloads"`
+}
+
+// WorkloadPerformance defines model for WorkloadPerformance.
+type WorkloadPerformance struct {
+	Buckets       []PerformanceBucket `json:"buckets"`
+	End           time.Time           `json:"end"`
+	Start         time.Time           `json:"start"`
+	WindowSeconds int                 `json:"window_seconds"`
+	WorkloadId    openapi_types.UUID  `json:"workload_id"`
+}
+
 // WorkloadRef defines model for WorkloadRef.
 type WorkloadRef struct {
 	App  AppName         `json:"app"`
@@ -5481,6 +5377,72 @@ type WorkloadRef struct {
 
 // WorkloadRefKind defines model for WorkloadRef.Kind.
 type WorkloadRefKind string
+
+// WorkloadSpec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
+type WorkloadSpec struct {
+	// Authorized Whether requests to the workload's URLs need a token.
+	Authorized *bool       `json:"authorized,omitempty"`
+	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
+
+	// CallbackUrl Receives a signed POST when a task is retried or finishes.
+	CallbackUrl *string `json:"callback_url,omitempty"`
+
+	// Checkpoint Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers.
+	Checkpoint *CheckpointSpec `json:"checkpoint,omitempty"`
+
+	// ClientContract The signature `lazycloud app export` types clients from.
+	ClientContract *json.RawMessage `json:"client_contract,omitempty"`
+
+	// Concurrency Tasks one container runs at once, one process per slot.
+	Concurrency *int `json:"concurrency,omitempty"`
+
+	// Cron Run the function on this UTC schedule.
+	Cron *string `json:"cron,omitempty"`
+
+	// Disks Durable disks; a workload with one runs at most one container.
+	Disks *[]DiskMountSpec `json:"disks,omitempty"`
+
+	// DockerEnabled Run a Docker daemon in each container; the image must include Docker.
+	DockerEnabled *bool              `json:"docker_enabled,omitempty"`
+	Environment   *map[string]string `json:"environment,omitempty"`
+
+	// Handler module:qualname within the source archive; pods have none
+	Handler *string `json:"handler,omitempty"`
+
+	// Http Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
+	Http  *HttpSpec `json:"http,omitempty"`
+	Image ImageSpec `json:"image"`
+
+	// InProcess Run the concurrency slots as threads of one runner process.
+	InProcess *bool `json:"in_process,omitempty"`
+
+	// KeepWarmSeconds Idle seconds before a container above the minimum stops.
+	KeepWarmSeconds *int `json:"keep_warm_seconds,omitempty"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+
+	// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
+	LifecycleHooks  *LifecycleHooks `json:"lifecycle_hooks,omitempty"`
+	MaxPendingTasks *int            `json:"max_pending_tasks,omitempty"`
+	Name            WorkloadName    `json:"name"`
+
+	// Placement Where a workload's containers may run.
+	Placement *Placement `json:"placement,omitempty"`
+
+	// Pod Makes the workload run a command instead of a handler: a pod, a devbox or a sandbox. keep_warm_seconds is the idle time before a container stops; deploy fills 600 for pods and sandboxes and 1800 for devboxes.
+	Pod *PodSpec `json:"pod,omitempty"`
+
+	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources   Resources    `json:"resources"`
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+
+	// Secrets Secrets the container receives as environment variables of the same name.
+	Secrets        *[]SecretName      `json:"secrets,omitempty"`
+	Source         SourceRef          `json:"source"`
+	TimeoutSeconds *int               `json:"timeout_seconds,omitempty"`
+	Volumes        *[]VolumeMountSpec `json:"volumes,omitempty"`
+}
 
 // WorkloadState Desired state. A paused app stops its active workloads too.
 type WorkloadState string
@@ -5543,17 +5505,8 @@ type CostStart = time.Time
 // Cursor defines model for Cursor.
 type Cursor = string
 
-// DeploymentPath defines model for DeploymentPath.
-type DeploymentPath = openapi_types.UUID
-
 // DiskPath defines model for DiskPath.
 type DiskPath = DiskName
-
-// EndpointPath defines model for EndpointPath.
-type EndpointPath = WorkloadName
-
-// FunctionPath defines model for FunctionPath.
-type FunctionPath = WorkloadName
 
 // ImageBuildPath defines model for ImageBuildPath.
 type ImageBuildPath = openapi_types.UUID
@@ -5569,6 +5522,9 @@ type InvitationTokenPath = string
 
 // InvokeWait defines model for InvokeWait.
 type InvokeWait = int
+
+// KindPath A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+type KindPath = WorkloadKind
 
 // Limit defines model for Limit.
 type Limit = int
@@ -5618,6 +5574,9 @@ type UserCodePath = string
 // UserPath defines model for UserPath.
 type UserPath = openapi_types.UUID
 
+// VersionPath defines model for VersionPath.
+type VersionPath = int
+
 // VersionQuery defines model for VersionQuery.
 type VersionQuery = int
 
@@ -5626,6 +5585,9 @@ type VolumePath = VolumeName
 
 // WindowSeconds defines model for WindowSeconds.
 type WindowSeconds = int
+
+// WorkloadPath defines model for WorkloadPath.
+type WorkloadPath = WorkloadName
 
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
@@ -5760,16 +5722,14 @@ type ListAppsParams struct {
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
-// GetAsgiParams defines parameters for GetAsgi.
-type GetAsgiParams struct {
-	// Version Describe this version instead of the active one.
-	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
-}
+// ListHttpRequestsParams defines parameters for ListHttpRequests.
+type ListHttpRequestsParams struct {
+	// Name Only the requests of this endpoint or ASGI app.
+	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
 
-// GetEndpointParams defines parameters for GetEndpoint.
-type GetEndpointParams struct {
-	// Version Describe this version instead of the active one.
-	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
+	// Before Return requests older than this request id.
+	Before *openapi_types.UUID `form:"before,omitempty" json:"before,omitempty"`
+	Limit  *int                `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // InvokeFunctionParams defines parameters for InvokeFunction.
@@ -5784,14 +5744,50 @@ type InvokeFunctionVersionParams struct {
 	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
 }
 
-// ListHttpRequestsParams defines parameters for ListHttpRequests.
-type ListHttpRequestsParams struct {
-	// Name Only the requests of this endpoint or ASGI app.
-	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+// GetWorkloadParams defines parameters for GetWorkload.
+type GetWorkloadParams struct {
+	// Version Describe this version instead of the active one.
+	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
+}
 
-	// Before Return requests older than this request id.
-	Before *openapi_types.UUID `form:"before,omitempty" json:"before,omitempty"`
-	Limit  *int                `form:"limit,omitempty" json:"limit,omitempty"`
+// ListWorkloadContainersParams defines parameters for ListWorkloadContainers.
+type ListWorkloadContainersParams struct {
+	// Live Only containers that have not stopped.
+	Live  *bool      `form:"live,omitempty" json:"live,omitempty"`
+	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// StreamWorkloadLogsParams defines parameters for StreamWorkloadLogs.
+type StreamWorkloadLogsParams struct {
+	// After Return entries with an id greater than this.
+	After *LogAfter `form:"after,omitempty" json:"after,omitempty"`
+
+	// Tail Start with only the last this many stored entries.
+	Tail   *LogTail `form:"tail,omitempty" json:"tail,omitempty"`
+	Follow *bool    `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// GetWorkloadPerformanceParams defines parameters for GetWorkloadPerformance.
+type GetWorkloadPerformanceParams struct {
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
+	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
+
+	// Start The start of the range, inclusive.
+	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
+
+	// End The end of the range, exclusive; defaults to now.
+	End *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
+}
+
+// ListWorkloadVersionsParams defines parameters for ListWorkloadVersions.
+type ListWorkloadVersionsParams struct {
+	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // ListArtifactsParams defines parameters for ListArtifacts.
@@ -5835,14 +5831,8 @@ type ListContainersParams struct {
 	Live *bool `form:"live,omitempty" json:"live,omitempty"`
 
 	// App Only the containers of this app's workloads.
-	App *AppName `form:"app,omitempty" json:"app,omitempty"`
-
-	// Function Only the containers of this workload of `app`; requires it.
-	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
-
-	// Deployment Only containers of this workload's releases.
-	Deployment *openapi_types.UUID `form:"deployment,omitempty" json:"deployment,omitempty"`
-	Limit      *PageLimit          `form:"limit,omitempty" json:"limit,omitempty"`
+	App   *AppName   `form:"app,omitempty" json:"app,omitempty"`
+	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -5945,49 +5935,6 @@ type OpenContainerShellParams struct {
 	Cols *int    `form:"cols,omitempty" json:"cols,omitempty"`
 	Rows *int    `form:"rows,omitempty" json:"rows,omitempty"`
 	Term *string `form:"term,omitempty" json:"term,omitempty"`
-}
-
-// ListDeploymentsParams defines parameters for ListDeployments.
-type ListDeploymentsParams struct {
-	App  *AppName      `form:"app,omitempty" json:"app,omitempty"`
-	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
-
-	// Search Part of the app or workload name.
-	Search *string    `form:"search,omitempty" json:"search,omitempty"`
-	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
-}
-
-// StreamDeploymentLogsParams defines parameters for StreamDeploymentLogs.
-type StreamDeploymentLogsParams struct {
-	// After Return entries with an id greater than this.
-	After *LogAfter `form:"after,omitempty" json:"after,omitempty"`
-
-	// Tail Start with only the last this many stored entries.
-	Tail   *LogTail `form:"tail,omitempty" json:"tail,omitempty"`
-	Follow *bool    `form:"follow,omitempty" json:"follow,omitempty"`
-}
-
-// GetDeploymentPerformanceParams defines parameters for GetDeploymentPerformance.
-type GetDeploymentPerformanceParams struct {
-	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
-	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
-
-	// Start The start of the range, inclusive.
-	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
-
-	// End The end of the range, exclusive; defaults to now.
-	End *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
-}
-
-// ListDeploymentVersionsParams defines parameters for ListDeploymentVersions.
-type ListDeploymentVersionsParams struct {
-	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // ListDisksParams defines parameters for ListDisks.
@@ -6209,6 +6156,23 @@ type StatVolumeFileParams struct {
 	Path *VolumeRelativePath `form:"path,omitempty" json:"path,omitempty"`
 }
 
+// ListWorkloadsParams defines parameters for ListWorkloads.
+type ListWorkloadsParams struct {
+	App  *AppName      `form:"app,omitempty" json:"app,omitempty"`
+	Kind *WorkloadKind `form:"kind,omitempty" json:"kind,omitempty"`
+	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+
+	// Id Only the workload with this id.
+	Id *openapi_types.UUID `form:"id,omitempty" json:"id,omitempty"`
+
+	// Search Part of the app or workload name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // ConnectAwsJSONRequestBody defines body for ConnectAws for application/json ContentType.
 type ConnectAwsJSONRequestBody = AwsConnectionRequest
 
@@ -6269,11 +6233,14 @@ type PlanDeploymentJSONRequestBody = DeploymentPlanRequest
 // DeployAppJSONRequestBody defines body for DeployApp for application/json ContentType.
 type DeployAppJSONRequestBody = DeploymentRequest
 
+// CreatePreviewJSONRequestBody defines body for CreatePreview for application/json ContentType.
+type CreatePreviewJSONRequestBody = PreviewRequest
+
+// PrepareReleaseJSONRequestBody defines body for PrepareRelease for application/json ContentType.
+type PrepareReleaseJSONRequestBody = WorkloadSpec
+
 // InvokeFunctionJSONRequestBody defines body for InvokeFunction for application/json ContentType.
 type InvokeFunctionJSONRequestBody = InvocationBody
-
-// PrepareFunctionReleaseJSONRequestBody defines body for PrepareFunctionRelease for application/json ContentType.
-type PrepareFunctionReleaseJSONRequestBody = FunctionSpec
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
@@ -6281,8 +6248,11 @@ type SubmitTasksJSONRequestBody = SubmitTasksRequest
 // InvokeFunctionVersionJSONRequestBody defines body for InvokeFunctionVersion for application/json ContentType.
 type InvokeFunctionVersionJSONRequestBody = InvocationBody
 
-// CreatePreviewJSONRequestBody defines body for CreatePreview for application/json ContentType.
-type CreatePreviewJSONRequestBody = PreviewRequest
+// ScaleWorkloadJSONRequestBody defines body for ScaleWorkload for application/json ContentType.
+type ScaleWorkloadJSONRequestBody = ScaleRequest
+
+// StartWorkloadJSONRequestBody defines body for StartWorkload for application/json ContentType.
+type StartWorkloadJSONRequestBody = StartWorkloadRequest
 
 // CreateArtifactJSONRequestBody defines body for CreateArtifact for application/json ContentType.
 type CreateArtifactJSONRequestBody = CreateArtifactRequest
@@ -6322,12 +6292,6 @@ type SnapshotContainerJSONRequestBody = SnapshotRequest
 
 // SetContainerTtlJSONRequestBody defines body for SetContainerTtl for application/json ContentType.
 type SetContainerTtlJSONRequestBody = TtlRequest
-
-// ScaleDeploymentJSONRequestBody defines body for ScaleDeployment for application/json ContentType.
-type ScaleDeploymentJSONRequestBody = ScaleRequest
-
-// StartDeploymentJSONRequestBody defines body for StartDeployment for application/json ContentType.
-type StartDeploymentJSONRequestBody = StartDeploymentRequest
 
 // BuildImageJSONRequestBody defines body for BuildImage for application/json ContentType.
 type BuildImageJSONRequestBody = ImageDefinition
