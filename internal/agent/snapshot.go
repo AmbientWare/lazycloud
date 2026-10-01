@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -45,12 +46,47 @@ const (
 // runc without CRIU.
 var errCannotCheckpoint = errors.New("this host cannot checkpoint containers")
 
-// restorePoint is an unpacked snapshot a new container starts from.
+// restorePoint is a verified, unpacked snapshot a new container starts
+// from.
 type restorePoint struct {
 	snapshot  string
 	dir       string
-	id        string
 	automatic bool
+}
+
+// restoreInto starts the created container id from point. Docker starts
+// from a checkpoint only in the container's own checkpoint directory, so
+// the unpacked snapshot moves there first; that takes an agent that runs as
+// root on the Docker host, as disks already do.
+func (a *Agent) restoreInto(ctx context.Context, id string, point *restorePoint) error {
+	info, err := a.docker.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return fmt.Errorf("docker info: %w", err)
+	}
+	target := filepath.Join(info.Info.DockerRootDir, "containers", id, "checkpoints", point.snapshot)
+	if err := moveDir(point.dir, target); err != nil {
+		return err
+	}
+	return a.startDocker(ctx, id, client.ContainerStartOptions{CheckpointID: point.snapshot})
+}
+
+// moveDir renames src to dst, copying when they are on different
+// filesystems.
+func moveDir(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("create checkpoint directory: %w", err)
+	}
+	err := os.Rename(src, dst)
+	if !errors.Is(err, syscall.EXDEV) {
+		if err != nil {
+			return fmt.Errorf("move checkpoint: %w", err)
+		}
+		return nil
+	}
+	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
+		return fmt.Errorf("copy checkpoint: %w", err)
+	}
+	return os.RemoveAll(src) //nolint:wrapcheck // the copy is complete
 }
 
 // coldStart records that the start could not restore snapshot.
@@ -127,7 +163,7 @@ func (c *container) downloadRestore(ctx context.Context, restore *hostproto.Snap
 		_ = os.RemoveAll(target)
 		return nil, fmt.Errorf("snapshot digest mismatch: got %s, want %s", got, want)
 	}
-	return &restorePoint{snapshot: id, dir: dir, id: id, automatic: restore.GetAutomatic()}, nil
+	return &restorePoint{snapshot: id, dir: target, automatic: restore.GetAutomatic()}, nil
 }
 
 // snapshot starts a SnapshotContainer once per snapshot id.

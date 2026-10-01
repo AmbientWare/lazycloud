@@ -158,11 +158,12 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			StorageOpt: a.diskLimit(resources),
 		},
 	}
-	if err := a.createContainer(ctx, c.dockerName(), options); err != nil {
+	id, err := a.createContainer(ctx, c.dockerName(), options)
+	if err != nil {
 		return err
 	}
 	if restore != nil {
-		err := a.startDocker(ctx, c.dockerName(), client.ContainerStartOptions{CheckpointID: restore.id, CheckpointDir: restore.dir})
+		err := a.restoreInto(ctx, id, restore)
 		if err == nil {
 			c.log.Info("container restored from a snapshot", "snapshot_id", restore.snapshot)
 			return nil
@@ -176,7 +177,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		if err := a.removeContainer(ctx, c.dockerName()); err != nil {
 			return err
 		}
-		if err := a.createContainer(ctx, c.dockerName(), options); err != nil {
+		if _, err := a.createContainer(ctx, c.dockerName(), options); err != nil {
 			return err
 		}
 	}
@@ -185,18 +186,18 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 
 // createContainer creates a container, replacing one of the same name left
 // behind by an earlier failed start.
-func (a *Agent) createContainer(ctx context.Context, name string, options client.ContainerCreateOptions) error {
-	_, err := a.docker.ContainerCreate(ctx, options)
+func (a *Agent) createContainer(ctx context.Context, name string, options client.ContainerCreateOptions) (string, error) {
+	created, err := a.docker.ContainerCreate(ctx, options)
 	if cerrdefs.IsConflict(err) {
 		if err := a.removeContainer(ctx, name); err != nil {
-			return err
+			return "", err
 		}
-		_, err = a.docker.ContainerCreate(ctx, options)
+		created, err = a.docker.ContainerCreate(ctx, options)
 	}
 	if err != nil {
-		return fmt.Errorf("create container: %w", err)
+		return "", fmt.Errorf("create container: %w", err)
 	}
-	return nil
+	return created.ID, nil
 }
 
 func (a *Agent) startDocker(ctx context.Context, name string, options client.ContainerStartOptions) error {
