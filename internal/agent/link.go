@@ -46,8 +46,14 @@ type link struct {
 // listenLink creates the container's socket. Serving starts later, so the
 // socket exists before the container does.
 func listenLink(ctx context.Context, c *container, dir string) (*link, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // mounted into the container
+	// The container may run as any user, and its supervisor creates its
+	// sockets here; only this container mounts the directory, and the
+	// agent's socket directory keeps everyone else out.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create link directory: %w", err)
+	}
+	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil { //nolint:gosec // see above
+		return nil, fmt.Errorf("chmod link directory: %w", err)
 	}
 	path := filepath.Join(dir, linkSocketName)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -57,11 +63,9 @@ func listenLink(ctx context.Context, c *container, dir string) (*link, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen on link socket: %w", err)
 	}
-	// The container may run as any user; only this container mounts the
-	// directory.
-	if err := os.Chmod(path, 0o666); err != nil { //nolint:gosec // see above
+	if err := chmodInside(dir, linkSocketName, 0o666); err != nil {
 		_ = listener.Close()
-		return nil, fmt.Errorf("chmod link socket: %w", err)
+		return nil, err
 	}
 	l := &link{
 		c:        c,
@@ -76,6 +80,20 @@ func listenLink(ctx context.Context, c *container, dir string) (*link, error) {
 	}
 	hostproto.RegisterContainerLinkServer(l.server, l)
 	return l, nil
+}
+
+// chmodInside changes the mode of name in dir without following a link out
+// of dir, which a running container could swap in.
+func chmodInside(dir, name string, mode os.FileMode) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open link directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Chmod(name, mode); err != nil {
+		return fmt.Errorf("chmod link socket: %w", err)
+	}
+	return nil
 }
 
 // linkStream is one supervisor connection's claim on the queue.

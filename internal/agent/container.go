@@ -270,6 +270,12 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if pod == nil && spec.GetFunction().GetHandler() == "" {
 		return fmt.Errorf("start has neither a function handler nor a pod")
 	}
+	if spec.GetDocker() && c.a.cfg.OCIRuntime != runtimeRunsc && !c.a.cfg.AllowPrivilegedDocker {
+		return fmt.Errorf("this host runs containers with %s, where a Docker daemon needs host privilege; it runs docker_enabled containers only under runsc or with -allow-privileged-docker", c.a.cfg.OCIRuntime)
+	}
+	if spec.GetDocker() && restricts(pod.GetNetwork()) {
+		return fmt.Errorf("a container with docker_enabled cannot limit its network: nested containers would bypass the policy")
+	}
 	// Functions run the managed Python runner; a pod mounts the runtime
 	// only when the start names one.
 	var runtime string
@@ -344,7 +350,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			workspaces = append(workspaces, ws)
 		}
 	}
-	restore, err := c.prepareRestore(ctx, spec.GetRestore())
+	restore, err := c.prepareRestore(ctx, spec.GetRestore(), restricts(pod.GetNetwork()))
 	if err != nil {
 		return err
 	}

@@ -160,6 +160,13 @@ func (s *Supervisor) work(ctx context.Context) error {
 			s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
 			return ErrLoadFailed
 		}
+		// A Docker daemon keeps the privileged container's capabilities.
+		if !cfg.GetDocker() {
+			if err := dropMountPrivilege(); err != nil {
+				s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
+				return ErrLoadFailed
+			}
+		}
 	}
 	if path := cfg.GetControlSocket(); path != "" {
 		ctl, err := newControl(s.log, s.children, cfg.GetPod().GetSsh())

@@ -3,13 +3,17 @@ package agent
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // tunnelProtocol is the upgrade the supervisor answers with a raw byte
@@ -24,7 +28,7 @@ const maxPortErrorBytes = 1 << 10
 func socketTransport(socket string) *http.Transport {
 	return &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+			return dialSupervisor(ctx, socket)
 		},
 		MaxIdleConnsPerHost: maxIdleRequestConns,
 		IdleConnTimeout:     90 * time.Second,
@@ -58,7 +62,7 @@ func portTransport(control string) *http.Transport {
 // dialPort asks the supervisor for a tunnel to port. Any failure before the
 // tunnel opens is a dial error: the workload never saw the request.
 func dialPort(ctx context.Context, control string, port int) (net.Conn, error) {
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", control)
+	conn, err := dialSupervisor(ctx, control)
 	if err != nil {
 		return nil, fmt.Errorf("reach the supervisor: %w", err)
 	}
@@ -87,6 +91,44 @@ func dialPort(ctx context.Context, control string, port int) (net.Conn, error) {
 		return fail(fmt.Errorf("port %d refused: %s %s", port, response.Status, strings.TrimSpace(string(body))))
 	}
 	return &bufferedConn{Conn: conn, reader: reader}, nil
+}
+
+// dialSupervisor connects to a socket the supervisor created in the link
+// directory. The workload can write there too, and a symlink it left would
+// resolve on the host, to another container's socket or Docker's, so the
+// agent connects only to a socket inode in the directory itself, through a
+// descriptor that pins it.
+func dialSupervisor(ctx context.Context, socket string) (net.Conn, error) {
+	// Every failure is a dial error: nothing reached the workload.
+	fail := func(err error) (net.Conn, error) {
+		return nil, &net.OpError{Op: "dial", Net: "unix", Addr: &net.UnixAddr{Name: socket, Net: "unix"}, Err: err}
+	}
+	dir, err := unix.Open(filepath.Dir(socket), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fail(fmt.Errorf("open the link directory: %w", err))
+	}
+	defer func() { _ = unix.Close(dir) }()
+	fd, err := unix.Openat(dir, filepath.Base(socket), unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fail(fmt.Errorf("open the socket: %w", err))
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return fail(fmt.Errorf("stat the socket: %w", err))
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFSOCK {
+		return fail(errors.New("the supervisor's socket is not a socket"))
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", "/proc/self/fd/"+strconv.Itoa(fd))
+	if err != nil {
+		var dialErr *net.OpError
+		if errors.As(err, &dialErr) {
+			err = dialErr.Err
+		}
+		return fail(err)
+	}
+	return conn, nil
 }
 
 // bufferedConn reads first what the handshake's reader already buffered.

@@ -64,6 +64,10 @@ func httpFromLabels(labels map[string]string) *hostproto.HttpServing {
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
+// runtimeRunsc is gVisor's runtime, which confines a privileged container to
+// its sandbox kernel.
+const runtimeRunsc = "runsc"
+
 func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
@@ -132,10 +136,9 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	if c.docker {
 		// A Docker daemon needs cgroups, mounts, iptables and device nodes
 		// that only a privileged container has under runc. That gives the
-		// workload the host kernel's full privilege: it can escape the
-		// container, so runc hosts must only run trusted tenants' Docker
-		// workloads. gVisor confines a privileged container to its sandbox
-		// kernel.
+		// workload the host kernel's full privilege, so prepare refuses it
+		// unless the host runs runsc, which confines a privileged container
+		// to its sandbox kernel, or the operator allowed it.
 		user = "0"
 	}
 	limit := int64(pidsLimit)

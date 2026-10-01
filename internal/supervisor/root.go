@@ -66,6 +66,37 @@ func enterRoot(root string) error {
 	return nil
 }
 
+// dropMountPrivilege takes CAP_SYS_ADMIN, which only entering the root
+// needed, out of reach of every process the devbox runs: it leaves the
+// bounding and ambient sets of every supervisor thread, so no exec regains
+// it, and no_new_privs stops set-id and file-capability programs adding it
+// back. The supervisor keeps it in its own permitted set. Docker grants no
+// inheritable capabilities; one that did would pass it to children, so that
+// refuses the start.
+func dropMountPrivilege() error {
+	for _, call := range []struct {
+		what string
+		args [3]uintptr
+	}{
+		{"drop CAP_SYS_ADMIN from the bounding set", [3]uintptr{unix.PR_CAPBSET_DROP, unix.CAP_SYS_ADMIN, 0}},
+		{"clear the ambient capabilities", [3]uintptr{unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0}},
+		{"set no_new_privs", [3]uintptr{unix.PR_SET_NO_NEW_PRIVS, 1, 0}},
+	} {
+		if _, _, errno := syscall.AllThreadsSyscall(unix.SYS_PRCTL, call.args[0], call.args[1], call.args[2]); errno != 0 {
+			return fmt.Errorf("%s: %w", call.what, errno)
+		}
+	}
+	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	var sets [2]unix.CapUserData
+	if err := unix.Capget(&header, &sets[0]); err != nil {
+		return fmt.Errorf("read capabilities: %w", err)
+	}
+	if sets[0].Inheritable&(1<<unix.CAP_SYS_ADMIN) != 0 {
+		return errors.New("the container grants CAP_SYS_ADMIN as inheritable, which would reach the devbox's processes")
+	}
+	return nil
+}
+
 // rootMounts are the mount points to bind into root: the top-level ones,
 // whose submounts a recursive bind carries, and rootBinds, outside root.
 func rootMounts(mounts []mountPoint, root string) []mountPoint {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -306,6 +307,62 @@ func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
 	}
 }
 
+// A workload that swaps its supervisor's socket for a symlink reaches
+// nothing through it: on the host the link would lead to another socket.
+func TestSupervisorSocketsAreNeverReachedThroughALink(t *testing.T) {
+	data, c := newForwardingAgent(t)
+	outside := filepath.Join(t.TempDir(), "other.sock")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reached atomic.Int32
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		reached.Add(1)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	if err := os.Symlink(outside, filepath.Join(c.linkDir(), controlSocketName)); err != nil {
+		t.Fatal(err)
+	}
+	for _, head := range []*hostproto.RequestHead{controlHead(c.id, http.MethodGet, "/processes"), portHead(c.id, 8000, "/")} {
+		got := data.forward(t, head, "")
+		if got.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING || !strings.Contains(got.err.GetMessage(), "not a socket") {
+			t.Fatalf("through a link: %+v %v", got, got.err)
+		}
+	}
+	if n := reached.Load(); n != 0 {
+		t.Fatalf("the linked socket answered %d requests", n)
+	}
+}
+
+// The agent's link directory lets a container user other than the agent's
+// create the supervisor's sockets, as when a root agent runs a non-root
+// image.
+func TestNonRootContainerUsersCreateTheirSupervisorSockets(t *testing.T) {
+	_, c := newForwardingAgent(t)
+	l, err := listenLink(t.Context(), c, c.linkDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.close(time.Second) })
+	out, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--user", "65534:65534", "--label", "lazycloud.agent="+c.id,
+		"-v", c.linkDir()+":"+containerLinkDir, testImage, "python3", "-c",
+		"import socket; s = socket.socket(socket.AF_UNIX); s.bind('"+containerControlSocket+"'); print('bound')").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "bound") {
+		t.Fatalf("a non-root container user could not create its socket: %v: %s", err, out)
+	}
+}
+
+// A filesystem archive past what the container can store fails the read.
+func TestFilesystemArchiveStopsAtTheContainersDisks(t *testing.T) {
+	_, c := newForwardingAgent(t)
+	archive := &countingReader{r: strings.NewReader(strings.Repeat("a", 4096)), max: c.archiveBound(map[string]string{"size": "1024"})}
+	if _, err := io.Copy(io.Discard, archive); !errors.Is(err, errArchiveTooLarge) {
+		t.Fatalf("an oversized archive read %d bytes: %v", archive.n, err)
+	}
+}
+
 func strconvAtoi32(s string) (int32, error) {
 	var n int32
 	_, err := fmt.Sscanf(s, "%d", &n)
@@ -523,10 +580,37 @@ func sshPublicKey(t *testing.T, name string) []byte {
 // testDockerImage has dockerd and the docker CLI.
 const testDockerImage = "docker.io/library/docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e88b745647fcbcfd"
 
+// A runc host runs no Docker daemon unless its operator allowed privileged
+// containers, nor one beside a network policy the nested containers would
+// bypass.
+func TestDockerPodsNeedPrivilegeAllowedAndNoPolicy(t *testing.T) {
+	e := newEnv(t)
+	e.startAgent()
+	session := e.session()
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"docker", "info"}})
+	start.GetStart().Docker = true
+	session.send(t, start)
+	exit := session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "allow-privileged-docker") {
+		t.Fatalf("docker pod on runc exit %v", exit)
+	}
+
+	allowed := newEnv(t)
+	allowed.startAgent(func(c *Config) { c.AllowPrivilegedDocker = true })
+	session = allowed.session()
+	start = allowed.podCommand(&hostproto.PodWorkload{Command: []string{"docker", "info"}, Network: &hostproto.NetworkPolicy{Block: true}})
+	start.GetStart().Docker = true
+	session.send(t, start)
+	exit = session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "bypass the policy") {
+		t.Fatalf("docker pod with a policy exit %v", exit)
+	}
+}
+
 // A pod with docker runs its command against a Docker daemon of its own.
 func TestDockerPodRunsADaemon(t *testing.T) {
 	e := newEnv(t)
-	e.startAgent()
+	e.startAgent(func(c *Config) { c.AllowPrivilegedDocker = true })
 	session := e.session()
 	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"docker", "info", "--format", "daemon {{.ServerVersion}}"}})
 	start.GetStart().Image = testDockerImage
@@ -633,7 +717,11 @@ func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
 	session := e.session()
 	archive := tarOf(t, map[string]string{"inventory.img": "not a checkpoint"})
 	sum := sha256.Sum256(archive)
-	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	var downloads atomic.Int32
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		downloads.Add(1)
+		_, _ = w.Write(archive)
+	}))
 	t.Cleanup(store.Close)
 	restore := func(automatic bool) *hostproto.SnapshotRestore {
 		return &hostproto.SnapshotRestore{SnapshotId: uuid.NewString(), Url: store.URL, Sha256: hex.EncodeToString(sum[:]), Automatic: automatic}
@@ -666,6 +754,29 @@ func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
 	exit = session.phase(t, corrupt.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
 	if !strings.Contains(exit.GetMessage(), "digest mismatch") {
 		t.Fatalf("corrupt snapshot exit %v", exit)
+	}
+
+	// Restored processes would run before a network filter applies, so a
+	// policed container never fetches its snapshot.
+	fetched := downloads.Load()
+	policed := func(automatic bool) *hostproto.ServerMessage {
+		start := e.podCommand(&hostproto.PodWorkload{Command: []string{"sleep", "600"}, Network: &hostproto.NetworkPolicy{Block: true}})
+		start.GetStart().Restore = restore(automatic)
+		session.send(t, start)
+		return start
+	}
+	cold := policed(true)
+	ready = session.phase(t, cold.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	if ready.GetRestoreFailed() != cold.GetStart().GetRestore().GetSnapshotId() {
+		t.Fatalf("policed automatic restore report %v", ready)
+	}
+	refused := policed(false)
+	exit = session.phase(t, refused.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "network policy") {
+		t.Fatalf("policed requested restore exit %v", exit)
+	}
+	if n := downloads.Load(); n != fetched {
+		t.Fatalf("policed containers fetched %d snapshots", n-fetched)
 	}
 }
 

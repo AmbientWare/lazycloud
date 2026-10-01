@@ -70,7 +70,18 @@ container.
   nftables netdev egress filter on the container's interfaces, from a helper
   container in the container's network namespace with NET_ADMIN, before the
   command starts; `UpdateNetwork` (versioned by `network_version`) changes
-  it later.
+  it later. The filter reads the frame's own EtherType and destination and
+  drops all but ARP and allowed ranges, so a raw socket's protocol label
+  cannot slip past it. A policy refuses `docker_enabled` (nested containers
+  bypass it) and snapshot restores (restored processes resume before the
+  filter); an automatic snapshot then starts cold.
+- Isolation. The agent connects only to a socket inode inside the link
+  directory, never through a link the workload left there, which resolves
+  on the host. The directory is sticky and world-writable so any container
+  user creates its sockets. Containers other than serving functions get no
+  platform API; a function reaches only the instances it started, and no
+  workload control. `docker_enabled` runs privileged only under runsc or
+  with the agent's `-allow-privileged-docker`.
 - Snapshots. `SnapshotContainer` makes the agent run `docker checkpoint
   create --leave-running`, upload the archive to
   `workspaces/<ws>/snapshots/<id>.tar` and report `CompleteSnapshot`; a host
@@ -89,6 +100,9 @@ container.
   it from the image on first use, binds `/proc`, `/dev`, `/sys`,
   `/run/lazycloud`, `/etc/hosts`, `/etc/resolv.conf` and the other mounts
   into it, and chroots, so the command and every session see it as `/`.
+  It then drops CAP_SYS_ADMIN from every thread's bounding and ambient sets
+  and sets no_new_privs, so no process in the devbox can mount; AppArmor
+  stays unconfined for the container's life.
   Phases come from the container state and its start stages (`image`,
   `disk`).
 
@@ -187,9 +201,13 @@ server, scheduler and agent from this branch, images cached:
   installed, so only the `unsupported` path and the restore fallback ran.
   Under runc a CRIU checkpoint does not carry the writable layer, and a
   restore needs a root agent to place the checkpoint in Docker's directory.
-- gVisor: the netdev egress filter, dockerd and the root switch are
-  unverified under runsc.
-- `docker_enabled` runs the container privileged under runc.
+- gVisor is not installed, so these are unverified under runsc: the netdev
+  filter on the sandbox's interface (gVisor's netstack sends through it), a
+  privileged dockerd inside the sandbox, the root switch and capability drop,
+  checkpoint and restore, and connecting to supervisor sockets created
+  inside the sandbox through the descriptor of their inode.
+- Under runc `docker_enabled` needs `-allow-privileged-docker` and gives the
+  workload host privilege; the local stack does not set it.
 - The TCP ingress needs a wildcard certificate and a listener in the Helm
   chart (operations).
 - Dashboard pages come with the web packet; their operations are below.

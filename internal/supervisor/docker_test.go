@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +114,63 @@ func TestNetfilterBlocksAndAllowsEgressInAContainer(t *testing.T) {
 	}
 }
 
+// rawFrame sends a UDP packet in a hand-built Ethernet frame from a packet
+// socket bound to an unassigned EtherType, so the kernel labels the packet
+// with that protocol while the frame says IPv4.
+const rawFrame = `import socket, struct, sys
+dst_ip, dst_mac, src_ip, src_mac, payload = sys.argv[1:6]
+payload = payload.encode()
+mac = lambda m: bytes.fromhex(m.replace(":", ""))
+udp = struct.pack("!HHHH", 40000, 9999, 8 + len(payload), 0) + payload
+ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 1, 0, 64, 17, 0, socket.inet_aton(src_ip), socket.inet_aton(dst_ip))
+total = sum(struct.unpack("!10H", ip))
+total = (total & 0xFFFF) + (total >> 16)
+ip = ip[:10] + struct.pack("!H", ~total & 0xFFFF) + ip[12:]
+sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+sock.bind(("eth0", 0x88B5))
+for _ in range(3):
+    try:
+        sock.send(mac(dst_mac) + mac(src_mac) + b"\x08\x00" + ip + udp)
+    except OSError as e:
+        print("send:", e)
+`
+
+// A blocked container cannot slip IP packets past the filter by labelling
+// them with another protocol from a raw socket.
+func TestNetfilterDropsRawFramesThatMislabelTheirProtocol(t *testing.T) {
+	bin := dockerTest(t)
+	const python = "python:3.12-slim"
+	if _, err := docker(t, "image", "inspect", python); err != nil {
+		mustDocker(t, "pull", python)
+	}
+	target := runContainer(t, python, "python3", "-uc",
+		"import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.bind(('0.0.0.0', 9999))\nwhile True: print(s.recv(100).decode(), flush=True)")
+	subject := runContainer(t, python, "sleep", "300")
+	address := func(name, field string) string {
+		return mustDocker(t, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{."+field+"}}{{end}}", name)
+	}
+	send := func(payload string) bool {
+		mustDocker(t, "exec", subject, "python3", "-c", rawFrame,
+			address(target, "IPAddress"), address(target, "MacAddress"), address(subject, "IPAddress"), address(subject, "MacAddress"), payload)
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			if logs, _ := docker(t, "logs", target); strings.Contains(logs, payload) {
+				return true
+			}
+		}
+		return false
+	}
+	if !send("open-frame") {
+		t.Fatal("a raw frame did not arrive without a policy")
+	}
+	if out, err := docker(t, "run", "--rm", "--network", "container:"+subject, "--cap-add", "NET_ADMIN",
+		"-v", bin+":/supervisor:ro", "--entrypoint", "/supervisor", busybox, "netfilter", `{"block":true}`); err != nil {
+		t.Fatalf("apply the policy: %v: %s", err, out)
+	}
+	if send("blocked-frame") {
+		t.Fatal("a mislabelled raw frame passed the block")
+	}
+}
+
 func TestDevboxRootPersistsWritesAndKeepsProc(t *testing.T) {
 	bin := dockerTest(t)
 	dir, err := os.MkdirTemp("", "lcdevbox")
@@ -176,6 +234,30 @@ func TestDevboxRootPersistsWritesAndKeepsProc(t *testing.T) {
 	}
 	if !strings.Contains(p.Stdout, "persisted.txt") || !strings.Contains(p.Stdout, "/opt/lazycloud/bin/supervisor") {
 		t.Fatalf("a process in the root sees %q (stderr %q)", p.Stdout, p.Stderr)
+	}
+	// Processes in the root never hold CAP_SYS_ADMIN, nor can gain it.
+	if status, _ := ctl.do(http.MethodPost, "/processes", apitypes.ProcessRequest{
+		Args: []string{"sh", "-c", "grep -E '^(CapBnd|CapEff|NoNewPrivs)' /proc/self/status; mkdir -p /m; mount -t tmpfs none /m && echo mounted"}, Cwd: &cwd,
+	}, &p); status != http.StatusCreated {
+		t.Fatalf("start a process: %d", status)
+	}
+	for p.Running {
+		ctl.do(http.MethodGet, "/processes/"+p.ProcessId+"?wait_seconds=5", nil, &p)
+	}
+	caps := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(p.Stdout), "\n") {
+		if key, value, ok := strings.Cut(line, ":"); ok {
+			caps[key] = strings.TrimSpace(value)
+		}
+	}
+	for _, set := range []string{"CapBnd", "CapEff"} {
+		bits, err := strconv.ParseUint(caps[set], 16, 64)
+		if err != nil || bits&(1<<21) != 0 {
+			t.Fatalf("%s is %q in the root: %s", set, caps[set], p.Stdout)
+		}
+	}
+	if caps["NoNewPrivs"] != "1" || strings.Contains(p.Stdout, "mounted") {
+		t.Fatalf("a process in the root may gain privilege: %s %s", p.Stdout, p.Stderr)
 	}
 	if status, _ := ctl.do(http.MethodPut, "/files/content?path=notes/rel.txt", []byte("relative"), nil); status != http.StatusNoContent {
 		t.Fatalf("upload: %d", status)
