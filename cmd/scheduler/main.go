@@ -241,8 +241,8 @@ func objectStoreFromEnv() (storage.Config, error) {
 			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),
 		},
 	}
-	if cfg.Endpoint == "" || cfg.Region == "" || cfg.Bucket == "" || cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
-		return cfg, errors.New("LAZYCLOUD_OBJECT_STORE_ENDPOINT, _REGION, _BUCKET, _ACCESS_KEY_ID and _SECRET_ACCESS_KEY are required")
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
 	}
 	if cfg.Workspaces.Prefix == "" {
 		cfg.Workspaces.Prefix = "lazycloud-ws"

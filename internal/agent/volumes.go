@@ -342,7 +342,7 @@ func (v *volumes) startMounter(ctx context.Context, workspace string) error {
 	}
 	id, err := v.runMount(ctx, mountSpec{
 		name: mounterName(workspace), dir: workspace, creds: v.storageDir(workspace),
-		source: grant.Bucket + ":volumes/", endpoint: grant.Endpoint, region: grant.Region, pathStyle: true,
+		source: grant.Bucket + ":volumes/", endpoint: grant.Endpoint, region: grant.Region, pathStyle: grant.Endpoint != "",
 		labels: map[string]string{labelKind: kindMount, labelWorkspace: workspace},
 	})
 	if err != nil {
