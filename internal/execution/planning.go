@@ -176,7 +176,13 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		if count <= 0 {
 			return nil
 		}
-		grant, err := billing.Admit(ctx, tx, billing.Request{Workspace: release.WorkspaceID, Start: count})
+		models := make([]billing.GPUType, len(release.GpuModels))
+		for n, m := range release.GpuModels {
+			models[n] = billing.GPUType(m)
+		}
+		grant, err := billing.Admit(ctx, tx, billing.Request{
+			Workspace: release.WorkspaceID, Start: count, GPUs: int(release.GpuCount), GPUModels: models, Pinned: release.Pinned,
+		})
 		var refused *billing.PaymentRequiredError
 		if errors.As(err, &refused) {
 			// The account cannot pay; its tasks wait until it can.
@@ -194,6 +200,8 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 			Slots:       release.Slots,
 			CpuMillis:   release.CpuMillis,
 			MemoryBytes: release.MemoryBytes,
+			GpuCount:    release.GpuCount,
+			RateClass:   string(billing.RateClassFor(release.Pinned, release.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
 		})
 		if err != nil {

@@ -42,6 +42,23 @@ func TestPlanningStartsWhatTheAccountMayRun(t *testing.T) {
 	}
 }
 
+func TestPlanningRecordsWhatBillingPrices(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{"resources": {"cpu_millis": 1000, "memory_mib": 512, "gpu": ["L4"]},
+		"placement": {"region": "us-east", "preemptible": false}}`)
+	queueTasks(t, pool, f, 1, 0)
+	plan(t, e)
+	var cards int
+	var class string
+	if err := pool.QueryRow(t.Context(), "select gpu_count, rate_class from containers where release_id = $1", f.release).Scan(&cards, &class); err != nil {
+		t.Fatal(err)
+	}
+	if cards != 1 || class != "pinned_non_preemptible" {
+		t.Fatalf("container holds %d GPUs at %s", cards, class)
+	}
+}
+
 func TestSubmitNeedsCreditAndRoomForColdWork(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
