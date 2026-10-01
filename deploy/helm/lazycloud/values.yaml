@@ -1,0 +1,103 @@
+# Images come from the release workflow: <registry>/<repository>:<tag>, or
+# @<digest> when a digest is set, which pins the exact bytes.
+image:
+  registry: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Every credential comes from one Kubernetes Secret, whose keys are the
+# environment variable names. Create it out of band, or let External Secrets
+# project it from AWS Secrets Manager (externalSecrets below). The chart never
+# carries a secret value.
+secrets:
+  name: lazycloud
+  # The key holding the 32-byte master key that wraps secret data keys. It
+  # is mounted as a file, never passed in the environment.
+  masterKey: secrets.key
+
+externalSecrets:
+  enabled: false
+  region: ""
+  # The role the secrets-reader service account exchanges its token for.
+  readerRoleArn: ""
+  refreshInterval: 1h
+  # Secret key -> {document, property} in Secrets Manager.
+  data: {}
+
+# Non-secret settings shared by the server, scheduler and migrations, as
+# LAZYCLOUD_* environment variables. The chart sets the listen addresses, the
+# master key path and the drain delay itself.
+config: {}
+
+serviceAccounts:
+  # Names match the EKS Pod Identity associations that grant AWS access.
+  server: lazycloud-server
+  scheduler: lazycloud-scheduler
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+server:
+  repository: server
+  digest: ""
+  replicas: 2
+  # Extra settings for the server alone.
+  config: {}
+  # Secret keys the server reads.
+  secretKeys:
+    - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID
+    - LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY
+    - LAZYCLOUD_GITHUB_CLIENT_SECRET
+    - LAZYCLOUD_RESEND_WEBHOOK_SECRET
+  # On SIGTERM the server reports not ready and keeps serving this long so
+  # Service endpoints and load balancers drop it, then gives open requests
+  # 10 seconds. The grace period must cover both.
+  drainDelaySeconds: 5
+  terminationGracePeriodSeconds: 30
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  service:
+    type: ClusterIP
+    annotations: {}
+  # Agents connect to this port. The host session is plaintext gRPC until
+  # the agent speaks TLS, so keep it inside the cluster network.
+  hostService:
+    type: ClusterIP
+    annotations: {}
+
+scheduler:
+  repository: scheduler
+  digest: ""
+  replicas: 2
+  config: {}
+  secretKeys:
+    - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID
+    - LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY
+    - LAZYCLOUD_RESEND_API_KEY
+  terminationGracePeriodSeconds: 30
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+migrations:
+  secretKeys:
+    - LAZYCLOUD_DATABASE_URL
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }

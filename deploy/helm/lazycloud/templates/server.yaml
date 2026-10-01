@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: server
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.labels" (list . "server") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.server }}
+      automountServiceAccountToken: false
+      {{- if lt (int .Values.server.terminationGracePeriodSeconds) (add (int .Values.server.drainDelaySeconds) 15) }}
+      {{- fail "server.terminationGracePeriodSeconds must cover drainDelaySeconds plus the 10 second shutdown grace and 5 seconds of margin" }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.server.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "lazycloud.spread" "server" | trim | nindent 8 }}
+      volumes:
+        {{- include "lazycloud.masterKeyVolume" . | nindent 8 }}
+      containers:
+        - name: server
+          image: {{ include "lazycloud.image" (list . "server") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            - name: LAZYCLOUD_HTTP_ADDR
+              value: "0.0.0.0:8080"
+            - name: LAZYCLOUD_GRPC_ADDR
+              value: "0.0.0.0:8081"
+            - name: LAZYCLOUD_SECRETS_KEY_FILE
+              value: /run/lazycloud/secrets/secrets.key
+            - name: LAZYCLOUD_DRAIN_DELAY
+              value: {{ printf "%ds" (int .Values.server.drainDelaySeconds) | quote }}
+            {{- include "lazycloud.env" (list . "server") | trim | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: hosts
+              containerPort: 8081
+          volumeMounts:
+            {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  {{- with .Values.server.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.server.service.type }}
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-hosts
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  {{- with .Values.server.hostService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.server.hostService.type }}
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: hosts
+      port: 8081
+      targetPort: hosts
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: server
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+spec:
+  # maxUnavailable rather than minAvailable: at one replica a minAvailable
+  # budget blocks every node drain.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: server

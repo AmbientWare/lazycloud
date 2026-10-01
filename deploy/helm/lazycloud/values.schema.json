@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "secrets", "config", "serviceAccounts", "server", "scheduler", "migrations"],
+  "definitions": {
+    "envName": { "type": "string", "pattern": "^LAZYCLOUD_[A-Z0-9_]+$" },
+    "settings": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/definitions/envName" },
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "secretKeys": { "type": "array", "items": { "$ref": "#/definitions/envName" }, "uniqueItems": true },
+    "digest": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64})?$" },
+    "component": {
+      "type": "object",
+      "required": ["repository", "replicas", "config", "secretKeys", "resources"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/definitions/digest" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "config": { "$ref": "#/definitions/settings" },
+        "secretKeys": { "$ref": "#/definitions/secretKeys" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["registry", "tag"],
+      "properties": {
+        "registry": { "type": "string" },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "required": ["name", "masterKey"],
+      "properties": { "name": { "type": "string", "minLength": 1 }, "masterKey": { "type": "string", "minLength": 1 } }
+    },
+    "externalSecrets": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "data": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["document", "property"],
+            "properties": {
+              "document": { "type": "string" },
+              "property": { "type": "string" },
+              "decodingStrategy": { "enum": ["None", "Base64", "Base64URL", "Auto"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "config": { "$ref": "#/definitions/settings" },
+    "server": {
+      "allOf": [
+        { "$ref": "#/definitions/component" },
+        { "required": ["drainDelaySeconds"], "properties": { "drainDelaySeconds": { "type": "integer", "minimum": 0 } } }
+      ]
+    },
+    "scheduler": { "$ref": "#/definitions/component" },
+    "migrations": {
+      "type": "object",
+      "required": ["secretKeys"],
+      "properties": { "secretKeys": { "$ref": "#/definitions/secretKeys" } }
+    }
+  }
+}
