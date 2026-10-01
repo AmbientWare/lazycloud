@@ -1386,6 +1386,7 @@ class UsageCostGroup(str, Enum):
 
 class UsageCostCategory(str, Enum):
     image_build = "image-build"
+    disk = "disk"
     unattributed = "unattributed"
 
 
@@ -1406,6 +1407,8 @@ class UsageCostComponentKind(str, Enum):
     cpu = "cpu"
     memory = "memory"
     gpu = "gpu"
+    volume_storage = "volume_storage"
+    disk = "disk"
 
 
 class UsageCostComponent(BaseModel):
@@ -1424,6 +1427,8 @@ class UsageCostRow(BaseModel):
     workload_name: str | None = None
     workload_kind: str | None = None
     task_id: UUID | None = None
+    disk_id: UUID | None = None
+    disk_name: Annotated[str | None, Field(description="Absent when the disk was deleted.")] = None
     category: UsageCostCategory | None = None
     cost_nanos: int
     components: list[UsageCostComponent]

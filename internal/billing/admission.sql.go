@@ -121,17 +121,25 @@ func (q *Queries) OwnerHasMemberEmail(ctx context.Context, arg OwnerHasMemberEma
 }
 
 const ownerLiveContainers = `-- name: OwnerLiveContainers :one
-select count(*)::int
+select count(*) filter (where c.gpu_count = 0)::int as cpu_containers,
+       coalesce(sum(c.gpu_count), 0)::int as gpus
 from workspace_members o
 join containers c on c.workspace_id = o.workspace_id
 where o.user_id = $1 and o.role = 'owner' and c.state <> 'stopped'
 `
 
-func (q *Queries) OwnerLiveContainers(ctx context.Context, userID uuid.UUID) (int32, error) {
+type OwnerLiveContainersRow struct {
+	CpuContainers int32
+	Gpus          int32
+}
+
+// The account's two concurrency pools: containers without GPUs, and the
+// cards the others hold.
+func (q *Queries) OwnerLiveContainers(ctx context.Context, userID uuid.UUID) (OwnerLiveContainersRow, error) {
 	row := q.db.QueryRow(ctx, ownerLiveContainers, userID)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
+	var i OwnerLiveContainersRow
+	err := row.Scan(&i.CpuContainers, &i.Gpus)
+	return i, err
 }
 
 const ownerMemberCount = `-- name: OwnerMemberCount :one

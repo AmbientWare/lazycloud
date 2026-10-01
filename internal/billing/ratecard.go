@@ -439,7 +439,7 @@ func rateHistory() []rateChange {
 			septemberGPUs[n].fleetHour = 1_000_000_000
 		case GPUL4:
 			septemberGPUs[n].fleetHour = 750_000_000
-		case GPUL40S, GPUA10040, GPUA10080, GPUH100, GPUH200, noGPU:
+		case GPUL40S, GPUA10040, GPUA10080, GPUH100, GPUH200, noGPU, GPUAny:
 		}
 	}
 	spotGPUs := []gpuRate{

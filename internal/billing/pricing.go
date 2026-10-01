@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"fmt"
 	"math/big"
 	"time"
 )
@@ -32,17 +33,29 @@ type Charge struct {
 	CPUNanos       int64
 	MemoryNanos    int64
 	GPUNanos       int64
+	// StoredBytes and AttachedBytes are what a storage source held over the
+	// interval; StorageNanos and AttachedNanos are their price.
+	StoredBytes   int64
+	AttachedBytes int64
+	StorageNanos  int64
+	AttachedNanos int64
 }
 
 // Total is the interval's cost.
-func (c Charge) Total() int64 { return c.ContainerNanos + c.CPUNanos + c.MemoryNanos + c.GPUNanos }
+func (c Charge) Total() int64 {
+	return c.ContainerNanos + c.CPUNanos + c.MemoryNanos + c.GPUNanos + c.StorageNanos + c.AttachedNanos
+}
 
 // price is the cost of holding shape for d under card. The arithmetic is
 // exact: an hourly rate times the resource times microseconds, divided once.
 func (c RateCard) price(shape Shape, d time.Duration) (Charge, error) {
 	gpu := shape.GPU
-	if shape.GPUCount == 0 {
+	switch {
+	case shape.GPUCount == 0:
 		gpu = noGPU
+	case gpu == noGPU:
+		// A card nobody named the model of would price as free.
+		return Charge{}, fmt.Errorf("a container holds %d GPUs of no recorded model", shape.GPUCount)
 	}
 	rate, err := c.computeRate(shape.Owner, shape.Class, gpu)
 	if err != nil {
@@ -58,15 +71,27 @@ func (c RateCard) price(shape Shape, d time.Duration) (Charge, error) {
 	}, nil
 }
 
+// storageCost is bytes held for d at a GiB-month rate, a month being the
+// published 30 days.
+func storageCost(gibMonth, bytes int64, d time.Duration) int64 {
+	return costOver(gibMonth, bytes, bytesPerGiB, d.Microseconds(), storageMonthSeconds*microsecondsPerSec)
+}
+
 // cost is hourly × units/perUnit × micros/microsPerHour, rounded half to
 // even.
 func cost(hourly, units, perUnit, micros int64) int64 {
-	if hourly == 0 || units == 0 || micros == 0 {
+	return costOver(hourly, units, perUnit, micros, microsPerHour)
+}
+
+// costOver is rate × units/perUnit × micros/periodMicros, exactly, rounded
+// half to even.
+func costOver(rate, units, perUnit, micros, periodMicros int64) int64 {
+	if rate == 0 || units == 0 || micros == 0 {
 		return 0
 	}
-	num := new(big.Int).Mul(big.NewInt(hourly), big.NewInt(units))
+	num := new(big.Int).Mul(big.NewInt(rate), big.NewInt(units))
 	num.Mul(num, big.NewInt(micros))
-	den := new(big.Int).Mul(big.NewInt(perUnit), big.NewInt(microsPerHour))
+	den := new(big.Int).Mul(big.NewInt(perUnit), big.NewInt(periodMicros))
 	q, r := new(big.Int).QuoRem(num, den, new(big.Int))
 	switch new(big.Int).Lsh(r, 1).Cmp(den) {
 	case 1:

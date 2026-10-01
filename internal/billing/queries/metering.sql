@@ -16,6 +16,7 @@ select now()::timestamptz as now,
 -- Ready and draining containers: the live set, read through its partial
 -- indexes rather than the container history.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
+       c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
        coalesce(u.complete, false)::bool as complete
@@ -24,13 +25,14 @@ join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
-left join usage_cursors u on u.container_id = c.id
+left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
 where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at is not null;
 
 -- name: StoppedMeteredContainers :many
 -- Containers that stopped since the look-back began and still owe their
 -- last entries.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
+       c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
        coalesce(u.complete, false)::bool as complete
@@ -39,7 +41,7 @@ join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
-left join usage_cursors u on u.container_id = c.id
+left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
 where c.ready_at is not null and c.stopped_at >= @since and not coalesce(u.complete, false);
 
 -- name: EnsureAccounts :exec
@@ -67,15 +69,16 @@ with entry as (
     insert into ledger_entries (
         source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
         billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
-        container_nanos, cpu_nanos, memory_nanos, gpu_nanos)
-    select 'container', e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
+        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos)
+    select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
            nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
            e.cpu_millis, e.memory_bytes, e.pricing_version,
-           e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos
+           e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
+           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos
     from (
-        select unnest(@source_ids::uuid[]) as source_id, unnest(@started_ats::timestamptz[]) as started_at,
+        select unnest(@source_kinds::text[]) as source_kind, unnest(@source_ids::uuid[]) as source_id, unnest(@started_ats::timestamptz[]) as started_at,
                unnest(@ended_ats::timestamptz[]) as ended_at, unnest(@user_ids::uuid[]) as user_id,
                unnest(@workspace_ids::uuid[]) as workspace_id, unnest(@app_ids::uuid[]) as app_id,
                unnest(@workload_ids::uuid[]) as workload_id, unnest(@categories::text[]) as category,
@@ -84,7 +87,9 @@ with entry as (
                unnest(@cpu_millis::bigint[]) as cpu_millis, unnest(@memory_bytes::bigint[]) as memory_bytes,
                unnest(@pricing_versions::text[]) as pricing_version,
                unnest(@container_nanos::bigint[]) as container_nanos, unnest(@cpu_nanos::bigint[]) as cpu_nanos,
-               unnest(@memory_nanos::bigint[]) as memory_nanos, unnest(@gpu_nanos::bigint[]) as gpu_nanos
+               unnest(@memory_nanos::bigint[]) as memory_nanos, unnest(@gpu_nanos::bigint[]) as gpu_nanos,
+               unnest(@stored_bytes::bigint[]) as stored_bytes, unnest(@attached_bytes::bigint[]) as attached_bytes,
+               unnest(@storage_nanos::bigint[]) as storage_nanos, unnest(@attached_nanos::bigint[]) as attached_nanos
     ) e
     on conflict (source_kind, source_id, started_at) do nothing
     returning user_id, started_at, cost_nanos
@@ -100,11 +105,11 @@ update billing_balances set due = true
 where user_id in (select user_id from hour) and not due;
 
 -- name: AdvanceCursors :exec
-insert into usage_cursors (container_id, billed_through, complete, updated_at)
-select c.id, c.through, c.complete, now()
-from (select unnest(@ids::uuid[]) as id, unnest(@through::timestamptz[]) as through,
+insert into usage_cursors (source_kind, source_id, billed_through, complete, updated_at)
+select c.kind, c.id, c.through, c.complete, now()
+from (select unnest(@kinds::text[]) as kind, unnest(@ids::uuid[]) as id, unnest(@through::timestamptz[]) as through,
              unnest(@complete::bool[]) as complete) c
-on conflict (container_id) do update
+on conflict (source_kind, source_id) do update
 set billed_through = greatest(usage_cursors.billed_through, excluded.billed_through),
     complete = usage_cursors.complete or excluded.complete,
     updated_at = now();
@@ -129,11 +134,46 @@ insert into metering_state (singleton, stopped_since) values (true, @stopped_sin
 on conflict (singleton) do update set stopped_since = excluded.stopped_since;
 
 -- name: PruneCursors :execrows
--- Complete cursors older than the look-back can no longer be scanned.
-delete from usage_cursors
-where container_id in (
-    select u.container_id from usage_cursors u
-    where u.complete and u.updated_at < @before
-    order by u.updated_at
+-- Complete cursors older than the look-back can no longer be scanned, and
+-- a storage source unseen for a day is gone.
+delete from usage_cursors u
+using (
+    select c.source_kind, c.source_id from usage_cursors c
+    where (c.complete and c.updated_at < @complete_before::timestamptz)
+       or (c.source_kind <> 'container' and c.updated_at < @gone_before::timestamptz)
     limit @row_limit
-);
+) old
+where u.source_kind = old.source_kind and u.source_id = old.source_id;
+
+-- name: MeteredVolumes :many
+-- Every volume row: active ones store bytes, deleting ones until they were
+-- deleted. The sweep removes a row once its files are gone.
+select v.id, v.workspace_id, v.size_bytes, v.created_at, v.deleted_at, o.user_id as owner_id,
+       u.billed_through, exists (select 1 from unfunded_periods p where p.user_id = o.user_id)::bool as waived
+from volumes v
+join workspace_members o on o.workspace_id = v.workspace_id and o.role = 'owner'
+left join usage_cursors u on u.source_kind = 'volume' and u.source_id = v.id;
+
+-- name: MeteredDisks :many
+-- Every disk row: it stores bytes for its life and holds its declared size
+-- while a container holds it or released it since the cursor.
+select d.id, d.workspace_id, d.stored_bytes, d.size_bytes, d.created_at, d.deleted_at,
+       coalesce(d.holder_container_id is not null or d.released_at > u.billed_through, false)::bool as held,
+       o.user_id as owner_id, u.billed_through,
+       exists (select 1 from unfunded_periods p where p.user_id = o.user_id)::bool as waived
+from disks d
+join workspace_members o on o.workspace_id = d.workspace_id and o.role = 'owner'
+left join usage_cursors u on u.source_kind = 'disk' and u.source_id = d.id;
+
+-- name: MeteredArtifacts :many
+-- Stored artifact bytes per app, or per workspace for artifacts no app
+-- owns, through the artifact listing index.
+select a.workspace_id, a.app_id, coalesce(a.app_id, a.workspace_id)::uuid as source_id,
+       sum(a.size_bytes)::bigint as stored_bytes, min(a.stored_at)::timestamptz as first_stored_at,
+       o.user_id as owner_id, u.billed_through,
+       exists (select 1 from unfunded_periods p where p.user_id = o.user_id)::bool as waived
+from artifacts a
+join workspace_members o on o.workspace_id = a.workspace_id and o.role = 'owner'
+left join usage_cursors u on u.source_kind = 'artifacts' and u.source_id = coalesce(a.app_id, a.workspace_id)
+where a.state = 'stored'
+group by a.workspace_id, a.app_id, o.user_id, u.billed_through;

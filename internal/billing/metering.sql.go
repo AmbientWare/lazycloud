@@ -13,24 +13,30 @@ import (
 )
 
 const advanceCursors = `-- name: AdvanceCursors :exec
-insert into usage_cursors (container_id, billed_through, complete, updated_at)
-select c.id, c.through, c.complete, now()
-from (select unnest($1::uuid[]) as id, unnest($2::timestamptz[]) as through,
-             unnest($3::bool[]) as complete) c
-on conflict (container_id) do update
+insert into usage_cursors (source_kind, source_id, billed_through, complete, updated_at)
+select c.kind, c.id, c.through, c.complete, now()
+from (select unnest($1::text[]) as kind, unnest($2::uuid[]) as id, unnest($3::timestamptz[]) as through,
+             unnest($4::bool[]) as complete) c
+on conflict (source_kind, source_id) do update
 set billed_through = greatest(usage_cursors.billed_through, excluded.billed_through),
     complete = usage_cursors.complete or excluded.complete,
     updated_at = now()
 `
 
 type AdvanceCursorsParams struct {
+	Kinds    []string
 	Ids      []uuid.UUID
 	Through  []time.Time
 	Complete []bool
 }
 
 func (q *Queries) AdvanceCursors(ctx context.Context, arg AdvanceCursorsParams) error {
-	_, err := q.db.Exec(ctx, advanceCursors, arg.Ids, arg.Through, arg.Complete)
+	_, err := q.db.Exec(ctx, advanceCursors,
+		arg.Kinds,
+		arg.Ids,
+		arg.Through,
+		arg.Complete,
+	)
 	return err
 }
 
@@ -69,24 +75,27 @@ with entry as (
     insert into ledger_entries (
         source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
         billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
-        container_nanos, cpu_nanos, memory_nanos, gpu_nanos)
-    select 'container', e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
+        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos)
+    select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
            nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
            nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
            e.cpu_millis, e.memory_bytes, e.pricing_version,
-           e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos
+           e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
+           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos
     from (
-        select unnest($1::uuid[]) as source_id, unnest($2::timestamptz[]) as started_at,
-               unnest($3::timestamptz[]) as ended_at, unnest($4::uuid[]) as user_id,
-               unnest($5::uuid[]) as workspace_id, unnest($6::uuid[]) as app_id,
-               unnest($7::uuid[]) as workload_id, unnest($8::text[]) as category,
-               unnest($9::text[]) as billing_owner, unnest($10::text[]) as rate_class,
-               unnest($11::text[]) as gpu_type, unnest($12::int[]) as gpu_count,
-               unnest($13::bigint[]) as cpu_millis, unnest($14::bigint[]) as memory_bytes,
-               unnest($15::text[]) as pricing_version,
-               unnest($16::bigint[]) as container_nanos, unnest($17::bigint[]) as cpu_nanos,
-               unnest($18::bigint[]) as memory_nanos, unnest($19::bigint[]) as gpu_nanos
+        select unnest($1::text[]) as source_kind, unnest($2::uuid[]) as source_id, unnest($3::timestamptz[]) as started_at,
+               unnest($4::timestamptz[]) as ended_at, unnest($5::uuid[]) as user_id,
+               unnest($6::uuid[]) as workspace_id, unnest($7::uuid[]) as app_id,
+               unnest($8::uuid[]) as workload_id, unnest($9::text[]) as category,
+               unnest($10::text[]) as billing_owner, unnest($11::text[]) as rate_class,
+               unnest($12::text[]) as gpu_type, unnest($13::int[]) as gpu_count,
+               unnest($14::bigint[]) as cpu_millis, unnest($15::bigint[]) as memory_bytes,
+               unnest($16::text[]) as pricing_version,
+               unnest($17::bigint[]) as container_nanos, unnest($18::bigint[]) as cpu_nanos,
+               unnest($19::bigint[]) as memory_nanos, unnest($20::bigint[]) as gpu_nanos,
+               unnest($21::bigint[]) as stored_bytes, unnest($22::bigint[]) as attached_bytes,
+               unnest($23::bigint[]) as storage_nanos, unnest($24::bigint[]) as attached_nanos
     ) e
     on conflict (source_kind, source_id, started_at) do nothing
     returning user_id, started_at, cost_nanos
@@ -103,6 +112,7 @@ where user_id in (select user_id from hour) and not due
 `
 
 type InsertLedgerEntriesParams struct {
+	SourceKinds     []string
 	SourceIds       []uuid.UUID
 	StartedAts      []time.Time
 	EndedAts        []time.Time
@@ -122,12 +132,17 @@ type InsertLedgerEntriesParams struct {
 	CpuNanos        []int64
 	MemoryNanos     []int64
 	GpuNanos        []int64
+	StoredBytes     []int64
+	AttachedBytes   []int64
+	StorageNanos    []int64
+	AttachedNanos   []int64
 }
 
 // Entries already written are skipped, so a repeated batch adds nothing to
 // the hourly totals. Accounts with new cost become due for a rollup.
 func (q *Queries) InsertLedgerEntries(ctx context.Context, arg InsertLedgerEntriesParams) error {
 	_, err := q.db.Exec(ctx, insertLedgerEntries,
+		arg.SourceKinds,
 		arg.SourceIds,
 		arg.StartedAts,
 		arg.EndedAts,
@@ -147,12 +162,17 @@ func (q *Queries) InsertLedgerEntries(ctx context.Context, arg InsertLedgerEntri
 		arg.CpuNanos,
 		arg.MemoryNanos,
 		arg.GpuNanos,
+		arg.StoredBytes,
+		arg.AttachedBytes,
+		arg.StorageNanos,
+		arg.AttachedNanos,
 	)
 	return err
 }
 
 const liveMeteredContainers = `-- name: LiveMeteredContainers :many
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
+       c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
        coalesce(u.complete, false)::bool as complete
@@ -161,7 +181,7 @@ join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
-left join usage_cursors u on u.container_id = c.id
+left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
 where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at is not null
 `
 
@@ -172,6 +192,10 @@ type LiveMeteredContainersRow struct {
 	ImageBuildID  *uuid.UUID
 	CpuMillis     int64
 	MemoryBytes   int64
+	GpuCount      int32
+	GpuType       string
+	RateClass     string
+	BillingOwner  string
 	ReadyAt       time.Time
 	StoppedAt     *time.Time
 	StopReason    *string
@@ -201,6 +225,10 @@ func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredConta
 			&i.ImageBuildID,
 			&i.CpuMillis,
 			&i.MemoryBytes,
+			&i.GpuCount,
+			&i.GpuType,
+			&i.RateClass,
+			&i.BillingOwner,
 			&i.ReadyAt,
 			&i.StoppedAt,
 			&i.StopReason,
@@ -210,6 +238,166 @@ func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredConta
 			&i.OwnerID,
 			&i.BilledThrough,
 			&i.Complete,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const meteredArtifacts = `-- name: MeteredArtifacts :many
+select a.workspace_id, a.app_id, coalesce(a.app_id, a.workspace_id)::uuid as source_id,
+       sum(a.size_bytes)::bigint as stored_bytes, min(a.stored_at)::timestamptz as first_stored_at,
+       o.user_id as owner_id, u.billed_through,
+       exists (select 1 from unfunded_periods p where p.user_id = o.user_id)::bool as waived
+from artifacts a
+join workspace_members o on o.workspace_id = a.workspace_id and o.role = 'owner'
+left join usage_cursors u on u.source_kind = 'artifacts' and u.source_id = coalesce(a.app_id, a.workspace_id)
+where a.state = 'stored'
+group by a.workspace_id, a.app_id, o.user_id, u.billed_through
+`
+
+type MeteredArtifactsRow struct {
+	WorkspaceID   uuid.UUID
+	AppID         *uuid.UUID
+	SourceID      uuid.UUID
+	StoredBytes   int64
+	FirstStoredAt time.Time
+	OwnerID       uuid.UUID
+	BilledThrough *time.Time
+	Waived        bool
+}
+
+// Stored artifact bytes per app, or per workspace for artifacts no app
+// owns, through the artifact listing index.
+func (q *Queries) MeteredArtifacts(ctx context.Context) ([]MeteredArtifactsRow, error) {
+	rows, err := q.db.Query(ctx, meteredArtifacts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MeteredArtifactsRow
+	for rows.Next() {
+		var i MeteredArtifactsRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.AppID,
+			&i.SourceID,
+			&i.StoredBytes,
+			&i.FirstStoredAt,
+			&i.OwnerID,
+			&i.BilledThrough,
+			&i.Waived,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const meteredDisks = `-- name: MeteredDisks :many
+select d.id, d.workspace_id, d.stored_bytes, d.size_bytes, d.created_at, d.deleted_at,
+       coalesce(d.holder_container_id is not null or d.released_at > u.billed_through, false)::bool as held,
+       o.user_id as owner_id, u.billed_through,
+       exists (select 1 from unfunded_periods p where p.user_id = o.user_id)::bool as waived
+from disks d
+join workspace_members o on o.workspace_id = d.workspace_id and o.role = 'owner'
+left join usage_cursors u on u.source_kind = 'disk' and u.source_id = d.id
+`
+
+type MeteredDisksRow struct {
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	StoredBytes   int64
+	SizeBytes     int64
+	CreatedAt     time.Time
+	DeletedAt     *time.Time
+	Held          bool
+	OwnerID       uuid.UUID
+	BilledThrough *time.Time
+	Waived        bool
+}
+
+// Every disk row: it stores bytes for its life and holds its declared size
+// while a container holds it or released it since the cursor.
+func (q *Queries) MeteredDisks(ctx context.Context) ([]MeteredDisksRow, error) {
+	rows, err := q.db.Query(ctx, meteredDisks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MeteredDisksRow
+	for rows.Next() {
+		var i MeteredDisksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.StoredBytes,
+			&i.SizeBytes,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.Held,
+			&i.OwnerID,
+			&i.BilledThrough,
+			&i.Waived,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const meteredVolumes = `-- name: MeteredVolumes :many
+select v.id, v.workspace_id, v.size_bytes, v.created_at, v.deleted_at, o.user_id as owner_id,
+       u.billed_through, exists (select 1 from unfunded_periods p where p.user_id = o.user_id)::bool as waived
+from volumes v
+join workspace_members o on o.workspace_id = v.workspace_id and o.role = 'owner'
+left join usage_cursors u on u.source_kind = 'volume' and u.source_id = v.id
+`
+
+type MeteredVolumesRow struct {
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	SizeBytes     int64
+	CreatedAt     time.Time
+	DeletedAt     *time.Time
+	OwnerID       uuid.UUID
+	BilledThrough *time.Time
+	Waived        bool
+}
+
+// Every volume row: active ones store bytes, deleting ones until they were
+// deleted. The sweep removes a row once its files are gone.
+func (q *Queries) MeteredVolumes(ctx context.Context) ([]MeteredVolumesRow, error) {
+	rows, err := q.db.Query(ctx, meteredVolumes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MeteredVolumesRow
+	for rows.Next() {
+		var i MeteredVolumesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SizeBytes,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.OwnerID,
+			&i.BilledThrough,
+			&i.Waived,
 		); err != nil {
 			return nil, err
 		}
@@ -241,23 +429,26 @@ func (q *Queries) MeteringClock(ctx context.Context) (MeteringClockRow, error) {
 }
 
 const pruneCursors = `-- name: PruneCursors :execrows
-delete from usage_cursors
-where container_id in (
-    select u.container_id from usage_cursors u
-    where u.complete and u.updated_at < $1
-    order by u.updated_at
-    limit $2
-)
+delete from usage_cursors u
+using (
+    select c.source_kind, c.source_id from usage_cursors c
+    where (c.complete and c.updated_at < $1::timestamptz)
+       or (c.source_kind <> 'container' and c.updated_at < $2::timestamptz)
+    limit $3
+) old
+where u.source_kind = old.source_kind and u.source_id = old.source_id
 `
 
 type PruneCursorsParams struct {
-	Before   time.Time
-	RowLimit int32
+	CompleteBefore time.Time
+	GoneBefore     time.Time
+	RowLimit       int32
 }
 
-// Complete cursors older than the look-back can no longer be scanned.
+// Complete cursors older than the look-back can no longer be scanned, and
+// a storage source unseen for a day is gone.
 func (q *Queries) PruneCursors(ctx context.Context, arg PruneCursorsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, pruneCursors, arg.Before, arg.RowLimit)
+	result, err := q.db.Exec(ctx, pruneCursors, arg.CompleteBefore, arg.GoneBefore, arg.RowLimit)
 	if err != nil {
 		return 0, err
 	}
@@ -312,6 +503,7 @@ func (q *Queries) SetStoppedSince(ctx context.Context, stoppedSince time.Time) e
 
 const stoppedMeteredContainers = `-- name: StoppedMeteredContainers :many
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
+       c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
        coalesce(u.complete, false)::bool as complete
@@ -320,7 +512,7 @@ join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
-left join usage_cursors u on u.container_id = c.id
+left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
 where c.ready_at is not null and c.stopped_at >= $1 and not coalesce(u.complete, false)
 `
 
@@ -331,6 +523,10 @@ type StoppedMeteredContainersRow struct {
 	ImageBuildID  *uuid.UUID
 	CpuMillis     int64
 	MemoryBytes   int64
+	GpuCount      int32
+	GpuType       string
+	RateClass     string
+	BillingOwner  string
 	ReadyAt       time.Time
 	StoppedAt     *time.Time
 	StopReason    *string
@@ -360,6 +556,10 @@ func (q *Queries) StoppedMeteredContainers(ctx context.Context, since *time.Time
 			&i.ImageBuildID,
 			&i.CpuMillis,
 			&i.MemoryBytes,
+			&i.GpuCount,
+			&i.GpuType,
+			&i.RateClass,
+			&i.BillingOwner,
 			&i.ReadyAt,
 			&i.StoppedAt,
 			&i.StopReason,

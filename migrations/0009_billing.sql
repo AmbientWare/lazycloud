@@ -56,14 +56,16 @@ create table credit_lots (
 
 create index credit_lots_unspent on credit_lots (user_id, expires_at) where spent_nanos <> amount_nanos - reversed_nanos;
 
--- One metered interval of one container: the usage fact and its price in
--- one immutable row. A container's entries are contiguous from its ready_at
--- and keyed by their start; they end on UTC quarter-hours, published rate
--- changes and the container's end. Workspace, app and workload ids carry no
--- foreign keys so the charge outlives what incurred it.
+-- One metered interval of one source: the usage fact and its price in one
+-- immutable row. A source's entries are contiguous and keyed by their start;
+-- they end on UTC quarter-hours, published rate changes and the source's
+-- end. A container prices its shape; a volume, an app's artifacts or a disk
+-- price the bytes they stored, and a disk also its declared size while a
+-- container held it. Workspace, app and workload ids carry no foreign keys so
+-- the charge outlives what incurred it.
 create table ledger_entries (
     id bigint generated always as identity primary key,
-    source_kind text not null check (source_kind in ('container')),
+    source_kind text not null check (source_kind in ('container', 'volume', 'artifacts', 'disk')),
     source_id uuid not null,
     started_at timestamptz not null,
     ended_at timestamptz not null,
@@ -71,7 +73,7 @@ create table ledger_entries (
     workspace_id uuid not null,
     app_id uuid,
     workload_id uuid,
-    category text check (category in ('image-build')),
+    category text check (category in ('image-build', 'volume', 'artifacts', 'disk')),
     billing_owner text not null check (billing_owner in ('platform_fleet', 'connected_cloud', 'self_hosted')),
     rate_class text not null check (rate_class in ('auto', 'pinned', 'non_preemptible', 'pinned_non_preemptible')),
     gpu_type text,
@@ -83,21 +85,28 @@ create table ledger_entries (
     cpu_nanos bigint not null check (cpu_nanos >= 0),
     memory_nanos bigint not null check (memory_nanos >= 0),
     gpu_nanos bigint not null check (gpu_nanos >= 0),
-    cost_nanos bigint generated always as (container_nanos + cpu_nanos + memory_nanos + gpu_nanos) stored,
+    stored_bytes bigint not null default 0 check (stored_bytes >= 0),
+    attached_bytes bigint not null default 0 check (attached_bytes >= 0),
+    storage_nanos bigint not null default 0 check (storage_nanos >= 0),
+    attached_nanos bigint not null default 0 check (attached_nanos >= 0),
+    cost_nanos bigint generated always as (
+        container_nanos + cpu_nanos + memory_nanos + gpu_nanos + storage_nanos + attached_nanos) stored,
     unique (source_kind, source_id, started_at),
     check (ended_at > started_at)
 );
 
 create index ledger_entries_payer on ledger_entries (user_id, started_at);
 
--- How far each container is metered. complete marks a stopped container
--- whose last entry is written; such rows are removed once the metering
--- look-back passes them.
+-- How far each source is metered. complete marks a stopped container whose
+-- last entry is written; such rows are removed once the metering look-back
+-- passes them, and storage rows once their source has gone for a day.
 create table usage_cursors (
-    container_id uuid primary key,
+    source_kind text not null,
+    source_id uuid not null,
     billed_through timestamptz not null,
     complete boolean not null default false,
-    updated_at timestamptz not null default now()
+    updated_at timestamptz not null default now(),
+    primary key (source_kind, source_id)
 );
 
 create index usage_cursors_complete on usage_cursors (updated_at) where complete;
@@ -110,6 +119,18 @@ create table metering_state (
 
 -- Metering finds containers that stopped since its last pass.
 create index containers_stopped_metering on containers (stopped_at) where ready_at is not null;
+
+-- What a container prices at. Planning records the GPUs and placement class
+-- its release asks for; placement records the GPU model and whose machine it
+-- got. The defaults are a CPU container placed automatically on the
+-- platform fleet.
+alter table containers
+    add column gpu_count integer not null default 0 check (gpu_count >= 0),
+    add column gpu_type text not null default '',
+    add column rate_class text not null default 'auto'
+        check (rate_class in ('auto', 'pinned', 'non_preemptible', 'pinned_non_preemptible')),
+    add column billing_owner text not null default 'platform_fleet'
+        check (billing_owner in ('platform_fleet', 'connected_cloud', 'self_hosted'));
 
 -- An account's cost per UTC hour, added to as entries are written, and how
 -- much of it credit covered. uncovered = cost - credited - waived is debt.

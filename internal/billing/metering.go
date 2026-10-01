@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,22 +11,29 @@ import (
 )
 
 const (
-	// MeteringPeriod is the UTC grid live containers' entries end on, so a
-	// running container's usage reaches the ledger at most this late. The
-	// balance does not wait for it: each pass writes the open interval as
-	// accrued cost.
+	// MeteringPeriod is the UTC grid entries end on, so a running
+	// container's or a stored source's usage reaches the ledger at most this
+	// late. The balance does not wait for compute: each pass writes live
+	// containers' open intervals as accrued cost.
 	MeteringPeriod = 15 * time.Minute
 	// stoppedLookBack is how far before the previous pass a pass looks for
 	// stopped containers. It covers stop transactions that committed after
 	// the previous pass read: a stop's stopped_at is its transaction's
 	// start, which precedes its commit by far less than this.
 	stoppedLookBack = 5 * time.Minute
-	// meteringWriteBatch bounds the containers one metering transaction
+	// storageGone is how long a storage source's cursor outlives the source.
+	storageGone = 24 * time.Hour
+	// meteringWriteBatch bounds the sources one metering transaction
 	// writes.
 	meteringWriteBatch = 500
 	cursorPruneBatch   = 5_000
 	stopHostLost       = "host_lost"
 	categoryImageBuild = "image-build"
+
+	kindContainer = "container"
+	kindVolume    = "volume"
+	kindArtifacts = "artifacts"
+	kindDisk      = "disk"
 )
 
 // MeterResult counts one metering pass.
@@ -37,23 +45,41 @@ type MeterResult struct {
 	// Entries is how many ledger entries it offered; entries already
 	// written are skipped by the database.
 	Entries int
-	// Failed counts containers the pass could not price; they keep their
+	// Failed counts sources the pass could not price; they keep their
 	// cursor and are retried next pass.
 	Failed int
 }
 
-// entry is one priced interval of one container.
-type entry struct {
-	container uuid.UUID
-	start     time.Time
-	end       time.Time
+// source is one thing usage is metered for: a container, a volume, one
+// app's artifacts or a disk.
+type source struct {
+	kind      string
+	id        uuid.UUID
 	owner     uuid.UUID
 	workspace uuid.UUID
-	app       uuid.UUID
-	workload  uuid.UUID
+	app       *uuid.UUID
+	workload  *uuid.UUID
 	category  string
-	shape     Shape
-	charge    Charge
+	// price prices holding the source for d under card.
+	price func(card RateCard, d time.Duration) (Charge, error)
+	// shape is what a container prices; storage sources leave it zero.
+	shape Shape
+}
+
+// entry is one priced interval of one source.
+type entry struct {
+	start, end time.Time
+	charge     Charge
+}
+
+// sourcePlan is what a pass writes for one source.
+type sourcePlan struct {
+	src      source
+	entries  []entry
+	through  time.Time
+	complete bool
+	accrued  int64
+	advance  bool
 }
 
 // meteredContainer is one container a pass reads, live or recently
@@ -62,35 +88,18 @@ type meteredContainer struct {
 	id, workspace, owner uuid.UUID
 	app, workload        *uuid.UUID
 	build                bool
-	cpuMillis, memory    int64
+	shape                Shape
 	readyAt              time.Time
 	stoppedAt            *time.Time
 	stopReason           *string
 	lastSeenAt           *time.Time
 	billedThrough        *time.Time
-	complete             bool
 }
 
-// containerShape is how a container prices. Containers do not record a GPU
-// or a placement choice yet and hosts do not record who owns the machine,
-// so every container prices as automatic CPU placement on the platform
-// fleet until execution and compute record them.
-func containerShape(c meteredContainer) Shape {
-	return Shape{Owner: OwnerPlatformFleet, Class: ClassAuto, CPUMillis: c.cpuMillis, MemoryBytes: c.memory}
-}
-
-// containerPlan is what a pass writes for one container.
-type containerPlan struct {
-	entries  []entry
-	through  time.Time
-	complete bool
-	accrued  int64
-	advance  bool
-}
-
-// Meter advances every live and recently stopped container's cursor:
-// stopped containers get their last entries, live ones the entries up to
-// their host's last report on the metering grid, and the open remainder is
+// Meter advances every metered source's cursor: stopped containers get
+// their last entries, live ones the entries up to their host's last report
+// on the metering grid, and stored volumes, artifacts and disks the
+// quarter-hours that closed. The open remainder of live containers is
 // written as accrued cost per account. Batches commit separately, so a
 // failure keeps the batches before it.
 func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
@@ -119,8 +128,7 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 		return MeterResult{}, fmt.Errorf("read metering clock: %w", err)
 	}
 	now := clock.Now
-	since := clock.StoppedSince.Add(-stoppedLookBack)
-	containers, err := b.meteredContainers(ctx, since)
+	containers, err := b.meteredContainers(ctx, clock.StoppedSince.Add(-stoppedLookBack))
 	if err != nil {
 		return MeterResult{}, err
 	}
@@ -131,21 +139,28 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 		live  int
 	}
 	accrued := map[uuid.UUID]*accrual{}
-	owners := map[uuid.UUID]bool{}
-	var batch []meteredContainer
-	var plans []containerPlan
+	var batch []sourcePlan
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := b.writeMetering(ctx, batch, plans, owners); err != nil {
+		if err := b.writeMetering(ctx, batch); err != nil {
 			return err
 		}
-		for _, p := range plans {
+		for _, p := range batch {
 			result.Entries += len(p.entries)
 		}
-		batch, plans = batch[:0], plans[:0]
-		clear(owners)
+		batch = batch[:0]
+		return nil
+	}
+	add := func(p sourcePlan) error {
+		if !p.advance && len(p.entries) == 0 {
+			return nil
+		}
+		batch = append(batch, p)
+		if len(batch) >= meteringWriteBatch {
+			return flush()
+		}
 		return nil
 	}
 	for _, c := range containers {
@@ -164,15 +179,23 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 			a.nanos += p.accrued
 			a.live++
 		}
-		owners[c.owner] = true
-		if !p.advance && len(p.entries) == 0 {
+		if err := add(p); err != nil {
+			return result, err
+		}
+	}
+	storage, err := b.storageSources(ctx)
+	if err != nil {
+		return result, err
+	}
+	for _, s := range storage {
+		p, err := b.planStorage(s, now)
+		if err != nil {
+			result.Failed++
+			b.logger.ErrorContext(ctx, "price storage usage", "kind", s.src.kind, "source_id", s.src.id, "error", err)
 			continue
 		}
-		batch, plans = append(batch, c), append(plans, p)
-		if len(batch) >= meteringWriteBatch {
-			if err := flush(); err != nil {
-				return result, err
-			}
+		if err := add(p); err != nil {
+			return result, err
 		}
 	}
 	if err := flush(); err != nil {
@@ -196,7 +219,9 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 		if err := q.SetStoppedSince(ctx, now); err != nil {
 			return fmt.Errorf("advance metering look-back: %w", err)
 		}
-		if _, err := q.PruneCursors(ctx, PruneCursorsParams{Before: now.Add(-2 * stoppedLookBack), RowLimit: cursorPruneBatch}); err != nil {
+		if _, err := q.PruneCursors(ctx, PruneCursorsParams{
+			CompleteBefore: now.Add(-2 * stoppedLookBack), GoneBefore: now.Add(-storageGone), RowLimit: cursorPruneBatch,
+		}); err != nil {
 			return fmt.Errorf("prune cursors: %w", err)
 		}
 		return nil
@@ -220,17 +245,26 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 	for _, r := range live {
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
-			build: r.ImageBuildID != nil, cpuMillis: r.CpuMillis, memory: r.MemoryBytes, readyAt: r.ReadyAt,
-			stoppedAt: r.StoppedAt, stopReason: r.StopReason, lastSeenAt: r.LastSeenAt,
-			billedThrough: r.BilledThrough, complete: r.Complete,
+			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough,
+			shape: Shape{
+				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
+				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
+			},
 		})
 	}
 	for _, r := range stopped {
+		if r.Complete {
+			continue
+		}
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
-			build: r.ImageBuildID != nil, cpuMillis: r.CpuMillis, memory: r.MemoryBytes, readyAt: r.ReadyAt,
-			stoppedAt: r.StoppedAt, stopReason: r.StopReason, lastSeenAt: r.LastSeenAt,
-			billedThrough: r.BilledThrough, complete: r.Complete,
+			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough,
+			shape: Shape{
+				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
+				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
+			},
 		})
 	}
 	return out, nil
@@ -240,40 +274,47 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // accrued cost at now. A container is billed from ready to stopped; one on a
 // lost host ends at the host's last report, and a live one is never billed
 // past it.
-func (b *Billing) planContainer(c meteredContainer, now time.Time) (containerPlan, error) {
+func (b *Billing) planContainer(c meteredContainer, now time.Time) (sourcePlan, error) {
+	shape := c.shape
+	src := source{
+		kind: kindContainer, id: c.id, owner: c.owner, workspace: c.workspace, app: c.app, workload: c.workload, shape: shape,
+		price: func(card RateCard, d time.Duration) (Charge, error) { return card.price(shape, d) },
+	}
+	if c.build {
+		src.category = categoryImageBuild
+	}
 	start := c.readyAt
 	if c.billedThrough != nil && c.billedThrough.After(start) {
 		start = *c.billedThrough
 	}
-	shape := containerShape(c)
 	if c.stoppedAt != nil {
 		end := *c.stoppedAt
 		if c.stopReason != nil && *c.stopReason == stopHostLost && c.lastSeenAt != nil && c.lastSeenAt.Before(end) {
 			end = *c.lastSeenAt
 		}
-		entries, err := b.entries(c, shape, start, end)
+		entries, err := b.entries(src, start, end)
 		if err != nil {
-			return containerPlan{}, err
+			return sourcePlan{}, err
 		}
-		return containerPlan{entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
+		return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
 	}
 	horizon := start
 	if c.lastSeenAt != nil {
 		horizon = maxTime(start, minTime(now, *c.lastSeenAt))
 	}
 	closed := horizon.Truncate(MeteringPeriod)
-	plan := containerPlan{through: start}
+	plan := sourcePlan{src: src, through: start}
 	if closed.After(start) {
-		entries, err := b.entries(c, shape, start, closed)
+		entries, err := b.entries(src, start, closed)
 		if err != nil {
-			return containerPlan{}, err
+			return sourcePlan{}, err
 		}
 		plan.entries, plan.through, plan.advance = entries, closed, true
 	}
 	if horizon.After(plan.through) {
-		open, err := b.entries(c, shape, plan.through, horizon)
+		open, err := b.entries(src, plan.through, horizon)
 		if err != nil {
-			return containerPlan{}, err
+			return sourcePlan{}, err
 		}
 		for _, e := range open {
 			plan.accrued += e.charge.Total()
@@ -282,9 +323,108 @@ func (b *Billing) planContainer(c meteredContainer, now time.Time) (containerPla
 	return plan, nil
 }
 
-// entries prices [start, end) in pieces that end on the metering grid and
-// on published rate changes.
-func (b *Billing) entries(c meteredContainer, shape Shape, start, end time.Time) ([]entry, error) {
+// storageSource is a stored source with where its billing starts and ends.
+type storageSource struct {
+	src     source
+	from    time.Time
+	cursor  *time.Time
+	deleted *time.Time
+}
+
+// storageSources reads every volume, disk and app's artifacts with their
+// size now. Sizes are sampled when a quarter-hour closes: volumes are
+// measured by storage's sweep, artifacts and disks are recorded exactly.
+// A source whose owner is in an unfunded retention period stores free.
+func (b *Billing) storageSources(ctx context.Context) ([]storageSource, error) {
+	var out []storageSource
+	volumes, err := b.queries.MeteredVolumes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read volumes: %w", err)
+	}
+	for _, v := range volumes {
+		bytes, waived := v.SizeBytes, v.Waived
+		out = append(out, storageSource{
+			src: source{kind: kindVolume, id: v.ID, owner: v.OwnerID, workspace: v.WorkspaceID, category: kindVolume,
+				price: volumePrice(bytes, waived)},
+			from: v.CreatedAt, cursor: v.BilledThrough, deleted: v.DeletedAt,
+		})
+	}
+	artifacts, err := b.queries.MeteredArtifacts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read artifacts: %w", err)
+	}
+	for _, a := range artifacts {
+		out = append(out, storageSource{
+			src: source{kind: kindArtifacts, id: a.SourceID, owner: a.OwnerID, workspace: a.WorkspaceID, app: a.AppID,
+				category: kindArtifacts, price: volumePrice(a.StoredBytes, a.Waived)},
+			from: a.FirstStoredAt, cursor: a.BilledThrough,
+		})
+	}
+	disks, err := b.queries.MeteredDisks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read disks: %w", err)
+	}
+	for _, d := range disks {
+		stored, attached, waived := d.StoredBytes, int64(0), d.Waived
+		if d.Held {
+			attached = d.SizeBytes
+		}
+		out = append(out, storageSource{
+			src: source{kind: kindDisk, id: d.ID, owner: d.OwnerID, workspace: d.WorkspaceID, category: kindDisk,
+				price: func(card RateCard, dur time.Duration) (Charge, error) {
+					if card.Disk == nil {
+						return Charge{}, errors.New("no disk rate was published then")
+					}
+					c := Charge{Version: card.Version, StoredBytes: stored, AttachedBytes: attached}
+					if !waived {
+						c.StorageNanos = storageCost(card.Disk.StoredGiBMonth, stored, dur)
+						c.AttachedNanos = storageCost(card.Disk.AttachedGiBMonth, attached, dur)
+					}
+					return c, nil
+				}},
+			from: d.CreatedAt, cursor: d.BilledThrough, deleted: d.DeletedAt,
+		})
+	}
+	return out, nil
+}
+
+func volumePrice(bytes int64, waived bool) func(RateCard, time.Duration) (Charge, error) {
+	return func(card RateCard, d time.Duration) (Charge, error) {
+		c := Charge{Version: card.Version, StoredBytes: bytes}
+		if !waived {
+			c.StorageNanos = storageCost(card.Platform.VolumeGiBMonth, bytes, d)
+		}
+		return c, nil
+	}
+}
+
+// planStorage writes a stored source's closed quarter-hours, through its
+// deletion when it was deleted.
+func (b *Billing) planStorage(s storageSource, now time.Time) (sourcePlan, error) {
+	start := s.from
+	if s.cursor != nil && s.cursor.After(start) {
+		start = *s.cursor
+	}
+	end, complete := now.Truncate(MeteringPeriod), false
+	if s.deleted != nil {
+		end, complete = *s.deleted, true
+	}
+	plan := sourcePlan{src: s.src, through: start}
+	if !end.After(start) {
+		plan.advance = complete && s.cursor == nil
+		return plan, nil
+	}
+	entries, err := b.entries(s.src, start, end)
+	if err != nil {
+		return sourcePlan{}, err
+	}
+	plan.entries, plan.through, plan.complete, plan.advance = entries, end, complete, true
+	return plan, nil
+}
+
+// entries prices [start, end) of src in pieces that end on the metering
+// grid and on published rate changes.
+func (b *Billing) entries(src source, start, end time.Time) ([]entry, error) {
 	var out []entry
 	cuts := b.rates.changesBetween(start, end)
 	for from := start; from.Before(end); {
@@ -299,24 +439,11 @@ func (b *Billing) entries(c meteredContainer, shape Shape, start, end time.Time)
 		if err != nil {
 			return nil, err
 		}
-		charge, err := card.price(shape, to.Sub(from))
+		charge, err := src.price(card, to.Sub(from))
 		if err != nil {
 			return nil, err
 		}
-		e := entry{
-			container: c.id, start: from, end: to, owner: c.owner, workspace: c.workspace,
-			shape: shape, charge: charge,
-		}
-		if c.app != nil {
-			e.app = *c.app
-		}
-		if c.workload != nil {
-			e.workload = *c.workload
-		}
-		if c.build {
-			e.category = categoryImageBuild
-		}
-		out = append(out, e)
+		out = append(out, entry{start: from, end: to, charge: charge})
 		from = to
 	}
 	return out, nil
@@ -324,34 +451,46 @@ func (b *Billing) entries(c meteredContainer, shape Shape, start, end time.Time)
 
 // writeMetering commits one batch: accounts for every owner, the entries
 // with their hourly totals, and the cursors.
-func (b *Billing) writeMetering(ctx context.Context, batch []meteredContainer, plans []containerPlan, owners map[uuid.UUID]bool) error {
+func (b *Billing) writeMetering(ctx context.Context, batch []sourcePlan) error {
 	var p InsertLedgerEntriesParams
-	cursors := AdvanceCursorsParams{}
-	for n, c := range batch {
-		plan := plans[n]
+	var cursors AdvanceCursorsParams
+	owners := map[uuid.UUID]bool{}
+	for _, plan := range batch {
+		src := plan.src
+		owners[src.owner] = true
 		for _, e := range plan.entries {
-			p.SourceIds = append(p.SourceIds, e.container)
+			p.SourceKinds = append(p.SourceKinds, src.kind)
+			p.SourceIds = append(p.SourceIds, src.id)
 			p.StartedAts = append(p.StartedAts, e.start)
 			p.EndedAts = append(p.EndedAts, e.end)
-			p.UserIds = append(p.UserIds, e.owner)
-			p.WorkspaceIds = append(p.WorkspaceIds, e.workspace)
-			p.AppIds = append(p.AppIds, e.app)
-			p.WorkloadIds = append(p.WorkloadIds, e.workload)
-			p.Categories = append(p.Categories, e.category)
-			p.BillingOwners = append(p.BillingOwners, string(e.shape.Owner))
-			p.RateClasses = append(p.RateClasses, string(e.shape.Class))
-			p.GpuTypes = append(p.GpuTypes, string(e.shape.GPU))
-			p.GpuCounts = append(p.GpuCounts, int32(e.shape.GPUCount)) //nolint:gosec // GPU counts are small.
-			p.CpuMillis = append(p.CpuMillis, e.shape.CPUMillis)
-			p.MemoryBytes = append(p.MemoryBytes, e.shape.MemoryBytes)
+			p.UserIds = append(p.UserIds, src.owner)
+			p.WorkspaceIds = append(p.WorkspaceIds, src.workspace)
+			p.AppIds = append(p.AppIds, orNil(src.app))
+			p.WorkloadIds = append(p.WorkloadIds, orNil(src.workload))
+			p.Categories = append(p.Categories, src.category)
+			owner, class := src.shape.Owner, src.shape.Class
+			if owner == "" {
+				owner, class = OwnerPlatformFleet, ClassAuto
+			}
+			p.BillingOwners = append(p.BillingOwners, string(owner))
+			p.RateClasses = append(p.RateClasses, string(class))
+			p.GpuTypes = append(p.GpuTypes, string(src.shape.GPU))
+			p.GpuCounts = append(p.GpuCounts, int32(src.shape.GPUCount)) //nolint:gosec // GPU counts are small.
+			p.CpuMillis = append(p.CpuMillis, src.shape.CPUMillis)
+			p.MemoryBytes = append(p.MemoryBytes, src.shape.MemoryBytes)
 			p.PricingVersions = append(p.PricingVersions, e.charge.Version)
 			p.ContainerNanos = append(p.ContainerNanos, e.charge.ContainerNanos)
 			p.CpuNanos = append(p.CpuNanos, e.charge.CPUNanos)
 			p.MemoryNanos = append(p.MemoryNanos, e.charge.MemoryNanos)
 			p.GpuNanos = append(p.GpuNanos, e.charge.GPUNanos)
+			p.StoredBytes = append(p.StoredBytes, e.charge.StoredBytes)
+			p.AttachedBytes = append(p.AttachedBytes, e.charge.AttachedBytes)
+			p.StorageNanos = append(p.StorageNanos, e.charge.StorageNanos)
+			p.AttachedNanos = append(p.AttachedNanos, e.charge.AttachedNanos)
 		}
 		if plan.advance {
-			cursors.Ids = append(cursors.Ids, c.id)
+			cursors.Kinds = append(cursors.Kinds, src.kind)
+			cursors.Ids = append(cursors.Ids, src.id)
 			cursors.Through = append(cursors.Through, plan.through)
 			cursors.Complete = append(cursors.Complete, plan.complete)
 		}
@@ -381,6 +520,13 @@ func (b *Billing) writeMetering(ctx context.Context, batch []meteredContainer, p
 		return fmt.Errorf("write metering batch: %w", err)
 	}
 	return nil
+}
+
+func orNil(id *uuid.UUID) uuid.UUID {
+	if id == nil {
+		return uuid.Nil
+	}
+	return *id
 }
 
 func minTime(a, b time.Time) time.Time {

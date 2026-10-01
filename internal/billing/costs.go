@@ -37,6 +37,7 @@ type costCursor struct {
 	App       uuid.UUID `json:"a"`
 	Workload  uuid.UUID `json:"l"`
 	Category  string    `json:"g"`
+	Disk      uuid.UUID `json:"d"`
 }
 
 func checkWindow(start, end time.Time) error {
@@ -52,7 +53,9 @@ func checkWindow(start, end time.Time) error {
 // Costs is one page of what the account's usage cost, grouped by app or by
 // workload, most expensive first, with the whole window's total. The
 // account pays for every workspace it owns, so rows carry their workspace.
-// No container runs for one task, so grouping by task groups by workload.
+// Each disk is its own row; volumes are usage without an app, and an app's
+// artifacts are its own row by workload. No container runs for one task, so
+// grouping by task groups by workload.
 func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apitypes.UsageCostPage, error) {
 	if err := checkWindow(q.Start, q.End); err != nil {
 		return apitypes.UsageCostPage{}, err
@@ -74,7 +77,7 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 			return apitypes.UsageCostPage{}, &InvalidError{Message: "the cursor is not from a previous page"}
 		}
 		params.HasCursor, params.AfterCost, params.AfterWorkspace = true, c.Cost, c.Workspace
-		params.AfterApp, params.AfterWorkload, params.AfterCategory = c.App, c.Workload, c.Category
+		params.AfterApp, params.AfterWorkload, params.AfterCategory, params.AfterDisk = c.App, c.Workload, c.Category, c.Disk
 	}
 	rows, err := b.queries.CostRows(ctx, params)
 	if err != nil {
@@ -91,7 +94,10 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 	}
 	if len(rows) > q.Limit {
 		last := rows[q.Limit-1]
-		raw, err := json.Marshal(costCursor{Cost: last.CostNanos, Workspace: last.WorkspaceID, App: last.AppKey, Workload: last.WorkloadKey, Category: last.Category})
+		raw, err := json.Marshal(costCursor{
+			Cost: last.CostNanos, Workspace: last.WorkspaceID, App: last.AppKey, Workload: last.WorkloadKey,
+			Category: last.Category, Disk: last.DiskKey,
+		})
 		if err != nil {
 			return apitypes.UsageCostPage{}, fmt.Errorf("encode cursor: %w", err)
 		}
@@ -113,13 +119,17 @@ type costNames struct {
 	workspaces map[uuid.UUID]string
 	apps       map[uuid.UUID]string
 	workloads  map[uuid.UUID][2]string
+	disks      map[uuid.UUID]string
 }
 
 // costNames resolves the names a page shows. A deleted app or workspace
 // keeps its cost and loses its name.
 func (b *Billing) costNames(ctx context.Context, rows []CostRowsRow) (costNames, error) {
-	var workspaces, apps, workloads []uuid.UUID
+	var workspaces, apps, workloads, disks []uuid.UUID
 	for _, r := range rows {
+		if r.DiskKey != uuid.Nil {
+			disks = append(disks, r.DiskKey)
+		}
 		workspaces = append(workspaces, r.WorkspaceID)
 		if r.AppKey != uuid.Nil {
 			apps = append(apps, r.AppKey)
@@ -128,7 +138,17 @@ func (b *Billing) costNames(ctx context.Context, rows []CostRowsRow) (costNames,
 			workloads = append(workloads, r.WorkloadKey)
 		}
 	}
-	out := costNames{workspaces: map[uuid.UUID]string{}, apps: map[uuid.UUID]string{}, workloads: map[uuid.UUID][2]string{}}
+	out := costNames{
+		workspaces: map[uuid.UUID]string{}, apps: map[uuid.UUID]string{}, workloads: map[uuid.UUID][2]string{},
+		disks: map[uuid.UUID]string{},
+	}
+	ds, err := b.queries.DiskNames(ctx, disks)
+	if err != nil {
+		return costNames{}, fmt.Errorf("read disk names: %w", err)
+	}
+	for _, d := range ds {
+		out.disks[d.ID] = d.Name
+	}
 	ws, err := b.queries.WorkspaceNames(ctx, workspaces)
 	if err != nil {
 		return costNames{}, fmt.Errorf("read workspace names: %w", err)
@@ -178,6 +198,17 @@ func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
 	case categoryImageBuild:
 		c := apitypes.UsageCostCategoryImageBuild
 		out.Category = &c
+	case kindDisk:
+		c := apitypes.UsageCostCategoryDisk
+		out.Category = &c
+		id := r.DiskKey
+		out.DiskId = &id
+		if name, ok := n.disks[id]; ok {
+			out.DiskName = &name
+		}
+	case kindArtifacts:
+		name, kind := "Artifacts", kindArtifacts
+		out.WorkloadName, out.WorkloadKind = &name, &kind
 	case "":
 		if r.AppKey == uuid.Nil {
 			c := apitypes.UsageCostCategoryUnattributed
@@ -185,15 +216,32 @@ func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
 		}
 	}
 	compute := apitypes.BilledDimensionComputeRuntime
-	out.Components = []apitypes.UsageCostComponent{
-		{Dimension: compute, Component: apitypes.ContainerTime, Quantity: float32(r.Seconds), CostNanos: r.ContainerNanos},
-		{Dimension: compute, Component: apitypes.Cpu, Quantity: float32(r.CoreSeconds), CostNanos: r.CpuNanos},
-		{Dimension: compute, Component: apitypes.Memory, Quantity: float32(r.GibSeconds), CostNanos: r.MemoryNanos},
+	if r.Seconds > 0 {
+		out.Components = append(out.Components,
+			apitypes.UsageCostComponent{Dimension: compute, Component: apitypes.UsageCostComponentKindContainerTime, Quantity: float32(r.Seconds), CostNanos: r.ContainerNanos},
+			apitypes.UsageCostComponent{Dimension: compute, Component: apitypes.UsageCostComponentKindCpu, Quantity: float32(r.CoreSeconds), CostNanos: r.CpuNanos},
+			apitypes.UsageCostComponent{Dimension: compute, Component: apitypes.UsageCostComponentKindMemory, Quantity: float32(r.GibSeconds), CostNanos: r.MemoryNanos},
+		)
 	}
 	if r.CardSeconds > 0 {
 		out.Components = append(out.Components, apitypes.UsageCostComponent{
-			Dimension: compute, Component: apitypes.Gpu, Quantity: float32(r.CardSeconds), CostNanos: r.GpuNanos,
+			Dimension: compute, Component: apitypes.UsageCostComponentKindGpu, Quantity: float32(r.CardSeconds), CostNanos: r.GpuNanos,
 		})
+	}
+	if r.VolumeGibSeconds > 0 || r.VolumeNanos > 0 {
+		out.Components = append(out.Components, apitypes.UsageCostComponent{
+			Dimension: apitypes.BilledDimensionVolumeStorage, Component: apitypes.UsageCostComponentKindVolumeStorage,
+			Quantity: float32(r.VolumeGibSeconds), CostNanos: r.VolumeNanos,
+		})
+	}
+	if r.DiskGibSeconds > 0 || r.DiskNanos > 0 {
+		out.Components = append(out.Components, apitypes.UsageCostComponent{
+			Dimension: apitypes.BilledDimensionDisk, Component: apitypes.UsageCostComponentKindDisk,
+			Quantity: float32(r.DiskGibSeconds), CostNanos: r.DiskNanos,
+		})
+	}
+	if out.Components == nil {
+		out.Components = []apitypes.UsageCostComponent{}
 	}
 	return out
 }
@@ -222,9 +270,9 @@ func (b *Billing) CostSeries(ctx context.Context, user uuid.UUID, start, end tim
 	if err != nil {
 		return apitypes.UsageCostSeries{}, fmt.Errorf("read subscription coverage: %w", err)
 	}
-	costs := make(map[int32]int64, len(rows))
+	costs := make(map[int32][]apitypes.UsageCostDimension, len(rows))
 	for _, r := range rows {
-		costs[r.Bucket] = r.CostNanos
+		costs[r.Bucket] = append(costs[r.Bucket], apitypes.UsageCostDimension{Dimension: apitypes.BilledDimension(r.Dimension), CostNanos: r.CostNanos})
 	}
 	out := apitypes.UsageCostSeries{
 		Start: start, End: end, Currency: Currency, Bucket: bucket, SubscriptionCreditNanos: covered,
@@ -233,9 +281,9 @@ func (b *Billing) CostSeries(ctx context.Context, user uuid.UUID, start, end tim
 	for n := range count {
 		from := start.Add(time.Duration(n) * width)
 		interval := apitypes.UsageCostInterval{StartedAt: from, EndedAt: minTime(from.Add(width), end), Dimensions: []apitypes.UsageCostDimension{}}
-		if cost, ok := costs[int32(n)]; ok { //nolint:gosec // Bounded by maxCostIntervals.
-			interval.CostNanos = cost
-			interval.Dimensions = append(interval.Dimensions, apitypes.UsageCostDimension{Dimension: apitypes.BilledDimensionComputeRuntime, CostNanos: cost})
+		for _, d := range costs[int32(n)] { //nolint:gosec // Bounded by maxCostIntervals.
+			interval.CostNanos += d.CostNanos
+			interval.Dimensions = append(interval.Dimensions, d)
 		}
 		out.CostNanos += interval.CostNanos
 		out.Intervals[n] = interval

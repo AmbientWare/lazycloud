@@ -4566,7 +4566,7 @@ components:
         Usage no app explains: image builds, and usage of resources outside
         any app.
       type: string
-      enum: [image-build, unattributed]
+      enum: [image-build, disk, unattributed]
 
     UsageCostBucket:
       type: string
@@ -4581,9 +4581,10 @@ components:
     UsageCostComponentKind:
       description: >-
         What a quantity counts: container_time in seconds, cpu in
-        core-seconds, memory in GiB-seconds, gpu in card-seconds.
+        core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in
+        card-seconds. A disk's cost includes its declared size while held.
       type: string
-      enum: [container_time, cpu, memory, gpu]
+      enum: [container_time, cpu, memory, gpu, volume_storage, disk]
 
     UsageCostComponent:
       type: object
@@ -4609,6 +4610,10 @@ components:
         workload_name: { type: string }
         workload_kind: { type: string }
         task_id: { type: string, format: uuid }
+        disk_id: { type: string, format: uuid }
+        disk_name:
+          description: Absent when the disk was deleted.
+          type: string
         category: { $ref: "#/components/schemas/UsageCostCategory" }
         cost_nanos: { type: integer, format: int64 }
         components:

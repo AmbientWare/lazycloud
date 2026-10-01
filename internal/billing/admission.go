@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,12 +22,28 @@ type Request struct {
 	// Cold marks work with no container to run on: Admit refuses it when
 	// the account already runs the most containers its plan allows.
 	Cold bool
+	// GPUs is the cards each container holds; 0 is a CPU container. Such
+	// containers count against the GPU pool by their cards instead of the
+	// CPU pool.
+	GPUs int
+	// GPUModels are the models the work accepts, in preference order; empty
+	// or GPUAny accepts any model the account may use.
+	GPUModels []GPUType
+	// Pinned marks placement in a chosen region or zone, which needs a plan
+	// with region selection.
+	Pinned bool
 }
+
+// GPUAny accepts whichever model has capacity.
+const GPUAny GPUType = "any"
 
 // Grant is what Admit allows.
 type Grant struct {
 	// Start is how many of the requested containers may start.
 	Start int
+	// GPUModels are the models placement may give a GPU container: the
+	// requested ones the account may use, every allowed model for any.
+	GPUModels []GPUType
 }
 
 // standing is an account's billing state as admission reads it.
@@ -114,19 +131,70 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	if err := s.fundsRefusal(); err != nil {
 		return Grant{}, err
 	}
+	if req.Pinned && !s.entitlements.RegionSelection {
+		return Grant{}, &PaymentRequiredError{Message: "region or availability zone selection requires the Team plan"}
+	}
+	var grant Grant
+	if req.GPUs > 0 {
+		models, err := s.entitlements.gpuModels(req.GPUModels)
+		if err != nil {
+			return Grant{}, err
+		}
+		grant.GPUModels = models
+	}
 	if req.Start == 0 && !req.Cold {
-		return Grant{}, nil
+		return grant, nil
 	}
 	live, err := q.OwnerLiveContainers(ctx, owner)
 	if err != nil {
 		return Grant{}, fmt.Errorf("count live containers: %w", err)
 	}
-	limit := s.entitlements.MaxCPUContainers
-	if req.Cold && int(live) >= limit {
-		return Grant{}, &LimitError{Message: fmt.Sprintf(
-			"this account already has %d containers running or queued, which is the most its plan allows (%d)", live, limit)}
+	if req.GPUs > 0 {
+		limit := s.entitlements.MaxGPUs
+		if req.Cold && int(live.Gpus)+req.GPUs > limit {
+			return Grant{}, &LimitError{Message: fmt.Sprintf(
+				"this account already holds %d GPUs across the containers it is running or has queued, and %d more would pass the most its plan allows (%d)",
+				live.Gpus, req.GPUs, limit)}
+		}
+		grant.Start = max(0, min(req.Start, (limit-int(live.Gpus))/req.GPUs))
+		return grant, nil
 	}
-	return Grant{Start: max(0, min(req.Start, limit-int(live)))}, nil
+	limit := s.entitlements.MaxCPUContainers
+	if req.Cold && int(live.CpuContainers) >= limit {
+		return Grant{}, &LimitError{Message: fmt.Sprintf(
+			"this account already has %d containers running or queued, which is the most its plan allows (%d)", live.CpuContainers, limit)}
+	}
+	grant.Start = max(0, min(req.Start, limit-int(live.CpuContainers)))
+	return grant, nil
+}
+
+// gpuModels narrows requested models to the ones the account may use. A
+// request for any model, or for none by name, gets every allowed model; a
+// named model the account may not use is refused.
+func (e Entitlements) gpuModels(requested []GPUType) ([]GPUType, error) {
+	var named []GPUType
+	for _, m := range requested {
+		if m == GPUAny {
+			return e.GPUTypes, nil
+		}
+		if !slices.Contains(e.GPUTypes, m) {
+			return nil, &PaymentRequiredError{Message: fmt.Sprintf(
+				"add a payment method to use %s; without a saved card, this account can use %s", m, joinModels(e.GPUTypes))}
+		}
+		named = append(named, m)
+	}
+	if len(named) == 0 {
+		return e.GPUTypes, nil
+	}
+	return named, nil
+}
+
+func joinModels(models []GPUType) string {
+	names := make([]string, len(models))
+	for n, m := range models {
+		names[n] = string(m)
+	}
+	return strings.Join(names, ", ")
 }
 
 // planChangePending refuses plan-limited additions while a change is

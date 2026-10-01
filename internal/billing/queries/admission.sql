@@ -16,7 +16,10 @@ where a.user_id = @user_id;
 select pg_advisory_xact_lock(hashtextextended('billing-account:' || cast(@user_id::uuid as text), 0));
 
 -- name: OwnerLiveContainers :one
-select count(*)::int
+-- The account's two concurrency pools: containers without GPUs, and the
+-- cards the others hold.
+select count(*) filter (where c.gpu_count = 0)::int as cpu_containers,
+       coalesce(sum(c.gpu_count), 0)::int as gpus
 from workspace_members o
 join containers c on c.workspace_id = o.workspace_id
 where o.user_id = @user_id and o.role = 'owner' and c.state <> 'stopped';

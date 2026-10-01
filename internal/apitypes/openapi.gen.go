@@ -954,6 +954,7 @@ func (e UsageCostBucket) Valid() bool {
 
 // Defines values for UsageCostCategory.
 const (
+	UsageCostCategoryDisk         UsageCostCategory = "disk"
 	UsageCostCategoryImageBuild   UsageCostCategory = "image-build"
 	UsageCostCategoryUnattributed UsageCostCategory = "unattributed"
 )
@@ -961,6 +962,8 @@ const (
 // Valid indicates whether the value is a known member of the UsageCostCategory enum.
 func (e UsageCostCategory) Valid() bool {
 	switch e {
+	case UsageCostCategoryDisk:
+		return true
 	case UsageCostCategoryImageBuild:
 		return true
 	case UsageCostCategoryUnattributed:
@@ -972,22 +975,28 @@ func (e UsageCostCategory) Valid() bool {
 
 // Defines values for UsageCostComponentKind.
 const (
-	ContainerTime UsageCostComponentKind = "container_time"
-	Cpu           UsageCostComponentKind = "cpu"
-	Gpu           UsageCostComponentKind = "gpu"
-	Memory        UsageCostComponentKind = "memory"
+	UsageCostComponentKindContainerTime UsageCostComponentKind = "container_time"
+	UsageCostComponentKindCpu           UsageCostComponentKind = "cpu"
+	UsageCostComponentKindDisk          UsageCostComponentKind = "disk"
+	UsageCostComponentKindGpu           UsageCostComponentKind = "gpu"
+	UsageCostComponentKindMemory        UsageCostComponentKind = "memory"
+	UsageCostComponentKindVolumeStorage UsageCostComponentKind = "volume_storage"
 )
 
 // Valid indicates whether the value is a known member of the UsageCostComponentKind enum.
 func (e UsageCostComponentKind) Valid() bool {
 	switch e {
-	case ContainerTime:
+	case UsageCostComponentKindContainerTime:
 		return true
-	case Cpu:
+	case UsageCostComponentKindCpu:
 		return true
-	case Gpu:
+	case UsageCostComponentKindDisk:
 		return true
-	case Memory:
+	case UsageCostComponentKindGpu:
+		return true
+	case UsageCostComponentKindMemory:
+		return true
+	case UsageCostComponentKindVolumeStorage:
 		return true
 	default:
 		return false
@@ -2609,7 +2618,7 @@ type UsageCostCategory string
 
 // UsageCostComponent defines model for UsageCostComponent.
 type UsageCostComponent struct {
-	// Component What a quantity counts: container_time in seconds, cpu in core-seconds, memory in GiB-seconds, gpu in card-seconds.
+	// Component What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds. A disk's cost includes its declared size while held.
 	Component UsageCostComponentKind `json:"component"`
 	CostNanos int64                  `json:"cost_nanos"`
 
@@ -2618,7 +2627,7 @@ type UsageCostComponent struct {
 	Quantity  float32         `json:"quantity"`
 }
 
-// UsageCostComponentKind What a quantity counts: container_time in seconds, cpu in core-seconds, memory in GiB-seconds, gpu in card-seconds.
+// UsageCostComponentKind What a quantity counts: container_time in seconds, cpu in core-seconds, memory, volume_storage and disk in GiB-seconds, gpu in card-seconds. A disk's cost includes its declared size while held.
 type UsageCostComponentKind string
 
 // UsageCostDimension defines model for UsageCostDimension.
@@ -2662,15 +2671,19 @@ type UsageCostRow struct {
 	AppName *string             `json:"app_name,omitempty"`
 
 	// Category Usage no app explains: image builds, and usage of resources outside any app.
-	Category      *UsageCostCategory   `json:"category,omitempty"`
-	Components    []UsageCostComponent `json:"components"`
-	CostNanos     int64                `json:"cost_nanos"`
-	TaskId        *openapi_types.UUID  `json:"task_id,omitempty"`
-	WorkloadId    *openapi_types.UUID  `json:"workload_id,omitempty"`
-	WorkloadKind  *string              `json:"workload_kind,omitempty"`
-	WorkloadName  *string              `json:"workload_name,omitempty"`
-	WorkspaceId   openapi_types.UUID   `json:"workspace_id"`
-	WorkspaceName *string              `json:"workspace_name,omitempty"`
+	Category   *UsageCostCategory   `json:"category,omitempty"`
+	Components []UsageCostComponent `json:"components"`
+	CostNanos  int64                `json:"cost_nanos"`
+	DiskId     *openapi_types.UUID  `json:"disk_id,omitempty"`
+
+	// DiskName Absent when the disk was deleted.
+	DiskName      *string             `json:"disk_name,omitempty"`
+	TaskId        *openapi_types.UUID `json:"task_id,omitempty"`
+	WorkloadId    *openapi_types.UUID `json:"workload_id,omitempty"`
+	WorkloadKind  *string             `json:"workload_kind,omitempty"`
+	WorkloadName  *string             `json:"workload_name,omitempty"`
+	WorkspaceId   openapi_types.UUID  `json:"workspace_id"`
+	WorkspaceName *string             `json:"workspace_name,omitempty"`
 }
 
 // UsageCostSeries defines model for UsageCostSeries.
