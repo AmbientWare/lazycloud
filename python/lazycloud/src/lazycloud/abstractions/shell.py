@@ -117,7 +117,9 @@ def wait_until_ready(
     while True:
         remaining = deadline - time.monotonic()
         try:
-            client.connect(container_id, wait_seconds=int(min(CONNECT_WAIT_SECONDS, remaining)))
+            client.connect(
+                container_id, wait_seconds=max(0, int(min(CONNECT_WAIT_SECONDS, remaining)))
+            )
         except ApiError as exc:
             if exc.code is ErrorCode.conflict:
                 msg = f"container {container_id} stopped: {exc.message}"
