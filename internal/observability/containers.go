@@ -58,6 +58,9 @@ func (o *Observability) ContainerMetrics(ctx context.Context, ws identity.Worksp
 	if !start.Before(end) {
 		return apitypes.ContainerMetrics{}, fmt.Errorf("%w: start must be before end", ErrInvalidRange)
 	}
+	if end.Sub(start) > minuteRetention {
+		return apitypes.ContainerMetrics{}, fmt.Errorf("%w: metrics are kept 7 days", ErrInvalidRange)
+	}
 	step := pickStep(start, end, q.Step, scope.ObservedAt)
 
 	var points []pointRow

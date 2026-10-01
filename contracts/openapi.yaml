@@ -1874,7 +1874,8 @@ paths:
         Hosts sample every 5 seconds. Samples are kept for an hour and as
         per-minute points for seven days, so a step under 60 seconds reads
         only the last hour. The default range is the container's last hour of
-        life; at most 1,000 points are returned, and the step grows to fit.
+        life, and a range spans at most 7 days; at most 1,000 points are
+        returned, and the step grows to fit.
       parameters:
         - $ref: "#/components/parameters/RangeStart"
         - $ref: "#/components/parameters/RangeEnd"
@@ -1989,7 +1990,9 @@ paths:
       operationId: getTaskMetrics
       tags: [observability]
       summary: Task outcomes, failure rate, run time and startup percentiles over a range
-      description: Tasks submitted in the range count. The default range is the last 24 hours.
+      description: >-
+        Tasks submitted in the range count. The default range is the last 24
+        hours; a range spans at most 31 days.
       parameters:
         - $ref: "#/components/parameters/RangeStart"
         - $ref: "#/components/parameters/RangeEnd"
@@ -2198,7 +2201,7 @@ components:
     WindowSeconds:
       name: window_seconds
       in: query
-      description: Seconds per bucket. A range holds at most 500 buckets.
+      description: Seconds per bucket. A range holds at most 500 buckets and 31 days.
       schema: { type: integer, minimum: 60, maximum: 604800, default: 3600 }
     VolumePath:
       name: volume

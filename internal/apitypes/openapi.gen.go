@@ -2739,7 +2739,7 @@ type WorkspacePath = Name
 type GetAccountActivityParams struct {
 	Measure *ActivityMeasure `form:"measure,omitempty" json:"measure,omitempty"`
 
-	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets.
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
 	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
 
 	// Start The start of the range, inclusive.
@@ -2860,7 +2860,7 @@ type StreamDeploymentLogsParams struct {
 
 // GetDeploymentPerformanceParams defines parameters for GetDeploymentPerformance.
 type GetDeploymentPerformanceParams struct {
-	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets.
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
 	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
 
 	// Start The start of the range, inclusive.
@@ -2929,7 +2929,7 @@ type ListMapKeysParams struct {
 
 // GetTaskActivityParams defines parameters for GetTaskActivity.
 type GetTaskActivityParams struct {
-	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets.
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
 	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
 
 	// Start The start of the range, inclusive.

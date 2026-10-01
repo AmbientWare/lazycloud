@@ -31,8 +31,12 @@ var (
 	ErrInvalidRange = errors.New("invalid time range")
 )
 
-// maxBuckets bounds a bucketed range.
-const maxBuckets = 500
+// maxBuckets bounds a bucketed range, and maxRange any aggregate's range,
+// so one read scans at most a month of rows.
+const (
+	maxBuckets = 500
+	maxRange   = 31 * 24 * time.Hour
+)
 
 // ConcurrencyLimits are an account's plan limits on live containers.
 type ConcurrencyLimits struct {
@@ -127,12 +131,16 @@ func alignedSpan(start, end *time.Time, width time.Duration, defaultBuckets int,
 	if aligned := floorEpoch(e, width); !aligned.Equal(e) {
 		e = aligned.Add(width)
 	}
-	s := e.Add(-time.Duration(defaultBuckets) * width)
+	// The default range shrinks to whole buckets within maxRange.
+	s := e.Add(-time.Duration(min(defaultBuckets, int(maxRange/width))) * width)
 	if start != nil {
 		s = floorEpoch(*start, width)
 	}
 	if !s.Before(e) {
 		return span{}, fmt.Errorf("%w: start must be before end", ErrInvalidRange)
+	}
+	if e.Sub(s) > maxRange {
+		return span{}, fmt.Errorf("%w: the range exceeds 31 days", ErrInvalidRange)
 	}
 	if n := e.Sub(s) / width; n > maxBuckets {
 		return span{}, fmt.Errorf("%w: %d buckets exceed %d; widen window_seconds", ErrInvalidRange, n, maxBuckets)
@@ -164,6 +172,9 @@ func exactSpan(start, end *time.Time, def time.Duration, now time.Time) (span, e
 	}
 	if !s.Before(e) {
 		return span{}, fmt.Errorf("%w: start must be before end", ErrInvalidRange)
+	}
+	if e.Sub(s) > maxRange {
+		return span{}, fmt.Errorf("%w: the range exceeds 31 days", ErrInvalidRange)
 	}
 	return span{start: s.UTC(), end: e.UTC()}, nil
 }

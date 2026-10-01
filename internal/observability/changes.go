@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -33,6 +34,16 @@ type ChangesConfig struct {
 	Buffer int
 	// MaxSubscribers bounds open streams per server.
 	MaxSubscribers int
+	// Idle is how long the listener waits without a notification before
+	// it checks the connection; zero means 30 s.
+	Idle time.Duration
+}
+
+func (c ChangesConfig) idle() time.Duration {
+	if c.Idle <= 0 {
+		return 30 * time.Second
+	}
+	return c.Idle
 }
 
 // DefaultChangesConfig keeps about a minute of a busy cluster's changes.
@@ -177,9 +188,9 @@ func (c *Changes) listen(ctx context.Context) error {
 	// Changes committed before LISTEN took effect are unknown to this hub.
 	c.gap()
 	for {
-		n, err := conn.WaitForNotification(ctx)
+		n, err := c.waitAlive(ctx, conn)
 		if err != nil {
-			return fmt.Errorf("wait for change notification: %w", err)
+			return err
 		}
 		var payload changePayload
 		if err := json.Unmarshal([]byte(n.Payload), &payload); err != nil {
@@ -192,6 +203,32 @@ func (c *Changes) listen(ctx context.Context) error {
 		})
 	}
 }
+
+// waitAlive waits for the next notification, checking with a bounded
+// query after every idle interval that the connection still answers. A
+// half-open connection that stopped delivering is otherwise silent forever.
+func (c *Changes) waitAlive(ctx context.Context, conn *pgx.Conn) (*pgconn.Notification, error) {
+	for {
+		waitCtx, cancel := context.WithTimeout(ctx, c.cfg.idle())
+		n, err := conn.WaitForNotification(waitCtx)
+		cancel()
+		if err == nil {
+			return n, nil
+		}
+		if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("wait for change notification: %w", err)
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, livenessTimeout)
+		_, err = conn.Exec(pingCtx, "select 1")
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("change listener stopped answering: %w", err)
+		}
+	}
+}
+
+// livenessTimeout bounds the query that checks an idle listener.
+const livenessTimeout = 5 * time.Second
 
 // frame renders one text/event-stream event. data holds no newline: it is
 // compact JSON from PostgreSQL.

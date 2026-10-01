@@ -133,6 +133,13 @@ func TestLargeStatementsPublishGroupedChanges(t *testing.T) {
 		*c.DeploymentId != f.workload {
 		t.Fatalf("grouped change %+v", c)
 	}
+
+	// An update of thousands of rows groups before building items too.
+	f.exec1("update tasks set status = 'cancelled', finished_at = now() where workload_id = $1", f.workload)
+	e, event = nextEvent(t, sub)
+	if c := event.Changes[0]; len(e.Frame) >= 8000 || c.Count == nil || *c.Count != 2000 || c.Change != apitypes.ChangeKindUpdated {
+		t.Fatalf("grouped update %+v", event)
+	}
 }
 
 // Containers, apps and deployments publish their state changes too.
@@ -165,4 +172,27 @@ func TestContainerAppAndDeploymentChangesArePublished(t *testing.T) {
 	// Writes that change no published state send nothing.
 	f.exec1("update workloads set next_version = next_version + 1 where id = $1", f.workload)
 	noEvent(t, sub, 200*time.Millisecond)
+}
+
+// A claim sends no notification, so claims never queue on PostgreSQL's
+// notification lock; the started tasks reach the stream coalesced, with
+// their current status.
+func TestClaimsPublishStartedTasksOffTheClaimTransaction(t *testing.T) {
+	f := newFixture(t, `{"max_pending_tasks": 100}`)
+	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
+	host, container := f.placedContainer(f.release)
+	nextEvent(t, sub) // the container
+	task := f.submit(1)[0]
+	nextEvent(t, sub) // the submit
+	claimed := f.claim(host, container)
+	noEvent(t, sub, 300*time.Millisecond)
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	go func() { _ = f.obs.RunStartedPublisher(ctx) }()
+	f.obs.TasksStarted([]execution.TaskID{claimed.Task})
+	_, started := nextEvent(t, sub)
+	if c := started.Changes[0]; *c.TaskId != uuid.UUID(task.ID) || *c.Status != "running" {
+		t.Fatalf("started change %+v", started)
+	}
 }
