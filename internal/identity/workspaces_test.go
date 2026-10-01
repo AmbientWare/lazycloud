@@ -287,7 +287,7 @@ func TestInvitations(t *testing.T) {
 
 	// Whoever opens the link joins, whatever their email; it works once.
 	joined, member, err := f.id.AcceptInvitation(ctx, guest, token)
-	if err != nil || joined.Name != ws || member.Role != RoleAdministrator || member.Email != "someone-else@example.com" {
+	if err != nil || joined.Name != ws || joined.CreatedAt.IsZero() || member.Role != RoleAdministrator || member.Email != "someone-else@example.com" {
 		t.Fatalf("accept %+v %+v %v", joined, member, err)
 	}
 	if _, _, err := f.id.AcceptInvitation(ctx, guest, token); !errors.Is(err, ErrNotFound) {

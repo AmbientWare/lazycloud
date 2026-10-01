@@ -40,7 +40,7 @@ left join users u on u.id = i.invited_by
 where i.token_hash = @token_hash and w.state = 'active';
 
 -- name: LockInvitationByToken :one
-select i.id, i.workspace_id, i.email, i.role, (i.expires_at <= now())::bool as expired
+select i.id, i.workspace_id, i.email, i.role, i.message_id, (i.expires_at <= now())::bool as expired
 from invitations i
 where i.token_hash = @token_hash
 for update;

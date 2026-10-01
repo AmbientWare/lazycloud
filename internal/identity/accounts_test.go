@@ -319,7 +319,8 @@ func TestAccountTokens(t *testing.T) {
 		}
 	}
 	week := 7 * day
-	secrets := map[string]TokenID{}
+	secrets := map[string]string{}
+	ids := map[string]TokenID{}
 	for _, name := range []string{"a", "b", "c"} {
 		var lifetime *time.Duration
 		if name == "b" {
@@ -329,7 +330,7 @@ func TestAccountTokens(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		secrets[secret] = token.ID
+		secrets[name], ids[name] = secret, token.ID
 	}
 	// Pages are newest first and end with no cursor; owner's own test
 	// token is the oldest.
@@ -351,23 +352,23 @@ func TestAccountTokens(t *testing.T) {
 		t.Fatalf("self revoke: %v", err)
 	}
 	outsider := f.account("outsider@example.com", false)
-	for secret, id := range secrets {
-		if err := f.id.RevokeToken(ctx, outsider, id); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("outsider revoke: %v", err)
-		}
-		if err := f.id.RevokeToken(ctx, owner, id); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.id.Authenticate(ctx, secret); !errors.Is(err, ErrUnauthenticated) {
-			t.Fatalf("revoked token: %v", err)
-		}
-		break
+	if err := f.id.RevokeToken(ctx, outsider, ids["c"]); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("outsider revoke: %v", err)
+	}
+	if err := f.id.RevokeToken(ctx, owner, ids["c"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.id.Authenticate(ctx, secrets["c"]); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("revoked token: %v", err)
 	}
 
 	// An expired token stops authenticating but stays listed.
 	f.exec("update api_tokens set expires_at = now() - interval '1 second' where name = 'b'")
-	for secret := range secrets {
-		_, _ = f.id.Authenticate(ctx, secret)
+	if _, err := f.id.Authenticate(ctx, secrets["b"]); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("expired token: %v", err)
+	}
+	if _, err := f.id.Authenticate(ctx, secrets["a"]); err != nil {
+		t.Fatal(err)
 	}
 	page, _ := f.id.ListTokens(ctx, owner, true, nil, 10)
 	if len(page.Tokens) != 3 {

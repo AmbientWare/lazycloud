@@ -70,19 +70,20 @@ func (q *Queries) ListMembers(ctx context.Context, workspaceID uuid.UUID) ([]Lis
 }
 
 const lockActiveWorkspace = `-- name: LockActiveWorkspace :one
-select id, name from workspaces where id = $1 and state = 'active' for share
+select id, name, created_at from workspaces where id = $1 and state = 'active' for share
 `
 
 type LockActiveWorkspaceRow struct {
-	ID   uuid.UUID
-	Name string
+	ID        uuid.UUID
+	Name      string
+	CreatedAt time.Time
 }
 
 // Fences writes against a deletion beginning beside them.
 func (q *Queries) LockActiveWorkspace(ctx context.Context, id uuid.UUID) (LockActiveWorkspaceRow, error) {
 	row := q.db.QueryRow(ctx, lockActiveWorkspace, id)
 	var i LockActiveWorkspaceRow
-	err := row.Scan(&i.ID, &i.Name)
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
 	return i, err
 }
 

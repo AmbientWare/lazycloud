@@ -190,7 +190,7 @@ func (q *Queries) LockInvitation(ctx context.Context, arg LockInvitationParams) 
 }
 
 const lockInvitationByToken = `-- name: LockInvitationByToken :one
-select i.id, i.workspace_id, i.email, i.role, (i.expires_at <= now())::bool as expired
+select i.id, i.workspace_id, i.email, i.role, i.message_id, (i.expires_at <= now())::bool as expired
 from invitations i
 where i.token_hash = $1
 for update
@@ -201,6 +201,7 @@ type LockInvitationByTokenRow struct {
 	WorkspaceID uuid.UUID
 	Email       string
 	Role        string
+	MessageID   *uuid.UUID
 	Expired     bool
 }
 
@@ -212,6 +213,7 @@ func (q *Queries) LockInvitationByToken(ctx context.Context, tokenHash []byte) (
 		&i.WorkspaceID,
 		&i.Email,
 		&i.Role,
+		&i.MessageID,
 		&i.Expired,
 	)
 	return i, err

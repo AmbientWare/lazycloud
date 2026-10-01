@@ -313,14 +313,14 @@ func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token stri
 				return fmt.Errorf("raise member role: %w", err)
 			}
 		}
-		if err := q.DeleteInvitation(ctx, inv.ID); err != nil {
-			return fmt.Errorf("delete invitation: %w", err)
+		if err := answer(ctx, tx, q, inv); err != nil {
+			return err
 		}
 		profile, err := q.UserProfile(ctx, uuid.UUID(p.User))
 		if err != nil {
 			return fmt.Errorf("read member: %w", err)
 		}
-		ws = Workspace{ID: WorkspaceID(active.ID), Name: active.Name, State: WorkspaceActive, Role: role}
+		ws = Workspace{ID: WorkspaceID(active.ID), Name: active.Name, State: WorkspaceActive, Role: role, CreatedAt: active.CreatedAt}
 		member = Member{User: p.User, DisplayName: profile.DisplayName, Email: deref(profile.Email), Role: role, CreatedAt: since}
 		return nil
 	})
@@ -338,10 +338,7 @@ func (i *Identity) DeclineInvitation(ctx context.Context, token string) error {
 		if err != nil {
 			return err
 		}
-		if err := q.DeleteInvitation(ctx, inv.ID); err != nil {
-			return fmt.Errorf("delete invitation: %w", err)
-		}
-		return nil
+		return answer(ctx, tx, q, inv)
 	})
 	if err != nil {
 		return fmt.Errorf("decline invitation: %w", err)
@@ -363,6 +360,18 @@ func redeemable(ctx context.Context, q *Queries, token string) (LockInvitationBy
 		return inv, &ConflictError{Message: "this invitation has expired; ask for a new one"}
 	}
 	return inv, nil
+}
+
+// answer removes an offer that was accepted or declined, and its email if
+// it has not gone yet.
+func answer(ctx context.Context, tx pgx.Tx, q *Queries, inv LockInvitationByTokenRow) error {
+	if err := q.DeleteInvitation(ctx, inv.ID); err != nil {
+		return fmt.Errorf("delete invitation: %w", err)
+	}
+	if inv.MessageID == nil {
+		return nil
+	}
+	return notifications.Discard(ctx, tx, []notifications.MessageID{notifications.MessageID(*inv.MessageID)})
 }
 
 func (i *Identity) invitationLink(token string) string {

@@ -27,4 +27,4 @@ select exists (
 
 -- name: LockActiveWorkspace :one
 -- Fences writes against a deletion beginning beside them.
-select id, name from workspaces where id = @id and state = 'active' for share;
+select id, name, created_at from workspaces where id = @id and state = 'active' for share;
