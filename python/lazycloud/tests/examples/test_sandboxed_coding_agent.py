@@ -306,6 +306,7 @@ def test_sandbox_inspection_returns_json_ready_rows(monkeypatch: pytest.MonkeyPa
         )
         for name in (sandbox.name, "other")
     ]
+
     def listed(self: Sandbox, limit: int) -> list[SandboxRow]:
         del self, limit
         return rows
