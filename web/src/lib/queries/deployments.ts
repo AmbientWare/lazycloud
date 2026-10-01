@@ -96,10 +96,19 @@ export function workloadQueryOptions(workspace: string, app: string, kind: strin
       if (!deployment) throw new WorkloadNotFoundError(name);
       const path = { workspace, app };
       switch (deployment.kind) {
-        // A pod, devbox or sandbox is a function that runs a command.
-        case "function":
+        // A pod, devbox or sandbox has no read of its own; reading its
+        // deployment answers its active release.
         case "pod":
         case "sandbox": {
+          const { active_release: release, ...detail } = await ok(
+            api.GET("/v1/workspaces/{workspace}/deployments/{deployment}", {
+              params: { path: { workspace, deployment: deployment.id } },
+            }),
+          );
+          if (!release) throw new Error(`${name} has no active version`);
+          return { deployment: detail, release, http: null, schedule: null };
+        }
+        case "function": {
           const fn = await ok(
             api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
               params: { path: { ...path, function: name } },
