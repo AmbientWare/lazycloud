@@ -120,6 +120,15 @@ func planFits(ctx context.Context, q *Queries, user uuid.UUID, target Plan, hasC
 	if !e.MaxMembers.Unlimited && int(members) > e.MaxMembers.Max {
 		violations = append(violations, fmt.Sprintf("%d members (limit %d)", members, e.MaxMembers.Max))
 	}
+	if !e.ConnectedCloud {
+		connections, err := q.ConnectedCloudCount(ctx, user)
+		if err != nil {
+			return fmt.Errorf("count connected clouds: %w", err)
+		}
+		if connections > 0 {
+			violations = append(violations, "a connected cloud account, which the plan does not include")
+		}
+	}
 	if len(violations) > 0 {
 		return &ConflictError{Message: "this account cannot move to the requested plan while it has " + strings.Join(violations, ", ")}
 	}

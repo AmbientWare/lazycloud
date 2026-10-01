@@ -311,4 +311,17 @@ func TestPlanChangesCannotGoBelowHeldLimits(t *testing.T) {
 	if err := planFits(t.Context(), f.billing.queries, owner, business, true); err != nil {
 		t.Fatalf("moving up: %v", err)
 	}
+
+	// A connected AWS account holds the account to the plan that includes it.
+	f.exec("insert into cloud_connections (account_id, aws_account_id, phase) values ($1, '111111111111', 'ready')", owner)
+	team, err := PlanFor(PlanTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := planFits(t.Context(), f.billing.queries, owner, team, true); !errors.As(err, &conflict) || !strings.Contains(err.Error(), "connected cloud") {
+		t.Fatalf("moving off Business with a connected AWS account: %v", err)
+	}
+	if account, err := f.billing.Account(t.Context(), owner); err != nil || account.Usage.ConnectedClouds != 1 {
+		t.Fatalf("usage %+v: %v", account.Usage, err)
+	}
 }

@@ -27,6 +27,10 @@ where o.user_id = @user_id and o.role = 'owner' and c.state <> 'stopped';
 -- name: OwnedWorkspaceCount :one
 select count(*)::int from workspace_members where user_id = @user_id and role = 'owner';
 
+-- name: ConnectedCloudCount :one
+-- The cloud accounts the account has connected, set up or not.
+select count(*)::int from cloud_connections where account_id = @user_id;
+
 -- name: OwnerMemberCount :one
 -- Distinct people across the workspaces the account owns, the owner
 -- included.

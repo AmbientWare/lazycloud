@@ -106,8 +106,8 @@ func uuidOut(id *uuid.UUID) *openapi_types.UUID {
 }
 
 // entitlementUsage is what the account holds of each limit across every
-// workspace it owns. The platform has no connected clouds or custom
-// domains yet, so those count zero.
+// workspace it owns. The platform has no custom domains yet, so those
+// count zero.
 func entitlementUsage(ctx context.Context, q *Queries, user uuid.UUID) (apitypes.EntitlementUsage, error) {
 	live, err := q.OwnerLiveContainers(ctx, user)
 	if err != nil {
@@ -121,9 +121,13 @@ func entitlementUsage(ctx context.Context, q *Queries, user uuid.UUID) (apitypes
 	if err != nil {
 		return apitypes.EntitlementUsage{}, fmt.Errorf("count members: %w", err)
 	}
+	connections, err := q.ConnectedCloudCount(ctx, user)
+	if err != nil {
+		return apitypes.EntitlementUsage{}, fmt.Errorf("count connected clouds: %w", err)
+	}
 	return apitypes.EntitlementUsage{
 		ConcurrentCpuContainers: int(live.CpuContainers), ConcurrentGpus: int(live.Gpus),
-		Workspaces: int(workspaces), Members: int(members),
+		Workspaces: int(workspaces), Members: int(members), ConnectedClouds: int(connections),
 	}, nil
 }
 

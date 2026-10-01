@@ -57,6 +57,18 @@ func (q *Queries) AccountStanding(ctx context.Context, userID uuid.UUID) (Accoun
 	return i, err
 }
 
+const connectedCloudCount = `-- name: ConnectedCloudCount :one
+select count(*)::int from cloud_connections where account_id = $1
+`
+
+// The cloud accounts the account has connected, set up or not.
+func (q *Queries) ConnectedCloudCount(ctx context.Context, userID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, connectedCloudCount, userID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const lockAccountContainers = `-- name: LockAccountContainers :exec
 select pg_advisory_xact_lock(hashtextextended('billing-account:' || cast($1::uuid as text), 0))
 `

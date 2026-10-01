@@ -77,6 +77,13 @@ Owner: `internal/billing` (billing and usage metering in one package).
 - [x] PR #424 review fixes, each with a regression test
 - [x] stripe-mock in `compose.test.yaml` and CI; Stripe tests fail rather
   than skip without it
+- [x] Compute seams. Assignment records the host's GPU model and whose
+  machine it is (`platform` → `platform_fleet`, `connection` →
+  `connected_cloud`, `machine` → `self_hosted`). Connecting AWS needs a
+  plan that includes it. Connections count in `/v1/billing` usage and in
+  plan-change fit. Evidence: compute
+  `TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices` and
+  `TestConnectingAWSNeedsThePlanThatIncludesIt`.
 - [x] Real Stripe test-mode flows (`TestStripeTestMode`). Server and
   scheduler read `LAZYCLOUD_STRIPE_API_KEY`, the reference's deployed secret
   name.
@@ -206,18 +213,11 @@ adds one live-container count and one account read to its transaction.
 
 ## Gaps
 
-- Handoffs, since neither packet has merged:
-  - endpoints call `billing.AdmitCustomDomain` on custom-domain creation and
-    `billing.RecordEgress` with per-workspace byte totals;
-  - compute calls `billing.AdmitConnectedCloud` when a connection is added;
-  - compute or scheduling sets `containers.gpu_type` and `billing_owner` at
-    assignment from the host kind (platform → `platform_fleet`, connection →
-    `connected_cloud`, joined machine → `self_hosted`).
-
-  Until then every container prices on the platform fleet with the release's
-  GPU count and no model, egress has no source, and the domain and
-  connected-cloud counts in `/v1/billing` are zero. Plan-change fit does not
-  check those counts yet.
+- Handoffs to endpoints, which has not merged: call
+  `billing.AdmitCustomDomain` on custom-domain creation and
+  `billing.RecordEgress` with per-workspace byte totals. Until then egress
+  has no source, the custom-domain count in `/v1/billing` is zero and plan
+  changes do not check domains.
 - CPU and memory bill at the reservation only. "The greater of reservation
   and measured use" can now read observability's container metrics, but
   billing does not do that yet.
