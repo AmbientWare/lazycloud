@@ -72,9 +72,14 @@ func (q *Queries) LiveContainersOnHost(ctx context.Context, hostID *uuid.UUID) (
 }
 
 const markContainerReady = `-- name: MarkContainerReady :exec
-update containers set state = 'ready', ready_at = now() where id = $1 and state = 'starting'
+update containers
+set state = 'ready', ready_at = now(),
+    active_until = case when keep_warm_seconds is null then active_until
+                        else greatest(active_until, now() + make_interval(secs => keep_warm_seconds)) end
+where id = $1 and state = 'starting'
 `
 
+// A container with a keep-warm window starts it now.
 func (q *Queries) MarkContainerReady(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markContainerReady, id)
 	return err

@@ -8,7 +8,8 @@ with candidates as (
     from containers c
     join releases r on r.id = c.release_id
     join workloads w on w.id = r.workload_id
-    where c.state <> 'stopped' and c.release_id > @after_id::uuid and (w.kind <> 'function' or r.version < 0)
+    where c.state <> 'stopped' and c.purpose = 'serve' and c.release_id > @after_id::uuid
+      and (w.kind in ('endpoint', 'asgi') or (w.kind = 'function' and r.version < 0))
     union
     select l.release_id from endpoint_loads l where l.expires_at > now() and l.release_id > @after_id
     union
@@ -18,7 +19,7 @@ with candidates as (
     from workloads w
     join apps a on a.id = w.app_id
     join releases r on r.id = w.active_release_id
-    where w.kind <> 'function'
+    where w.kind in ('endpoint', 'asgi')
       and w.desired_state = 'active'
       and a.state = 'active'
       and w.active_release_id > @after_id
@@ -52,7 +53,7 @@ select r.id as release_id,
        coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,
        exists (
            select 1 from containers ac
-           where ac.release_id = w.active_release_id and ac.state = 'ready'
+           where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'
        )::bool as active_ready,
        (r.load_error is not null or r.start_failures >= @start_failure_limit::int)::bool as failed,
        c.pending::int as pending,
@@ -74,7 +75,7 @@ cross join lateral (
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
            count(*) filter (where c.state = 'draining') as draining
-    from containers c where c.release_id = r.id and c.state <> 'stopped'
+    from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id;
 
@@ -86,7 +87,7 @@ update containers
 set state = 'draining', drain_started_at = now()
 where id in (
     select d.id from containers d
-    where d.release_id = @release_id::uuid and d.state in ('starting', 'ready')
+    where d.release_id = @release_id::uuid and d.state in ('starting', 'ready') and d.purpose = 'serve'
     order by d.created_at desc, d.id desc
     limit @count
     for update skip locked
@@ -110,7 +111,7 @@ delete from endpoint_loads where expires_at < now() - interval '1 hour';
 select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state
 from releases r
 join containers c on c.release_id = r.id
-where r.workload_id = @workload_id and c.state = 'ready' and r.version is not null
+where r.workload_id = @workload_id and c.state = 'ready' and c.purpose = 'serve' and r.version is not null
 order by r.version desc, c.ready_at, c.id;
 
 -- name: ReleaseFailures :many

@@ -151,7 +151,7 @@ func (q *Queries) CountRunningAttemptsOnContainer(ctx context.Context, container
 }
 
 const lockContainerForClaim = `-- name: LockContainerForClaim :one
-select c.state, c.host_id, c.slots, c.release_id::uuid as release_id, r.spec
+select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec
 from containers c
 join releases r on r.id = c.release_id
 where c.id = $1
@@ -162,6 +162,7 @@ type LockContainerForClaimRow struct {
 	State     string
 	HostID    *uuid.UUID
 	Slots     int32
+	Purpose   string
 	ReleaseID uuid.UUID
 	Spec      []byte
 }
@@ -175,6 +176,7 @@ func (q *Queries) LockContainerForClaim(ctx context.Context, id uuid.UUID) (Lock
 		&i.State,
 		&i.HostID,
 		&i.Slots,
+		&i.Purpose,
 		&i.ReleaseID,
 		&i.Spec,
 	)
