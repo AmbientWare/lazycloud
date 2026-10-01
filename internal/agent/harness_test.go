@@ -59,6 +59,7 @@ type hostServer struct {
 	joinToken, hostID, hostToken string
 
 	sessions    chan *serverSession
+	enrolls     chan *hostproto.EnrollRequest
 	completions chan *hostproto.CompleteTaskRequest
 	builds      chan *hostproto.CompleteImageBuildRequest
 
@@ -84,6 +85,7 @@ func newHostServer() *hostServer {
 	return &hostServer{
 		joinToken: "lc_join", hostID: uuid.NewString(), hostToken: "lc_host_" + uuid.NewString(),
 		sessions:    make(chan *serverSession, 8),
+		enrolls:     make(chan *hostproto.EnrollRequest, 8),
 		completions: make(chan *hostproto.CompleteTaskRequest, 64),
 		builds:      make(chan *hostproto.CompleteImageBuildRequest, 8),
 		queued:      map[string][]*hostproto.ClaimedTask{},
@@ -96,7 +98,10 @@ func (s *hostServer) authorize(ctx context.Context, method string) error {
 		return nil
 	}
 	md, _ := metadata.FromIncomingContext(ctx)
-	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer "+s.hostToken {
+	s.mu.Lock()
+	token := s.hostToken
+	s.mu.Unlock()
+	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer "+token {
 		return status.Error(codes.Unauthenticated, "bad host token")
 	}
 	return nil
@@ -129,10 +134,20 @@ func (s *hostServer) serve(t *testing.T, address string) (*grpc.Server, string) 
 }
 
 func (s *hostServer) Enroll(_ context.Context, r *hostproto.EnrollRequest) (*hostproto.EnrollResponse, error) {
-	if r.GetJoinToken() != s.joinToken {
+	s.enrolls <- r
+	if r.GetJoinToken() != s.joinToken && r.GetCloudIdentity() == nil {
 		return nil, status.Error(codes.PermissionDenied, "bad join token")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return &hostproto.EnrollResponse{HostId: s.hostID, HostToken: s.hostToken}, nil
+}
+
+// revoke replaces the host token, as removing the machine does.
+func (s *hostServer) revoke() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hostToken = "lc_host_" + uuid.NewString()
 }
 
 func (s *hostServer) Session(stream hostproto.HostService_SessionServer) error {
@@ -283,7 +298,8 @@ type runningAgent struct {
 	done   chan error
 }
 
-func (e *env) startAgent() *runningAgent {
+// startAgent runs an agent; configure adjusts its configuration.
+func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 	e.t.Helper()
 	runtimeDir, err := filepath.Abs("../supervisor/testdata/runtime")
 	if err != nil {
@@ -300,10 +316,13 @@ func (e *env) startAgent() *runningAgent {
 		SupervisorPath: supervisorBinary,
 		OCIRuntime:     "runc",
 		BuildNetwork:   "host",
-		Capacity:       &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30},
+		Limits:         Limits{CPUMillis: 4000, MemoryBytes: 8 << 30},
 		Labels:         map[string]string{"lazycloud.agent": e.id},
 		Version:        "test",
 		Logger:         slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+	for _, fn := range configure {
+		fn(&cfg)
 	}
 	go func() { a.done <- Run(ctx, cfg) }()
 	e.t.Cleanup(a.stop)
@@ -318,6 +337,30 @@ func (a *runningAgent) stop() {
 		panic("agent did not stop")
 	}
 	a.done <- nil
+}
+
+// exited waits for Run to return on its own.
+func (a *runningAgent) exited(t *testing.T) error {
+	t.Helper()
+	select {
+	case err := <-a.done:
+		a.done <- nil
+		return err
+	case <-time.After(60 * time.Second):
+		t.Fatal("agent did not exit")
+		return nil
+	}
+}
+
+func (e *env) enrollment() *hostproto.EnrollRequest {
+	e.t.Helper()
+	select {
+	case r := <-e.server.enrolls:
+		return r
+	case <-time.After(30 * time.Second):
+		e.t.Fatal("agent did not enroll")
+		return nil
+	}
 }
 
 func (e *env) session() *serverSession {

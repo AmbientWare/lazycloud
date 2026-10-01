@@ -293,7 +293,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "out"), Target: buildOutDir},
 				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "docker"), Target: buildDockerConfig, ReadOnly: true},
 			},
-			Resources: containerResources(spec.GetResources(), a.capacity, limit),
+			Resources: containerResources(spec.GetResources(), a.capacity, limit, nil),
 		},
 	}
 	_, err := a.docker.ContainerCreate(ctx, options)

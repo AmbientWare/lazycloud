@@ -79,6 +79,10 @@ type container struct {
 	claiming   bool
 	// build marks an image build container, which has no link or slots.
 	isBuild bool
+
+	// gpus are the UUIDs of the devices the container holds, guarded by the
+	// agent's mutex.
+	gpus []string
 }
 
 func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.ContainerPhase) *container {
@@ -189,6 +193,13 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if info, err := os.Stat(runtime); err != nil || !info.IsDir() {
 		return fmt.Errorf("python runtime %s is not installed at %s", version, runtime)
 	}
+	var gpus []string
+	if n := int(spec.GetResources().GetGpuCount()); n > 0 {
+		var err error
+		if gpus, err = c.a.allocateGPUs(c, n); err != nil {
+			return err
+		}
+	}
 
 	began := time.Now()
 	pulled, err := c.a.images.ensure(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
@@ -211,7 +222,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
-	if err := c.a.createAndStart(ctx, c, spec, runtime); err != nil {
+	if err := c.a.createAndStart(ctx, c, spec, runtime, gpus); err != nil {
 		return err
 	}
 	c.log.Info("container started",
@@ -352,6 +363,12 @@ func (c *container) detach() {
 	if l != nil {
 		l.close(0)
 	}
+}
+
+func (c *container) isExited() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED
 }
 
 func (c *container) isStopping() bool {
