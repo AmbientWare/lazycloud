@@ -37,14 +37,16 @@ type FileKey struct {
 }
 
 // LoadFileKey reads a master key file. The file must hold exactly 32 bytes
-// and be readable only by its owner.
+// and be readable only by its owner and group.
 func LoadFileKey(path string) (*FileKey, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("secrets key file: %w", err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("secrets key file %s is readable by other users; chmod 600 it", path)
+	// Group read is allowed: Kubernetes mounts secret files root-owned and
+	// readable by the pod's fsGroup, never by other users.
+	if info.Mode().Perm()&0o027 != 0 {
+		return nil, fmt.Errorf("secrets key file %s is accessible to other users; chmod 600 it", path)
 	}
 	key, err := os.ReadFile(path) //nolint:gosec // The operator names the key file.
 	if err != nil {
