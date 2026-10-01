@@ -9,7 +9,6 @@ from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.secret.control import SecretControlClient
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.clients.volume.control import VolumeControlClient
-from lazycloud.clients.workspace.control import WorkspaceControlClient
 from lazycloud.control import (
     ControlClientConfig,
     api_client,
@@ -140,20 +139,6 @@ def volume_client(
     )
 
 
-def workspace_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> WorkspaceControlClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return WorkspaceControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
 __all__ = [
     "api_session",
     "compute_client",
@@ -162,5 +147,4 @@ __all__ = [
     "secret_client",
     "ssh_client",
     "volume_client",
-    "workspace_client",
 ]

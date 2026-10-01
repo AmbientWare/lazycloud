@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,9 +12,18 @@ from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import CliContextState
 from lazycloud.cli.main import build_public_cli
 from lazycloud.config import ClientProfile, get_profile, reset_settings_cache, set_profile
-from shared.http.workspaces import WorkspaceListResponse, WorkspaceResponse
 from typer.core import TyperCommand
 from typer.testing import CliRunner
+
+from tests.api_server import (
+    TOKEN,
+    ApiRequest,
+    FakeApi,
+    Reply,
+    error_reply,
+    json_reply,
+    running_fake_api,
+)
 
 
 class _InteractiveInput:
@@ -23,77 +31,74 @@ class _InteractiveInput:
         return True
 
 
-def _workspace(name: str) -> WorkspaceResponse:
-    return WorkspaceResponse(
-        id=f"workspace-{name}",
-        name=name,
-        created_at=datetime(2026, 9, 1, tzinfo=UTC),
-        updated_at=datetime(2026, 9, 1, tzinfo=UTC),
-    )
+class _Workspaces:
+    """The workspace routes of the API over an in-memory list."""
+
+    def __init__(self, api: FakeApi, *names: str) -> None:
+        self.items: dict[str, dict[str, object]] = {}
+        for name in names:
+            self._add(name)
+        api.route("GET", "/v1/workspaces")(self.list)
+        api.route("POST", "/v1/workspaces")(self.create)
+        api.route("PATCH", "/v1/workspaces/([a-z0-9-]+)")(self.rename)
+        api.route("DELETE", "/v1/workspaces/([a-z0-9-]+)")(self.delete)
+
+    def _add(self, name: str) -> dict[str, object]:
+        item: dict[str, object] = {
+            "id": f"0192f0a0-0000-7000-8000-{len(self.items):012d}",
+            "name": name,
+            "state": "active",
+            "role": "owner",
+            "created_at": "2026-09-01T00:00:00Z",
+        }
+        self.items[name] = item
+        return item
+
+    def list(self, request: ApiRequest) -> Reply:
+        assert request.headers["authorization"] == f"Bearer {TOKEN}"
+        return json_reply({"workspaces": sorted(self.items.values(), key=lambda w: str(w["name"]))})
+
+    def create(self, request: ApiRequest) -> Reply:
+        return json_reply(self._add(request.json()["name"]), 201)
+
+    def rename(self, request: ApiRequest) -> Reply:
+        old = request.path.rsplit("/", 1)[1]
+        if old not in self.items:
+            return error_reply("forbidden", "the token cannot reach this workspace", 403)
+        item = self.items.pop(old)
+        item["name"] = request.json()["name"]
+        self.items[str(item["name"])] = item
+        return json_reply(item)
+
+    def delete(self, request: ApiRequest) -> Reply:
+        item = self.items[request.path.rsplit("/", 1)[1]]
+        item["state"] = "deleting"
+        return json_reply(item, 202)
 
 
-@dataclass
-class _WorkspaceClient:
-    selected: WorkspaceResponse
-    workspaces: list[WorkspaceResponse]
-    deleted: list[str] = field(default_factory=list)
-
-    def current(self) -> WorkspaceResponse:
-        return self.selected
-
-    def list(self) -> WorkspaceListResponse:
-        return WorkspaceListResponse(workspaces=self.workspaces)
-
-    def create(self, name: str, *, connection_id: str | None = None) -> WorkspaceResponse:
-        del connection_id
-        created = _workspace(name)
-        self.workspaces.append(created)
-        self.selected = created
-        return created
-
-    def rename(self, name: str) -> WorkspaceResponse:
-        renamed = self.selected.model_copy(update={"name": name})
-        self.workspaces = [
-            renamed if item.id == self.selected.id else item for item in self.workspaces
-        ]
-        self.selected = renamed
-        return renamed
-
-    def delete(self, name: str) -> None:
-        self.deleted.append(name)
-        self.workspaces = [item for item in self.workspaces if item.name != name]
-
-
-@pytest.fixture(autouse=True)
-def isolated_profile(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
+@pytest.fixture
+def api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[FakeApi]:
     monkeypatch.setenv("LAZYCLOUD_HOME", str(tmp_path / "state"))
-    monkeypatch.delenv("LAZYCLOUD_ENDPOINT", raising=False)
-    monkeypatch.delenv("LAZYCLOUD_PROFILE", raising=False)
-    monkeypatch.delenv("LAZYCLOUD_TOKEN", raising=False)
-    monkeypatch.delenv("LAZYCLOUD_WORKSPACE", raising=False)
+    for name in (
+        "LAZYCLOUD_ENDPOINT",
+        "LAZYCLOUD_PROFILE",
+        "LAZYCLOUD_TOKEN",
+        "LAZYCLOUD_WORKSPACE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    reset_settings_cache()
+    with running_fake_api() as fake:
+        yield fake
     reset_settings_cache()
 
 
-def _profile(workspace: str) -> None:
-    set_profile(
-        ClientProfile(
-            endpoint="https://api.example",
-            workspace=workspace,
-            token="stored-token",
-        )
-    )
+def _profile(api: FakeApi, workspace: str) -> None:
+    set_profile(ClientProfile(endpoint=api.url, workspace=workspace, token=TOKEN))
 
 
-def test_workspace_create_and_rename_keep_the_profile_selected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    default = _workspace("default")
-    client = _WorkspaceClient(selected=default, workspaces=[default])
-    _profile(default.name)
-    monkeypatch.setattr(workspace_commands, "workspace_client", lambda: client)
+def test_workspace_create_and_rename_keep_the_profile_selected(api: FakeApi) -> None:
+    _Workspaces(api, "default")
+    _profile(api, "default")
     cli = build_public_cli()
 
     created = CliRunner().invoke(cli, ["--json", "workspace", "create", "review"])
@@ -105,16 +110,29 @@ def test_workspace_create_and_rename_keep_the_profile_selected(
     assert renamed.exit_code == 0, renamed.output
     assert json.loads(renamed.stdout)["name"] == "renamed"
     assert get_profile(apply_env=False).workspace == "renamed"
+    (rename,) = api.calls("PATCH", "/v1/workspaces/review")
+    assert rename.json() == {"name": "renamed"}
+
+    listed = CliRunner().invoke(cli, ["--json", "workspace", "list"])
+    assert [w["name"] for w in json.loads(listed.stdout)["workspaces"]] == ["default", "renamed"]
 
 
-def test_workspace_use_selects_only_an_accessible_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    default = _workspace("default")
-    team = _workspace("team")
-    client = _WorkspaceClient(selected=default, workspaces=[default, team])
-    _profile(default.name)
-    monkeypatch.setattr(workspace_commands, "workspace_client", lambda: client)
+def test_workspace_create_in_a_cloud_needs_a_connection(api: FakeApi) -> None:
+    _Workspaces(api, "default")
+    _profile(api, "default")
+
+    result = CliRunner().invoke(
+        build_public_cli(), ["workspace", "create", "review", "--cloud", "aws"]
+    )
+
+    assert isinstance(result.exception, ClientError)
+    assert "lazycloud cloud connect aws" in str(result.exception)
+    assert not api.calls("POST", "/v1/workspaces")
+
+
+def test_workspace_use_selects_only_an_accessible_workspace(api: FakeApi) -> None:
+    _Workspaces(api, "default", "team")
+    _profile(api, "default")
     cli = build_public_cli()
 
     selected = CliRunner().invoke(cli, ["--json", "workspace", "use", "team"])
@@ -128,13 +146,10 @@ def test_workspace_use_selects_only_an_accessible_workspace(
 
 
 def test_workspace_delete_requires_the_exact_name_and_selects_a_fallback(
-    monkeypatch: pytest.MonkeyPatch,
+    api: FakeApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    default = _workspace("default")
-    review = _workspace("review")
-    client = _WorkspaceClient(selected=review, workspaces=[default, review])
-    _profile(review.name)
-    monkeypatch.setattr(workspace_commands, "workspace_client", lambda: client)
+    _Workspaces(api, "default", "review")
+    _profile(api, "review")
 
     def wrong_prompt(*_args: object, **_kwargs: object) -> str:
         return "wrong"
@@ -144,32 +159,31 @@ def test_workspace_delete_requires_the_exact_name_and_selects_a_fallback(
     context = typer.Context(TyperCommand(name="delete"))
     context.obj = CliContextState()
     with pytest.raises(ClientError, match="confirmation did not match"):
-        workspace_commands.workspace_delete(context, review.name, False)
-    assert client.deleted == []
+        workspace_commands.workspace_delete(context, "review", False)
+    assert not api.calls("DELETE", "/v1/workspaces/review")
 
     deleted = CliRunner().invoke(
         build_public_cli(),
-        ["--json", "workspace", "delete", review.name, "--yes"],
+        ["--json", "workspace", "delete", "review", "--yes"],
     )
     assert deleted.exit_code == 0, deleted.output
     assert json.loads(deleted.stdout) == {
         "current": "default",
         "deleted": True,
         "name": "review",
+        "state": "deleting",
     }
-    assert client.deleted == ["review"]
+    assert len(api.calls("DELETE", "/v1/workspaces/review")) == 1
     assert get_profile(apply_env=False).workspace == "default"
 
 
 def test_workspace_create_refuses_an_environment_owned_selection(
-    monkeypatch: pytest.MonkeyPatch,
+    api: FakeApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    default = _workspace("default")
-    client = _WorkspaceClient(selected=default, workspaces=[default])
-    _profile(default.name)
+    _Workspaces(api, "default")
+    _profile(api, "default")
     monkeypatch.setenv("LAZYCLOUD_WORKSPACE", "environment")
     reset_settings_cache()
-    monkeypatch.setattr(workspace_commands, "workspace_client", lambda: client)
 
     result = CliRunner().invoke(
         build_public_cli(),
@@ -177,4 +191,4 @@ def test_workspace_create_refuses_an_environment_owned_selection(
     )
 
     assert result.exit_code == 1
-    assert client.workspaces == [default]
+    assert not api.calls("POST", "/v1/workspaces")

@@ -9,7 +9,7 @@ import (
 
 func TestWorkspaceAuthorization(t *testing.T) {
 	ctx := t.Context()
-	id := NewIdentity(dbtest.New(t))
+	id := NewIdentity(dbtest.New(t), Config{})
 	for _, u := range []struct {
 		email string
 		admin bool

@@ -223,9 +223,11 @@ with candidates as (
     select w.active_release_id
     from workloads w
     join apps a on a.id = w.app_id
+    join workspaces ws on ws.id = a.workspace_id
     join releases r on r.id = w.active_release_id
     where w.desired_state = 'active'
       and a.state = 'active'
+      and ws.state = 'active'
       and w.active_release_id > $1
       and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
 ),
@@ -234,11 +236,12 @@ batch as (
 )
 select r.id as release_id,
        a.workspace_id,
-       (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active')::bool as active,
-       -- A paused or deleted app, a deleted workload, or a stopped workload's
-       -- deployed versions wind down; working-tree releases of a stopped
-       -- workload keep running.
-       (a.state <> 'active' or w.desired_state = 'deleted'
+       (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
+        and ws.state = 'active')::bool as active,
+       -- A paused or deleted app, a deleted workload, a deleting workspace,
+       -- or a stopped workload's deployed versions wind down; working-tree
+       -- releases of a stopped workload keep running.
+       (a.state <> 'active' or w.desired_state = 'deleted' or ws.state = 'deleting'
         or (w.desired_state = 'stopped' and r.version is not null))::bool as stopping,
        -- Deletion also cancels running tasks.
        (a.state = 'deleted' or w.desired_state = 'deleted')::bool as retiring,
@@ -259,6 +262,7 @@ from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
 cross join lateral (
     select count(*) filter (where t.available_at <= now() and t.unmet_dependencies = 0) as available
     from tasks t where t.release_id = r.id and t.status = 'queued'

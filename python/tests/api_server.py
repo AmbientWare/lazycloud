@@ -83,6 +83,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         self._dispatch()
 
+    def do_PATCH(self) -> None:
+        self._dispatch()
+
     def do_DELETE(self) -> None:
         self._dispatch()
 

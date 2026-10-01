@@ -28,8 +28,17 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/identity/identitytest"
+	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
+)
+
+// dashboardURL is the public origin the handler trusts for browser
+// requests; webhookSecret signs test Resend deliveries.
+const (
+	dashboardURL  = "https://dashboard.test"
+	webhookSecret = "whsec_dGVzdC13ZWJob29rLXNlY3JldC1rZXk="
 )
 
 type env struct {
@@ -37,6 +46,8 @@ type env struct {
 	pool      *pgxpool.Pool
 	url       string
 	execution *execution.Execution
+	identity  *identity.Identity
+	github    *identitytest.GitHub
 	owner     string
 	outsider  string
 }
@@ -51,12 +62,16 @@ func newEnv(t *testing.T) *env {
 	wg.Go(func() { _ = listener.Run(runCtx) })
 	t.Cleanup(func() { stop(); wg.Wait() })
 
-	id := identity.NewIdentity(pool)
+	gh := identitytest.NewGitHub(t, dashboardURL+identity.GitHubCallbackPath)
+	id := identity.NewIdentity(pool, identity.Config{PublicURL: dashboardURL, GitHub: identity.GitHubConfig{
+		ClientID: identitytest.ClientID, ClientSecret: identitytest.ClientSecret, OAuthURL: gh.URL, APIURL: gh.URL,
+	}})
 	e := execution.NewExecution(pool)
+	logger := slog.New(slog.DiscardHandler)
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
-		Execution: e, Listener: listener,
-	}, slog.New(slog.DiscardHandler))
+		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
+	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9"}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +94,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, pool: pool, url: server.URL, execution: e, owner: owner, outsider: outsider}
+	return &env{t: t, pool: pool, url: server.URL, execution: e, identity: id, github: gh, owner: owner, outsider: outsider}
 }
 
 // do sends a request and decodes the response into out. It is safe off the
