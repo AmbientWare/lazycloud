@@ -302,18 +302,30 @@ func (r liveReserve) cycle(launched time.Time) {
 	r.move(compute.PhaseResuming)
 	asked := time.Now()
 	r.act()
-	// Another reserve's actuator pass may hold this host's claim.
+	// Another reserve's actuator pass may hold this host's claim. EC2
+	// answers IncorrectSpotRequestState for about 40 s after a Spot
+	// reserve stops, which the actuator retries, and may then refuse the
+	// start for Spot capacity, which retires the reserve.
+	refused := false
 	for scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
-		if time.Since(asked) > time.Minute {
+		if r.phase() == string(compute.PhaseTerminating) {
+			refused = true
+			t.Logf("%s: start refused, retired: %s", r.c.name(), scan[string](t, r.o.pool, "select phase_message from hosts where id = $1", r.host))
+			break
+		}
+		if time.Since(asked) > 3*time.Minute {
 			t.Fatalf("start not recorded; host %s", r.phase())
 		}
 		time.Sleep(2 * time.Second)
 		r.act()
 	}
-	started := r.until(ec2types.InstanceStateNameRunning, 10*time.Minute, func() {})
-	r.timings.add(r.c.name()+": start to running", started.Sub(asked))
-	if r.c.mode == compute.ReserveHibernate {
-		r.logResume()
+	started := time.Now()
+	if !refused {
+		started = r.until(ec2types.InstanceStateNameRunning, 10*time.Minute, func() {})
+		r.timings.add(r.c.name()+": start to running", started.Sub(asked))
+		if r.c.mode == compute.ReserveHibernate {
+			r.logResume()
+		}
 	}
 
 	// The planner retires it.
