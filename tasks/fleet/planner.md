@@ -83,7 +83,7 @@ Branch `fleet-planner` from `fleet-capacity-plan` at
 
 - `Compute.Plan` (internal/compute/planner.go, planner_snapshot.go,
   planner_markets.go, queries/planner.sql) replaces `PlanCapacity` and the
-  idle drain in `Retire`. One transaction under the capacity lock: 13 reads,
+  idle drain in `Retire`. One transaction under the capacity lock: 12 reads,
   then PlanFleet for the platform and for each connected account, then one
   statement per intent kind, NOTIFY `lc_compute` once and `lc_host` for
   returned hosts.
@@ -171,6 +171,17 @@ Parity lines marked "Packet: planner", with tests (internal/compute):
 - A reserve retired while still preparing drains (preparing -> ready ->
   draining in one guarded statement, both transitions checked); one not
   launched yet is removed; one launching is decided again next pass.
+- A host whose agent refused to prove a stop serves with its reserve mode
+  set (reserve_session.go). The pass treats it as unable to stop, so
+  retention drains it rather than asking again, and, while it is idle in
+  the cooldown window after the refusal, cools its offer without a
+  `refused_at`. A failed stuck reserve cools its offer the same way.
+- A reserve being prepared or stopping holds host room as well as reserve
+  room, and a reserve purchase needs host room (`Propose:` commit in
+  fleet_plan.go), so running hosts stay within `MaxHosts`.
+- Quotas are read raw on the pass's transaction; PlanFleet subtracts the
+  snapshot's own hosts. `QuotaUsage` and the exported `QuotaRooms` are
+  gone; Spot prices are read on the same transaction.
 - A host stuck in `preparing` for 15 minutes outside an agent update fails
   as `service_lost`, and reconcile terminates its instance (plan.md's
   `any -> failed` for lost service). The pass owns it because no other
@@ -208,10 +219,10 @@ Parity lines marked "Packet: planner", with tests (internal/compute):
 
   | Pending, finished | Statements | Wall | hosts | pending | arrivals | scheduled |
   | --- | --- | --- | --- | --- | --- | --- |
-  | 0, 1,000 | 18 | 66 ms | 522 | 2 | 164 | 92 |
-  | 500, 1,000 | 18 | 38 ms | 446 | 19 | 67 | 92 |
-  | 2,000, 1,000 | 18 | 53 ms | 349 | 82 | 18 | 92 |
-  | 10,000, 20,000 | 18 | 53 ms | 448 | 124 | 18 | 92 |
+  | 0, 1,000 | 17 | 51 ms | 522 | 2 | 164 | 105 |
+  | 500, 1,000 | 17 | 41 ms | 446 | 19 | 67 | 93 |
+  | 2,000, 1,000 | 17 | 58 ms | 349 | 82 | 18 | 93 |
+  | 10,000 plus 10,000 on a warm cron function, 20,000 | 17 | 62 ms | 349 | 123 | 18 | 93 |
 
   Activation stats, cooldowns and markets stay at 0-5 buffers. No node
   reads more than the 2,000-container batch. The guard first caught the
