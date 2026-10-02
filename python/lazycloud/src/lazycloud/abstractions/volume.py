@@ -27,7 +27,7 @@ from lazycloud.clients.storage import (
     put_presigned,
     upload_file_parts,
 )
-from lazycloud.control import ResourceControlBinding, resolve_control_client_config, storage_client
+from lazycloud.control import ResourceControlBinding, storage_client
 from shared import api
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
@@ -242,13 +242,7 @@ class Volume(ResourceControlBinding[StorageClient]):
     @property
     def control_client(self) -> StorageClient:
         if self.client is None:
-            config = resolve_control_client_config(
-                workspace=self.workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-            )
-            self.client = storage_client(config)
+            self.client = storage_client(self._config())
         return self.client
 
     def get_or_create(self) -> bool:

@@ -23,27 +23,9 @@ _CONTROL_WORKSPACE: ContextVar[str | None] = ContextVar(
 ClientT = TypeVar("ClientT")
 
 
-class ResourceControlBinding(Generic[ClientT]):
+class ControlClientConfigMixin:
     __slots__ = ()
 
-    client: ClientT | None
-    workspace: str | None
-    endpoint: str | None
-    token: str | None
-    timeout_seconds: float
-
-
-@dataclass(frozen=True, slots=True)
-class ControlClientConfig:
-    endpoint: str
-    token: str | None
-    workspace: str
-    timeout_seconds: float
-    # The container API socket, inside a workload container without a token.
-    container_api: str | None = None
-
-
-class ControlClientConfigMixin:
     endpoint: str | None
     token: str | None
     workspace: str | None
@@ -56,6 +38,22 @@ class ControlClientConfigMixin:
             workspace=self.workspace,
             timeout_seconds=self.timeout_seconds,
         )
+
+
+class ResourceControlBinding(ControlClientConfigMixin, Generic[ClientT]):
+    __slots__ = ()
+
+    client: ClientT | None
+
+
+@dataclass(frozen=True, slots=True)
+class ControlClientConfig:
+    endpoint: str
+    token: str | None
+    workspace: str
+    timeout_seconds: float
+    # The container API socket, inside a workload container without a token.
+    container_api: str | None = None
 
 
 def resolve_control_client_config(

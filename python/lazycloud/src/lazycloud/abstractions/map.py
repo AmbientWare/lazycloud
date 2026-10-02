@@ -11,7 +11,6 @@ from lazycloud.clients.api import ApiError
 from lazycloud.clients.storage import StorageClient
 from lazycloud.control import (
     ResourceControlBinding,
-    resolve_control_client_config,
     storage_client,
 )
 from lazycloud.values import decode_value, encode_value
@@ -38,13 +37,7 @@ class Map(ResourceControlBinding[StorageClient], MutableMapping[str, Any]):
     @property
     def control_client(self) -> StorageClient:
         if self.client is None:
-            config = resolve_control_client_config(
-                workspace=self.workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-            )
-            self.client = storage_client(config)
+            self.client = storage_client(self._config())
         return self.client
 
     def set(
