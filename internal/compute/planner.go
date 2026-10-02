@@ -250,13 +250,19 @@ func (ps *fleetPass) offerInputs(networks map[string]Network, owner string, host
 func (ps *fleetPass) platform(groups []pendingGroup) error {
 	now := ps.r.now
 	var hosts []FleetHost
+	// failed are hosts that could not prove a stop into the reserve.
+	var failed []PlannerHostsRow
 	for _, row := range ps.r.hosts {
 		if HostKind(row.Kind) != KindPlatform {
 			continue
 		}
 		if stuckPreparing(row, now) {
 			ps.w.stuck = append(ps.w.stuck, row.ID)
+			failed = append(failed, row)
 			continue
+		}
+		if refusedReserve(row) && row.Containers == 0 && now.Sub(row.PhaseAt) < ps.c.fleet.CapacityCooldown {
+			failed = append(failed, row)
 		}
 		if Phase(row.Phase) == PhaseReady && row.CapacityReason == reasonConsolidating && row.Containers == 0 {
 			ps.w.uncordon = append(ps.w.uncordon, row.ID)
@@ -271,13 +277,26 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	}
 	in := ps.offerInputs(ps.c.fleet.Networks, ownerPlatform, hosts)
 	in.Rates, in.Quotas, in.PlainStop = ps.rates, vcpuQuotas(ps.r.quotas), ps.plain
+	// The offer of a host that could not prove a stop cools, so this pass
+	// does not buy its replacement from it.
+	var unproven []OfferCooldown
+	for _, row := range failed {
+		unproven = append(unproven, OfferCooldown{
+			Region: row.Region, InstanceType: row.InstanceType, Market: marketOf(row.Market), Until: now.Add(ps.c.fleet.CapacityCooldown),
+		})
+	}
+	in.Cooldowns = append(in.Cooldowns, unproven...)
+	ps.cool(ownerPlatform, unproven, "offer cooled: its host could not prove a stop into the reserve")
 	forecast, locations := forecasts(ps.p, ps.r, hosts, groups)
 	ps.consolidations()
+	// A reserve being prepared or stopping runs, so it holds host room as
+	// well as reserve room.
 	held, reserves := 0, 0
 	for _, h := range hosts {
 		if h.reserve() {
 			reserves++
-		} else {
+		}
+		if !h.reserve() || h.State == FleetPreparing || h.State == FleetStopping {
 			held++
 		}
 	}
@@ -286,7 +305,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		Markets: maps.Clone(ps.records), HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves),
 	}
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
-	ps.cool(ownerPlatform, cools)
+	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
 	pressure := ps.pressure(plan)
 	due := ps.reserveDue(pressure)
 	ps.result.Published = due
@@ -341,7 +360,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		}
 		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held)}
 		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
-		ps.cool(conn.ID.String(), cools)
+		ps.cool(conn.ID.String(), cools, "offer cooled: its host could not take the container bought for")
 		chosen, bought, err := ps.apply(plan, &conn.ID, func(FleetAction) bool { return true })
 		if err != nil {
 			return err
@@ -393,11 +412,12 @@ func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []
 	return PlanFleet(p, s), cools
 }
 
-func (ps *fleetPass) cool(owner string, cools []OfferCooldown) {
+// cool writes cooldowns without a refusal time, so they do not count toward
+// region cooling.
+func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 	for _, c := range cools {
 		ps.w.cools = append(ps.w.cools, coolRow{ConnectionKey: owner, Region: c.Region, InstanceType: c.InstanceType, Market: c.Market})
-		ps.note("offer cooled: its host could not take the container bought for", "owner", owner, "region", c.Region,
-			"instance_type", c.InstanceType, "market", c.Market)
+		ps.note(why, "owner", owner, "region", c.Region, "instance_type", c.InstanceType, "market", c.Market)
 	}
 }
 

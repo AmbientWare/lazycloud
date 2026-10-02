@@ -160,7 +160,9 @@ func fleetStateOf(h PlannerHostsRow, now time.Time) FleetState {
 
 // fleetHostOf is a cloud host as PlanFleet sees it. Only an on-demand host
 // or a Spot reserve on a persistent request can stop, and a host of a type
-// whose hibernation booted cold in its region stops plainly.
+// whose hibernation booted cold in its region stops plainly. A host whose
+// agent refused to prove a stop serves with its reserve mode still set; it
+// is not asked again, so retention drains it.
 func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease, plainStop map[string]bool) FleetHost {
 	market := marketOf(h.Market)
 	return FleetHost{
@@ -171,7 +173,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease, plainS
 		Containers: int(h.Containers), Pinned: int(h.Pinned), Protected: h.InterruptionAt != nil, LaunchedAt: h.LaunchedAt,
 		Current: preparedFor(h, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured && !plainStop[h.Region+"/"+h.InstanceType],
-		Stoppable:             market == MarketOnDemand || h.SpotRequestID != nil,
+		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, LightSince: h.LightSince,
 	}
 }
@@ -184,6 +186,12 @@ func preparedFor(h PlannerHostsRow, release *AgentRelease) bool {
 		return true
 	}
 	return h.PreparedAgentVersion != nil && *h.PreparedAgentVersion == release.Version
+}
+
+// refusedReserve reports a host serving after its agent refused to prove a
+// stop into the reserve.
+func refusedReserve(h PlannerHostsRow) bool {
+	return Phase(h.Phase) == PhaseReady && h.ReserveMode != nil
 }
 
 // stuckPreparing reports a platform host whose agent has not proved it may

@@ -285,6 +285,81 @@ func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 			t.Errorf("host %s is %s (%v), want %s", host, phase, failure, want)
 		}
 	}
+	if !cooledWithoutRefusal(t, o, "m7i.large") {
+		t.Fatal("the failed reserve's offer did not cool, so the pass could buy it again")
+	}
+}
+
+// cooledWithoutRefusal reports whether the platform's on-demand offer of
+// typ in us-east-2 cools without counting as a provider refusal.
+func cooledWithoutRefusal(t *testing.T, o owners, typ string) bool {
+	t.Helper()
+	return scan[bool](t, o.pool, `select exists (select 1 from capacity_cooldowns where connection_key = 'platform'
+and region = 'us-east-2' and instance_type = $1 and market = 'on_demand' and until > now() and refused_at is null)`, typ)
+}
+
+// A host whose agent refused to prove a stop serves with its reserve mode
+// set. It is never asked again, so once idle it drains, and its offer cools
+// so the replacement reserve comes from another one.
+func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	publish(t, o.compute)
+	refused := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc01")
+	other := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc02")
+	run(t, o.pool, "update hosts set hibernation_configured = true where id = any($1)", []uuid.UUID{uuid.UUID(refused), uuid.UUID(other)})
+	// The agent's refusal returned it to ready just now; it costs more, so
+	// retention considers it first.
+	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now(), hourly_micros = hourly_micros + 1 where id = $1", uuid.UUID(refused))
+
+	if r := plan(t, o); r.Drained != 1 || r.Returned != 0 {
+		t.Fatalf("plan %+v, want the refused host drained, not asked again", r)
+	}
+	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseDraining) {
+		t.Fatalf("refused host is %s, want draining", phase)
+	}
+	if !cooledWithoutRefusal(t, o, "m7i.2xlarge") {
+		t.Fatal("the refused host's offer did not cool")
+	}
+	if n := scan[int](t, o.pool, `select count(*) from hosts where phase = 'requested' and instance_type = 'm7i.2xlarge'
+and region = 'us-east-2' and market = 'on_demand'`); n != 0 {
+		t.Fatalf("bought %d more of the refused host's offer", n)
+	}
+}
+
+// A reserve being prepared runs, so it holds host room: with the limit
+// reached, pending work waits for the limit instead of buying past it.
+func TestReservesBeingPreparedHoldHostRoom(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{MaxHosts: 2}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	fleetHost(t, o, compute.PhaseReady, compute.MarketOnDemand, "m7i.2xlarge", "i-0000000000000fd01")
+	preparing := fleetHost(t, o, compute.PhasePreparing, compute.MarketOnDemand, "m7i.2xlarge", "i-0000000000000fd02")
+	run(t, o.pool, "update hosts set reserve_mode = 'stop' where id = $1", uuid.UUID(preparing))
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 40_000, 64*gib)
+
+	if r := planCapacity(t, o); r.Requested != 0 || r.Limited != 1 {
+		t.Fatalf("plan %+v, want the container held by the fleet limit", r)
+	}
+}
+
+// The pass reads raw quotas on its own transaction and counts its own
+// snapshot's hosts against them, so a reserve it fails in the same pass no
+// longer holds quota there.
+func TestQuotaUseIsTheSnapshotsHosts(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	run(t, o.pool, `insert into fleet_quotas (region, quota_class, market, vcpus, observed_at) values ('us-east-2', 'standard', 'on_demand', 8, now())`)
+	stuck := fleetHost(t, o, compute.PhasePreparing, compute.MarketOnDemand, "m7i.2xlarge", "i-0000000000000fe01")
+	run(t, o.pool, "update hosts set reserve_mode = 'stop', phase_at = now() - interval '16 minutes' where id = $1", uuid.UUID(stuck))
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 1000, gib)
+
+	if r := planCapacity(t, o); r.Failed != 1 || r.Requested != 1 {
+		t.Fatalf("plan %+v, want the stuck reserve failed and one host bought", r)
+	}
+	if got := requested(t, o); len(got) != 1 || !strings.Contains(got[0], "on_demand us-east-2") {
+		t.Fatalf("requested %v, want us-east-2, whose quota the failed reserve no longer holds", got)
+	}
 }
 
 // A cold boot after a hibernation in the last day (P1) stops that type
