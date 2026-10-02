@@ -150,11 +150,11 @@ func TestFleetNodesListReserveStatesAndNeverARefusedLaunch(t *testing.T) {
 	hibernate, stop := ptr("hibernate"), ptr("stop")
 	current, old := ptr("2.0.0"), ptr("1.0.0")
 	wants := map[uuid.UUID]want{
-		e.fleetHost(fleetHost{instance: "i-0serving", phase: "ready", online: true, agent: "2.0.0"}):         {apitypes.FleetServing, true},
-		e.fleetHost(fleetHost{instance: "i-0outdated", phase: "ready", online: true, agent: "1.0.0"}):        {apitypes.FleetServing, false},
+		e.fleetHost(fleetHost{instance: "i-0serving", phase: "ready", online: true, agent: "2.0.0"}):           {apitypes.FleetServing, true},
+		e.fleetHost(fleetHost{instance: "i-0outdated", phase: "ready", online: true, agent: "1.0.0"}):          {apitypes.FleetServing, false},
 		e.fleetHost(fleetHost{instance: "i-0preparing", phase: "preparing", reserve: hibernate, online: true}): {apitypes.FleetPreparing, false},
 		e.fleetHost(fleetHost{instance: "i-0stopping", phase: "stopping", reserve: hibernate}):                 {apitypes.FleetStopping, false},
-		e.fleetHost(fleetHost{instance: "i-0stopped", phase: "stopped", reserve: stop, prepared: current}):      {apitypes.FleetStopped, true},
+		e.fleetHost(fleetHost{instance: "i-0stopped", phase: "stopped", reserve: stop, prepared: current}):     {apitypes.FleetStopped, true},
 		e.fleetHost(fleetHost{instance: "i-0unverified", phase: "stopped", reserve: hibernate, prepared: current}): {
 			apitypes.FleetHibernateUnverified, true,
 		},
