@@ -1,796 +1,2844 @@
 {
- "source": "AWS public Spot price page data (website.spot.ec2.aws.a2z.com/spot.js), Linux, one regional price per type; DescribeSpotPriceHistory is denied to the default-test role",
- "fetched": "2026-10-02T12:26:00Z",
+ "source": "DescribeSpotPriceHistory, Linux/UNIX, latest quote per type and zone",
+ "fetched": "2026-10-02T21:14:17Z",
  "quotes": [
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "c6a.2xlarge",
-   "hourly_micros": 147400
+   "hourly_micros": 156100
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "c6a.4xlarge",
-   "hourly_micros": 303900
+   "hourly_micros": 271300
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "c6a.8xlarge",
-   "hourly_micros": 602100
+   "hourly_micros": 528800
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "c6i.8xlarge",
-   "hourly_micros": 676500
+   "hourly_micros": 1061500
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "c7i.2xlarge",
-   "hourly_micros": 163000
+   "hourly_micros": 170200
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.12xlarge",
-   "hourly_micros": 1727100
+   "hourly_micros": 1600700
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.16xlarge",
-   "hourly_micros": 1564000
+   "hourly_micros": 1524800
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.2xlarge",
-   "hourly_micros": 306300
+   "hourly_micros": 309600
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.4xlarge",
-   "hourly_micros": 526400
+   "hourly_micros": 464500
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.8xlarge",
-   "hourly_micros": 872900
+   "hourly_micros": 780300
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.metal",
-   "hourly_micros": 3523200
+   "hourly_micros": 4876800
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g4dn.xlarge",
-   "hourly_micros": 220400
+   "hourly_micros": 284400
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.12xlarge",
-   "hourly_micros": 2468500
+   "hourly_micros": 4800000
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.16xlarge",
-   "hourly_micros": 1750300
+   "hourly_micros": 1734500
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.24xlarge",
-   "hourly_micros": 3955200
+   "hourly_micros": 5955000
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.2xlarge",
-   "hourly_micros": 595400
+   "hourly_micros": 772700
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.48xlarge",
-   "hourly_micros": 6498900
+   "hourly_micros": 4710400
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.4xlarge",
-   "hourly_micros": 714700
+   "hourly_micros": 883700
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.8xlarge",
-   "hourly_micros": 1275900
+   "hourly_micros": 1190100
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g5.xlarge",
-   "hourly_micros": 500600
+   "hourly_micros": 395600
   },
   {
    "region": "us-east-1",
+   "zone_id": "use1-az6",
    "instance_type": "g6.12xlarge",
+   "hourly_micros": 4142000
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 1617800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 3503800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 869000
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 9597900
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 925600
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 1241100
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 602600
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 9368700
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 2111600
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 1506600
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 2213800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 5321600
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 2695800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 1700200
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1837500
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 173500
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 329700
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 571900
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 713300
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 1229900
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 162500
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 301200
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 538800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.large",
+   "hourly_micros": 41400
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 84800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 16859500
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "p4de.24xlarge",
+   "hourly_micros": 20977300
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 27913700
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 2871500
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 30298200
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 144800
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 374700
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 561000
+  },
+  {
+   "region": "us-east-1",
+   "zone_id": "use1-az6",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 189300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 115200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 240400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 378600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 333700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 117200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1907300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 2064700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 373700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 629600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 1033200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 4028700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 276900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 2801200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 1937100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 3901500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 639800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 14659200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 867500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 1231800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 534000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 2553400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 1574500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 3169200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 485500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 7086400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 674600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 971900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 403800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 5247200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3739100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 13559000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 1289100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 18596000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 1537600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 2249600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1663700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 127600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 227400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 307700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 726900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 878200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 135000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 277300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 420600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.large",
+   "hourly_micros": 30100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 65000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 5319000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 20988800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 2736300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 29220400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 145600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 273000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 533200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az1",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 159800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 124500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 238500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 360200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 326600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 120700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1948900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 2007700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 383300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 624900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 1067300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 4154700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 276100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 3005100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 1870400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 4268100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 615700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 9965100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 862100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 1226700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 525800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 2645900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 1562800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 3184300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 483200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 6808200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 677300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 968300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 394600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 5188800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3729500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 8157400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 1565600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 21693800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 1633700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 2262200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1553600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 136200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 207300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 273900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 878000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 992400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 135200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 298800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 698600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.large",
+   "hourly_micros": 36300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 56900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 7509500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 22194000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 2678100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 29533200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 152700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 304200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 616100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az2",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 171700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 101800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 199000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 352600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 327800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 99900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1918100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 2051700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 380600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 622800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 1041200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 4020300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 271900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 2994600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 1865800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 4188100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 624800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 8306300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 862100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 1226100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 514800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 2507000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 1596000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 3127700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 478200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 6744200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 662800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 964800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 390700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 5249500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3779600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 9055800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 2017900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 18616200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 1593400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 2334700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1373500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 112300
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 216600
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 284900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 724800
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 857000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 115200
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 226000
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 539900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.large",
+   "hourly_micros": 30900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 60500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 19171700
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 21720400
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 28721900
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 129500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 272500
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 513100
+  },
+  {
+   "region": "us-east-2",
+   "zone_id": "use2-az3",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 150400
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 209300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 277800
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 712000
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 668600
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 217600
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 2208300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 1277500
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 459600
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 874500
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 1196800
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 3726900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 332100
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 201900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 300200
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 660600
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 1084700
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 1450300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 203100
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 387400
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 947700
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.large",
+   "hourly_micros": 48100
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 98700
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 224100
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 373800
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 718900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az1",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 188200
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 192200
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 287400
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 704300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 750000
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 209300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 2216200
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 1208800
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 435600
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 831400
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 998700
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 3190300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 365300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 192900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 300100
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 684500
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 838600
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 852200
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 215400
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 351900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 867300
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.large",
+   "hourly_micros": 49800
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 108000
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 19777500
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 79120000
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 215200
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 311900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 656900
+  },
+  {
+   "region": "us-west-1",
+   "zone_id": "usw1-az3",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 182600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 175800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 254400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 532700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 477000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 205300
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1571400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 1405600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 325100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 428000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 742800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 4629900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 238000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 5012800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 1303700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 2655700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 553200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 6710000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 739400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 965300
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 497900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 3807900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 1514700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 3315200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 813900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 7435000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 935900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 907200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 616600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 9886700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3343800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 8231200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 2242100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 26838500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 3004200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 2759300
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1861000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 184100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 353800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "m6a.8xlarge",
    "hourly_micros": 604500
   },
   {
-   "region": "us-east-1",
-   "instance_type": "g6.16xlarge",
-   "hourly_micros": 440400
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "g6.24xlarge",
-   "hourly_micros": 859700
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "g6.2xlarge",
-   "hourly_micros": 125900
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "g6.48xlarge",
-   "hourly_micros": 1759600
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "g6.4xlarge",
-   "hourly_micros": 172300
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "g6.8xlarge",
-   "hourly_micros": 262300
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "g6.xlarge",
-   "hourly_micros": 105000
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "m6a.2xlarge",
-   "hourly_micros": 168500
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "m6a.4xlarge",
-   "hourly_micros": 331700
-  },
-  {
-   "region": "us-east-1",
-   "instance_type": "m6a.8xlarge",
-   "hourly_micros": 659200
-  },
-  {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.12xlarge",
-   "hourly_micros": 1015800
+   "hourly_micros": 1062900
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.16xlarge",
-   "hourly_micros": 1389400
+   "hourly_micros": 1472200
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.2xlarge",
-   "hourly_micros": 177400
+   "hourly_micros": 212300
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.4xlarge",
-   "hourly_micros": 393900
+   "hourly_micros": 354000
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.8xlarge",
-   "hourly_micros": 704200
+   "hourly_micros": 835800
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.large",
-   "hourly_micros": 44900
+   "hourly_micros": 52700
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "m7i.xlarge",
-   "hourly_micros": 89700
+   "hourly_micros": 107000
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "p4d.24xlarge",
-   "hourly_micros": 13066700
+   "hourly_micros": 13840600
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "p4de.24xlarge",
+   "hourly_micros": 18459500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "p5.48xlarge",
-   "hourly_micros": 57761800
+   "hourly_micros": 28308000
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 2803700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "r6a.2xlarge",
-   "hourly_micros": 218200
+   "hourly_micros": 199500
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "r6a.4xlarge",
-   "hourly_micros": 379300
+   "hourly_micros": 400100
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "r6a.8xlarge",
-   "hourly_micros": 722300
+   "hourly_micros": 775600
   },
   {
-   "region": "us-east-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az1",
    "instance_type": "r7i.2xlarge",
-   "hourly_micros": 243500
+   "hourly_micros": 208700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "c6a.2xlarge",
-   "hourly_micros": 136100
+   "hourly_micros": 166800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "c6a.4xlarge",
-   "hourly_micros": 233300
+   "hourly_micros": 242100
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "c6a.8xlarge",
-   "hourly_micros": 420500
+   "hourly_micros": 532700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "c6i.8xlarge",
-   "hourly_micros": 438900
+   "hourly_micros": 538900
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "c7i.2xlarge",
-   "hourly_micros": 159700
+   "hourly_micros": 193600
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.12xlarge",
-   "hourly_micros": 2038900
+   "hourly_micros": 1535700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.16xlarge",
-   "hourly_micros": 1250300
+   "hourly_micros": 1342800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.2xlarge",
-   "hourly_micros": 271400
+   "hourly_micros": 324800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.4xlarge",
-   "hourly_micros": 567100
+   "hourly_micros": 469800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.8xlarge",
-   "hourly_micros": 816100
+   "hourly_micros": 765300
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.metal",
-   "hourly_micros": 3690400
+   "hourly_micros": 4567700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g4dn.xlarge",
-   "hourly_micros": 197100
+   "hourly_micros": 238600
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.12xlarge",
-   "hourly_micros": 1087700
+   "hourly_micros": 4719700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.16xlarge",
-   "hourly_micros": 1385300
+   "hourly_micros": 1270300
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.24xlarge",
-   "hourly_micros": 1425900
+   "hourly_micros": 2990700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.2xlarge",
-   "hourly_micros": 463800
+   "hourly_micros": 521200
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.48xlarge",
-   "hourly_micros": 2852700
+   "hourly_micros": 10181800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.4xlarge",
-   "hourly_micros": 535000
+   "hourly_micros": 803700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.8xlarge",
-   "hourly_micros": 904300
+   "hourly_micros": 1044100
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g5.xlarge",
-   "hourly_micros": 418300
+   "hourly_micros": 503400
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.12xlarge",
-   "hourly_micros": 584000
+   "hourly_micros": 3800500
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.16xlarge",
-   "hourly_micros": 430700
+   "hourly_micros": 1659800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.24xlarge",
-   "hourly_micros": 860900
+   "hourly_micros": 3108800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.2xlarge",
-   "hourly_micros": 126100
+   "hourly_micros": 804100
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.48xlarge",
-   "hourly_micros": 1698400
+   "hourly_micros": 7549000
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.4xlarge",
-   "hourly_micros": 175000
+   "hourly_micros": 780400
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.8xlarge",
-   "hourly_micros": 259000
+   "hourly_micros": 963600
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "g6.xlarge",
-   "hourly_micros": 103900
+   "hourly_micros": 506900
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 8587500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3111100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 15065600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 1424900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 10687200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 2107600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 2486600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1861000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m6a.2xlarge",
-   "hourly_micros": 139800
+   "hourly_micros": 184200
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m6a.4xlarge",
-   "hourly_micros": 287000
+   "hourly_micros": 351800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m6a.8xlarge",
-   "hourly_micros": 459800
+   "hourly_micros": 617300
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.12xlarge",
-   "hourly_micros": 748900
+   "hourly_micros": 1024800
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.16xlarge",
-   "hourly_micros": 1075600
+   "hourly_micros": 1453600
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.2xlarge",
-   "hourly_micros": 196100
+   "hourly_micros": 212200
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.4xlarge",
-   "hourly_micros": 275100
+   "hourly_micros": 346300
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.8xlarge",
-   "hourly_micros": 545200
+   "hourly_micros": 655700
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.large",
-   "hourly_micros": 35400
+   "hourly_micros": 52200
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "m7i.xlarge",
-   "hourly_micros": 66500
+   "hourly_micros": 111400
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "p4d.24xlarge",
-   "hourly_micros": 5733700
+   "hourly_micros": 14488300
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "p4de.24xlarge",
+   "hourly_micros": 19627400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "p5.48xlarge",
-   "hourly_micros": 35718700
+   "hourly_micros": 22131400
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 3601700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 29599000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "r6a.2xlarge",
-   "hourly_micros": 168100
+   "hourly_micros": 222300
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "r6a.4xlarge",
-   "hourly_micros": 341000
+   "hourly_micros": 413900
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "r6a.8xlarge",
-   "hourly_micros": 734200
+   "hourly_micros": 801600
   },
   {
-   "region": "us-east-2",
+   "region": "us-west-2",
+   "zone_id": "usw2-az2",
    "instance_type": "r7i.2xlarge",
-   "hourly_micros": 219900
+   "hourly_micros": 210300
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "c6a.2xlarge",
-   "hourly_micros": 160100
+   "hourly_micros": 174300
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "c6a.4xlarge",
-   "hourly_micros": 357300
+   "hourly_micros": 259600
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "c6a.8xlarge",
-   "hourly_micros": 779800
+   "hourly_micros": 534500
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "c6i.8xlarge",
-   "hourly_micros": 718600
+   "hourly_micros": 512900
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "c7i.2xlarge",
-   "hourly_micros": 169000
+   "hourly_micros": 188000
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.12xlarge",
-   "hourly_micros": 1296600
+   "hourly_micros": 1585200
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.16xlarge",
-   "hourly_micros": 809100
+   "hourly_micros": 1373100
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.2xlarge",
-   "hourly_micros": 318800
+   "hourly_micros": 336300
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.4xlarge",
-   "hourly_micros": 535600
+   "hourly_micros": 475600
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.8xlarge",
-   "hourly_micros": 831300
+   "hourly_micros": 920400
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.metal",
-   "hourly_micros": 1557900
+   "hourly_micros": 4513700
   },
   {
-   "region": "us-west-1",
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g4dn.xlarge",
-   "hourly_micros": 246800
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m6a.2xlarge",
-   "hourly_micros": 178100
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m6a.4xlarge",
-   "hourly_micros": 322100
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m6a.8xlarge",
-   "hourly_micros": 618400
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.12xlarge",
-   "hourly_micros": 960400
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.16xlarge",
-   "hourly_micros": 1115900
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.2xlarge",
-   "hourly_micros": 179500
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.4xlarge",
-   "hourly_micros": 394200
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.8xlarge",
-   "hourly_micros": 858600
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.large",
-   "hourly_micros": 47700
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "m7i.xlarge",
-   "hourly_micros": 84500
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "r6a.2xlarge",
-   "hourly_micros": 172100
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "r6a.4xlarge",
-   "hourly_micros": 401500
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "r6a.8xlarge",
-   "hourly_micros": 991600
-  },
-  {
-   "region": "us-west-1",
-   "instance_type": "r7i.2xlarge",
-   "hourly_micros": 212000
+   "hourly_micros": 232400
   },
   {
    "region": "us-west-2",
-   "instance_type": "c6a.2xlarge",
-   "hourly_micros": 133700
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "c6a.4xlarge",
-   "hourly_micros": 214900
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "c6a.8xlarge",
-   "hourly_micros": 577300
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "c6i.8xlarge",
-   "hourly_micros": 543100
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "c7i.2xlarge",
-   "hourly_micros": 140200
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.12xlarge",
-   "hourly_micros": 1463300
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.16xlarge",
-   "hourly_micros": 695200
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.2xlarge",
-   "hourly_micros": 253900
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.4xlarge",
-   "hourly_micros": 324200
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.8xlarge",
-   "hourly_micros": 662300
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.metal",
-   "hourly_micros": 3272000
-  },
-  {
-   "region": "us-west-2",
-   "instance_type": "g4dn.xlarge",
-   "hourly_micros": 229000
-  },
-  {
-   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.12xlarge",
-   "hourly_micros": 2377100
+   "hourly_micros": 3692800
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.16xlarge",
-   "hourly_micros": 854900
+   "hourly_micros": 1270300
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.24xlarge",
-   "hourly_micros": 1562400
+   "hourly_micros": 3973200
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.2xlarge",
-   "hourly_micros": 459300
+   "hourly_micros": 557300
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.48xlarge",
-   "hourly_micros": 3791000
+   "hourly_micros": 6080900
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.4xlarge",
-   "hourly_micros": 486000
+   "hourly_micros": 759500
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.8xlarge",
-   "hourly_micros": 640300
+   "hourly_micros": 947300
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g5.xlarge",
-   "hourly_micros": 446100
+   "hourly_micros": 483700
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.12xlarge",
-   "hourly_micros": 596100
+   "hourly_micros": 3750700
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.16xlarge",
-   "hourly_micros": 450700
+   "hourly_micros": 1471000
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.24xlarge",
-   "hourly_micros": 789300
+   "hourly_micros": 3366400
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.2xlarge",
-   "hourly_micros": 128600
+   "hourly_micros": 754500
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.48xlarge",
-   "hourly_micros": 1710600
+   "hourly_micros": 7201800
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.4xlarge",
-   "hourly_micros": 169400
+   "hourly_micros": 760100
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.8xlarge",
-   "hourly_micros": 259700
+   "hourly_micros": 944000
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "g6.xlarge",
-   "hourly_micros": 104600
+   "hourly_micros": 467200
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 9853800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3310000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 7842000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 2242100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 16787700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 3004200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 3081600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1861000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m6a.2xlarge",
-   "hourly_micros": 141000
+   "hourly_micros": 188900
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m6a.4xlarge",
-   "hourly_micros": 261700
+   "hourly_micros": 370500
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m6a.8xlarge",
-   "hourly_micros": 578000
+   "hourly_micros": 617300
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.12xlarge",
-   "hourly_micros": 572600
+   "hourly_micros": 987200
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.16xlarge",
-   "hourly_micros": 992100
+   "hourly_micros": 1464400
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.2xlarge",
-   "hourly_micros": 159300
+   "hourly_micros": 208700
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.4xlarge",
-   "hourly_micros": 329500
+   "hourly_micros": 368000
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.8xlarge",
-   "hourly_micros": 621400
+   "hourly_micros": 763100
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.large",
-   "hourly_micros": 36400
+   "hourly_micros": 40000
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "m7i.xlarge",
-   "hourly_micros": 74300
+   "hourly_micros": 104200
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "p4d.24xlarge",
-   "hourly_micros": 6205000
+   "hourly_micros": 12725900
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "p4de.24xlarge",
+   "hourly_micros": 19523000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "p5.48xlarge",
-   "hourly_micros": 31298500
+   "hourly_micros": 22311000
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 3854100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 28998200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "r6a.2xlarge",
-   "hourly_micros": 177500
+   "hourly_micros": 205100
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "r6a.4xlarge",
-   "hourly_micros": 345300
+   "hourly_micros": 431500
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "r6a.8xlarge",
-   "hourly_micros": 892300
+   "hourly_micros": 727600
   },
   {
    "region": "us-west-2",
+   "zone_id": "usw2-az3",
    "instance_type": "r7i.2xlarge",
-   "hourly_micros": 69900
+   "hourly_micros": 216200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 143000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 258200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 510500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 536000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 152300
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 3229400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 1405700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 2626100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 509200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 7166900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 1033000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 881000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 422900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.12xlarge",
+   "hourly_micros": 6534400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.16xlarge",
+   "hourly_micros": 3951700
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.24xlarge",
+   "hourly_micros": 15065600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.2xlarge",
+   "hourly_micros": 1940800
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.48xlarge",
+   "hourly_micros": 30131200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.4xlarge",
+   "hourly_micros": 1581200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.8xlarge",
+   "hourly_micros": 1844500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "g6e.xlarge",
+   "hourly_micros": 1706000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 157400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 282600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 559500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 1166100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 1309600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 198600
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 318200
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 667400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.large",
+   "hourly_micros": 40300
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 80000
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 12634900
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 22098100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "p5.4xlarge",
+   "hourly_micros": 2629500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "p5en.48xlarge",
+   "hourly_micros": 28109500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 185100
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 457500
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 753400
+  },
+  {
+   "region": "us-west-2",
+   "zone_id": "usw2-az4",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 199800
   }
  ]
 }

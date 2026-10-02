@@ -93,6 +93,7 @@ func spotSnapshot(t *testing.T, now time.Time, networks map[string]Network) []Sp
 	var snapshot struct {
 		Quotes []struct {
 			Region       string `json:"region"`
+			ZoneID       string `json:"zone_id"`
 			InstanceType string `json:"instance_type"`
 			HourlyMicros int64  `json:"hourly_micros"`
 		} `json:"quotes"`
@@ -102,8 +103,8 @@ func spotSnapshot(t *testing.T, now time.Time, networks map[string]Network) []Sp
 	}
 	var quotes []SpotQuote
 	for _, q := range snapshot.Quotes {
-		for _, s := range networks[q.Region].Subnets {
-			quotes = append(quotes, SpotQuote{Region: q.Region, ZoneID: s.ZoneID, InstanceType: q.InstanceType, HourlyMicros: q.HourlyMicros, ObservedAt: now})
+		if _, ok := networks[q.Region]; ok {
+			quotes = append(quotes, SpotQuote{Region: q.Region, ZoneID: q.ZoneID, InstanceType: q.InstanceType, HourlyMicros: q.HourlyMicros, ObservedAt: now})
 		}
 	}
 	return quotes

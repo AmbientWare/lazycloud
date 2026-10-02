@@ -105,6 +105,9 @@ type reserveCase struct {
 	market       compute.Market
 	mode         compute.ReserveMode
 	gpus         int
+	// zone pins the launch: us-east-2a refused m7i.large for capacity on
+	// 2026-10-02.
+	zone string
 }
 
 func (c reserveCase) name() string {
@@ -122,9 +125,9 @@ func lifecycleRun(t *testing.T, cfg aws.Config, client *ec2.Client, network comp
 	})
 	publish(t, o.compute)
 	cases := []reserveCase{
-		{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate},
-		{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveStop},
-		{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1},
+		{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate, zone: "us-east-2b"},
+		{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveStop, zone: "us-east-2c"},
+		{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1, zone: "us-east-2b"},
 	}
 	hosts := make([]uuid.UUID, len(cases))
 	for n, c := range cases {
@@ -133,9 +136,10 @@ func lifecycleRun(t *testing.T, cfg aws.Config, client *ec2.Client, network comp
 			t.Fatalf("%s is not in the catalog", c.instanceType)
 		}
 		hosts[n] = scan[uuid.UUID](t, o.pool, `
-insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, instance_type, market, reserve_mode)
-values ($1, 'offline', 'platform', 'aws', 'requested', $2, $3, $4, $5, $6, $7, $8, $9)
-returning id`, fmt.Sprintf("acceptance-%d", n), typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion,
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
+                   instance_type, market, reserve_mode)
+values ($1, 'offline', 'platform', 'aws', 'requested', $2, $3, $4, $5, $6, $7, $8, $9, $10)
+returning id`, fmt.Sprintf("acceptance-%d", n), typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion, c.zone,
 			c.instanceType, string(c.market), string(c.mode))
 	}
 	launched := time.Now()
