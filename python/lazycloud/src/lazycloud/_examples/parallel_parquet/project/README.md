@@ -11,7 +11,7 @@ Run these commands from this downloaded project directory:
 
 ```bash
 uv sync
-uv run lazycloud login --token <token>
+uv run lazycloud login
 uv run python -m parallel_parquet.configure
 uv run lazycloud run parallel_parquet.app:run_batch true 4 10 false
 ```

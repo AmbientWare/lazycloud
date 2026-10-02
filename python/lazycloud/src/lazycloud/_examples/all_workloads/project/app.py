@@ -375,12 +375,12 @@ def exercise_runs(value: int = 7) -> dict[str, JsonValue]:
 
 
 def run_endpoint(value: int = 7, fail: bool = False) -> dict[str, JsonValue]:
-    response = predict.request(value, fail=fail)
+    response = predict.target("deployed").request(value, fail=fail)
     return {"status_code": response.status_code, "result": response.json()}
 
 
 def run_asgi() -> dict[str, JsonValue]:
-    response = service.request(method="GET", path="/service")
+    response = service.request(method="GET", path="/service", target="deployed")
     return {"status_code": response.status_code, "result": response.json()}
 
 

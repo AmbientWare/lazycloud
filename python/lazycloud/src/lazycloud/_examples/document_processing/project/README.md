@@ -4,7 +4,7 @@ Run these commands from this downloaded project directory:
 
 ```bash
 uv sync
-uv run lazycloud login --token <token>
+uv run lazycloud login
 uv run python -m document_processing.configure
 uv run lazycloud deploy document_processing.app:app
 ```
