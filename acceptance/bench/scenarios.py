@@ -16,6 +16,7 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -236,6 +237,9 @@ def map_(n: str, label: str = "") -> None:
 
     fn = benchapp.echo
     count = int(n)
+    if label.startswith("cold"):
+        # New source makes a new release, so every container starts cold.
+        Path("nonce.py").write_text(f"NONCE = {time.time_ns()}\n")
     t0 = time.time()
 
     def run() -> tuple[float, float, list]:
@@ -489,6 +493,121 @@ def endpoint_burst(n: str = "1000", rounds: str = "3") -> None:
     record("endpoint-burst", {"concurrency": int(n), "rounds": results})
 
 
+CALLBACK_PORT = 29999
+
+
+def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "180") -> None:
+    """Requests to an endpoint with callback_url, and the callback each one owes.
+
+    A local receiver records when each request's callback arrives, keyed by
+    the task_id the platform sends, which is the request's X-Request-Id.
+    """
+    import http.server
+    import socketserver
+
+    url = _urls()["pingcb"]
+    arrived: dict[str, list[float]] = {}
+    lock = threading.Lock()
+
+    class Hook(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = self.rfile.read(int(self.headers.get("content-length") or 0))
+            now = time.time()
+            try:
+                task = str(json.loads(body).get("task_id", ""))
+            except ValueError:
+                task = ""
+            with lock:
+                arrived.setdefault(task, []).append(now)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_: object) -> None:
+            return
+
+    class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+        # Deliveries arrive in parallel; a short backlog drops SYNs and adds
+        # a one-second retransmit to the measured delay.
+        request_queue_size = 1024
+
+    server = Server(("0.0.0.0", CALLBACK_PORT), Hook)  # noqa: S104
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    ended: dict[str, float] = {}
+    began: dict[str, float] = {}
+    ends: list[float] = []
+    starts: list[float] = []
+    lat: list[float] = []
+    codes: dict[str, int] = {}
+
+    def arrivals() -> int:
+        with lock:
+            return sum(len(v) for v in arrived.values())
+
+    def settle(want: int, timeout: float) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline and arrivals() < want:
+            time.sleep(0.1)
+
+    async def main() -> None:
+        limits = httpx.Limits(max_connections=int(concurrency) + 10, max_keepalive_connections=int(concurrency) + 10)
+        gate = asyncio.Semaphore(int(concurrency))
+        async with httpx.AsyncClient(timeout=300, headers=HEADERS, limits=limits) as client:
+
+            async def one(i: int, timed: bool) -> None:
+                async with gate:
+                    t, wall_start = time.perf_counter(), time.time()
+                    try:
+                        r = await client.post(url, json={"n": i})
+                        code = str(r.status_code)
+                        request = r.headers.get("x-request-id", "")
+                    except httpx.HTTPError as exc:
+                        code, request = type(exc).__name__, ""
+                    if timed:
+                        lat.append(time.perf_counter() - t)
+                        codes[code] = codes.get(code, 0) + 1
+                        ends.append(time.time())
+                        starts.append(wall_start)
+                        if request:
+                            ended[request], began[request] = ends[-1], wall_start
+
+            # Warm up, and let the warm-up's callbacks land before timing.
+            await asyncio.gather(*(one(i, False) for i in range(20)))
+            await asyncio.to_thread(settle, 20, 60)
+            with lock:
+                arrived.clear()
+            start = time.perf_counter()
+            await asyncio.gather(*(one(i, True) for i in range(int(n))))
+            wall.append(time.perf_counter() - start)
+
+    wall: list[float] = []
+    asyncio.run(main())
+    settle(int(n), float(wait))
+    server.shutdown()
+    with lock:
+        if ended:
+            delays = [arrived[r][0] - t for r, t in ended.items() if r in arrived]
+            totals = [arrived[r][0] - t for r, t in began.items() if r in arrived]
+            missing = sum(1 for r in ended if r not in arrived)
+            duplicates = sum(len(v) - 1 for r, v in arrived.items() if r in ended)
+            matched = "request id"
+        else:
+            # Without a request id on the response, pair the n-th response to
+            # end with the n-th callback to arrive.
+            firsts = sorted(v[0] for v in arrived.values())
+            delays = [a - e for a, e in zip(firsts, sorted(ends), strict=False)]
+            totals = [a - b for a, b in zip(firsts, sorted(starts), strict=False)]
+            missing = max(0, len(ends) - len(firsts))
+            duplicates = sum(len(v) - 1 for v in arrived.values())
+            matched = "arrival order"
+    record("endpoint-callback", {
+        "requests": int(n), "concurrency": int(concurrency), "wall_s": round(wall[0], 2),
+        "latency": dist(lat), "codes": codes, "matched_by": matched,
+        "callback_delay": dist(delays), "callback_since_request": dist(totals), "callbacks_missing": missing, "callbacks_duplicated": duplicates,
+    })
+
+
 def idle(seconds: str = "120", label: str = "default") -> None:
     before = sample.snapshot(TARGET)
     time.sleep(float(seconds))
@@ -505,7 +624,7 @@ SCENARIOS = {
     "endpoint-warm": endpoint_warm,
     "endpoint-cold": endpoint_cold,
     "endpoint-sse": endpoint_sse,
-    "endpoint-burst": endpoint_burst,
+    "endpoint-burst": endpoint_burst, "endpoint-callback": endpoint_callback,
     "idle": idle,
 }
 

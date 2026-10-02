@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
-
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -33,6 +33,9 @@ const (
 	// requestBatch and requestFlush bound one write.
 	requestBatch = 500
 	requestFlush = time.Second
+	// callbackFlush is how soon a record owing a callback is written, so
+	// the callback leaves within about this much of the response.
+	callbackFlush = 50 * time.Millisecond
 	// requestRetention is how long records, and the output containers
 	// wrote, are kept.
 	requestRetention = 7 * 24 * time.Hour
@@ -50,9 +53,11 @@ const (
 type requestRecord struct {
 	id, workspace, app, workload, release uuid.UUID
 	// container is the last container offered the request, or nil.
-	container                   uuid.UUID
-	method, path                string
-	status                      int
+	container    uuid.UUID
+	method, path string
+	status       int
+	// callback is set when the release names a callback_url.
+	callback                    bool
 	started                     time.Time
 	duration                    time.Duration
 	requestBytes, responseBytes int64
@@ -113,7 +118,7 @@ func (e *Edge) serveRecorded(w http.ResponseWriter, r *http.Request, t target, s
 	}
 	rec := requestRecord{
 		id: id, workspace: uuid.UUID(t.workload.workspace), app: t.workload.appID, workload: t.workload.id, release: t.release.id,
-		method: r.Method, path: path, started: time.Now(),
+		method: r.Method, path: path, started: time.Now(), callback: t.release.spec.CallbackUrl != nil,
 	}
 	rw := &recordingWriter{ResponseWriter: w}
 	rw.Header().Set(RequestIDHeader, id.String())
@@ -155,6 +160,12 @@ func (e *Edge) writeRequests(ctx context.Context) {
 	prune := time.NewTicker(pruneInterval)
 	defer prune.Stop()
 	batch := make([]requestRecord, 0, requestBatch)
+	// soon fires callbackFlush after the first queued record that owes a
+	// callback; nil while none waits.
+	soonTimer := time.NewTimer(time.Hour)
+	soonTimer.Stop()
+	defer soonTimer.Stop()
+	var soon <-chan time.Time
 	var retryAt time.Time
 	write := func(ctx context.Context) {
 		if len(batch) == 0 || time.Now().Before(retryAt) {
@@ -200,7 +211,14 @@ func (e *Edge) writeRequests(ctx context.Context) {
 			batch = append(batch, rec)
 			if len(batch) >= requestBatch {
 				write(ctx)
+				soon = nil
+			} else if rec.callback && soon == nil {
+				soonTimer.Reset(callbackFlush)
+				soon = soonTimer.C
 			}
+		case <-soon:
+			soon = nil
+			write(ctx)
 		case <-flush.C:
 			write(ctx)
 		case <-prune.C:
@@ -265,12 +283,17 @@ func (e *Edge) insertRequests(ctx context.Context, batch []requestRecord) error 
 		if err := q.InsertRequests(ctx, p); err != nil {
 			return fmt.Errorf("insert request records: %w", err)
 		}
-		dropped, err := q.InsertRequestCallbacks(ctx, InsertRequestCallbacksParams{Ids: p.Ids, MaxPending: maxPendingCallbacks})
+		callbacks, err := q.InsertRequestCallbacks(ctx, InsertRequestCallbacksParams{Ids: p.Ids, MaxPending: maxPendingCallbacks})
 		if err != nil {
 			return fmt.Errorf("insert request callbacks: %w", err)
 		}
-		if dropped > 0 {
-			e.logger.WarnContext(ctx, "request callbacks dropped: their release has the most waiting", "callbacks", dropped, "max_pending", maxPendingCallbacks)
+		if callbacks.Dropped > 0 {
+			e.logger.WarnContext(ctx, "request callbacks dropped: their release has the most waiting", "callbacks", callbacks.Dropped, "max_pending", maxPendingCallbacks)
+		}
+		if callbacks.Queued > 0 {
+			if err := database.Notify(ctx, tx, database.ChannelCallback, ""); err != nil {
+				return err //nolint:wrapcheck // Notify names the channel
+			}
 		}
 		for _, egress := range egressOf(batch) {
 			if err := billing.RecordEgress(ctx, tx, egress); err != nil {

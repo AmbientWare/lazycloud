@@ -105,8 +105,15 @@ func recordCallbacks(ctx context.Context, q *Queries, event CallbackEvent, tasks
 			return fmt.Errorf("encode callback failure: %w", err)
 		}
 	}
-	if err := q.EnqueueCallbacks(ctx, EnqueueCallbacksParams{Event: string(event), TaskIds: tasks, Failure: encoded}); err != nil {
+	queued, err := q.EnqueueCallbacks(ctx, EnqueueCallbacksParams{Event: string(event), TaskIds: tasks, Failure: encoded})
+	if err != nil {
 		return fmt.Errorf("enqueue %s callbacks: %w", event, err)
+	}
+	if queued == 0 {
+		return nil
+	}
+	if err := q.WakeCallbackDelivery(ctx); err != nil {
+		return fmt.Errorf("wake callback delivery: %w", err)
 	}
 	return nil
 }

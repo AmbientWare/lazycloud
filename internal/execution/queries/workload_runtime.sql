@@ -15,7 +15,7 @@ where t.id = @task_id and t.status = 'running' and a.container_id = @container_i
 -- name: LockStartingContainer :one
 select state from containers where id = @id and host_id = @host_id for update;
 
--- name: EnqueueCallbacks :exec
+-- name: EnqueueCallbacks :execrows
 -- One outbox row per task whose release names a callback_url. A repeated
 -- transition for the same attempt adds nothing.
 insert into task_callbacks (task_id, workspace_id, url, event, attempt, max_attempts, failure)
@@ -24,3 +24,8 @@ from tasks t
 join releases r on r.id = t.release_id
 where t.id = any(@task_ids::uuid[]) and r.spec ->> 'callback_url' is not null
 on conflict (task_id, event, attempt) do nothing;
+
+-- name: WakeCallbackDelivery :exec
+-- Delivered when the transaction commits; the deliverer runs at once
+-- instead of on its next tick. The channel is database.ChannelCallback.
+select pg_notify('lc_callback', '');

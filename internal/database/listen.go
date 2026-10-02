@@ -34,6 +34,8 @@ const (
 	// ChannelContainerOp wakes waiters on a memory snapshot or a filesystem
 	// image when its host reports it; payload is its id.
 	ChannelContainerOp Channel = "lc_container_op"
+	// ChannelCallback wakes callback delivery when callbacks are queued.
+	ChannelCallback Channel = "lc_callback"
 )
 
 // Listener holds one connection that LISTENs on a fixed set of channels and

@@ -497,6 +497,55 @@ func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
 	}
 }
 
+// A request owing a callback is written and wakes delivery well inside the
+// batch flush, so its callback leaves about callbackFlush after the response
+// rather than up to a second later.
+func TestARequestOwingACallbackIsQueuedPromptly(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	if _, err := pool.Exec(t.Context(), `update releases set spec = '{"callback_url": "https://hooks.example.com/r"}' where id = $1`, rel); err != nil {
+		t.Fatal(err)
+	}
+	var app uuid.UUID
+	if err := pool.QueryRow(t.Context(), `select app_id from workloads where id = $1`, wl).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelCallback)
+	wake, cancelWake := listener.Subscribe(database.ChannelCallback, "")
+	defer cancelWake()
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+	wg.Go(func() { _ = listener.Run(ctx) })
+	// Run wakes subscribers once LISTEN is active.
+	select {
+	case <-wake:
+	case <-time.After(5 * time.Second):
+		t.Fatal("listener did not start")
+	}
+	wg.Go(func() { e.writeRequests(ctx) })
+
+	queued := time.Now()
+	e.queueRecord(requestRecord{
+		id: uuid.New(), workspace: ws, app: app, workload: wl, release: rel, method: "POST", path: "/", status: 200,
+		started: time.Now(), callback: true,
+	})
+	select {
+	case <-wake:
+	case <-time.After(requestFlush / 2):
+		t.Fatalf("no callback wake within %s of the response", requestFlush/2)
+	}
+	var pending int
+	if err := pool.QueryRow(t.Context(), `select count(*) from task_callbacks where release_id = $1 and state = 'pending'`, rel).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 {
+		t.Fatalf("%d pending callbacks after %s; want 1", pending, time.Since(queued))
+	}
+}
+
 // Past maxPendingCallbacks waiting callbacks of one release, the edge
 // records further request callbacks as failed with the reason instead of
 // queueing them, so one endpoint's flood cannot fill the shared queue.

@@ -91,6 +91,14 @@ case "${1:-}" in
   scheduler2)
     bin/scheduler >"$state/logs/scheduler2.log" 2>&1 &
     echo $! >"$state/scheduler2.pid" ;;
-  down) stop; $compose down -v ;;
+  down)
+    stop
+    # A stopped agent leaves its workload containers running; remove this
+    # stack's host's containers with the stack.
+    if [ -f "$state/agent/identity.json" ]; then
+      host=$(sed -n 's/.*"host_id": *"\([^"]*\)".*/\1/p' "$state/agent/identity.json")
+      [ -z "$host" ] || docker ps -aq --filter "label=lazycloud.host-id=$host" | xargs -r docker rm -f >/dev/null
+    fi
+    $compose down -v ;;
   *) echo "usage: $0 start|stop|agent-stop|agent-start|scheduler2|down" >&2; exit 2 ;;
 esac

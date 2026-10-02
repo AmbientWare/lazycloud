@@ -12,12 +12,13 @@ case "$target" in
     venv=${LCBENCH_REF:-/tmp/lc-ref}/.venv
     export LAZYCLOUD_ENDPOINT=http://lazycloud.localhost:38000
     export LAZYCLOUD_WORKSPACE=${LCBENCH_WORKSPACE:-tenant-customer} LCBENCH_MACHINE=lcbench-agent
+    export LCBENCH_CALLBACK_URL=http://host.docker.internal:29999/hook
     LAZYCLOUD_TOKEN=$(cat "${LCBENCH_TOKEN_FILE:-$state/ref-token}")
     ;;
   new)
     venv=$root/.venv
     export LAZYCLOUD_ENDPOINT=http://127.0.0.1:28080
-    export LAZYCLOUD_WORKSPACE=${LCBENCH_WORKSPACE:-dev}
+    export LAZYCLOUD_WORKSPACE=${LCBENCH_WORKSPACE:-dev} LCBENCH_CALLBACK_URL=http://127.0.0.1:29999/hook
     LAZYCLOUD_TOKEN=$(cat "${LCBENCH_TOKEN_FILE:-$state/new/token}")
     ;;
   *) echo "usage: $0 ref|new <command...>" >&2; exit 2 ;;

@@ -191,6 +191,78 @@ scenario except idle rows read, which is level within noise
 (`results/report-after.md`). Assigned to ready ranged 644 to 730 ms across
 three runs against the reference's single 722 ms measurement.
 
+## Recheck after the parity PRs (branch perf-recheck)
+
+The full suite ran again on go-rewrite 11ceab3fd, which includes #443 to
+#448, on the same host and stack as before. A new scenario sends requests to
+an endpoint whose release has a `callback_url` and times each callback at a
+local receiver. Raw files are `results/recheck-*.jsonl`.
+
+| | post-#442 | 11ceab3fd | perf-recheck | Reference |
+| --- | --- | --- | --- | --- |
+| Cold `.remote()` p50 / p95, ms | 866 / 1,054 | 869 / 1,139 | 845 / 886 | 1,318 / 1,425 |
+| Assigned to ready, median ms | 677 | 717 | 659 | 722 |
+| Warm `.remote()` p50 / p95, ms | 12.9 / 16.8 | 15.5 / 33.7 | 12.5 / 16.5 | 118 / 141 |
+| map 2,000: total / server span, s | 4.1 / 1.5 | 4.3 / 1.5 | 5.3 / 2.4 | 101 / 52 |
+| map 10,000: total / server span, s | 27.0 / 14.6 | 22.5 / 9.6 | 26.5 / 7.8 | client hung / 272 |
+| Endpoint warm p50 / p95, ms | 1.3 / 1.7 | 1.2 / 1.5 | 1.2 / 1.5 | 129 / 154 |
+| Endpoint cold p50 / p95, ms | 780 / 791 | 768 / 880 | 758 / 782 | 903 / 993 |
+| SSE, 20 at once, total p50, ms (ideal 1000) | 1,031 | 1,030 | 1,031 | 1,506 |
+| 1000 concurrent, third round wall, s | 2.6 | 1.8 | 1.9 | 25.1 |
+| Idle PG statements/s, 1 / 2 schedulers | 8.6 / 8.7 | 9.0 / 8.7 | 8.9 / 8.7 | 108 / 108 |
+| Idle with 100k finished tasks, PG statements/s | 8.6 | 9.1 | 9.0 | 107 |
+| map 2,000 over 100k finished tasks, server span, s | 3.3 | 3.7 | 3.2 | 54 |
+
+Warm `.remote()`, readiness and the 2,000-input map moved both ways between
+runs. To separate code from host load, the post-#442 tree (bc22f4d86) and
+11ceab3fd ran back to back on fresh stacks with the same calls
+(`results/recheck-ab-*.jsonl`). The two trees matched within noise:
+- warm p50 15.4 to 16.5 ms against 14.1 to 16.4 ms;
+- assigned to ready median 732 against 744 ms, with 694 to 818 and 654 to 996 across the ten runs each;
+- server-side queue and execution 3.35 and 3.98 ms against 2.90 and 3.49 ms.
+
+Repeated warm 2,000-input maps took 1.43 to 1.54 s server span, and maps on
+cold containers with nothing else running took 3.1 s. Neither the code nor
+the post-#442 numbers changed; the host did.
+
+Idle statements are about 0.3/s higher, from upkeep the parity PRs added:
+callback purge on its own minute loop and the metering session-lock check.
+They stay flat with replicas. Idle rows read
+moved between 160 and 247/s against the reference's 200 to 221/s. The
+excess at small tables is the planner scanning a few-dozen-row table whole.
+At 214,000 metric samples the rollup reads only its window through
+`container_metric_samples_age`.
+
+**Callbacks were slow to leave.** A request callback waited for the edge's
+one-second record flush, then for the deliverer's one-second tick. The edge
+now writes a record that owes a callback within 50 ms and wakes delivery
+with `lc_callback` (`database.ChannelCallback`) in the same transaction.
+Task callbacks wake it too.
+
+| Endpoint with callback_url | 11ceab3fd | perf-recheck | Reference |
+| --- | --- | --- | --- |
+| 200 requests, 10 at once: request p50 / p95, ms | 10 / 32 | 14 / 37 | 386 / 538 |
+| Callback after the response, p50 / p95, ms | 866 / 949 | 58 / 95 | -51 / -47 |
+| Callback after the request started, p50 / p95, ms | 879 / 964 | 75 / 110 | 334 / 427 |
+| 1000 requests, 100 at once: request p50 / p95, ms | 152 / 611 | 164 / 681 | 2,762 / 4,185 |
+| Callback after the response, p50 / p95, ms | 1,319 / 1,886 | 26 / 50 | -54 / -19 |
+| Callback after the request started, p50 / p95, ms | 1,560 / 2,153 | 190 / 700 | 2,291 / 2,823 |
+
+None of the three missed or duplicated a callback. The reference calls
+back inline before it answers, so its callbacks precede the response and its
+requests pay for delivery. The rewrite now beats it from request start to
+callback at both loads. Reference responses carry no request id, so its
+callbacks are paired with responses in arrival order. Measuring needed two
+changes to the reference copy, like the label change above: it allows a
+private callback target, which it otherwise refuses. The receiver's listen
+backlog went to 1,024, because the default of five dropped connections and
+added a one-second retransmit to every system's numbers.
+
+Guards: `TestARequestOwingACallbackIsQueuedPromptly` (internal/edge, under
+1 s) fails with the one-second flush. `TestQueuedCallbacksWakeAnIdleScheduler`
+(cmd/scheduler, 3 s) runs a real idle scheduler. It fails if a queued
+callback waits for the delivery loop's safety tick; delivery took 15 ms.
+
 ## Reference defects found
 
 - After an agent stop and start with a container stopped mid-cleanup, the
