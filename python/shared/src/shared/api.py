@@ -271,11 +271,24 @@ class Backoff(str, Enum):
     exponential = "exponential"
 
 
+class RetryOnEnum(str, Enum):
+    user_error = "user_error"
+    timeout = "timeout"
+    lost = "lost"
+
+
 class RetryPolicy(APIModel):
     max_attempts: Annotated[int, Field(description="Attempts including the first.", ge=1, le=100)]
     delay_seconds: Annotated[float, Field(ge=0.0, le=3600.0)] = 0
     backoff: Backoff = Backoff.fixed
     max_delay_seconds: Annotated[float | None, Field(ge=0.0, le=86400.0)] = None
+    retry_on: Annotated[
+        list[RetryOnEnum] | None,
+        Field(
+            description="The failures another attempt follows; absent means all three.",
+            min_length=1,
+        ),
+    ] = None
 
 
 class Autoscaler(APIModel):
@@ -1153,6 +1166,8 @@ class ChangeTopic(str, Enum):
     tasks = "tasks"
     containers = "containers"
     storage_secrets = "storage.secrets"
+    storage_volumes = "storage.volumes"
+    usage = "usage"
 
 
 class ChangeKind(str, Enum):

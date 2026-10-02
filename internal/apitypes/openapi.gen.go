@@ -466,7 +466,9 @@ const (
 	ChangeTopicContainers     ChangeTopic = "containers"
 	ChangeTopicDeployments    ChangeTopic = "deployments"
 	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
+	ChangeTopicStorageVolumes ChangeTopic = "storage.volumes"
 	ChangeTopicTasks          ChangeTopic = "tasks"
+	ChangeTopicUsage          ChangeTopic = "usage"
 )
 
 // Valid indicates whether the value is a known member of the ChangeTopic enum.
@@ -480,7 +482,11 @@ func (e ChangeTopic) Valid() bool {
 		return true
 	case ChangeTopicStorageSecrets:
 		return true
+	case ChangeTopicStorageVolumes:
+		return true
 	case ChangeTopicTasks:
+		return true
+	case ChangeTopicUsage:
 		return true
 	default:
 		return false
@@ -1795,6 +1801,27 @@ func (e RetryPolicyBackoff) Valid() bool {
 	case Exponential:
 		return true
 	case Fixed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryPolicyRetryOn.
+const (
+	RetryPolicyRetryOnLost      RetryPolicyRetryOn = "lost"
+	RetryPolicyRetryOnTimeout   RetryPolicyRetryOn = "timeout"
+	RetryPolicyRetryOnUserError RetryPolicyRetryOn = "user_error"
+)
+
+// Valid indicates whether the value is a known member of the RetryPolicyRetryOn enum.
+func (e RetryPolicyRetryOn) Valid() bool {
+	switch e {
+	case RetryPolicyRetryOnLost:
+		return true
+	case RetryPolicyRetryOnTimeout:
+		return true
+	case RetryPolicyRetryOnUserError:
 		return true
 	default:
 		return false
@@ -4527,10 +4554,16 @@ type RetryPolicy struct {
 	// MaxAttempts Attempts including the first.
 	MaxAttempts     int      `json:"max_attempts"`
 	MaxDelaySeconds *float32 `json:"max_delay_seconds,omitempty"`
+
+	// RetryOn The failures another attempt follows; absent means all three.
+	RetryOn *[]RetryPolicyRetryOn `json:"retry_on,omitempty"`
 }
 
 // RetryPolicyBackoff defines model for RetryPolicy.Backoff.
 type RetryPolicyBackoff string
+
+// RetryPolicyRetryOn defines model for RetryPolicy.RetryOn.
+type RetryPolicyRetryOn string
 
 // Sandbox defines model for Sandbox.
 type Sandbox struct {
@@ -5597,8 +5630,11 @@ type ListCostsParams struct {
 	WorkspaceId *openapi_types.UUID `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 
 	// AppId Only this app's usage.
-	AppId    *openapi_types.UUID `form:"app_id,omitempty" json:"app_id,omitempty"`
-	Category *UsageCostCategory  `form:"category,omitempty" json:"category,omitempty"`
+	AppId *openapi_types.UUID `form:"app_id,omitempty" json:"app_id,omitempty"`
+
+	// WorkloadId Only this workload's usage, such as its runs by task.
+	WorkloadId *openapi_types.UUID `form:"workload_id,omitempty" json:"workload_id,omitempty"`
+	Category   *UsageCostCategory  `form:"category,omitempty" json:"category,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -6027,8 +6063,11 @@ type ListHttpRequestLogsParams struct {
 
 // ListSandboxesParams defines parameters for ListSandboxes.
 type ListSandboxesParams struct {
-	App   *AppName `form:"app,omitempty" json:"app,omitempty"`
-	Limit *Limit   `form:"limit,omitempty" json:"limit,omitempty"`
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// Search Part of the sandbox's name, its app's name or its container id.
+	Search *string `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`

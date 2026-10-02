@@ -214,12 +214,29 @@ At a 15-second cadence a 10k-container fleet costs one 0.24 s read pass, a
 write pass each quarter-hour and about 40,000 ledger rows per hour. Submit
 adds one live-container count and one account read to its transaction.
 
+## Measured use
+
+Each closed metering period of a container bills CPU and memory at the
+greater of its reservation and what observability's metrics measured in
+it: CPU core-seconds from the usage counters, memory byte-seconds from the
+resident set, read from the samples while they are kept (an hour) and from
+the folded minutes after, where a minute counts at its peak. The ledger row
+records the shape it billed. Container time and GPUs bill as reserved.
+
+A period closes only once observability's rollup watermark passes its end,
+because ingest refuses samples older than the watermark; until then it is
+accrued at its reservation, including a stopped container's last period,
+which the stopped look-back keeps reading until the watermark passes it.
+`TestMeteringBillsTheGreaterOfReservationAndMeasuredUse`,
+`TestMeteringWaitsForMeasuredUseBeforeClosingAPeriod`.
+
+Grouping costs by task splits each container ledger entry among the
+attempts that ran in it by the time they overlapped it, at read time;
+idle container time stays on the workload's row and concurrent attempts
+share by overlap. `TestCostsByTaskSplitContainerTimeAmongItsRuns`.
+
 ## Gaps
 
-- CPU and memory bill at the reservation only. "The greater of reservation
-  and measured use" can now read observability's container metrics, but
-  billing does not do that yet.
-- Grouping by task equals grouping by workload: no container runs one task.
 - The cost of storage scans at scale is not measured; only the container
   pass is.
 - Stripe test mode does not cover these:

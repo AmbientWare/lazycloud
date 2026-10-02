@@ -95,6 +95,34 @@ func TestRetryableFailureRequeuesUntilAttemptsRunOut(t *testing.T) {
 	}
 }
 
+// retry_on narrows which failures retry: here timeouts do, user errors
+// fail the task at once.
+func TestRetryOnRetriesOnlyTheNamedFailures(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	spec := `{"retry_policy": {"max_attempts": 3, "retry_on": ["timeout"]}}`
+
+	timedOut := runningAttempt(t, pool, spec, 3)
+	if err := finish(t.Context(), e, &timedOut.host, AttemptOutcome{
+		Attempt: timedOut.attempt, State: AttemptTimedOut, Failure: &Failure{Kind: FailureTimeout, Message: "ran past 60s"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := taskState(t, pool, timedOut.task); status != string(TaskQueued) {
+		t.Fatalf("timeout: status %s, want queued for another attempt", status)
+	}
+
+	failed := runningAttempt(t, pool, spec, 3)
+	if err := finish(t.Context(), e, &failed.host, AttemptOutcome{
+		Attempt: failed.attempt, State: AttemptFailed, Failure: &Failure{Kind: FailureUserError, Type: "ValueError", Message: "bad"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status, kind := taskState(t, pool, failed.task); status != string(TaskFailed) || kind == nil || *kind != string(FailureUserError) {
+		t.Fatalf("user error: status %s, kind %v; want failed with attempts left", status, kind)
+	}
+}
+
 func TestLoadErrorIsTerminal(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)

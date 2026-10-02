@@ -320,7 +320,10 @@ func (e *Edge) readID(ctx context.Context, id uuid.UUID) (target, error) {
 		// A preview runs while its lease lives, whatever its workload's state.
 		w.accepting = row.PreviewLive
 	case r.workingTree:
-		w.accepting = row.AppState == "active"
+		// The caller's own code runs while its app is paused or its
+		// workload stopped, as execution admits it; only deployed versions
+		// stop with them.
+		w.accepting = row.AppState != "deleted" && row.DesiredState != "deleted"
 	}
 	return target{workload: w, release: r, container: container}.withPolicy(row.ActiveAuthorized), nil
 }

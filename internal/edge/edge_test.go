@@ -430,3 +430,36 @@ func (p *countingProvider) CreateHostname(context.Context, string) (ProviderHost
 	p.created++
 	return ProviderHostname{}, errors.New("not reached in this test")
 }
+
+// A paused app's release hosts take working-tree calls, as the API's
+// submit does, and refuse its deployed versions.
+func TestReleaseHostsOfAPausedAppTakeOnlyWorkingTreeCalls(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	var deployed, workingTree uuid.UUID
+	err := pool.QueryRow(ctx, `
+with ws as (insert into workspaces (name) values ('ws') returning id),
+     a as (insert into apps (workspace_id, name, state) select id, 'reports', 'paused' from ws returning id),
+     w as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'summarize', 'active' from a returning id),
+     d as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+           select id, 1, '{"kind": "function", "name": "summarize"}', sha256('v1'), sha256('src') from w returning id),
+     r as (insert into releases (workload_id, spec, spec_digest, source_sha256)
+           select id, '{"kind": "function", "name": "summarize"}', sha256('run'), sha256('src') from w returning id)
+select d.id, r.id from d, r`).Scan(&deployed, &workingTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "update workloads set active_release_id = $1", deployed); err != nil {
+		t.Fatal(err)
+	}
+	dbtest.OwnWorkspaces(t, pool)
+	run, err := e.readID(ctx, workingTree)
+	if err != nil || !run.workload.accepting {
+		t.Fatalf("working-tree host of a paused app %+v %v, want accepting", run.workload, err)
+	}
+	version, err := e.readID(ctx, deployed)
+	if err != nil || version.workload.accepting {
+		t.Fatalf("deployed version host of a paused app %+v %v, want refusing", version.workload, err)
+	}
+}

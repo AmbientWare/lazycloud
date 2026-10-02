@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -66,5 +67,42 @@ func TestMeteringReadsLiveAndRecentContainersOnly(t *testing.T) {
 		if strings.Contains(plan, "Seq Scan on containers") || strings.Contains(plan, "Seq Scan on billing_balances") {
 			t.Errorf("%s scans history:\n%s", c.name, plan)
 		}
+	}
+}
+
+// TestCostsByTaskReadOnlyTheirContainersAttempts keeps the usage page's run
+// breakdown proportional to the window's ledger: each entry reads its own
+// container's attempts, however much attempt history the account keeps.
+func TestCostsByTaskReadOnlyTheirContainersAttempts(t *testing.T) {
+	f := newFixture(t)
+	owner := f.user()
+	ws := f.workspace(owner)
+	rel := f.release(ws)
+	host := f.host(time.Now())
+	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	stopped := base.Add(15 * time.Minute)
+	c := f.container(containerSpec{workspace: ws, host: host, release: &rel.id, ready: base, stopped: &stopped, cpuMillis: 1000, memoryBytes: 1 << 30})
+	// Month-old history: 20,000 finished tasks with attempts in other containers.
+	f.exec(`with old as (
+    insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, stopped_at, stop_reason)
+    select $1, $2, 'stopped', $3, 1, 1000, 1 << 30, now() - interval '30 days', now() - interval '30 days', now() - interval '29 days', 'stopped'
+    from generate_series(1, 200) returning id
+), t as (
+    insert into tasks (workspace_id, workload_id, release_id, status, max_attempts, finished_at)
+    select $1, $4, $2, 'succeeded', 1, now() - interval '29 days' from generate_series(1, 20000) returning id
+), numbered as (select id, row_number() over () as n from t), cs as (select id, row_number() over () as n from old)
+insert into attempts (task_id, number, container_id, state, started_at, deadline_at, finished_at)
+select numbered.id, 1, cs.id, 'succeeded', now() - interval '30 days', now() - interval '29 days', now() - interval '29 days'
+from numbered join cs on cs.n = numbered.n % 200 + 1`, ws, rel.id, host, rel.workload)
+	f.exec(`with t as (insert into tasks (workspace_id, workload_id, release_id, status, max_attempts, finished_at)
+             values ($1, $2, $3, 'succeeded', 1, $5) returning id)
+insert into attempts (task_id, number, container_id, state, started_at, deadline_at, finished_at)
+select t.id, 1, $4, 'succeeded', $6, $5, $5 from t`, ws, rel.workload, rel.id, c, base.Add(10*time.Minute), base)
+	f.meter()
+
+	plan := f.explain(costRows, false, false, int64(0), uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, "", uuid.Nil, int32(51),
+		owner, base, base.Add(time.Hour), nil, &rel.app, &rel.workload, "", true)
+	if strings.Contains(plan, "Seq Scan on attempts") || !strings.Contains(plan, "Index Cond: ((container_id = ") {
+		t.Errorf("costs by task scan attempt history:\n%s", plan)
 	}
 }

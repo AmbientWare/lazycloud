@@ -59,3 +59,21 @@ export function taskSearchQueryOptions(workspaceName: string, term: string) {
     },
   });
 }
+
+/** Sandboxes whose name, app name or container id contains the term. */
+export function sandboxSearchQueryOptions(workspaceName: string, term: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.search(workspaceName, "sandboxes", term),
+    queryFn: async (): Promise<Schemas["Sandbox"][]> => {
+      const page = await ok(
+        api.GET("/v1/workspaces/{workspace}/sandboxes", {
+          params: {
+            path: { workspace: workspaceName },
+            query: { limit: RESULT_LIMIT, search: term || undefined },
+          },
+        }),
+      );
+      return page.sandboxes;
+    },
+  });
+}

@@ -95,15 +95,56 @@ func (q *Queries) CostBuckets(ctx context.Context, arg CostBucketsParams) ([]Cos
 
 const costRows = `-- name: CostRows :many
 
-select g.workspace_id, g.app_key::uuid as app_key, g.workload_key::uuid as workload_key, g.category::text as category, g.disk_key::uuid as disk_key,
-       sum(g.cost_nanos)::bigint as cost_nanos,
-       sum(g.container_nanos)::bigint as container_nanos,
-       sum(g.cpu_nanos)::bigint as cpu_nanos,
-       sum(g.memory_nanos)::bigint as memory_nanos,
-       sum(g.gpu_nanos)::bigint as gpu_nanos,
-       sum(g.volume_nanos)::bigint as volume_nanos,
-       sum(g.disk_nanos)::bigint as disk_nanos,
-       sum(g.egress_nanos)::bigint as egress_nanos,
+with entries as (
+    select e.id, e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id, e.app_id, e.workload_id, e.category, e.billing_owner, e.rate_class, e.gpu_type, e.gpu_count, e.cpu_millis, e.memory_bytes, e.pricing_version, e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos, e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos, e.cost_nanos
+    from ledger_entries e
+    where e.user_id = $11 and e.started_at >= $12 and e.started_at < $13
+      and ($14::uuid is null or e.workspace_id = $14::uuid)
+      and ($15::uuid is null or e.app_id = $15::uuid)
+      and ($16::uuid is null or e.workload_id = $16::uuid)
+      and ($17::text = ''
+           or ($17::text = 'image-build' and e.category = 'image-build')
+           or ($17::text = 'disk' and e.category = 'disk')
+           or ($17::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
+), attempt_spans as (
+    -- Each entry reads its own container's attempts: finished ones through
+    -- (container_id, finished_at) from the entry's start, running ones
+    -- through the running partial index, never attempt history at large.
+    select e.id, a.task_id,
+           extract(epoch from least(coalesce(a.finished_at, e.ended_at), e.ended_at) - greatest(a.started_at, e.started_at))::float8 as seconds
+    from entries e
+    cross join lateral (
+        select f.task_id, f.started_at, f.finished_at from attempts f
+        where f.container_id = e.source_id and f.finished_at > e.started_at and f.started_at < e.ended_at
+        union all
+        select r.task_id, r.started_at, r.finished_at from attempts r
+        where r.container_id = e.source_id and r.state = 'running' and r.finished_at is null and r.started_at < e.ended_at
+    ) a
+    where $18::bool and e.source_kind = 'container' and e.category is null
+), runs as (
+    select o.id, o.task_id,
+           sum(o.seconds) / greatest(max(extract(epoch from e.ended_at - e.started_at))::float8, max(t.seconds)) as share
+    from attempt_spans o
+    join entries e on e.id = o.id
+    join (select id, sum(seconds) as seconds from attempt_spans group by id) t on t.id = o.id
+    group by o.id, o.task_id
+), parts as (
+    select r.id, r.task_id, r.share from runs r
+    union all
+    select e.id, null::uuid, 1 - coalesce(r.share, 0)
+    from entries e
+    left join (select id, sum(share) as share from runs group by id) r on r.id = e.id
+)
+select g.workspace_id, g.app_key::uuid as app_key, g.workload_key::uuid as workload_key, g.task_key::uuid as task_key,
+       g.category::text as category, g.disk_key::uuid as disk_key,
+       round(sum(g.cost_nanos))::bigint as cost_nanos,
+       round(sum(g.container_nanos))::bigint as container_nanos,
+       round(sum(g.cpu_nanos))::bigint as cpu_nanos,
+       round(sum(g.memory_nanos))::bigint as memory_nanos,
+       round(sum(g.gpu_nanos))::bigint as gpu_nanos,
+       round(sum(g.volume_nanos))::bigint as volume_nanos,
+       round(sum(g.disk_nanos))::bigint as disk_nanos,
+       round(sum(g.egress_nanos))::bigint as egress_nanos,
        sum(g.egress_gib)::float8 as egress_gib,
        sum(g.seconds)::float8 as seconds,
        sum(g.core_seconds)::float8 as core_seconds,
@@ -116,64 +157,65 @@ from (
            coalesce(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid) as app_key,
            (case when $1::bool then coalesce(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid)
                  else '00000000-0000-0000-0000-000000000000'::uuid end) as workload_key,
+           coalesce(p.task_id, '00000000-0000-0000-0000-000000000000'::uuid) as task_key,
            (case when e.category in ('image-build', 'disk') then e.category
                  when e.category = 'artifacts' and $1::bool then 'artifacts'
                  else '' end)::text as category,
            (case when e.category = 'disk' then e.source_id
                  else '00000000-0000-0000-0000-000000000000'::uuid end) as disk_key,
-           e.cost_nanos, e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
-           (case when e.source_kind in ('volume', 'artifacts') then e.storage_nanos else 0 end) as volume_nanos,
-           (case when e.source_kind = 'disk' then e.storage_nanos + e.attached_nanos else 0 end) as disk_nanos,
-           e.egress_nanos, e.egress_bytes / 1073741824.0 as egress_gib,
-           (case when e.source_kind = 'container' then extract(epoch from e.ended_at - e.started_at) else 0 end) as seconds,
-           e.cpu_millis / 1000.0 * extract(epoch from e.ended_at - e.started_at) as core_seconds,
-           e.memory_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) as gib_seconds,
-           e.gpu_count * extract(epoch from e.ended_at - e.started_at) as card_seconds,
+           e.cost_nanos * p.share as cost_nanos, e.container_nanos * p.share as container_nanos,
+           e.cpu_nanos * p.share as cpu_nanos, e.memory_nanos * p.share as memory_nanos, e.gpu_nanos * p.share as gpu_nanos,
+           (case when e.source_kind in ('volume', 'artifacts') then e.storage_nanos else 0 end) * p.share as volume_nanos,
+           (case when e.source_kind = 'disk' then e.storage_nanos + e.attached_nanos else 0 end) * p.share as disk_nanos,
+           e.egress_nanos * p.share as egress_nanos, e.egress_bytes / 1073741824.0 * p.share as egress_gib,
+           (case when e.source_kind = 'container' then extract(epoch from e.ended_at - e.started_at) else 0 end) * p.share as seconds,
+           e.cpu_millis / 1000.0 * extract(epoch from e.ended_at - e.started_at) * p.share as core_seconds,
+           e.memory_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) * p.share as gib_seconds,
+           e.gpu_count * extract(epoch from e.ended_at - e.started_at) * p.share as card_seconds,
            (case when e.source_kind in ('volume', 'artifacts')
-                 then e.stored_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) else 0 end) as volume_gib_seconds,
+                 then e.stored_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) else 0 end) * p.share as volume_gib_seconds,
            (case when e.source_kind = 'disk'
-                 then e.stored_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) else 0 end) as disk_gib_seconds
-    from ledger_entries e
-    where e.user_id = $2 and e.started_at >= $3 and e.started_at < $4
-      and ($5::uuid is null or e.workspace_id = $5::uuid)
-      and ($6::uuid is null or e.app_id = $6::uuid)
-      and ($7::text = ''
-           or ($7::text = 'image-build' and e.category = 'image-build')
-           or ($7::text = 'disk' and e.category = 'disk')
-           or ($7::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
+                 then e.stored_bytes / 1073741824.0 * extract(epoch from e.ended_at - e.started_at) else 0 end) * p.share as disk_gib_seconds
+    from parts p
+    join entries e on e.id = p.id
+    where p.share > 1e-9
 ) g
-group by 1, 2, 3, 4, 5
-having not $8::bool
-    or sum(g.cost_nanos) < $9::bigint
-    or (sum(g.cost_nanos) = $9::bigint
-        and (g.workspace_id, g.app_key, g.workload_key, g.category, g.disk_key)
-            > ($10::uuid, $11::uuid, $12::uuid, $13::text, $14::uuid))
-order by 6 desc, 1, 2, 3, 4, 5
-limit $15
+group by 1, 2, 3, 4, 5, 6
+having not $2::bool
+    or round(sum(g.cost_nanos)) < $3::bigint
+    or (round(sum(g.cost_nanos)) = $3::bigint
+        and (g.workspace_id, g.app_key, g.workload_key, g.task_key, g.category, g.disk_key)
+            > ($4::uuid, $5::uuid, $6::uuid, $7::uuid, $8::text, $9::uuid))
+order by 7 desc, 1, 2, 3, 4, 5, 6
+limit $10
 `
 
 type CostRowsParams struct {
 	ByWorkload     bool
-	UserID         uuid.UUID
-	StartAt        time.Time
-	EndAt          time.Time
-	WorkspaceID    *uuid.UUID
-	AppID          *uuid.UUID
-	Category       string
 	HasCursor      bool
 	AfterCost      int64
 	AfterWorkspace uuid.UUID
 	AfterApp       uuid.UUID
 	AfterWorkload  uuid.UUID
+	AfterTask      uuid.UUID
 	AfterCategory  string
 	AfterDisk      uuid.UUID
 	RowLimit       int32
+	UserID         uuid.UUID
+	StartAt        time.Time
+	EndAt          time.Time
+	WorkspaceID    *uuid.UUID
+	AppID          *uuid.UUID
+	WorkloadID     *uuid.UUID
+	Category       string
+	ByTask         bool
 }
 
 type CostRowsRow struct {
 	WorkspaceID      uuid.UUID
 	AppKey           uuid.UUID
 	WorkloadKey      uuid.UUID
+	TaskKey          uuid.UUID
 	Category         string
 	DiskKey          uuid.UUID
 	CostNanos        int64
@@ -198,24 +240,30 @@ type CostRowsRow struct {
 // One page of cost groups, most expensive first, then by key. Groups are
 // the workspace, app and category, and by_workload splits app rows by
 // workload and an app's artifact storage into its own row. Each disk is one
-// group. Components sum in the same pass.
+// group. by_task also splits a container's cost among the attempts that ran
+// in it, each by the time it overlapped an entry; time no attempt used
+// (starting, keeping warm) stays with the workload, and attempts running at
+// once share by their overlap. Components sum in the same pass.
 func (q *Queries) CostRows(ctx context.Context, arg CostRowsParams) ([]CostRowsRow, error) {
 	rows, err := q.db.Query(ctx, costRows,
 		arg.ByWorkload,
-		arg.UserID,
-		arg.StartAt,
-		arg.EndAt,
-		arg.WorkspaceID,
-		arg.AppID,
-		arg.Category,
 		arg.HasCursor,
 		arg.AfterCost,
 		arg.AfterWorkspace,
 		arg.AfterApp,
 		arg.AfterWorkload,
+		arg.AfterTask,
 		arg.AfterCategory,
 		arg.AfterDisk,
 		arg.RowLimit,
+		arg.UserID,
+		arg.StartAt,
+		arg.EndAt,
+		arg.WorkspaceID,
+		arg.AppID,
+		arg.WorkloadID,
+		arg.Category,
+		arg.ByTask,
 	)
 	if err != nil {
 		return nil, err
@@ -228,6 +276,7 @@ func (q *Queries) CostRows(ctx context.Context, arg CostRowsParams) ([]CostRowsR
 			&i.WorkspaceID,
 			&i.AppKey,
 			&i.WorkloadKey,
+			&i.TaskKey,
 			&i.Category,
 			&i.DiskKey,
 			&i.CostNanos,
@@ -310,10 +359,11 @@ from ledger_entries e
 where e.user_id = $1 and e.started_at >= $2 and e.started_at < $3
   and ($4::uuid is null or e.workspace_id = $4::uuid)
   and ($5::uuid is null or e.app_id = $5::uuid)
-  and ($6::text = ''
-       or ($6::text = 'image-build' and e.category = 'image-build')
-       or ($6::text = 'disk' and e.category = 'disk')
-       or ($6::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
+  and ($6::uuid is null or e.workload_id = $6::uuid)
+  and ($7::text = ''
+       or ($7::text = 'image-build' and e.category = 'image-build')
+       or ($7::text = 'disk' and e.category = 'disk')
+       or ($7::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
 `
 
 type WindowCostParams struct {
@@ -322,6 +372,7 @@ type WindowCostParams struct {
 	EndAt       time.Time
 	WorkspaceID *uuid.UUID
 	AppID       *uuid.UUID
+	WorkloadID  *uuid.UUID
 	Category    string
 }
 
@@ -332,6 +383,7 @@ func (q *Queries) WindowCost(ctx context.Context, arg WindowCostParams) (int64, 
 		arg.EndAt,
 		arg.WorkspaceID,
 		arg.AppID,
+		arg.WorkloadID,
 		arg.Category,
 	)
 	var column_1 int64
