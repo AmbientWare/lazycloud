@@ -90,8 +90,8 @@ Scope notes:
   Delivered: references.py identical to the reference; test_sdk_handler_references.py, `test_file_deploy_requires_a_selection_when_several_apps_are_present`.
 - [x] `lazycloud app list [--active|--inactive|--all]`, `app show APP`, `app pause APP`, `app resume APP`, `app delete APP`, by name or ID (CLI/apps.py:79-195)
   Intentional: cli/apps.py; `test_app_commands_accept_a_name_and_report_each_outcome`, `TestAppPauseResumeAndDeleteFreeTheName`. Columns: tasks/control.md.
-- [ ] `lazycloud app export APP [-o/--output DIR] [--openapi res=file.json]... [--openapi-path res=/path]...`: typed package in `lazycloud_clients/<app>` (CLI/apps.py:24, SDK/client_codegen.py)
-  Gap: functions export (test_app_export.py), but endpoints and ASGI apps are never exported and every `--openapi`/`--openapi-path` is refused, while docs/concepts/apps.mdx promises both. About 1-1.5 days.
+- [x] `lazycloud app export APP [-o/--output DIR] [--openapi res=file.json]... [--openapi-path res=/path]...`: typed package in `lazycloud_clients/<app>` (CLI/apps.py:24, SDK/client_codegen.py)
+  Intentional: client_codegen.py, client_handles.py; `test_export_gives_endpoints_request_and_asgi_routes_typed_methods`, `test_export_reads_a_given_openapi_file_and_fails_a_missing_explicit_path`. `--json` release ids: tasks/control.md.
 - [x] `lazycloud deployment list [--app] [--limit 100]` (CLI/execution.py:352)
   Intentional: `test_deployment_references_resolve_names_and_versions`. Lists workloads, not versions: tasks/control.md.
 - [x] `lazycloud deployment stop IDS_OR_NAMES...`, `start ID`, `scale ID --containers N` (pods only), `delete ID` (CLI/execution.py:377-450)
@@ -472,8 +472,8 @@ Scope notes:
   Delivered: cli/examples.py identical, 8 examples; tests/examples (26 tests).
 - [x] `lazycloud update [--check]`: self-upgrade that detects uv tool, project or pip, then verifies the new version (CLI/update.py:22, SDK/self_update.py)
   Delivered: cli/update.py, self_update.py identical; code reading only.
-- [ ] `lazycloud app export` typed client codegen with `remote()` for functions and `request()` for endpoints/ASGI via OpenAPI (CLI/apps.py:24, SDK/client_codegen.py)
-  Gap: functions only (test_app_export.py); no endpoint `request()` or ASGI OpenAPI methods. About 1-1.5 days.
+- [x] `lazycloud app export` typed client codegen with `remote()` for functions and `request()` for endpoints/ASGI via OpenAPI (CLI/apps.py:24, SDK/client_codegen.py)
+  Delivered: test_app_export.py (functions, endpoint `request()` with typed returns, ASGI OpenAPI path/query/body methods, public apps without the token).
 - [ ] `lazycloud.env` helpers `is_local`, `is_remote`, `local_entrypoint`, `env_value`, and `SdkEnvVar` (SDK/env.py)
   Gap: env.py identical and `is_local`/`is_remote` work in containers, but containers get no `WORKSPACE_NAME`/`WORKSPACE_ID`, so `env_value(SdkEnvVar.WorkspaceName)` returns its default; `GatewayToken`/`GatewayHttpUrl` are never set by design. Under 1 h in internal/agent once #442 lands.
 - [x] `lazycloud.schema` fields (String, Integer, Number, Boolean, JSON, File, Image, Object, Schema) for `inputs=`/`outputs=` (SDK/schema.py)

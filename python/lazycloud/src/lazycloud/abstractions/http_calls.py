@@ -198,7 +198,7 @@ def resolve_url(
     config = resolve_control_client_config(timeout_seconds=30)
     client = api_client(config)
     workspace = require_workspace(config)
-    timeout = (owner.effective_timeout_seconds() or 180) + _REQUEST_MARGIN_SECONDS
+    timeout = request_timeout(owner.effective_timeout_seconds())
     name = owner.resource_name
     if target in {"auto", "served"} and options.deployment_version is None and is_local():
         record = read_serve_preview(
@@ -228,6 +228,11 @@ def resolve_url(
     url = http.version_url if options.deployment_version is not None else http.url
     token = config.token if workload.release.spec.authorized is not False else None
     return url, token, timeout
+
+
+def request_timeout(timeout_seconds: int | None) -> float:
+    """The read timeout of a request to a workload with this timeout."""
+    return (timeout_seconds or 180) + _REQUEST_MARGIN_SECONDS
 
 
 def send_request(
@@ -284,6 +289,7 @@ __all__ = [
     "InvocationTargetError",
     "InvocationTargetName",
     "http_workload_spec",
+    "request_timeout",
     "resolve_url",
     "send_request",
     "unsupported_http_options",

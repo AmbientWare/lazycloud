@@ -18,15 +18,17 @@ from lazycloud.client_contracts import build_client_contract
 from lazycloud.values import cloudpickle_bytes
 from pydantic import BaseModel, Field
 from shared.deployments import DeploymentKind
+from shared.http.errors import HttpApiError
 from typer.testing import CliRunner, Result
 
-from tests.api_server import ApiRequest, FakeApi, Reply, json_reply
+from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 NOW = "2026-09-30T12:00:00Z"
 WORKLOADS = "/v1/workspaces/team/workloads"
-FUNCTIONS = "/v1/workspaces/team/apps/reports/workloads/function"
+APP = "/v1/workspaces/team/apps/reports/workloads"
+FUNCTIONS = f"{APP}/function"
 
 
 class Sale(BaseModel):
@@ -51,12 +53,14 @@ def _uuid(index: int) -> str:
     return f"0192f0a0-0000-7000-8000-{index:012d}"
 
 
-def _workload(index: int, name: str, state: str = "active") -> dict[str, object]:
+def _workload(
+    index: int, name: str, state: str = "active", kind: str = "function"
+) -> dict[str, object]:
     return {
         "id": _uuid(index),
         "app": "reports",
         "name": name,
-        "kind": "function",
+        "kind": kind,
         "state": state,
         "running_containers": 0,
         "version": 1,
@@ -103,7 +107,7 @@ def _serve_app(api: FakeApi, *, contracts: Mapping[str, dict[str, Any] | None]) 
 
     @api.route("GET", WORKLOADS)
     def listed(request: ApiRequest) -> Reply:
-        assert (request.query["app"], request.query["kind"]) == (["reports"], ["function"])
+        assert request.query["app"] == ["reports"]
         cursor = request.query.get("cursor", [None])[0]
         return json_reply(pages[cursor])
 
@@ -284,3 +288,203 @@ def test_export_requires_a_package_name_for_the_output_directory(
         write_client_package(app="reports", workspace=None, output=tmp_path / "my-clients")
 
     assert fake_api.requests == []
+
+
+class Score(BaseModel):
+    label: str
+    confidence: float
+
+
+def score_text(text: str, *, threshold: float = 0.5) -> Score:
+    return Score(label=text, confidence=threshold)
+
+
+SHOP_SCHEMA: dict[str, Any] = {
+    "openapi": "3.1.0",
+    "info": {"title": "shop", "version": "1"},
+    "paths": {
+        "/items/{item_id}": {
+            "get": {
+                "operationId": "get_item",
+                "parameters": [
+                    {
+                        "name": "item_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "integer"},
+                    },
+                    {"name": "q", "in": "query", "schema": {"type": "string"}},
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/Item"}}
+                        }
+                    }
+                },
+            }
+        },
+        "/items": {
+            "post": {
+                "operationId": "create_item",
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {"schema": {"$ref": "#/components/schemas/Item"}}
+                    },
+                },
+                "responses": {
+                    "201": {"content": {"application/json": {"schema": {"type": "integer"}}}}
+                },
+            }
+        },
+    },
+    "components": {
+        "schemas": {
+            "Item": {
+                "title": "Item",
+                "type": "object",
+                "required": ["name", "price"],
+                "properties": {"name": {"type": "string"}, "price": {"type": "number"}},
+            }
+        }
+    },
+}
+
+
+def _http_detail(
+    api: FakeApi,
+    index: int,
+    kind: str,
+    name: str,
+    *,
+    authorized: bool = True,
+    contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    url = f"{api.url}/edge/{name}"
+    spec: dict[str, object] = {
+        "kind": kind,
+        "name": name,
+        "handler": f"reports:{name}",
+        "source": {"sha256": "0" * 64},
+        "image": {"python_version": "3.11"},
+        "resources": {"cpu_millis": 500, "memory_mib": 1024},
+        "timeout_seconds": 20,
+        "authorized": authorized,
+        "http": {"kind": kind, "methods": ["POST"]},
+    }
+    if contract is not None:
+        spec["client_contract"] = contract
+    return {
+        "workload": _workload(index, name, kind=kind),
+        "release": {
+            "id": _uuid(100 + index),
+            "name": name,
+            "version": 1,
+            "created_at": NOW,
+            "spec": spec,
+        },
+        "http": {
+            "url": url,
+            "version_url": url + "-v1",
+            "release_url": url + "-r",
+            "invoke_path": f"/i/{name}",
+            "version_invoke_path": f"/i/{name}-v1",
+        },
+    }
+
+
+def _serve_http_app(api: FakeApi) -> None:
+    """Serve an endpoint, an ASGI app with a schema and a public one without."""
+    endpoint = build_client_contract(score_text, kind=DeploymentKind.Endpoint)
+    assert endpoint is not None
+    details = {
+        "score_text": _http_detail(
+            api, 1, "endpoint", "score_text", contract=endpoint.model_dump(mode="json")
+        ),
+        "shop": _http_detail(api, 2, "asgi", "shop"),
+        "status_page": _http_detail(api, 3, "asgi", "status_page", authorized=False),
+    }
+    api.route("GET", WORKLOADS)(
+        lambda _: json_reply({"workloads": [d["workload"] for d in details.values()]})
+    )
+    api.route("GET", f"{APP}/(endpoint|asgi)/[^/]+")(
+        lambda request: json_reply(details[request.path.rsplit("/", 1)[1]])
+    )
+    api.route("GET", "/edge/shop/openapi.json")(lambda _: json_reply(SHOP_SCHEMA))
+
+
+def test_export_gives_endpoints_request_and_asgi_routes_typed_methods(
+    tmp_path: Path, fake_api: FakeApi
+) -> None:
+    _serve_http_app(fake_api)
+    output = tmp_path / "lazycloud_clients"
+
+    result = _export("reports", "-o", str(output))
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert [(r["kind"], r["name"]) for r in payload["resources"]] == [
+        ("endpoint", "score_text"),
+        ("asgi", "shop"),
+        ("asgi", "status_page"),
+    ]
+    assert payload["asgi_without_schema"] == ["status_page"]
+    sys.path.insert(0, str(tmp_path))
+    clients = importlib.import_module("lazycloud_clients.reports")
+    assert str(inspect.signature(clients.score_text.request)) == (
+        "(text: 'str', *, threshold: 'float' = 0.5) -> '_ScoreTextScore'"
+    )
+
+    fake_api.route("POST", "/edge/score_text")(
+        lambda _: json_reply({"label": "spam", "confidence": 0.9})
+    )
+    assert clients.score_text.request("buy now", threshold=0.7) == clients.score_text.Score(
+        label="spam", confidence=0.9
+    )
+    sent = fake_api.calls("POST", "/edge/score_text")[0]
+    assert sent.json() == {"args": ["buy now"], "kwargs": {"threshold": 0.7}}
+    assert sent.headers["authorization"] == f"Bearer {TOKEN}"
+
+    fake_api.route("GET", "/edge/shop/items/7")(
+        lambda _: json_reply({"name": "lamp", "price": 12.5})
+    )
+    item = clients.shop.get_item(item_id=7, q="desk")
+    assert (item.name, item.price) == ("lamp", 12.5)
+    assert fake_api.calls("GET", "/edge/shop/items/7")[0].query == {"q": ["desk"]}
+    fake_api.route("POST", "/edge/shop/items")(lambda _: json_reply(41, 201))
+    assert clients.shop.create_item(body=clients.shop.create_item_Item(name="mug", price=3)) == 41
+    assert fake_api.calls("POST", "/edge/shop/items")[0].json() == {"name": "mug", "price": 3}
+
+    fake_api.route("GET", "/edge/shop/items/8")(lambda _: json_reply({"detail": "no item 8"}, 404))
+    with pytest.raises(HttpApiError, match="no item 8"):
+        clients.shop.get_item(item_id=8)
+
+    fake_api.route("GET", "/edge/status_page/health")(lambda _: (200, {}, b"ok"))
+    response = clients.status_page.request(method="GET", path="/health")
+    assert (response.status_code, response.text) == (200, "ok")
+    # A public app never receives the caller's token.
+    assert "authorization" not in fake_api.calls("GET", "/edge/status_page/health")[0].headers
+
+
+def test_export_reads_a_given_openapi_file_and_fails_a_missing_explicit_path(
+    tmp_path: Path, fake_api: FakeApi
+) -> None:
+    _serve_http_app(fake_api)
+    schema = tmp_path / "status.json"
+    schema.write_text(json.dumps({**SHOP_SCHEMA, "paths": {}}))
+    output = tmp_path / "lazycloud_clients"
+
+    exported = write_client_package(
+        app="reports", workspace=None, output=output, openapi_files={"status_page": schema}
+    )
+
+    assert exported["asgi_without_schema"] == []
+    assert fake_api.calls("GET", "/edge/status_page/openapi.json") == []
+    with pytest.raises(ClientGenerationError, match="OpenAPI discovery failed for status_page"):
+        write_client_package(
+            app="reports",
+            workspace=None,
+            output=output,
+            openapi_paths={"status_page": "/docs/openapi.json"},
+        )
