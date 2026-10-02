@@ -35,7 +35,8 @@ func TestIdlePassesDoNotGrowWithReplicas(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 2)
 	var metrics []string
-	start := func() {
+	rates := make([]float64, 0, 2)
+	for range 2 {
 		health, scrape := freeAddr(t), freeAddr(t)
 		t.Setenv("LAZYCLOUD_HEALTH_ADDR", health)
 		t.Setenv("LAZYCLOUD_METRICS_ADDR", scrape)
@@ -45,17 +46,11 @@ func TestIdlePassesDoNotGrowWithReplicas(t *testing.T) {
 		waitStatus(t, "http://"+health+"/readyz", http.StatusOK)
 		metrics = append(metrics, "http://"+scrape+"/metrics")
 		time.Sleep(settle)
-	}
-	rate := func() float64 {
 		before := passes(t, metrics)
 		time.Sleep(window)
-		return (passes(t, metrics) - before) / window.Seconds()
+		rates = append(rates, (passes(t, metrics)-before)/window.Seconds())
 	}
-
-	start()
-	one := rate()
-	start()
-	two := rate()
+	one, two := rates[0], rates[1]
 	t.Logf("idle passes a second: %.2f with one replica, %.2f with two", one, two)
 	if one > idlePassLimit {
 		t.Errorf("one idle replica runs %.2f passes a second, over %.1f", one, idlePassLimit)

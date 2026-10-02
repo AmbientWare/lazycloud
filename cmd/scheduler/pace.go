@@ -64,42 +64,46 @@ func (p *pace) isLeading() bool {
 // errors never quiet the loops.
 func (p *pace) watch(ctx context.Context, probe func(context.Context) (bool, error), wake <-chan struct{}, logger *slog.Logger) error {
 	for {
-		leading, _, _ := p.state()
-		if leading {
+		if leading, _, _ := p.state(); leading {
 			live, err := probe(ctx)
 			if err != nil {
-				if ctx.Err() != nil {
-					return nil
+				if ctx.Err() == nil {
+					logger.ErrorContext(ctx, "live work probe", "error", err)
 				}
-				logger.ErrorContext(ctx, "live work probe", "error", err)
 				live = true
 			}
 			p.setLive(live)
 		}
 		leading, live, changed := p.state()
-		var timer *time.Timer
-		var fire <-chan time.Time
-		if leading {
-			wait := safetyTick
-			if live {
-				wait = tick
-			}
-			timer = time.NewTimer(wait)
-			fire = timer.C
+		wait := safetyTick
+		if live {
+			wait = tick
 		}
-		select {
-		case <-ctx.Done():
-		case <-fire:
-		case <-wake:
-		case <-changed:
-		}
-		if timer != nil {
-			timer.Stop()
-		}
-		if ctx.Err() != nil {
+		if !sleep(ctx, wait, leading, wake, changed, nil) {
 			return nil
 		}
 	}
+}
+
+// sleep waits for d, or only for a wake when timed is false, a wake or the
+// end of ctx, and reports whether ctx is still live. A nil channel never
+// wakes.
+func sleep(ctx context.Context, d time.Duration, timed bool, a, b, c <-chan struct{}) bool {
+	var fire <-chan time.Time
+	if timed {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		fire = timer.C
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-fire:
+	case <-a:
+	case <-b:
+	case <-c:
+	}
+	return true
 }
 
 // cadence is when a loop runs without a wake on the leader.
@@ -123,24 +127,8 @@ func (p *pace) loop(ctx context.Context, c cadence, wake, alsoWake <-chan struct
 		// Taken before the wait is chosen, so a change in between still
 		// wakes the loop.
 		_, _, changed := p.state()
-		wait, ok := p.wait(ctx, c, again)
-		var timer *time.Timer
-		var fire <-chan time.Time
-		if ok {
-			timer = time.NewTimer(wait)
-			fire = timer.C
-		}
-		select {
-		case <-ctx.Done():
-		case <-fire:
-		case <-wake:
-		case <-alsoWake:
-		case <-changed:
-		}
-		if timer != nil {
-			timer.Stop()
-		}
-		if ctx.Err() != nil {
+		wait, timed := p.wait(ctx, c, again)
+		if !sleep(ctx, wait, timed, wake, alsoWake, changed) {
 			return nil
 		}
 	}
