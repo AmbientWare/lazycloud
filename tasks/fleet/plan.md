@@ -174,7 +174,7 @@ the contract between the packets:
 | --- | --- | --- | --- |
 | Buy to serve | planner | insert `requested`, `reserve_mode` null | RunInstances (exists) |
 | Buy for reserve | planner | insert `requested`, `reserve_mode` set | RunInstances with hibernation or persistent Spot when set |
-| Return to reserve | planner | `ready` to `preparing`, `reserve_mode` set | nothing; the session asks the agent |
+| Return to reserve | planner | `ready` to `preparing`, `reserve_mode` set; only on-demand hosts and persistent-request Spot reserves, never a one-time Spot host | nothing; the session asks the agent |
 | Agent proved readiness | host session | `preparing` to `stopping`, `sleep_attempt_id` | StopInstances, `Hibernate` when `reserve_mode = hibernate` |
 | Resume to serve | planner | `stopped` to `resuming`, `resume_requested_at`, `reserve_mode` cleared | StartInstances |
 | Host says Hello after a launch or resume | host session | to `joining`; on first session `ready`, or `preparing` when `reserve_mode` is set | nothing |
