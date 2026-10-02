@@ -31,8 +31,13 @@ func volumeOut(id uuid.UUID, name string, size int64, measured *time.Time, creat
 	}
 }
 
-// CreateVolume creates the named volume, or returns the active one.
+// CreateVolume creates the named volume, or returns the active one. Only a
+// new volume needs credit, so get-or-create keeps working on an unfunded
+// account.
 func (s *Storage) CreateVolume(ctx context.Context, workspace identity.WorkspaceID, name string) (apitypes.Volume, error) {
+	if existing, err := s.GetVolume(ctx, workspace, name); !errors.Is(err, ErrNotFound) {
+		return existing, err
+	}
 	if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
 		return apitypes.Volume{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 	}

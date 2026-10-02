@@ -44,6 +44,9 @@ func TestUnfundedWorkspacesStoreNothingNewButReadWhatTheyHave(t *testing.T) {
 	_, err = s.CreateArtifact(ctx, f.ws, apitypes.CreateArtifactRequest{TaskId: task, Filename: "x.txt", SizeBytes: 1})
 	refused("an artifact", err)
 
+	if _, err := s.CreateVolume(ctx, f.ws, "data"); err != nil {
+		t.Fatalf("getting an existing volume stays open: %v", err)
+	}
 	if _, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{Path: "kept.txt", Method: apitypes.PresignVolumeFileRequestMethodGet}); err != nil {
 		t.Fatalf("reading stored data stays open: %v", err)
 	}
