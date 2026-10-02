@@ -549,6 +549,21 @@ func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
 	}
 }
 
+// A reserve runs while it is prepared, so buying one takes host room: a
+// full fleet buys none, however short the reserve.
+func TestPlanBuysReservesOnlyWithinTheHostLimit(t *testing.T) {
+	for _, c := range []struct {
+		room, want int
+	}{{0, 0}, {100, 1}} {
+		s := planSnapshot(t)
+		s.HostRoom = c.room
+		plan := PlanFleet(planPolicy(FleetCapacity{}, small.Times(2)), s)
+		if n := len(actionsOf(plan, ActionBuyReserve)); n != c.want {
+			t.Errorf("host room %d: %d reserves bought, want %d", c.room, n, c.want)
+		}
+	}
+}
+
 func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *testing.T) {
 	need := Requirement{GPUs: []string{GPUAny}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})

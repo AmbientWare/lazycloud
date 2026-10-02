@@ -143,8 +143,8 @@ type FleetSnapshot struct {
 	Locations map[ReserveMarket][]LocationDemand
 	Offers    OfferInputs
 	Markets   map[ReserveMarket]MarketRecord
-	// HostRoom is how many more hosts may run or start; ReserveRoom how
-	// many more may be held stopped.
+	// HostRoom is how many more hosts may run or start, reserves being
+	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
 	ReserveRoom int
 }
@@ -490,9 +490,9 @@ func (ps *pass) buy(m ReserveMarket, o FleetOffer, reserve bool, containers []uu
 			mode = ptr(ReserveHibernate)
 		}
 		ps.reserveRoom--
-	} else {
-		ps.hostRoom--
 	}
+	// A reserve runs while it is prepared, so it takes host room too.
+	ps.hostRoom--
 	ps.planned = append(ps.planned, plannedHost{market: m, offer: o, reserve: reserve})
 	ps.start(o.Region, o.Type.Name, o.Market)
 	return ps.act(FleetAction{Kind: kind, Market: m, Offer: &o, Mode: mode, Containers: containers})
@@ -1089,8 +1089,8 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 	fits := mode == ReserveHibernate || v.t.Hibernation.Empty()
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && fits && !v.t.Stopped.Empty() && !ps.reserveHeld(v).Covers(v.t.Stopped) {
 		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false
+		// It runs until it stops, so it keeps its host room.
 		ps.reserveRoom--
-		ps.hostRoom++
 		ps.act(FleetAction{Kind: ActionReturnToReserve, Market: v.m, Host: ptr(h.ID), Mode: ptr(mode)})
 		return
 	}
@@ -1115,7 +1115,7 @@ func (ps *pass) reserveHeld(v *marketView) FleetCapacity {
 func (ps *pass) reserves(v *marketView) {
 	committed := totalOf(ps.inMarket(v.m, FleetHost.hibernatingReserve), func(h *FleetHost) FleetCapacity { return h.Usable })
 	v.hibernate = v.t.Hibernation.Minus(committed).Clamp()
-	limit := func() int { return min(ps.room(v.m), ps.reserveRoom) }
+	limit := func() int { return min(ps.room(v.m), ps.reserveRoom, ps.hostRoom) }
 	if v.mayGrow && !v.hibernate.Empty() {
 		offers := slices.DeleteFunc(slices.Clone(ps.marketOffers(v.m, true)), func(o FleetOffer) bool { return !o.Hibernate })
 		result := Cover(preferHealthy(offers), CoverNeed{Aggregate: v.hibernate}, reserveCost(ps.p), ps.limits(limit()))
