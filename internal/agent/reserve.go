@@ -99,15 +99,7 @@ func (a *Agent) readyForReserve(ctx context.Context, request *hostproto.PrepareR
 		ready.Refused = refused
 		return ready
 	}
-	if request.GetMode() == hostproto.ReserveMode_RESERVE_MODE_HIBERNATE {
-		if err := writeSleepMarker(request.GetAttemptId(), a.bootID); err != nil {
-			ready.Refused = err.Error()
-			return ready
-		}
-	}
-	a.mu.Lock()
 	attempt := sleepAttempt{ID: request.GetAttemptId(), BootID: a.bootID, Gap: a.clock.gap()}
-	a.mu.Unlock()
 	data, err := json.Marshal(attempt)
 	if err == nil {
 		err = writeFileAtomic(filepath.Join(a.cfg.StateDir, sleepAttemptFile), data, 0o600)
@@ -179,22 +171,4 @@ func (a *Agent) driverGPUs(ctx context.Context) int32 {
 		}
 	}
 	return found
-}
-
-// writeSleepMarker puts the attempt into the kernel log, where the console
-// output EC2 keeps after a hibernation shows it ran before the image was
-// written.
-func writeSleepMarker(attempt, boot string) error {
-	kmsg, err := os.OpenFile("/dev/kmsg", os.O_WRONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open the kernel log for the sleep marker: %w", err)
-	}
-	_, err = fmt.Fprintf(kmsg, "lazycloud-sleep attempt=%s boot=%s\n", attempt, boot)
-	if closeErr := kmsg.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fmt.Errorf("write the sleep marker: %w", err)
-	}
-	return nil
 }

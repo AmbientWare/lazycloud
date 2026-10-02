@@ -270,11 +270,14 @@ func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 		phase    string
 		outcome  string
 		sample   string
+		// proven is the hibernation evidence the resume report leaves.
+		proven string
 	}{
-		{"hibernated", "saved", nil, "boot-1", 31, "ready", "memory_restored", "resume/memory_restored"},
-		{"silent hibernation failure", "saved", nil, "boot-2", 0, "ready", "cold_boot", "resume/cold_boot"},
-		{"plain stop", "unavailable", nil, "boot-2", 0, "ready", "cold_boot", "boot/cold_boot"},
-		{"refresh", "unavailable", &stop, "boot-2", 0, "preparing", "cold_boot", "boot/cold_boot"},
+		{"hibernated", "saved", nil, "boot-1", 31, "ready", "memory_restored", "resume/memory_restored", "saved"},
+		{"hibernation EC2 had not confirmed", "unknown", nil, "boot-1", 31, "ready", "memory_restored", "resume/memory_restored", "saved"},
+		{"silent hibernation failure", "saved", nil, "boot-2", 0, "ready", "cold_boot", "resume/cold_boot", "failed"},
+		{"plain stop", "unavailable", nil, "boot-2", 0, "ready", "cold_boot", "boot/cold_boot", "unavailable"},
+		{"refresh", "unavailable", &stop, "boot-2", 0, "preparing", "cold_boot", "boot/cold_boot", "unavailable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h.exec("delete from fleet_activations")
@@ -292,6 +295,13 @@ func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 			}
 			if got := h.activations(); len(got) != 1 || got[0] != c.sample {
 				t.Fatalf("samples %v, want %s", got, c.sample)
+			}
+			var evidence string
+			if err := h.pool.QueryRow(h.t.Context(), "select image_evidence from hosts where id = $1", uuid.UUID(host)).Scan(&evidence); err != nil {
+				t.Fatal(err)
+			}
+			if evidence != c.proven {
+				t.Fatalf("image evidence %s, want %s", evidence, c.proven)
 			}
 			// The same report again settles nothing more.
 			openHello(t, ctx, h.client, hello)

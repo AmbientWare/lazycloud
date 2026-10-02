@@ -126,7 +126,13 @@ func (q *Queries) PruneActivations(ctx context.Context) error {
 
 const recordResumeOutcome = `-- name: RecordResumeOutcome :exec
 update hosts
-set last_resume_outcome = $1, sleep_attempt_id = null, sleep_boot_id = null, updated_at = now()
+set last_resume_outcome = $1,
+    image_evidence = case
+        when $1 = 'memory_restored' then 'saved'
+        when $1 = 'cold_boot' and image_evidence = 'saved' then 'failed'
+        else image_evidence
+    end,
+    sleep_attempt_id = null, sleep_boot_id = null, updated_at = now()
 where id = $2
 `
 
@@ -135,7 +141,10 @@ type RecordResumeOutcomeParams struct {
 	ID      uuid.UUID
 }
 
-// Settles the attempt, so a repeated Hello records nothing more.
+// Settles the attempt, so a repeated Hello records nothing more. The
+// agent's report is the hibernation's proof: restored memory means the
+// image was saved, and a cold boot after a saved hibernation means it was
+// not.
 func (q *Queries) RecordResumeOutcome(ctx context.Context, arg RecordResumeOutcomeParams) error {
 	_, err := q.db.Exec(ctx, recordResumeOutcome, arg.Outcome, arg.ID)
 	return err

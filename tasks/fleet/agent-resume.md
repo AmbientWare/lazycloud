@@ -113,6 +113,12 @@ provider packet merges.
   the host row's creation to its first session, resume and boot from
   `resume_requested_at` to the Hello. Rows older than a day are pruned on
   insert.
+- P1 (approved), in its own commit: the agent writes no kmsg marker, and
+  the resume report proves the hibernation. Settling a resume writes
+  `image_evidence`: memory restored makes it `saved`, a cold boot after a
+  `saved` hibernation makes it `failed`. The day-long unreliability mark for
+  that type and region is the `fleet_activations` row with kind `resume`
+  and outcome `cold_boot`; the planner's activation query reads it.
 
 ## Evidence
 

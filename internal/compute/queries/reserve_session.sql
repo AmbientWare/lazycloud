@@ -25,9 +25,18 @@ select phase, session_epoch, kind, provider, reserve_mode, resume_requested_at, 
 from hosts where id = @id for update;
 
 -- name: RecordResumeOutcome :exec
--- Settles the attempt, so a repeated Hello records nothing more.
+-- Settles the attempt, so a repeated Hello records nothing more. The
+-- agent's report is the hibernation's proof: restored memory means the
+-- image was saved, and a cold boot after a saved hibernation means it was
+-- not.
 update hosts
-set last_resume_outcome = @outcome, sleep_attempt_id = null, sleep_boot_id = null, updated_at = now()
+set last_resume_outcome = @outcome,
+    image_evidence = case
+        when @outcome = 'memory_restored' then 'saved'
+        when @outcome = 'cold_boot' and image_evidence = 'saved' then 'failed'
+        else image_evidence
+    end,
+    sleep_attempt_id = null, sleep_boot_id = null, updated_at = now()
 where id = @id;
 
 -- name: ClearResumeRequest :exec

@@ -47,7 +47,7 @@ func (c *fakeClock) sleep(t *testing.T, d time.Duration) {
 
 func prepareCommand() *hostproto.ServerMessage {
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_PrepareReserve{PrepareReserve: &hostproto.PrepareReserve{
-		RequestId: uuid.NewString(), AttemptId: uuid.NewString(), Mode: hostproto.ReserveMode_RESERVE_MODE_STOP,
+		RequestId: uuid.NewString(), AttemptId: uuid.NewString(), Mode: hostproto.ReserveMode_RESERVE_MODE_HIBERNATE,
 	}}}
 }
 
