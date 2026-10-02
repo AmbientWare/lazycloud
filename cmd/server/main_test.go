@@ -64,6 +64,11 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 	if status := get(t, api+"/readyz", ""); status == http.StatusOK {
 		t.Fatal("the API port answers /readyz; probes belong on the health port")
 	}
+	// Download links need no credential; one the server did not sign is
+	// not found.
+	if status := get(t, api+"/v1/links/forged.link", ""); status != http.StatusNotFound {
+		t.Fatalf("a forged download link = %d, want 404", status)
+	}
 
 	stopped := time.Now()
 	cancel()

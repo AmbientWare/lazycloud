@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -323,7 +324,14 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
+	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
+	if err != nil {
+		return err
+	}
 	cfg.objectStore.BrowserOrigin = cfg.identity.PublicURL
+	cfg.objectStore.Links = storage.Links{
+		URL: strings.TrimRight(cfg.identity.PublicURL, "/") + api.LinksPath, Key: masterKey.Derive("lazycloud download links"),
+	}
 	store := storage.NewStorage(pool, cfg.objectStore)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
 	// that refuses the rule only costs those browser transfers.
@@ -331,10 +339,6 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		logger.WarnContext(ctx, "dashboard transfers of artifacts will fail", "error", err)
 	}
 	exec := execution.NewExecution(pool)
-	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
-	if err != nil {
-		return err
-	}
 	vault := secrets.NewSecrets(pool, masterKey)
 	im := images.NewImages(pool, exec, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)

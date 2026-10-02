@@ -312,7 +312,7 @@ def test_artifacts_save_for_a_task(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert isinstance(stat, Stat)
     assert (stat.mode, stat.size) == ("0644", len("quarterly"))
     assert artifact.exists() is True
-    assert httpx.get(artifact.public_url(expires=60)).text == "quarterly"
+    assert httpx.get(artifact.public_url(expires=60), follow_redirects=True).text == "quarterly"
 
     folder = tmp_path / "plots"
     folder.mkdir()

@@ -65,6 +65,8 @@ type Config struct {
 	// from it send and read presigned requests: uploads, downloads and
 	// previews go from the browser to the store, not through the API.
 	BrowserOrigin string
+	// Links serves download URLs that outlive the server's credentials.
+	Links Links
 }
 
 // Storage is the storage owner.
@@ -148,13 +150,17 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 		return SourceUpload{Present: true}, nil
 	}
 
+	lifetime, err := s.signedLifetime(ctx, uploadURLLifetime)
+	if err != nil {
+		return SourceUpload{}, err
+	}
 	req, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:         aws.String(s.bucket),
 		Key:            aws.String(key),
 		ContentLength:  aws.Int64(size),
 		ContentType:    aws.String("application/zip"),
 		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(digest[:])),
-	}, s3.WithPresignExpires(uploadURLLifetime))
+	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return SourceUpload{}, fmt.Errorf("presign source upload: %w", err)
 	}
@@ -165,7 +171,7 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 		}
 	}
 	return SourceUpload{Upload: &UploadTarget{
-		URL: req.URL, Method: req.Method, Headers: headers, ExpiresAt: time.Now().Add(uploadURLLifetime),
+		URL: req.URL, Method: req.Method, Headers: headers, ExpiresAt: time.Now().Add(lifetime),
 	}}, nil
 }
 
@@ -195,12 +201,16 @@ func (s *Storage) storedMatches(ctx context.Context, key string, digest Digest, 
 
 // SourceURL is a presigned GET for a workspace's source archive.
 func (s *Storage) SourceURL(ctx context.Context, workspace identity.WorkspaceID, digest Digest) (string, time.Time, error) {
+	lifetime, err := s.signedLifetime(ctx, downloadURLLifetime)
+	if err != nil {
+		return "", time.Time{}, err
+	}
 	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(sourceKey(workspace, digest)),
-	}, s3.WithPresignExpires(downloadURLLifetime))
+	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("presign source download: %w", err)
 	}
-	return req.URL, time.Now().Add(downloadURLLifetime), nil
+	return req.URL, time.Now().Add(lifetime), nil
 }
