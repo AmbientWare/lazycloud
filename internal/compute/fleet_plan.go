@@ -387,7 +387,7 @@ func (ps *pass) hibernationShapes(m ReserveMarket) []FleetCapacity {
 	}
 	var shapes []FleetCapacity
 	for _, h := range ps.inMarket(m, func(h FleetHost) bool { return h.State != FleetFailed && h.State != FleetTerminating }) {
-		if t, ok := ps.typeNamed(h.InstanceType); ok && t.Hibernates {
+		if t, ok := ps.typeNamed(h.InstanceType); ok && t.Hibernates && !ps.s.Offers.PlainStop[h.Region+"/"+t.Name] {
 			shapes = append(shapes, t.Usable(ps.s.Offers.ReportedMemory[t.Name]))
 		}
 	}

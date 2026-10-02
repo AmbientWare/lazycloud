@@ -79,6 +79,12 @@ type OfferInputs struct {
 	// against them.
 	Quotas    []VCPUQuota
 	QuotaUsed map[QuotaKey]int64
+	// OwnerPays is set for a connected account's offers: the account pays
+	// its own hosts, so no purchase margin applies.
+	OwnerPays bool
+	// PlainStop names the region/type pairs whose hibernation booted cold
+	// within the last day; reserves there stop plainly.
+	PlainStop map[string]bool
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
@@ -213,7 +219,9 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // offer prices the root disk a hibernating reserve needs. It keeps offers
 // sold in the region, in a market the need allows, not cooling, with a
 // complete cost, whose usable capacity covers the need, whose GPUs the need
-// accepts (GPU hosts only for GPU work), and that keep the purchase margin.
+// accepts (GPU hosts only for GPU work), and that keep the purchase margin
+// unless the owner pays. A reserve offer hibernates where the type does,
+// outside PlainStop.
 // Order: the need's GPU preference, cooling regions last, complete hourly
 // cost, region preference, fewest hosts in the zone, key. An offer whose
 // host would exceed a known vCPU quota is skipped.
@@ -245,7 +253,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) {
 					continue
 				}
-				hibernate := reserve && t.Hibernates
+				hibernate := reserve && t.Hibernates && !in.PlainStop[region+"/"+t.Name]
 				disk := rootDiskMicros(region, t.RootGiB(hibernate))
 				for _, market := range markets {
 					compute := onDemand
@@ -263,7 +271,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
 						CoolingRegion: cooling[region], Quota: quota,
 					}
-					if _, rejected := marginRejection(p, rates, o, need.Preemptible); rejected {
+					if _, rejected := marginRejection(p, rates, o, need.Preemptible); rejected && !in.OwnerPays {
 						continue
 					}
 					offers = append(offers, o)
