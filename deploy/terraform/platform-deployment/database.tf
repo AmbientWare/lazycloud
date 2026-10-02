@@ -29,4 +29,11 @@ locals {
     planetscale_neki_role.platform.access_host_url,
     var.database_pool_max_connections,
   )
+  # LAZYCLOUD_DATABASE_SESSION_URL: LISTEN, the migration, metering and
+  # leader locks hold state in their session and need a direct connection.
+  # Neki has one endpoint, the router, and the router keeps a session that
+  # holds state on one backend until it ends, so both URLs name it; the
+  # runbook checks LISTEN and session locks through it before the first
+  # release.
+  session_database_url = local.database_url
 }

@@ -49,6 +49,7 @@ externalSecrets:
     operator: ""
   data:
     LAZYCLOUD_DATABASE_URL: { document: platform, property: LAZYCLOUD_DATABASE_URL }
+    LAZYCLOUD_DATABASE_SESSION_URL: { document: platform, property: LAZYCLOUD_DATABASE_SESSION_URL }
     secrets.key: { document: platform, property: LAZYCLOUD_SECRETS_MASTER_KEY, decodingStrategy: Base64 }
     cloudflared.json: { document: platform, property: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS }
     LAZYCLOUD_GITHUB_CLIENT_ID: { document: operator, property: LAZYCLOUD_GITHUB_CLIENT_ID }
@@ -113,6 +114,7 @@ server:
   # Identity role through the AWS default credential chain.
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_DATABASE_SESSION_URL
     - LAZYCLOUD_GITHUB_CLIENT_ID
     - LAZYCLOUD_GITHUB_CLIENT_SECRET
     - LAZYCLOUD_STRIPE_API_KEY
@@ -152,6 +154,7 @@ scheduler:
   config: {}
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_DATABASE_SESSION_URL
     - LAZYCLOUD_STRIPE_API_KEY
     - LAZYCLOUD_RESEND_API_KEY
   terminationGracePeriodSeconds: 30
@@ -189,6 +192,7 @@ tcpCertificate:
 migrations:
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_DATABASE_SESSION_URL
   backoffLimit: 2
   activeDeadlineSeconds: 600
   resources:

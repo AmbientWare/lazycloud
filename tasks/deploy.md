@@ -34,6 +34,19 @@ The router pools backends, so there is no PgBouncer and no client-side
 pooler; each process bounds its pgx pool with `pool_max_conns=8`. There is
 no Redis.
 
+Connections that keep state in their session open from
+`LAZYCLOUD_DATABASE_SESSION_URL` (`database.OpenSession`), the direct
+connection: every LISTEN (the server's and scheduler's listeners, the
+dashboard's change hub, the edge's route watch), the migration lock, the
+metering lock and, once #442 lands, the scheduler's leader lock. Everything
+else is a transaction or a single statement: the other advisory locks are
+`pg_advisory_xact_lock`, nothing runs `SET`, and pgx's cached prepared
+statements use the extended protocol, whose statement lifecycle the router
+implements. Neki has no endpoint besides its router, which keeps a session
+that holds an advisory lock on one backend until it ends, so both URLs name
+the router; step 6 of the runbook checks it holds LISTEN and session locks
+too.
+
 Fleet hosts launch from the baked node image (`deploy/ami`): Amazon Linux
 2023 with Docker, gVisor `runsc` 20260928 as Docker's `runsc` runtime with
 `--host-uds=all` (plus `--nvproxy` on GPU images, driver 590.48.01, which
@@ -55,6 +68,7 @@ it and refuses it in config.
 | Property | Becomes | Read by |
 | --- | --- | --- |
 | `LAZYCLOUD_DATABASE_URL` | the same | server, scheduler, migrate, publish-agent-release |
+| `LAZYCLOUD_DATABASE_SESSION_URL` | the same | server, scheduler, migrate |
 | `LAZYCLOUD_SECRETS_MASTER_KEY` (32 random bytes, `prevent_destroy`) | file `secrets.key`, mode 0440, `LAZYCLOUD_SECRETS_KEY_FILE` | server, scheduler |
 | `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` (from the Terraform-made endpoint) | the same | server |
 | `LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS` | file `credentials.json` | cloudflared |
@@ -113,7 +127,7 @@ managed-runtime wheel locks.
 | Piece | main | port | What changed and why it is better |
 | --- | ---: | ---: | --- |
 | Terraform | 4,478 (platform-core, platform-deployment, cloudflare, stripe, terraform-state docs) | 1,737 (state, platform-core, platform-deployment, github, README) | Four roots for one deployment become one: Cloudflare tunnel and records, Stripe webhook and the deployment's AWS resources share one apply, so the webhook secret and tunnel credentials go straight into the platform document instead of being copied by hand, and the descriptor publishing step is an `aws_s3_object`. Dropped Redis, release CloudFront and bucket, access-log bucket and queue, control principal, fleet connection role and its 357-line generated policy, acceptance roles, moved blocks. The control-plane policy grants the calls the binaries make: no bucket policy, logging or deletion rights, no Secrets Manager, EC2 limited to RunInstances/TerminateInstances on fleet-tagged instances. Every provider pinned exactly to its current release; helm and kubernetes providers move to 3.x. The operator-owned state bucket stays outside every root. |
-| Database | PlanetScale Postgres branch, PgBouncer on 6432 plus a direct URL | PlanetScale Neki branch and one role, router on 5432 | One URL; the router pools. |
+| Database | PlanetScale Postgres branch, PgBouncer on 6432 plus a direct URL | PlanetScale Neki branch and one role, router on 5432 | The router pools. Session-holding connections have their own URL, which names the router on Neki and a direct endpoint wherever a pooler sits in front. |
 | Chart | 2,670 (chart, values renderer) | 1,570 (chart, schema, prod environment, example values) | Seven Python services, connection gateway with HAProxy sidecar, cache server, fleet controller and bootstrap jobs become server, scheduler, web and cloudflared. Values are Terraform's JSON merged with the version by jq; `chart_values.py` and its 367 lines go. One disruption template for all four workloads. |
 | Argo CD | 155 | 141 | Same three applications at current versions; the deployment reads `deploy/helm/lazycloud`. |
 | Workflows | 908 (ship, promote, deploy, build-platform, release, node-images, deployment-definition) | 413 (ship, deploy, node-images, deploy-checks) | Ship builds with one bake call and records with Deploy. Release manifests, the previous-release reuse planner and S3 asset publication go: the image tag is the version and the server carries its agent. Promote went with staging. Deploy takes a version, so a rollback is `gh workflow run deploy.yml -f version=<old>`. |
@@ -156,11 +170,26 @@ the PlanetScale database. Everything below is a fresh build. Kept:
    `planetscale_organization`). It reads `lazycloud-prod/operator` and
    fails if the document is missing. Check the Neki profile size in the
    dashboard.
-6. Verify Neki before shipping: in two `pscale shell lazycloud-prod main`
-   sessions run `LISTEN lc_test` and `NOTIFY lc_test`, and `SELECT
-   pg_advisory_lock(1)` in one while the other's `pg_try_advisory_lock(1)`
-   returns false. The platform depends on both. If either fails, switch
-   database.tf back to `planetscale_postgres_branch` (GA) before going on.
+6. Verify the router keeps session state before shipping. Open two
+   `pscale shell lazycloud-prod main` sessions, A and B; both go through
+   the router as the platform does.
+   - LISTEN: A runs `LISTEN lc_check;` and a few `SELECT 1;`. B runs
+     `NOTIFY lc_check, 'b';`. A's next statement must print the
+     notification from B.
+   - Session lock: A runs `SELECT pg_advisory_lock(42);` and a few `SELECT
+     1;`. B's `SELECT pg_try_advisory_lock(42);` must return false. A's
+     `SELECT pg_advisory_unlock(42);` must return true, which proves A's
+     later statements ran on the backend that took the lock. Then B's try
+     returns true.
+   - Repeat both after A has sat idle for five minutes.
+
+   If any check fails, LISTEN and the session locks need a direct endpoint
+   Neki does not offer; stop and choose the database again before going on.
+   After Ship, `kubectl -n lazycloud-prod logs` for the server and scheduler
+   must show no `prepared statement` errors. A `database listener
+   disconnected` warning at most every 30 minutes on a quiet platform is
+   the router's `idle-session-timeout`; the listener reconnects and
+   re-reads.
 7. [GO] `github` apply (`release_reviewer_user_ids`).
 8. [GO] Run Node images; commit the `LAZYCLOUD_FLEET_IMAGES` value from its
    summary into the env file through a reviewed PR.
@@ -192,6 +221,17 @@ Rollback after bring-up is Deploy with an earlier version.
   server's AWS identity` (images, hostsession, server). ECR tokens last 12
   hours, so a static login could not work. Test:
   `TestPlatformECRLoginIsMintedAndReplacedBeforeItExpires`.
+- `Propose: open LISTEN connections from their own database URL` and
+  `Propose: open every connection that holds session state from the direct
+  database URL` (database, server, scheduler, billing, edge):
+  `LAZYCLOUD_DATABASE_SESSION_URL` and `-database-session-url`, empty for
+  the main URL. Listeners, the change hub, the edge's route watch, both
+  binaries' migrations and the metering lock use it.
+- For #442 (perf-fixes), at merge: the scheduler's
+  `database.Lead(ctx, pool, ...)` becomes `database.Lead(ctx, session,
+  ...)`. Git will not flag it. `holdLead` would also do better to check
+  `pg_locks` for its own advisory lock instead of `conn.Ping`, so a session
+  a proxy re-homed cannot pass for the leader.
 - shellcheck fixes in `deploy/local/build-runtime.sh` and
   `garage-bootstrap.sh`; `host-setup.sh` reads the shared gVisor pin.
 
@@ -228,7 +268,7 @@ launch or Neki connection.
   limits do not affect the schema (no temporary tables, `SELECT INTO`,
   `INTERSECT`/`EXCEPT`, large objects or `COPY` over the extended
   protocol), and session advisory locks route on a single shard. LISTEN
-  through the router is not documented either way; step 15 checks it. The
+  through the router is not documented either way; step 6 checks it. The
   docs give no Postgres major version; the dashboard shows it. The
   provider's `access_host_url` is used as the host, as for Postgres roles;
   confirm on the first apply.
