@@ -530,17 +530,22 @@ class Function(Generic[P, R]):
         Ctrl-C while waiting cancels the tasks whose values were not yielded.
         """
         calls = self.spawn_map(inputs)
+        timeout = self._effective_timeout_seconds()
         for n, call in enumerate(calls):
             try:
-                value = call.get()
+                result = call.result(wait=True, timeout_seconds=timeout)
             except KeyboardInterrupt:
                 _cancel_tasks([c.task for c in calls[n:]])
                 raise
-            except Exception as exc:
+            except TimeoutError as exc:
                 self._error(f"Task failed during map: {exc}")
                 yield None
                 continue
-            yield value
+            if not result.ok:
+                self._error(f"Task failed during map: {result.error or result.status.value}")
+                yield None
+                continue
+            yield result.value
 
     def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
         """Submit one task with JSON arguments; its result comes back as JSON."""
