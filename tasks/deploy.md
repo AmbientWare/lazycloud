@@ -125,22 +125,25 @@ variable its binary does not read.
 
 ## Main against the port
 
-Lines counted without generated lock files and main's 5.2k lines of
-managed-runtime wheel locks.
+Counted on 2026-10-01 with `git ls-files | xargs wc -l`, without generated
+lock files and main's 5.2k lines of managed-runtime wheel locks.
 
 | Piece | main | port | What changed and why it is better |
 | --- | ---: | ---: | --- |
-| Terraform | 4,478 (platform-core, platform-deployment, cloudflare, stripe, terraform-state docs) | 1,737 (state, platform-core, platform-deployment, github, README) | Four roots for one deployment become one: Cloudflare tunnel and records, Stripe webhook and the deployment's AWS resources share one apply, so the webhook secret and tunnel credentials go straight into the platform document instead of being copied by hand, and the descriptor publishing step is an `aws_s3_object`. Dropped Redis, release CloudFront and bucket, access-log bucket and queue, control principal, fleet connection role and its 357-line generated policy, acceptance roles, moved blocks. The control-plane policy grants the calls the binaries make: no bucket policy, logging or deletion rights, no Secrets Manager, EC2 limited to RunInstances/TerminateInstances on fleet-tagged instances. Every provider pinned exactly to its current release; helm and kubernetes providers move to 3.x. The operator-owned state bucket stays outside every root. |
+| Terraform | 4,478 (platform-core, platform-deployment, cloudflare, stripe, terraform-state docs) | 1,746 (platform-core, platform-deployment, github, README) | Four roots for one deployment become one: Cloudflare tunnel and records, Stripe webhook and the deployment's AWS resources share one apply, so the webhook secret and tunnel credentials go straight into the platform document instead of being copied by hand, and the descriptor publishing step is an `aws_s3_object`. Dropped Redis, release CloudFront and bucket, access-log bucket and queue, control principal, fleet connection role and its 357-line generated policy, acceptance roles, moved blocks. The control-plane policy grants the calls the binaries make: no bucket policy, logging or deletion rights, no Secrets Manager, EC2 limited to RunInstances/TerminateInstances on fleet-tagged instances, tags only at launch and launch permissions on the platform's node images. Every provider pinned exactly to its current release; helm and kubernetes providers move to 3.x. The operator-owned state bucket stays outside every root. |
 | Database | PlanetScale Postgres branch, PgBouncer on 6432 plus a direct URL | PlanetScale Neki branch and one role, router on 5432 | The router pools. Session-holding connections have their own URL, which names the router on Neki and a direct endpoint wherever a pooler sits in front. |
-| Chart | 2,670 (chart, values renderer) | 1,570 (chart, schema, prod environment, example values) | Seven Python services, connection gateway with HAProxy sidecar, cache server, fleet controller and bootstrap jobs become server, scheduler, web and cloudflared. Values are Terraform's JSON merged with the version by jq; `chart_values.py` and its 367 lines go. One disruption template for all four workloads. |
+| Chart | 2,670 (chart, values renderer) | 1,575 (chart, schema, prod environment, example values) | Seven Python services, connection gateway with HAProxy sidecar, cache server, fleet controller and bootstrap jobs become server, scheduler, web and cloudflared. Values are Terraform's JSON merged with the version by jq; `chart_values.py` and its 367 lines go. One disruption template for all four workloads. |
 | Argo CD | 155 | 141 | Same three applications at current versions; the deployment reads `deploy/helm/lazycloud`. |
-| Workflows | 908 (ship, promote, deploy, build-platform, release, node-images, deployment-definition) | 413 (ship, deploy, node-images, deploy-checks) | Ship builds with one bake call and records with Deploy. Release manifests, the previous-release reuse planner and S3 asset publication go: the image tag is the version and the server carries its agent. Promote went with staging. Deploy takes a version, so a rollback is `gh workflow run deploy.yml -f version=<old>`. |
+| Workflows | 908 (ship, promote, deploy, build-platform, release, node-images, deployment-definition) | 409 (ship, deploy, node-images, deploy-checks) | Ship builds with one bake call and records with Deploy. Release manifests, the previous-release reuse planner and S3 asset publication go: the image tag is the version and the server carries its agent. Promote went with staging. Deploy takes a version, so a rollback is `gh workflow run deploy.yml -f version=<old>`. |
 | Images | 775 (control-plane, worker, agent Dockerfiles and bake) | 235 | One Dockerfile; no worker image. |
-| Node images | 1,548 (bake.py, catalog.py, recipe) | 273 | A shell bake and recipe; the image map is reviewed into the env file instead of a published catalog. |
+| Node images | 1,548 (bake.py, catalog.py, recipe) | 276 | A shell bake and recipe; the image map is reviewed into the env file instead of a published catalog. |
 | Release, ingress and connected-AWS tooling | 9,898 including runtime locks (release.py, aws-release-assets, agent-binary, managed-runtime, connection gateway, tunnel identity, PgBouncer, connected-aws scripts) | 0 | The agent bundle builds in the image; the connection template lives in compute. |
-| Docs | 1,455 (README, RUNBOOK, CONFIGURATION, PROVIDERS, spot-capacity) | 295 (this file, deploy/AGENTS.md) | |
+| Docs | 1,455 (README, RUNBOOK, CONFIGURATION, PROVIDERS, spot-capacity) | 333 (this file, deploy/AGENTS.md) | |
 | Checks | none local | 101 (`deploy/check.sh`) | Lint, render, schema, env, Terraform, actionlint and shellcheck in one script CI also runs. |
-| Total | 17,519 | 4,765 | |
+| Total | 17,519 | 4,816 | |
+
+Outside the table, this packet's proposals add 295 and remove 51 non-test
+lines in cmd and internal: the session URL and connected-account images.
 
 ## Defaults
 
