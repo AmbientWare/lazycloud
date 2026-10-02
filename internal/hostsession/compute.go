@@ -75,6 +75,10 @@ func sessionOpenIn(hello *hostproto.Hello) compute.SessionOpen {
 	return open
 }
 
+func agentStateIn(hello *hostproto.Hello) compute.AgentState {
+	return compute.AgentState{Version: hello.GetAgentVersion(), Rejected: hello.GetRejectedVersion(), Updatable: hello.GetUpdatable()}
+}
+
 // reserveAttempt is the PrepareReserve this session sent and awaits.
 type reserveAttempt struct {
 	request string
@@ -86,13 +90,17 @@ type reserveAttempt struct {
 // it may stop, and asks again with a fresh attempt when an answer is
 // overdue. Only the newest attempt's answer counts.
 func (sess *session) syncReserve(ctx context.Context) error {
-	request, err := sess.server.compute.PendingReserve(ctx, sess.host)
+	step, request, err := sess.server.compute.ReserveSync(ctx, sess.host, sess.agent)
 	if err != nil {
 		return sess.server.grpcError(ctx, err)
 	}
-	if request == nil {
+	switch step {
+	case compute.ReserveRejoin:
+		return status.Error(codes.Aborted, "the host resumed before it stopped; its next Hello settles the resume")
+	case compute.ReserveIdle, compute.ReserveWait:
 		sess.reserve = nil
 		return nil
+	case compute.ReservePrepare:
 	}
 	if sess.reserve != nil && sess.reserve.request == request.ID && time.Since(sess.reserve.sentAt) < compute.ReserveAttemptTimeout {
 		return nil
@@ -120,7 +128,7 @@ func (sess *session) answerReserve(ctx context.Context, ready *hostproto.Reserve
 	}
 	verdict, err := sess.server.compute.AnswerReserve(ctx, sess.host, compute.ReserveAnswer{
 		RequestID: ready.GetRequestId(), Attempt: sess.reserve.attempt, BootID: ready.GetBootId(), AgentVersion: ready.GetAgentVersion(),
-		GPUs: int(ready.GetGpus()), Refused: ready.GetRefused(),
+		GPUs: int(ready.GetGpus()), Refused: ready.GetRefused(), Updating: ready.GetUpdating(),
 	})
 	if err != nil {
 		return sess.server.grpcError(ctx, err)

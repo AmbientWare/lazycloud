@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -251,7 +253,9 @@ func (h *harness) stoppedReserve(host compute.HostID, phase, evidence string, mo
 	h.t.Helper()
 	h.exec(`update hosts set provider = 'aws', instance_type = 'm7i.large', region = 'us-east-2', phase = $2, phase_at = now(),
         image_evidence = $3, reserve_mode = $4, sleep_attempt_id = $5, sleep_boot_id = 'boot-1',
-        resume_requested_at = case when $2 = 'resuming' then now() - interval '30 seconds' end
+        resume_requested_at = case when $2 = 'resuming' then now() - interval '30 seconds' end,
+        stop_requested_at = now() - interval '5 minutes', force_stop_at = now(), hibernate_refused_at = now(),
+        stopped_at = now() - interval '4 minutes'
         where id = $1`, uuid.UUID(host), phase, evidence, mode, attempt)
 }
 
@@ -292,6 +296,16 @@ func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 			r := h.waitPhase(host, c.phase)
 			if r.outcome == nil || *r.outcome != c.outcome || r.attempt != nil || r.resumeRequested != nil {
 				t.Fatalf("after the resume %+v", r)
+			}
+			// The last stop's facts end with it, even though no actuator
+			// recorded the start.
+			var stopFacts int
+			if err := h.pool.QueryRow(h.t.Context(), `select num_nonnulls(stop_requested_at, force_stop_at, hibernate_refused_at, stopped_at)
+from hosts where id = $1`, uuid.UUID(host)).Scan(&stopFacts); err != nil {
+				t.Fatal(err)
+			}
+			if stopFacts != 0 {
+				t.Fatalf("%d facts of the last stop survived the resume", stopFacts)
 			}
 			if got := h.activations(); len(got) != 1 || got[0] != c.sample {
 				t.Fatalf("samples %v, want %s", got, c.sample)
@@ -383,6 +397,114 @@ func TestFirstSessionOfALaunchedHost(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A reserve the planner resumes while it is still stopping never slept, so
+// it sends no new Hello: its session ends, and the agent's next Hello
+// settles the resume.
+func TestResumeOfAHostThatNeverStopped(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	stream := open(t, ctx, h.client)
+	h.waitPhase(host, "ready")
+	h.exec(`update hosts set phase = 'resuming', phase_at = now(), resume_requested_at = now(), sleep_boot_id = 'boot-1'
+        where id = $1`, uuid.UUID(host))
+	ended := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := stream.Recv(); err != nil {
+				ended <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-ended:
+		if status.Code(err) != codes.Aborted {
+			t.Fatalf("the session ended with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session of a host resumed before it stopped stayed open")
+	}
+	open(t, ctx, h.client)
+	h.waitPhase(host, "ready")
+}
+
+// pump delivers a session's commands on a channel.
+func pump(stream hostStream) <-chan *hostproto.ServerMessage {
+	out := make(chan *hostproto.ServerMessage, 64)
+	go func() {
+		defer close(out)
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			out <- msg
+		}
+	}()
+	return out
+}
+
+func nextPrepare(t *testing.T, commands <-chan *hostproto.ServerMessage, within time.Duration) *hostproto.PrepareReserve {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		select {
+		case msg, ok := <-commands:
+			if !ok {
+				t.Fatal("session closed")
+			}
+			if p := msg.GetPrepareReserve(); p != nil {
+				return p
+			}
+		case <-deadline:
+			return nil
+		}
+	}
+}
+
+// A reserve is not asked to stop while an agent update is offered or in
+// flight, and a refusal for an update keeps it preparing instead of
+// sending it into service.
+func TestReserveWaitsOutAnAgentUpdate(t *testing.T) {
+	h := start(t)
+	if err := h.compute.PublishAgentRelease(h.t.Context(), compute.AgentRelease{
+		Version: "v2", SHA256: map[string]string{"amd64": strings.Repeat("a", 64)}, RolloutPercent: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	host, ctx := h.enroll()
+	old := openHello(t, ctx, h.client, &hostproto.Hello{BootId: "boot-1", AgentVersion: "v1", Updatable: true})
+	commands := pump(old)
+	h.waitPhase(host, "ready")
+	h.exec("update hosts set phase = 'preparing', phase_at = now(), reserve_mode = 'hibernate' where id = $1", uuid.UUID(host))
+	if p := nextPrepare(t, commands, time.Second); p != nil {
+		t.Fatalf("asked an updating host to stop: %v", p)
+	}
+	_ = old.CloseSend()
+
+	// The updated agent reconnects, still on trial.
+	updated := openHello(t, ctx, h.client, &hostproto.Hello{BootId: "boot-1", AgentVersion: "v2", Updatable: true})
+	commands = pump(updated)
+	p := nextPrepare(t, commands, 5*time.Second)
+	if p == nil {
+		t.Fatal("the updated host was not asked to stop")
+	}
+	trial := readyFor(p)
+	trial.AgentVersion, trial.Refused, trial.Updating = "v2", "an agent update is in flight", true
+	answer(t, updated, trial)
+	again := nextPrepare(t, commands, 5*time.Second)
+	if again == nil || again.GetAttemptId() == p.GetAttemptId() {
+		t.Fatalf("after the update refusal the host was asked %v", again)
+	}
+	if r := h.reserveHost(host); r.phase != "preparing" {
+		t.Fatalf("an update refusal moved the host to %s", r.phase)
+	}
+	ready := readyFor(again)
+	ready.AgentVersion = "v2"
+	answer(t, updated, ready)
+	h.waitPhase(host, "stopping")
 }
 
 func ptr[T any](v T) *T { return &v }

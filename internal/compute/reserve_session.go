@@ -60,21 +60,63 @@ func reserveRequestID(phaseAt time.Time) string {
 	return strconv.FormatInt(phaseAt.UnixMicro(), 10)
 }
 
-// PendingReserve returns what host must prove before it stops, or nil when
-// it is not preparing. A host prepared without a mode stops plainly.
-func (c *Compute) PendingReserve(ctx context.Context, host HostID) (*ReserveRequest, error) {
-	row, err := c.queries.PreparingHost(ctx, uuid.UUID(host))
+// ReserveStep is what an open session does for its host's reserve phase.
+type ReserveStep string
+
+const (
+	// ReserveIdle: the host is in no reserve phase the session acts on.
+	ReserveIdle ReserveStep = "idle"
+	// ReservePrepare: ask the host to prove it may stop.
+	ReservePrepare ReserveStep = "prepare"
+	// ReserveWait: the host prepares while an agent update is offered or
+	// in flight; asking now would only be refused.
+	ReserveWait ReserveStep = "wait"
+	// ReserveRejoin: the planner resumed a host that never stopped, so no
+	// new Hello will come; the session ends and the agent's next Hello
+	// settles the resume.
+	ReserveRejoin ReserveStep = "rejoin"
+)
+
+// AgentState is what a session's Hello said about the agent's release.
+type AgentState struct {
+	Version   string
+	Rejected  string
+	Updatable bool
+}
+
+// ReserveSync returns what host's open session does for its reserve phase,
+// and for ReservePrepare what it asks. A host prepared without a mode
+// stops plainly.
+func (c *Compute) ReserveSync(ctx context.Context, host HostID, agent AgentState) (ReserveStep, *ReserveRequest, error) {
+	row, err := c.queries.ReserveSessionHost(ctx, uuid.UUID(host))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return ReserveIdle, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read preparing host: %w", err)
+		return "", nil, fmt.Errorf("read reserve host: %w", err)
+	}
+	switch Phase(row.Phase) {
+	case PhaseResuming:
+		return ReserveRejoin, nil, nil
+	case PhasePreparing:
+	default:
+		return ReserveIdle, nil, nil
+	}
+	if row.Updating {
+		return ReserveWait, nil, nil
+	}
+	update, err := c.UpdateFor(ctx, host, agent.Version, agent.Rejected, agent.Updatable)
+	if err != nil {
+		return "", nil, err
+	}
+	if update != nil {
+		return ReserveWait, nil, nil
 	}
 	mode := ReserveStop
 	if row.ReserveMode != nil {
 		mode = ReserveMode(*row.ReserveMode)
 	}
-	return &ReserveRequest{ID: reserveRequestID(row.PhaseAt), Mode: mode, GPUs: int(row.GpuCount)}, nil
+	return ReservePrepare, &ReserveRequest{ID: reserveRequestID(row.PhaseAt), Mode: mode, GPUs: int(row.GpuCount)}, nil
 }
 
 // ReserveAnswer is a host's answer to a ReserveRequest.
@@ -86,6 +128,8 @@ type ReserveAnswer struct {
 	GPUs         int
 	// Refused is why the agent cannot stop; empty when it is ready.
 	Refused string
+	// Updating marks a refusal for an agent update in flight.
+	Updating bool
 }
 
 // ReserveVerdict is what an answer did to the host.
@@ -99,6 +143,9 @@ const (
 	ReserveReturned ReserveVerdict = "returned"
 	// ReserveStale: the answer is for a request or boot no longer current.
 	ReserveStale ReserveVerdict = "stale"
+	// ReserveDeferred: the agent is updating; the host keeps preparing and
+	// is asked again after the update.
+	ReserveDeferred ReserveVerdict = "deferred"
 )
 
 // AnswerReserve applies a host's answer for the current return to the
@@ -107,6 +154,9 @@ const (
 // it offers found through the driver and a passed preflight, and with no
 // container still assigned; otherwise it returns to ready.
 func (c *Compute) AnswerReserve(ctx context.Context, host HostID, answer ReserveAnswer) (ReserveVerdict, error) {
+	if answer.Updating {
+		return ReserveDeferred, nil
+	}
 	target, err := c.TargetRelease(ctx)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return "", err
@@ -237,8 +287,8 @@ func settleSession(ctx context.Context, q *Queries, host uuid.UUID, open Session
 		if err := movePhase(ctx, q, host, PhaseResuming, PhaseJoining); err != nil {
 			return err
 		}
-		if err := q.ClearResumeRequest(ctx, host); err != nil {
-			return fmt.Errorf("clear resume request: %w", err)
+		if err := q.EndLastStop(ctx, host); err != nil {
+			return fmt.Errorf("end the last stop: %w", err)
 		}
 		phase = PhaseJoining
 	}

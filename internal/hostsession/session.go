@@ -47,8 +47,10 @@ type session struct {
 	// networks holds the newest policy version recorded per container, so
 	// a report restating it writes nothing.
 	networks map[execution.ContainerID]int32
-	// reserve is the PrepareReserve awaiting its answer.
+	// reserve is the PrepareReserve awaiting its answer, and agent the
+	// release the Hello stated.
 	reserve *reserveAttempt
+	agent   compute.AgentState
 }
 
 // recordNetwork records a newly reported applied policy version.
@@ -97,7 +99,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
-		grants: map[identity.WorkspaceID]time.Time{}}
+		grants: map[identity.WorkspaceID]time.Time{}, agent: agentStateIn(hello)}
 	for _, r := range reports {
 		sess.observe(r)
 	}

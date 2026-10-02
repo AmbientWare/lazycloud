@@ -1,7 +1,8 @@
--- name: PreparingHost :one
--- A host the planner is returning to the reserve. Its phase_at names the
--- request: a later return starts a new one.
-select phase_at, reserve_mode, gpu_count from hosts where id = @id and phase = 'preparing';
+-- name: ReserveSessionHost :one
+-- What an open session does for a reserve. A preparing host's phase_at
+-- names the request: a later return starts a new one.
+select phase, phase_at, reserve_mode, gpu_count, coalesce(updating_until > now(), false)::bool as updating
+from hosts where id = @id;
 
 -- name: ReserveProofHost :one
 select id, phase, phase_at, boot_id, gpu_count, preflight from hosts where id = @id for update;
@@ -39,8 +40,13 @@ set last_resume_outcome = @outcome,
     sleep_attempt_id = null, sleep_boot_id = null, updated_at = now()
 where id = @id;
 
--- name: ClearResumeRequest :exec
-update hosts set resume_requested_at = null, updated_at = now() where id = @id;
+-- name: EndLastStop :exec
+-- A resume joined: the request and the last stop's facts end, even when
+-- the actuator never recorded the start, so the next stop starts clean.
+update hosts
+set resume_requested_at = null, stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
+    stopped_at = null, updated_at = now()
+where id = @id;
 
 -- name: InsertActivation :exec
 -- Seconds are measured on the database clock, which set started_at.

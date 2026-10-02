@@ -377,6 +377,9 @@ message ReserveReady {
   int32 gpus = 5;
   // Why the host cannot stop; empty when it is ready.
   string refused = 6;
+  // The refusal is an agent update in flight; the server keeps the host
+  // preparing and asks again once the update is done.
+  bool updating = 7;
 }
 
 message StartContainer {

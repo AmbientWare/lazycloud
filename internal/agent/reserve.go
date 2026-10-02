@@ -92,6 +92,15 @@ func (a *Agent) readyForReserve(ctx context.Context, request *hostproto.PrepareR
 	ready := &hostproto.ReserveReady{
 		RequestId: request.GetRequestId(), AttemptId: request.GetAttemptId(), BootId: a.bootID, AgentVersion: a.cfg.Version,
 	}
+	a.mu.Lock()
+	updating := a.updating || a.trial != ""
+	a.mu.Unlock()
+	if updating {
+		// Not a reason to serve: the server asks again once the update is
+		// committed.
+		ready.Refused, ready.Updating = "an agent update is in flight", true
+		return ready
+	}
 	if request.GetGpus() > 0 {
 		ready.Gpus = a.driverGPUs(ctx)
 	}
@@ -117,7 +126,6 @@ func (a *Agent) readyForReserve(ctx context.Context, request *hostproto.PrepareR
 // reserveBlocker names what keeps the host from stopping, or is empty.
 func (a *Agent) reserveBlocker(ctx context.Context) string {
 	a.mu.Lock()
-	updating := a.updating || a.trial != ""
 	live := 0
 	for _, c := range a.containers {
 		if !c.hasExited() {
@@ -125,9 +133,6 @@ func (a *Agent) reserveBlocker(ctx context.Context) string {
 		}
 	}
 	a.mu.Unlock()
-	if updating {
-		return "an agent update is in flight"
-	}
 	if live > 0 {
 		return fmt.Sprintf("containers still run here (%d)", live)
 	}

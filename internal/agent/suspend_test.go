@@ -188,10 +188,11 @@ func TestResumeRearmsTheSpotNoticeFromTheWallClock(t *testing.T) {
 	}
 }
 
-func TestReserveBlockerRefusesDuringAnUpdate(t *testing.T) {
+func TestReserveRefusalDuringAnUpdateIsMarked(t *testing.T) {
 	for _, a := range []*Agent{{updating: true}, {trial: "v2"}} {
-		if got := a.reserveBlocker(t.Context()); got != "an agent update is in flight" {
-			t.Fatalf("an updating agent answered %q", got)
+		ready := a.readyForReserve(t.Context(), &hostproto.PrepareReserve{AttemptId: "a"})
+		if !ready.GetUpdating() || ready.GetRefused() == "" {
+			t.Fatalf("an updating agent answered %v", ready)
 		}
 	}
 }

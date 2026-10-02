@@ -2554,7 +2554,10 @@ type ReserveReady struct {
 	// The GPUs the driver reported just now.
 	Gpus int32 `protobuf:"varint,5,opt,name=gpus,proto3" json:"gpus,omitempty"`
 	// Why the host cannot stop; empty when it is ready.
-	Refused       string `protobuf:"bytes,6,opt,name=refused,proto3" json:"refused,omitempty"`
+	Refused string `protobuf:"bytes,6,opt,name=refused,proto3" json:"refused,omitempty"`
+	// The refusal is an agent update in flight; the server keeps the host
+	// preparing and asks again once the update is done.
+	Updating      bool `protobuf:"varint,7,opt,name=updating,proto3" json:"updating,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2629,6 +2632,13 @@ func (x *ReserveReady) GetRefused() string {
 		return x.Refused
 	}
 	return ""
+}
+
+func (x *ReserveReady) GetUpdating() bool {
+	if x != nil {
+		return x.Updating
+	}
+	return false
 }
 
 type StartContainer struct {
@@ -6370,7 +6380,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"attempt_id\x18\x02 \x01(\tR\tattemptId\x122\n" +
 	"\x04mode\x18\x03 \x01(\x0e2\x1e.lazycloud.host.v1.ReserveModeR\x04mode\x12\x12\n" +
-	"\x04gpus\x18\x04 \x01(\x05R\x04gpus\"\xb8\x01\n" +
+	"\x04gpus\x18\x04 \x01(\x05R\x04gpus\"\xd4\x01\n" +
 	"\fReserveReady\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -6379,7 +6389,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\aboot_id\x18\x03 \x01(\tR\x06bootId\x12#\n" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\x12\x12\n" +
 	"\x04gpus\x18\x05 \x01(\x05R\x04gpus\x12\x18\n" +
-	"\arefused\x18\x06 \x01(\tR\arefused\"\xcd\b\n" +
+	"\arefused\x18\x06 \x01(\tR\arefused\x12\x1a\n" +
+	"\bupdating\x18\a \x01(\bR\bupdating\"\xcd\b\n" +
 	"\x0eStartContainer\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12%\n" +

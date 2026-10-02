@@ -48,12 +48,17 @@ func (q *Queries) AcceptReserveStop(ctx context.Context, arg AcceptReserveStopPa
 	return result.RowsAffected(), nil
 }
 
-const clearResumeRequest = `-- name: ClearResumeRequest :exec
-update hosts set resume_requested_at = null, updated_at = now() where id = $1
+const endLastStop = `-- name: EndLastStop :exec
+update hosts
+set resume_requested_at = null, stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
+    stopped_at = null, updated_at = now()
+where id = $1
 `
 
-func (q *Queries) ClearResumeRequest(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, clearResumeRequest, id)
+// A resume joined: the request and the last stop's facts end, even when
+// the actuator never recorded the start, so the next stop starts clean.
+func (q *Queries) EndLastStop(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, endLastStop, id)
 	return err
 }
 
@@ -94,25 +99,6 @@ func (q *Queries) LiveHostContainers(ctx context.Context, id *uuid.UUID) (int64,
 	var count int64
 	err := row.Scan(&count)
 	return count, err
-}
-
-const preparingHost = `-- name: PreparingHost :one
-select phase_at, reserve_mode, gpu_count from hosts where id = $1 and phase = 'preparing'
-`
-
-type PreparingHostRow struct {
-	PhaseAt     time.Time
-	ReserveMode *string
-	GpuCount    int32
-}
-
-// A host the planner is returning to the reserve. Its phase_at names the
-// request: a later return starts a new one.
-func (q *Queries) PreparingHost(ctx context.Context, id uuid.UUID) (PreparingHostRow, error) {
-	row := q.db.QueryRow(ctx, preparingHost, id)
-	var i PreparingHostRow
-	err := row.Scan(&i.PhaseAt, &i.ReserveMode, &i.GpuCount)
-	return i, err
 }
 
 const pruneActivations = `-- name: PruneActivations :exec
@@ -173,6 +159,34 @@ func (q *Queries) ReserveProofHost(ctx context.Context, id uuid.UUID) (ReservePr
 		&i.BootID,
 		&i.GpuCount,
 		&i.Preflight,
+	)
+	return i, err
+}
+
+const reserveSessionHost = `-- name: ReserveSessionHost :one
+select phase, phase_at, reserve_mode, gpu_count, coalesce(updating_until > now(), false)::bool as updating
+from hosts where id = $1
+`
+
+type ReserveSessionHostRow struct {
+	Phase       string
+	PhaseAt     time.Time
+	ReserveMode *string
+	GpuCount    int32
+	Updating    bool
+}
+
+// What an open session does for a reserve. A preparing host's phase_at
+// names the request: a later return starts a new one.
+func (q *Queries) ReserveSessionHost(ctx context.Context, id uuid.UUID) (ReserveSessionHostRow, error) {
+	row := q.db.QueryRow(ctx, reserveSessionHost, id)
+	var i ReserveSessionHostRow
+	err := row.Scan(
+		&i.Phase,
+		&i.PhaseAt,
+		&i.ReserveMode,
+		&i.GpuCount,
+		&i.Updating,
 	)
 	return i, err
 }
