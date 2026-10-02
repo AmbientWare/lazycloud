@@ -530,17 +530,12 @@ class Function(Generic[P, R]):
         Ctrl-C while waiting cancels the tasks whose values were not yielded.
         """
         calls = self.spawn_map(inputs)
-        timeout = self._effective_timeout_seconds()
         for n, call in enumerate(calls):
             try:
-                result = call.result(wait=True, timeout_seconds=timeout)
+                result = call.result(wait=True)
             except KeyboardInterrupt:
                 _cancel_tasks([c.task for c in calls[n:]])
                 raise
-            except TimeoutError as exc:
-                self._error(f"Task failed during map: {exc}")
-                yield None
-                continue
             if not result.ok:
                 self._error(f"Task failed during map: {result.error or result.status.value}")
                 yield None
