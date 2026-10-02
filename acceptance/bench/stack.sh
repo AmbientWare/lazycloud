@@ -64,6 +64,9 @@ start() {
   [ -d "$state/runtime/3.12" ] || deploy/local/build-runtime.sh "$state/runtime" 3.12
 
   bin/server migrate
+  # The samplers read query counts from it; the preloaded library alone
+  # does not create the view.
+  $compose exec -T postgres psql -U lazycloud -d lazycloud -qc 'create extension if not exists pg_stat_statements'
   release="local-$(sha256sum bin/agent | cut -c1-12)"
   [ -f "$LAZYCLOUD_AGENT_DIST_DIR/$release/lazycloud-agent-linux-amd64.tar.gz" ] ||
     deploy/agent/build-bundle.sh --python 3.12 "$LAZYCLOUD_AGENT_DIST_DIR" "$release" >/dev/null
