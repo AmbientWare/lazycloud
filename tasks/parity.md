@@ -424,8 +424,8 @@ Scope notes:
   Intentional: ContainerMetricsCharts/*; `TestMetricSamplesComeOnlyFromTheAssignedHost`, test_observability.py. Downsampling and no disk chart: tasks/observability.md. GPU sampling unverified.
 - [x] Account metrics drawer: containers, concurrency vs plan limits, tasks and failures over 24h, activity by app/resource/time range (WEB/components/shared/AppShell/AccountMetrics/*)
   Delivered: AccountMetrics/*; `TestAccountMetricsAndActivity` (CPU, GPU and container activity).
-- [ ] Live updates over the SSE change stream `/api/v1/events/changes/stream`, plus container event summaries (WEB/components/shared/WorkspaceLiveUpdates/index.tsx, Q/events.ts)
-  Gap: change hub, WorkspaceLiveUpdates; `TestChangeStreamDeliversCommittedChangesOfItsWorkspace`, `TestChangeStreamOverHTTP`. Volumes and usage have no topic, so those lists do not refresh live. About 1-2 h (a trigger migration).
+- [x] Live updates over the SSE change stream `/api/v1/events/changes/stream`, plus container event summaries (WEB/components/shared/WorkspaceLiveUpdates/index.tsx, Q/events.ts)
+  Intentional: change hub, WorkspaceLiveUpdates; topics apps, deployments, tasks, containers, secrets, volumes and usage: `TestChangeStreamDeliversCommittedChangesOfItsWorkspace`, `TestChangeStreamOverHTTP`, `TestVolumeAndUsageChangesArePublished`, workspace-invalidations.test.ts. `/v1` path and per-statement events: tasks/observability.md.
 
 ## Notifications
 - [x] Transactional email outbox (Resend): 8 attempts with backoff, bodies purged after 2 days, delivery reports via `/webhooks/resend` (R/packages/notifications/src/notifications/outbox.py, R/apps/api/src/api/server/routers/webhooks.py:127)

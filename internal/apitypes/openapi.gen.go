@@ -466,7 +466,9 @@ const (
 	ChangeTopicContainers     ChangeTopic = "containers"
 	ChangeTopicDeployments    ChangeTopic = "deployments"
 	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
+	ChangeTopicStorageVolumes ChangeTopic = "storage.volumes"
 	ChangeTopicTasks          ChangeTopic = "tasks"
+	ChangeTopicUsage          ChangeTopic = "usage"
 )
 
 // Valid indicates whether the value is a known member of the ChangeTopic enum.
@@ -480,7 +482,11 @@ func (e ChangeTopic) Valid() bool {
 		return true
 	case ChangeTopicStorageSecrets:
 		return true
+	case ChangeTopicStorageVolumes:
+		return true
 	case ChangeTopicTasks:
+		return true
+	case ChangeTopicUsage:
 		return true
 	default:
 		return false

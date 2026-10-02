@@ -4795,7 +4795,7 @@ export interface components {
             time: string;
         };
         /** @enum {string} */
-        ChangeTopic: "apps" | "deployments" | "tasks" | "containers" | "storage.secrets";
+        ChangeTopic: "apps" | "deployments" | "tasks" | "containers" | "storage.secrets" | "storage.volumes" | "usage";
         /** @enum {string} */
         ChangeKind: "created" | "updated" | "deleted";
         /** @description The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id. */
@@ -11564,7 +11564,7 @@ export const domainErrorCodeValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const previewStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewState"]> = ["starting", "ready", "stopped"];
 export const previewKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewKind"]> = ["function", "endpoint", "asgi", "realtime"];
 export const containerLogEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerLogEntry"]["stream"]> = ["stdout", "stderr", "system"];
-export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "containers", "storage.secrets"];
+export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "containers", "storage.secrets", "storage.volumes", "usage"];
 export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
 export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
 export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "image", "source", "create", "runtime", "draining"];

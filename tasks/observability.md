@@ -106,8 +106,9 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   silently. A Redis outage lost the reference's changes; here a change is
   published by the transaction that made it.
 - One `change` event per committed statement carries a list of changes.
-  Topics: apps, deployments, tasks, containers, storage.secrets. Compute pages
-  poll; volumes and usage have no topic yet (gap).
+  Topics: apps, deployments, tasks, containers, storage.secrets,
+  storage.volumes and usage (migration 0014). Compute pages
+  poll.
 - Container metrics take a range and step and are downsampled; the
   reference returned the newest 500 raw entries of a Redis stream, minus
   other event types. GPU memory and utilization are measured; the reference

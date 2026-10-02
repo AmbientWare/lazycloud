@@ -6232,7 +6232,7 @@ components:
 
     ChangeTopic:
       type: string
-      enum: [apps, deployments, tasks, containers, storage.secrets]
+      enum: [apps, deployments, tasks, containers, storage.secrets, storage.volumes, usage]
 
     ChangeKind:
       type: string

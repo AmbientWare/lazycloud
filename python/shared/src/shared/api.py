@@ -1166,6 +1166,8 @@ class ChangeTopic(str, Enum):
     tasks = "tasks"
     containers = "containers"
     storage_secrets = "storage.secrets"
+    storage_volumes = "storage.volumes"
+    usage = "usage"
 
 
 class ChangeKind(str, Enum):
