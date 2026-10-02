@@ -14,4 +14,4 @@ config:
   # Platform and connected-account hosts launch only from these; a region
   # missing here launches nothing. Commit the workflow's output here
   # through a reviewed PR.
-  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-040f78e6cc9794d10","us-east-2":"ami-0b1991a9f980b11d1","us-west-1":"ami-0f5ae8cec880ea299","us-west-2":"ami-0af599bbc4a82570b"},"gpu":{"us-east-1":"ami-0a14a462f6ce593ab","us-east-2":"ami-0922f369bbbe3d466","us-west-1":"ami-092be80c9ecfaad95","us-west-2":"ami-0a6977878534e362f"}}'
+  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-000b64d8755387fce","us-east-2":"ami-035efe52c98ac1f82","us-west-1":"ami-00c00f68dad41e7a8","us-west-2":"ami-040a2cf495bcfbd45"},"gpu":{"us-east-1":"ami-0fc2846ad59cc9c3b","us-east-2":"ami-0494e2060ad10475f","us-west-1":"ami-0b0c22100e6c7964d","us-west-2":"ami-095d79f3b628f67d9"}}'
