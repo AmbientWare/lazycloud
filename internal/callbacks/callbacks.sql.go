@@ -174,6 +174,31 @@ func (q *Queries) FinishCallback(ctx context.Context, arg FinishCallbackParams) 
 	return err
 }
 
+const nextCallbackAt = `-- name: NextCallbackAt :many
+select next_attempt_at from task_callbacks where state = 'pending' order by next_attempt_at limit 1
+`
+
+// When the earliest pending callback is due; no row without one.
+func (q *Queries) NextCallbackAt(ctx context.Context) ([]time.Time, error) {
+	rows, err := q.db.Query(ctx, nextCallbackAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []time.Time
+	for rows.Next() {
+		var next_attempt_at time.Time
+		if err := rows.Scan(&next_attempt_at); err != nil {
+			return nil, err
+		}
+		items = append(items, next_attempt_at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const purgeFinishedCallbacks = `-- name: PurgeFinishedCallbacks :execrows
 delete from task_callbacks
 where id in (

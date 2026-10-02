@@ -164,6 +164,24 @@ func (q *Queries) DrainIdleContainers(ctx context.Context, arg DrainIdleContaine
 	return items, nil
 }
 
+const hasLiveWork = `-- name: HasLiveWork :one
+select ((select 1 from tasks where status = 'queued' order by release_id limit 1) is not null
+        or (select 1 from tasks where status = 'running' order by release_id limit 1) is not null
+        or (select 1 from containers where state <> 'stopped' order by release_id limit 1) is not null)::bool as live
+`
+
+// Whether anything exists that time alone can advance: a queued or running
+// task, or a live container (pending, starting, ready or draining). Each
+// check takes the first entry of a partial index of live rows: ordering by
+// the indexed column, which EXISTS would drop, keeps the planner from
+// scanning history for a match.
+func (q *Queries) HasLiveWork(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, hasLiveWork)
+	var live bool
+	err := row.Scan(&live)
+	return live, err
+}
+
 const lockIdleContainers = `-- name: LockIdleContainers :many
 select c.id
 from containers c
@@ -208,8 +226,17 @@ func (q *Queries) LockIdleContainers(ctx context.Context, arg LockIdleContainers
 }
 
 const planningReleases = `-- name: PlanningReleases :many
-with candidates as (
-    select t.release_id from tasks t where t.status = 'queued' and t.release_id > $1
+with recursive queued (release_id) as (
+    (select t.release_id from tasks t
+     where t.status = 'queued' and t.release_id > $1
+     order by t.release_id limit 1)
+    union all
+    select (select t.release_id from tasks t
+            where t.status = 'queued' and t.release_id > q.release_id
+            order by t.release_id limit 1)
+    from queued q where q.release_id is not null
+), candidates as (
+    select release_id from queued where release_id is not null
     union
     select t.release_id from tasks t where t.status = 'running' and t.release_id > $1
     union
@@ -277,8 +304,13 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 cross join lateral (
-    select count(*) filter (where t.available_at <= now() and t.unmet_dependencies = 0) as available
-    from tasks t where t.release_id = r.id and t.status = 'queued'
+    select count(*) as available from (
+        select 1 from tasks t
+        where t.release_id = r.id and t.status = 'queued'
+          and t.available_at <= now() and t.unmet_dependencies = 0
+        limit greatest(coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1), 1)::bigint
+              * greatest(coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1), 1)::bigint
+    ) capped
 ) q
 cross join lateral (
     select count(*) as running from tasks t where t.release_id = r.id and t.status = 'running'
@@ -325,7 +357,11 @@ type PlanningReleasesRow struct {
 
 // Releases after @after_id that need a planning decision: queued or running
 // tasks, live containers, or a warm minimum on an active release. Each source
-// reads a partial index of live rows, so retained history costs nothing.
+// reads a partial index of live rows, so retained history costs nothing. The
+// queued releases are found by skipping through tasks_queued one release at
+// a time, so a deep backlog costs one probe per release, not per task.
+// Demand past max_containers * tasks_per_container changes no decision, so
+// the count stops there and a deep backlog reads a bounded prefix.
 func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesParams) ([]PlanningReleasesRow, error) {
 	rows, err := q.db.Query(ctx, planningReleases, arg.AfterID, arg.BatchSize)
 	if err != nil {

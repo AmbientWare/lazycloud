@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import queue
 import re
+import threading
 import zipfile
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -368,8 +369,12 @@ def deploy_functions(
             workloads=[specs[id(function)] for function in target.functions], prune=prune
         )
 
-    deployments: list[AppDeployment] = []
+    deployments: list[AppDeployment | None] = []
     for target in targets:
+        if staged and not target.functions:
+            # An app with no workloads only prunes, in the second pass.
+            deployments.append(None)
+            continue
         with ExitStack() as stack:
             steps = [
                 stack.enter_context(terminal.step("Runtime", function.resource_name))
@@ -391,8 +396,10 @@ def deploy_functions(
                 deployments[n] = client.deploy_app(
                     workspace, target.app, request(target, prune=True)
                 )
-            step.done(f"{deployments[n].removed_versions} deployment versions removed")
-    return deployments
+            done = deployments[n]
+            assert done is not None
+            step.done(f"{done.removed_versions} deployment versions removed")
+    return [deployment for deployment in deployments if deployment is not None]
 
 
 def prepare_release(
@@ -533,21 +540,41 @@ def _prepare_images(
             raise ImageBuildError(msg)
         return result
 
-    with ThreadPoolExecutor(
-        max_workers=MAX_IMAGE_PREPARATIONS, thread_name_prefix="deployment-image"
-    ) as executor:
-        futures = {
-            key: executor.submit(copy_context().run, build, image)
-            for key, image in distinct.items()
-        }
+    # Daemon threads, so a failed build or Ctrl+C returns at once instead of
+    # waiting for the other builds' remote polling to end.
+    finished: queue.SimpleQueue[tuple[str, ImageBuildResult | None, BaseException | None]] = (
+        queue.SimpleQueue()
+    )
+
+    def run(key: str, image: Image) -> None:
         try:
-            for future in as_completed(futures.values()):
-                future.result()
-        except BaseException:
-            for future in futures.values():
-                future.cancel()
-            raise
-    return {function_id: futures[key].result() for function_id, key in keys.items()}
+            finished.put((key, build(image), None))
+        except BaseException as error:
+            finished.put((key, None, error))
+
+    waiting = list(distinct.items())
+    results: dict[str, ImageBuildResult] = {}
+
+    def start_next() -> None:
+        key, image = waiting.pop(0)
+        threading.Thread(
+            target=copy_context().run,
+            args=(run, key, image),
+            name="deployment-image",
+            daemon=True,
+        ).start()
+
+    for _ in range(min(MAX_IMAGE_PREPARATIONS, len(waiting))):
+        start_next()
+    while len(results) < len(distinct):
+        key, result, error = finished.get()
+        if error is not None:
+            raise error
+        assert result is not None
+        results[key] = result
+        if waiting:
+            start_next()
+    return {function_id: results[key] for function_id, key in keys.items()}
 
 
 def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:

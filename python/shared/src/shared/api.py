@@ -4,7 +4,8 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal
-from pydantic import AwareDatetime, Base64Bytes, BaseModel, ConfigDict, Field, RootModel
+from pydantic import AwareDatetime, Base64Bytes, ConfigDict, Field, RootModel
+from shared.contracts import APIModel
 from uuid import UUID
 from typing_extensions import TypeAliasType
 
@@ -43,11 +44,11 @@ class PlatformRole(str, Enum):
     member = "member"
 
 
-class UserRoleRequest(BaseModel):
+class UserRoleRequest(APIModel):
     role: PlatformRole
 
 
-class UserStatusRequest(BaseModel):
+class UserStatusRequest(APIModel):
     status: UserStatus
 
 
@@ -62,7 +63,7 @@ class WorkspaceRole(str, Enum):
     member = "member"
 
 
-class WorkspaceRequest(BaseModel):
+class WorkspaceRequest(APIModel):
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
     cloud: Annotated[
         Literal["aws"] | None,
@@ -77,7 +78,7 @@ class TokenStatus(str, Enum):
     expired = "expired"
 
 
-class Token(BaseModel):
+class Token(APIModel):
     id: UUID
     name: str
     prefix: Annotated[
@@ -98,14 +99,14 @@ class Token(BaseModel):
     ] = None
 
 
-class TokenList(BaseModel):
+class TokenList(APIModel):
     tokens: list[Token]
     next_cursor: Annotated[
         UUID | None, Field(description="Pass as `cursor` for the next page; absent after the last.")
     ] = None
 
 
-class TokenCreateRequest(BaseModel):
+class TokenCreateRequest(APIModel):
     name: Annotated[str, Field(max_length=100, min_length=1)]
     expires_in_seconds: Annotated[
         int | None,
@@ -115,18 +116,18 @@ class TokenCreateRequest(BaseModel):
     ] = None
 
 
-class CreatedToken(BaseModel):
+class CreatedToken(APIModel):
     token: Annotated[str, Field(description="The secret; it is not shown again.")]
     record: Token
 
 
-class DeviceLoginRequest(BaseModel):
+class DeviceLoginRequest(APIModel):
     client_name: Annotated[
         str, Field(description="Names the device token, such as cli@laptop.", max_length=200)
     ] = "cli"
 
 
-class DeviceLogin(BaseModel):
+class DeviceLogin(APIModel):
     device_code: Annotated[str, Field(description="The CLI's secret for polling.")]
     user_code: Annotated[
         str, Field(description="What the person confirms at the verification page.")
@@ -139,7 +140,7 @@ class DeviceLogin(BaseModel):
     poll_interval_seconds: int
 
 
-class DeviceTokenRequest(BaseModel):
+class DeviceTokenRequest(APIModel):
     device_code: Annotated[str, Field(max_length=200, min_length=1)]
 
 
@@ -151,7 +152,7 @@ class DeviceTokenStatus(str, Enum):
     expired = "expired"
 
 
-class DeviceTokenResponse(BaseModel):
+class DeviceTokenResponse(APIModel):
     status: DeviceTokenStatus
     token: Annotated[
         str | None,
@@ -169,7 +170,7 @@ class DeviceCodeStatus(str, Enum):
     expired = "expired"
 
 
-class DeviceCode(BaseModel):
+class DeviceCode(APIModel):
     user_code: str
     client_name: str
     status: DeviceCodeStatus
@@ -177,7 +178,7 @@ class DeviceCode(BaseModel):
     expires_at: AwareDatetime
 
 
-class Member(BaseModel):
+class Member(APIModel):
     user_id: UUID
     display_name: str
     email: str
@@ -185,7 +186,7 @@ class Member(BaseModel):
     created_at: Annotated[AwareDatetime, Field(description="When the user joined.")]
 
 
-class MemberList(BaseModel):
+class MemberList(APIModel):
     members: list[Member]
 
 
@@ -204,12 +205,12 @@ class DeliveryState(str, Enum):
     discarded = "discarded"
 
 
-class InvitationRequest(BaseModel):
+class InvitationRequest(APIModel):
     email: Annotated[str, Field(max_length=320, min_length=3)]
     role: InvitationRole = InvitationRole.member
 
 
-class Invitation(BaseModel):
+class Invitation(APIModel):
     id: UUID
     workspace_id: UUID
     email: str
@@ -223,11 +224,11 @@ class Invitation(BaseModel):
     updated_at: AwareDatetime
 
 
-class InvitationList(BaseModel):
+class InvitationList(APIModel):
     invitations: list[Invitation]
 
 
-class InvitationPreview(BaseModel):
+class InvitationPreview(APIModel):
     workspace_id: UUID
     workspace_name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
     email: str
@@ -237,21 +238,21 @@ class InvitationPreview(BaseModel):
     expires_at: AwareDatetime
 
 
-class SourceUploadRequest(BaseModel):
+class SourceUploadRequest(APIModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
     ]
     size_bytes: Annotated[int, Field(ge=1, le=536870912)]
 
 
-class UploadTarget(BaseModel):
+class UploadTarget(APIModel):
     url: Annotated[str, Field(description="Absolute URL; the request carries no bearer token.")]
     method: Literal["PUT"]
     headers: dict[str, str]
     expires_at: AwareDatetime
 
 
-class SourceRef(BaseModel):
+class SourceRef(APIModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
     ]
@@ -270,14 +271,14 @@ class Backoff(str, Enum):
     exponential = "exponential"
 
 
-class RetryPolicy(BaseModel):
+class RetryPolicy(APIModel):
     max_attempts: Annotated[int, Field(description="Attempts including the first.", ge=1, le=100)]
     delay_seconds: Annotated[float, Field(ge=0.0, le=3600.0)] = 0
     backoff: Backoff = Backoff.fixed
     max_delay_seconds: Annotated[float | None, Field(ge=0.0, le=86400.0)] = None
 
 
-class Autoscaler(BaseModel):
+class Autoscaler(APIModel):
     min_containers: Annotated[int, Field(ge=0, le=1000)] = 0
     max_containers: Annotated[int, Field(ge=1, le=1000)] = 1
     tasks_per_container: Annotated[int, Field(ge=1, le=10000)] = 1
@@ -288,7 +289,7 @@ class Encoding(str, Enum):
     cloudpickle = "cloudpickle"
 
 
-class Payload(BaseModel):
+class Payload(APIModel):
     encoding: Encoding
     value: Any | None = None
     data: Base64Bytes | None = None
@@ -327,7 +328,7 @@ class FailureKind(str, Enum):
     dependency_failed = "dependency_failed"
 
 
-class TaskFailure(BaseModel):
+class TaskFailure(APIModel):
     kind: FailureKind
     type: Annotated[str | None, Field(description="The exception type the handler raised.")] = None
     message: str
@@ -344,7 +345,7 @@ class Stream(str, Enum):
     system = "system"
 
 
-class LogEntry(BaseModel):
+class LogEntry(APIModel):
     id: int
     task_id: UUID
     attempt: int
@@ -367,7 +368,7 @@ class SecretName(RootModel[str]):
     ]
 
 
-class SecretCreate(BaseModel):
+class SecretCreate(APIModel):
     name: Annotated[
         str,
         Field(
@@ -378,11 +379,11 @@ class SecretCreate(BaseModel):
     value: Annotated[str, Field(max_length=65536)]
 
 
-class SecretValueUpdate(BaseModel):
+class SecretValueUpdate(APIModel):
     value: Annotated[str, Field(max_length=65536)]
 
 
-class SecretValue(BaseModel):
+class SecretValue(APIModel):
     name: Annotated[
         str,
         Field(
@@ -395,7 +396,7 @@ class SecretValue(BaseModel):
     updated_at: AwareDatetime
 
 
-class Schedule(BaseModel):
+class Schedule(APIModel):
     cron: Annotated[str, Field(description="The normalized expression.")]
     timezone: Literal["UTC"]
     next_run_at: AwareDatetime
@@ -410,13 +411,13 @@ class Schedule(BaseModel):
     ] = None
 
 
-class ScheduledFunction(BaseModel):
+class ScheduledFunction(APIModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     schedule: Schedule
 
 
-class SchedulePage(BaseModel):
+class SchedulePage(APIModel):
     schedules: list[ScheduledFunction]
     next_cursor: Annotated[str | None, Field(description="Present when more schedules follow.")] = (
         None
@@ -437,7 +438,7 @@ class VolumeRelativePath(RootModel[str]):
     ]
 
 
-class CloudBucketSpec(BaseModel):
+class CloudBucketSpec(APIModel):
     bucket: Annotated[str, Field(max_length=63, min_length=3)]
     prefix: Annotated[
         str,
@@ -468,11 +469,11 @@ class CloudBucketSpec(BaseModel):
     ] = None
 
 
-class CreateVolumeRequest(BaseModel):
+class CreateVolumeRequest(APIModel):
     name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
 
 
-class VolumeFile(BaseModel):
+class VolumeFile(APIModel):
     path: Annotated[str, Field(description="The path relative to the volume root.")]
     is_dir: bool
     size_bytes: int
@@ -481,18 +482,18 @@ class VolumeFile(BaseModel):
     )
 
 
-class VolumeFilePage(BaseModel):
+class VolumeFilePage(APIModel):
     files: list[VolumeFile]
     next_cursor: str | None = None
 
 
-class RemovedVolumeFiles(BaseModel):
+class RemovedVolumeFiles(APIModel):
     removed: Annotated[
         list[str], Field(description="Removed file paths relative to the volume root.")
     ]
 
 
-class MoveVolumeFileRequest(BaseModel):
+class MoveVolumeFileRequest(APIModel):
     from_: Annotated[
         str,
         Field(
@@ -517,7 +518,7 @@ class Method(str, Enum):
     upload_part = "upload_part"
 
 
-class PresignVolumeFileRequest(BaseModel):
+class PresignVolumeFileRequest(APIModel):
     path: Annotated[
         str,
         Field(
@@ -537,12 +538,12 @@ class PresignVolumeFileRequest(BaseModel):
     ] = False
 
 
-class PresignedUrl(BaseModel):
+class PresignedUrl(APIModel):
     url: Annotated[str, Field(description="Absolute URL; the request carries no bearer token.")]
     expires_at: AwareDatetime
 
 
-class UploadPart(BaseModel):
+class UploadPart(APIModel):
     number: int
     offset: int
     size_bytes: int
@@ -552,19 +553,19 @@ class UploadPart(BaseModel):
     ]
 
 
-class Upload(BaseModel):
+class Upload(APIModel):
     upload_id: str | None = None
     part_size_bytes: int | None = None
     parts: list[UploadPart]
     expires_at: AwareDatetime
 
 
-class CompletedPart(BaseModel):
+class CompletedPart(APIModel):
     number: Annotated[int, Field(ge=1, le=10000)]
     etag: Annotated[str, Field(max_length=1024)]
 
 
-class CreateVolumeUploadRequest(BaseModel):
+class CreateVolumeUploadRequest(APIModel):
     path: Annotated[
         str,
         Field(
@@ -575,7 +576,7 @@ class CreateVolumeUploadRequest(BaseModel):
     part_size_bytes: Annotated[int, Field(ge=5242880, le=5368709120)] = 5242880
 
 
-class MultipartUpload(BaseModel):
+class MultipartUpload(APIModel):
     upload_id: str
     path: str
     part_size_bytes: int
@@ -583,7 +584,7 @@ class MultipartUpload(BaseModel):
     expires_at: AwareDatetime
 
 
-class CompleteVolumeUploadRequest(BaseModel):
+class CompleteVolumeUploadRequest(APIModel):
     path: Annotated[
         str,
         Field(
@@ -594,7 +595,7 @@ class CompleteVolumeUploadRequest(BaseModel):
     parts: Annotated[list[CompletedPart], Field(max_length=10000, min_length=1)]
 
 
-class AbortVolumeUploadRequest(BaseModel):
+class AbortVolumeUploadRequest(APIModel):
     path: Annotated[
         str,
         Field(
@@ -615,7 +616,7 @@ class State(str, Enum):
     stored = "stored"
 
 
-class Artifact(BaseModel):
+class Artifact(APIModel):
     id: UUID
     task_id: UUID | None = None
     app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
@@ -628,12 +629,12 @@ class Artifact(BaseModel):
     expires_at: AwareDatetime | None = None
 
 
-class ArtifactPage(BaseModel):
+class ArtifactPage(APIModel):
     artifacts: list[Artifact]
     next_cursor: str | None = None
 
 
-class CreateArtifactRequest(BaseModel):
+class CreateArtifactRequest(APIModel):
     task_id: UUID
     filename: Annotated[
         str, Field(description="A base name without `/`.", pattern="^[^/\\x00-\\x1f\\x7f]{1,255}$")
@@ -642,19 +643,19 @@ class CreateArtifactRequest(BaseModel):
     size_bytes: Annotated[int, Field(ge=0, le=5497558138880)]
 
 
-class ArtifactUpload(BaseModel):
+class ArtifactUpload(APIModel):
     artifact: Artifact
     upload: Upload
 
 
-class CompleteArtifactRequest(BaseModel):
+class CompleteArtifactRequest(APIModel):
     parts: Annotated[
         list[CompletedPart] | None,
         Field(description="The ETag of every part of a multipart upload.", max_length=10000),
     ] = None
 
 
-class PresignArtifactRequest(BaseModel):
+class PresignArtifactRequest(APIModel):
     expires_seconds: Annotated[
         int, Field(description="Capped at the artifact's remaining retention.", ge=1, le=604800)
     ] = 3600
@@ -663,7 +664,7 @@ class PresignArtifactRequest(BaseModel):
     ] = False
 
 
-class ArtifactSummary(BaseModel):
+class ArtifactSummary(APIModel):
     count: int
     size_bytes: int
     estimated_monthly_nanos: Annotated[
@@ -680,15 +681,15 @@ class ArtifactSummary(BaseModel):
     ]
 
 
-class DeleteArtifactsRequest(BaseModel):
+class DeleteArtifactsRequest(APIModel):
     ids: Annotated[list[UUID], Field(max_length=100, min_length=1)]
 
 
-class DeletedArtifacts(BaseModel):
+class DeletedArtifacts(APIModel):
     deleted: list[UUID]
 
 
-class QueueInfo(BaseModel):
+class QueueInfo(APIModel):
     name: Annotated[
         str,
         Field(
@@ -700,12 +701,12 @@ class QueueInfo(BaseModel):
     oldest_message_at: AwareDatetime | None = None
 
 
-class QueuePage(BaseModel):
+class QueuePage(APIModel):
     queues: list[QueueInfo]
     next_cursor: str | None = None
 
 
-class PutQueueMessagesRequest(BaseModel):
+class PutQueueMessagesRequest(APIModel):
     messages: Annotated[
         list[Base64Bytes],
         Field(
@@ -714,11 +715,11 @@ class PutQueueMessagesRequest(BaseModel):
     ]
 
 
-class QueueMessageResult(BaseModel):
+class QueueMessageResult(APIModel):
     message: Base64Bytes | None = None
 
 
-class MapInfo(BaseModel):
+class MapInfo(APIModel):
     name: Annotated[
         str,
         Field(
@@ -732,17 +733,17 @@ class MapInfo(BaseModel):
     next_expiry_at: AwareDatetime | None = None
 
 
-class MapPage(BaseModel):
+class MapPage(APIModel):
     maps: list[MapInfo]
     next_cursor: str | None = None
 
 
-class MapKeyPage(BaseModel):
+class MapKeyPage(APIModel):
     keys: list[str]
     next_cursor: str | None = None
 
 
-class MapEntry(BaseModel):
+class MapEntry(APIModel):
     key: str
     value: Annotated[
         Base64Bytes,
@@ -756,7 +757,7 @@ class MapEntry(BaseModel):
     updated_at: AwareDatetime
 
 
-class SetMapEntryRequest(BaseModel):
+class SetMapEntryRequest(APIModel):
     value: Annotated[Base64Bytes, Field(description="At most 1 MiB, base64.")]
     ttl_seconds: Annotated[
         int | None,
@@ -770,7 +771,7 @@ class SetMapEntryRequest(BaseModel):
     if_absent: bool = False
 
 
-class MapEntryWrite(BaseModel):
+class MapEntryWrite(APIModel):
     revision: str
     expires_at: AwareDatetime | None = None
 
@@ -817,41 +818,41 @@ class WorkloadKind(str, Enum):
     sandbox = "sandbox"
 
 
-class WorkloadIdentity(BaseModel):
+class WorkloadIdentity(APIModel):
     kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
 
-class DeploymentPlanItem(BaseModel):
+class DeploymentPlanItem(APIModel):
     kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     action: DeploymentPlanAction
     versions: Annotated[int, Field(description="Versions the workload has now.")]
 
 
-class StartWorkloadRequest(BaseModel):
+class StartWorkloadRequest(APIModel):
     version: Annotated[
         int | None, Field(description="Make this deployed version active before starting.", ge=1)
     ] = None
 
 
-class Version(BaseModel):
+class Version(APIModel):
     release_id: UUID
     version: int
     active: bool
     created_at: AwareDatetime
 
 
-class VersionPage(BaseModel):
+class VersionPage(APIModel):
     versions: list[Version]
     next_cursor: str | None = None
 
 
-class StopTasksRequest(BaseModel):
+class StopTasksRequest(APIModel):
     task_ids: Annotated[list[UUID], Field(max_length=1000, min_length=1)]
 
 
-class StopTasksResponse(BaseModel):
+class StopTasksResponse(APIModel):
     stopped: Annotated[list[UUID], Field(description="Tasks this request cancelled.")]
     skipped: Annotated[
         list[UUID],
@@ -933,14 +934,14 @@ class Group(RootModel[str]):
     root: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
 
 
-class ImageStep(BaseModel):
+class ImageStep(APIModel):
     kind: ImageStepKind
     command: Annotated[str | None, Field(max_length=65536)] = None
     args: Annotated[list[Arg] | None, Field(max_length=1000)] = None
     groups: Annotated[list[Group] | None, Field(max_length=64)] = None
 
 
-class Image(BaseModel):
+class Image(APIModel):
     id: Annotated[str, Field(pattern="^img_[0-9a-f]{24}$")]
     python_version: str
     architecture: ImageArchitecture
@@ -962,7 +963,7 @@ class ImageBuildPhase(str, Enum):
     finished = "finished"
 
 
-class ImageBuild(BaseModel):
+class ImageBuild(APIModel):
     id: UUID
     image_id: Annotated[str, Field(pattern="^img_[0-9a-f]{24}$")]
     status: ImageBuildStatus
@@ -973,7 +974,7 @@ class ImageBuild(BaseModel):
     finished_at: AwareDatetime | None = None
 
 
-class ImageBuildLogEntry(BaseModel):
+class ImageBuildLogEntry(APIModel):
     id: int
     attempt: int
     data: Annotated[
@@ -999,7 +1000,7 @@ class HttpMethod(str, Enum):
     TRACE = "TRACE"
 
 
-class HttpUrls(BaseModel):
+class HttpUrls(APIModel):
     url: Annotated[str, Field(description="Follows the active release across deploys.")]
     version_url: Annotated[str, Field(description="Pinned to the release's version.")]
     release_url: Annotated[str, Field(description="Addresses the release by id.")]
@@ -1014,13 +1015,13 @@ class HttpUrls(BaseModel):
     ] = None
 
 
-class InvocationBody(BaseModel):
+class InvocationBody(APIModel):
     model_config = ConfigDict(
         extra="allow",
     )
 
 
-class DomainRequest(BaseModel):
+class DomainRequest(APIModel):
     hostname: Annotated[str, Field(max_length=253)]
 
 
@@ -1038,13 +1039,13 @@ class DomainErrorCode(str, Enum):
     upstream_unavailable = "upstream_unavailable"
 
 
-class DnsRecord(BaseModel):
+class DnsRecord(APIModel):
     type: str
     name: str
     value: str
 
 
-class Domain(BaseModel):
+class Domain(APIModel):
     id: UUID
     hostname: Annotated[
         str,
@@ -1066,7 +1067,7 @@ class Domain(BaseModel):
     updated_at: AwareDatetime
 
 
-class DomainList(BaseModel):
+class DomainList(APIModel):
     data: list[Domain]
     next: Annotated[
         str | None, Field(description="Pass as `after` for the next page; absent on the last.")
@@ -1086,7 +1087,7 @@ class PreviewKind(str, Enum):
     realtime = "realtime"
 
 
-class Preview(BaseModel):
+class Preview(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
@@ -1108,12 +1109,12 @@ class Preview(BaseModel):
     created_at: AwareDatetime
 
 
-class PreviewSync(BaseModel):
+class PreviewSync(APIModel):
     written: int
     removed: int
 
 
-class HttpRequest(BaseModel):
+class HttpRequest(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
@@ -1132,14 +1133,14 @@ class HttpRequest(BaseModel):
     response_bytes: int
 
 
-class HttpRequestList(BaseModel):
+class HttpRequestList(APIModel):
     data: list[HttpRequest]
     next: Annotated[
         UUID | None, Field(description="Pass as `before` for the next page; absent on the last.")
     ] = None
 
 
-class ContainerLogEntry(BaseModel):
+class ContainerLogEntry(APIModel):
     id: int
     stream: Stream
     data: Annotated[str, Field(description="One line of output without its trailing newline.")]
@@ -1160,7 +1161,7 @@ class ChangeKind(str, Enum):
     deleted = "deleted"
 
 
-class ResourceChange(BaseModel):
+class ResourceChange(APIModel):
     topic: ChangeTopic
     change: ChangeKind
     resource_id: Annotated[
@@ -1185,11 +1186,11 @@ class ChangeResetReason(str, Enum):
     unknown_cursor = "unknown_cursor"
 
 
-class ChangeReset(BaseModel):
+class ChangeReset(APIModel):
     reason: ChangeResetReason
 
 
-class ContainerMetricPoint(BaseModel):
+class ContainerMetricPoint(APIModel):
     timestamp: AwareDatetime
     interval_ms: int
     cpu_millicores: Annotated[float, Field(description="Average CPU use over the interval.")]
@@ -1216,7 +1217,7 @@ class LifecycleStageKind(str, Enum):
     draining = "draining"
 
 
-class LifecycleStage(BaseModel):
+class LifecycleStage(APIModel):
     stage: LifecycleStageKind
     started_at: AwareDatetime
     finished_at: Annotated[
@@ -1230,7 +1231,7 @@ class LifecycleStage(BaseModel):
     ] = None
 
 
-class ContainerLifecycle(BaseModel):
+class ContainerLifecycle(APIModel):
     container_id: UUID
     app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
     function: Annotated[str | None, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")] = None
@@ -1247,11 +1248,11 @@ class ContainerLifecycle(BaseModel):
     stages: Annotated[list[LifecycleStage], Field(description="In the order they began.")]
 
 
-class ContainerLifecyclesRequest(BaseModel):
+class ContainerLifecyclesRequest(APIModel):
     container_ids: Annotated[list[UUID], Field(max_length=200, min_length=1)]
 
 
-class ContainerLifecycleList(BaseModel):
+class ContainerLifecycleList(APIModel):
     lifecycles: list[ContainerLifecycle]
 
 
@@ -1272,7 +1273,7 @@ class TaskEventKind(str, Enum):
     finished = "finished"
 
 
-class TaskEvent(BaseModel):
+class TaskEvent(APIModel):
     kind: TaskEventKind
     at: AwareDatetime
     attempt: Annotated[
@@ -1290,13 +1291,13 @@ class TaskEvent(BaseModel):
     ] = None
 
 
-class TaskTimeline(BaseModel):
+class TaskTimeline(APIModel):
     task_id: UUID
     status: TaskStatus
     events: list[TaskEvent]
 
 
-class CallGraphNode(BaseModel):
+class CallGraphNode(APIModel):
     task_id: UUID
     parent_task_id: UUID | None = None
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -1313,7 +1314,7 @@ class CallGraphNode(BaseModel):
     ]
 
 
-class TaskCallGraph(BaseModel):
+class TaskCallGraph(APIModel):
     root_task_id: UUID
     nodes: Annotated[
         list[CallGraphNode],
@@ -1324,7 +1325,7 @@ class TaskCallGraph(BaseModel):
     ]
 
 
-class TaskStatusCounts(BaseModel):
+class TaskStatusCounts(APIModel):
     queued: int
     running: int
     succeeded: int
@@ -1332,7 +1333,7 @@ class TaskStatusCounts(BaseModel):
     cancelled: int
 
 
-class PerformanceBucket(BaseModel):
+class PerformanceBucket(APIModel):
     timestamp: AwareDatetime
     count: Annotated[int, Field(description="Finished tasks with a run time.")]
     p50_ms: float | None = None
@@ -1341,7 +1342,7 @@ class PerformanceBucket(BaseModel):
     status_counts: TaskStatusCounts
 
 
-class WorkloadPerformance(BaseModel):
+class WorkloadPerformance(APIModel):
     workload_id: UUID
     window_seconds: int
     start: AwareDatetime
@@ -1349,7 +1350,7 @@ class WorkloadPerformance(BaseModel):
     buckets: list[PerformanceBucket]
 
 
-class TaskMetrics(BaseModel):
+class TaskMetrics(APIModel):
     start: AwareDatetime
     end: AwareDatetime
     total: int
@@ -1367,12 +1368,12 @@ class TaskMetrics(BaseModel):
     startup_ms_p95: float | None = None
 
 
-class ActivityBucket(BaseModel):
+class ActivityBucket(APIModel):
     timestamp: AwareDatetime
     status_counts: TaskStatusCounts
 
 
-class ActivitySeries(BaseModel):
+class ActivitySeries(APIModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     app_id: UUID | None = None
     function: Annotated[
@@ -1386,7 +1387,7 @@ class ActivitySeries(BaseModel):
     buckets: list[ActivityBucket]
 
 
-class TaskActivity(BaseModel):
+class TaskActivity(APIModel):
     window_seconds: int
     start: AwareDatetime
     end: AwareDatetime
@@ -1395,17 +1396,17 @@ class TaskActivity(BaseModel):
     ]
 
 
-class ContainerCounts(BaseModel):
+class ContainerCounts(APIModel):
     pending: Annotated[int, Field(description="Waiting for a host or starting.")]
     running: Annotated[int, Field(description="Ready or draining.")]
 
 
-class ConcurrencyLimits(BaseModel):
+class ConcurrencyLimits(APIModel):
     max_cpu_containers: int
     max_gpus: int
 
 
-class Concurrency(BaseModel):
+class Concurrency(APIModel):
     cpu_containers: int
     gpus: int
     limits: Annotated[
@@ -1414,7 +1415,7 @@ class Concurrency(BaseModel):
     ] = None
 
 
-class AccountMetrics(BaseModel):
+class AccountMetrics(APIModel):
     containers: Annotated[
         ContainerCounts,
         Field(description="Live containers in every workspace the caller is a member of."),
@@ -1443,12 +1444,12 @@ class ActivitySeriesKind(str, Enum):
     other = "other"
 
 
-class ActivityPoint(BaseModel):
+class ActivityPoint(APIModel):
     timestamp: AwareDatetime
     value: float
 
 
-class AccountActivitySeries(BaseModel):
+class AccountActivitySeries(APIModel):
     kind: ActivitySeriesKind
     workspace: Annotated[str | None, Field(pattern="^[a-z][a-z0-9-]{0,62}$")] = None
     app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
@@ -1459,7 +1460,7 @@ class AccountActivitySeries(BaseModel):
     buckets: list[ActivityPoint]
 
 
-class AccountActivity(BaseModel):
+class AccountActivity(APIModel):
     measure: ActivityMeasure
     unit: ActivityUnit
     window_seconds: int
@@ -1489,7 +1490,7 @@ class Region(str, Enum):
     ap_southeast = "ap-southeast"
 
 
-class Placement(BaseModel):
+class Placement(APIModel):
     machine: Annotated[
         str | None,
         Field(
@@ -1556,7 +1557,7 @@ class Severity(str, Enum):
     error = "error"
 
 
-class PreflightCheck(BaseModel):
+class PreflightCheck(APIModel):
     name: str
     ok: bool
     message: str
@@ -1564,7 +1565,7 @@ class PreflightCheck(BaseModel):
     remediation: str
 
 
-class Machine(BaseModel):
+class Machine(APIModel):
     id: UUID
     name: str
     workspaces: Annotated[
@@ -1595,7 +1596,7 @@ class Machine(BaseModel):
     updated_at: AwareDatetime
 
 
-class MachinePage(BaseModel):
+class MachinePage(APIModel):
     machines: list[Machine]
     next_cursor: Annotated[str | None, Field(description="Present when more machines follow.")] = (
         None
@@ -1606,7 +1607,7 @@ class GpuItem(RootModel[str]):
     root: Annotated[str, Field(max_length=32)]
 
 
-class MachineJoinRequest(BaseModel):
+class MachineJoinRequest(APIModel):
     name: Annotated[
         str,
         Field(
@@ -1625,7 +1626,7 @@ class MachineJoinRequest(BaseModel):
     ttl_seconds: Annotated[int, Field(ge=60, le=86400)] = 1800
 
 
-class MachineJoinCommand(BaseModel):
+class MachineJoinCommand(APIModel):
     command: Annotated[
         str, Field(description="A shell command that installs the agent and joins the host.")
     ]
@@ -1633,7 +1634,7 @@ class MachineJoinCommand(BaseModel):
     machine: Machine
 
 
-class MachineUpdate(BaseModel):
+class MachineUpdate(APIModel):
     workspaces: Annotated[list[Name], Field(max_length=100, min_length=1)]
 
 
@@ -1642,7 +1643,7 @@ class Market(str, Enum):
     on_demand = "on_demand"
 
 
-class ComputeInstance(BaseModel):
+class ComputeInstance(APIModel):
     id: UUID
     placement: Annotated[str, Field(description="connection:<id>")]
     provider: Literal["aws"]
@@ -1670,26 +1671,26 @@ class ComputeInstance(BaseModel):
     created_at: AwareDatetime
 
 
-class ComputeInstancePage(BaseModel):
+class ComputeInstancePage(APIModel):
     instances: list[ComputeInstance]
     next_cursor: str | None = None
 
 
-class Instances(BaseModel):
+class Instances(APIModel):
     total: int
     ready: int
     pending: int
     degraded: int
 
 
-class Cost(BaseModel):
+class Cost(APIModel):
     hourly_micros: int | None = None
     daily_micros: int | None = None
     currency: Literal["USD"]
     estimated: bool
 
 
-class ComputeWorkload(BaseModel):
+class ComputeWorkload(APIModel):
     deployment_id: Annotated[UUID, Field(description="The workload id.")]
     app: str
     name: str
@@ -1703,7 +1704,7 @@ class ComputeWorkload(BaseModel):
     gpu_count: int
 
 
-class ComputeWorkloadPage(BaseModel):
+class ComputeWorkloadPage(APIModel):
     workloads: list[ComputeWorkload]
     next_cursor: str | None = None
 
@@ -1753,7 +1754,7 @@ class AuthorizationMode(str, Enum):
     existing_role = "existing_role"
 
 
-class ManagedAuthorization(BaseModel):
+class ManagedAuthorization(APIModel):
     stack_name: str
     region: str
     generation: int
@@ -1762,7 +1763,7 @@ class ManagedAuthorization(BaseModel):
     template_sha256: str
 
 
-class AwsAuthorizationGeneration(BaseModel):
+class AwsAuthorizationGeneration(APIModel):
     generation: int
     authorization_mode: AuthorizationMode
     managed_authorization: ManagedAuthorization | None = None
@@ -1775,12 +1776,12 @@ class AwsAuthorizationGeneration(BaseModel):
     updated_at: AwareDatetime
 
 
-class AwsStackParameter(BaseModel):
+class AwsStackParameter(APIModel):
     ParameterKey: str
     ParameterValue: str
 
 
-class Request(BaseModel):
+class Request(APIModel):
     StackName: str
     TemplateBody: Annotated[str, Field(max_length=51200)]
     Parameters: list[AwsStackParameter]
@@ -1788,20 +1789,20 @@ class Request(BaseModel):
     OnFailure: Literal["DELETE"]
 
 
-class AwsStackAction(BaseModel):
+class AwsStackAction(APIModel):
     account_id: str
     region: str
     template_sha256: str
     request: Request
 
 
-class AwsCustomerAction(BaseModel):
+class AwsCustomerAction(APIModel):
     url: str | None = None
     stack: AwsStackAction | None = None
     label: str
 
 
-class AwsConnection(BaseModel):
+class AwsConnection(APIModel):
     id: UUID
     account_id: Annotated[str, Field(description="The 12-digit AWS account id.")]
     phase: AwsConnectionPhase
@@ -1821,7 +1822,7 @@ class AwsConnection(BaseModel):
     updated_at: AwareDatetime
 
 
-class AwsConnectionEnvelope(BaseModel):
+class AwsConnectionEnvelope(APIModel):
     connection: AwsConnection | None = None
 
 
@@ -1829,7 +1830,7 @@ class SubnetId(RootModel[str]):
     root: Annotated[str, Field(max_length=128, min_length=1)]
 
 
-class AwsNetwork(BaseModel):
+class AwsNetwork(APIModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -1838,7 +1839,7 @@ class AwsNetwork(BaseModel):
     security_group_id: Annotated[str, Field(max_length=128, min_length=1)]
 
 
-class AwsConnectionRequest(BaseModel):
+class AwsConnectionRequest(APIModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -1864,7 +1865,7 @@ class AwsConnectionRequest(BaseModel):
     ] = None
 
 
-class AwsReconnectRequest(BaseModel):
+class AwsReconnectRequest(APIModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -1876,17 +1877,17 @@ class AwsReconnectRequest(BaseModel):
     ] = None
 
 
-class Authorization(BaseModel):
+class Authorization(APIModel):
     stack: AwsStackAction | None = None
     external_id: str | None = None
 
 
-class AwsConnectionAuthorization(BaseModel):
+class AwsConnectionAuthorization(APIModel):
     connection: AwsConnection
     authorization: Authorization
 
 
-class FleetCapacity(BaseModel):
+class FleetCapacity(APIModel):
     cpu_millicores: int
     memory_mib: int
     gpu_count: int
@@ -1906,14 +1907,14 @@ class FleetState(str, Enum):
     FleetImageSaved = "image_saved"
 
 
-class FleetStateCapacity(BaseModel):
+class FleetStateCapacity(APIModel):
     state: FleetState
     machines: int
     capacity: FleetCapacity
     allocated: FleetCapacity
 
 
-class FleetMarket(BaseModel):
+class FleetMarket(APIModel):
     preemptible: bool
     gpu_type: Annotated[str, Field(description="Empty for CPU hosts.")]
     warm_free: Annotated[FleetCapacity, Field(description="Unreserved capacity on serving hosts.")]
@@ -1933,13 +1934,13 @@ class FleetMarket(BaseModel):
     reason: Annotated[str, Field(description="Why the market cannot grow, when it cannot.")]
 
 
-class Plan(BaseModel):
+class Plan(APIModel):
     generated_at: AwareDatetime
     expires_at: AwareDatetime
     markets: list[FleetMarket]
 
 
-class Release1(BaseModel):
+class Release1(APIModel):
     version: str
     generation: int
     complete: Annotated[bool, Field(description="Every connected platform host runs the release.")]
@@ -1947,7 +1948,7 @@ class Release1(BaseModel):
     pending_capacity_owners: int
 
 
-class FleetSummary(BaseModel):
+class FleetSummary(APIModel):
     observed_at: AwareDatetime
     plan: Plan | None = None
     release: Annotated[
@@ -1960,7 +1961,7 @@ class Provider(str, Enum):
     FleetNodeAws = "aws"
 
 
-class FleetNode(BaseModel):
+class FleetNode(APIModel):
     id: UUID
     machine_id: Annotated[str | None, Field(description="Set once the host enrolled.")] = None
     instance_id: str | None = None
@@ -1976,7 +1977,7 @@ class FleetNode(BaseModel):
     ready: Annotated[bool, Field(description="Serving and on the target agent release.")]
 
 
-class FleetNodePage(BaseModel):
+class FleetNodePage(APIModel):
     nodes: list[FleetNode]
     next_cursor: str | None = None
     observed_at: AwareDatetime
@@ -2007,7 +2008,7 @@ class RateClass(str, Enum):
     pinned_non_preemptible = "pinned_non_preemptible"
 
 
-class PlanEntitlements(BaseModel):
+class PlanEntitlements(APIModel):
     max_concurrent_cpu_containers: int
     max_concurrent_gpus: int
     gpu_types: Annotated[list[str], Field(description="The GPU models the account may ask for.")]
@@ -2028,7 +2029,7 @@ class PlanEntitlements(BaseModel):
     ]
 
 
-class PublishedPlan(BaseModel):
+class PublishedPlan(APIModel):
     id: PlanId
     terms_version: TermsVersion
     name: str
@@ -2039,20 +2040,20 @@ class PublishedPlan(BaseModel):
     terms: list[str]
 
 
-class ShapeRate(BaseModel):
+class ShapeRate(APIModel):
     billing_owner: BillingOwner
     nanos_per_container_hour: int
     nanos_per_cpu_core_hour: int
     nanos_per_memory_gib_hour: int
 
 
-class CardRates(BaseModel):
+class CardRates(APIModel):
     platform_fleet: int
     connected_cloud: int
     self_hosted: int
 
 
-class ComputeRate(BaseModel):
+class ComputeRate(APIModel):
     billing_owner: BillingOwner
     gpu_type: Annotated[str | None, Field(description="Absent for containers without a GPU.")] = (
         None
@@ -2063,7 +2064,7 @@ class ComputeRate(BaseModel):
     nanos_per_gpu_card_hour: int
 
 
-class PlacementRate(BaseModel):
+class PlacementRate(APIModel):
     rate_class: RateClass
     effective_at: AwareDatetime
     pinned: bool
@@ -2074,30 +2075,30 @@ class PlacementRate(BaseModel):
     compute_rates: list[ComputeRate]
 
 
-class TrialTerms(BaseModel):
+class TrialTerms(APIModel):
     amount_nanos: int
     duration_days: int
     one_time: bool
 
 
-class NoPaymentMethodTerms(BaseModel):
+class NoPaymentMethodTerms(APIModel):
     max_concurrent_cpu_containers: int
     max_concurrent_gpus: int
     gpu_types: list[str]
 
 
-class PlatformRate(BaseModel):
+class PlatformRate(APIModel):
     nanos_per_egress_gib: int
     nanos_per_volume_gib_month: int
     storage_month_seconds: int
 
 
-class DiskRate(BaseModel):
+class DiskRate(APIModel):
     nanos_per_stored_gib_month: int
     nanos_per_attached_gib_month: int
 
 
-class CreditPurchaseTerms(BaseModel):
+class CreditPurchaseTerms(APIModel):
     minimum_cents: int
     maximum_cents: int
 
@@ -2107,7 +2108,7 @@ class BillingStatus(str, Enum):
     past_due = "past_due"
 
 
-class BillingPlan(BaseModel):
+class BillingPlan(APIModel):
     id: PlanId
     name: str
     terms_version: TermsVersion
@@ -2122,7 +2123,7 @@ class BillingPlan(BaseModel):
     period_ended_at: AwareDatetime | None = None
 
 
-class EntitlementUsage(BaseModel):
+class EntitlementUsage(APIModel):
     concurrent_cpu_containers: int
     concurrent_gpus: int
     workspaces: int
@@ -2131,7 +2132,7 @@ class EntitlementUsage(BaseModel):
     custom_domains: int
 
 
-class UsageBudget(BaseModel):
+class UsageBudget(APIModel):
     month_started_at: AwareDatetime
     month_ended_at: AwareDatetime
     limit_nanos: Annotated[
@@ -2141,7 +2142,7 @@ class UsageBudget(BaseModel):
     available_nanos: int | None = None
 
 
-class BillingPreferences(BaseModel):
+class BillingPreferences(APIModel):
     monthly_usage_limit_nanos: Annotated[
         int | None,
         Field(
@@ -2160,7 +2161,7 @@ class ReloadPauseReason(str, Enum):
     action_required = "action_required"
 
 
-class AutomaticReload(BaseModel):
+class AutomaticReload(APIModel):
     paused_purchase_id: UUID | None = None
     pause_reason: ReloadPauseReason | None = None
     pending_purchase_id: UUID | None = None
@@ -2169,7 +2170,7 @@ class AutomaticReload(BaseModel):
     monthly_payment_committed_cents: int
 
 
-class BillingAccount(BaseModel):
+class BillingAccount(APIModel):
     status: BillingStatus
     currency: str
     plan: BillingPlan
@@ -2196,12 +2197,12 @@ class BillingAccount(BaseModel):
     ]
 
 
-class PlanChangeRequest(BaseModel):
+class PlanChangeRequest(APIModel):
     plan: PlanId
     terms_version: TermsVersion
 
 
-class HostedSessionRequest(BaseModel):
+class HostedSessionRequest(APIModel):
     return_url: Annotated[
         str,
         Field(
@@ -2219,11 +2220,11 @@ class HostedSessionRequest(BaseModel):
     ] = None
 
 
-class HostedSession(BaseModel):
+class HostedSession(APIModel):
     url: str
 
 
-class CreditPurchaseRequest(BaseModel):
+class CreditPurchaseRequest(APIModel):
     request_key: UUID
     amount_cents: Annotated[int, Field(ge=500, le=100000)]
     return_url: Annotated[str, Field(max_length=2048, min_length=1)]
@@ -2243,7 +2244,7 @@ class Kind(str, Enum):
     automatic = "automatic"
 
 
-class CreditPurchase(BaseModel):
+class CreditPurchase(APIModel):
     id: UUID
     kind: Kind
     amount_nanos: int
@@ -2256,7 +2257,7 @@ class CreditPurchase(BaseModel):
     created_at: AwareDatetime
 
 
-class ComplimentaryRequest(BaseModel):
+class ComplimentaryRequest(APIModel):
     complimentary: bool
 
 
@@ -2294,14 +2295,14 @@ class UsageCostComponentKind(str, Enum):
     egress = "egress"
 
 
-class UsageCostComponent(BaseModel):
+class UsageCostComponent(APIModel):
     dimension: BilledDimension
     component: UsageCostComponentKind
     quantity: float
     cost_nanos: int
 
 
-class UsageCostRow(BaseModel):
+class UsageCostRow(APIModel):
     workspace_id: UUID
     workspace_name: str | None = None
     app_id: UUID | None = None
@@ -2317,7 +2318,7 @@ class UsageCostRow(BaseModel):
     components: list[UsageCostComponent]
 
 
-class UsageCostPage(BaseModel):
+class UsageCostPage(APIModel):
     start: AwareDatetime
     end: AwareDatetime
     currency: str
@@ -2327,7 +2328,7 @@ class UsageCostPage(BaseModel):
     next_cursor: Annotated[str | None, Field(description="Present when more rows follow.")] = None
 
 
-class UsageCostDimension(BaseModel):
+class UsageCostDimension(APIModel):
     dimension: BilledDimension
     cost_nanos: int
 
@@ -2356,21 +2357,21 @@ class AllowListItem(RootModel[str]):
     root: Annotated[str, Field(max_length=64)]
 
 
-class HealthCheck(BaseModel):
+class HealthCheck(APIModel):
     path: Annotated[str, Field(max_length=2048, pattern="^/[^\\s]*$")]
     port: Annotated[
         int | None, Field(description="Defaults to the first port.", ge=1, le=65535)
     ] = None
 
 
-class CheckpointSpec(BaseModel):
+class CheckpointSpec(APIModel):
     readiness_path: Annotated[str | None, Field(max_length=2048, pattern="^/[^\\s]*$")] = None
     readiness_port: Annotated[int | None, Field(ge=1, le=65535)] = None
     readiness_timeout_seconds: Annotated[int, Field(ge=1, le=3600)] = 600
     readiness_interval_seconds: Annotated[float, Field(ge=0.1, le=60.0)] = 1
 
 
-class DiskMountSpec(BaseModel):
+class DiskMountSpec(APIModel):
     name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
     size_bytes: Annotated[
         int,
@@ -2390,12 +2391,12 @@ class DiskMountSpec(BaseModel):
     ]
 
 
-class Scaling(BaseModel):
+class Scaling(APIModel):
     min_containers: int
     max_containers: int
 
 
-class ScaleRequest(BaseModel):
+class ScaleRequest(APIModel):
     containers: Annotated[int, Field(ge=0, le=1000)]
 
 
@@ -2416,7 +2417,7 @@ class DevboxPhase(str, Enum):
     failed = "failed"
 
 
-class DevboxDisk(BaseModel):
+class DevboxDisk(APIModel):
     name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
     size_bytes: int
     stored_bytes: int
@@ -2424,7 +2425,7 @@ class DevboxDisk(BaseModel):
     status: DiskStatus
 
 
-class CreateInstanceRequest(BaseModel):
+class CreateInstanceRequest(APIModel):
     release_id: UUID | None = None
     snapshot_id: UUID | None = None
     command: Annotated[
@@ -2444,7 +2445,7 @@ class CreateInstanceRequest(BaseModel):
     ] = False
 
 
-class Instance(BaseModel):
+class Instance(APIModel):
     id: UUID
     release_id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -2477,13 +2478,13 @@ EnvAdditionalProperty1 = TypeAliasType(
 )
 
 
-class ProcessRequest(BaseModel):
+class ProcessRequest(APIModel):
     args: Annotated[list[Arg1], Field(max_length=4096, min_length=1)]
     cwd: Annotated[str, Field(max_length=4096)] = "/workspace"
     env: Annotated[dict[str, EnvAdditionalProperty1] | None, Field(max_length=1024)] = None
 
 
-class Process(BaseModel):
+class Process(APIModel):
     process_id: str
     pid: int
     command: str
@@ -2499,7 +2500,7 @@ class Process(BaseModel):
     ] = None
 
 
-class ProcessSummary(BaseModel):
+class ProcessSummary(APIModel):
     process_id: str
     pid: int
     command: str
@@ -2508,7 +2509,7 @@ class ProcessSummary(BaseModel):
     exit_code: int | None = None
 
 
-class ProcessList(BaseModel):
+class ProcessList(APIModel):
     processes: list[ProcessSummary]
 
 
@@ -2522,11 +2523,11 @@ class Signal(str, Enum):
     SignalUSR2 = "USR2"
 
 
-class KillRequest(BaseModel):
+class KillRequest(APIModel):
     signal: Signal = Signal.SignalTERM
 
 
-class ContainerFile(BaseModel):
+class ContainerFile(APIModel):
     name: str
     mode: Annotated[int, Field(description="The raw st_mode, file type bits included.")]
     size: int
@@ -2537,71 +2538,71 @@ class ContainerFile(BaseModel):
     permissions: Annotated[int, Field(description="The permission bits, mode & 0777.")]
 
 
-class ContainerFileList(BaseModel):
+class ContainerFileList(APIModel):
     files: list[ContainerFile]
     truncated: Annotated[
         bool, Field(description="Only the first limit entries by name are listed.")
     ]
 
 
-class FindInFilesRequest(BaseModel):
+class FindInFilesRequest(APIModel):
     path: Annotated[str, Field(max_length=4096, min_length=1)]
     pattern: Annotated[str, Field(max_length=65536, min_length=1)]
 
 
-class FileMatch(BaseModel):
+class FileMatch(APIModel):
     path: str
     line: Annotated[int, Field(description="1-based.")]
     column: Annotated[int, Field(description="1-based, in characters.")]
     text: str
 
 
-class FileMatches(BaseModel):
+class FileMatches(APIModel):
     matches: list[FileMatch]
     truncated: Annotated[bool, Field(description="The search stopped at 10,000 matches.")]
 
 
-class ReplaceInFilesRequest(BaseModel):
+class ReplaceInFilesRequest(APIModel):
     path: Annotated[str, Field(max_length=4096, min_length=1)]
     pattern: Annotated[str, Field(max_length=65536, min_length=1)]
     replacement: Annotated[str, Field(max_length=65536)]
 
 
-class ReplacedFiles(BaseModel):
+class ReplacedFiles(APIModel):
     files: Annotated[int, Field(description="Files that changed.")]
     replacements: int
 
 
-class ExposePortRequest(BaseModel):
+class ExposePortRequest(APIModel):
     port: Annotated[int, Field(ge=1, le=65535)]
 
 
-class ContainerPort(BaseModel):
+class ContainerPort(APIModel):
     port: int
     url: str
 
 
-class ContainerPortList(BaseModel):
+class ContainerPortList(APIModel):
     ports: list[ContainerPort]
 
 
-class NetworkPolicy(BaseModel):
+class NetworkPolicy(APIModel):
     block_network: bool
     allow_list: Annotated[
         list[AllowListItem], Field(description="IPv4 or IPv6 CIDR ranges.", max_length=10)
     ]
 
 
-class TtlRequest(BaseModel):
+class TtlRequest(APIModel):
     ttl: Annotated[int, Field(ge=-1, le=604800)]
 
 
-class Ttl(BaseModel):
+class Ttl(APIModel):
     ttl: int
     expires_at: AwareDatetime | None = None
 
 
-class SnapshotRequest(BaseModel):
+class SnapshotRequest(APIModel):
     snapshot_id: Annotated[
         UUID | None, Field(description="The id the snapshot takes; a new one by default.")
     ] = None
@@ -2613,7 +2614,7 @@ class MemorySnapshotState(str, Enum):
     failed = "failed"
 
 
-class MemorySnapshot(BaseModel):
+class MemorySnapshot(APIModel):
     id: UUID
     container_id: UUID
     release_id: UUID
@@ -2623,7 +2624,7 @@ class MemorySnapshot(BaseModel):
     created_at: AwareDatetime
 
 
-class FilesystemImage(BaseModel):
+class FilesystemImage(APIModel):
     image_id: Annotated[str, Field(pattern="^img_[0-9a-f]{24}$")]
 
 
@@ -2635,7 +2636,7 @@ class SandboxStatus(str, Enum):
     failed = "failed"
 
 
-class Sandbox(BaseModel):
+class Sandbox(APIModel):
     id: Annotated[
         UUID, Field(description="The sandbox's container id, which `Sandbox.connect` takes.")
     ]
@@ -2651,17 +2652,17 @@ class Sandbox(BaseModel):
     lifetime_ms: int | None = None
 
 
-class SandboxPage(BaseModel):
+class SandboxPage(APIModel):
     sandboxes: list[Sandbox]
     next_cursor: str | None = None
 
 
-class SandboxCreatedBucket(BaseModel):
+class SandboxCreatedBucket(APIModel):
     timestamp: AwareDatetime
     count: int
 
 
-class SshCertificateRequest(BaseModel):
+class SshCertificateRequest(APIModel):
     public_key: Annotated[
         str,
         Field(
@@ -2670,13 +2671,13 @@ class SshCertificateRequest(BaseModel):
     ]
 
 
-class SshCertificate(BaseModel):
+class SshCertificate(APIModel):
     certificate: Annotated[str, Field(description="The OpenSSH certificate line.")]
     principal: str
     expires_at: AwareDatetime
 
 
-class SshHost(BaseModel):
+class SshHost(APIModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     pod: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     role: PodRole
@@ -2692,17 +2693,17 @@ class SshHost(BaseModel):
     ]
 
 
-class SshHostPage(BaseModel):
+class SshHostPage(APIModel):
     hosts: list[SshHost]
     next_cursor: str | None = None
 
 
-class Error(BaseModel):
+class Error(APIModel):
     code: ErrorCode
     message: str
 
 
-class User(BaseModel):
+class User(APIModel):
     id: UUID
     email: Annotated[
         str, Field(description="Empty when GitHub reported no verified primary address.")
@@ -2717,14 +2718,14 @@ class User(BaseModel):
     created_at: AwareDatetime
 
 
-class UserList(BaseModel):
+class UserList(APIModel):
     users: list[User]
     next_cursor: Annotated[
         UUID | None, Field(description="Pass as `cursor` for the next page; absent after the last.")
     ] = None
 
 
-class Workspace(BaseModel):
+class Workspace(APIModel):
     id: UUID
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
     state: WorkspaceState
@@ -2735,7 +2736,7 @@ class Workspace(BaseModel):
     created_at: AwareDatetime
 
 
-class WorkspaceList(BaseModel):
+class WorkspaceList(APIModel):
     workspaces: list[Workspace]
     next_cursor: Annotated[
         str | None,
@@ -2746,16 +2747,16 @@ class WorkspaceList(BaseModel):
     ] = None
 
 
-class MemberRoleRequest(BaseModel):
+class MemberRoleRequest(APIModel):
     role: InvitationRole
 
 
-class AcceptedInvitation(BaseModel):
+class AcceptedInvitation(APIModel):
     workspace: Workspace
     member: Member
 
 
-class SourceUpload(BaseModel):
+class SourceUpload(APIModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
     ]
@@ -2763,7 +2764,7 @@ class SourceUpload(BaseModel):
     upload: UploadTarget | None = None
 
 
-class App(BaseModel):
+class App(APIModel):
     id: UUID
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     state: AppState
@@ -2774,7 +2775,7 @@ class App(BaseModel):
     created_at: AwareDatetime
 
 
-class ImageSpec(BaseModel):
+class ImageSpec(APIModel):
     python_version: Annotated[
         PythonVersion, Field(description="The Python minor version the runtime is mounted for.")
     ]
@@ -2784,7 +2785,7 @@ class ImageSpec(BaseModel):
     ] = None
 
 
-class Resources(BaseModel):
+class Resources(APIModel):
     cpu_millis: Annotated[int, Field(ge=125, le=192000)]
     cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
     memory_mib: Annotated[int, Field(ge=128, le=1572864)]
@@ -2810,7 +2811,7 @@ class Resources(BaseModel):
     ] = None
 
 
-class SubmitTasksRequest(BaseModel):
+class SubmitTasksRequest(APIModel):
     inputs: Annotated[list[TaskInput], Field(max_length=1000, min_length=1)]
     release_id: Annotated[
         UUID | None,
@@ -2823,7 +2824,7 @@ class SubmitTasksRequest(BaseModel):
     ] = None
 
 
-class TaskPendingProgress(BaseModel):
+class TaskPendingProgress(APIModel):
     reason: TaskPendingReason
     message: str
     since: Annotated[AwareDatetime, Field(description="When the current reason began.")]
@@ -2833,7 +2834,7 @@ class TaskPendingProgress(BaseModel):
     observed_at: AwareDatetime
 
 
-class LifecycleHooks(BaseModel):
+class LifecycleHooks(APIModel):
     on_start: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_running: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_success: Annotated[list[HookReference] | None, Field(max_length=16)] = None
@@ -2843,13 +2844,13 @@ class LifecycleHooks(BaseModel):
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
 
 
-class WorkloadRef(BaseModel):
+class WorkloadRef(APIModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
 
-class VolumeMountSpec(BaseModel):
+class VolumeMountSpec(APIModel):
     name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
     mount_path: Annotated[
         str | None,
@@ -2862,7 +2863,7 @@ class VolumeMountSpec(BaseModel):
     cloud_bucket: CloudBucketSpec | None = None
 
 
-class Volume(BaseModel):
+class Volume(APIModel):
     id: UUID
     name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
     size_bytes: Annotated[int, Field(description="Bytes stored at the last measurement.")]
@@ -2873,12 +2874,12 @@ class Volume(BaseModel):
     ]
 
 
-class VolumePage(BaseModel):
+class VolumePage(APIModel):
     volumes: list[Volume]
     next_cursor: str | None = None
 
 
-class Disk(BaseModel):
+class Disk(APIModel):
     id: UUID
     name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
     size_bytes: int
@@ -2899,24 +2900,24 @@ class Disk(BaseModel):
     updated_at: AwareDatetime
 
 
-class DiskPage(BaseModel):
+class DiskPage(APIModel):
     disks: list[Disk]
     next_cursor: str | None = None
 
 
-class AppPage(BaseModel):
+class AppPage(APIModel):
     apps: list[App]
     next_cursor: Annotated[str | None, Field(description="Present when another page follows.")] = (
         None
     )
 
 
-class DeploymentPlanRequest(BaseModel):
+class DeploymentPlanRequest(APIModel):
     workloads: Annotated[list[WorkloadIdentity], Field(max_length=200)]
     prune: bool = False
 
 
-class DeploymentPlan(BaseModel):
+class DeploymentPlan(APIModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     prune: bool
     items: Annotated[
@@ -2925,7 +2926,7 @@ class DeploymentPlan(BaseModel):
     ]
 
 
-class Workload(BaseModel):
+class Workload(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
@@ -2949,12 +2950,12 @@ class Workload(BaseModel):
     url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
 
 
-class WorkloadPage(BaseModel):
+class WorkloadPage(APIModel):
     workloads: list[Workload]
     next_cursor: str | None = None
 
 
-class Container(BaseModel):
+class Container(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
@@ -2991,12 +2992,12 @@ class Container(BaseModel):
     ] = None
 
 
-class ContainerPage(BaseModel):
+class ContainerPage(APIModel):
     containers: list[Container]
     next_cursor: str | None = None
 
 
-class ImageDefinition(BaseModel):
+class ImageDefinition(APIModel):
     python_version: Annotated[
         str,
         Field(
@@ -3044,12 +3045,12 @@ class ImageDefinition(BaseModel):
     ] = None
 
 
-class ImageResolution(BaseModel):
+class ImageResolution(APIModel):
     image: Image
     build: ImageBuild | None = None
 
 
-class HttpSpec(BaseModel):
+class HttpSpec(APIModel):
     kind: HttpKind
     route: Annotated[
         str,
@@ -3068,18 +3069,18 @@ class HttpSpec(BaseModel):
     workers: Annotated[int, Field(ge=1, le=64)] = 1
 
 
-class ContainerLogList(BaseModel):
+class ContainerLogList(APIModel):
     data: list[ContainerLogEntry]
 
 
-class ChangeEvent(BaseModel):
+class ChangeEvent(APIModel):
     seq: int
     workspace_id: UUID
     occurred_at: AwareDatetime
     changes: list[ResourceChange]
 
 
-class ContainerMetrics(BaseModel):
+class ContainerMetrics(APIModel):
     container_id: UUID
     cpu_total_millicores: Annotated[int, Field(description="The container's CPU reservation.")]
     memory_total_bytes: Annotated[int, Field(description="The container's memory reservation.")]
@@ -3087,12 +3088,12 @@ class ContainerMetrics(BaseModel):
     points: list[ContainerMetricPoint]
 
 
-class Connection(BaseModel):
+class Connection(APIModel):
     account_id: str
     phase: AwsConnectionPhase
 
 
-class ComputeSummary(BaseModel):
+class ComputeSummary(APIModel):
     connection: Annotated[
         Connection | None,
         Field(
@@ -3104,12 +3105,12 @@ class ComputeSummary(BaseModel):
     workload_count: int
 
 
-class GpuRate(BaseModel):
+class GpuRate(APIModel):
     gpu_type: str
     nanos_per_card_hour: CardRates
 
 
-class PricingCatalog(BaseModel):
+class PricingCatalog(APIModel):
     trial: TrialTerms
     pricing_version: str
     metered_rates_effective_at: AwareDatetime
@@ -3128,7 +3129,7 @@ class PricingCatalog(BaseModel):
     credit_purchase: CreditPurchaseTerms
 
 
-class BillingAccountAdmin(BaseModel):
+class BillingAccountAdmin(APIModel):
     user: User
     plan: PlanId | None = None
     status: BillingStatus | None = None
@@ -3140,14 +3141,14 @@ class BillingAccountAdmin(BaseModel):
     recent_cost_since: AwareDatetime
 
 
-class BillingAccountAdminPage(BaseModel):
+class BillingAccountAdminPage(APIModel):
     accounts: list[BillingAccountAdmin]
     next_cursor: Annotated[str | None, Field(description="Present when more accounts follow.")] = (
         None
     )
 
 
-class UsageCostInterval(BaseModel):
+class UsageCostInterval(APIModel):
     started_at: AwareDatetime
     ended_at: AwareDatetime
     cost_nanos: int
@@ -3157,7 +3158,7 @@ class UsageCostInterval(BaseModel):
     ]
 
 
-class UsageCostSeries(BaseModel):
+class UsageCostSeries(APIModel):
     start: AwareDatetime
     end: AwareDatetime
     currency: str
@@ -3169,7 +3170,7 @@ class UsageCostSeries(BaseModel):
     intervals: list[UsageCostInterval]
 
 
-class PodSpec(BaseModel):
+class PodSpec(APIModel):
     kind: PodKind
     command: Annotated[
         list[CommandItem] | None, Field(description="What the container runs.", max_length=1024)
@@ -3198,7 +3199,7 @@ class PodSpec(BaseModel):
     ] = None
 
 
-class Devbox(BaseModel):
+class Devbox(APIModel):
     deployment_id: UUID
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -3224,7 +3225,7 @@ class Devbox(BaseModel):
     resources: Resources | None = None
 
 
-class SandboxStats(BaseModel):
+class SandboxStats(APIModel):
     concurrent: Annotated[int, Field(description="Sandboxes pending, running or stopping.")]
     total_created: int
     rate_per_second: Annotated[
@@ -3237,12 +3238,12 @@ class SandboxStats(BaseModel):
     ]
 
 
-class Me(BaseModel):
+class Me(APIModel):
     user: User
     workspaces: list[Workspace]
 
 
-class WorkloadSpec(BaseModel):
+class WorkloadSpec(APIModel):
     kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     handler: Annotated[
@@ -3321,7 +3322,7 @@ class WorkloadSpec(BaseModel):
     checkpoint: CheckpointSpec | None = None
 
 
-class Release(BaseModel):
+class Release(APIModel):
     id: UUID
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     version: Annotated[
@@ -3340,7 +3341,7 @@ class Release(BaseModel):
     ] = None
 
 
-class Task(BaseModel):
+class Task(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
@@ -3378,7 +3379,7 @@ class Task(BaseModel):
     failure: TaskFailure | None = None
 
 
-class Secret(BaseModel):
+class Secret(APIModel):
     name: Annotated[
         str,
         Field(
@@ -3393,14 +3394,14 @@ class Secret(BaseModel):
     ]
 
 
-class SecretPage(BaseModel):
+class SecretPage(APIModel):
     secrets: list[Secret]
     next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
         None
     )
 
 
-class WorkloadDetail(BaseModel):
+class WorkloadDetail(APIModel):
     workload: Workload
     release: Annotated[
         Release,
@@ -3414,26 +3415,26 @@ class WorkloadDetail(BaseModel):
     )
 
 
-class TaskPage(BaseModel):
+class TaskPage(APIModel):
     tasks: list[Task]
     next_cursor: str | None = None
 
 
-class Invocation(BaseModel):
+class Invocation(APIModel):
     task: Task
     result: Annotated[
         Any | None, Field(description="The JSON value the function returned, once it succeeded.")
     ] = None
 
 
-class PreviewRequest(BaseModel):
+class PreviewRequest(APIModel):
     spec: WorkloadSpec
     timeout_seconds: Annotated[
         int, Field(description="Stop after this long; 0 runs until stopped.", ge=0, le=86400)
     ] = 0
 
 
-class DeploymentRequest(BaseModel):
+class DeploymentRequest(APIModel):
     workloads: Annotated[
         list[WorkloadSpec],
         Field(
@@ -3446,12 +3447,12 @@ class DeploymentRequest(BaseModel):
     ] = False
 
 
-class Deployment(BaseModel):
+class Deployment(APIModel):
     app: App
     releases: list[Release]
     pruned: Annotated[list[WorkloadName], Field(description="Workloads the prune deleted.")]
     removed_versions: Annotated[int, Field(description="Versions of the pruned workloads.")]
 
 
-class SubmitTasksResponse(BaseModel):
+class SubmitTasksResponse(APIModel):
     tasks: list[Task]

@@ -2,7 +2,10 @@
 // delivery, workspace deletion and the compute fleet against PostgreSQL. Replicas are safe to
 // run together: advisory locks serialize the planner and the placer, a
 // replica that finds a lock held skips the pass, and email and deletion
-// steps are claimed or idempotent.
+// steps are claimed or idempotent. Every replica runs passes when a
+// notification wakes it; only the elected leader also runs them on timers,
+// and while nothing is live its quiet loops wait for a wake or a slow safety
+// tick, so idle cost stays flat as replicas are added.
 //
 // With LAZYCLOUD_HEALTH_ADDR set it serves /healthz, failing when a loop
 // stops finishing passes, and /readyz, true once every loop finished one. On
@@ -41,8 +44,10 @@ import (
 
 const (
 	// tick bounds how long a missed wake delays planning, placement and
-	// attempt deadlines.
+	// attempt deadlines while work is live; safetyTick bounds it otherwise.
 	tick = time.Second
+	// leaderLock names the session advisory lock the leader holds.
+	leaderLock = "scheduler_leader"
 	// hostLossTick paces host-loss detection; hosts are lost after
 	// compute.LivenessTimeout, so detection lags by at most this much.
 	hostLossTick = 5 * time.Second
@@ -112,7 +117,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	tel.RegisterPool(pool)
 	timed := newPassTimer(tel)
-	beats := newHeartbeats()
+	p := newPace()
+	beats := newHeartbeats(p.isLeading)
 	// every wraps a loop's pass with its deadline, heartbeat, trace and
 	// duration metric.
 	every := func(name string, interval time.Duration, pass func(context.Context) bool) func(context.Context) bool {
@@ -156,7 +162,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, vault, images.Config{})
 	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
-		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute)
+		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelFleetWake()
 	capacityWake, cancelCapacityWake := listener.Subscribe(database.ChannelExecution, "")
@@ -174,6 +180,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	defer cancelPlanWake()
 	placeWake, cancelPlaceWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelPlaceWake()
+	liveWake, cancelLiveWake := listener.Subscribe(database.ChannelExecution, "")
+	defer cancelLiveWake()
+	schedulesWake, cancelSchedulesWake := listener.Subscribe(schedules.Channel, "")
+	defer cancelSchedulesWake()
 	// Planning signals placement after creating containers. One pending
 	// value is enough: placement reads every pending container.
 	placeNow := make(chan struct{}, 1)
@@ -188,9 +198,18 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error { return listener.Run(ctx) })
+	leading := func(leading bool) {
+		if leading {
+			beats.rebase(time.Now())
+			logger.InfoContext(ctx, "leading timed passes")
+		}
+		p.setLeading(leading)
+	}
+	group.Go(func() error { return database.Lead(ctx, pool, leaderLock, leaderCheck, leading, logger) })
+	group.Go(func() error { return p.watch(ctx, exec.HasLiveWork, liveWake, logger) })
 	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
 	group.Go(func() error {
-		return loop(ctx, rollupTick, nil, nil, every("metrics_rollup", rollupTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: rollupTick}, nil, nil, every("metrics_rollup", rollupTick, func(ctx context.Context) bool {
 			result, err := obs.RollUp(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "metrics rollup pass", "error", err)
@@ -200,7 +219,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true}, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
 			result, err := exec.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
@@ -216,6 +235,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			result.Skipped = result.Skipped || serving.Skipped || pods.Skipped
 			result.Created += serving.Created + pods.Created
 			if result.Created > 0 {
+				// New pending containers are live work before any report
+				// wakes the probe.
+				p.setLive(true)
 				select {
 				case placeNow <- struct{}{}:
 				default:
@@ -225,7 +247,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, placeWake, placeNow, every("place", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true}, placeWake, placeNow, every("place", tick, func(ctx context.Context) bool {
 			result, err := sched.Place(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "placement pass", "error", err)
@@ -234,7 +256,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, every("workloads", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true}, nil, nil, every("workloads", tick, func(ctx context.Context) bool {
 			if _, err := exec.StopIdle(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "idle instance pass", "error", err)
 			}
@@ -245,7 +267,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, every("deadlines", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true}, nil, nil, every("deadlines", tick, func(ctx context.Context) bool {
 			if _, err := exec.TimeOutAttempts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "attempt deadline pass", "error", err)
 			}
@@ -256,7 +278,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, every("schedules", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true, due: crons.NextFire}, schedulesWake, nil, every("schedules", tick, func(ctx context.Context) bool {
 			if _, err := crons.Fire(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "schedule pass", "error", err)
 			}
@@ -265,7 +287,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		lastPurge := time.Now()
-		return loop(ctx, tick, nil, nil, every("callbacks", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true, due: deliverer.NextDue}, nil, nil, every("callbacks", tick, func(ctx context.Context) bool {
 			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}
@@ -279,7 +301,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, hostLossTick, nil, nil, every("host_loss", hostLossTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: hostLossTick}, nil, nil, every("host_loss", hostLossTick, func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
 			}
@@ -287,7 +309,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, fleetTick, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
 			result, err := comp.PlanCapacity(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "capacity pass", "error", err)
@@ -296,7 +318,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		})
 	})
 	group.Go(func() error {
-		return loop(ctx, fleetTick, fleetWake, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, func(ctx context.Context) bool {
 			if _, err := comp.Launch(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "launch pass", "error", err)
 			}
@@ -313,7 +335,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		})
 	})
 	group.Go(func() error {
-		return loop(ctx, reconcileTick, nil, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: reconcileTick}, nil, nil, func(ctx context.Context) bool {
 			if err := comp.Reconcile(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "reconcile pass", "error", err)
 			}
@@ -321,7 +343,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		})
 	})
 	group.Go(func() error {
-		return loop(ctx, sweepTick, nil, nil, every("storage_sweep", sweepTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: sweepTick}, nil, nil, every("storage_sweep", sweepTick, func(ctx context.Context) bool {
 			if _, err := store.Sweep(ctx, logger); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, "storage sweep incomplete", "error", err)
 			}
@@ -329,15 +351,15 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, buildRecoveryTick, buildWake, nil, every("build_recovery", buildRecoveryTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: buildRecoveryTick}, buildWake, nil, every("build_recovery", buildRecoveryTick, func(ctx context.Context) bool {
 			if _, err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false
 		}))
 	})
-	accounts.start(ctx, group, beats)
-	newBillingLoops(pool, exec, store, logger).start(ctx, group)
+	accounts.start(ctx, group, p, beats)
+	newBillingLoops(pool, exec, store, logger).start(ctx, group, p)
 	if healthListener != nil {
 		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
 		group.Go(func() error {
@@ -360,29 +382,6 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	logger.Info("scheduler stopped")
 	return nil
-}
-
-// loop runs pass now, then after every wake, tick or contended retry until
-// ctx ends. pass reports whether it found its lock held. Failures are logged
-// by pass and retried on the next wake or tick; a nil wake channel is never
-// ready.
-func loop(ctx context.Context, interval time.Duration, wake, alsoWake <-chan struct{}, pass func(context.Context) bool) error {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		var retry <-chan time.Time
-		if pass(ctx) {
-			retry = time.After(contendedRetry)
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		case <-wake:
-		case <-alsoWake:
-		case <-retry:
-		}
-	}
 }
 
 // objectStoreFromEnv reads the object store the server uses; the sweeper

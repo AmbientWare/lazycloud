@@ -364,3 +364,16 @@ func callbackBody(row CallbackDeliveriesRow, result *CallbackResultRow) ([]byte,
 	}
 	return encoded, nil
 }
+
+// NextDue reports when the earliest pending callback is due, and false when
+// none is pending.
+func (c *Callbacks) NextDue(ctx context.Context) (time.Time, bool, error) {
+	next, err := c.queries.NextCallbackAt(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("next callback: %w", err)
+	}
+	if len(next) == 0 {
+		return time.Time{}, false, nil
+	}
+	return next[0], true, nil
+}

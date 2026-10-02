@@ -52,3 +52,7 @@ where id in (
     where f.state <> 'pending' and f.finished_at < now() - make_interval(secs => @retain_seconds::float8)
     limit @batch_size
 );
+
+-- name: NextCallbackAt :many
+-- When the earliest pending callback is due; no row without one.
+select next_attempt_at from task_callbacks where state = 'pending' order by next_attempt_at limit 1;
