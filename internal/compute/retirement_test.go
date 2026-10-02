@@ -19,9 +19,11 @@ func cloudHost(t *testing.T, o owners, market compute.Market, instance string) c
 	})
 }
 
-func idleSince(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
+// lightFor makes a host launched an hour ago lightly used for ago.
+func lightFor(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
 	t.Helper()
-	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
+	run(t, o.pool, "update hosts set launched_at = now() - interval '1 hour', light_since = now() - make_interval(secs => $2) where id = $1",
+		uuid.UUID(host), ago.Seconds())
 }
 
 // terminated lists the instance ids every TerminateInstances call named.
@@ -34,8 +36,11 @@ func terminated(e *awsEmulator) []string {
 	return out
 }
 
-func TestIdleHostsBeyondTheHeadroomFloorDrainAndTerminate(t *testing.T) {
-	o, emulator, _ := launchFleet(t, compute.Fleet{HeadroomFloor: 1, IdleTimeout: 5 * time.Minute})
+// Idle hosts leave only once lightly used past the idle wait and while the
+// market's free room beyond its warm target covers them; a one-time Spot
+// host cannot stop, so it drains and terminates.
+func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{IdleTimeout: 5 * time.Minute})
 	emulator.on("TerminateInstances", terminateInstancesReply)
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -44,33 +49,37 @@ func TestIdleHostsBeyondTheHeadroomFloorDrainAndTerminate(t *testing.T) {
 	recent := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a003")
 	busy := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a004")
 	other := cloudHost(t, o, compute.MarketOnDemand, "i-0000000000000a005")
-	idleSince(t, o, oldest, 30*time.Minute)
-	idleSince(t, o, idle, 20*time.Minute)
-	idleSince(t, o, recent, time.Minute)
-	idleSince(t, o, busy, time.Hour)
-	idleSince(t, o, other, time.Hour)
-	runningAttempt(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), busy)
+	lightFor(t, o, oldest, 30*time.Minute)
+	lightFor(t, o, idle, 20*time.Minute)
+	lightFor(t, o, recent, time.Minute)
+	lightFor(t, o, busy, time.Hour)
+	lightFor(t, o, other, time.Hour)
+	// Busy past the light-use share, so it does not consolidate either,
+	// with a container that arrived before the forecast's window.
+	run(t, o.pool, `
+insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values (uuidv7(interval '-1 hour'), $1, $2, 'ready', $3, 1, 1500, 1 << 28, now(), now())`, dev, newRelease(t, o.pool, dev, `{}`), uuid.UUID(busy))
 
+	if result := plan(t, o); !result.Published || result.Drained != 2 {
+		t.Fatalf("plan %+v, want a reserve pass that drains two hosts", result)
+	}
 	result, err := o.compute.Retire(t.Context(), discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Drained != 1 || result.Terminated != 1 {
-		t.Fatalf("retire %+v, want one host drained and terminated", result)
+	if result.Terminated != 2 {
+		t.Fatalf("retire %+v, want the two drained hosts terminated", result)
 	}
-	if got := terminated(emulator); !slices.Equal(got, []string{"i-0000000000000a002"}) {
-		t.Fatalf("terminated %v, want only the idle host past the floor and the idle window", got)
+	if got := terminated(emulator); !slices.Equal(got, []string{"i-0000000000000a001", "i-0000000000000a002"}) {
+		t.Fatalf("terminated %v, want the hosts idle past the wait beyond the warm target", got)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		oldest: compute.PhaseReady, idle: compute.PhaseTerminating, recent: compute.PhaseReady,
+		oldest: compute.PhaseTerminating, idle: compute.PhaseTerminating, recent: compute.PhaseReady,
 		busy: compute.PhaseReady, other: compute.PhaseReady,
 	} {
 		if phase, _ := hostPhase(t, o.pool, host); phase != string(want) {
 			t.Errorf("host %s is %s, want %s", host, phase, want)
 		}
-	}
-	if result, err := o.compute.Retire(t.Context(), discard()); err != nil || result.Terminated != 0 {
-		t.Fatalf("second pass %+v %v, want nothing more terminated", result, err)
 	}
 }
 

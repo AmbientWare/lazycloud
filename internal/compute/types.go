@@ -61,6 +61,10 @@ const (
 	PhaseJoining      Phase = "joining"
 	PhaseReady        Phase = "ready"
 	PhaseDraining     Phase = "draining"
+	PhasePreparing    Phase = "preparing"
+	PhaseStopping     Phase = "stopping"
+	PhaseStopped      Phase = "stopped"
+	PhaseResuming     Phase = "resuming"
 	PhaseTerminating  Phase = "terminating"
 	PhaseDeleted      Phase = "deleted"
 	PhaseFailed       Phase = "failed"
@@ -81,6 +85,14 @@ func (p Phase) Message() string {
 		return "Ready for workloads"
 	case PhaseDraining:
 		return "Draining; no new work is placed here"
+	case PhasePreparing:
+		return "Preparing to stop into the reserve"
+	case PhaseStopping:
+		return "Stopping into the reserve"
+	case PhaseStopped:
+		return "Stopped in the reserve"
+	case PhaseResuming:
+		return "Starting from the reserve"
 	case PhaseTerminating:
 		return "Shutting down"
 	case PhaseDeleted:
@@ -90,6 +102,33 @@ func (p Phase) Message() string {
 	}
 	return string(p)
 }
+
+// ReserveMode is how a platform host sleeps in the reserve.
+type ReserveMode string
+
+const (
+	// ReserveStop stops the instance; it boots again on start.
+	ReserveStop ReserveMode = "stop"
+	// ReserveHibernate saves memory to the root volume, so a start
+	// restores the running agent.
+	ReserveHibernate ReserveMode = "hibernate"
+)
+
+// ImageEvidence is whether a reserve's last stop saved a hibernation image.
+type ImageEvidence string
+
+const (
+	// EvidenceUnknown is a hibernation still stopping.
+	EvidenceUnknown ImageEvidence = "unknown"
+	// EvidenceSaved is a hibernation EC2 stopped the instance for; the
+	// agent's resume report proves the image.
+	EvidenceSaved ImageEvidence = "saved"
+	// EvidenceFailed is a hibernation EC2 stopped the instance for some
+	// other reason; the host boots cold on start.
+	EvidenceFailed ImageEvidence = "failed"
+	// EvidenceUnavailable is a plain or forced stop, which saves nothing.
+	EvidenceUnavailable ImageEvidence = "unavailable"
+)
 
 // Failure says why a host failed.
 type Failure string

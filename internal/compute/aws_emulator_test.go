@@ -3,6 +3,7 @@ package compute_test
 import (
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -45,6 +46,8 @@ type awsCall struct {
 	Host string
 	// AccessKey is the access key id in the request's SigV4 credential.
 	AccessKey string
+	// Body is a JSON protocol call's input.
+	Body []byte
 }
 
 type awsReply struct {
@@ -60,6 +63,11 @@ func newAWS(t *testing.T) *awsEmulator {
 	server := httptest.NewServer(http.HandlerFunc(a.serve))
 	t.Cleanup(server.Close)
 	a.url = server.URL
+	// Reconcile lists the platform's persistent Spot requests in every
+	// region; tests that hold some answer with their own handler.
+	a.on("DescribeSpotInstanceRequests", func(awsCall) awsReply {
+		return ok(`<DescribeSpotInstanceRequestsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotInstanceRequestSet/></DescribeSpotInstanceRequestsResponse>`)
+	})
 	return a
 }
 
@@ -71,6 +79,14 @@ func (a *awsEmulator) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	call := awsCall{Action: r.Form.Get("Action"), Form: r.Form, Header: r.Header.Clone(), Host: r.Host}
+	contentType := "text/xml"
+	// The JSON protocols, such as Service Quotas', name the action in a
+	// header and carry their input as the body.
+	if target := r.Header.Get("X-Amz-Target"); target != "" {
+		_, call.Action, _ = strings.Cut(target, ".")
+		call.Body, _ = io.ReadAll(r.Body)
+		contentType = "application/x-amz-json-1.1"
+	}
 	if m := credentialPattern.FindStringSubmatch(r.Header.Get("Authorization")); m != nil {
 		call.AccessKey = m[1]
 	}
@@ -84,7 +100,7 @@ func (a *awsEmulator) serve(w http.ResponseWriter, r *http.Request) {
 	} else {
 		reply = handler(call)
 	}
-	w.Header().Set("Content-Type", "text/xml")
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Amzn-Requestid", "req-0000")
 	w.WriteHeader(reply.status)
 	_, _ = w.Write([]byte(reply.body))
@@ -118,7 +134,7 @@ func (a *awsEmulator) fleet(f compute.Fleet) compute.Fleet {
 		Credentials: credentials.NewStaticCredentialsProvider(platformAccessKey, "platform-secret", ""),
 		Retryer:     func() aws.Retryer { return aws.NopRetryer{} },
 	}
-	f.Endpoints = compute.Endpoints{EC2: a.url, STS: a.url, CloudFormation: a.url}
+	f.Endpoints = compute.Endpoints{EC2: a.url, STS: a.url, CloudFormation: a.url, ServiceQuotas: a.url}
 	return f
 }
 

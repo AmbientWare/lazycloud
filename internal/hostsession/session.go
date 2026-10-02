@@ -47,6 +47,10 @@ type session struct {
 	// networks holds the newest policy version recorded per container, so
 	// a report restating it writes nothing.
 	networks map[execution.ContainerID]int32
+	// reserve is the PrepareReserve awaiting its answer, and agent the
+	// release the Hello stated.
+	reserve *reserveAttempt
+	agent   compute.AgentState
 }
 
 // recordNetwork records a newly reported applied policy version.
@@ -90,14 +94,12 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	// Subscribe before reading durable state so no change is missed.
 	wake, unsubscribe := s.listener.Subscribe(database.ChannelHost, host.String())
 	defer unsubscribe()
-	epoch, err := s.compute.OpenSession(ctx, host, compute.SessionOpen{
-		BootID: hello.GetBootId(), Capacity: capacityIn(hello.GetCapacity()), AgentVersion: hello.GetAgentVersion(),
-	})
+	epoch, err := s.compute.OpenSession(ctx, host, sessionOpenIn(hello))
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
-		grants: map[identity.WorkspaceID]time.Time{}}
+		grants: map[identity.WorkspaceID]time.Time{}, agent: agentStateIn(hello)}
 	for _, r := range reports {
 		sess.observe(r)
 	}
@@ -233,6 +235,8 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 			return sess.server.grpcError(ctx, err)
 		}
 		return nil
+	case *hostproto.HostMessage_ReserveReady:
+		return sess.answerReserve(ctx, body.ReserveReady)
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
 		// outcome.
@@ -315,6 +319,9 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 	}
 	sess.sent = derived
+	if err := sess.syncReserve(ctx); err != nil {
+		return err
+	}
 	return sess.refreshGrants(ctx)
 }
 

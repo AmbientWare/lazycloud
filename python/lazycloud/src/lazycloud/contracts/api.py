@@ -1882,13 +1882,14 @@ class FleetMarket(APIModel):
     gpu_type: Annotated[str, Field(description="Empty for CPU hosts.")]
     warm_free: Annotated[FleetCapacity, Field(description="Unreserved capacity on serving hosts.")]
     warm_target: Annotated[
-        FleetCapacity, Field(description="The idle capacity the headroom floor keeps.")
+        FleetCapacity, Field(description="The free capacity on serving hosts the plan keeps.")
     ]
     reserve_ready: Annotated[
-        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+        FleetCapacity,
+        Field(description="Stopped reserves prepared for the agent release they should run."),
     ]
     reserve_target: Annotated[
-        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+        FleetCapacity, Field(description="The stopped reserve capacity the plan keeps.")
     ]
     allocated: Annotated[
         FleetCapacity, Field(description="Reservations of live containers on the market's hosts.")
@@ -1913,7 +1914,9 @@ class Release1(APIModel):
 
 class FleetSummary(APIModel):
     observed_at: AwareDatetime
-    plan: Plan | None = None
+    plan: Annotated[
+        Plan | None, Field(description="The planner's last published plan; absent once it expires.")
+    ] = None
     release: Annotated[
         Release1 | None, Field(description="The agent release platform hosts move to.")
     ] = None
@@ -1937,7 +1940,10 @@ class FleetNode(APIModel):
     capacity: FleetCapacity
     allocated: FleetCapacity
     containers: int
-    ready: Annotated[bool, Field(description="Serving and on the target agent release.")]
+    ready: Annotated[
+        bool,
+        Field(description="Serving on its agent release, or a stopped reserve prepared for it."),
+    ]
 
 
 class FleetNodePage(APIModel):

@@ -26,18 +26,12 @@ const (
 
 // FleetCapacity is CPU, memory and GPUs.
 type FleetCapacity struct {
-	CPUMillis   int64
-	MemoryBytes int64
-	GPUs        int
+	CPUMillis   int64 `json:"cpu_millis"`
+	MemoryBytes int64 `json:"memory_bytes"`
+	GPUs        int   `json:"gpus"`
 }
 
-func (a *FleetCapacity) add(b FleetCapacity) {
-	a.CPUMillis += b.CPUMillis
-	a.MemoryBytes += b.MemoryBytes
-	a.GPUs += b.GPUs
-}
-
-// FleetNode is one platform host.
+// FleetNode is one platform host with an instance.
 type FleetNode struct {
 	ID           HostID
 	Enrolled     bool
@@ -51,26 +45,17 @@ type FleetNode struct {
 	Capacity     FleetCapacity
 	Allocated    FleetCapacity
 	Containers   int
-	AgentVersion string
+	// Ready is a serving host on the agent release it should run, or a
+	// stopped reserve prepared for that release.
+	Ready bool
 }
 
 // FleetStateCapacity totals one state's hosts in a market.
 type FleetStateCapacity struct {
-	State     FleetState
-	Machines  int
-	Capacity  FleetCapacity
-	Allocated FleetCapacity
-}
-
-// FleetMarket is the platform's hosts of one purchase market and GPU model.
-type FleetMarket struct {
-	Preemptible bool
-	GPUType     string
-	WarmFree    FleetCapacity
-	WarmTarget  FleetCapacity
-	Allocated   FleetCapacity
-	States      []FleetStateCapacity
-	Reason      string
+	State     FleetState    `json:"state"`
+	Machines  int           `json:"machines"`
+	Capacity  FleetCapacity `json:"capacity"`
+	Allocated FleetCapacity `json:"allocated"`
 }
 
 // FleetRelease is the agent rollout over platform hosts.
@@ -78,115 +63,90 @@ type FleetRelease struct {
 	Version  string
 	Complete bool
 	// Phases counts connected hosts on the release (current), on another
-	// version (updating) and disconnected ones (offline).
+	// version (updating), reserves (reserve) and other enrolled hosts
+	// (offline).
 	Phases map[string]int
+}
+
+// FleetPublication is the plan the fleet planning pass last published,
+// while it is current.
+type FleetPublication struct {
+	GeneratedAt time.Time
+	ExpiresAt   time.Time
+	Markets     []PublishedMarket
 }
 
 // FleetSummary is the platform fleet for administrators.
 type FleetSummary struct {
 	ObservedAt time.Time
-	Markets    []FleetMarket
-	Release    *FleetRelease
+	// Plan is nil while no market has a current plan.
+	Plan    *FleetPublication
+	Release *FleetRelease
 }
 
-// fleetScan bounds the hosts one summary reads.
-const fleetScan = 10000
-
-// FleetNodes lists platform hosts by id after the cursor.
+// FleetNodes lists platform hosts with an instance by id after the cursor.
 func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([]FleetNode, error) {
-	rows, err := c.queries.PlatformHosts(ctx, PlatformHostsParams{AfterID: after, MaxRows: int32(limit)}) //nolint:gosec // Bounded by the API or fleetScan.
+	release, err := c.TargetRelease(ctx)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	var target *AgentRelease
+	if err == nil {
+		target = &release
+	}
+	rows, err := c.queries.PlatformHosts(ctx, PlatformHostsParams{AfterID: after, MaxRows: int32(limit)}) //nolint:gosec // The API bounds the page.
 	if err != nil {
 		return nil, fmt.Errorf("list platform hosts: %w", err)
 	}
+	now := time.Now()
 	out := make([]FleetNode, 0, len(rows))
 	for _, r := range rows {
 		n := FleetNode{
-			ID: HostID(r.ID), Enrolled: r.Enrolled, InstanceID: deref(r.InstanceID), Provider: Provider(r.Provider),
+			ID: HostID(r.ID), Enrolled: r.Enrolled, InstanceID: r.InstanceID, Provider: Provider(r.Provider),
 			Region: r.Region, InstanceType: r.InstanceType, Preemptible: deref(r.Market) == string(MarketSpot),
 			GPUType: r.GpuType, Capacity: FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.GpuCount)},
 			Allocated:  FleetCapacity{CPUMillis: r.UsedCpu, MemoryBytes: r.UsedMemory, GPUs: int(r.UsedGpus)},
-			Containers: int(r.Containers), AgentVersion: r.AgentVersion,
+			Containers: int(r.Containers),
+			State: fleetStateOf(hostStanding{
+				Phase: r.Phase, State: r.State, CapacityState: r.CapacityState, CapacityReason: r.CapacityReason,
+				ImageEvidence: r.ImageEvidence, LastSeenAt: r.LastSeenAt, ReserveMode: r.ReserveMode, Containers: r.Containers,
+			}, now),
 		}
-		switch Phase(r.Phase) {
-		case PhaseTerminating, PhaseDeleted:
-			n.State = FleetTerminating
-		case PhaseFailed:
-			n.State = FleetFailed
-		case PhaseRequested, PhaseProvisioning, PhaseBooting, PhaseJoining:
-			n.State = FleetStarting
-		case PhaseDraining:
-			n.State = FleetDraining
-		case PhaseReady:
-			switch {
-			case CapacityState(r.CapacityState) != CapacityAvailable:
-				n.State = FleetDraining
-			case connected(r.State, r.LastSeenAt):
-				n.State = FleetServing
-			default:
-				n.State = FleetUnavailable
-			}
-		default:
-			n.State = FleetUnavailable
+		switch n.State {
+		case FleetServing:
+			n.Ready = onRelease(n.ID, &r.AgentVersion, target)
+		case FleetStopped, FleetHibernateUnverified, FleetImageSaved:
+			n.Ready = onRelease(n.ID, r.PreparedAgentVersion, target)
+		case FleetStarting, FleetDraining, FleetPreparing, FleetStopping, FleetUnavailable, FleetFailed, FleetTerminating:
 		}
 		out = append(out, n)
 	}
 	return out, nil
 }
 
-// Fleet summarizes platform capacity per market: Spot and on-demand CPU
-// always, and each GPU model the fleet runs.
+// Fleet returns the platform fleet's current published plan, CPU markets
+// first, and the agent rollout. A market whose plan expired is left out.
 func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
-	nodes, err := c.FleetNodes(ctx, uuid.Nil, fleetScan)
+	summary := FleetSummary{ObservedAt: time.Now()}
+	markets, err := c.PublishedPlan(ctx)
 	if err != nil {
 		return FleetSummary{}, err
 	}
-	type key struct {
-		preemptible bool
-		gpu         string
+	// One reserve pass publishes every market it plans, so the plan is the
+	// newest pass's markets; a market it no longer plans keeps an older row.
+	var newest time.Time
+	for _, m := range markets {
+		if m.GeneratedAt.After(newest) {
+			newest = m.GeneratedAt
+		}
 	}
-	markets := map[key]*FleetMarket{{true, ""}: {Preemptible: true}, {false, ""}: {}}
-	states := map[key]map[FleetState]*FleetStateCapacity{}
-	for _, n := range nodes {
-		k := key{n.Preemptible, n.GPUType}
-		m, ok := markets[k]
-		if !ok {
-			m = &FleetMarket{Preemptible: n.Preemptible, GPUType: n.GPUType}
-			markets[k] = m
-		}
-		m.Allocated.add(n.Allocated)
-		if n.State == FleetServing {
-			m.WarmFree.add(FleetCapacity{
-				CPUMillis: n.Capacity.CPUMillis - n.Allocated.CPUMillis, MemoryBytes: n.Capacity.MemoryBytes - n.Allocated.MemoryBytes,
-				GPUs: n.Capacity.GPUs - n.Allocated.GPUs,
-			})
-			if n.Containers == 0 && c.fleet.HeadroomFloor > 0 {
-				m.WarmTarget.add(n.Capacity)
-			}
-		}
-		if states[k] == nil {
-			states[k] = map[FleetState]*FleetStateCapacity{}
-		}
-		s := states[k][n.State]
-		if s == nil {
-			s = &FleetStateCapacity{State: n.State}
-			states[k][n.State] = s
-		}
-		s.Machines++
-		s.Capacity.add(n.Capacity)
-		s.Allocated.add(n.Allocated)
+	markets = slices.DeleteFunc(markets, func(m PublishedMarket) bool {
+		return !m.GeneratedAt.Equal(newest) || !summary.ObservedAt.Before(m.ExpiresAt)
+	})
+	if len(markets) > 0 {
+		summary.Plan = &FleetPublication{GeneratedAt: newest, ExpiresAt: markets[0].ExpiresAt, Markets: markets}
 	}
-	summary := FleetSummary{ObservedAt: time.Now()}
-	for k, m := range markets {
-		for _, s := range states[k] {
-			m.States = append(m.States, *s)
-		}
-		slices.SortFunc(m.States, func(a, b FleetStateCapacity) int { return strings.Compare(string(a.State), string(b.State)) })
-		if len(c.fleet.Networks) == 0 {
-			m.Reason = "the platform has no AWS network to launch in"
-		}
-		summary.Markets = append(summary.Markets, *m)
-	}
-	slices.SortFunc(summary.Markets, func(a, b FleetMarket) int {
+	slices.SortFunc(markets, func(a, b PublishedMarket) int {
 		if a.GPUType != b.GPUType {
 			return strings.Compare(a.GPUType, b.GPUType)
 		}
@@ -205,20 +165,19 @@ func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
 	if err != nil {
 		return FleetSummary{}, err
 	}
-	rollout := &FleetRelease{Version: release.Version, Complete: true, Phases: map[string]int{}}
-	for _, n := range nodes {
-		switch {
-		case n.State != FleetServing && n.State != FleetDraining:
-			if n.Enrolled {
-				rollout.Phases["offline"]++
-			}
-		case n.AgentVersion == release.Version:
-			rollout.Phases["current"]++
-		default:
-			rollout.Phases["updating"]++
-			rollout.Complete = false
+	rows, err := c.queries.FleetRollout(ctx, FleetRolloutParams{
+		LiveAfter: summary.ObservedAt.Add(-LivenessTimeout), Consolidating: reasonConsolidating, Version: release.Version,
+	})
+	if err != nil {
+		return FleetSummary{}, fmt.Errorf("count the agent rollout: %w", err)
+	}
+	rollout := &FleetRelease{Version: release.Version, Phases: map[string]int{}}
+	for _, r := range rows {
+		if r.Phase != "" {
+			rollout.Phases[r.Phase] = int(r.Hosts)
 		}
 	}
+	rollout.Complete = rollout.Phases["updating"] == 0
 	summary.Release = rollout
 	return summary, nil
 }

@@ -22,7 +22,8 @@ const (
 	launchLease = 2 * time.Minute
 	// maxLaunchAttempts bounds launches that keep failing without an answer.
 	maxLaunchAttempts = 5
-	// rootVolumeGiB is each instance's encrypted root disk.
+	// rootVolumeGiB is each instance's encrypted root disk; a host launched
+	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
 	cpuImage      = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 	gpuImage      = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
@@ -78,26 +79,27 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
 	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
 	if err != nil {
-		return false, c.failLaunch(ctx, h, err.Error(), false)
+		return false, c.failLaunch(ctx, h, err.Error(), false, false)
 	}
 	release, err := c.TargetRelease(ctx)
 	if err != nil {
-		return false, c.failLaunch(ctx, h, "no agent release is published", false)
+		return false, c.failLaunch(ctx, h, "no agent release is published", false, false)
 	}
 	subnet, ok := subnetFor(target.network, h.AvailabilityZone, h.ID)
 	if !ok {
-		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
+		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false, false)
 	}
 	image, ok := c.nodeImage(h.Region, h.GpuCount > 0)
 	if !ok {
-		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false)
+		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false, false)
 	}
 	if err := c.shareImage(ctx, target, h.Region, image); err != nil {
 		if accessDenied(err) || strings.HasPrefix(awsCode(err), "InvalidAMI") {
-			return false, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false)
+			return false, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false, false)
 		}
 		return false, fmt.Errorf("share node image: %w", err)
 	}
+	opts := launchOptionsFor(h)
 	tags := []ec2types.Tag{
 		{Key: aws.String(tagFleet), Value: aws.String(c.fleet.Name)},
 		{Key: aws.String(tagHost), Value: aws.String(h.ID.String())},
@@ -118,7 +120,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 		BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
 			DeviceName: aws.String("/dev/xvda"),
 			Ebs: &ec2types.EbsBlockDevice{
-				VolumeSize: aws.Int32(rootVolumeGiB), VolumeType: ec2types.VolumeTypeGp3,
+				VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
 				Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true),
 			},
 		}},
@@ -134,23 +136,40 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	if target.instanceProfile != "" {
 		input.IamInstanceProfile = &ec2types.IamInstanceProfileSpecification{Name: aws.String(target.instanceProfile)}
 	}
+	if opts.hibernate {
+		input.HibernationOptions = &ec2types.HibernationOptionsRequest{Configured: aws.Bool(true)}
+	}
 	if h.Market != nil && Market(*h.Market) == MarketSpot {
-		input.InstanceMarketOptions = &ec2types.InstanceMarketOptionsRequest{
-			MarketType: ec2types.MarketTypeSpot,
-			SpotOptions: &ec2types.SpotMarketOptions{
-				SpotInstanceType:             ec2types.SpotInstanceTypeOneTime,
-				InstanceInterruptionBehavior: ec2types.InstanceInterruptionBehaviorTerminate,
-			},
+		spot := &ec2types.SpotMarketOptions{
+			SpotInstanceType:             ec2types.SpotInstanceTypeOneTime,
+			InstanceInterruptionBehavior: ec2types.InstanceInterruptionBehaviorTerminate,
 		}
+		if opts.persistent {
+			// A reserve outlives a stop, so its request must too. EC2
+			// relaunches a persistent request's instance when it ends, so
+			// the request is tagged for cleanup and cancelled first.
+			// EC2 refuses a persistent request whose instance would
+			// terminate itself, so a guest shutdown stops it, and
+			// reconcile retires a reserve that stopped unasked.
+			spot.SpotInstanceType = ec2types.SpotInstanceTypePersistent
+			spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorStop
+			input.InstanceInitiatedShutdownBehavior = ec2types.ShutdownBehaviorStop
+			if opts.hibernate {
+				spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorHibernate
+			}
+			input.TagSpecifications = append(input.TagSpecifications,
+				ec2types.TagSpecification{ResourceType: ec2types.ResourceTypeSpotInstancesRequest, Tags: tags[:2]})
+		}
+		input.InstanceMarketOptions = &ec2types.InstanceMarketOptionsRequest{MarketType: ec2types.MarketTypeSpot, SpotOptions: spot}
 	}
 	out, err := c.aws().ec2(target.scope, h.Region).RunInstances(ctx, input)
 	if err != nil {
 		code := awsCode(err)
 		switch {
 		case capacityRefusal(code) || strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
-			return false, c.failLaunch(ctx, h, describeAWSError(err), true)
+			return false, c.failLaunch(ctx, h, describeAWSError(err), true, quotaRefusal(code))
 		case h.LaunchAttempts >= maxLaunchAttempts:
-			return false, c.failLaunch(ctx, h, describeAWSError(err), false)
+			return false, c.failLaunch(ctx, h, describeAWSError(err), false, false)
 		}
 		return false, fmt.Errorf("run instance: %w", err)
 	}
@@ -166,6 +185,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	n, err := c.queries.RecordLaunch(ctx, RecordLaunchParams{
 		ID: h.ID, InstanceID: instance.InstanceId, AvailabilityZone: zone, AvailabilityZoneID: zoneID,
 		AuthorizationID: target.authorization, NodeRoleArn: nilIfEmpty(target.nodeRole),
+		SpotRequestID: persistentRequest(opts, instance), NodeImage: instance.ImageId, HibernationConfigured: opts.hibernate,
 	})
 	if err != nil {
 		return false, fmt.Errorf("record launch: %w", err)
@@ -177,6 +197,42 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
 		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market))
 	return true, nil
+}
+
+// launchOptions are the parts of a launch a reserve changes.
+type launchOptions struct {
+	rootGiB int32
+	// hibernate launches the instance able to hibernate.
+	hibernate bool
+	// persistent buys Spot on a persistent request that stops instead of
+	// terminating.
+	persistent bool
+}
+
+// launchOptionsFor sizes a launch. A platform host bought for the reserve
+// hibernates when it asks to and its catalog type can, with its root grown
+// for the image. A Spot reserve keeps its request across stops. Serving and
+// connection hosts launch with the plain root.
+func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
+	opts := launchOptions{rootGiB: rootVolumeGiB}
+	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
+		return opts
+	}
+	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot
+	t, _ := CatalogTypeNamed(h.InstanceType)
+	opts.hibernate = ReserveMode(*h.ReserveMode) == ReserveHibernate && t.Hibernates
+	opts.rootGiB = int32(t.RootGiB(opts.hibernate)) //nolint:gosec // At most 250: only types under 150 GiB of RAM hibernate.
+	return opts
+}
+
+// persistentRequest is the Spot request a host must cancel before it
+// terminates: a reserve's persistent one. A one-time request ends with its
+// instance, and cancelling it is neither needed nor allowed.
+func persistentRequest(opts launchOptions, instance ec2types.Instance) *string {
+	if !opts.persistent {
+		return nil
+	}
+	return nilIfEmpty(aws.ToString(instance.SpotInstanceRequestId))
 }
 
 // nodeImage is the AMI a host launches from: the baked image of its region
@@ -221,8 +277,9 @@ func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, i
 }
 
 // failLaunch fails a host that could not launch; cool also skips its offer
-// until the cooldown ends.
-func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool bool) error {
+// until the cooldown ends, and quota its class in the region for the
+// platform.
+func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool, quota bool) error {
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if cool && h.Market != nil {
@@ -236,8 +293,15 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 			}); err != nil {
 				return fmt.Errorf("insert cooldown: %w", err)
 			}
+			if quota && h.ConnectionID == nil {
+				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
+					return err
+				}
+			}
 		}
-		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message)}); err != nil {
+		if _, err := q.FailHost(ctx, FailHostParams{
+			ID: h.ID, FromPhase: string(PhaseRequested), Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
+		}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}
 		return notifyChannel(ctx, tx, h.ID)
@@ -309,9 +373,18 @@ func (c *Compute) bootstrap(host uuid.UUID, release AgentRelease) string {
 	}, "\n")
 }
 
-// terminate stops an instance in scope.
+// terminate ends an instance in scope. A Spot reserve's persistent
+// request is cancelled first, or EC2 would launch a replacement.
 func (c *Compute) terminate(ctx context.Context, scope awsScope, region, instance string) error {
-	_, err := c.aws().ec2(scope, region).TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+	client := c.aws().ec2(scope, region)
+	request, err := c.spotRequestOf(ctx, instance)
+	if err != nil {
+		return err
+	}
+	if request != "" {
+		return endSpotRequest(ctx, client, request)
+	}
+	_, err = client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
 	if err != nil && awsCode(err) != "InvalidInstanceID.NotFound" {
 		return fmt.Errorf("terminate %s: %w", instance, err)
 	}

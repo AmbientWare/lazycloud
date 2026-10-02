@@ -12,21 +12,78 @@ import (
 	"github.com/google/uuid"
 )
 
+const fleetRollout = `-- name: FleetRollout :many
+select (case
+    when h.phase = 'draining' or (h.phase = 'ready' and ((h.capacity_state <> 'available'
+            and (h.capacity_reason <> $1::text or live.containers > 0))
+        or (h.state = 'online' and coalesce(h.last_seen_at > $2::timestamptz, false))))
+        then case when h.agent_version = $3::text then 'current' else 'updating' end
+    when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'
+    when h.token_hash is not null then 'offline'
+    else ''
+end)::text as phase, count(*)::int as hosts
+from hosts h
+left join lateral (
+    select count(*) as containers from containers c where c.host_id = h.id and c.state <> 'stopped'
+) live on true
+where h.kind = 'platform' and h.phase <> 'deleted'
+  and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
+group by 1
+order by 1
+`
+
+type FleetRolloutParams struct {
+	Consolidating string
+	LiveAfter     time.Time
+	Version       string
+}
+
+type FleetRolloutRow struct {
+	Phase string
+	Hosts int32
+}
+
+// Platform hosts by where they stand on the agent release: connected
+// serving or draining hosts on it (current) or on another (updating),
+// reserves, and other enrolled hosts (offline). Draining and serving are
+// fleetStateOf's: an emptied consolidating host is not draining.
+func (q *Queries) FleetRollout(ctx context.Context, arg FleetRolloutParams) ([]FleetRolloutRow, error) {
+	rows, err := q.db.Query(ctx, fleetRollout, arg.Consolidating, arg.LiveAfter, arg.Version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FleetRolloutRow
+	for rows.Next() {
+		var i FleetRolloutRow
+		if err := rows.Scan(&i.Phase, &i.Hosts); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const platformHosts = `-- name: PlatformHosts :many
-select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at, (h.token_hash is not null)::bool as enrolled,
-       h.instance_id, h.region, h.instance_type, h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes,
-       h.agent_version,
+select h.id, h.provider, h.phase, h.state, h.capacity_state, h.capacity_reason, h.last_seen_at,
+       (h.token_hash is not null)::bool as enrolled, h.instance_id::text as instance_id, h.region, h.instance_type,
+       h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.agent_version, h.reserve_mode,
+       h.image_evidence, h.prepared_agent_version,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(coalesce(release_gpus(r.spec), 0)) as gpus, count(*) as containers
+           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           count(*) as containers
     from containers c
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
-where h.kind = 'platform' and h.phase <> 'deleted'
+where h.kind = 'platform' and h.instance_id is not null and h.phase <> 'deleted'
   and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
   and h.id > $1
 order by h.id
@@ -39,30 +96,35 @@ type PlatformHostsParams struct {
 }
 
 type PlatformHostsRow struct {
-	ID            uuid.UUID
-	Provider      string
-	Phase         string
-	State         string
-	CapacityState string
-	LastSeenAt    *time.Time
-	Enrolled      bool
-	InstanceID    *string
-	Region        string
-	InstanceType  string
-	Market        *string
-	GpuType       string
-	GpuCount      int32
-	CpuMillis     int64
-	MemoryBytes   int64
-	AgentVersion  string
-	UsedCpu       int64
-	UsedMemory    int64
-	UsedGpus      int32
-	Containers    int32
+	ID                   uuid.UUID
+	Provider             string
+	Phase                string
+	State                string
+	CapacityState        string
+	CapacityReason       string
+	LastSeenAt           *time.Time
+	Enrolled             bool
+	InstanceID           string
+	Region               string
+	InstanceType         string
+	Market               *string
+	GpuType              string
+	GpuCount             int32
+	CpuMillis            int64
+	MemoryBytes          int64
+	AgentVersion         string
+	ReserveMode          *string
+	ImageEvidence        string
+	PreparedAgentVersion *string
+	UsedCpu              int64
+	UsedMemory           int64
+	UsedGpus             int32
+	Containers           int32
 }
 
-// Platform hosts that exist, with the reservations of their live
-// containers, by id after the cursor; failed ones for a day.
+// Platform hosts with an instance, with the reservations of their live
+// containers, by id after the cursor; failed ones for a day. A launch the
+// provider refused has no instance and is left out.
 func (q *Queries) PlatformHosts(ctx context.Context, arg PlatformHostsParams) ([]PlatformHostsRow, error) {
 	rows, err := q.db.Query(ctx, platformHosts, arg.AfterID, arg.MaxRows)
 	if err != nil {
@@ -78,6 +140,7 @@ func (q *Queries) PlatformHosts(ctx context.Context, arg PlatformHostsParams) ([
 			&i.Phase,
 			&i.State,
 			&i.CapacityState,
+			&i.CapacityReason,
 			&i.LastSeenAt,
 			&i.Enrolled,
 			&i.InstanceID,
@@ -89,6 +152,9 @@ func (q *Queries) PlatformHosts(ctx context.Context, arg PlatformHostsParams) ([
 			&i.CpuMillis,
 			&i.MemoryBytes,
 			&i.AgentVersion,
+			&i.ReserveMode,
+			&i.ImageEvidence,
+			&i.PreparedAgentVersion,
 			&i.UsedCpu,
 			&i.UsedMemory,
 			&i.UsedGpus,

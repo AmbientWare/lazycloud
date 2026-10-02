@@ -151,8 +151,8 @@ func TestFleetIsForAdministratorsOnly(t *testing.T) {
 	}
 	var platform uuid.UUID
 	if err := e.pool.QueryRow(ctx, `
-insert into hosts (name, token_hash, state, last_seen_at, cpu_millis, memory_bytes)
-values ('platform-1', sha256(random()::text::bytea), 'online', now(), 4000, 8 << 30) returning id`).Scan(&platform); err != nil {
+insert into hosts (name, token_hash, state, last_seen_at, cpu_millis, memory_bytes, provider, instance_id)
+values ('platform-1', sha256(random()::text::bytea), 'online', now(), 4000, 8 << 30, 'aws', 'i-0platform1') returning id`).Scan(&platform); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.pool.Exec(ctx, `

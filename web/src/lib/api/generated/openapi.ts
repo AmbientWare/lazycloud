@@ -5350,7 +5350,7 @@ export interface components {
             gpu_count: number;
         };
         /**
-         * @description A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+         * @description A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
          * @enum {string}
          */
         FleetState: "serving" | "starting" | "draining" | "preparing" | "stopping" | "unavailable" | "failed" | "terminating" | "stopped" | "hibernate_unverified" | "image_saved";
@@ -5366,11 +5366,11 @@ export interface components {
             gpu_type: string;
             /** @description Unreserved capacity on serving hosts. */
             warm_free: components["schemas"]["FleetCapacity"];
-            /** @description The idle capacity the headroom floor keeps. */
+            /** @description The free capacity on serving hosts the plan keeps. */
             warm_target: components["schemas"]["FleetCapacity"];
-            /** @description Always zero; the fleet keeps no stopped reserves. */
+            /** @description Stopped reserves prepared for the agent release they should run. */
             reserve_ready: components["schemas"]["FleetCapacity"];
-            /** @description Always zero; the fleet keeps no stopped reserves. */
+            /** @description The stopped reserve capacity the plan keeps. */
             reserve_target: components["schemas"]["FleetCapacity"];
             /** @description Reservations of live containers on the market's hosts. */
             allocated: components["schemas"]["FleetCapacity"];
@@ -5381,6 +5381,7 @@ export interface components {
         FleetSummary: {
             /** Format: date-time */
             observed_at: string;
+            /** @description The planner's last published plan; absent once it expires. */
             plan?: {
                 /** Format: date-time */
                 generated_at: string;
@@ -5416,7 +5417,7 @@ export interface components {
             capacity: components["schemas"]["FleetCapacity"];
             allocated: components["schemas"]["FleetCapacity"];
             containers: number;
-            /** @description Serving and on the target agent release. */
+            /** @description Serving on its agent release, or a stopped reserve prepared for it. */
             ready: boolean;
         };
         FleetNodePage: {
