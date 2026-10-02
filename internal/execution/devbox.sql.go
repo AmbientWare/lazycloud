@@ -13,16 +13,25 @@ import (
 )
 
 const devboxContainer = `-- name: DevboxContainer :one
-select c.id, c.state, c.host_id, c.keep_warm_seconds, c.active_until,
-       coalesce(array(select st.stage from container_startup_stages st where st.container_id = c.id), '{}')::text[] as stages,
-       (select count(*) from container_leases l where l.container_id = c.id and l.expires_at > now())::int as connections,
-       coalesce((select max(l.expires_at) from container_leases l where l.container_id = c.id), c.created_at)::timestamptz
-           as last_connection
-from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = $1 and c.purpose = 'serve' and c.state <> 'stopped'
-order by c.created_at desc, c.id desc
-limit 1
+select c.id, c.state, c.host_id, c.keep_warm_seconds, c.active_until, st.stages,
+       lease.connections::int as connections,
+       coalesce(lease.last_connection, c.created_at)::timestamptz as last_connection
+from (
+    select c.id, c.state, c.host_id, c.keep_warm_seconds, c.active_until, c.created_at
+    from containers c
+    join releases r on r.id = c.release_id
+    where r.workload_id = $1 and c.purpose = 'serve' and c.state <> 'stopped'
+    order by c.created_at desc, c.id desc
+    limit 1
+) c
+cross join lateral (
+    select coalesce(array_agg(st.stage), '{}')::text[] as stages
+    from container_startup_stages st where st.container_id = c.id
+) st
+cross join lateral (
+    select count(*) filter (where l.expires_at > now()) as connections, max(l.expires_at) as last_connection
+    from container_leases l where l.container_id = c.id
+) lease
 `
 
 type DevboxContainerRow struct {

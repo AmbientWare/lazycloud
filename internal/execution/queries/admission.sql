@@ -36,28 +36,18 @@ for share of t;
 select id, root_task_id from tasks where id = @id and workspace_id = @workspace_id;
 
 -- name: InsertTasks :many
--- One statement inserts every task and its input; rows return in input order.
-with input as materialized (
-    select uuidv7() as id, i as ord, (@encodings::text[])[i] as encoding, (@data::bytea[])[i] as data,
-           (@unmet::int[])[i] as unmet
-    from generate_subscripts(@encodings::text[], 1) as i
-), task as (
-    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
-                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for, traceparent)
-    select input.id, @workspace_id, @workload_id, @release_id, 'queued', @max_attempts,
-           sqlc.narg(parent_task_id)::uuid, sqlc.narg(root_task_id)::uuid, input.unmet,
-           sqlc.narg(scheduled_for)::timestamptz, sqlc.narg(traceparent)::text
-    from input
-    order by input.ord
-    returning tasks.id, tasks.created_at
-), task_input as (
-    insert into task_inputs (task_id, encoding, data)
-    select input.id, input.encoding, input.data from input
-)
-select task.id, task.created_at
-from input
-join task on task.id = input.id
-order by input.ord;
+-- The submit picks the task ids, so InsertTaskInputs can follow in the same
+-- round trip.
+insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
+                   parent_task_id, root_task_id, unmet_dependencies, scheduled_for, traceparent)
+select unnest(@ids::uuid[]), @workspace_id, @workload_id, @release_id, 'queued', @max_attempts,
+       sqlc.narg(parent_task_id)::uuid, sqlc.narg(root_task_id)::uuid, unnest(@unmet::int[]),
+       sqlc.narg(scheduled_for)::timestamptz, sqlc.narg(traceparent)::text
+returning id, created_at;
+
+-- name: InsertTaskInputs :exec
+insert into task_inputs (task_id, encoding, data)
+select unnest(@task_ids::uuid[]), unnest(@encodings::text[]), unnest(@data::bytea[]);
 
 -- name: InsertDependencies :exec
 insert into task_dependencies (task_id, depends_on)
