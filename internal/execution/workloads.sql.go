@@ -230,9 +230,9 @@ func (q *Queries) DrainIdleInstances(ctx context.Context, batchSize int32) ([]Dr
 }
 
 const drainPodContainers = `-- name: DrainPodContainers :many
-update containers
+update containers c
 set state = 'draining', drain_started_at = now()
-where id in (
+from (
     select d.id from containers d
     cross join lateral (
         select (d.state = 'ready' and d.keep_warm_seconds is not null and d.active_until < now()
@@ -245,9 +245,9 @@ where id in (
     order by k.idle desc, d.created_at desc, d.id desc
     limit $2
     for update of d skip locked
-)
-  and state in ('starting', 'ready')
-returning id, host_id
+) pick
+where c.id = pick.id and c.state in ('starting', 'ready')
+returning c.id, c.host_id
 `
 
 type DrainPodContainersParams struct {
@@ -261,7 +261,8 @@ type DrainPodContainersRow struct {
 }
 
 // Idle ready containers first, then the newest; the oldest active ones are
-// the ones holding connections.
+// the ones holding connections. The pick joins as a FROM item: Neki's
+// router loses the lateral when it runs as an IN subquery.
 func (q *Queries) DrainPodContainers(ctx context.Context, arg DrainPodContainersParams) ([]DrainPodContainersRow, error) {
 	rows, err := q.db.Query(ctx, drainPodContainers, arg.ReleaseID, arg.Count)
 	if err != nil {
