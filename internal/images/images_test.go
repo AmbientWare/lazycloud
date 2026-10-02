@@ -139,6 +139,14 @@ func (f fixture) imageRepository(t *testing.T, id string) string {
 	return f.registry + "/lazycloud/images/" + digest
 }
 
+// workspaceImageRepository is where workspace's own builds of image id
+// push: forced rebuilds and builds on customer hosts.
+func (f fixture) workspaceImageRepository(t *testing.T, workspace identity.WorkspaceID, id string) string {
+	t.Helper()
+	shared := f.imageRepository(t, id)
+	return f.registry + "/lazycloud/workspace-images/" + uuid.UUID(workspace).String() + "/" + shared[strings.LastIndex(shared, "/")+1:]
+}
+
 func numpy() apitypes.ImageDefinition {
 	return apitypes.ImageDefinition{PythonVersion: "3.12", PythonPackages: &[]string{"numpy"}}
 }

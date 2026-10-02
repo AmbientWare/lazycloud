@@ -24,13 +24,20 @@ from images i
 join workspace_images w on w.image_digest = i.digest
 where w.workspace_id = @workspace_id and i.id = @id;
 
+-- name: WorkspaceOnCustomerHosts :one
+-- A workspace bound to a connected AWS account runs its builds there.
+select (connection_id is not null)::bool from workspaces where id = @id;
+
+-- name: HostKind :one
+select kind from hosts where id = @id;
+
 -- name: LockImage :one
 select digest, id, python_version, architecture, reference, created_at, ready_at
 from images where digest = @digest for update;
 
 -- name: ActiveBuild :one
--- The build a request joins: the global one, or the workspace's own forced
--- rebuild.
+-- The build a request joins: the global one, or the workspace's own
+-- workspace-scoped build (forced = true).
 select id, image_digest, state, failure, created_at, finished_at
 from image_builds
 where image_digest = @image_digest and state = 'building'
@@ -61,7 +68,7 @@ select coalesce((select c.state from containers c where c.image_build_id = @id o
        (select count(*) from containers c where c.image_build_id = @id)::int as attempts;
 
 -- name: BuildToStart :one
-select b.id, b.state, b.workspace_id, b.context_sha256, b.registry_auth, b.deadline_at,
+select b.id, b.state, b.workspace_id, b.forced, b.context_sha256, b.registry_auth, b.deadline_at,
        i.digest, i.dockerfile, i.architecture
 from image_builds b
 join images i on i.digest = b.image_digest

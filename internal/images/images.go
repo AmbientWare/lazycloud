@@ -106,6 +106,28 @@ func (c Config) imageRepository(digest []byte) string {
 	return c.Repository + "/images/" + hex.EncodeToString(digest)
 }
 
+// workspaceImageRepository holds a workspace's own builds of an image: a
+// forced rebuild, or any build on a host a customer controls. Only that
+// workspace pulls from it.
+func (c Config) workspaceImageRepository(workspace uuid.UUID, digest []byte) string {
+	return c.Repository + "/workspace-images/" + workspace.String() + "/" + hex.EncodeToString(digest)
+}
+
+// imageTarget is where a build pushes and whether its result is the
+// workspace's alone. A build on a connected account's or joined machine's
+// host runs where the customer controls it, so only the shared image a
+// platform host built may be published for every workspace.
+func (i *Images) imageTarget(ctx context.Context, q *Queries, host compute.HostID, workspace uuid.UUID, digest []byte, forced bool) (string, bool, error) {
+	kind, err := q.HostKind(ctx, uuid.UUID(host))
+	if err != nil {
+		return "", false, fmt.Errorf("read host kind: %w", err)
+	}
+	if forced || compute.HostKind(kind) != compute.KindPlatform {
+		return i.config.workspaceImageRepository(workspace, digest), true, nil
+	}
+	return i.config.imageRepository(digest), false, nil
+}
+
 func (c Config) cacheRepository(workspace uuid.UUID) string {
 	return c.Repository + "/cache/" + workspace.String()
 }
@@ -360,8 +382,14 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		if p.reference != nil || (image.Reference != nil && !force) {
 			return nil
 		}
-		// Forcing an image nobody published yet is its first build.
-		forced := force && image.globalReference != nil
+		// Forcing an image nobody published yet is its first build. A
+		// workspace whose builds run on its connected account's hosts
+		// builds for itself alone.
+		customer, err := q.WorkspaceOnCustomerHosts(ctx, uuid.UUID(workspace))
+		if err != nil {
+			return fmt.Errorf("read workspace hosts: %w", err)
+		}
+		forced := (force && image.globalReference != nil) || customer
 		active, err := q.ActiveBuild(ctx, ActiveBuildParams{ImageDigest: p.digest, Forced: forced, WorkspaceID: uuid.UUID(workspace)})
 		switch {
 		case err == nil:
@@ -626,8 +654,9 @@ type BuildCommand struct {
 	Deadline time.Time
 }
 
-// BuildCommandOf returns the command for a starting build container.
-func (i *Images) BuildCommandOf(ctx context.Context, start execution.BuildStart) (BuildCommand, error) {
+// BuildCommandOf returns the command for a build container starting on
+// host.
+func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start execution.BuildStart) (BuildCommand, error) {
 	row, err := i.queries.BuildToStart(ctx, start.Build)
 	if err != nil {
 		return BuildCommand{}, fmt.Errorf("read build %s: %w", start.Build, err)
@@ -642,7 +671,11 @@ func (i *Images) BuildCommandOf(ctx context.Context, start execution.BuildStart)
 	// one: a build could write any cache entry it can push, and caches hold
 	// the workspace's build contexts.
 	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + dockerfileBase(row.Dockerfile)))
-	image, cache := i.config.imageRepository(row.Digest), i.config.cacheRepository(row.WorkspaceID)
+	image, _, err := i.imageTarget(ctx, i.queries, host, row.WorkspaceID, row.Digest, row.Forced)
+	if err != nil {
+		return BuildCommand{}, err
+	}
+	cache := i.config.cacheRepository(row.WorkspaceID)
 	// The build pushes only its image and its workspace's cache, until its
 	// deadline.
 	platform, err := i.login.host(ctx, hostAccess{push: []string{image, cache}}, row.DeadlineAt.Add(time.Minute))
@@ -681,16 +714,21 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 	if err != nil {
 		return err
 	}
-	digest, err := i.queries.BuildImageDigest(ctx, build)
+	started, err := i.queries.BuildToStart(ctx, build)
 	if err != nil {
 		return fmt.Errorf("read build: %w", err)
+	}
+	digest := started.Digest
+	repository, scoped, err := i.imageTarget(ctx, i.queries, host, started.WorkspaceID, digest, started.Forced)
+	if err != nil {
+		return err
 	}
 	var reference string
 	if outcome.Failure == "" {
 		if !manifestDigest.MatchString(outcome.Digest) {
 			return invalid("digest %q is not sha256:<hex>", outcome.Digest)
 		}
-		reference = i.config.Registry + "/" + i.config.imageRepository(digest) + "@" + outcome.Digest
+		reference = i.config.Registry + "/" + repository + "@" + outcome.Digest
 		auth, err := i.login.auth(ctx)
 		if err != nil {
 			return err
@@ -718,7 +756,10 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 			}
 		} else {
 			var err error
-			if row.Forced {
+			// A workspace-scoped build, or one a customer's host ran, is
+			// that workspace's image only; other workspaces that joined it
+			// build again.
+			if scoped {
 				err = q.PublishWorkspaceImage(ctx, PublishWorkspaceImageParams{
 					WorkspaceID: row.WorkspaceID, ImageDigest: digest, Reference: reference,
 				})

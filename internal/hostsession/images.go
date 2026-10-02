@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
@@ -57,7 +58,7 @@ func (sess *session) syncBuilds(ctx context.Context, derived map[string]bool) er
 		if sess.sent[id] {
 			continue
 		}
-		msg, err := sess.server.buildStartMessage(ctx, id, start)
+		msg, err := sess.server.buildStartMessage(ctx, sess.host, id, start)
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
@@ -68,8 +69,8 @@ func (sess *session) syncBuilds(ctx context.Context, derived map[string]bool) er
 	return nil
 }
 
-func (s *Server) buildStartMessage(ctx context.Context, id string, start execution.BuildStart) (*hostproto.ServerMessage, error) {
-	command, err := s.images.BuildCommandOf(ctx, start)
+func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id string, start execution.BuildStart) (*hostproto.ServerMessage, error) {
+	command, err := s.images.BuildCommandOf(ctx, host, start)
 	if err != nil {
 		return nil, err
 	}
