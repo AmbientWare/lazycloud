@@ -8,9 +8,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The plan tests use two shapes like the reference's: m.small (8 vCPU,
-// 16 GiB) and m.large (32 vCPU, 64 GiB, four smalls' usable capacity),
-// in the standard quota class like the M family.
+// The plan tests use two shapes: m.small (8 vCPU, 16 GiB) and m.large
+// (32 vCPU, 64 GiB, four smalls' usable capacity), in the standard quota
+// class like the M family.
 var (
 	planSmall = CatalogType{Name: "m.small", CPUMillis: 8000, MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
 	planLarge = CatalogType{Name: "m.large", CPUMillis: 32_000, MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}

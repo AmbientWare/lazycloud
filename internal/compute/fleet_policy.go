@@ -174,8 +174,10 @@ type Policy struct {
 	RequestShapes        int
 }
 
-// DefaultPolicy is the reference policy.
+// DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
+	// The CPU floors keep about $231/month of warm spares and stopped
+	// reserves at zero load.
 	cpu := MarketReserve{
 		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
 		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},

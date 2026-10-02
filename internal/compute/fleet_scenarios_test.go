@@ -76,10 +76,10 @@ type sim struct {
 	next    byte
 	r       simResult
 	planned time.Time
-	// demandOnly plans without forecasts, as the rewrite does today.
+	// demandOnly plans without forecasts.
 	demandOnly bool
 	// quotas are EC2's vCPU quotas; the planner reads them only with
-	// knowQuota (P2).
+	// knowQuota.
 	quotas    map[QuotaKey]int64
 	knowQuota bool
 }
@@ -425,7 +425,8 @@ func (r simResult) row(name string) string {
 		long, len(waits), p95, r.launches, r.refusals, r.stops, r.resumes)
 }
 
-// demandOnly is the rewrite today: no headroom and no reserves.
+// demandOnly is the baseline the scenarios compare the policy with: no
+// headroom and no reserves.
 func demandOnly() Policy {
 	p := DefaultPolicy()
 	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
@@ -460,11 +461,12 @@ func TestFleetScenarios(t *testing.T) {
 	}
 	for _, sc := range scenarios {
 		for _, policy := range []struct {
-			name string
-			p    Policy
-		}{{"reference policy", DefaultPolicy()}, {"demand only (rewrite today)", demandOnly()}} {
+			name       string
+			p          Policy
+			demandOnly bool
+		}{{"default policy", DefaultPolicy(), false}, {"demand only", demandOnly(), true}} {
 			s := newSim(t, policy.p)
-			s.demandOnly = policy.name != "reference policy"
+			s.demandOnly = policy.demandOnly
 			r := s.run(sc.d, sc.arrivals)
 			t.Log(r.row(sc.name + ", " + policy.name))
 			for _, v := range r.violations {
@@ -517,9 +519,9 @@ func TestFleetQuotaScenario(t *testing.T) {
 		s.quotas = map[QuotaKey]int64{{Region: "us-west-2", Class: QuotaG, Market: MarketSpot}: 0}
 		s.knowQuota = known
 		r := s.run(time.Hour, arrivals)
-		name := "Oregon G Spot quota 0, quota unknown (today)"
+		name := "Oregon G Spot quota 0, quota unknown"
 		if known {
-			name = "Oregon G Spot quota 0, quota read (P2)"
+			name = "Oregon G Spot quota 0, quota read"
 		}
 		t.Log(r.row(name))
 		if known && r.refusals > 0 {

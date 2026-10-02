@@ -362,7 +362,7 @@ func TestQuotaUseIsTheSnapshotsHosts(t *testing.T) {
 	}
 }
 
-// A cold boot after a hibernation in the last day (P1) stops that type
+// A cold boot after a hibernation in the last day stops that type
 // plainly in its region: a host that cannot hibernate does not return to a
 // reserve that hibernates, so it drains.
 func TestAColdBootAfterAHibernationStopsTheTypePlainly(t *testing.T) {

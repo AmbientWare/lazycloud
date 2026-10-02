@@ -12,6 +12,12 @@ version, Deploy records it on the `prod` branch, and Argo CD syncs the chart
 | `gh workflow run deploy.yml -f version=<x.y.z>` | Writes `prod` as that version's tree plus `values-deployment.yaml`; an earlier version rolls back. Migrations do not roll back |
 | `gh workflow run node-images.yml` | Bakes the CPU and GPU node images into every fleet region; its summary holds the `LAZYCLOUD_FLEET_IMAGES` value for the env file |
 
+Some releases need a step before Ship. New scheduler IAM applies
+`platform-deployment` first; it only adds permissions. A change to
+`deploy/ami` runs Node images from main and lands a PR updating
+`LAZYCLOUD_FLEET_IMAGES`. A change to SQL runs `acceptance/neki/check.sh`,
+so every query executes through Neki's router first.
+
 ## Settings and secrets
 
 "Values" is platform-deployment's `values.json`, which Deploy merges into the
@@ -69,8 +75,6 @@ document in us-east-1 and the account's GitHub OIDC provider.
 - LISTEN, the migration, metering and leader locks need a connection that
   keeps its session: `LAZYCLOUD_DATABASE_SESSION_URL`. Neki's router does;
   behind any other pooler, point it at a direct endpoint.
-- A release that changes SQL runs `acceptance/neki/check.sh` before Ship, so
-  every query executes through Neki's router first.
 - Node capacity installs before Argo CD, whose pre-install hooks need a node.
 - Argo CD reads `deploy/argocd/apps` from main, and the deployment from `prod`.
 - Only the prod environment's deploy key pushes `prod`; Deploy refuses a tag
@@ -79,3 +83,6 @@ document in us-east-1 and the account's GitHub OIDC provider.
 - The server reads the TCP certificate at start, so a renewal waits for the
   next release or restart.
 - Agent archives and images are linux/amd64 only.
+- Real-EC2 fleet acceptance runs in `AWS_PROFILE=default` with
+  `LAZYCLOUD_EC2_ACCEPTANCE_PROFILE`; `default-test` serves only the
+  connected-account checks.

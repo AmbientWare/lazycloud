@@ -460,7 +460,7 @@ func vcpuQuotas(rooms []QuotaRoom) []VCPUQuota {
 }
 
 // plainStops are the region/type pairs whose hibernation booted cold within
-// the last day (P1): their reserves stop plainly.
+// the last day: their reserves stop plainly.
 func plainStops(stats []ActivationStat) map[string]bool {
 	out := map[string]bool{}
 	for _, s := range stats {
