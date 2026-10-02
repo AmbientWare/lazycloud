@@ -149,9 +149,8 @@ def read_text_file(key: str) -> str:
     return (Path("/data") / key).read_text()
 ```
 
-`access_key` and `secret_key` name [secrets](/concepts/secrets). Without them,
-the mount uses the machine's own credentials, such as an instance role in your
-[AWS account](/platform/compute). `bucket`, `prefix`, `endpoint`,
+`access_key` and `secret_key` name [secrets](/concepts/secrets); both are
+required. `bucket`, `prefix`, `endpoint`,
 `force_path_style`, and `read_only` cover other layouts and stores. The bucket
 must already exist. See the [Parquet example](/examples/parallel-parquet-s3).
 
