@@ -63,41 +63,11 @@ resource "github_actions_environment_variable" "environment" {
   value         = each.value.value
 }
 
-# Release tags. Workflow tokens (integration 15368, GitHub Actions) may
-# create a v* tag, which Ship's version job does, and nothing more: only
-# administrators (repository role 5) move or delete one. Deploy refuses a
-# tag whose commit is not on main, so a tag a branch workflow creates
-# cannot reach prod.
-resource "github_repository_ruleset" "release_tag_creation" {
-  name        = "release tag creation"
-  repository  = local.repository
-  target      = "tag"
-  enforcement = "active"
-
-  conditions {
-    ref_name {
-      include = ["refs/tags/v*"]
-      exclude = []
-    }
-  }
-
-  bypass_actors {
-    actor_id    = 5
-    actor_type  = "RepositoryRole"
-    bypass_mode = "always"
-  }
-
-  bypass_actors {
-    actor_id    = 15368
-    actor_type  = "Integration"
-    bypass_mode = "always"
-  }
-
-  rules {
-    creation = true
-  }
-}
-
+# Release tags: Ship's version job creates v* tags with the workflow token,
+# and only administrators (repository role 5) move or delete one. Deploy
+# refuses a tag whose commit is not on main, so a tag made elsewhere cannot
+# reach prod. GitHub does not accept the Actions integration as a bypass on
+# a repository ruleset, so creation itself stays open to writers.
 resource "github_repository_ruleset" "release_tags" {
   name        = "release tags"
   repository  = local.repository
