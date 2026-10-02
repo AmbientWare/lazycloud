@@ -112,7 +112,7 @@ managed-runtime wheel locks.
 
 | Piece | main | port | What changed and why it is better |
 | --- | ---: | ---: | --- |
-| Terraform | 4,478 (platform-core, platform-deployment, cloudflare, stripe, terraform-state docs) | 1,737 (state, platform-core, platform-deployment, github, README) | Four roots for one deployment become one: Cloudflare tunnel and records, Stripe webhook and the deployment's AWS resources share one apply, so the webhook secret and tunnel credentials go straight into the platform document instead of being copied by hand, and the descriptor publishing step is an `aws_s3_object`. Dropped Redis, release CloudFront and bucket, access-log bucket and queue, control principal, fleet connection role and its 357-line generated policy, acceptance roles, moved blocks. The control-plane policy grants the calls the binaries make: no bucket policy, logging or deletion rights, no Secrets Manager, EC2 limited to RunInstances/TerminateInstances on fleet-tagged instances. Every provider pinned exactly to its current release; helm and kubernetes providers move to 3.x. A state root replaces a hand-made bucket. |
+| Terraform | 4,478 (platform-core, platform-deployment, cloudflare, stripe, terraform-state docs) | 1,737 (state, platform-core, platform-deployment, github, README) | Four roots for one deployment become one: Cloudflare tunnel and records, Stripe webhook and the deployment's AWS resources share one apply, so the webhook secret and tunnel credentials go straight into the platform document instead of being copied by hand, and the descriptor publishing step is an `aws_s3_object`. Dropped Redis, release CloudFront and bucket, access-log bucket and queue, control principal, fleet connection role and its 357-line generated policy, acceptance roles, moved blocks. The control-plane policy grants the calls the binaries make: no bucket policy, logging or deletion rights, no Secrets Manager, EC2 limited to RunInstances/TerminateInstances on fleet-tagged instances. Every provider pinned exactly to its current release; helm and kubernetes providers move to 3.x. The operator-owned state bucket stays outside every root. |
 | Database | PlanetScale Postgres branch, PgBouncer on 6432 plus a direct URL | PlanetScale Neki branch and one role, router on 5432 | One URL; the router pools. |
 | Chart | 2,670 (chart, values renderer) | 1,570 (chart, schema, prod environment, example values) | Seven Python services, connection gateway with HAProxy sidecar, cache server, fleet controller and bootstrap jobs become server, scheduler, web and cloudflared. Values are Terraform's JSON merged with the version by jq; `chart_values.py` and its 367 lines go. One disruption template for all four workloads. |
 | Argo CD | 155 | 141 | Same three applications at current versions; the deployment reads `deploy/helm/lazycloud`. |
@@ -146,7 +146,9 @@ the PlanetScale database. Everything below is a fresh build. Kept:
    user ids are known.
 2. [GO] The integrator merges go-rewrite into main, so Argo CD's root
    Application finds the new applications when it starts.
-3. [GO] `state` apply; write the backend file from its output.
+3. Write the backend file for the existing state bucket
+   (deploy/terraform/README.md). The platform-core and platform-deployment
+   keys hold main's empty states, which the first applies take over.
 4. [GO] `platform-core` apply (`cluster_api_cidrs` with the operator's
    address).
 5. [GO] `platform-deployment` apply (`deployment`, `github_environment`,
