@@ -74,10 +74,14 @@ with recursive closure (id) as (
     union
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
-select t.id, t.release_id from tasks t
-where t.id = any(array(select id from closure)) and t.status = 'queued'
-order by t.id
-for update
+select l.id, l.release_id from (
+    select t.id, t.release_id, t.status from tasks t
+    where t.id = any(array(select id from closure))
+    order by t.id
+    offset 0
+    for update
+) l
+where l.status = 'queued'
 `
 
 type LockDependentClosureRow struct {
@@ -86,7 +90,7 @@ type LockDependentClosureRow struct {
 }
 
 // Queued tasks that depend on any upstream directly or through other tasks,
-// locked in id order.
+// locked in id order and read by key, as LockQueuedDependents.
 func (q *Queries) LockDependentClosure(ctx context.Context, upstream []uuid.UUID) ([]LockDependentClosureRow, error) {
 	rows, err := q.db.Query(ctx, lockDependentClosure, upstream)
 	if err != nil {
@@ -108,17 +112,22 @@ func (q *Queries) LockDependentClosure(ctx context.Context, upstream []uuid.UUID
 }
 
 const lockQueuedDependents = `-- name: LockQueuedDependents :many
-select t.id from tasks t
-where t.id = any(array(select d.task_id from task_dependencies d where d.depends_on = any($1::uuid[])))
-  and t.status = 'queued'
-order by t.id
-for update
+select l.id from (
+    select t.id, t.status from tasks t
+    where t.id = any(array(select d.task_id from task_dependencies d where d.depends_on = any($1::uuid[])))
+    order by t.id
+    offset 0
+    for update
+) l
+where l.status = 'queued'
 `
 
 // Queued tasks that depend directly on any upstream, locked in id order so
-// concurrent upstream outcomes never deadlock on shared dependents. The
-// array is evaluated first, so tasks are read by key and the cost follows
-// the dependents, never the queued backlog.
+// concurrent upstream outcomes never deadlock on shared dependents. Tasks
+// are read by key: OFFSET 0 keeps the status test out of the locking scan,
+// because with it the planner may walk the queued index when statistics
+// taken at an empty queue call it empty. Terminal dependents are locked too
+// and dropped by the outer test.
 func (q *Queries) LockQueuedDependents(ctx context.Context, upstream []uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, lockQueuedDependents, upstream)
 	if err != nil {
@@ -149,11 +158,15 @@ with recursive base as (
     union
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
-select t.id, (t.id = any(array(select id from base)))::bool as in_release
-from tasks t
-where t.id = any(array(select id from closure)) and t.status = 'queued'
-order by t.id
-for update of t
+select l.id, l.in_release from (
+    select t.id, t.status, (t.id = any(array(select id from base)))::bool as in_release
+    from tasks t
+    where t.id = any(array(select id from closure))
+    order by t.id
+    offset 0
+    for update of t
+) l
+where l.status = 'queued'
 `
 
 type LockQueuedWithDependentsParams struct {
@@ -170,7 +183,8 @@ type LockQueuedWithDependentsRow struct {
 // depends on them directly or transitively, locked together in id order, so
 // failing or cancelling the batch and then its dependents never takes a
 // second round of locks. Callers repeat until no batch is left, so the batch
-// is any queued tasks the tasks_queued index yields, not the lowest ids.
+// is the first queued tasks an index yields, not the lowest ids: unordered,
+// the scan stops after batch_size rows.
 func (q *Queries) LockQueuedWithDependents(ctx context.Context, arg LockQueuedWithDependentsParams) ([]LockQueuedWithDependentsRow, error) {
 	rows, err := q.db.Query(ctx, lockQueuedWithDependents, arg.ReleaseID, arg.BatchSize)
 	if err != nil {
