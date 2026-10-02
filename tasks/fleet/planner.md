@@ -222,13 +222,17 @@ Parity lines marked "Packet: planner", with tests (internal/compute):
   | 0, 1,000 | 17 | 51 ms | 522 | 2 | 164 | 105 |
   | 500, 1,000 | 17 | 41 ms | 446 | 19 | 67 | 93 |
   | 2,000, 1,000 | 17 | 58 ms | 349 | 82 | 18 | 93 |
-  | 10,000 plus 10,000 on a warm cron function, 20,000 | 17 | 62 ms | 349 | 123 | 18 | 93 |
+  | 15,000 (5,000 created at once), 10,000 more on a warm cron function, 20,000 | 17 | 65 ms | 448 | 92 | 18 | 93 |
 
   Activation stats, cooldowns and markets stay at 0-5 buffers. No node
   reads more than the 2,000-container batch. The guard first caught the
   scheduled read counting a release's pending containers (1,294 -> 3,376
   buffers) and the arrivals read walking the pending backlog; both now read
-  only placed containers.
+  only placed containers. It later caught the pending batch sorting a whole
+  backlog created in one statement (ties on created_at broken by id: 5,001
+  rows); the batch now follows the pending index alone. Each measurement
+  runs on vacuumed, analyzed tables, so autovacuum timing under load does
+  not move it.
 - `BenchmarkPlan` (2,000 pending, Spot quotes): 43 ms p50, 67 ms p95, 18
   hosts. Before, `BenchmarkPlanCapacity` on 7f33b8bc: 144 ms p50, 191 ms
   p95, 288 one-container hosts in one pass and about 300 statements (one
