@@ -27,10 +27,8 @@ const (
 	rootVolumeGiB = 100
 	// maxRootVolumeGiB is the largest root a hibernating host grows to.
 	maxRootVolumeGiB = 2048
-	// hibernationMemoryLimit is the RAM EC2 hibernates under.
-	hibernationMemoryLimit = 150 * gib
-	cpuImage               = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-	gpuImage               = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
+	cpuImage         = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+	gpuImage         = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
 )
 
 // Tags on every instance the fleet launches.

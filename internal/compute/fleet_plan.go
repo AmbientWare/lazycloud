@@ -10,14 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// ReserveMode is how a reserve stops.
-type ReserveMode string
-
-const (
-	ReserveStop      ReserveMode = "stop"
-	ReserveHibernate ReserveMode = "hibernate"
-)
-
 // Reserve states of a platform host, beside the serving ones in
 // fleet_admin.go.
 const (

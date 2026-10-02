@@ -8,11 +8,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// The plan tests use two shapes like the reference's: small (8 vCPU,
-// 16 GiB) and large (32 vCPU, 64 GiB, four smalls' usable capacity).
+// The plan tests use two shapes like the reference's: m.small (8 vCPU,
+// 16 GiB) and m.large (32 vCPU, 64 GiB, four smalls' usable capacity),
+// in the standard quota class like the M family.
 var (
-	planSmall = CatalogType{Name: "small", CPUMillis: 8000, MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
-	planLarge = CatalogType{Name: "large", CPUMillis: 32_000, MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}
+	planSmall = CatalogType{Name: "m.small", CPUMillis: 8000, MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+	planLarge = CatalogType{Name: "m.large", CPUMillis: 32_000, MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}
 	small     = planSmall.Usable(0)
 	large     = planLarge.Usable(0)
 	onDemand  = ReserveMarket{}
@@ -95,9 +96,9 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 		target FleetCapacity
 		want   []string
 	}{
-		{small, []string{"small"}},
-		{small.Times(4), []string{"large"}},
-		{large.Times(4), []string{"large", "large", "large", "large"}},
+		{small, []string{"m.small"}},
+		{small.Times(4), []string{"m.large"}},
+		{large.Times(4), []string{"m.large", "m.large", "m.large", "m.large"}},
 	} {
 		plan := PlanFleet(planPolicy(c.target, FleetCapacity{}), planSnapshot(t))
 		if got := boughtTypes(plan); !slices.Equal(got, c.want) {
@@ -114,7 +115,7 @@ func TestPlanFitsALargeRecentShapeOnOneHostDespiteAggregateRoom(t *testing.T) {
 		planHost(3, planSmall, FleetServing), planHost(4, planSmall, FleetServing))
 	s.Forecasts = map[ReserveMarket]MarketForecast{onDemand: {Shapes: []FleetCapacity{cpuGiB(16_000, 32)}}}
 	plan := PlanFleet(planPolicy(small, FleetCapacity{}), s)
-	if got := boughtTypes(plan); !slices.Equal(got, []string{"large"}) {
+	if got := boughtTypes(plan); !slices.Equal(got, []string{"m.large"}) {
 		t.Fatalf("bought %v", got)
 	}
 }
@@ -254,7 +255,7 @@ func TestPlanRightsizesAnIdleHostAndKeepsItUntilTheReplacementServes(t *testing.
 	source := idle(planHost(1, planLarge, FleetServing))
 	plan := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, source))
 	moves := actionsOf(plan, ActionRightsize)
-	if len(moves) != 1 || *moves[0].Host != (HostID{1}) || moves[0].Offer.Type.Name != "small" || len(actionsOf(plan, ActionDrain)) > 0 {
+	if len(moves) != 1 || *moves[0].Host != (HostID{1}) || moves[0].Offer.Type.Name != "m.small" || len(actionsOf(plan, ActionDrain)) > 0 {
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 	replanned := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, source, planHost(2, planSmall, FleetStarting)))
@@ -616,7 +617,7 @@ func TestPlanDrainsAHostThatCannotHibernateWhenTheReserveShouldHibernate(t *test
 func TestLocationDemandStillBuysInACoolingRegionNothingElseServes(t *testing.T) {
 	s := planSnapshot(t)
 	s.Offers.Networks["us-west-1"] = oneZone("us-west-1a", "usw1-az1")
-	for _, typ := range []string{"small", "large"} {
+	for _, typ := range []string{planSmall.Name, planLarge.Name} {
 		s.Offers.Cooldowns = append(s.Offers.Cooldowns, OfferCooldown{
 			Region: "us-east-2", InstanceType: typ, Market: MarketOnDemand, RefusedAt: offerNow.Add(-15 * time.Minute), Until: offerNow.Add(-5 * time.Minute),
 		})

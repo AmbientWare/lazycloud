@@ -9,15 +9,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
-// SpotQuote is EC2's latest Spot price for one type in one zone.
-type SpotQuote struct {
-	Region       string
-	ZoneID       string
-	InstanceType string
-	HourlyMicros int64
-	ObservedAt   time.Time
-}
-
 // OfferCooldown is a refusal that cools one offer until Until. A quota
 // refusal cools every type of the offer's quota class in its region and
 // market.
