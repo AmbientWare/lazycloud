@@ -710,11 +710,11 @@ func (c *Compute) WorkspaceConnection(ctx context.Context, account identity.User
 		return uuid.UUID{}, err
 	}
 	if conn == nil {
-		return uuid.UUID{}, &ConflictError{Message: "connect an AWS account with `lazycloud cloud connect aws` before creating a workspace there"}
+		return uuid.UUID{}, &ConflictError{Message: "no AWS account is connected; run `lazycloud cloud connect aws` first"}
 	}
 	if !conn.HostsWorkloads() {
 		return uuid.UUID{}, &ConflictError{Message: fmt.Sprintf(
-			"connected AWS account %s is %s; a workspace can only be created there once it is ready", conn.AWSAccountID, conn.Phase)}
+			"the connected AWS account is %s; a workspace can be created there once `lazycloud cloud status` reports ready", conn.Phase)}
 	}
 	return conn.ID, nil
 }
