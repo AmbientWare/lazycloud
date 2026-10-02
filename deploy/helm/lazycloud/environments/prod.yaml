@@ -10,6 +10,7 @@ config:
   LAZYCLOUD_FLEET_HEADROOM: "0"
   # AMIs the Node images workflow baked, per region: Amazon Linux 2023 with
   # Docker, gVisor (runsc as Docker's runtime, --host-uds=all) and nbd.
-  # Platform hosts launch only from these; a region missing here launches
-  # nothing. Replace with the workflow's output before cutover.
+  # Platform and connected-account hosts launch only from these; a region
+  # missing here launches nothing. Replace with the workflow's output
+  # before cutover.
   LAZYCLOUD_FLEET_IMAGES: '{"cpu": {}, "gpu": {}}'

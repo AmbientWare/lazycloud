@@ -69,10 +69,13 @@ if [[ "$ami" == None || -z "$ami" ]]; then
     "Name=tag:lazycloud:fleet,Values=$deployment" --query 'SecurityGroups[0].GroupId' --output text)"
   log "baking from $base in $subnet"
   tags="ResourceType=instance,Tags=[{Key=lazycloud:node-image-bake,Value=true},{Key=Name,Value=$name}]"
+  # Unencrypted, so the image can be shared with connected accounts (an
+  # image under the account's default EBS key cannot be). It holds public
+  # software only, and every host encrypts its root volume at launch.
   instance="$(aws ec2 run-instances --region "$bake_region" --image-id "$base" --instance-type "$instance_type" \
     --subnet-id "$subnet" --security-group-ids "$group" --associate-public-ip-address \
     --metadata-options HttpTokens=required,HttpEndpoint=enabled \
-    --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$volume_gib,VolumeType=gp3,Encrypted=true,DeleteOnTermination=true}" \
+    --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$volume_gib,VolumeType=gp3,DeleteOnTermination=true}" \
     --tag-specifications "$tags" "ResourceType=volume,Tags=[{Key=lazycloud:node-image-bake,Value=true}]" \
     --user-data "file://$user_data" --query 'Instances[0].InstanceId' --output text)"
   trap 'aws ec2 terminate-instances --region "$bake_region" --instance-ids "$instance" >/dev/null; rm -f "$user_data"' EXIT
@@ -109,7 +112,7 @@ for region in "${region_list[@]:1}"; do
   if [[ "$copy" == None || -z "$copy" ]]; then
     copy="$(aws ec2 copy-image --region "$region" --source-region "$bake_region" --source-image-id "$ami" \
       --name "$name" --description "LazyCloud $variant fleet node, recipe $recipe" --copy-image-tags \
-      --encrypted --query ImageId --output text)"
+      --query ImageId --output text)"
     aws ec2 wait image-available --region "$region" --image-ids "$copy"
   fi
   log "$region $copy"

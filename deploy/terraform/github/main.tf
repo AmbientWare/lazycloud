@@ -155,12 +155,24 @@ data "aws_iam_policy_document" "node_images" {
   }
 
   statement {
-    actions   = ["ec2:RunInstances", "ec2:CreateTags"]
+    actions   = ["ec2:RunInstances"]
     resources = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*"]
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/lazycloud:node-image-bake"
       values   = ["true"]
+    }
+  }
+
+  # Tags only what a launch creates, so no other instance can be tagged
+  # into the bake's terminate rights.
+  statement {
+    actions   = ["ec2:CreateTags"]
+    resources = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = ["RunInstances"]
     }
   }
 
@@ -180,8 +192,18 @@ data "aws_iam_policy_document" "node_images" {
   }
 
   statement {
-    actions   = ["ec2:CreateImage", "ec2:CopyImage", "ec2:CreateTags"]
+    actions   = ["ec2:CreateImage", "ec2:CopyImage"]
     resources = ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*::snapshot/*"]
+  }
+
+  statement {
+    actions   = ["ec2:CreateTags"]
+    resources = ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*::snapshot/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = ["CreateImage", "CopyImage"]
+    }
   }
 }
 

@@ -3,7 +3,7 @@
 # so its name is an external contract once a customer connects. It holds
 # what the binaries call: S3 for objects and workspace buckets, STS for
 # host storage grants and customer connections, ECR for workload images,
-# EC2 for the fleet.
+# EC2 for the fleet and for sharing node images with connected accounts.
 resource "aws_iam_role" "control_plane" {
   name = "${var.deployment}-control-plane"
   assume_role_policy = jsonencode({
@@ -84,8 +84,10 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   # Fleet hosts: RunInstances with the host id as client token. The
-  # launcher tags the instance and its volumes, and only tagged instances
-  # can be terminated.
+  # launcher tags the instance and its volumes at launch and may tag nothing
+  # else, and only tagged instances can be terminated. RunInstances also
+  # creates the network interface and, on Spot, the request, which carry no
+  # tag.
   statement {
     sid       = "DescribeFleet"
     actions   = ["ec2:DescribeInstances", "ec2:DescribeSubnets"]
@@ -94,12 +96,38 @@ data "aws_iam_policy_document" "control_plane" {
 
   statement {
     sid       = "LaunchTagged"
-    actions   = ["ec2:RunInstances", "ec2:CreateTags"]
+    actions   = ["ec2:RunInstances"]
     resources = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*"]
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/lazycloud:fleet"
       values   = [local.fleet_name]
+    }
+  }
+
+  statement {
+    sid       = "TagAtLaunch"
+    actions   = ["ec2:CreateTags"]
+    resources = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = ["RunInstances"]
+    }
+  }
+
+  # Connected accounts launch the baked node images: before each launch the
+  # launcher grants the account launch permission on the image it uses.
+  # Image ARNs carry no account, so the node-image tag the bake sets
+  # scopes this to the platform's own images.
+  statement {
+    sid       = "ShareNodeImages"
+    actions   = ["ec2:ModifyImageAttribute"]
+    resources = ["${local.arn_prefix}:ec2:*::image/*"]
+    condition {
+      test     = "Null"
+      variable = "aws:ResourceTag/lazycloud:node-image"
+      values   = ["false"]
     }
   }
 

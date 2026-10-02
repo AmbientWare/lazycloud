@@ -47,7 +47,11 @@ that holds an advisory lock on one backend until it ends, so both URLs name
 the router; step 6 of the runbook checks it holds LISTEN and session locks
 too.
 
-Fleet hosts launch from the baked node image (`deploy/ami`): Amazon Linux
+Platform and connected-account hosts launch from the baked node image
+(`deploy/ami`), shared with each connected account before its launches.
+The image and its copies are unencrypted so they can be shared (the
+account's default EBS key cannot be); they hold public software only, and
+every host encrypts its root volume at launch. The image is Amazon Linux
 2023 with Docker, gVisor `runsc` 20260928 as Docker's `runsc` runtime with
 `--host-uds=all` (plus `--nvproxy` on GPU images, driver 590.48.01, which
 that gVisor release proxies), the nbd module at boot, and qemu-storage-daemon
@@ -227,11 +231,20 @@ Rollback after bring-up is Deploy with an earlier version.
 ## Proposed shared changes
 
 - `Propose: launch platform hosts from the baked node image of their region`
-  (compute): `LAZYCLOUD_FLEET_IMAGES`; a region without an image fails the
-  host instead of launching one without gVisor. Connection hosts keep the
-  stock images. Tests:
+  and `Propose: launch connected-account hosts from the baked node image
+  shared with their account` (compute): `LAZYCLOUD_FLEET_IMAGES`; a region
+  without an image fails the host instead of launching one without gVisor.
+  Before a connected account's launch the platform adds the account to the
+  image's launch permissions (`ModifyImageAttribute`, idempotent, so no
+  record is kept); the account then launches it through its connection
+  role. The connection template (now `2026-10-01.v1`) lets RunInstances
+  create untagged network interfaces and Spot requests, which the old
+  tag condition refused, and allows CreateTags only as part of
+  RunInstances, so the role can no longer tag an unrelated instance into
+  its terminate rights. Tests:
   `TestPlatformHostsLaunchFromTheBakedNodeImageOfTheirRegion`,
-  `TestPlatformHostsWithoutANodeImageForTheirRegionFail`.
+  `TestPlatformHostsWithoutANodeImageForTheirRegionFail`,
+  `TestConnectionHostsLaunchTheBakedImageSharedWithTheirAccount`.
 - `Propose: log in to an ECR platform registry with refreshed tokens from the
   server's AWS identity` (images, hostsession, server). ECR tokens last 12
   hours, so a static login could not work. Test:
@@ -290,11 +303,9 @@ launch or Neki connection.
 - The server migrates at start, so its role inherits `postgres`. A
   data-only role for the server and scheduler (`pg_read_all_data`,
   `pg_write_all_data`) would need migrations to run only in the Job.
-- Connected AWS accounts launch stock Amazon Linux: runc and no disk tools.
-  Sharing the baked images with connected accounts belongs to compute. The
-  connection template's `LaunchTagged` statement also requires the fleet tag
-  on network interfaces and Spot requests, which the launcher does not tag;
-  real IAM may refuse those launches.
+- A connected account keeps launch permission on a baked image after it
+  disconnects. The image holds public software only, and each bake makes
+  new images that start unshared.
 - Builds use the `bridge` network; the images packet wanted a registry-only
   network in production.
 - The TCP certificate renews 30 days before expiry, but the server reads it
