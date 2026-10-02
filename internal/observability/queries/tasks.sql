@@ -1,14 +1,3 @@
--- name: TaskForTimeline :one
-select t.status, t.attempt_count, t.available_at, t.created_at, t.finished_at, now()::timestamptz as observed_at
-from tasks t
-where t.id = @id and t.workspace_id = @workspace_id;
-
--- name: TaskAttempts :many
-select id, number, container_id, state, started_at, finished_at
-from attempts
-where task_id = @task_id
-order by number;
-
 -- name: TaskRoot :one
 select coalesce(root_task_id, id)::uuid as root_id
 from tasks

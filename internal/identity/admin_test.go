@@ -2,90 +2,12 @@ package identity
 
 import (
 	"errors"
-	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
-
-func TestListUsersFiltersAndPages(t *testing.T) {
-	f := newFixture(t)
-	ctx := t.Context()
-	admin := f.account("admin@example.com", true)
-	octo := f.signIn(gitHubAccount{ID: 7, Login: "Octo_Cat", Name: "Octo Cat", Email: "octo@example.com", Verified: true})
-	for _, email := range []string{"axb@example.com", "a_b@example.com", "carol@example.com"} {
-		if _, err := f.id.CreateUser(ctx, email, false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.exec(`update users set display_name = '50% Off' where email = 'carol@example.com'`)
-	if _, err := f.id.SetUserStatus(ctx, admin, octo.User, UserDisabled); err != nil {
-		t.Fatal(err)
-	}
-
-	emails := func(q UserQuery) []string {
-		t.Helper()
-		page, err := f.id.ListUsers(ctx, admin, q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out []string
-		for _, u := range page.Users {
-			out = append(out, u.Email)
-		}
-		return out
-	}
-
-	// Pages of two walk every account once, oldest first, including ones
-	// that never signed in.
-	var walked []string
-	q := UserQuery{Limit: 2}
-	for {
-		page, err := f.id.ListUsers(ctx, admin, q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, u := range page.Users {
-			walked = append(walked, u.Email)
-		}
-		if page.Next == nil {
-			break
-		}
-		q.After = page.Next
-	}
-	want := []string{"admin@example.com", "octo@example.com", "axb@example.com", "a_b@example.com", "carol@example.com"}
-	if !slices.Equal(walked, want) {
-		t.Fatalf("walk %v", walked)
-	}
-
-	// Search ignores case across name, email and login and takes LIKE
-	// wildcards literally.
-	disabled, admins := UserDisabled, PlatformAdministrator
-	for _, tc := range []struct {
-		q    UserQuery
-		want []string
-	}{
-		{UserQuery{Search: " octo_CAT "}, []string{"octo@example.com"}},
-		{UserQuery{Search: "OCTO cat"}, []string{"octo@example.com"}},
-		{UserQuery{Search: "a_b"}, []string{"a_b@example.com"}},
-		{UserQuery{Search: "%"}, []string{"carol@example.com"}},
-		{UserQuery{Status: &disabled}, []string{"octo@example.com"}},
-		{UserQuery{Role: &admins}, []string{"admin@example.com"}},
-		{UserQuery{Role: &admins, Status: &disabled}, nil},
-	} {
-		tc.q.Limit = 50
-		if got := emails(tc.q); !slices.Equal(got, tc.want) {
-			t.Errorf("%+v: %v", tc.q, got)
-		}
-	}
-	var invalid *InvalidError
-	if _, err := f.id.ListUsers(ctx, admin, UserQuery{Search: strings.Repeat("x", MaxUserSearch+1), Limit: 50}); !errors.As(err, &invalid) {
-		t.Fatalf("long search: %v", err)
-	}
-}
 
 func TestAccountAdministrationNeedsAnAdministratorAccount(t *testing.T) {
 	f := newFixture(t)
@@ -97,16 +19,10 @@ func TestAccountAdministrationNeedsAnAdministratorAccount(t *testing.T) {
 	}
 	restricted := f.tokenPrincipal("admin@example.com", "acme")
 
-	if _, err := f.id.ListUsers(ctx, member, UserQuery{Limit: 50}); !errors.Is(err, ErrAdminRequired) {
-		t.Fatalf("member list: %v", err)
-	}
 	if _, err := f.id.SetUserRole(ctx, member, admin.User, PlatformMember); !errors.Is(err, ErrAdminRequired) {
 		t.Fatalf("member demotes: %v", err)
 	}
 	var accountErr *AccountError
-	if _, err := f.id.ListUsers(ctx, restricted, UserQuery{Limit: 50}); !errors.As(err, &accountErr) {
-		t.Fatalf("restricted list: %v", err)
-	}
 	if _, err := f.id.SetUserStatus(ctx, restricted, member.User, UserDisabled); !errors.As(err, &accountErr) {
 		t.Fatalf("restricted disable: %v", err)
 	}

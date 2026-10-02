@@ -7,8 +7,6 @@ package schedules
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,9 +29,6 @@ const fireBatch = 100
 // arguments, and a pickled input keeps a cloudpickled result, so any return
 // value is kept. It is plain protocol-4 pickle of builtins.
 var noArguments = []byte("\x80\x04\x95\x19\x00\x00\x00\x00\x00\x00\x00}\x94(\x8c\x04args\x94]\x94\x8c\x06kwargs\x94}\x94u.") //nolint:gochecknoglobals // constant bytes
-
-// ErrInvalidCursor means a list cursor was not produced by List.
-var ErrInvalidCursor = errors.New("invalid cursor")
 
 // Apply makes workload's schedule match expression, the normalized cron of
 // its active release, inside the deploy transaction tx. An unchanged
@@ -202,13 +197,6 @@ type Schedule struct {
 	LastError  *string
 }
 
-// ScheduledFunction is a schedule and the function it runs.
-type ScheduledFunction struct {
-	App      string
-	Function string
-	Schedule Schedule
-}
-
 // ForFunction returns the function's schedule, or nil when it has none.
 func (s *Schedules) ForFunction(ctx context.Context, workspace identity.WorkspaceID, app, function string) (*Schedule, error) {
 	row, err := s.queries.FunctionSchedule(ctx, FunctionScheduleParams{WorkspaceID: uuid.UUID(workspace), AppName: app, Name: function})
@@ -222,48 +210,6 @@ func (s *Schedules) ForFunction(ctx context.Context, workspace identity.Workspac
 		Expression: row.Expression, NextRunAt: row.NextFireAt,
 		LastRunAt: row.LastFiredAt, LastTask: row.LastTaskID, LastError: row.LastError,
 	}, nil
-}
-
-type listCursor struct {
-	App      string `json:"a"`
-	Function string `json:"f"`
-}
-
-// List returns up to limit schedules of workspace ordered by app and
-// function after cursor, and the next page's cursor when more follow.
-func (s *Schedules) List(ctx context.Context, workspace identity.WorkspaceID, cursor string, limit int) ([]ScheduledFunction, string, error) {
-	var after listCursor
-	if cursor != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(cursor)
-		if err != nil || json.Unmarshal(raw, &after) != nil {
-			return nil, "", ErrInvalidCursor
-		}
-	}
-	rows, err := s.queries.ListSchedules(ctx, ListSchedulesParams{
-		WorkspaceID: uuid.UUID(workspace), AfterApp: after.App, AfterFunction: after.Function,
-		MaxRows: int32(limit) + 1, //nolint:gosec // The API caps limit at 1000.
-	})
-	if err != nil {
-		return nil, "", fmt.Errorf("list schedules: %w", err)
-	}
-	next := ""
-	if len(rows) > limit {
-		rows = rows[:limit]
-		last := rows[limit-1]
-		raw, err := json.Marshal(listCursor{App: last.AppName, Function: last.FunctionName})
-		if err != nil {
-			return nil, "", fmt.Errorf("encode cursor: %w", err)
-		}
-		next = base64.RawURLEncoding.EncodeToString(raw)
-	}
-	out := make([]ScheduledFunction, len(rows))
-	for n, row := range rows {
-		out[n] = ScheduledFunction{App: row.AppName, Function: row.FunctionName, Schedule: Schedule{
-			Expression: row.Expression, NextRunAt: row.NextFireAt,
-			LastRunAt: row.LastFiredAt, LastTask: row.LastTaskID, LastError: row.LastError,
-		}}
-	}
-	return out, next, nil
 }
 
 // NextFire reports when the earliest schedule fires next, and false when

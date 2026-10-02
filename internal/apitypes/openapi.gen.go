@@ -121,36 +121,6 @@ func (e ArtifactState) Valid() bool {
 	}
 }
 
-// Defines values for AttemptOutcome.
-const (
-	AttemptOutcomeCancelled AttemptOutcome = "cancelled"
-	AttemptOutcomeFailed    AttemptOutcome = "failed"
-	AttemptOutcomeLost      AttemptOutcome = "lost"
-	AttemptOutcomeRunning   AttemptOutcome = "running"
-	AttemptOutcomeSucceeded AttemptOutcome = "succeeded"
-	AttemptOutcomeTimedOut  AttemptOutcome = "timed_out"
-)
-
-// Valid indicates whether the value is a known member of the AttemptOutcome enum.
-func (e AttemptOutcome) Valid() bool {
-	switch e {
-	case AttemptOutcomeCancelled:
-		return true
-	case AttemptOutcomeFailed:
-		return true
-	case AttemptOutcomeLost:
-		return true
-	case AttemptOutcomeRunning:
-		return true
-	case AttemptOutcomeSucceeded:
-		return true
-	case AttemptOutcomeTimedOut:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AwsAuthorizationError.
 const (
 	AwsAuthorizationErrorAccountMismatch       AwsAuthorizationError = "account_mismatch"
@@ -1936,33 +1906,6 @@ func (e StopReason) Valid() bool {
 	}
 }
 
-// Defines values for TaskEventKind.
-const (
-	TaskEventKindAttemptFinished TaskEventKind = "attempt_finished"
-	TaskEventKindAttemptStarted  TaskEventKind = "attempt_started"
-	TaskEventKindFinished        TaskEventKind = "finished"
-	TaskEventKindRetryScheduled  TaskEventKind = "retry_scheduled"
-	TaskEventKindSubmitted       TaskEventKind = "submitted"
-)
-
-// Valid indicates whether the value is a known member of the TaskEventKind enum.
-func (e TaskEventKind) Valid() bool {
-	switch e {
-	case TaskEventKindAttemptFinished:
-		return true
-	case TaskEventKindAttemptStarted:
-		return true
-	case TaskEventKindFinished:
-		return true
-	case TaskEventKindRetryScheduled:
-		return true
-	case TaskEventKindSubmitted:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for TaskInputEncoding.
 const (
 	TaskInputEncodingCloudpickle TaskInputEncoding = "cloudpickle"
@@ -2468,9 +2411,6 @@ type ArtifactUpload struct {
 	// Upload Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT.
 	Upload Upload `json:"upload"`
 }
-
-// AttemptOutcome defines model for AttemptOutcome.
-type AttemptOutcome string
 
 // AutomaticReload defines model for AutomaticReload.
 type AutomaticReload struct {
@@ -4699,20 +4639,6 @@ type Schedule struct {
 // ScheduleTimezone defines model for Schedule.Timezone.
 type ScheduleTimezone string
 
-// SchedulePage defines model for SchedulePage.
-type SchedulePage struct {
-	// NextCursor Present when more schedules follow.
-	NextCursor *string             `json:"next_cursor,omitempty"`
-	Schedules  []ScheduledFunction `json:"schedules"`
-}
-
-// ScheduledFunction defines model for ScheduledFunction.
-type ScheduledFunction struct {
-	App      AppName      `json:"app"`
-	Function WorkloadName `json:"function"`
-	Schedule Schedule     `json:"schedule"`
-}
-
 // Secret defines model for Secret.
 type Secret struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -4945,27 +4871,6 @@ type TaskCallGraph struct {
 	Truncated bool `json:"truncated"`
 }
 
-// TaskEvent defines model for TaskEvent.
-type TaskEvent struct {
-	At time.Time `json:"at"`
-
-	// Attempt The attempt number, for attempt and retry events.
-	Attempt     *int                `json:"attempt,omitempty"`
-	AttemptId   *openapi_types.UUID `json:"attempt_id,omitempty"`
-	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
-
-	// DueAt For retry_scheduled, when the next attempt may start.
-	DueAt   *time.Time      `json:"due_at,omitempty"`
-	Kind    TaskEventKind   `json:"kind"`
-	Outcome *AttemptOutcome `json:"outcome,omitempty"`
-
-	// Status For finished, the task's final status.
-	Status *TaskStatus `json:"status,omitempty"`
-}
-
-// TaskEventKind defines model for TaskEventKind.
-type TaskEventKind string
-
 // TaskFailure defines model for TaskFailure.
 type TaskFailure struct {
 	// Exception The cloudpickled exception, when the runner could serialize it.
@@ -5043,13 +4948,6 @@ type TaskStatusCounts struct {
 	Queued    int `json:"queued"`
 	Running   int `json:"running"`
 	Succeeded int `json:"succeeded"`
-}
-
-// TaskTimeline defines model for TaskTimeline.
-type TaskTimeline struct {
-	Events []TaskEvent        `json:"events"`
-	Status TaskStatus         `json:"status"`
-	TaskId openapi_types.UUID `json:"task_id"`
 }
 
 // TermsVersion The published terms of a plan; a change names the exact terms chosen.
@@ -5262,13 +5160,6 @@ type User struct {
 
 	// Status A disabled account cannot sign in or authenticate.
 	Status UserStatus `json:"status"`
-}
-
-// UserList defines model for UserList.
-type UserList struct {
-	// NextCursor Pass as `cursor` for the next page; absent after the last.
-	NextCursor *openapi_types.UUID `json:"next_cursor,omitempty"`
-	Users      []User              `json:"users"`
 }
 
 // UserRoleRequest defines model for UserRoleRequest.
@@ -5760,18 +5651,6 @@ type ListTokensParams struct {
 	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
-// ListUsersParams defines parameters for ListUsers.
-type ListUsersParams struct {
-	// Search Matches the display name, email or GitHub login, ignoring case.
-	Search *string       `form:"search,omitempty" json:"search,omitempty"`
-	Role   *PlatformRole `form:"role,omitempty" json:"role,omitempty"`
-	Status *UserStatus   `form:"status,omitempty" json:"status,omitempty"`
-	Limit  *int          `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The `next_cursor` of the previous page.
-	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
-}
-
 // ListWorkspacesParams defines parameters for ListWorkspaces.
 type ListWorkspacesParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -6136,13 +6015,6 @@ type ListSandboxesParams struct {
 // GetSandboxStatsParams defines parameters for GetSandboxStats.
 type GetSandboxStatsParams struct {
 	App *AppName `form:"app,omitempty" json:"app,omitempty"`
-}
-
-// ListSchedulesParams defines parameters for ListSchedules.
-type ListSchedulesParams struct {
-	// Cursor The next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListSecretsParams defines parameters for ListSecrets.

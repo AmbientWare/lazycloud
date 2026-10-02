@@ -383,26 +383,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Every account, oldest first; platform administrators only
-         * @description Accounts that have never signed in are listed too. The filters narrow the list on the server, so every page holds only matches.
-         */
-        get: operations["listUsers"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/users/{user}/role": {
         parameters: {
             query?: never;
@@ -1127,25 +1107,6 @@ export interface paths {
          * @description The only operation that returns a value. Tokens limited to reading cannot call it.
          */
         get: operations["getSecretValue"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/schedules": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-            };
-            cookie?: never;
-        };
-        /** Scheduled functions with their next and last runs */
-        get: operations["listSchedules"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2196,26 +2157,6 @@ export interface paths {
         put?: never;
         /** The lifecycles of up to 200 containers, such as those of a call graph */
         post: operations["listContainerLifecycles"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/tasks/{task}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                task: components["parameters"]["TaskPath"];
-            };
-            cookie?: never;
-        };
-        /** The task's submission, attempts, retries and outcome in order */
-        get: operations["getTaskTimeline"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3443,14 +3384,6 @@ export interface components {
          * @enum {string}
          */
         PlatformRole: "administrator" | "member";
-        UserList: {
-            users: components["schemas"]["User"][];
-            /**
-             * Format: uuid
-             * @description Pass as `cursor` for the next page; absent after the last.
-             */
-            next_cursor?: string;
-        };
         UserRoleRequest: {
             role: components["schemas"]["PlatformRole"];
         };
@@ -4017,16 +3950,6 @@ export interface components {
             last_task_id?: string;
             /** @description Why the last occurrence admitted no task. */
             last_error?: string;
-        };
-        ScheduledFunction: {
-            app: components["schemas"]["AppName"];
-            function: components["schemas"]["WorkloadName"];
-            schedule: components["schemas"]["Schedule"];
-        };
-        SchedulePage: {
-            schedules: components["schemas"]["ScheduledFunction"][];
-            /** @description Present when more schedules follow. */
-            next_cursor?: string;
         };
         VolumeName: string;
         DiskName: string;
@@ -4949,35 +4872,6 @@ export interface components {
         };
         ContainerLifecycleList: {
             lifecycles: components["schemas"]["ContainerLifecycle"][];
-        };
-        /** @enum {string} */
-        AttemptOutcome: "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "lost";
-        /** @enum {string} */
-        TaskEventKind: "submitted" | "attempt_started" | "attempt_finished" | "retry_scheduled" | "finished";
-        TaskEvent: {
-            kind: components["schemas"]["TaskEventKind"];
-            /** Format: date-time */
-            at: string;
-            /** @description The attempt number, for attempt and retry events. */
-            attempt?: number;
-            /** Format: uuid */
-            attempt_id?: string;
-            /** Format: uuid */
-            container_id?: string;
-            outcome?: components["schemas"]["AttemptOutcome"];
-            /**
-             * Format: date-time
-             * @description For retry_scheduled, when the next attempt may start.
-             */
-            due_at?: string;
-            /** @description For finished, the task's final status. */
-            status?: components["schemas"]["TaskStatus"];
-        };
-        TaskTimeline: {
-            /** Format: uuid */
-            task_id: string;
-            status: components["schemas"]["TaskStatus"];
-            events: components["schemas"]["TaskEvent"][];
         };
         CallGraphNode: {
             /** Format: uuid */
@@ -6965,35 +6859,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    listUsers: {
-        parameters: {
-            query?: {
-                /** @description Matches the display name, email or GitHub login, ignoring case. */
-                search?: string;
-                role?: components["schemas"]["PlatformRole"];
-                status?: components["schemas"]["UserStatus"];
-                limit?: number;
-                /** @description The `next_cursor` of the previous page. */
-                cursor?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One page of accounts */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserList"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     setUserRole: {
         parameters: {
             query?: never;
@@ -8099,33 +7964,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecretValue"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    listSchedules: {
-        parameters: {
-            query?: {
-                /** @description The next_cursor of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-                limit?: components["parameters"]["Limit"];
-            };
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One page of schedules ordered by app and function */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SchedulePage"];
                 };
             };
             default: components["responses"]["Error"];
@@ -9774,30 +9612,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerLifecycleList"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    getTaskTimeline: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                task: components["parameters"]["TaskPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The task's timeline */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskTimeline"];
                 };
             };
             default: components["responses"]["Error"];
@@ -11587,8 +11401,6 @@ export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>[
 export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
 export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
 export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "image", "source", "create", "runtime", "draining"];
-export const attemptOutcomeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AttemptOutcome"]> = ["running", "succeeded", "failed", "timed_out", "cancelled", "lost"];
-export const taskEventKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskEventKind"]> = ["submitted", "attempt_started", "attempt_finished", "retry_scheduled", "finished"];
 export const activityMeasureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityMeasure"]> = ["containers", "tasks", "cpu", "memory", "gpu"];
 export const activityUnitValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityUnit"]> = ["starts", "cores", "gibibytes", "gpus"];
 export const activitySeriesKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivitySeriesKind"]> = ["app", "unassigned", "other"];

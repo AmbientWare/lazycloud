@@ -45,16 +45,6 @@ join workloads w on w.id = s.workload_id
 join apps a on a.id = w.app_id
 where a.workspace_id = @workspace_id and a.name = @app_name and w.kind = 'function' and w.name = @name;
 
--- name: ListSchedules :many
-select a.name as app_name, w.name as function_name,
-       s.expression, s.next_fire_at, s.last_fired_at, s.last_task_id, s.last_error
-from schedules s
-join workloads w on w.id = s.workload_id
-join apps a on a.id = w.app_id
-where a.workspace_id = @workspace_id and (a.name, w.name) > (@after_app::text, @after_function::text)
-order by a.name, w.name
-limit @max_rows;
-
 -- name: NextFireAt :many
 -- When the earliest schedule fires next; no row without schedules.
 select next_fire_at from schedules order by next_fire_at limit 1;

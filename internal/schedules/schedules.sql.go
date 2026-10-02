@@ -56,67 +56,6 @@ func (q *Queries) FunctionSchedule(ctx context.Context, arg FunctionSchedulePara
 	return i, err
 }
 
-const listSchedules = `-- name: ListSchedules :many
-select a.name as app_name, w.name as function_name,
-       s.expression, s.next_fire_at, s.last_fired_at, s.last_task_id, s.last_error
-from schedules s
-join workloads w on w.id = s.workload_id
-join apps a on a.id = w.app_id
-where a.workspace_id = $1 and (a.name, w.name) > ($2::text, $3::text)
-order by a.name, w.name
-limit $4
-`
-
-type ListSchedulesParams struct {
-	WorkspaceID   uuid.UUID
-	AfterApp      string
-	AfterFunction string
-	MaxRows       int32
-}
-
-type ListSchedulesRow struct {
-	AppName      string
-	FunctionName string
-	Expression   string
-	NextFireAt   time.Time
-	LastFiredAt  *time.Time
-	LastTaskID   *uuid.UUID
-	LastError    *string
-}
-
-func (q *Queries) ListSchedules(ctx context.Context, arg ListSchedulesParams) ([]ListSchedulesRow, error) {
-	rows, err := q.db.Query(ctx, listSchedules,
-		arg.WorkspaceID,
-		arg.AfterApp,
-		arg.AfterFunction,
-		arg.MaxRows,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListSchedulesRow
-	for rows.Next() {
-		var i ListSchedulesRow
-		if err := rows.Scan(
-			&i.AppName,
-			&i.FunctionName,
-			&i.Expression,
-			&i.NextFireAt,
-			&i.LastFiredAt,
-			&i.LastTaskID,
-			&i.LastError,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockDueSchedules = `-- name: LockDueSchedules :many
 select s.workload_id, s.expression, s.next_fire_at, a.workspace_id, a.name as app_name,
        w.name as function_name, now()::timestamptz as now

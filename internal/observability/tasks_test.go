@@ -3,13 +3,11 @@ package observability_test
 import (
 	"errors"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -24,64 +22,6 @@ func (f *fixture) claim(host compute.HostID, container execution.ContainerID) ex
 		f.t.Fatalf("claim: %v %+v", err, claimed)
 	}
 	return claimed[0]
-}
-
-func kinds(events []apitypes.TaskEvent) string {
-	out := make([]string, len(events))
-	for i, e := range events {
-		out[i] = string(e.Kind)
-	}
-	return strings.Join(out, ",")
-}
-
-// The timeline is built from the task's and its attempts' rows: a failed
-// attempt, the retry it scheduled, the attempt that succeeded and the
-// outcome.
-func TestTaskTimelineFollowsAttemptsAndRetries(t *testing.T) {
-	f := newFixture(t, `{"max_pending_tasks": 100, "retry_policy": {"max_attempts": 2, "delay_seconds": 0}}`)
-	host, container := f.placedContainer(f.release)
-	task := f.submit(1)[0]
-
-	first := f.claim(host, container)
-	if err := f.exec.CompleteAttempt(t.Context(), host, container, execution.AttemptOutcome{
-		Attempt: first.Attempt, State: execution.AttemptFailed,
-		Failure: &execution.Failure{Kind: execution.FailureUserError, Message: "boom"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	waiting, err := f.obs.TaskTimeline(t.Context(), f.workspace, task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := kinds(waiting.Events); got != "submitted,attempt_started,attempt_finished,retry_scheduled" {
-		t.Fatalf("timeline while waiting to retry: %s", got)
-	}
-	retry := waiting.Events[3]
-	if retry.DueAt == nil || *retry.Attempt != 2 || *waiting.Events[2].Outcome != apitypes.AttemptOutcomeFailed ||
-		*waiting.Events[1].ContainerId != uuid.UUID(container) {
-		t.Fatalf("retry events %+v", waiting.Events)
-	}
-
-	second := f.claim(host, container)
-	if err := f.exec.CompleteAttempt(t.Context(), host, container, execution.AttemptOutcome{
-		Attempt: second.Attempt, State: execution.AttemptSucceeded,
-		Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`1`)},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	done, err := f.obs.TaskTimeline(t.Context(), f.workspace, task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := kinds(done.Events); got != "submitted,attempt_started,attempt_finished,retry_scheduled,attempt_started,attempt_finished,finished" {
-		t.Fatalf("finished timeline: %s", got)
-	}
-	if done.Status != apitypes.TaskStatusSucceeded || done.Events[3].DueAt != nil || *done.Events[6].Status != apitypes.TaskStatusSucceeded {
-		t.Fatalf("finished timeline %+v", done)
-	}
-	if _, err := f.obs.TaskTimeline(t.Context(), f.workspace, execution.TaskID(uuid.New())); !errors.Is(err, observability.ErrNotFound) {
-		t.Fatalf("unknown task: %v", err)
-	}
 }
 
 // Any task of a call graph returns the whole graph from its root, parents

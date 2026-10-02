@@ -400,40 +400,6 @@ paths:
   # Administration: platform accounts, for platform administrators using an
   # account credential.
 
-  /v1/users:
-    get:
-      operationId: listUsers
-      tags: [admin]
-      summary: Every account, oldest first; platform administrators only
-      description: >-
-        Accounts that have never signed in are listed too. The filters
-        narrow the list on the server, so every page holds only matches.
-      parameters:
-        - name: search
-          in: query
-          description: Matches the display name, email or GitHub login, ignoring case.
-          schema: { type: string, maxLength: 200 }
-        - name: role
-          in: query
-          schema: { $ref: "#/components/schemas/PlatformRole" }
-        - name: status
-          in: query
-          schema: { $ref: "#/components/schemas/UserStatus" }
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
-        - name: cursor
-          in: query
-          description: The `next_cursor` of the previous page.
-          schema: { type: string, format: uuid }
-      responses:
-        "200":
-          description: One page of accounts
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/UserList" }
-        default: { $ref: "#/components/responses/Error" }
-
   /v1/users/{user}/role:
     parameters:
       - $ref: "#/components/parameters/UserPath"
@@ -1259,24 +1225,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SecretValue" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/schedules:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-    get:
-      operationId: listSchedules
-      tags: [schedules]
-      summary: Scheduled functions with their next and last runs
-      parameters:
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
-      responses:
-        "200":
-          description: One page of schedules ordered by app and function
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SchedulePage" }
         default: { $ref: "#/components/responses/Error" }
 
   # Storage: volumes, disks, artifacts, queues and maps.
@@ -2455,22 +2403,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ContainerLifecycleList" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/tasks/{task}/timeline:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/TaskPath"
-    get:
-      operationId: getTaskTimeline
-      tags: [observability]
-      summary: The task's submission, attempts, retries and outcome in order
-      responses:
-        "200":
-          description: The task's timeline
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TaskTimeline" }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/tasks/{task}/call-graph:
@@ -4077,18 +4009,6 @@ components:
       type: string
       enum: [administrator, member]
 
-    UserList:
-      type: object
-      required: [users]
-      properties:
-        users:
-          type: array
-          items: { $ref: "#/components/schemas/User" }
-        next_cursor:
-          description: Pass as `cursor` for the next page; absent after the last.
-          type: string
-          format: uuid
-
     UserRoleRequest:
       type: object
       required: [role]
@@ -4998,24 +4918,6 @@ components:
           description: Why the last occurrence admitted no task.
           type: string
 
-    ScheduledFunction:
-      type: object
-      required: [app, function, schedule]
-      properties:
-        app: { $ref: "#/components/schemas/AppName" }
-        function: { $ref: "#/components/schemas/WorkloadName" }
-        schedule: { $ref: "#/components/schemas/Schedule" }
-
-    SchedulePage:
-      type: object
-      required: [schedules]
-      properties:
-        schedules:
-          type: array
-          items: { $ref: "#/components/schemas/ScheduledFunction" }
-        next_cursor:
-          description: Present when more schedules follow.
-          type: string
     # Storage
 
     VolumeName:
@@ -6432,44 +6334,6 @@ components:
         lifecycles:
           type: array
           items: { $ref: "#/components/schemas/ContainerLifecycle" }
-
-    AttemptOutcome:
-      type: string
-      enum: [running, succeeded, failed, timed_out, cancelled, lost]
-
-    TaskEventKind:
-      type: string
-      enum: [submitted, attempt_started, attempt_finished, retry_scheduled, finished]
-
-    TaskEvent:
-      type: object
-      required: [kind, at]
-      properties:
-        kind: { $ref: "#/components/schemas/TaskEventKind" }
-        at: { type: string, format: date-time }
-        attempt:
-          description: The attempt number, for attempt and retry events.
-          type: integer
-        attempt_id: { type: string, format: uuid }
-        container_id: { type: string, format: uuid }
-        outcome: { $ref: "#/components/schemas/AttemptOutcome" }
-        due_at:
-          description: For retry_scheduled, when the next attempt may start.
-          type: string
-          format: date-time
-        status:
-          description: For finished, the task's final status.
-          allOf: [{ $ref: "#/components/schemas/TaskStatus" }]
-
-    TaskTimeline:
-      type: object
-      required: [task_id, status, events]
-      properties:
-        task_id: { type: string, format: uuid }
-        status: { $ref: "#/components/schemas/TaskStatus" }
-        events:
-          type: array
-          items: { $ref: "#/components/schemas/TaskEvent" }
 
     CallGraphNode:
       type: object

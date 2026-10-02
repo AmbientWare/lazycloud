@@ -161,7 +161,7 @@ func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
 		"/v1/workspaces/acme/metrics/activity",
 		workload + "/performance",
 		"/v1/workspaces/acme/containers/" + unknown + "/metrics",
-		"/v1/workspaces/acme/tasks/" + unknown + "/timeline",
+		"/v1/workspaces/acme/tasks/" + unknown + "/call-graph",
 	} {
 		if status := e.do("GET", path, e.outsider, nil, &apiErr); status != http.StatusForbidden {
 			t.Fatalf("outsider %s: %d", path, status)
@@ -176,7 +176,6 @@ func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
 		"/v1/workspaces/acme/metrics/activity?window_seconds=60&start=2026-01-01T00:00:00Z":        400,
 		"/v1/workspaces/acme/containers/" + unknown + "/metrics":                                   404,
 		"/v1/workspaces/acme/containers/" + unknown + "/lifecycle":                                 404,
-		"/v1/workspaces/acme/tasks/" + unknown + "/timeline":                                       404,
 		"/v1/workspaces/acme/tasks/" + unknown + "/call-graph":                                     404,
 		"/v1/workspaces/acme/apps/reports/workloads/function/unknown/performance":                  404,
 		"/v1/workspaces/acme/metrics/tasks?start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z":    400,
