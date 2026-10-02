@@ -1,10 +1,9 @@
 from typing import Any, cast
 from uuid import uuid4
 
-from shared.api import Deployment, DeploymentRequest
-
 from lazycloud.clients.api import ApiClient
 from lazycloud.session.deployment import AppFunctions, deploy_functions
+from shared.api import Deployment, DeploymentRequest
 
 
 class _Control:
