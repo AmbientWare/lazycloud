@@ -1,7 +1,7 @@
 # Deploy packet
 
-go-rewrite holds everything needed to bring the new platform up in a clean
-AWS account state after the user destroys main's infrastructure: Terraform
+go-rewrite holds everything needed to build the new platform fresh in the
+platform account, whose old infrastructure is gone: Terraform
 roots, Argo CD applications, the chart, the images, the node image bake and
 the Ship, Deploy and Node images workflows. Nothing here has touched AWS,
 GitHub, PlanetScale, Cloudflare or Stripe. Every step below marked [GO]
@@ -120,89 +120,56 @@ managed-runtime wheel locks.
 
 ## Bring-up runbook
 
-Before the destroy, export what the new platform reuses or users need:
+Main's infrastructure was destroyed on 2026-10-01: the EKS cluster, VPCs,
+Redis, buckets, the Cloudflare tunnel and records, the Stripe webhooks and
+the PlanetScale database. Everything below is a fresh build. Kept:
 
-1. [GO] The operator document's values (`aws secretsmanager
-   get-secret-value --secret-id lazycloud-prod/operator`) into the
-   operator's password manager. Main's Terraform deletes it with no recovery
-   window. The GitHub App's client id and secret, the Stripe key, the Resend
-   key and webhook secret and both Cloudflare tokens move over unchanged.
-2. [GO] The Argo CD GitHub App private key, if the operator does not hold it
-   already (`TF_VAR_github_app_private_key`).
-3. [GO] Stripe: export customers, active subscriptions and prices. Cancel
-   the old platform's subscriptions or they keep charging users of a
-   platform that no longer runs. Archive any price whose lookup key is
-   `lazycloud-<terms version>` and whose amount differs from the rate card,
-   since the server reuses prices by that key.
-4. [GO] Cloudflare: the zone's record list and the custom hostnames
-   (customers' domains, which they re-register), for comparison after the
-   destroy. Mail records must survive it.
-5. [GO] Optional: a `pg_dump` of main's database and copies of workspace
-   buckets, if any user data or ledger history is worth keeping; the new
-   platform imports none of it.
-6. [GO] Private copies of main's Terraform states.
+- Secrets Manager `lazycloud-prod/operator` (us-east-1), which the new
+  platform reads as is.
+- The state bucket `lazycloud-terraform-state-534742592531`; main's state
+  objects in it are empty.
+- The tailnet states, which are not part of this stack.
+- Stripe's one live customer, on a $0 subscription.
+- The account's GitHub OIDC provider, which the roots read.
 
-The destroy (the user runs it from a main checkout):
+`lazycloud-prod/platform` was force-deleted, so Terraform creates it anew.
 
-7. Delete the `lazycloud-prod` Argo CD Application and wait for its
-   finalizer, so Kubernetes removes the NLBs before the VPC goes. Scale main's
-   fleet controller to zero and delete what it made outside Terraform: Auto
-   Scaling groups, launch templates, instances and AMIs tagged
-   `cloud-pool:managed-by=control-plane`, and their snapshots.
-8. Empty the `objects`, `deploy`, `releases` and `storage-access` buckets and
-   delete the `lazycloud-prod-workspace-*` buckets; main marks the four
-   `prevent_destroy`, so lift that in the checkout first. Drop the
-   PlanetScale branch role from state before destroying (main's LIFECYCLE
-   note).
-9. `terraform destroy` stripe, platform-deployment, cloudflare, then
-   platform-core. Delete the `lazycloud-release-assets` CloudFormation stack,
-   its public ECR repository and main's GitHub environment secrets and
-   repository variables (`AWS_RELEASE_*`, `OBJECT_STORE_RELEASE_BUCKET`,
-   `RELEASE_PUBLIC_BASE_URL`, `INFRASTRUCTURE_CONFIG_URI`, prod's
-   `AWS_DEPLOY_ROLE_ARN` secret). Keep the account's GitHub OIDC provider:
-   the new roots read it. Delete the old state bucket once the states are
-   copied.
-
-Bring-up:
-
-10. [GO] Prerequisites: the PlanetScale organization joins the Neki
-    Platform Preview (an organization administrator, in the dashboard);
-    Cloudflare for SaaS is on for the zone; the release reviewers' GitHub
-    user ids are known.
-11. [GO] The integrator merges go-rewrite into main, so Argo CD's root
-    Application finds the new applications when it starts.
-12. [GO] `state` apply; write the backend file from its output.
-13. [GO] `platform-core` apply (`cluster_api_cidrs` with the operator's
-    address).
-14. [GO] `platform-deployment` apply (`deployment`, `github_environment`,
-    `domain`, `cloudflare_account_id`, `cloudflare_zone_id`,
-    `planetscale_organization`). Then write the exported operator values into
-    `lazycloud-prod/operator`. Check the Neki profile size in the dashboard.
-15. Verify Neki before shipping: in two `pscale shell lazycloud-prod main`
-    sessions run `LISTEN lc_test` and `NOTIFY lc_test`, and `SELECT
-    pg_advisory_lock(1)` in one while the other's `pg_try_advisory_lock(1)`
-    returns false. The platform depends on both. If either fails, switch
-    database.tf back to `planetscale_postgres_branch` (GA) before going on.
-16. [GO] `github` apply (`release_reviewer_user_ids`).
-17. [GO] Run Node images; commit the `LAZYCLOUD_FLEET_IMAGES` value from its
-    summary into the env file through a reviewed PR.
-18. [GO] Run Ship with `bump: major`. A reviewer approves the image push; it
-    publishes the CLI to PyPI and Deploy writes `prod`. Argo CD syncs.
-19. [GO] `platform-deployment` apply again with `host_load_balancer` and
+1. [GO] Prerequisites: the PlanetScale organization joins the Neki
+   Platform Preview (an organization administrator, in the dashboard);
+   Cloudflare for SaaS is on for the zone; the release reviewers' GitHub
+   user ids are known.
+2. [GO] The integrator merges go-rewrite into main, so Argo CD's root
+   Application finds the new applications when it starts.
+3. [GO] `state` apply; write the backend file from its output.
+4. [GO] `platform-core` apply (`cluster_api_cidrs` with the operator's
+   address).
+5. [GO] `platform-deployment` apply (`deployment`, `github_environment`,
+   `domain`, `cloudflare_account_id`, `cloudflare_zone_id`,
+   `planetscale_organization`). Then write the exported operator values into
+   `lazycloud-prod/operator`. Check the Neki profile size in the dashboard.
+6. Verify Neki before shipping: in two `pscale shell lazycloud-prod main`
+   sessions run `LISTEN lc_test` and `NOTIFY lc_test`, and `SELECT
+   pg_advisory_lock(1)` in one while the other's `pg_try_advisory_lock(1)`
+   returns false. The platform depends on both. If either fails, switch
+   database.tf back to `planetscale_postgres_branch` (GA) before going on.
+7. [GO] `github` apply (`release_reviewer_user_ids`).
+8. [GO] Run Node images; commit the `LAZYCLOUD_FLEET_IMAGES` value from its
+   summary into the env file through a reviewed PR.
+9. [GO] Run Ship with `bump: major`. A reviewer approves the image push; it
+   publishes the CLI to PyPI and Deploy writes `prod`. Argo CD syncs.
+10. [GO] `platform-deployment` apply again with `host_load_balancer` and
     `tcp_load_balancer` from `kubectl -n lazycloud-prod get svc server-hosts
     server-tcp`.
-20. [GO] Create the first administrator: `kubectl -n lazycloud-prod exec
+11. [GO] Create the first administrator: `kubectl -n lazycloud-prod exec
     deploy/server -- /usr/local/bin/server admin create-user --email <owner>
     --admin`, sign in with GitHub, provision billing through the service.
-21. Verify: dashboard and sign-in; `lazycloud login`; a function on platform
+12. Verify: dashboard and sign-in; `lazycloud login`; a function on platform
     compute (a baked host in us-east-2 enrolls over `hosts.<domain>`); an
     endpoint on its generated host; a TCP pod; an image build pushing to
     ECR; `machine join`; a custom domain; a Stripe delivery; an invitation
     email; Argo CD at `argocd.<domain>`.
 
-Rollback after bring-up is Deploy with an earlier version. There is no
-return to main's deployment once its infrastructure is destroyed; that is
-the user's decision at step 7.
+Rollback after bring-up is Deploy with an earlier version.
 
 ## Proposed shared changes
 
