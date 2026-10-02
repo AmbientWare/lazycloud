@@ -63,11 +63,13 @@ resource "github_actions_environment_variable" "environment" {
   value         = each.value.value
 }
 
-# Only administrators and Ship's workflow token create, move or delete
-# release tags. Repository role 5 is admin; integration 15368 is GitHub
-# Actions.
-resource "github_repository_ruleset" "release_tags" {
-  name        = "release tags"
+# Release tags. Workflow tokens (integration 15368, GitHub Actions) may
+# create a v* tag, which Ship's version job does, and nothing more: only
+# administrators (repository role 5) move or delete one. Deploy refuses a
+# tag whose commit is not on main, so a tag a branch workflow creates
+# cannot reach prod.
+resource "github_repository_ruleset" "release_tag_creation" {
+  name        = "release tag creation"
   repository  = local.repository
   target      = "tag"
   enforcement = "active"
@@ -88,6 +90,83 @@ resource "github_repository_ruleset" "release_tags" {
   bypass_actors {
     actor_id    = 15368
     actor_type  = "Integration"
+    bypass_mode = "always"
+  }
+
+  rules {
+    creation = true
+  }
+}
+
+resource "github_repository_ruleset" "release_tags" {
+  name        = "release tags"
+  repository  = local.repository
+  target      = "tag"
+  enforcement = "active"
+
+  conditions {
+    ref_name {
+      include = ["refs/tags/v*"]
+      exclude = []
+    }
+  }
+
+  bypass_actors {
+    actor_id    = 5
+    actor_type  = "RepositoryRole"
+    bypass_mode = "always"
+  }
+
+  rules {
+    update           = true
+    deletion         = true
+    non_fast_forward = true
+  }
+}
+
+# prod is what Argo CD runs. Only Deploy pushes it, with this deploy key,
+# which lives in the prod environment and so only in jobs from main that
+# the environment admits; no workflow token and no person but an
+# administrator can push it.
+resource "tls_private_key" "prod_deploy" {
+  algorithm = "ED25519"
+}
+
+resource "github_repository_deploy_key" "prod_deploy" {
+  repository = local.repository
+  title      = "Deploy: prod branch"
+  key        = tls_private_key.prod_deploy.public_key_openssh
+  read_only  = false
+}
+
+resource "github_actions_environment_secret" "prod_deploy_key" {
+  repository      = local.repository
+  environment     = github_repository_environment.environment["prod"].environment
+  secret_name     = "PROD_DEPLOY_KEY"
+  plaintext_value = tls_private_key.prod_deploy.private_key_openssh
+}
+
+resource "github_repository_ruleset" "prod" {
+  name        = "prod branch"
+  repository  = local.repository
+  target      = "branch"
+  enforcement = "active"
+
+  conditions {
+    ref_name {
+      include = ["refs/heads/prod"]
+      exclude = []
+    }
+  }
+
+  bypass_actors {
+    actor_id    = 5
+    actor_type  = "RepositoryRole"
+    bypass_mode = "always"
+  }
+
+  bypass_actors {
+    actor_type  = "DeployKey"
     bypass_mode = "always"
   }
 

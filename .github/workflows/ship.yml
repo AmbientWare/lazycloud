@@ -17,10 +17,10 @@ on:
           - minor
           - major
 
-# Reusable workflows cannot request permissions their caller lacks.
-permissions:
-  contents: write
-  id-token: write
+# No job gets more than it needs: only the tag job writes contents (Deploy
+# pushes prod with the prod environment's deploy key), and only the jobs that assume an AWS role or publish to PyPI mint OIDC
+# tokens. A reusable workflow cannot request more than its caller job has.
+permissions: {}
 
 concurrency:
   group: ship
@@ -30,6 +30,8 @@ jobs:
   version:
     name: Cut the version
     runs-on: ubuntu-26.04
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.next.outputs.version }}
       commit: ${{ steps.source.outputs.commit }}
@@ -83,15 +85,23 @@ jobs:
 
   go:
     needs: version
+    permissions:
+      contents: read
     uses: ./.github/workflows/go.yml
   python:
     needs: version
+    permissions:
+      contents: read
     uses: ./.github/workflows/python.yml
   web:
     needs: version
+    permissions:
+      contents: read
     uses: ./.github/workflows/web.yml
   checks:
     needs: version
+    permissions:
+      contents: read
     uses: ./.github/workflows/deploy-checks.yml
 
   images:
@@ -101,10 +111,14 @@ jobs:
     # The image release role trusts only this workflow, from main, in this
     # environment, whose reviewers approve each push.
     environment: images
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
       - name: Release settings
         env:
           ROLE: ${{ vars.AWS_IMAGE_RELEASE_ROLE_ARN }}
@@ -151,10 +165,14 @@ jobs:
     needs: [version, go, python, web, checks]
     runs-on: ubuntu-26.04
     environment: release
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.29"
@@ -202,6 +220,10 @@ jobs:
   deploy:
     name: Record it for prod
     needs: [version, images, python-package]
+    permissions:
+      contents: read
+      id-token: write
+    # Deploy's job reads the prod environment's deploy key itself.
     uses: ./.github/workflows/deploy.yml
     with:
       version: ${{ needs.version.outputs.version }}

@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Vitest runs under Node. A pinned Node keeps the jsdom Web Storage
       # behaviour the tests rely on from changing with the runner image.

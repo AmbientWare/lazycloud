@@ -4,7 +4,7 @@
 | --- | --- | --- | --- |
 | platform-core | `platform-core/lazycloud.tfstate` | VPC, EKS Auto Mode cluster, node capacity, Argo CD and its root Application, cluster OIDC provider, release image repositories, workload image creation template, NetworkPolicy enforcement | AWS, `TF_VAR_github_app_private_key` |
 | platform-deployment | `platform-deployment/<deployment>.tfstate` | Neki database and role, buckets, secret documents, fleet networks, workload identities, deploy role, tunnel and DNS, host certificate, Stripe webhook, chart values | AWS, `CLOUDFLARE_API_TOKEN`, `PLANETSCALE_SERVICE_TOKEN_ID` and `_TOKEN`, `STRIPE_API_KEY` |
-| github | `github/lazycloud.tfstate` | Environments, tag rule, OIDC subject template, Ship and Node images roles | AWS, a repository administrator's `GITHUB_TOKEN` |
+| github | `github/lazycloud.tfstate` | Environments, tag and prod branch rules, the prod deploy key, OIDC subject template, Ship and Node images roles | AWS, a repository administrator's `GITHUB_TOKEN` |
 
 Apply them in that order from an operator machine with `AWS_PROFILE=default`
 after `aws sts get-caller-identity` names the platform account, and review

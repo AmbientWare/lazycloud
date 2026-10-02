@@ -4,6 +4,8 @@ name: Deploy
 # version's tagged tree plus values-deployment.yaml, which merges
 # platform-deployment's values.json with the version. Argo CD syncs the
 # branch. Ship calls it; run it by hand to roll back to an earlier version.
+# Only the prod environment's deploy key may push prod (the github root's
+# ruleset), so no workflow token can, and the environment admits main only.
 
 on:
   workflow_dispatch:
@@ -18,9 +20,7 @@ on:
         type: string
         required: true
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: deploy-prod
@@ -32,6 +32,9 @@ jobs:
     runs-on: ubuntu-26.04
     # The deploy role trusts only this workflow on main in this environment.
     environment: prod
+    permissions:
+      contents: read
+      id-token: write
     env:
       DEPLOYMENT: lazycloud-prod
       BRANCH: prod
@@ -47,6 +50,16 @@ jobs:
         with:
           ref: v${{ inputs.version }}
           fetch-depth: 0
+          ssh-key: ${{ secrets.PROD_DEPLOY_KEY }}
+      # A v* tag anyone created on a branch commit is not a release.
+      - name: Check the version is on main
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "v$VERSION^{commit}" FETCH_HEAD; then
+            echo "::error::v$VERSION is not a commit of main."
+            exit 1
+          fi
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -86,8 +99,7 @@ jobs:
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
           git checkout -B "$BRANCH" "v$VERSION"
-          # The workflow token may not write workflow files, and the branch
-          # needs none.
+          # The branch needs no workflow files.
           git rm -r --quiet --cached .github
           git add deploy/helm/lazycloud/values-deployment.yaml
           git commit -m "Select release $VERSION"
