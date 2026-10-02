@@ -151,9 +151,12 @@ constraints. Keep task plans and progress with the task, not in the tree.
   resources. State irreversible actions beforehand. Ask when architectural,
   public-contract, security, cost or destructive scope is unresolved.
 - A refused tool call is a stop. Report it and wait; do not reroute it.
-- Authorized deployments use AWS default; disposable provider acceptance checks
-  default-test first. Verify profiles and STS identity. Never change accounts
-  to bypass a failure or copy credentials into workloads. CI uses OIDC.
+- AWS default is the platform account: deployments and real EC2 checks of
+  the platform fleet run there, with tagged, short-lived resources removed
+  afterwards. default-test is the second account that connected-account
+  checks need, not a sandbox. Verify profiles and STS identity. Never change
+  accounts to bypass a failure or copy credentials into workloads. CI uses
+  OIDC.
 - Use a task branch and one PR per coherent change. Review and pass relevant
   checks before merge or deployment.
 - When delegating, agree contracts first, then assign disjoint owners and files;
