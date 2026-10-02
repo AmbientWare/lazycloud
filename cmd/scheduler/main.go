@@ -322,9 +322,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
-			result, err := comp.PlanCapacity(ctx, logger)
+			result, err := comp.Plan(ctx, logger)
 			if err != nil {
-				logger.ErrorContext(ctx, "capacity pass", "error", err)
+				logger.ErrorContext(ctx, "fleet planning pass", "error", err)
 			}
 			return result.Skipped
 		})

@@ -10,11 +10,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// BenchmarkPlanCapacity measures one capacity pass over 2,000 pending
+// BenchmarkPlan measures one fleet planning pass over 2,000 pending
 // containers from 20 workspaces that fit no host, packed onto new platform
 // hosts in two regions. Each iteration starts with nothing bought. Run with
-// -bench PlanCapacity -benchtime 20x.
-func BenchmarkPlanCapacity(b *testing.B) {
+// -bench Plan -benchtime 20x.
+func BenchmarkPlan(b *testing.B) {
 	pool := dbtest.New(b)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	network := func(zone string) Network {
@@ -41,9 +41,10 @@ from rel join wl on wl.id = rel.workload_id join app on app.id = wl.app_id, gene
 		b.StopTimer()
 		exec(b, pool, "update containers set capacity_wait = null")
 		exec(b, pool, "delete from hosts")
+		exec(b, pool, "delete from fleet_markets")
 		b.StartTimer()
 		start := time.Now()
-		result, err := c.PlanCapacity(b.Context(), logger)
+		result, err := c.Plan(b.Context(), logger)
 		if err != nil {
 			b.Fatal(err)
 		}

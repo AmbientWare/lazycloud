@@ -242,12 +242,8 @@ func persistentRequest(opts launchOptions, instance ec2types.Instance) *string {
 
 // nominalMemory is the RAM of a catalog type.
 func nominalMemory(instanceType string) (int64, bool) {
-	for _, t := range catalog() {
-		if t.Name == instanceType {
-			return t.MemoryBytes, true
-		}
-	}
-	return 0, false
+	t, ok := CatalogTypeNamed(instanceType)
+	return t.MemoryBytes, ok
 }
 
 // nodeImage is the AMI a host launches from: the baked image of its region

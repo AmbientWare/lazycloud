@@ -179,10 +179,6 @@ func (c *Compute) refuseQuota(ctx context.Context, q *Queries, region, instanceT
 
 // typeVCPUs is the vCPU count of a catalog type.
 func typeVCPUs(instanceType string) (int64, bool) {
-	for _, t := range catalog() {
-		if t.Name == instanceType {
-			return t.CPUMillis / 1000, true
-		}
-	}
-	return 0, false
+	t, ok := CatalogTypeNamed(instanceType)
+	return t.VCPUs(), ok
 }

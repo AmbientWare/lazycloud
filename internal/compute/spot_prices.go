@@ -98,8 +98,8 @@ func (c *Compute) SpotPrices(ctx context.Context) ([]SpotQuote, error) {
 // spotTypes are the catalog types sold in region.
 func spotTypes(region string) []string {
 	var out []string
-	for _, t := range catalog() {
-		if t.Regions == nil || slices.Contains(t.Regions, region) {
+	for _, t := range FleetCatalog() {
+		if _, sold := t.OnDemandMicros(region); sold {
 			out = append(out, t.Name)
 		}
 	}

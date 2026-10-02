@@ -25,42 +25,15 @@ type RetireResult struct {
 	Terminated int
 }
 
-// Retire drains idle cloud hosts beyond each market's headroom floor and
-// terminates draining hosts that run nothing. A market is an owner, region
-// and purchase market; its oldest idle hosts are the ones kept. A
-// disconnecting account's hosts all drain.
+// Retire drains a disconnecting account's hosts and terminates draining
+// hosts that run nothing. Which idle hosts leave is the planning pass's
+// decision (Plan).
 func (c *Compute) Retire(ctx context.Context, logger *slog.Logger) (RetireResult, error) {
 	var result RetireResult
 	var terminate []ClaimTerminationsRow
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		result, terminate = RetireResult{}, nil
 		q := c.queries.WithTx(tx)
-		if err := q.MarkIdle(ctx); err != nil {
-			return fmt.Errorf("mark idle hosts: %w", err)
-		}
-		idle, err := q.IdleHosts(ctx)
-		if err != nil {
-			return fmt.Errorf("list idle hosts: %w", err)
-		}
-		kept := map[string]int{}
-		var drain []uuid.UUID
-		for _, h := range idle {
-			market := h.Owner + "/" + h.Region + "/" + h.Market
-			if kept[market] < c.fleet.HeadroomFloor {
-				kept[market]++
-				continue
-			}
-			if h.IdleSince != nil && time.Since(*h.IdleSince) >= c.fleet.IdleTimeout {
-				drain = append(drain, h.ID)
-			}
-		}
-		if len(drain) > 0 {
-			drained, err := q.DrainHosts(ctx, DrainHostsParams{Ids: drain, Reason: "idle"})
-			if err != nil {
-				return fmt.Errorf("drain idle hosts: %w", err)
-			}
-			result.Drained += len(drained)
-		}
 		disconnecting, err := q.DrainConnectionHosts(ctx)
 		if err != nil {
 			return fmt.Errorf("drain disconnecting hosts: %w", err)

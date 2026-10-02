@@ -19,9 +19,8 @@ import (
 //	LAZYCLOUD_FLEET_INSTANCE_PROFILE  its instance profile
 //	LAZYCLOUD_FLEET_NETWORKS          {"us-east-2": {"vpc_id", "security_group_id", "subnets": [{"id", "zone", "zone_id"}]}}
 //	LAZYCLOUD_FLEET_IMAGES            {"cpu": {"us-east-2": "ami-..."}, "gpu": {...}}; unset uses stock Amazon Linux
-//	LAZYCLOUD_FLEET_MAX_HOSTS         live cloud hosts per owner (20)
-//	LAZYCLOUD_FLEET_IDLE_TIMEOUT      idle time before a host drains (5m)
-//	LAZYCLOUD_FLEET_HEADROOM          idle hosts each market keeps (0)
+//	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per owner, and platform reserves (20)
+//	LAZYCLOUD_FLEET_IDLE_TIMEOUT      idle time before a host leaves (5m)
 //	LAZYCLOUD_AWS_PRINCIPAL_ARN       principal connection roles trust
 //	LAZYCLOUD_AWS_ENDPOINT_EC2, _STS, _CLOUDFORMATION  service endpoint overrides
 func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
@@ -47,9 +46,6 @@ func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	}
 	var err error
 	if f.MaxHosts, err = intEnv(getenv, "LAZYCLOUD_FLEET_MAX_HOSTS"); err != nil {
-		return Fleet{}, err
-	}
-	if f.HeadroomFloor, err = intEnv(getenv, "LAZYCLOUD_FLEET_HEADROOM"); err != nil {
 		return Fleet{}, err
 	}
 	if raw := getenv("LAZYCLOUD_FLEET_IDLE_TIMEOUT"); raw != "" {
