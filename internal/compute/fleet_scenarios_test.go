@@ -325,7 +325,7 @@ func (s *sim) launch(a FleetAction, reserve bool) (HostID, bool) {
 	h := &simHost{offer: o, FleetHost: FleetHost{
 		ID: HostID{s.next, 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
-		LaunchedAt: ptr(s.now), HibernationConfigured: reserve && o.Hibernate,
+		LaunchedAt: ptr(s.now), HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
 	}}
 	h.until = s.now.Add(simProvision)
 	if reserve {

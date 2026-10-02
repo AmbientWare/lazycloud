@@ -111,7 +111,8 @@ Parity lines marked "Packet: policy", with the tests that deliver them:
   `TestActivationFailuresFallBackToProvisionAndPlainStopsBoot`.
 - Location demand: `TestPlanBuysCapacityForLocationDemandAndProtectsItsHosts`,
   `TestPlanDoesNotResumeAReserveTheLocationCannotUse`.
-- "any" GPU demand: `TestAnyGPUDemandGoesToTheModelTheFleetHoldsThenTheCheapestPerCard`.
+- GPU model choice: `TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard`,
+  `TestGPUWorkFallsThroughToTheModelItListsNext`.
 - Resume before buying, current release only, borrowing:
   `TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases`,
   `TestPlanResumesOnlyAReserveReadyForTheCurrentAgent`,
@@ -133,7 +134,7 @@ Parity lines marked "Packet: policy", with the tests that deliver them:
 - Catalog, regions, on-demand table, hibernation flags, usable capacity:
   `TestFleetCatalogPricesMatchTheAWSPriceList`,
   `TestFleetCatalogHibernatesOnlyCPUTypesUnderTheRAMLimit`,
-  `TestFleetCatalogUsableCapacityFollowsTheAgent`.
+  `TestFleetCatalogUsableMemoryIsWhatHostsReport`.
 - Offers, ranking, exact fill, Spot use, interruption and zone, complete
   cost, region cooling, zone spreading:
   `TestOffersNeverIncludeANodeTheRequestWouldExactlyFill`,
@@ -149,7 +150,11 @@ Parity lines marked "Packet: policy", with the tests that deliver them:
   `TestPlanAResumedReserveCannotCoverRetiringTheLastReadyOne`,
   `TestPlanKeepsVerifiedHibernationOverAPlainStop`,
   `TestPlanCountsAnUnverifiedHibernationAsReadyButNotSaved`,
-  `TestPlanCountsEachHostOnceAndWarmRoomOnlyFromServingHosts`.
+  `TestPlanCountsEachHostOnceAndWarmRoomOnlyFromServingHosts`,
+  `TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt`,
+  `TestPlanDrainsAHostThatCannotHibernateWhenTheReserveShouldHibernate`.
+- Region cooling with location demand:
+  `TestLocationDemandStillBuysInACoolingRegionNothingElseServes`.
 - Retention, consolidation, rightsizing, pinned work:
   `TestPlanKeepsTheOnlyHostThatFitsRecentRequests`,
   `TestPlanKeepsIdleHostsUntilBilledAndLightLongEnough`,
@@ -172,6 +177,8 @@ Contract notes for the planner and provider packets:
   refreshing, counts as `preparing` from `requested` until it stops; a
   serving purchase in `requested` to `joining`, or a `resuming` host, is
   `starting`.
+- `FleetHost.Stoppable` is set for on-demand hosts and persistent-request
+  Spot reserves; a one-time Spot host only drains.
 - `ReserveMode` (`stop`, `hibernate`) is declared in fleet_plan.go for the
   provider's `reserve_mode` column.
 - `OfferCooldown.Quota` marks a quota refusal; the provider's refusal
@@ -205,6 +212,10 @@ Contract notes for the planner and provider packets:
   in one pass, so there is no "without a plan" case.
 - Pending request shapes join the forecast's shapes before the 32-shape
   bound, so the bound always holds; the reference added them after.
+- A leaving host returns to the reserve only if it can stop the way the
+  market wants: a market with a hibernation target drains a host launched
+  without hibernation and buys a hibernating reserve, rather than holding
+  both and retiring the plain one a pass later.
 - Region cooling counts distinct type and market pairs refused in the
   window, from cooldown rows; the reference counted pool units.
 - Two covers of equal cost keep the one with fewer hosts.

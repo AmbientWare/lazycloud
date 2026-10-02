@@ -104,8 +104,8 @@ type FleetOffer struct {
 	// StoppedMicros is the root disk alone, what a stopped reserve costs.
 	HourlyMicros  int64
 	StoppedMicros int64
-	// CoolingRegion marks an offer kept only because no other region
-	// serves the need.
+	// CoolingRegion marks an offer in a region with recent refusals; it
+	// ranks last and serves only when nothing else does.
 	CoolingRegion bool
 	// Quota is the vCPU quota a host bought from the offer counts against.
 	Quota QuotaKey
@@ -142,9 +142,6 @@ type rateIndex map[billing.RateClass]map[billing.GPUType]billing.ComputeRate
 func indexRates(rates []billing.ComputeRate) rateIndex {
 	index := rateIndex{}
 	for _, r := range rates {
-		if r.Owner != billing.OwnerPlatformFleet {
-			continue
-		}
 		if index[r.Class] == nil {
 			index[r.Class] = map[billing.GPUType]billing.ComputeRate{}
 		}
@@ -227,9 +224,8 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // complete cost, whose usable capacity covers the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and that keep the purchase margin.
 // Order: the need's GPU preference, cooling regions last, complete hourly
-// cost, region preference, fewest hosts in the zone, key. Offers in a
-// cooling region are dropped while another region serves the need, and an
-// offer whose host would exceed a known vCPU quota is skipped.
+// cost, region preference, fewest hosts in the zone, key. An offer whose
+// host would exceed a known vCPU quota is skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
 	room := quotaRoom(in.Quotas, in.QuotaUsed)
@@ -284,9 +280,6 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 			}
 		}
 	}
-	if slices.ContainsFunc(offers, func(o FleetOffer) bool { return !o.CoolingRegion }) {
-		offers = slices.DeleteFunc(offers, func(o FleetOffer) bool { return o.CoolingRegion })
-	}
 	slices.SortStableFunc(offers, func(a, b FleetOffer) int {
 		return cmp.Or(
 			cmp.Compare(GPURank(need.GPUs, a.Type.GPU), GPURank(need.GPUs, b.Type.GPU)),
@@ -298,6 +291,16 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 		)
 	})
 	return offers
+}
+
+// preferHealthy drops offers in cooling regions while another offer
+// remains. Callers apply it after every placement filter, so a cooling
+// region still serves demand nothing else can.
+func preferHealthy(offers []FleetOffer) []FleetOffer {
+	if !slices.ContainsFunc(offers, func(o FleetOffer) bool { return !o.CoolingRegion }) {
+		return offers
+	}
+	return slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return o.CoolingRegion })
 }
 
 // boolOrder sorts false before true.

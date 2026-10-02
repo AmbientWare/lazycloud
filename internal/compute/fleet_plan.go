@@ -56,6 +56,9 @@ type FleetHost struct {
 	// HibernationConfigured is set when the instance launched able to
 	// hibernate.
 	HibernationConfigured bool
+	// Stoppable is set when EC2 can stop the instance: on-demand, or Spot
+	// on a persistent request. A one-time Spot host can only terminate.
+	Stoppable bool
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
 	// LightSince is when the host became lightly used, as last published.
@@ -577,13 +580,46 @@ func (ps *pass) demandMarket(need Requirement) ReserveMarket {
 	if need.GPUsNeeded() == 0 {
 		return ReserveMarket{Preemptible: need.Preemptible}
 	}
-	return ReserveMarket{GPU: ps.chargedModel(need)}
+	if models := ps.gpuModels(need, ps.classOffers(need)); len(models) > 0 {
+		return ReserveMarket{GPU: models[0]}
+	}
+	for _, model := range need.GPUs {
+		if model != GPUAny {
+			return ReserveMarket{GPU: model}
+		}
+	}
+	return ReserveMarket{GPU: GPUAny}
 }
 
-// chargedModel is the GPU model work is charged to: the best-ranked model
-// it accepts; among equally ranked ones (as with "any"), a model the fleet
-// already holds, then the cheapest per card.
-func (ps *pass) chargedModel(need Requirement) string {
+func reservedCard(p Policy, model string) bool {
+	_, ok := p.GPU[model]
+	return ok
+}
+
+// classKey is what offers depend on in a requirement.
+func classKey(need Requirement) Requirement {
+	return Requirement{Region: need.Region, Zone: need.Zone, Preemptible: need.Preemptible, GPUs: need.GPUs}
+}
+
+// classOffers ranks the offers for work of need's placement and GPUs, once
+// per pass.
+func (ps *pass) classOffers(need Requirement) []FleetOffer {
+	c := classKey(need)
+	key := "demand/" + c.Region + "/" + c.Zone + "/" + boolKey(c.Preemptible) + "/" + strings.Join(c.GPUs, ",")
+	if offers, ok := ps.offers[key]; ok {
+		return offers
+	}
+	offers := RankOffers(ps.p, c, false, ps.s.Offers)
+	ps.offers[key] = offers
+	return offers
+}
+
+// gpuModels are the GPU models work may buy, best first, among those an
+// offer serves: the work's preference rank; among equal ranks a model the
+// fleet holds, then the cheapest per card. "any" takes only the policy's
+// reserved cards. Later models are fallbacks when earlier ones cannot
+// place the work.
+func (ps *pass) gpuModels(need Requirement, offers []FleetOffer) []string {
 	type model struct {
 		name    string
 		rank    int
@@ -591,33 +627,29 @@ func (ps *pass) chargedModel(need Requirement) string {
 		perCard int64
 	}
 	var models []model
-	for _, t := range ps.s.Offers.Catalog {
-		if t.GPU == "" || !GPUAccepted(need.GPUs, t.GPU) {
+	for _, o := range offers {
+		rank := GPURank(need.GPUs, o.Type.GPU)
+		if o.Type.GPU == "" || rank < 0 || (need.GPUs[rank] == GPUAny && !reservedCard(ps.p, o.Type.GPU)) {
 			continue
 		}
-		price := int64(-1)
-		for _, region := range regionOrder() {
-			if p, ok := t.OnDemandMicros(region); ok && (price < 0 || p < price) {
-				price = p
-			}
-		}
-		per := price / int64(t.GPUCount)
-		if i := slices.IndexFunc(models, func(m model) bool { return m.name == t.GPU }); i >= 0 {
+		per := o.HourlyMicros / int64(o.Type.GPUCount)
+		if i := slices.IndexFunc(models, func(m model) bool { return m.name == o.Type.GPU }); i >= 0 {
 			models[i].perCard = min(models[i].perCard, per)
 			continue
 		}
 		stocked := slices.ContainsFunc(ps.hosts, func(h FleetHost) bool {
-			return h.GPU == t.GPU && h.State != FleetFailed && h.State != FleetTerminating
+			return h.GPU == o.Type.GPU && h.State != FleetFailed && h.State != FleetTerminating
 		})
-		models = append(models, model{name: t.GPU, rank: GPURank(need.GPUs, t.GPU), stocked: stocked, perCard: per})
+		models = append(models, model{name: o.Type.GPU, rank: rank, stocked: stocked, perCard: per})
 	}
-	if len(models) == 0 {
-		return GPUAny
-	}
-	best := slices.MinFunc(models, func(a, b model) int {
+	slices.SortFunc(models, func(a, b model) int {
 		return cmp.Or(cmp.Compare(a.rank, b.rank), boolOrder(!a.stocked, !b.stocked), cmp.Compare(a.perCard, b.perCard), strings.Compare(a.name, b.name))
 	})
-	return best.name
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.name
+	}
+	return names
 }
 
 // resumeFor resumes ready reserves for containers nothing running takes:
@@ -698,7 +730,7 @@ type demandClass struct {
 func (ps *pass) buyFor(items []pendingItem) {
 	var classes []*demandClass
 	for _, it := range items {
-		key := Requirement{Region: it.need.Region, Zone: it.need.Zone, Preemptible: it.need.Preemptible, GPUs: it.need.GPUs}
+		key := classKey(it.need)
 		n := slices.IndexFunc(classes, func(c *demandClass) bool {
 			return c.need.Region == key.Region && c.need.Zone == key.Zone && c.need.Preemptible == key.Preemptible && slices.Equal(c.need.GPUs, key.GPUs)
 		})
@@ -717,29 +749,16 @@ func (ps *pass) buyFor(items []pendingItem) {
 		c.containers[i] = append(c.containers[i], it)
 	}
 	for _, c := range classes {
-		offers := RankOffers(ps.p, c.need, false, ps.s.Offers)
+		offers := ps.classOffers(c.need)
+		markets := []ReserveMarket{c.market}
 		if c.market.GPU != "" {
-			offers = slices.DeleteFunc(offers, func(o FleetOffer) bool { return o.Type.GPU != c.market.GPU })
+			markets = nil
+			for _, model := range ps.gpuModels(c.need, offers) {
+				markets = append(markets, ReserveMarket{GPU: model})
+			}
 		}
-		need := CoverNeed{Items: make([]CoverItem, len(c.shapes))}
-		for i, shape := range c.shapes {
-			need.Items[i] = CoverItem{Shape: shape, Count: len(c.containers[i])}
-		}
-		result := Cover(offers, need, servingCost(ps.p), ps.limits(min(ps.room(c.market), ps.hostRoom)))
-		for _, node := range result.Nodes {
-			var ids []uuid.UUID
-			var taken []pendingItem
-			for i, n := range node.Placed {
-				taken = append(taken, c.containers[i][:n]...)
-				c.containers[i] = c.containers[i][n:]
-			}
-			for _, it := range taken {
-				ids = append(ids, it.id)
-			}
-			action := ps.buy(c.market, node.Offer, false, ids)
-			for _, it := range taken {
-				ps.provisioning(it, nil, ptr(action))
-			}
+		for _, m := range markets {
+			ps.buyClass(c, m, offers)
 		}
 		if ps.hostRoom <= 0 {
 			for _, left := range c.containers {
@@ -748,6 +767,38 @@ func (ps *pass) buyFor(items []pendingItem) {
 					ps.limited[c.market] = true
 				}
 			}
+		}
+	}
+}
+
+// buyClass covers what is left of a class with the offers of market m.
+func (ps *pass) buyClass(c *demandClass, m ReserveMarket, offers []FleetOffer) {
+	if m.GPU != "" {
+		offers = slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return o.Type.GPU != m.GPU })
+	}
+	need := CoverNeed{Items: make([]CoverItem, len(c.shapes))}
+	left := 0
+	for i, shape := range c.shapes {
+		need.Items[i] = CoverItem{Shape: shape, Count: len(c.containers[i])}
+		left += len(c.containers[i])
+	}
+	if left == 0 {
+		return
+	}
+	result := Cover(preferHealthy(offers), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
+	for _, node := range result.Nodes {
+		var ids []uuid.UUID
+		var taken []pendingItem
+		for i, n := range node.Placed {
+			taken = append(taken, c.containers[i][:n]...)
+			c.containers[i] = c.containers[i][n:]
+		}
+		for _, it := range taken {
+			ids = append(ids, it.id)
+		}
+		action := ps.buy(m, node.Offer, false, ids)
+		for _, it := range taken {
+			ps.provisioning(it, nil, ptr(action))
 		}
 	}
 }
@@ -887,7 +938,7 @@ func (ps *pass) grow(v *marketView) {
 	locations, _ = ps.uncoveredLocations(v)
 	for _, d := range locations {
 		offers := slices.DeleteFunc(slices.Clone(ps.marketOffers(v.m, false)), func(o FleetOffer) bool { return !d.accepts(o.Region, o.Zone, o.ZoneID) })
-		result := Cover(offers, CoverNeed{Items: []CoverItem{{Shape: d.Shape, Count: d.Count}}}, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom)))
+		result := Cover(preferHealthy(offers), CoverNeed{Items: []CoverItem{{Shape: d.Shape, Count: d.Count}}}, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom)))
 		for _, node := range result.Nodes {
 			ps.buy(v.m, node.Offer, false, nil)
 			short = short.Minus(node.Offer.Usable).Clamp()
@@ -895,7 +946,7 @@ func (ps *pass) grow(v *marketView) {
 		}
 	}
 	if !short.Empty() || len(shapes) > 0 {
-		result := Cover(ps.marketOffers(v.m, false), CoverNeed{Aggregate: short, Shapes: shapes}, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom)))
+		result := Cover(preferHealthy(ps.marketOffers(v.m, false)), CoverNeed{Aggregate: short, Shapes: shapes}, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom)))
 		for _, node := range result.Nodes {
 			ps.buy(v.m, node.Offer, false, nil)
 		}
@@ -1034,14 +1085,17 @@ func (ps *pass) retain(v *marketView) {
 }
 
 // leave returns a leaving host to the reserve while the market's reserve
-// without it falls short, and drains it otherwise.
+// without it falls short and the host can stop as the market wants: a
+// market keeping a hibernation target takes only hosts that hibernate. It
+// drains the host otherwise.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	_, catalogued := ps.typeNamed(h.InstanceType)
-	if ps.reserveRoom > 0 && catalogued && !v.t.Stopped.Empty() && !ps.reserveHeld(v).Covers(v.t.Stopped) {
-		mode := ReserveStop
-		if h.HibernationConfigured && v.m.GPU == "" {
-			mode = ReserveHibernate
-		}
+	mode := ReserveStop
+	if h.HibernationConfigured && v.m.GPU == "" {
+		mode = ReserveHibernate
+	}
+	fits := mode == ReserveHibernate || v.t.Hibernation.Empty()
+	if ps.reserveRoom > 0 && catalogued && h.Stoppable && fits && !v.t.Stopped.Empty() && !ps.reserveHeld(v).Covers(v.t.Stopped) {
 		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false
 		ps.reserveRoom--
 		ps.hostRoom++
@@ -1072,7 +1126,7 @@ func (ps *pass) reserves(v *marketView) {
 	limit := func() int { return min(ps.room(v.m), ps.reserveRoom) }
 	if v.mayGrow && !v.hibernate.Empty() {
 		offers := slices.DeleteFunc(slices.Clone(ps.marketOffers(v.m, true)), func(o FleetOffer) bool { return !o.Hibernate })
-		result := Cover(offers, CoverNeed{Aggregate: v.hibernate}, reserveCost(ps.p), ps.limits(limit()))
+		result := Cover(preferHealthy(offers), CoverNeed{Aggregate: v.hibernate}, reserveCost(ps.p), ps.limits(limit()))
 		for _, node := range result.Nodes {
 			ps.buy(v.m, node.Offer, true, nil)
 		}
@@ -1092,7 +1146,7 @@ func (ps *pass) reserves(v *marketView) {
 	if !v.mayGrow {
 		return
 	}
-	result := Cover(ps.marketOffers(v.m, true), CoverNeed{Aggregate: v.stopped, Shapes: v.stoppedOut}, reserveCost(ps.p), ps.limits(limit()))
+	result := Cover(preferHealthy(ps.marketOffers(v.m, true)), CoverNeed{Aggregate: v.stopped, Shapes: v.stoppedOut}, reserveCost(ps.p), ps.limits(limit()))
 	for _, node := range result.Nodes {
 		ps.buy(v.m, node.Offer, true, nil)
 	}
@@ -1191,7 +1245,7 @@ func (ps *pass) rightsize(v *marketView) {
 			continue
 		}
 		for _, o := range ps.marketOffers(v.m, false) {
-			if o.Region != h.Region || o.Zone != h.Zone || !o.Usable.Covers(need) {
+			if o.CoolingRegion || o.Region != h.Region || o.Zone != h.Zone || !o.Usable.Covers(need) {
 				continue
 			}
 			if slices.ContainsFunc(v.shapes, func(shape FleetCapacity) bool {

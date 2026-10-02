@@ -5,11 +5,6 @@ import (
 	"strings"
 )
 
-// CatalogReviewed is when the catalog's prices and regions were last checked
-// against the AWS price list (published 2026-09-25); the reference reviewed
-// the same figures on 2026-09-18.
-const CatalogReviewed = "2026-10-02"
-
 // hibernationMemoryLimit is the RAM EC2 hibernates instances under.
 const hibernationMemoryLimit = 150 * gib
 
@@ -113,7 +108,8 @@ func rootDiskMicros(region string, gib int64) int64 {
 }
 
 // FleetCatalog is what the platform fleet buys, with on-demand prices in
-// us-east-2, us-west-1, us-east-1 and us-west-2.
+// us-east-2, us-west-1, us-east-1 and us-west-2 as the AWS price list
+// published 2026-09-25 has them (testdata/fleet/on_demand_prices.json).
 func FleetCatalog() []CatalogType {
 	cpu := func(name string, vcpus, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
 		return CatalogType{Name: name, CPUMillis: vcpus * 1000, MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}

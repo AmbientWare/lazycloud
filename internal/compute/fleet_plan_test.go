@@ -38,7 +38,7 @@ func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
 	price, _ := typ.OnDemandMicros("us-east-2")
 	h := FleetHost{
 		ID: HostID{id}, InstanceType: typ.Name, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1",
-		Market: MarketOnDemand, Usable: typ.Usable(0), State: state, Current: true,
+		Market: MarketOnDemand, Usable: typ.Usable(0), State: state, Current: true, Stoppable: true,
 		HourlyMicros: ptr(price + rootDiskMicros("us-east-2", rootVolumeGiB) + 5000),
 	}
 	if h.reserve() {
@@ -74,9 +74,9 @@ func actionsOf(plan FleetPlan, kinds ...FleetActionKind) []FleetAction {
 	return out
 }
 
-func boughtTypes(plan FleetPlan, kind FleetActionKind) []string {
+func boughtTypes(plan FleetPlan) []string {
 	var names []string
-	for _, a := range actionsOf(plan, kind) {
+	for _, a := range actionsOf(plan, ActionBuy) {
 		names = append(names, a.Offer.Type.Name)
 	}
 	return names
@@ -100,7 +100,7 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 		{large.Times(4), []string{"large", "large", "large", "large"}},
 	} {
 		plan := PlanFleet(planPolicy(c.target, FleetCapacity{}), planSnapshot(t))
-		if got := boughtTypes(plan, ActionBuy); !slices.Equal(got, c.want) {
+		if got := boughtTypes(plan); !slices.Equal(got, c.want) {
 			t.Errorf("target %+v bought %v", c.target, got)
 		}
 		if mp := marketPlan(t, plan, onDemand); !mp.Shortfall.Empty() {
@@ -114,7 +114,7 @@ func TestPlanFitsALargeRecentShapeOnOneHostDespiteAggregateRoom(t *testing.T) {
 		planHost(3, planSmall, FleetServing), planHost(4, planSmall, FleetServing))
 	s.Forecasts = map[ReserveMarket]MarketForecast{onDemand: {Shapes: []FleetCapacity{cpuGiB(16_000, 32)}}}
 	plan := PlanFleet(planPolicy(small, FleetCapacity{}), s)
-	if got := boughtTypes(plan, ActionBuy); !slices.Equal(got, []string{"large"}) {
+	if got := boughtTypes(plan); !slices.Equal(got, []string{"large"}) {
 		t.Fatalf("bought %v", got)
 	}
 }
@@ -484,7 +484,7 @@ func TestPlanCoversABatchOfContainersTogether(t *testing.T) {
 	need := Requirement{CPUMillis: 6000, MemoryBytes: 4 * gib}
 	s.Pending = []DemandGroup{{Need: need, Containers: []PendingContainer{{ID: uuid.New()}, {ID: uuid.New()}}}}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
-	if got := boughtTypes(plan, ActionBuy); !slices.Equal(got, []string{"c6a.4xlarge"}) || len(plan.Actions[0].Containers) != 2 {
+	if got := boughtTypes(plan); !slices.Equal(got, []string{"c6a.4xlarge"}) || len(plan.Actions[0].Containers) != 2 {
 		t.Fatalf("two 6 vCPU containers: %+v", plan.Actions)
 	}
 }
@@ -548,21 +548,82 @@ func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
 	}
 }
 
-func TestAnyGPUDemandGoesToTheModelTheFleetHoldsThenTheCheapestPerCard(t *testing.T) {
+func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *testing.T) {
 	need := Requirement{GPUs: []string{GPUAny}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	loaded := func(typ string, model string) FleetHost {
+		h := planHost(1, mustType(t, typ), FleetServing)
+		h.GPU, h.Load = model, h.Usable
+		return h
+	}
+	for _, c := range []struct {
+		name  string
+		hosts []FleetHost
+		want  string
+	}{
+		{"no stock", nil, "g4dn.xlarge"},
+		{"L4 in stock", []FleetHost{loaded("g6.2xlarge", "L4")}, "g6.2xlarge"},
+		{"L40S is not a reserved card", []FleetHost{loaded("g6e.4xlarge", "L40S")}, "g4dn.xlarge"},
+	} {
+		s := planSnapshot(t, c.hosts...)
+		s.Offers.Catalog = FleetCatalog()
+		g, _ := pendingOne(need, nil)
+		s.Pending = []DemandGroup{g}
+		plan := PlanFleet(p, s)
+		if got := boughtTypes(plan); !slices.Equal(got, []string{c.want}) {
+			t.Errorf("%s: bought %v", c.name, got)
+		}
+	}
+}
+
+func TestGPUWorkFallsThroughToTheModelItListsNext(t *testing.T) {
 	s := planSnapshot(t)
 	s.Offers.Catalog = FleetCatalog()
-	g, _ := pendingOne(need, nil)
+	g, _ := pendingOne(Requirement{GPUs: []string{"H100", "L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}, nil)
 	s.Pending = []DemandGroup{g}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
-	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Market != (ReserveMarket{GPU: "T4"}) || buys[0].Offer.Type.GPU != "T4" {
-		t.Fatalf("no stock: %+v", plan.Actions)
+	// Both H100 types fail the margin, so the L4 serves.
+	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Offer.Type.GPU != "L4" || buys[0].Market != (ReserveMarket{GPU: "L4"}) {
+		t.Fatalf("actions %+v", plan.Actions)
 	}
-	l4 := planHost(1, mustType(t, "g6.2xlarge"), FleetServing)
-	l4.GPU, l4.Load = "L4", l4.Usable
-	s.Hosts = []FleetHost{l4}
-	plan = PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
-	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Market != (ReserveMarket{GPU: "L4"}) || buys[0].Offer.Type.GPU != "L4" {
-		t.Fatalf("L4 in stock: %+v", plan.Actions)
+}
+
+func TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.Spot = MarketReserve{Stopped: HeadroomTarget{Floor: small}}
+	h := idle(planHost(1, planSmall, FleetServing))
+	h.Market = MarketSpot
+	for _, stoppable := range []bool{false, true} {
+		h.Stoppable = stoppable
+		plan := PlanFleet(p, planSnapshot(t, h))
+		if returned := len(actionsOf(plan, ActionReturnToReserve)) == 1; returned != stoppable || (!stoppable && len(actionsOf(plan, ActionDrain)) != 1) {
+			t.Errorf("stoppable %v: %+v", stoppable, plan.Actions)
+		}
+	}
+}
+
+func TestPlanDrainsAHostThatCannotHibernateWhenTheReserveShouldHibernate(t *testing.T) {
+	s := planSnapshot(t, idle(planHost(1, planFast, FleetServing)))
+	s.Offers.Catalog = append(s.Offers.Catalog, planFast)
+	plan := PlanFleet(planPolicy(FleetCapacity{}, small), s)
+	reserves := actionsOf(plan, ActionBuyReserve)
+	if len(actionsOf(plan, ActionReturnToReserve)) > 0 || len(actionsOf(plan, ActionDrain)) != 1 || len(reserves) != 1 || *reserves[0].Mode != ReserveHibernate {
+		t.Fatalf("actions %+v", plan.Actions)
+	}
+}
+
+func TestLocationDemandStillBuysInACoolingRegionNothingElseServes(t *testing.T) {
+	s := planSnapshot(t)
+	s.Offers.Networks["us-west-1"] = oneZone("us-west-1a", "usw1-az1")
+	for _, typ := range []string{"small", "large"} {
+		s.Offers.Cooldowns = append(s.Offers.Cooldowns, OfferCooldown{
+			Region: "us-east-2", InstanceType: typ, Market: MarketOnDemand, RefusedAt: offerNow.Add(-15 * time.Minute), Until: offerNow.Add(-5 * time.Minute),
+		})
+	}
+	s.Locations = map[ReserveMarket][]LocationDemand{onDemand: {{Region: "us-east", Shape: small, Count: 1}}}
+	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
+	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Offer.Region != "us-east-2" {
+		t.Fatalf("actions %+v", plan.Actions)
 	}
 }

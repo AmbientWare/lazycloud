@@ -178,7 +178,10 @@ func TestRefusalsCoolTheOfferAndTwoInARegionMoveBuyingToTheNext(t *testing.T) {
 	}
 	in.Cooldowns = append(in.Cooldowns, refused("m7i.xlarge", offerNow.Add(-20*time.Minute)))
 	offers = RankOffers(DefaultPolicy(), need, false, in)
-	for _, o := range offers {
+	if last := offers[len(offers)-1]; !last.CoolingRegion || offers[0].CoolingRegion {
+		t.Fatalf("a cooling region ranks last: %v", offerKeys(offers))
+	}
+	for _, o := range preferHealthy(offers) {
 		if o.Region == "us-east-2" {
 			t.Fatalf("a cooling region is passed over while another serves: %v", offerKeys(offers))
 		}
