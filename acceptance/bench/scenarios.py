@@ -237,6 +237,9 @@ def map_(n: str, label: str = "") -> None:
 
     fn = benchapp.echo
     count = int(n)
+    if label.startswith("cold"):
+        # New source makes a new release, so every container starts cold.
+        Path("nonce.py").write_text(f"NONCE = {time.time_ns()}\n")
     t0 = time.time()
 
     def run() -> tuple[float, float, list]:
