@@ -27,3 +27,7 @@ alter table hosts drop column idle_since;
 -- Containers that left pending, by id: the planner reads the last ten
 -- minutes' arrivals as a uuidv7 range without walking a pending backlog.
 create index containers_arrived on containers (id) where state <> 'pending';
+
+-- Ready containers by release: the planner counts a scheduled function's
+-- warm containers without reading its pending backlog.
+create index containers_ready_release on containers (release_id) where state = 'ready';

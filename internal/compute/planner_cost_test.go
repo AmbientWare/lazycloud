@@ -159,6 +159,11 @@ select count(*) from rel`)
 	costExec(t, pool, `
 insert into schedules (workload_id, expression, next_fire_at)
 select id, '*/5 * * * *', now() + interval '2 minutes' from workloads order by id limit 10`)
+	// The first scheduled function keeps a warm container, so the pass
+	// counts its ready ones.
+	costExec(t, pool, `
+update releases set spec = spec || '{"autoscaler": {"min_containers": 1, "max_containers": 20000}}'
+where id = (select active_release_id from workloads order by id limit 1)`)
 	costExec(t, pool, `
 insert into hosts (name, token_hash, state, last_seen_at, kind, provider, phase, cpu_millis, memory_bytes, market, region,
                    availability_zone, availability_zone_id, instance_type, instance_id, launched_at, session_epoch)
@@ -254,7 +259,14 @@ select 'provision', 'm7i.4xlarge', 'us-east-2', 240, 'ready', now() - interval '
 	grow(2_000, 1_000)
 	small := measure("2,000 pending, 1,000 finished")
 	grow(10_000, 20_000)
-	large := measure("10,000 pending, 20,000 finished")
+	// A deep backlog on the warm scheduled function too.
+	costExec(t, pool, `
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
+select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
+from (select active_release_id, app_id from workloads order by id limit 1) w
+join apps a on a.id = w.app_id, generate_series(1, 10000)`)
+	costExec(t, pool, "analyze")
+	large := measure("10,000 pending and 10,000 on a warm cron function, 20,000 finished")
 	if large.statements != small.statements {
 		t.Errorf("the pass sent %d statements at 10,000 pending and %d at 2,000, want a fixed number", large.statements, small.statements)
 	}
