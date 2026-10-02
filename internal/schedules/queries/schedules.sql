@@ -54,3 +54,7 @@ join apps a on a.id = w.app_id
 where a.workspace_id = @workspace_id and (a.name, w.name) > (@after_app::text, @after_function::text)
 order by a.name, w.name
 limit @max_rows;
+
+-- name: NextFireAt :many
+-- When the earliest schedule fires next; no row without schedules.
+select next_fire_at from schedules order by next_fire_at limit 1;

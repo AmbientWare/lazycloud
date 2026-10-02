@@ -1,0 +1,24 @@
+statements/s 7.98
+table container_metric_samples: seq scans/s 0.03, seq rows/s 18
+table releases: seq scans/s 0.13, seq rows/s 5
+table container_metric_minutes: seq scans/s 0.07, seq rows/s 4
+table workloads: seq scans/s 0.67, seq rows/s 3
+table hosts: seq scans/s 2.12, seq rows/s 2
+table usage_cursors: seq scans/s 0.13, seq rows/s 1
+table billing_balances: seq scans/s 0.25, seq rows/s 0
+table edges: seq scans/s 0.10, seq rows/s 0
+table metering_state: seq scans/s 0.08, seq rows/s 0
+table billing_accounts: seq scans/s 0.05, seq rows/s 0
+table container_metric_rollup: seq scans/s 0.02, seq rows/s 0
+     6 calls      107 blocks  with touched as ( update hosts set last_seen_at = now() where id = $1 and session_epoch = $2 and state = 'onli
+     1 calls       98 blocks  insert into container_metric_minutes ( container_id, minute, samples, interval_ms, cpu_usage_usec, memory_rss_
+    12 calls       72 blocks  update hosts h set launch_lease_until = now() + make_interval(secs => $1::float8), launch_attempts = launch_at
+     2 calls       52 blocks  with recursive queued (release_id) as ( (select t.release_id from tasks t where t.status = 'queued' and t.rele
+    12 calls       36 blocks  update hosts h set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired'
+    12 calls       36 blocks  update hosts h set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting', phase_m
+    12 calls       36 blocks  update hosts h set phase = $1, phase_message = $2, phase_at = now(), state = $3, updated_at = now() from cloud
+    12 calls       36 blocks  select id from hosts where interruption_at is not null and interruption_at <= now() + make_interval(secs => $1
+    12 calls       36 blocks  select h.id, coalesce(h.connection_id::text, 'platform')::text as owner, h.region, coalesce(h.market, '')::tex
+     4 calls       36 blocks  select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_
+    12 calls       36 blocks  select id, last_seen_at from hosts where state = $5 and last_seen_at < now() - make_interval(secs => $1::float
+     6 calls       34 blocks  insert into edges (id, relay_address, token_sha256, expires_at) values ($1, $2, $3, $4) on conflict (id) do up

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,8 +80,153 @@ func summary(plan string) string {
 	return timing + ", " + buffers
 }
 
-// Recurring planner and recovery scans read partial indexes of live rows, so
-// their cost does not grow with retained history.
+// explainAs explains query under plan_cache_mode mode in a transaction it
+// rolls back: "auto" plans with the arguments, "force_generic_plan" as a
+// prepared statement reused across arguments may.
+func explainAs(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...any) string {
+	t.Helper()
+	var plan string
+	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), "select set_config('plan_cache_mode', $1, true)", mode); err != nil {
+			return err
+		}
+		rows, err := tx.Query(t.Context(), "explain (analyze, buffers, costs off) "+query, args...)
+		if err != nil {
+			return err
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		plan = strings.Join(lines, "\n")
+		return errRollback
+	})
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("explain: %v", err)
+	}
+	return plan
+}
+
+// buffers is the most shared buffers any node of a plan touched while
+// executing, which a walk over many rows dominates. Planning is left out.
+func buffers(plan string) int {
+	most := 0
+	for _, line := range strings.Split(plan, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "Planning:" || strings.HasPrefix(line, "Planning Time:") {
+			break
+		}
+		if !strings.HasPrefix(line, "Buffers:") {
+			continue
+		}
+		total := 0
+		for _, field := range strings.Fields(line) {
+			for _, kind := range []string{"hit=", "read="} {
+				if n, ok := strings.CutPrefix(field, kind); ok {
+					if v, err := strconv.Atoi(n); err == nil {
+						total += v
+					}
+				}
+			}
+		}
+		most = max(most, total)
+	}
+	return most
+}
+
+// scan is one recurring statement and its arguments.
+type scan struct {
+	name  string
+	query string
+	args  []any
+}
+
+// costAt explains every scan with custom and generic plans and returns the
+// most buffers either touched. With a positive limit it fails a plan in which
+// one node over tasks, attempts or containers returns or filters out more
+// than limit rows: a scan of every row, or of a whole backlog or history.
+func costAt(t *testing.T, pool *pgxpool.Pool, scans []scan, label string, limit int) map[string]int {
+	t.Helper()
+	cost := map[string]int{}
+	for _, s := range scans {
+		for _, mode := range []string{"auto", "force_generic_plan"} {
+			plan := explainAs(t, pool, mode, s.query, s.args...)
+			cost[s.name] = max(cost[s.name], buffers(plan))
+			t.Logf("%s, %s, %s: %s", label, s.name, mode, summary(plan))
+			if limit <= 0 {
+				continue
+			}
+			if node, rows := widestRead(plan); rows > limit {
+				t.Errorf("%s: %s (%s) reads %d rows in %q:\n%s", label, s.name, mode, rows, node, plan)
+			}
+		}
+	}
+	return cost
+}
+
+// widestRead is the plan node over tasks, attempts or containers that
+// returned or filtered out the most rows, and that count.
+func widestRead(plan string) (string, int) {
+	var node, widest string
+	most := 0
+	for _, line := range strings.Split(plan, "\n") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "->"))
+		if strings.Contains(trimmed, "(actual") {
+			node = ""
+			for _, table := range []string{" on tasks", " on attempts", " on containers"} {
+				if strings.Contains(trimmed, table) {
+					node = trimmed
+				}
+			}
+			if node != "" {
+				rows := planNumber(trimmed, "rows=") * max(planNumber(trimmed, "loops="), 1)
+				if rows > most {
+					most, widest = rows, node
+				}
+			}
+			continue
+		}
+		if node != "" && strings.HasPrefix(trimmed, "Rows Removed by") {
+			_, n, _ := strings.Cut(trimmed, ": ")
+			if v, err := strconv.Atoi(n); err == nil && v > most {
+				most, widest = v, node
+			}
+		}
+	}
+	return widest, most
+}
+
+// planNumber reads the integer part of the number after key in line.
+func planNumber(line, key string) int {
+	_, rest, ok := strings.Cut(line, key)
+	if !ok {
+		return 0
+	}
+	end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' })
+	if end < 0 {
+		end = len(rest)
+	}
+	v, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// constantCost fails each scan whose buffers grew from small to large by
+// more than slack: a read that walks the grown rows exceeds it many times.
+func constantCost(t *testing.T, small, large map[string]int, slack int, grown string) {
+	t.Helper()
+	for name, before := range small {
+		if after := large[name]; after > before+slack {
+			t.Errorf("%s reads %d buffers after %s, %d before: its cost follows the grown rows", name, after, grown, before)
+		}
+	}
+}
+
+// Recurring planner, recovery and idle passes, and each host report, read
+// partial indexes of live rows, so their cost does not grow with retained
+// history.
 func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
 	pool := dbtest.New(t)
 	f := newRelease(t, pool, `{"autoscaler": {"max_containers": 5}}`)
@@ -90,34 +236,28 @@ func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
 	attemptOn(t, pool, f, busy, 0)
 	readyContainer(t, pool, f, host, time.Minute)
 
-	scans := []struct {
-		name  string
-		query string
-		args  []any
-	}{
+	scans := []scan{
 		{"planning releases", planningReleases, []any{uuid.Nil, planningBatch}},
+		{"serving releases", servingReleases, []any{int32(startFailureLimit), uuid.Nil, int32(planningBatch)}},
+		{"pod releases", podReleases, []any{int32(startFailureLimit), uuid.Nil, int32(planningBatch)}},
+		{"live work", hasLiveWork, nil},
 		{"idle containers", lockIdleContainers, []any{f.release, 0.0, 5}},
+		{"idle instances", drainIdleInstances, []any{int32(100)}},
+		{"unserved instances", drainUnservedInstances, nil},
+		{"unserved pending instances", stopUnservedPendingInstances, nil},
+		{"snapshot candidates", automaticSnapshotCandidates, nil},
+		{"stale snapshots", failStaleSnapshots, []any{SnapshotDeadline.Seconds()}},
+		{"stale filesystem images", failStaleFilesystemImages, []any{PublishDeadline.Seconds()}},
 		{"overdue attempts", overdueAttempts, []any{time.Time{}, uuid.Nil, recoveryBatch}},
 		{"stuck starts", stuckStartingContainers, []any{StartTimeout.Seconds(), time.Time{}, uuid.Nil, recoveryBatch}},
 		{"host containers", liveContainersOnHost, []any{host}},
+		{"ended attempts on host", endedAttemptsOnHost, []any{&host, cancelResendWindow.Seconds()}},
 	}
-	for _, history := range []int{0, 10_000} {
-		if history > 0 {
-			addHistory(t, pool, f, host, history)
-		}
-		exec(t, pool, "analyze")
-		for _, scan := range scans {
-			plan := explain(t, pool, scan.query, scan.args...)
-			t.Logf("%d finished tasks, %s: %s", history, scan.name, summary(plan))
-			if history == 0 {
-				// A single-page table is cheapest to read whole.
-				continue
-			}
-			for _, table := range []string{"tasks", "attempts", "containers"} {
-				if strings.Contains(plan, "Seq Scan on "+table) {
-					t.Errorf("%s scans every row of %s:\n%s", scan.name, table, plan)
-				}
-			}
-		}
-	}
+	addHistory(t, pool, f, host, 1_000)
+	exec(t, pool, "analyze")
+	small := costAt(t, pool, scans, "1,000 finished tasks", 0)
+	addHistory(t, pool, f, host, 20_000)
+	exec(t, pool, "analyze")
+	large := costAt(t, pool, scans, "21,000 finished tasks", 500)
+	constantCost(t, small, large, 20, "20,000 more finished tasks and 2,000 more stopped containers")
 }

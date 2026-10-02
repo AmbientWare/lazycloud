@@ -26,6 +26,9 @@ const (
 // instead of silently stopping its work.
 type heartbeats struct {
 	passTimeout time.Duration
+	// leading reports whether this replica runs timed passes. A standby
+	// runs passes only when woken, so its loops never stall.
+	leading func() bool
 
 	mu    sync.Mutex
 	loops map[string]*heartbeat
@@ -38,8 +41,8 @@ type heartbeat struct {
 	finished bool
 }
 
-func newHeartbeats() *heartbeats {
-	return &heartbeats{passTimeout: passTimeout, loops: map[string]*heartbeat{}}
+func newHeartbeats(leading func() bool) *heartbeats {
+	return &heartbeats{passTimeout: passTimeout, leading: leading, loops: map[string]*heartbeat{}}
 }
 
 type progressKey struct{}
@@ -68,6 +71,16 @@ func (h *heartbeats) beat(name string, finished bool) {
 	beat.finished = beat.finished || finished
 }
 
+// rebase restarts every loop's stall clock, for a replica that just became
+// leader: its loops waited for wakes until now and run at once.
+func (h *heartbeats) rebase(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, beat := range h.loops {
+		beat.since = now
+	}
+}
+
 // progressed records that the pass running under ctx advanced.
 func progressed(ctx context.Context) {
 	if beat, ok := ctx.Value(progressKey{}).(func()); ok {
@@ -78,10 +91,11 @@ func progressed(ctx context.Context) {
 // check returns the loops that have not finished a first pass and those
 // that stalled at now.
 func (h *heartbeats) check(now time.Time) (starting, stalled []string) {
+	leading := h.leading()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for name, beat := range h.loops {
-		if now.Sub(beat.since) > beat.limit {
+		if leading && now.Sub(beat.since) > beat.limit {
 			stalled = append(stalled, name)
 		} else if !beat.finished {
 			starting = append(starting, name)
