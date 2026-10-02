@@ -186,11 +186,12 @@ update users u
 set display_name = $1, avatar_url = $2,
     github_user_id = $3, github_login = $4,
     email = case
-        when $5::text is null then u.email
-        when exists (select 1 from users o where o.email = $5::text and o.id <> u.id) then u.email
+        when $5::text is null or o.id is not null then u.email
         else $5::text
     end,
     updated_at = now()
+from (select 1) one
+left join users o on o.email = $5::text and o.id <> $6
 where u.id = $6
 `
 
@@ -204,7 +205,8 @@ type UpdateGitHubProfileParams struct {
 }
 
 // The email follows GitHub's verified primary address unless another
-// account holds it.
+// account holds it. users.email is unique, so the left join adds at most
+// one row: the other holder, if any.
 func (q *Queries) UpdateGitHubProfile(ctx context.Context, arg UpdateGitHubProfileParams) error {
 	_, err := q.db.Exec(ctx, updateGitHubProfile,
 		arg.DisplayName,
