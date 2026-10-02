@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the managed Python runtime an agent bind-mounts read-only at
 # /opt/lazycloud/runtime with PYTHONPATH pointing there, one directory per
-# Python version. It holds the runner, the shared contracts and the SDK, because
-# user modules import lazycloud at top level to declare their apps.
+# Python version. It holds the runner and the SDK, because user modules import
+# lazycloud at top level to declare their apps.
 #
 # Usage: deploy/local/build-runtime.sh [out_dir] [python_versions...]
 set -euo pipefail
@@ -27,7 +27,7 @@ trap 'rm -rf "$work"' EXIT
 # lets every install below keep --only-binary for all packages.
 # setuptools leaves build/ in the package directory; it is removed so the
 # source tree stays as it was.
-for package in shared lazycloud runner; do
+for package in lazycloud runner; do
   "$uv" build --quiet --wheel --out-dir "$work/wheels" "$root/python/$package"
   rm -rf "$root/python/$package/build"
 done

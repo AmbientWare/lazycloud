@@ -42,11 +42,8 @@ if TYPE_CHECKING:
     from lazycloud.abstractions.secret import Secret
     from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
     from lazycloud.agent_harness import AgentHarness
-    from lazycloud.progress import (
-        PendingProgressCallback,
-        TaskPendingProgress,
-        TaskPendingReason,
-    )
+    from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
+    from lazycloud.progress import PendingProgressCallback
     from lazycloud.session.deployment import Deployment
     from lazycloud.session.task import FunctionCall, Task
     from lazycloud.terminal import output
@@ -206,15 +203,13 @@ def __getattr__(name: str):
             from lazycloud.agent_harness import AgentHarness
 
             return AgentHarness
-        case "PendingProgressCallback" | "TaskPendingProgress" | "TaskPendingReason":
-            from lazycloud.progress import (
-                PendingProgressCallback,
-                TaskPendingProgress,
-                TaskPendingReason,
-            )
+        case "PendingProgressCallback":
+            from lazycloud.progress import PendingProgressCallback
 
-            if name == "PendingProgressCallback":
-                return PendingProgressCallback
+            return PendingProgressCallback
+        case "TaskPendingProgress" | "TaskPendingReason":
+            from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
+
             if name == "TaskPendingProgress":
                 return TaskPendingProgress
             if name == "TaskPendingReason":

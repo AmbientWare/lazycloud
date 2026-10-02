@@ -8,15 +8,17 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from lazycloud._shared.timestamps import utc_now
-from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
 
 if TYPE_CHECKING:
+    from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
     from lazycloud.terminal import Terminal, TerminalStep
 
 # A task queued for less than this shows no pending card; most start sooner.
 PENDING_NOTICE_DELAY_SECONDS = 5
 
-PendingProgressCallback = Callable[[str, TaskPendingProgress | None], None]
+# Every lazycloud import, the runner's included, loads this module, so the API
+# models it names load only when something uses them.
+PendingProgressCallback = Callable[[str, "TaskPendingProgress | None"], None]
 _callback: ContextVar[PendingProgressCallback | None] = ContextVar("pending_progress", default=None)
 
 
@@ -75,8 +77,6 @@ __all__ = [
     "PENDING_NOTICE_DELAY_SECONDS",
     "PendingProgressCallback",
     "PendingProgressReporter",
-    "TaskPendingProgress",
-    "TaskPendingReason",
     "progress",
     "progress_observed",
 ]

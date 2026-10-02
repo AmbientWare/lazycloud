@@ -5,7 +5,7 @@ description = "In-container Python runner entrypoints."
 requires-python = ">=3.10"
 dependencies = [
     "cloudpickle>=3,<4",
-    "lazycloud-shared==0.1.0",
+    "lazycloud-client==0.1.0",
     "pydantic>=2.12,<3",
     "uvicorn==0.54.0",
     "wsproto==1.3.2",
