@@ -112,6 +112,8 @@ message HostMessage {
     // The provider will reclaim the host. Sent again after reconnects while
     // the notice stands.
     Interruption interruption = 70;
+    // The answer to PrepareReserve.
+    ReserveReady reserve_ready = 71;
   }
 }
 
@@ -133,6 +135,12 @@ message Hello {
   bool updatable = 70;
   // A release the host rolled back from; the server does not offer it again.
   string rejected_version = 71;
+  // Seconds the machine slept since it accepted sleep_attempt_id, measured
+  // in this boot; zero after a cold boot or while it has not slept.
+  double slept_seconds = 72;
+  // The last PrepareReserve attempt the host answered ready, kept across
+  // boots, so a resumed or rebooted reserve names the stop it came back from.
+  string sleep_attempt_id = 73;
 }
 
 enum ContainerPhase {
@@ -264,6 +272,7 @@ message ServerMessage {
     CancelAttempt cancel = 4;
     StorageGrant storage_grant = 40;
     UpdateAgent update = 70;
+    PrepareReserve prepare_reserve = 71;
     UpdateNetwork network = 90;
     SnapshotContainer snapshot = 91;
     PublishFilesystem publish_filesystem = 92;
@@ -333,6 +342,41 @@ message UpdateAgent {
   // Where the release archive for the host's architecture downloads from.
   string url = 2;
   string sha256 = 3;
+}
+
+// PrepareReserve asks a host the server is returning to the stopped reserve
+// to prove it can stop: no container, mounted volume or disk and no agent
+// update in flight, and for a GPU reserve its cards answering through the
+// driver. The host answers ReserveReady and remembers attempt_id across
+// boots. A later PrepareReserve supersedes an earlier one.
+message PrepareReserve {
+  // Names the server's decision to stop the host; a ReserveReady for another
+  // request is stale.
+  string request_id = 1;
+  string attempt_id = 2;
+  ReserveMode mode = 3;
+  // The GPUs the host must still find through the driver.
+  int32 gpus = 4;
+}
+
+enum ReserveMode {
+  RESERVE_MODE_UNSPECIFIED = 0;
+  // A plain stop; the host boots cold on resume.
+  RESERVE_MODE_STOP = 1;
+  // EC2 hibernation; memory is restored on resume.
+  RESERVE_MODE_HIBERNATE = 2;
+}
+
+// ReserveReady answers PrepareReserve.
+message ReserveReady {
+  string request_id = 1;
+  string attempt_id = 2;
+  string boot_id = 3;
+  string agent_version = 4;
+  // The GPUs the driver reported just now.
+  int32 gpus = 5;
+  // Why the host cannot stop; empty when it is ready.
+  string refused = 6;
 }
 
 message StartContainer {
