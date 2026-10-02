@@ -532,15 +532,25 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
     server = Server(("0.0.0.0", CALLBACK_PORT), Hook)  # noqa: S104
     threading.Thread(target=server.serve_forever, daemon=True).start()
     ended: dict[str, float] = {}
+    ends: list[float] = []
     lat: list[float] = []
     codes: dict[str, int] = {}
+
+    def arrivals() -> int:
+        with lock:
+            return sum(len(v) for v in arrived.values())
+
+    def settle(want: int, timeout: float) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline and arrivals() < want:
+            time.sleep(0.1)
 
     async def main() -> None:
         limits = httpx.Limits(max_connections=int(concurrency) + 10, max_keepalive_connections=int(concurrency) + 10)
         gate = asyncio.Semaphore(int(concurrency))
         async with httpx.AsyncClient(timeout=300, headers=HEADERS, limits=limits) as client:
 
-            async def one(i: int, record: bool) -> None:
+            async def one(i: int, timed: bool) -> None:
                 async with gate:
                     t = time.perf_counter()
                     try:
@@ -549,36 +559,44 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
                         request = r.headers.get("x-request-id", "")
                     except httpx.HTTPError as exc:
                         code, request = type(exc).__name__, ""
-                    if record:
+                    if timed:
                         lat.append(time.perf_counter() - t)
                         codes[code] = codes.get(code, 0) + 1
+                        ends.append(time.time())
                         if request:
-                            ended[request] = time.time()
+                            ended[request] = ends[-1]
 
+            # Warm up, and let the warm-up's callbacks land before timing.
             await asyncio.gather(*(one(i, False) for i in range(20)))
+            await asyncio.to_thread(settle, 20, 60)
+            with lock:
+                arrived.clear()
             start = time.perf_counter()
             await asyncio.gather(*(one(i, True) for i in range(int(n))))
-            nonlocal_wall.append(time.perf_counter() - start)
+            wall.append(time.perf_counter() - start)
 
-    nonlocal_wall: list[float] = []
+    wall: list[float] = []
     asyncio.run(main())
-    deadline = time.time() + float(wait)
-    while time.time() < deadline:
-        with lock:
-            if all(r in arrived for r in ended):
-                break
-        time.sleep(0.2)
+    settle(int(n), float(wait))
     server.shutdown()
     with lock:
-        delays = [arrived[r][0] - t for r, t in ended.items() if r in arrived]
-        missing = sum(1 for r in ended if r not in arrived)
-        duplicates = sum(len(v) - 1 for r, v in arrived.items() if r in ended)
-        stray = sum(len(v) for r, v in arrived.items() if r not in ended)
+        if ended:
+            delays = [arrived[r][0] - t for r, t in ended.items() if r in arrived]
+            missing = sum(1 for r in ended if r not in arrived)
+            duplicates = sum(len(v) - 1 for r, v in arrived.items() if r in ended)
+            matched = "request id"
+        else:
+            # Without a request id on the response, pair the n-th response to
+            # end with the n-th callback to arrive.
+            firsts = sorted(v[0] for v in arrived.values())
+            delays = [a - e for a, e in zip(firsts, sorted(ends), strict=False)]
+            missing = max(0, len(ends) - len(firsts))
+            duplicates = sum(len(v) - 1 for v in arrived.values())
+            matched = "arrival order"
     record("endpoint-callback", {
-        "requests": int(n), "concurrency": int(concurrency), "wall_s": round(nonlocal_wall[0], 2),
-        "latency": dist(lat), "codes": codes, "with_request_id": len(ended),
+        "requests": int(n), "concurrency": int(concurrency), "wall_s": round(wall[0], 2),
+        "latency": dist(lat), "codes": codes, "matched_by": matched,
         "callback_delay": dist(delays), "callbacks_missing": missing, "callbacks_duplicated": duplicates,
-        "callbacks_unmatched": stray,
     })
 
 
