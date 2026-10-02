@@ -162,9 +162,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 				err = c.terminate(ctx, scope, region, instance)
 			}
 		case phase == PhaseProvisioning && o.state == ec2types.InstanceStateNameRunning:
-			_, err = c.queries.SetHostPhase(ctx, SetHostPhaseParams{
-				ID: h.ID, FromPhase: string(PhaseProvisioning), Phase: string(PhaseBooting), Message: PhaseBooting.Message(),
-			})
+			_, err = changePhase(ctx, c.queries, h.ID, PhaseProvisioning, PhaseBooting)
 		case phase == PhaseReady && HostState(h.State) == HostLost && !updating && h.LastSeenAt != nil &&
 			time.Since(*h.LastSeenAt) > serviceLostAfter:
 			if err = c.hostGone(ctx, h.ID, FailureServiceLost, "The agent stopped reporting"); err == nil {
