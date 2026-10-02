@@ -35,9 +35,10 @@ resource "aws_s3_object" "values" {
     }
     server = {
       config = {
-        LAZYCLOUD_IMAGE_REGISTRY     = local.core.ecr_registry
-        LAZYCLOUD_IMAGE_REPOSITORY   = local.core.workload_image_repository
-        LAZYCLOUD_CLOUDFLARE_ZONE_ID = var.cloudflare_zone_id
+        LAZYCLOUD_IMAGE_REGISTRY               = local.core.ecr_registry
+        LAZYCLOUD_IMAGE_REPOSITORY             = local.core.workload_image_repository
+        LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN = aws_iam_role.registry_hosts.arn
+        LAZYCLOUD_CLOUDFLARE_ZONE_ID           = var.cloudflare_zone_id
       }
       hostService = { certificateArn = aws_acm_certificate_validation.hosts.certificate_arn }
     }

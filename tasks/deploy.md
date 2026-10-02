@@ -104,7 +104,7 @@ Server, beyond those:
 | `PUBLIC_URL`, `EDGE_URL` `https://<domain>`; `EDGE_TCP_URL` `tls://tcp.<domain>:1995`; `EDGE_TCP_CERT`/`_KEY` the certificate's secret; `AGENT_SERVER_ADDR` `hosts.<domain>:443`; `INSTALL_URL`; `CLIENT_RELEASE_VERSION` the release version | chart |
 | `AGENT_DIST_DIR` `/opt/lazycloud/agent-dist` | image |
 | `OBJECT_STORE_REGION`, `OBJECT_STORE_BUCKET`, `WORKSPACE_BUCKET_PROVIDER` aws, `_PREFIX`, `_ROLE_ARN` | values |
-| `IMAGE_REGISTRY` (the account's ECR), `IMAGE_REPOSITORY` `lazycloud/workload-images`, `CLOUDFLARE_ZONE_ID` | values |
+| `IMAGE_REGISTRY` (the account's ECR), `IMAGE_REPOSITORY` `lazycloud/workload-images`, `IMAGE_REGISTRY_HOST_ROLE_ARN` (the role host logins are scoped from), `CLOUDFLARE_ZONE_ID` | values |
 | `FLEET_NAME`, `FLEET_ACCOUNT_ID`, `FLEET_NODE_ROLE_ARN`, `FLEET_INSTANCE_PROFILE`, `FLEET_NETWORKS`, `AWS_PRINCIPAL_ARN` | values |
 | `FLEET_IMAGES`, `FLEET_MAX_HOSTS`, `FLEET_IDLE_TIMEOUT`, `FLEET_HEADROOM`, `LOG_FORMAT` | env file |
 | `OTLP_ENDPOINT`, `OTLP_INSECURE`, `TRACE_SAMPLE_RATIO` | chart, telemetry on |

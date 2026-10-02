@@ -66,8 +66,8 @@ data "aws_iam_policy_document" "control_plane" {
     resources = ["${local.arn_prefix}:iam::*:role/*"]
   }
 
-  # Builds push images, caches and snapshots, and hosts pull them, with the
-  # tokens the server mints; ECR creates each repository on first push.
+  # The server's own login pins base images and checks what builds pushed.
+  # Hosts never get it: their logins come from registry_hosts.
   statement {
     sid       = "RegistryLogin"
     actions   = ["ecr:GetAuthorizationToken"]
@@ -75,11 +75,8 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   statement {
-    sid = "WorkloadImages"
-    actions = [
-      "ecr:CreateRepository", "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
-      "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
-    ]
+    sid       = "ReadWorkloadImages"
+    actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
     resources = [local.workload_arn]
   }
 
@@ -173,6 +170,40 @@ data "aws_iam_policy_document" "control_plane" {
       values   = ["spot.amazonaws.com"]
     }
   }
+}
+
+# Hosts' registry logins (LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN). The
+# server assumes this role for each host command with a session policy that
+# names only that command's repositories: an image to pull, or a build's
+# image and its workspace's cache, or a workspace's snapshots to push. This
+# grant is the ceiling of those sessions. The control plane's
+# CustomerConnections statement covers the AssumeRole.
+resource "aws_iam_role" "registry_hosts" {
+  name = "${var.deployment}-registry-hosts"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.control_plane.arn }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "registry_hosts" {
+  name = "workload-images"
+  role = aws_iam_role.registry_hosts.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" },
+      {
+        # ECR creates each repository on its first push.
+        Effect = "Allow"
+        Action = [
+          "ecr:CreateRepository", "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
+          "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+        ]
+        Resource = local.workload_arn
+      },
+    ]
+  })
 }
 
 resource "aws_iam_role_policy" "control_plane" {

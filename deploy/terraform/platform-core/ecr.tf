@@ -24,9 +24,10 @@ resource "aws_ecr_lifecycle_policy" "release" {
   })
 }
 
-# Workload images: builds push images by digest, BuildKit caches by mutable
-# tag and snapshots push per workspace, under
-# <name>/workload-images/{images,cache,filesystems/<workspace>}. ECR creates
+# Workload images: each built image has a repository named by its digest,
+# each workspace one for its build cache (mutable tags) and one for its
+# filesystem snapshots, under <name>/workload-images/{images/<image
+# digest>,cache/<workspace>,filesystems/<workspace>}. ECR creates
 # each repository on its first push from this template. No expiry rule:
 # releases pin images by digest, untagged, and their retention is the
 # images owner's.

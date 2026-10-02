@@ -40,6 +40,7 @@ server:
   config:
     LAZYCLOUD_IMAGE_REGISTRY: 000000000000.dkr.ecr.us-east-1.amazonaws.com
     LAZYCLOUD_IMAGE_REPOSITORY: lazycloud/workload-images
+    LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN: arn:aws:iam::000000000000:role/example-registry-hosts
     LAZYCLOUD_CLOUDFLARE_ZONE_ID: "00000000000000000000000000000000"
   hostService:
     certificateArn: arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-4000-8000-000000000000
