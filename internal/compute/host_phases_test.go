@@ -11,6 +11,7 @@ func TestHostLifecycleAllowsTheReservePathAndNothingThatSkipsAProof(t *testing.T
 		{compute.PhaseReady, compute.PhasePreparing},
 		{compute.PhasePreparing, compute.PhaseStopping},
 		{compute.PhasePreparing, compute.PhaseReady},
+		{compute.PhasePreparing, compute.PhaseDraining},
 		{compute.PhaseStopping, compute.PhaseStopped},
 		{compute.PhaseStopping, compute.PhaseResuming},
 		{compute.PhaseStopped, compute.PhaseResuming},

@@ -96,7 +96,7 @@ func (sess *session) syncReserve(ctx context.Context) error {
 	}
 	switch step {
 	case compute.ReserveRejoin:
-		return status.Error(codes.Aborted, "the host resumed before it stopped; its next Hello settles the resume")
+		return status.Error(codes.Aborted, "the host is resuming; its next Hello settles the resume")
 	case compute.ReserveIdle, compute.ReserveWait:
 		sess.reserve = nil
 		return nil

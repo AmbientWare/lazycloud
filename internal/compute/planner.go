@@ -705,7 +705,7 @@ func (ps *fleetPass) note(msg string, attrs ...any) {
 func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 	for _, t := range [][2]Phase{
 		{PhasePreparing, PhaseFailed}, {PhaseStopped, PhaseResuming}, {PhaseReady, PhasePreparing}, {PhaseReady, PhaseDraining},
-		{PhasePreparing, PhaseReady}, {PhaseStopped, PhaseTerminating}, {PhaseRequested, PhaseDeleted},
+		{PhasePreparing, PhaseReady}, {PhasePreparing, PhaseDraining}, {PhaseStopped, PhaseTerminating}, {PhaseRequested, PhaseDeleted},
 	} {
 		if err := transition(t[0], t[1]); err != nil {
 			return err

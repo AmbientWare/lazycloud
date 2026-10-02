@@ -71,9 +71,9 @@ const (
 	// ReserveWait: the host prepares while an agent update is offered or
 	// in flight; asking now would only be refused.
 	ReserveWait ReserveStep = "wait"
-	// ReserveRejoin: the planner resumed a host that never stopped, so no
-	// new Hello will come; the session ends and the agent's next Hello
-	// settles the resume.
+	// ReserveRejoin: the host is resuming while a session from before its
+	// stop is still open. No Hello comes on that session, so it ends and
+	// the agent's next Hello settles the resume.
 	ReserveRejoin ReserveStep = "rejoin"
 )
 
