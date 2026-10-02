@@ -85,6 +85,10 @@ class DeploymentOperationError(SdkError):
     pass
 
 
+class ImageBuildError(DeploymentOperationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class AppFunctions:
     """The functions of one app that a deployment makes current."""
@@ -468,7 +472,7 @@ def _prepare_images(
                 build = f" build {result.build_id}" if result.build_id else ""
                 image_name = f" {result.image_id}" if result.image_id else ""
                 msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
-                raise DeploymentOperationError(msg)
+                raise ImageBuildError(msg)
             by_definition[key] = result
         results[id(function)] = result
     return results
