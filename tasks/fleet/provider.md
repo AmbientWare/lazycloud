@@ -101,6 +101,11 @@ table as your first two commits; the agent-resume packet branches from them.
 
 ## Progress
 
+Branch `fleet-provider` from `fleet-capacity-plan` at
+`08acf1dbcf9d4483d075f62d40b9739fcdc5109b`.
+
+- [x] Reconcile moved to reconcile.go unchanged.
+
 ## Intentional differences
 
 - One actuator per host phase replaces pools, slots and their JSON state
