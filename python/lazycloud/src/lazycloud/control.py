@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 from urllib.parse import urlencode
 
-from typing_extensions import Self
-
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.storage import StorageClient
 from lazycloud.clients.workloads import WorkloadsClient
@@ -33,26 +31,6 @@ class ResourceControlBinding(Generic[ClientT]):
     endpoint: str | None
     token: str | None
     timeout_seconds: float
-
-    def _bind_control(
-        self,
-        client: ClientT | None = None,
-        *,
-        workspace: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-        timeout_seconds: float | None = None,
-    ) -> Self:
-        self.client = client
-        if workspace is not None:
-            self.workspace = workspace
-        if endpoint is not None:
-            self.endpoint = endpoint
-        if token is not None:
-            self.token = token
-        if timeout_seconds is not None:
-            self.timeout_seconds = timeout_seconds
-        return self
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,7 +20,6 @@ from shared.api import (
 )
 from shared.app_identity import NAME
 from shared.task_context import current_task_id
-from typing_extensions import Self
 
 from lazycloud.clients.api import ApiConnectionError, ApiError
 from lazycloud.clients.storage import StorageClient, upload_file_parts
@@ -107,26 +106,6 @@ class Artifact:
             content_type=content_type,
             task_id=task_id,
         )
-
-    def _bind_control(
-        self,
-        client: StorageClient | None = None,
-        *,
-        workspace: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-        timeout_seconds: float | None = None,
-    ) -> Self:
-        self._client = client
-        if workspace is not None:
-            self.workspace = workspace
-        if endpoint is not None:
-            self.endpoint = endpoint
-        if token is not None:
-            self.token = token
-        if timeout_seconds is not None:
-            self.timeout_seconds = timeout_seconds
-        return self
 
     @classmethod
     def from_file(
