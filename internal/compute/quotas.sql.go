@@ -10,49 +10,6 @@ import (
 	"time"
 )
 
-const quotaUsage = `-- name: QuotaUsage :many
-select region, instance_type, market::text, count(*)::int as hosts
-from hosts
-where provider = 'aws' and kind = 'platform' and market is not null
-  and phase not in ('deleted', 'failed', 'stopped')
-group by region, instance_type, market
-order by region, instance_type, market
-`
-
-type QuotaUsageRow struct {
-	Region       string
-	InstanceType string
-	Market       string
-	Hosts        int32
-}
-
-// Platform instances that hold vCPU quota: every launched or launching
-// host that is not stopped, by region, type and market.
-func (q *Queries) QuotaUsage(ctx context.Context) ([]QuotaUsageRow, error) {
-	rows, err := q.db.Query(ctx, quotaUsage)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []QuotaUsageRow
-	for rows.Next() {
-		var i QuotaUsageRow
-		if err := rows.Scan(
-			&i.Region,
-			&i.InstanceType,
-			&i.Market,
-			&i.Hosts,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const quotas = `-- name: Quotas :many
 select region, quota_class, market, vcpus, observed_at, coalesce(refused_until > now(), false)::bool as refused
 from fleet_quotas

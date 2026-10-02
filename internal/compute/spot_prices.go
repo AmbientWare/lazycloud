@@ -81,7 +81,12 @@ func (c *Compute) RefreshSpotPrices(ctx context.Context, logger *slog.Logger) (i
 
 // SpotPrices are the Spot prices fresh enough to buy on.
 func (c *Compute) SpotPrices(ctx context.Context) ([]SpotQuote, error) {
-	rows, err := c.queries.FreshSpotPrices(ctx, spotPriceFresh.Seconds())
+	return readSpotPrices(ctx, c.queries)
+}
+
+// readSpotPrices are the Spot prices fresh enough to buy on, read through q.
+func readSpotPrices(ctx context.Context, q *Queries) ([]SpotQuote, error) {
+	rows, err := q.FreshSpotPrices(ctx, spotPriceFresh.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("read spot prices: %w", err)
 	}

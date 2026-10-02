@@ -7,12 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
 
-func TestQuotaRoomIsTheQuotaLessRunningPlatformVCPUsAndARefusalCoolsTheClass(t *testing.T) {
+// Each region's quotas are stored as read, a failed region stores none,
+// and a quota refusal holds the class at no room. The planner subtracts
+// what the fleet runs (TestQuotaRoomsAndSpotPricesSteerPurchases).
+func TestQuotaReadsAreStoredAndARefusalCoolsTheClass(t *testing.T) {
 	o, emulator, ec2 := reserveFleet(t)
 	quotas := map[string]float64{
 		"L-1216C47A": 64, "L-34B43A08": 32, "L-DB2E81BA": 8, "L-3819A6DF": 0, "L-417A185B": 0, "L-7212CCBC": 0,
@@ -31,13 +32,6 @@ func TestQuotaRoomIsTheQuotaLessRunningPlatformVCPUsAndARefusalCoolsTheClass(t *
 	if stored != 6 || err == nil || !strings.Contains(err.Error(), "us-west-1") {
 		t.Fatalf("refresh stored %d (%v), want six us-east-2 quotas and the us-west-1 failure", stored, err)
 	}
-	for _, instance := range []string{"i-0000000000000f001", "i-0000000000000f002"} {
-		host := cloudHost(t, o, compute.MarketSpot, instance)
-		run(t, o.pool, "update hosts set instance_type = 'm7i.large' where id = $1", uuid.UUID(host))
-	}
-	// A stopped reserve holds no running quota.
-	reserve(t, o, compute.PhaseStopped, compute.MarketSpot, compute.ReserveStop, "i-0000000000000f003")
-
 	// A G Spot launch refused for quota cools every G Spot type there.
 	ec2.refuse = func(call awsCall) (awsReply, bool) {
 		return ec2Error(http.StatusBadRequest, "VcpuLimitExceeded", "You have requested more vCPU capacity than your current vCPU limit"),
@@ -49,25 +43,44 @@ values ('g', 'offline', 'platform', 'aws', 'requested', 3500, 14::bigint << 30, 
 		t.Fatalf("launched %d past the quota", n)
 	}
 
-	rooms, err := o.compute.QuotaRooms(t.Context())
+	type quota struct {
+		vcpus   *int32
+		refused bool
+	}
+	got := map[string]quota{}
+	rows, err := o.pool.Query(t.Context(),
+		"select region || '/' || quota_class || '/' || market, vcpus, coalesce(refused_until > now(), false) from fleet_quotas")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]compute.QuotaRoom{}
-	for _, r := range rooms {
-		got[r.Region+"/"+string(r.Class)+"/"+string(r.Market)] = r
+	for rows.Next() {
+		var key string
+		var q quota
+		if err := rows.Scan(&key, &q.vcpus, &q.refused); err != nil {
+			t.Fatal(err)
+		}
+		got[key] = q
 	}
-	if r := got["us-east-2/standard/spot"]; !r.Known || r.VCPUs != 28 {
-		t.Errorf("standard spot room %+v, want 32 less two running m7i.large", r)
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
-	if r := got["us-east-2/standard/on_demand"]; !r.Known || r.VCPUs != 64 {
-		t.Errorf("standard on-demand room %+v, want the whole 64", r)
+	vcpus := func(q quota) int32 {
+		if q.vcpus == nil {
+			return -1
+		}
+		return *q.vcpus
 	}
-	if r := got["us-east-2/g/spot"]; !r.Known || !r.Refused || r.VCPUs != 0 {
-		t.Errorf("G spot room %+v, want cooled by the refusal", r)
+	if q := got["us-east-2/standard/spot"]; vcpus(q) != 32 || q.refused {
+		t.Errorf("standard spot quota %d (refused %t), want 32", vcpus(q), q.refused)
 	}
-	if r := got["us-east-2/g/on_demand"]; !r.Known || r.Refused || r.VCPUs != 8 {
-		t.Errorf("G on-demand room %+v, want 8 and not cooled", r)
+	if q := got["us-east-2/standard/on_demand"]; vcpus(q) != 64 {
+		t.Errorf("standard on-demand quota %d, want 64", vcpus(q))
+	}
+	if q := got["us-east-2/g/spot"]; !q.refused {
+		t.Errorf("G spot quota %d not cooled by the refusal", vcpus(q))
+	}
+	if q := got["us-east-2/g/on_demand"]; vcpus(q) != 8 || q.refused {
+		t.Errorf("G on-demand quota %d (refused %t), want 8 and not cooled", vcpus(q), q.refused)
 	}
 	if _, read := got["us-west-1/standard/spot"]; read {
 		t.Errorf("us-west-1 quotas %v stored after a failed read", got)

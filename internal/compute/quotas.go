@@ -63,8 +63,8 @@ func QuotaClassOf(instanceType string) (QuotaClass, bool) {
 	return "", false
 }
 
-// QuotaRoom is the vCPU quota the platform has left in one region, class
-// and market.
+// QuotaRoom is the platform's vCPU quota in one region, class and market
+// as the last read left it. The planner subtracts what the fleet runs.
 type QuotaRoom struct {
 	Region string
 	Class  QuotaClass
@@ -72,8 +72,7 @@ type QuotaRoom struct {
 	// Known is false when the quota was never read or the read is stale;
 	// VCPUs then bounds nothing.
 	Known bool
-	// VCPUs is the quota less the vCPUs of platform instances that hold it,
-	// never below zero; zero while a quota refusal cools the class.
+	// VCPUs is the quota; zero while a quota refusal cools the class.
 	VCPUs int64
 	// Refused is a quota refusal cooling the class.
 	Refused bool
@@ -127,37 +126,23 @@ func (c *Compute) RefreshQuotas(ctx context.Context, logger *slog.Logger) (int, 
 	return stored, failed
 }
 
-// QuotaRooms are the platform's quota room per region, class and market,
-// from the last quota read less the platform instances that hold quota.
-func (c *Compute) QuotaRooms(ctx context.Context) ([]QuotaRoom, error) {
-	quotas, err := c.queries.Quotas(ctx)
+// quotaRooms are the platform's vCPU quotas per region, class and market,
+// read through q.
+func quotaRooms(ctx context.Context, q *Queries, now time.Time) ([]QuotaRoom, error) {
+	quotas, err := q.Quotas(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read quotas: %w", err)
 	}
-	usage, err := c.queries.QuotaUsage(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("read quota usage: %w", err)
-	}
-	used := map[[3]string]int64{}
-	for _, u := range usage {
-		class, ok := QuotaClassOf(u.InstanceType)
-		vcpus, known := typeVCPUs(u.InstanceType)
-		if !ok || !known {
-			continue
-		}
-		used[[3]string{u.Region, string(class), u.Market}] += vcpus * int64(u.Hosts)
-	}
 	out := make([]QuotaRoom, len(quotas))
-	for n, q := range quotas {
-		r := QuotaRoom{Region: q.Region, Class: QuotaClass(q.QuotaClass), Market: Market(q.Market), Refused: q.Refused}
-		r.Known = q.Vcpus != nil && q.ObservedAt != nil && time.Since(*q.ObservedAt) < quotaFresh
-		if r.Known {
-			r.VCPUs = max(0, int64(*q.Vcpus)-used[[3]string{q.Region, q.QuotaClass, q.Market}])
+	for n, r := range quotas {
+		room := QuotaRoom{Region: r.Region, Class: QuotaClass(r.QuotaClass), Market: Market(r.Market), Refused: r.Refused}
+		if room.Known = r.Vcpus != nil && r.ObservedAt != nil && now.Sub(*r.ObservedAt) < quotaFresh; room.Known {
+			room.VCPUs = int64(*r.Vcpus)
 		}
-		if r.Refused {
-			r.Known, r.VCPUs = true, 0
+		if room.Refused {
+			room.Known, room.VCPUs = true, 0
 		}
-		out[n] = r
+		out[n] = room
 	}
 	return out, nil
 }
@@ -175,10 +160,4 @@ func (c *Compute) refuseQuota(ctx context.Context, q *Queries, region, instanceT
 		return fmt.Errorf("refuse quota: %w", err)
 	}
 	return nil
-}
-
-// typeVCPUs is the vCPU count of a catalog type.
-func typeVCPUs(instanceType string) (int64, bool) {
-	t, ok := CatalogTypeNamed(instanceType)
-	return t.VCPUs(), ok
 }

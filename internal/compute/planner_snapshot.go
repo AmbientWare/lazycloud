@@ -14,8 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// fleetRead is what one planning pass reads: everything in its transaction
-// but the Spot prices and quota rooms, which their refresh loops write.
+// fleetRead is what one planning pass reads, all in its transaction.
 type fleetRead struct {
 	now time.Time
 	// until ends the scheduled forecast: a provision, or the slowest
@@ -37,7 +36,7 @@ type fleetRead struct {
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
 // each bounded by live rows, the pending batch or a recent window.
-func (c *Compute) readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetRead, error) {
+func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetRead, error) {
 	r := fleetRead{now: now, markets: map[string]FleetMarketsRow{}}
 	var err error
 	if r.hosts, err = q.PlannerHosts(ctx); err != nil {
@@ -95,10 +94,10 @@ func (c *Compute) readFleet(ctx context.Context, q *Queries, p Policy, now time.
 			return r, fmt.Errorf("read connections: %w", err)
 		}
 	}
-	if r.spot, err = c.SpotPrices(ctx); err != nil {
+	if r.spot, err = readSpotPrices(ctx, q); err != nil {
 		return r, err
 	}
-	if r.quotas, err = c.QuotaRooms(ctx); err != nil {
+	if r.quotas, err = quotaRooms(ctx, q, now); err != nil {
 		return r, err
 	}
 	return r, nil
@@ -419,18 +418,14 @@ func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 	return out
 }
 
-// vcpuQuotas are the platform's known vCPU quotas as PlanFleet takes them:
-// what each quota room leaves plus what the snapshot's hosts already count
-// against it, which PlanFleet subtracts again.
-func vcpuQuotas(rooms []QuotaRoom, hosts []FleetHost, catalog []CatalogType) []VCPUQuota {
-	used := QuotaUse(hosts, catalog)
+// vcpuQuotas are the platform's known vCPU quotas as PlanFleet takes them;
+// it subtracts what the snapshot's hosts run.
+func vcpuQuotas(rooms []QuotaRoom) []VCPUQuota {
 	var out []VCPUQuota
 	for _, r := range rooms {
-		if !r.Known {
-			continue
+		if r.Known {
+			out = append(out, VCPUQuota{Key: QuotaKey{Region: r.Region, Class: r.Class, Market: r.Market}, VCPUs: r.VCPUs})
 		}
-		key := QuotaKey{Region: r.Region, Class: r.Class, Market: r.Market}
-		out = append(out, VCPUQuota{Key: key, VCPUs: r.VCPUs + used[key]})
 	}
 	return out
 }

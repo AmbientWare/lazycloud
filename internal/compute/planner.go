@@ -85,7 +85,7 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 			return nil
 		}
 		p := c.policy()
-		read, err := c.readFleet(ctx, q, p, lock.Now)
+		read, err := readFleet(ctx, q, p, lock.Now)
 		if err != nil {
 			return err
 		}
@@ -270,7 +270,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		}
 	}
 	in := ps.offerInputs(ps.c.fleet.Networks, ownerPlatform, hosts)
-	in.Rates, in.Quotas, in.PlainStop = ps.rates, vcpuQuotas(ps.r.quotas, hosts, ps.catalog), ps.plain
+	in.Rates, in.Quotas, in.PlainStop = ps.rates, vcpuQuotas(ps.r.quotas), ps.plain
 	forecast, locations := forecasts(ps.p, ps.r, hosts, groups)
 	ps.consolidations()
 	held, reserves := 0, 0

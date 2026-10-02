@@ -17,13 +17,3 @@ on conflict (region, quota_class, market) do update set refused_until = excluded
 select region, quota_class, market, vcpus, observed_at, coalesce(refused_until > now(), false)::bool as refused
 from fleet_quotas
 order by region, quota_class, market;
-
--- name: QuotaUsage :many
--- Platform instances that hold vCPU quota: every launched or launching
--- host that is not stopped, by region, type and market.
-select region, instance_type, market::text, count(*)::int as hosts
-from hosts
-where provider = 'aws' and kind = 'platform' and market is not null
-  and phase not in ('deleted', 'failed', 'stopped')
-group by region, instance_type, market
-order by region, instance_type, market;
