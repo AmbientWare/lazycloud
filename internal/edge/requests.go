@@ -27,6 +27,9 @@ const (
 	// requestQueue bounds finished requests waiting to be written; past it
 	// records are dropped rather than slow requests.
 	requestQueue = 8192
+	// maxPendingCallbacks bounds the callbacks of one release that wait at
+	// once; the edge records later ones as failed with the reason.
+	maxPendingCallbacks = 1000
 	// requestBatch and requestFlush bound one write.
 	requestBatch = 500
 	requestFlush = time.Second
@@ -262,8 +265,12 @@ func (e *Edge) insertRequests(ctx context.Context, batch []requestRecord) error 
 		if err := q.InsertRequests(ctx, p); err != nil {
 			return fmt.Errorf("insert request records: %w", err)
 		}
-		if err := q.InsertRequestCallbacks(ctx, p.Ids); err != nil {
+		dropped, err := q.InsertRequestCallbacks(ctx, InsertRequestCallbacksParams{Ids: p.Ids, MaxPending: maxPendingCallbacks})
+		if err != nil {
 			return fmt.Errorf("insert request callbacks: %w", err)
+		}
+		if dropped > 0 {
+			e.logger.WarnContext(ctx, "request callbacks dropped: their release has the most waiting", "callbacks", dropped, "max_pending", maxPendingCallbacks)
 		}
 		for _, egress := range egressOf(batch) {
 			if err := billing.RecordEgress(ctx, tx, egress); err != nil {

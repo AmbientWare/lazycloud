@@ -40,7 +40,6 @@ const (
 	// callbackTimeout bounds one delivery; the lease outlasts it.
 	callbackTimeout = 5 * time.Second
 	leaseSeconds    = 30
-	claimBatch      = 64
 	// deliveryConcurrency bounds callbacks in flight per scheduler.
 	deliveryConcurrency = 16
 	maxResponseBytes    = 64 << 10
@@ -150,42 +149,78 @@ func isPublic(addr netip.Addr) bool {
 	return true
 }
 
-// Deliver sends due callbacks until none is due, with at most
-// deliveryConcurrency in flight, and returns how many it sent.
+// Deliver sends due callbacks until none is due and returns how many it
+// sent. At most deliveryConcurrency are in flight: each claim takes as many
+// as there are free slots, so a slow target holds only its own slot while
+// the others keep claiming. It returns once every delivery it started ended.
 func (c *Callbacks) Deliver(ctx context.Context) (int, error) {
+	slots := make(chan struct{}, deliveryConcurrency)
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	total := 0
 	for {
-		claimed, err := c.queries.ClaimDueCallbacks(ctx, ClaimDueCallbacksParams{LeaseSeconds: leaseSeconds, BatchSize: claimBatch})
-		if err != nil {
-			return total, fmt.Errorf("claim callbacks: %w", err)
-		}
-		if len(claimed) == 0 {
+		// Claim nothing that could not finish before the pass ends; a
+		// delivery cut short is sent again once its lease lapses.
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 2*callbackTimeout {
 			return total, nil
 		}
-		ids := make([]int64, len(claimed))
-		lease := make(map[int64]int32, len(claimed))
-		for n, row := range claimed {
-			ids[n], lease[row.ID] = row.ID, row.Deliveries
+		// Wait for one free slot, then take every other free one.
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return total, nil
 		}
-		rows, err := c.queries.CallbackDeliveries(ctx, ids)
-		if err != nil {
-			return total, fmt.Errorf("read callbacks: %w", err)
+		free := 1
+	fill:
+		for free < deliveryConcurrency {
+			select {
+			case slots <- struct{}{}:
+				free++
+			default:
+				break fill
+			}
 		}
-		var wg sync.WaitGroup
-		limit := make(chan struct{}, deliveryConcurrency)
+		release := func(n int) {
+			for range n {
+				<-slots
+			}
+		}
+		rows, lease, err := c.claim(ctx, free)
+		if err != nil || len(rows) == 0 {
+			release(free)
+			return total, err
+		}
+		release(free - len(rows))
 		for _, row := range rows {
-			limit <- struct{}{}
 			wg.Go(func() {
-				defer func() { <-limit }()
+				defer release(1)
 				c.deliverOne(ctx, row, lease[row.ID])
 			})
 		}
-		wg.Wait()
 		total += len(rows)
-		if len(claimed) < claimBatch {
-			return total, nil
-		}
 	}
+}
+
+// claim leases up to n due callbacks and reads them, with the deliveries
+// count each lease fences.
+func (c *Callbacks) claim(ctx context.Context, n int) ([]CallbackDeliveriesRow, map[int64]int32, error) {
+	claimed, err := c.queries.ClaimDueCallbacks(ctx, ClaimDueCallbacksParams{LeaseSeconds: leaseSeconds, BatchSize: int32(n)}) //nolint:gosec // At most deliveryConcurrency.
+	if err != nil {
+		return nil, nil, fmt.Errorf("claim callbacks: %w", err)
+	}
+	if len(claimed) == 0 {
+		return nil, nil, nil
+	}
+	ids := make([]int64, len(claimed))
+	lease := make(map[int64]int32, len(claimed))
+	for i, row := range claimed {
+		ids[i], lease[row.ID] = row.ID, row.Deliveries
+	}
+	rows, err := c.queries.CallbackDeliveries(ctx, ids)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read callbacks: %w", err)
+	}
+	return rows, lease, nil
 }
 
 // Purge deletes callbacks that finished more than a week ago.

@@ -11,18 +11,39 @@ from generate_subscripts(@ids::uuid[], 1) as i
 join releases r on r.id = (@release_ids::uuid[])[i]
 on conflict (id) do nothing;
 
--- name: InsertRequestCallbacks :exec
+-- name: InsertRequestCallbacks :one
 -- A callback per written request whose release names a callback_url: a
--- client that left (499) cancelled it, a 5xx failed it. A batch written
--- again adds none.
-insert into task_callbacks (request_id, workspace_id, url, event, attempt, max_attempts)
-select h.id, h.workspace_id, r.spec ->> 'callback_url',
-       case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end,
-       1, 1
-from http_requests h
-join releases r on r.id = h.release_id
-where h.id = any(@ids::uuid[]) and r.spec ->> 'callback_url' is not null
-on conflict (request_id) do nothing;
+-- client that left (499) cancelled it, a 5xx failed it. While max_pending of
+-- a release's callbacks wait, the rest are recorded as failed with the
+-- reason instead of queued, so a flood of requests cannot fill the queue
+-- every workspace's callbacks share. Concurrent edges can each fill the cap
+-- once. A batch written again adds none. Returns the dropped count.
+with batch as (
+    select h.id, h.workspace_id, h.release_id, r.spec ->> 'callback_url' as url,
+           case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end as event,
+           row_number() over (partition by h.release_id order by h.id) as n
+    from http_requests h
+    join releases r on r.id = h.release_id
+    where h.id = any(@ids::uuid[]) and r.spec ->> 'callback_url' is not null
+), waiting as (
+    select b.release_id, (
+        select count(*) from task_callbacks p where p.release_id = b.release_id and p.state = 'pending'
+    ) as pending
+    from (select distinct release_id from batch) b
+), inserted as (
+    insert into task_callbacks (request_id, release_id, workspace_id, url, event, attempt, max_attempts, state,
+                                finished_at, last_error)
+    select b.id, b.release_id, b.workspace_id, b.url, b.event, 1, 1,
+           case when w.pending + b.n <= @max_pending::bigint then 'pending' else 'failed' end,
+           case when w.pending + b.n <= @max_pending::bigint then null else now() end,
+           case when w.pending + b.n <= @max_pending::bigint then null
+                else 'dropped: ' || @max_pending::bigint || ' callbacks of this release were already waiting' end
+    from batch b
+    join waiting w on w.release_id = b.release_id
+    on conflict (request_id) do nothing
+    returning state
+)
+select count(*) filter (where state = 'failed')::int as dropped from inserted;
 
 -- name: PruneRequests :execrows
 -- The oldest requests past the retention, a bounded batch at a time.

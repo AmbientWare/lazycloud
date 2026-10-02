@@ -497,6 +497,47 @@ func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
 	}
 }
 
+// Past maxPendingCallbacks waiting callbacks of one release, the edge
+// records further request callbacks as failed with the reason instead of
+// queueing them, so one endpoint's flood cannot fill the shared queue.
+func TestAReleasesCallbacksPastTheCapAreDroppedWithTheReason(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	if _, err := pool.Exec(ctx, `update releases set spec = '{"callback_url": "https://hooks.example.com/r"}' where id = $1`, rel); err != nil {
+		t.Fatal(err)
+	}
+	var app uuid.UUID
+	if err := pool.QueryRow(ctx, `select app_id from workloads where id = $1`, wl).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	records := func(n int) []requestRecord {
+		out := make([]requestRecord, n)
+		for i := range out {
+			out[i] = requestRecord{id: uuid.New(), workspace: ws, app: app, workload: wl, release: rel, method: "POST", path: "/", status: 200, started: time.Now()}
+		}
+		return out
+	}
+	if err := e.insertRequests(ctx, records(maxPendingCallbacks-2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.insertRequests(ctx, records(5)); err != nil {
+		t.Fatal(err)
+	}
+	var pending, dropped int
+	var reason string
+	if err := pool.QueryRow(ctx, `
+select count(*) filter (where state = 'pending'), count(*) filter (where state = 'failed'),
+       coalesce(max(last_error) filter (where state = 'failed'), '')
+from task_callbacks where release_id = $1`, rel).Scan(&pending, &dropped, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if pending != maxPendingCallbacks || dropped != 3 || !strings.Contains(reason, "were already waiting") {
+		t.Fatalf("%d pending and %d dropped (%q); want %d and 3 with the reason", pending, dropped, reason, maxPendingCallbacks)
+	}
+}
+
 // Registering a custom domain needs a plan that includes them; the provider
 // is never asked otherwise.
 func TestDomainRegistrationFollowsThePlan(t *testing.T) {

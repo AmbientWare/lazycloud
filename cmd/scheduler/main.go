@@ -292,16 +292,19 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		lastPurge := time.Now()
 		return p.loop(ctx, cadence{every: tick, quiet: true, due: deliverer.NextDue}, nil, nil, every("callbacks", tick, func(ctx context.Context) bool {
 			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}
-			if time.Since(lastPurge) > purgeInterval {
-				lastPurge = time.Now()
-				if _, err := deliverer.Purge(ctx); err != nil {
-					logger.ErrorContext(ctx, "callback purge", "error", err)
-				}
+			return false
+		}))
+	})
+	// Purging finished callbacks runs apart, so a long delivery pass never
+	// holds it back, and on the leader's timer like other upkeep.
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: purgeInterval}, nil, nil, every("callback_purge", purgeInterval, func(ctx context.Context) bool {
+			if _, err := deliverer.Purge(ctx); err != nil {
+				logger.ErrorContext(ctx, "callback purge", "error", err)
 			}
 			return false
 		}))

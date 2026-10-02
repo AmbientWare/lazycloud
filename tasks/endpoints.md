@@ -112,7 +112,13 @@ SaaS, and the edge routes only verified ones.
   `cancelled`, any other status `succeeded`
   (`TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce`). The
   reference posted when the request's task finished; this posts within a
-  second of the request ending, when its record is written.
+  second of the request ending, when its record is written. At most 1,000
+  callbacks of one release wait at once; the edge records later ones as
+  failed with the reason (`TestAReleasesCallbacksPastTheCapAreDroppedWithTheReason`).
+  Deliveries claim each workspace's oldest due callback in turn and keep
+  16 in flight as slots free, so one workspace's flood does not delay
+  another's (`TestAFloodFromOneWorkspaceDoesNotDelayAnother`); purging runs
+  on its own scheduler loop.
 - The reference SDK's `/api/v1/functions/invoke/stream` NDJSON call was its
   internal transport for `.remote()`, not a public HTTP route: no doc or
   other consumer used it. Task submit plus the task log stream replace it,
