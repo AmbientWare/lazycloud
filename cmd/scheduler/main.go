@@ -362,6 +362,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			if _, err := comp.RefreshQuotas(ctx, logger); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, "ec2 quota refresh incomplete", "error", err)
 			}
+			if _, err := comp.RefreshZoneOfferings(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "zone offering refresh incomplete", "error", err)
+			}
 			return false
 		}))
 	})

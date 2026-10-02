@@ -240,7 +240,7 @@ func (ps *fleetPass) offerInputs(networks map[string]Network, owner string, host
 	}
 	return OfferInputs{
 		Now: ps.r.now, Catalog: ps.catalog, Networks: networks, Spot: ps.r.spot, Cooldowns: offerCooldowns(ps.r.cooldowns, owner),
-		ReportedMemory: ps.reported, ZoneHosts: zones,
+		ReportedMemory: ps.reported, ZoneHosts: zones, ZoneTypes: ps.r.zoneTypes,
 	}
 }
 

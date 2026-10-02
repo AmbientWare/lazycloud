@@ -75,6 +75,10 @@ type OfferInputs struct {
 	ReportedMemory map[string]int64
 	// ZoneHosts counts live hosts per availability zone id.
 	ZoneHosts map[string]int
+	// ZoneTypes are the types EC2 offers in each zone, by region and zone
+	// id. A zone of a region it holds offers only what it lists; a region
+	// it lacks limits nothing.
+	ZoneTypes map[string]map[string][]string
 	// Quotas are the EC2 vCPU quotas and QuotaUsed what live hosts count
 	// against them.
 	Quotas    []VCPUQuota
@@ -246,6 +250,9 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 			}
 			for _, t := range in.Catalog {
 				onDemand, sold := t.OnDemandMicros(region)
+				if zones, known := in.ZoneTypes[region]; known && !slices.Contains(zones[subnet.ZoneID], t.Name) {
+					continue
+				}
 				if !sold || (gpus > 0) != (t.GPUCount > 0) || t.GPUCount < gpus || (gpus > 0 && !GPUAccepted(need.GPUs, t.GPU)) {
 					continue
 				}

@@ -90,6 +90,7 @@ data "aws_iam_policy_document" "control_plane" {
     sid = "DescribeFleet"
     actions = [
       "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSpotInstanceRequests", "ec2:DescribeSpotPriceHistory",
+      "ec2:DescribeInstanceTypeOfferings",
     ]
     resources = ["*"]
   }

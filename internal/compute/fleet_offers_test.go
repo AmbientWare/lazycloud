@@ -251,3 +251,20 @@ func TestAConnectionPaysItsOwnHostsAndAColdBootStopsReservesPlainly(t *testing.T
 		t.Fatalf("reserve offers %v, want one that stops plainly after a cold boot", offerKeys(offers))
 	}
 }
+
+func TestOffersSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
+	in := offerInputs(t)
+	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "g4dn.xlarge")}
+	in.Networks = map[string]Network{
+		"us-east-1": {Subnets: []Subnet{{ID: "a", Zone: "us-east-1e", ZoneID: "use1-az3"}, {ID: "b", Zone: "us-east-1a", ZoneID: "use1-az6"}}},
+		"us-east-2": oneZone("us-east-2a", "use2-az1"),
+	}
+	// us-east-1 was read and use1-az3 offers neither type; us-east-2 was
+	// not read, so nothing limits it.
+	in.ZoneTypes = map[string]map[string][]string{"us-east-1": {"use1-az6": {"g4dn.xlarge", "m7i.large"}}}
+	got := offerKeys(RankOffers(DefaultPolicy(), Requirement{}, false, in))
+	want := []string{"us-east-2/use2-az1/m7i.large/on_demand", "us-east-1/use1-az6/m7i.large/on_demand"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("offers %v, want %v", got, want)
+	}
+}

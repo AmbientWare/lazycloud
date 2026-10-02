@@ -31,6 +31,7 @@ type fleetRead struct {
 	release     *AgentRelease
 	connections []HostingConnectionsRow
 	spot        []SpotQuote
+	zoneTypes   map[string]map[string][]string
 	quotas      []QuotaRoom
 }
 
@@ -98,6 +99,9 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		return r, err
 	}
 	if r.quotas, err = quotaRooms(ctx, q, now); err != nil {
+		return r, err
+	}
+	if r.zoneTypes, err = readZoneOfferings(ctx, q); err != nil {
 		return r, err
 	}
 	return r, nil
