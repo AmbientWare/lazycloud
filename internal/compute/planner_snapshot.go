@@ -114,10 +114,26 @@ func uuidFloor(t time.Time) uuid.UUID {
 	return id
 }
 
+// hostStanding is what a cloud host's fleet state derives from, for the
+// planner and the admin Nodes list alike.
+type hostStanding struct {
+	Phase, State, CapacityState, CapacityReason, ImageEvidence string
+	LastSeenAt                                                 *time.Time
+	ReserveMode                                                *string
+	Containers                                                 int32
+}
+
+func (h PlannerHostsRow) standing() hostStanding {
+	return hostStanding{
+		Phase: h.Phase, State: h.State, CapacityState: h.CapacityState, CapacityReason: h.CapacityReason,
+		ImageEvidence: h.ImageEvidence, LastSeenAt: h.LastSeenAt, ReserveMode: h.ReserveMode, Containers: h.Containers,
+	}
+}
+
 // fleetStateOf is where a cloud host stands in the fleet. A host bought for
 // the reserve or refreshing prepares until it stops; a consolidated host
 // that emptied serves again.
-func fleetStateOf(h PlannerHostsRow, now time.Time) FleetState {
+func fleetStateOf(h hostStanding, now time.Time) FleetState {
 	reserve := h.ReserveMode != nil
 	switch Phase(h.Phase) {
 	case PhaseRequested, PhaseProvisioning, PhaseBooting, PhaseJoining, PhaseResuming:
@@ -167,25 +183,26 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease, plainS
 	market := marketOf(h.Market)
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
-		Market: market, GPU: h.GpuType, State: fleetStateOf(h, now),
+		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: h.UsedCpu, MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
 		Containers: int(h.Containers), Pinned: int(h.Pinned), Protected: h.InterruptionAt != nil, LaunchedAt: h.LaunchedAt,
-		Current: preparedFor(h, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
+		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured && !plainStop[h.Region+"/"+h.InstanceType],
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, LightSince: h.LightSince,
 	}
 }
 
-// preparedFor reports whether a host last proved the agent release it
-// should run: the target once the rollout reaches it, any release outside
-// the rollout or without a target.
-func preparedFor(h PlannerHostsRow, release *AgentRelease) bool {
-	if release == nil || rolloutBucket(HostID(h.ID)) >= release.RolloutPercent {
+// onRelease reports whether version is the agent release a host should run:
+// the target once the rollout reaches it, any release outside the rollout
+// or without a target. A reserve passes the release it last proved it could
+// stop on.
+func onRelease(host HostID, version *string, release *AgentRelease) bool {
+	if release == nil || rolloutBucket(host) >= release.RolloutPercent {
 		return true
 	}
-	return h.PreparedAgentVersion != nil && *h.PreparedAgentVersion == release.Version
+	return version != nil && *version == release.Version
 }
 
 // refusedReserve reports a host serving after its agent refused to prove a
