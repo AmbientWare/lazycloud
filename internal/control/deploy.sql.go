@@ -49,6 +49,18 @@ func (q *Queries) ActiveRelease(ctx context.Context, id uuid.UUID) (ActiveReleas
 	return i, err
 }
 
+const countReleaseVersions = `-- name: CountReleaseVersions :one
+select count(*)::int as versions from releases where workload_id = any($1::uuid[]) and version > 0
+`
+
+// Counts the versioned releases of the workloads.
+func (q *Queries) CountReleaseVersions(ctx context.Context, workloadIds []uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countReleaseVersions, workloadIds)
+	var versions int32
+	err := row.Scan(&versions)
+	return versions, err
+}
+
 const insertRelease = `-- name: InsertRelease :one
 insert into releases (workload_id, version, spec, spec_digest, source_sha256)
 values ($1, $2, $3, $4, $5)
@@ -88,8 +100,7 @@ set desired_state = 'deleted', deleted_at = now()
 where w.app_id = $1 and w.desired_state <> 'deleted'
   and w.active_release_id is not null
   and not (w.kind || ':' || w.name = any($2::text[]))
-returning w.name,
-          (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions
+returning w.id, w.name
 `
 
 type PruneFunctionsParams struct {
@@ -98,8 +109,8 @@ type PruneFunctionsParams struct {
 }
 
 type PruneFunctionsRow struct {
-	Name     string
-	Versions int32
+	ID   uuid.UUID
+	Name string
 }
 
 // Deletes the app's deployed functions that the deploy does not list.
@@ -112,7 +123,7 @@ func (q *Queries) PruneFunctions(ctx context.Context, arg PruneFunctionsParams) 
 	var items []PruneFunctionsRow
 	for rows.Next() {
 		var i PruneFunctionsRow
-		if err := rows.Scan(&i.Name, &i.Versions); err != nil {
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

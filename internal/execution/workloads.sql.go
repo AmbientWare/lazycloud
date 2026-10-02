@@ -167,12 +167,17 @@ func (q *Queries) CreatePendingPodContainers(ctx context.Context, arg CreatePend
 
 const deleteOldContainerLeases = `-- name: DeleteOldContainerLeases :exec
 delete from container_leases l
-using containers c
-where c.id = l.container_id
-  and (c.state = 'stopped' or l.expires_at < now() - interval '8 days')
+where (l.container_id, l.holder_id) in (
+    select o.container_id, o.holder_id
+    from container_leases o
+    join containers c on c.id = o.container_id
+    where c.state = 'stopped' or o.expires_at < now() - interval '8 days'
+)
 `
 
 // Leases of stopped containers, and leases past any keep-warm window.
+// The join reads containers by key for the leases there are; an EXISTS
+// under the OR would hash every stopped container.
 func (q *Queries) DeleteOldContainerLeases(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteOldContainerLeases)
 	return err
@@ -229,15 +234,17 @@ update containers
 set state = 'draining', drain_started_at = now()
 where id in (
     select d.id from containers d
+    cross join lateral (
+        select (d.state = 'ready' and d.keep_warm_seconds is not null and d.active_until < now()
+                and not exists (
+                    select 1 from container_leases l
+                    where l.container_id = d.id and l.expires_at + make_interval(secs => d.keep_warm_seconds) > now()
+                )) as idle
+    ) k
     where d.release_id = $1::uuid and d.purpose = 'serve' and d.state in ('starting', 'ready')
-    order by (d.state = 'ready' and d.keep_warm_seconds is not null and d.active_until < now()
-              and not exists (
-                  select 1 from container_leases l
-                  where l.container_id = d.id and l.expires_at + make_interval(secs => d.keep_warm_seconds) > now()
-              )) desc,
-             d.created_at desc, d.id desc
+    order by k.idle desc, d.created_at desc, d.id desc
     limit $2
-    for update skip locked
+    for update of d skip locked
 )
   and state in ('starting', 'ready')
 returning id, host_id
@@ -796,16 +803,13 @@ select r.id as release_id,
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
+       gpu.models as gpu_models,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
        coalesce((r.spec -> 'pod' ->> 'block_network')::boolean, false)::bool as block_network,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'pod' -> 'allow_list')), '{}')::text[] as allow_list,
-       exists (
-           select 1 from containers ac
-           where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'
-       )::bool as active_ready,
+       allow.hosts as allow_list,
+       active.ready as active_ready,
        c.pending::int as pending,
        c.starting::int as starting,
        c.ready::int as ready,
@@ -818,19 +822,37 @@ join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join pod_states s on s.workload_id = w.id
 cross join lateral (
+    select exists (
+        select 1 from containers ac
+        where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'
+    ) as ready
+) active
+cross join lateral (
+    select coalesce(array_agg(m.model order by m.n), '{}')::text[] as models
+    from jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu') with ordinality as m(model, n)
+) gpu
+cross join lateral (
+    select coalesce(array_agg(h.host order by h.n), '{}')::text[] as hosts
+    from jsonb_array_elements_text(r.spec -> 'pod' -> 'allow_list') with ordinality as h(host, n)
+) allow
+cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
            count(*) filter (where c.state = 'draining') as draining,
-           -- Starting containers and ready ones still inside their
-           -- keep-warm window or holding a connection.
-           count(*) filter (where c.state = 'starting' or (c.state = 'ready' and (
-               c.keep_warm_seconds is null or c.active_until is null or c.active_until > now()
-               or exists (
-                   select 1 from container_leases l
-                   where l.container_id = c.id and l.expires_at + make_interval(secs => c.keep_warm_seconds) > now()
-               )))) as warm
-    from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
+           count(*) filter (where k.warm) as warm
+    from containers c
+    -- Starting containers and ready ones still inside their keep-warm
+    -- window or holding a connection.
+    cross join lateral (
+        select (c.state = 'starting' or (c.state = 'ready' and (
+            c.keep_warm_seconds is null or c.active_until is null or c.active_until > now()
+            or exists (
+                select 1 from container_leases l
+                where l.container_id = c.id and l.expires_at + make_interval(secs => c.keep_warm_seconds) > now()
+            )))) as warm
+    ) k
+    where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id
 `

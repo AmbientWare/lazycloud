@@ -117,27 +117,33 @@ with recursive spaces as (
             limit 1)
     from spaces s
     where s.workspace_id is not null
-), turns as (
-    select q.id, q.next_attempt_at, q.turn
-    from spaces s
-    cross join lateral (
-        select d.id, d.next_attempt_at, row_number() over (order by d.next_attempt_at, d.id) as turn
-        from task_callbacks d
-        where d.workspace_id = s.workspace_id and d.state = 'pending' and d.next_attempt_at <= now()
-        order by d.next_attempt_at, d.id
-        limit $2
-    ) q
-    where s.workspace_id is not null
-), picked as (
-    select p.id from task_callbacks p
-    where p.id in (select t.id from turns t order by t.turn, t.next_attempt_at, t.id limit $2)
-      and p.state = 'pending' and p.next_attempt_at <= now()
-    for update skip locked
 )
 update task_callbacks c
 set next_attempt_at = now() + make_interval(secs => $1::float8),
     deliveries = c.deliveries + 1
-from picked
+from (
+    select p.id from task_callbacks p
+    where p.id in (
+        select t.id
+        from spaces s
+        cross join lateral (
+            select array_agg(d.id order by d.next_attempt_at, d.id) as ids,
+                   array_agg(d.next_attempt_at order by d.next_attempt_at, d.id) as ats
+            from (
+                select d.id, d.next_attempt_at from task_callbacks d
+                where d.workspace_id = s.workspace_id and d.state = 'pending' and d.next_attempt_at <= now()
+                order by d.next_attempt_at, d.id
+                limit $2
+            ) d
+        ) w
+        cross join lateral rows from (unnest(w.ids), unnest(w.ats)) with ordinality as t(id, next_attempt_at, turn)
+        where s.workspace_id is not null
+        order by t.turn, t.next_attempt_at, t.id
+        limit $2
+    )
+      and p.state = 'pending' and p.next_attempt_at <= now()
+    for update skip locked
+) picked
 where c.id = picked.id
 returning c.id, c.deliveries
 `
@@ -155,9 +161,10 @@ type ClaimDueCallbacksRow struct {
 // Leases due callbacks to this deliverer in per-workspace round robin:
 // every workspace's oldest due callback, then every workspace's second, so
 // one workspace's backlog never holds back another's. The workspaces with
-// due callbacks come from a skip scan of task_callbacks_due_workspace.
-// next_attempt_at moves past the delivery timeout and deliveries counts the
-// attempt, which fences a late outcome from an earlier lease.
+// due callbacks come from a skip scan of task_callbacks_due_workspace; each
+// workspace's turns are the ordinality of its oldest batch_size, aggregated
+// in order. next_attempt_at moves past the delivery timeout and deliveries
+// counts the attempt, which fences a late outcome from an earlier lease.
 func (q *Queries) ClaimDueCallbacks(ctx context.Context, arg ClaimDueCallbacksParams) ([]ClaimDueCallbacksRow, error) {
 	rows, err := q.db.Query(ctx, claimDueCallbacks, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {

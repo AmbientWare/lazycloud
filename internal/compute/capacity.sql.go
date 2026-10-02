@@ -28,7 +28,7 @@ select h.id,
        (h.cpu_millis - coalesce(used.cpu, 0))::bigint as free_cpu_millis,
        (h.memory_bytes - coalesce(used.memory, 0))::bigint as free_memory_bytes,
        (h.gpu_count - coalesce(used.gpus, 0))::int as free_gpus,
-       array(select hw.workspace_id from host_workspaces hw where hw.host_id = h.id order by hw.workspace_id)::uuid[] as workspaces
+       coalesce(hw.workspaces, '{}')::uuid[] as workspaces
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
@@ -37,6 +37,11 @@ left join lateral (
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
+left join lateral (
+    select array_agg(w.workspace_id order by w.workspace_id) as workspaces
+    from host_workspaces w
+    where w.host_id = h.id
+) hw on true
 where h.state = 'online'
   and h.phase = 'ready'
   and h.capacity_state = 'available'

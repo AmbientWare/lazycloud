@@ -229,8 +229,8 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 	}
 	err = pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
 		q := b.queries.WithTx(tx)
-		if err := q.EnsureAccounts(ctx, EnsureAccountsParams{UserIds: users, TrialNanos: TrialNanos, TrialDays: TrialDays}); err != nil {
-			return fmt.Errorf("ensure accounts: %w", err)
+		if err := ensureAccounts(ctx, q, users); err != nil {
+			return err
 		}
 		if err := q.SetAccrued(ctx, SetAccruedParams{UserIds: users, Accrued: nanos, Live: live}); err != nil {
 			return fmt.Errorf("set accrued cost: %w", err)
@@ -560,14 +560,33 @@ func ledgerParams(batch []sourcePlan) ([]uuid.UUID, InsertLedgerEntriesParams, A
 }
 
 // writeLedger writes entries and cursors in the caller's transaction,
-// creating the accounts they charge first.
+// creating the accounts they charge first. Only entries the insert wrote
+// reach the hourly totals and make their accounts due, and all of it
+// commits together, so each entry's cost is counted exactly once.
 func writeLedger(ctx context.Context, q *Queries, users []uuid.UUID, p InsertLedgerEntriesParams, cursors AdvanceCursorsParams) error {
-	if err := q.EnsureAccounts(ctx, EnsureAccountsParams{UserIds: users, TrialNanos: TrialNanos, TrialDays: TrialDays}); err != nil {
-		return fmt.Errorf("ensure accounts: %w", err)
+	if err := ensureAccounts(ctx, q, users); err != nil {
+		return err
 	}
 	if len(p.SourceIds) > 0 {
-		if err := q.InsertLedgerEntries(ctx, p); err != nil {
+		written, err := q.InsertLedgerEntries(ctx, p)
+		if err != nil {
 			return fmt.Errorf("insert ledger entries: %w", err)
+		}
+		if len(written) > 0 {
+			hours := AddLedgerHoursParams{
+				UserIds:    make([]uuid.UUID, len(written)),
+				StartedAts: make([]time.Time, len(written)),
+				CostNanos:  make([]int64, len(written)),
+			}
+			for i, e := range written {
+				hours.UserIds[i], hours.StartedAts[i], hours.CostNanos[i] = e.UserID, e.StartedAt, e.CostNanos
+			}
+			if err := q.AddLedgerHours(ctx, hours); err != nil {
+				return fmt.Errorf("add hourly cost: %w", err)
+			}
+			if err := q.MarkBalancesDue(ctx, hours.UserIds); err != nil {
+				return fmt.Errorf("mark charged accounts due: %w", err)
+			}
 		}
 	}
 	if len(cursors.Ids) > 0 {

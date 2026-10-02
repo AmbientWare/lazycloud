@@ -85,10 +85,17 @@ func (b *Billing) SetComplimentary(ctx context.Context, user uuid.UUID, complime
 		if err := ensureAccount(ctx, q, user); err != nil {
 			return err
 		}
-		if _, err := q.SetComplimentary(ctx, SetComplimentaryParams{UserID: user, Complimentary: complimentary}); err != nil {
+		// Waiving marks the balance due in the same transaction, so the
+		// rollup covers usage from then on.
+		n, err := q.SetComplimentary(ctx, SetComplimentaryParams{UserID: user, Complimentary: complimentary})
+		if err != nil {
 			return fmt.Errorf("set complimentary: %w", err)
 		}
-		var err error
+		if n > 0 {
+			if err := q.MarkBalancesDue(ctx, []uuid.UUID{user}); err != nil {
+				return fmt.Errorf("mark balance due: %w", err)
+			}
+		}
 		row, err = q.AdminAccount(ctx, AdminAccountParams{ID: user, Since: since})
 		return err
 	})

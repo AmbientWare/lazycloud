@@ -50,40 +50,40 @@ func (q *Queries) InsertDependencies(ctx context.Context, arg InsertDependencies
 	return err
 }
 
+const insertTaskInputs = `-- name: InsertTaskInputs :exec
+insert into task_inputs (task_id, encoding, data)
+select unnest($1::uuid[]), unnest($2::text[]), unnest($3::bytea[])
+`
+
+type InsertTaskInputsParams struct {
+	TaskIds   []uuid.UUID
+	Encodings []string
+	Data      [][]byte
+}
+
+func (q *Queries) InsertTaskInputs(ctx context.Context, arg InsertTaskInputsParams) error {
+	_, err := q.db.Exec(ctx, insertTaskInputs, arg.TaskIds, arg.Encodings, arg.Data)
+	return err
+}
+
 const insertTasks = `-- name: InsertTasks :many
-with input as materialized (
-    select uuidv7() as id, i as ord, ($1::text[])[i] as encoding, ($2::bytea[])[i] as data,
-           ($3::int[])[i] as unmet
-    from generate_subscripts($1::text[], 1) as i
-), task as (
-    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
-                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for, traceparent)
-    select input.id, $4, $5, $6, 'queued', $7,
-           $8::uuid, $9::uuid, input.unmet,
-           $10::timestamptz, $11::text
-    from input
-    order by input.ord
-    returning tasks.id, tasks.created_at
-), task_input as (
-    insert into task_inputs (task_id, encoding, data)
-    select input.id, input.encoding, input.data from input
-)
-select task.id, task.created_at
-from input
-join task on task.id = input.id
-order by input.ord
+insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
+                   parent_task_id, root_task_id, unmet_dependencies, scheduled_for, traceparent)
+select unnest($1::uuid[]), $2, $3, $4, 'queued', $5,
+       $6::uuid, $7::uuid, unnest($8::int[]),
+       $9::timestamptz, $10::text
+returning id, created_at
 `
 
 type InsertTasksParams struct {
-	Encodings    []string
-	Data         [][]byte
-	Unmet        []int32
+	Ids          []uuid.UUID
 	WorkspaceID  uuid.UUID
 	WorkloadID   uuid.UUID
 	ReleaseID    uuid.UUID
 	MaxAttempts  int32
 	ParentTaskID *uuid.UUID
 	RootTaskID   *uuid.UUID
+	Unmet        []int32
 	ScheduledFor *time.Time
 	Traceparent  *string
 }
@@ -93,18 +93,18 @@ type InsertTasksRow struct {
 	CreatedAt time.Time
 }
 
-// One statement inserts every task and its input; rows return in input order.
+// The submit picks the task ids, so InsertTaskInputs can follow in the same
+// round trip.
 func (q *Queries) InsertTasks(ctx context.Context, arg InsertTasksParams) ([]InsertTasksRow, error) {
 	rows, err := q.db.Query(ctx, insertTasks,
-		arg.Encodings,
-		arg.Data,
-		arg.Unmet,
+		arg.Ids,
 		arg.WorkspaceID,
 		arg.WorkloadID,
 		arg.ReleaseID,
 		arg.MaxAttempts,
 		arg.ParentTaskID,
 		arg.RootTaskID,
+		arg.Unmet,
 		arg.ScheduledFor,
 		arg.Traceparent,
 	)

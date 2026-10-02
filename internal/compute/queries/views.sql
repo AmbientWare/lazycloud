@@ -2,33 +2,41 @@
 -- The workspace's location and its capacity: a connected account's cloud
 -- hosts, or the hosts running the workspace's containers on platform
 -- compute.
-with ws as (
-    select w.id, w.connection_id from workspaces w where w.id = @workspace_id
-), counted as (
+with counted as (
     select h.phase, h.state, h.last_seen_at, h.hourly_micros
-    from hosts h, ws
-    where ws.connection_id is not null and h.connection_id = ws.connection_id and h.kind = 'connection'
+    from hosts h
+    join workspaces w on w.connection_id = h.connection_id
+    where w.id = @workspace_id and h.kind = 'connection'
       and (h.phase not in ('deleted', 'failed') or h.phase_at > now() - interval '1 day')
     union all
     select h.phase, h.state, h.last_seen_at, null::bigint
-    from hosts h, ws
-    where ws.connection_id is null
-      and h.id in (select c.host_id from containers c where c.workspace_id = ws.id and c.state <> 'stopped')
+    from hosts h
+    join workspaces w on w.id = @workspace_id and w.connection_id is null
+    where h.id in (select c.host_id from containers c where c.workspace_id = @workspace_id and c.state <> 'stopped')
 )
 select cc.aws_account_id, cc.phase as connection_phase,
-       (select count(*) from counted where phase not in ('deleted'))::int as total,
-       (select count(*) from counted where phase = 'ready' and state = 'online'
-            and last_seen_at >= now() - make_interval(secs => @timeout_seconds::float8))::int as ready,
-       (select count(*) from counted where phase in ('requested', 'provisioning', 'booting', 'joining'))::int as pending,
-       (select count(*) from counted where phase = 'failed'
-            or (phase = 'ready' and (state <> 'online'
-                or last_seen_at < now() - make_interval(secs => @timeout_seconds::float8))))::int as degraded,
-       coalesce((select sum(hourly_micros) from counted where phase not in ('deleted', 'failed')), 0)::bigint as hourly_micros,
-       (select count(*) from workloads wl join apps a on a.id = wl.app_id
-            where a.workspace_id = ws.id and wl.desired_state = 'active' and a.state = 'active'
-              and wl.active_release_id is not null)::int as workload_count
-from ws
-left join cloud_connections cc on cc.id = ws.connection_id;
+       hosts.total, hosts.ready, hosts.pending, hosts.degraded, hosts.hourly_micros,
+       served.workload_count
+from workspaces w
+left join cloud_connections cc on cc.id = w.connection_id
+cross join (
+    select count(*) filter (where phase not in ('deleted'))::int as total,
+           count(*) filter (where phase = 'ready' and state = 'online'
+               and last_seen_at >= now() - make_interval(secs => @timeout_seconds::float8))::int as ready,
+           count(*) filter (where phase in ('requested', 'provisioning', 'booting', 'joining'))::int as pending,
+           count(*) filter (where phase = 'failed'
+               or (phase = 'ready' and (state <> 'online'
+                   or last_seen_at < now() - make_interval(secs => @timeout_seconds::float8))))::int as degraded,
+           coalesce(sum(hourly_micros) filter (where phase not in ('deleted', 'failed')), 0)::bigint as hourly_micros
+    from counted
+) hosts
+cross join (
+    select count(*)::int as workload_count
+    from workloads wl join apps a on a.id = wl.app_id
+    where a.workspace_id = @workspace_id and wl.desired_state = 'active' and a.state = 'active'
+      and wl.active_release_id is not null
+) served
+where w.id = @workspace_id;
 
 -- name: ComputeWorkloads :many
 -- Deployed workloads with their active release's size and machine pin, by

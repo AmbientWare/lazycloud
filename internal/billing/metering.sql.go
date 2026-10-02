@@ -13,6 +13,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addLedgerHours = `-- name: AddLedgerHours :exec
+insert into billing_hours (user_id, hour, cost_nanos)
+select e.user_id, date_trunc('hour', e.started_at, 'UTC'), sum(e.cost_nanos)::bigint
+from (
+    select unnest($1::uuid[]) as user_id, unnest($2::timestamptz[]) as started_at,
+           unnest($3::bigint[]) as cost_nanos
+) e
+group by 1, 2
+on conflict (user_id, hour) do update set cost_nanos = billing_hours.cost_nanos + excluded.cost_nanos
+`
+
+type AddLedgerHoursParams struct {
+	UserIds    []uuid.UUID
+	StartedAts []time.Time
+	CostNanos  []int64
+}
+
+// Adds the entries InsertLedgerEntries wrote to their hourly totals.
+func (q *Queries) AddLedgerHours(ctx context.Context, arg AddLedgerHoursParams) error {
+	_, err := q.db.Exec(ctx, addLedgerHours, arg.UserIds, arg.StartedAts, arg.CostNanos)
+	return err
+}
+
 const advanceCursors = `-- name: AdvanceCursors :exec
 insert into usage_cursors (source_kind, source_id, billed_through, complete, updated_at)
 select c.kind, c.id, c.through, c.complete, now()
@@ -118,77 +141,69 @@ func (q *Queries) DeleteEgress(ctx context.Context, arg DeleteEgressParams) erro
 	return err
 }
 
-const ensureAccounts = `-- name: EnsureAccounts :exec
-with created as (
-    insert into billing_accounts (user_id)
-    select unnest($3::uuid[])
-    on conflict do nothing
-    returning user_id, created_at
-), trial as (
-    insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
-    select user_id, 'trial', 'trial', $1::bigint, created_at, created_at + make_interval(days => $2::int)
-    from created
-)
-insert into billing_balances (user_id, balance_nanos, month_started_at, recheck_at)
-select user_id, $1::bigint, date_trunc('month', created_at, 'UTC'),
-       least(created_at + make_interval(days => $2::int), date_trunc('month', created_at, 'UTC') + interval '1 month')
-from created
+const insertAccounts = `-- name: InsertAccounts :many
+insert into billing_accounts (user_id)
+select unnest($1::uuid[])
+on conflict do nothing
+returning user_id, created_at
 `
 
-type EnsureAccountsParams struct {
-	TrialNanos int64
-	TrialDays  int32
-	UserIds    []uuid.UUID
+type InsertAccountsRow struct {
+	UserID    uuid.UUID
+	CreatedAt time.Time
 }
 
-// Creates the accounts that do not exist yet with their trial credit and
-// a balance holding it.
-func (q *Queries) EnsureAccounts(ctx context.Context, arg EnsureAccountsParams) error {
-	_, err := q.db.Exec(ctx, ensureAccounts, arg.TrialNanos, arg.TrialDays, arg.UserIds)
-	return err
+// The accounts that did not exist yet.
+func (q *Queries) InsertAccounts(ctx context.Context, userIds []uuid.UUID) ([]InsertAccountsRow, error) {
+	rows, err := q.db.Query(ctx, insertAccounts, userIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InsertAccountsRow
+	for rows.Next() {
+		var i InsertAccountsRow
+		if err := rows.Scan(&i.UserID, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-const insertLedgerEntries = `-- name: InsertLedgerEntries :exec
-with entry as (
-    insert into ledger_entries (
-        source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
-        billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
-        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos,
-        egress_bytes, egress_nanos)
-    select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
-           nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
-           nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
-           nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
-           e.cpu_millis, e.memory_bytes, e.pricing_version,
-           e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
-           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos
-    from (
-        select unnest($1::text[]) as source_kind, unnest($2::uuid[]) as source_id, unnest($3::timestamptz[]) as started_at,
-               unnest($4::timestamptz[]) as ended_at, unnest($5::uuid[]) as user_id,
-               unnest($6::uuid[]) as workspace_id, unnest($7::uuid[]) as app_id,
-               unnest($8::uuid[]) as workload_id, unnest($9::text[]) as category,
-               unnest($10::text[]) as billing_owner, unnest($11::text[]) as rate_class,
-               unnest($12::text[]) as gpu_type, unnest($13::int[]) as gpu_count,
-               unnest($14::bigint[]) as cpu_millis, unnest($15::bigint[]) as memory_bytes,
-               unnest($16::text[]) as pricing_version,
-               unnest($17::bigint[]) as container_nanos, unnest($18::bigint[]) as cpu_nanos,
-               unnest($19::bigint[]) as memory_nanos, unnest($20::bigint[]) as gpu_nanos,
-               unnest($21::bigint[]) as stored_bytes, unnest($22::bigint[]) as attached_bytes,
-               unnest($23::bigint[]) as storage_nanos, unnest($24::bigint[]) as attached_nanos,
-               unnest($25::bigint[]) as egress_bytes, unnest($26::bigint[]) as egress_nanos
-    ) e
-    on conflict (source_kind, source_id, started_at) do nothing
-    returning user_id, started_at, cost_nanos
-), hour as (
-    insert into billing_hours (user_id, hour, cost_nanos)
-    select user_id, date_trunc('hour', started_at, 'UTC'), sum(cost_nanos)::bigint
-    from entry
-    group by 1, 2
-    on conflict (user_id, hour) do update set cost_nanos = billing_hours.cost_nanos + excluded.cost_nanos
-    returning user_id
-)
-update billing_balances set due = true
-where user_id in (select user_id from hour)
+const insertLedgerEntries = `-- name: InsertLedgerEntries :many
+insert into ledger_entries (
+    source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
+    billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
+    container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos,
+    egress_bytes, egress_nanos)
+select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
+       nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
+       nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
+       nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
+       e.cpu_millis, e.memory_bytes, e.pricing_version,
+       e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
+       e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos
+from (
+    select unnest($1::text[]) as source_kind, unnest($2::uuid[]) as source_id, unnest($3::timestamptz[]) as started_at,
+           unnest($4::timestamptz[]) as ended_at, unnest($5::uuid[]) as user_id,
+           unnest($6::uuid[]) as workspace_id, unnest($7::uuid[]) as app_id,
+           unnest($8::uuid[]) as workload_id, unnest($9::text[]) as category,
+           unnest($10::text[]) as billing_owner, unnest($11::text[]) as rate_class,
+           unnest($12::text[]) as gpu_type, unnest($13::int[]) as gpu_count,
+           unnest($14::bigint[]) as cpu_millis, unnest($15::bigint[]) as memory_bytes,
+           unnest($16::text[]) as pricing_version,
+           unnest($17::bigint[]) as container_nanos, unnest($18::bigint[]) as cpu_nanos,
+           unnest($19::bigint[]) as memory_nanos, unnest($20::bigint[]) as gpu_nanos,
+           unnest($21::bigint[]) as stored_bytes, unnest($22::bigint[]) as attached_bytes,
+           unnest($23::bigint[]) as storage_nanos, unnest($24::bigint[]) as attached_nanos,
+           unnest($25::bigint[]) as egress_bytes, unnest($26::bigint[]) as egress_nanos
+) e
+on conflict (source_kind, source_id, started_at) do nothing
+returning user_id, started_at, cost_nanos::bigint as cost_nanos
 `
 
 type InsertLedgerEntriesParams struct {
@@ -220,10 +235,16 @@ type InsertLedgerEntriesParams struct {
 	EgressNanos     []int64
 }
 
-// Entries already written are skipped, so a repeated batch adds nothing to
-// the hourly totals. Accounts with new cost become due for a rollup.
-func (q *Queries) InsertLedgerEntries(ctx context.Context, arg InsertLedgerEntriesParams) error {
-	_, err := q.db.Exec(ctx, insertLedgerEntries,
+type InsertLedgerEntriesRow struct {
+	UserID    uuid.UUID
+	StartedAt time.Time
+	CostNanos int64
+}
+
+// Entries already written are skipped and not returned, so a repeated batch
+// adds nothing to the hourly totals.
+func (q *Queries) InsertLedgerEntries(ctx context.Context, arg InsertLedgerEntriesParams) ([]InsertLedgerEntriesRow, error) {
+	rows, err := q.db.Query(ctx, insertLedgerEntries,
 		arg.SourceKinds,
 		arg.SourceIds,
 		arg.StartedAts,
@@ -250,6 +271,70 @@ func (q *Queries) InsertLedgerEntries(ctx context.Context, arg InsertLedgerEntri
 		arg.AttachedNanos,
 		arg.EgressBytes,
 		arg.EgressNanos,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InsertLedgerEntriesRow
+	for rows.Next() {
+		var i InsertLedgerEntriesRow
+		if err := rows.Scan(&i.UserID, &i.StartedAt, &i.CostNanos); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const insertTrialBalances = `-- name: InsertTrialBalances :exec
+insert into billing_balances (user_id, balance_nanos, month_started_at, recheck_at)
+select a.user_id, $1::bigint, date_trunc('month', a.created_at, 'UTC'),
+       least(a.created_at + make_interval(days => $2::int), date_trunc('month', a.created_at, 'UTC') + interval '1 month')
+from (select unnest($3::uuid[]) as user_id, unnest($4::timestamptz[]) as created_at) a
+`
+
+type InsertTrialBalancesParams struct {
+	TrialNanos int64
+	TrialDays  int32
+	UserIds    []uuid.UUID
+	CreatedAts []time.Time
+}
+
+// The balances, holding the trial credit, of accounts InsertAccounts created.
+func (q *Queries) InsertTrialBalances(ctx context.Context, arg InsertTrialBalancesParams) error {
+	_, err := q.db.Exec(ctx, insertTrialBalances,
+		arg.TrialNanos,
+		arg.TrialDays,
+		arg.UserIds,
+		arg.CreatedAts,
+	)
+	return err
+}
+
+const insertTrialCredit = `-- name: InsertTrialCredit :exec
+insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
+select a.user_id, 'trial', 'trial', $1::bigint, a.created_at, a.created_at + make_interval(days => $2::int)
+from (select unnest($3::uuid[]) as user_id, unnest($4::timestamptz[]) as created_at) a
+`
+
+type InsertTrialCreditParams struct {
+	TrialNanos int64
+	TrialDays  int32
+	UserIds    []uuid.UUID
+	CreatedAts []time.Time
+}
+
+// The trial credit of accounts InsertAccounts created.
+func (q *Queries) InsertTrialCredit(ctx context.Context, arg InsertTrialCreditParams) error {
+	_, err := q.db.Exec(ctx, insertTrialCredit,
+		arg.TrialNanos,
+		arg.TrialDays,
+		arg.UserIds,
+		arg.CreatedAts,
 	)
 	return err
 }
