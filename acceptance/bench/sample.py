@@ -2,10 +2,10 @@
 
 A snapshot holds cumulative counters: CPU seconds and memory per platform
 process (Compose containers via cgroup v2, host processes via /proc), PostgreSQL
-statement/transaction/row counters and its container's network bytes, and Redis
-command and byte counters where the stack has Redis. Two snapshots give rates.
+statement/transaction/row counters and its container's network bytes. Two
+snapshots give rates.
 
-    python sample.py ref|new [seconds]   prints the idle cost over the window
+    python sample.py [seconds]   prints the idle cost over the window
 """
 
 from __future__ import annotations
@@ -19,11 +19,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TICK = os.sysconf("SC_CLK_TCK")
-STATE = Path(os.environ.get("LCBENCH_STATE_ROOT", "/tmp/lcbench"))
-PROJECT = {"ref": "lcbench-ref", "new": "lcbench-new"}
+STATE = Path(os.environ.get("LCBENCH_STATE", "/tmp/lcbench/stack"))
+PROJECT = "lcbench"
+POSTGRES = f"{PROJECT}-postgres-1"
 HOST_PROCESSES = ("server", "scheduler", "scheduler2", "agent")
-# Workload containers each platform starts on the benchmark host.
-WORKLOAD_LABEL = {"ref": "lazycloud.agent.managed-lcbench=true", "new": "lazycloud.host-id"}
 
 
 def _run(*args: str) -> str:
@@ -39,8 +38,8 @@ def _containers(filter_: str) -> list[dict]:
     return json.loads(out or "[]")
 
 
-def _new_host_id() -> str:
-    path = STATE / "new/agent/identity.json"
+def _host_id() -> str:
+    path = STATE / "agent/identity.json"
     return json.loads(path.read_text()).get("host_id", "") if path.exists() else ""
 
 
@@ -96,55 +95,32 @@ class Snapshot:
     processes: dict[str, tuple[float, int]] = field(default_factory=dict)
     workloads: tuple[int, float, int] = (0, 0.0, 0)
     pg: dict[str, float] = field(default_factory=dict)
-    redis: dict[str, float] = field(default_factory=dict)
 
 
-def snapshot(target: str) -> Snapshot:
+def snapshot() -> Snapshot:
     snap = Snapshot(at=time.time())
     pg_pid = 0
-    for c in _containers(f"label=com.docker.compose.project={PROJECT[target]}"):
+    for c in _containers(f"label=com.docker.compose.project={PROJECT}"):
         service = c["Config"]["Labels"]["com.docker.compose.service"]
         number = c["Config"]["Labels"].get("com.docker.compose.container-number", "1")
         name = service if number == "1" else f"{service}-{number}"
         snap.processes[name] = _cgroup(c["Id"])
         if service == "postgres":
             pg_pid = c["State"]["Pid"]
-    if target == "new":
-        for name in HOST_PROCESSES:
-            pidfile = STATE / f"new/{name}.pid"
-            if pidfile.exists():
-                try:
-                    snap.processes[name] = _proc(int(pidfile.read_text()))
-                except FileNotFoundError:
-                    pass
-    if target == "new":
-        workloads = _containers(f"label=lazycloud.host-id={_new_host_id()}")
-        usage = [_cgroup(c["Id"]) for c in workloads]
-        snap.workloads = (len(workloads), sum(u[0] for u in usage), sum(u[1] for u in usage))
-    else:
-        # The reference runs an always-on worker container per host slot and
-        # starts user processes inside it, so the worker is platform runtime
-        # and live workloads are its running container rows.
-        for n, c in enumerate(_containers(f"label={WORKLOAD_LABEL[target]}")):
-            snap.processes[f"worker-{n + 1}"] = _cgroup(c["Id"])
-        live = _run(
-            "docker",
-            "exec",
-            f"{PROJECT[target]}-postgres-1",
-            "psql",
-            "-U",
-            "lazycloud",
-            "-d",
-            "lazycloud",
-            "-At",
-            "-c",
-            "select count(*) from containers where status in ('pending', 'running')",
-        )
-        snap.workloads = (int(live), 0.0, 0)
+    for name in HOST_PROCESSES:
+        pidfile = STATE / f"{name}.pid"
+        if pidfile.exists():
+            try:
+                snap.processes[name] = _proc(int(pidfile.read_text()))
+            except FileNotFoundError:
+                pass
+    workloads = _containers(f"label=lazycloud.host-id={_host_id()}")
+    usage = [_cgroup(c["Id"]) for c in workloads]
+    snap.workloads = (len(workloads), sum(u[0] for u in usage), sum(u[1] for u in usage))
     out = _run(
         "docker",
         "exec",
-        f"{PROJECT[target]}-postgres-1",
+        POSTGRES,
         "psql",
         "-U",
         "lazycloud",
@@ -171,14 +147,6 @@ def snapshot(target: str) -> Snapshot:
         "net_rx": float(rx),
         "net_tx": float(tx),
     }
-    if target == "ref":
-        info = _run("docker", "exec", "lcbench-ref-redis-1", "redis-cli", "info", "stats")
-        values = dict(line.split(":", 1) for line in info.splitlines() if ":" in line)
-        snap.redis = {
-            "commands": float(values["total_commands_processed"]),
-            "net_in": float(values["total_net_input_bytes"]),
-            "net_out": float(values["total_net_output_bytes"]),
-        }
     return snap
 
 
@@ -192,7 +160,6 @@ def delta(a: Snapshot, b: Snapshot) -> dict:
             "mem_mib": round(mem / 2**20, 1),
         }
     rate = {k: round((b.pg[k] - a.pg[k]) / seconds, 2) for k in b.pg}
-    redis = {k: round((b.redis[k] - a.redis[k]) / seconds, 2) for k in b.redis}
     control = sum(p["cpu_pct"] for p in processes.values())
     return {
         "seconds": round(seconds, 1),
@@ -204,17 +171,15 @@ def delta(a: Snapshot, b: Snapshot) -> dict:
         else None,
         "workload_mem_mib": round(b.workloads[2] / 2**20, 1),
         "pg_per_s": rate,
-        "redis_per_s": redis,
         "processes": processes,
     }
 
 
 def main() -> None:
-    target = sys.argv[1]
-    seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 60
-    first = snapshot(target)
+    seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 60
+    first = snapshot()
     time.sleep(seconds)
-    print(json.dumps(delta(first, snapshot(target)), indent=1))
+    print(json.dumps(delta(first, snapshot()), indent=1))
 
 
 if __name__ == "__main__":

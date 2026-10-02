@@ -102,8 +102,8 @@ func (e *Edge) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var payment *billing.PaymentRequiredError
 	var limit *billing.LimitError
 	switch {
-	// Billing's refusals, with the reference's statuses: the account must
-	// pay, or is at a plan limit it can act on.
+	// Billing's refusals: the account must pay (402), or is at a plan limit
+	// it can act on (409).
 	case errors.As(err, &payment):
 		writeError(w, http.StatusPaymentRequired, payment.Error())
 	case errors.As(err, &limit):

@@ -27,7 +27,7 @@ const InvokeWait = 60 * time.Second
 var ErrInvalidArguments = errors.New("invalid request payload")
 
 // InvocationArguments turns an HTTP body and query into a function's JSON
-// arguments, as the reference platform did: the body's `args` and `kwargs`
+// arguments: the body's `args` and `kwargs`
 // when present, else the whole body as keyword arguments, plus each query
 // parameter as a keyword argument, a float when it parses as one and a list
 // when it repeats.
@@ -170,8 +170,7 @@ func (e *Edge) invoke(w http.ResponseWriter, r *http.Request, t target) {
 		e.fail(w, r, err)
 		return
 	}
-	// Function invocations are tasks; the header names it, as the
-	// reference platform's did.
+	// Function invocations are tasks; the header names it.
 	w.Header().Set("X-Task-Id", out.Task.Id.String())
 	w.Header().Add("Access-Control-Expose-Headers", "X-Task-Id")
 	w.Header().Set("Content-Type", "application/json")

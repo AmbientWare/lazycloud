@@ -34,8 +34,7 @@ import (
 )
 
 const (
-	// callbackAttempts is how many times one callback is sent, as in the
-	// reference.
+	// callbackAttempts is how many times one callback is sent.
 	callbackAttempts = 3
 	// callbackTimeout bounds one delivery; the lease outlasts it.
 	callbackTimeout = 5 * time.Second
@@ -51,7 +50,7 @@ const (
 	purgeBatch    = 1000
 )
 
-// retryDelays separate the attempts, as in the reference.
+// retryDelays separate the attempts.
 var retryDelays = [...]time.Duration{250 * time.Millisecond, 750 * time.Millisecond} //nolint:gochecknoglobals // constant table
 
 // CallbackConfig configures delivery.
@@ -292,8 +291,7 @@ func (c *Callbacks) send(ctx context.Context, row CallbackDeliveriesRow) (retry 
 	idempotency := sha256.Sum256(fmt.Appendf(nil, "%s:%d:%s", subject, row.Attempt, row.Event))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", hex.EncodeToString(idempotency[:]))
-	// A request's callback names the request where a task's names the task,
-	// as the reference's per-request task did.
+	// A request's callback names the request where a task's names the task.
 	req.Header.Set("X-Task-ID", subject.String())
 	if row.RequestID != nil {
 		req.Header.Set("X-Request-ID", subject.String())
@@ -318,7 +316,7 @@ func (c *Callbacks) send(ctx context.Context, row CallbackDeliveriesRow) (retry 
 
 // Sign is the X-Task-Signature of body sent at timestamp: hex
 // HMAC-SHA256, keyed by the workspace signing key, of the base64 body, a
-// colon and the timestamp, as in the reference.
+// colon and the timestamp.
 func Sign(key string, body []byte, timestamp string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(base64.StdEncoding.EncodeToString(body) + ":" + timestamp))
@@ -341,11 +339,10 @@ func subjectOf(row CallbackDeliveriesRow) uuid.UUID {
 	return *row.RequestID
 }
 
-// callbackBody is the reference's body, compact with sorted keys. A result
+// callbackBody is the callback body, compact with sorted keys. A result
 // above maxCallbackResultBytes is left out and data_omitted is set. A
-// request's body reports it as the reference reported the task it made for
-// the request: task_id and root_task_id are the request id, and data holds
-// the response's status code and size.
+// request's body has the shape of a task's: task_id and root_task_id are the
+// request id, and data holds the response's status code and size.
 func callbackBody(row CallbackDeliveriesRow, result *CallbackResultRow) ([]byte, error) {
 	subject := subjectOf(row)
 	root := subject

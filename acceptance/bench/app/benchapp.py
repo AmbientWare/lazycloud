@@ -1,4 +1,4 @@
-"""The benchmark app, deployed unchanged to the reference and the rewrite."""
+"""The benchmark app, deployed unchanged to every commit under test."""
 
 from __future__ import annotations
 
@@ -11,14 +11,11 @@ from lazycloud import App, Autoscaler, Image
 
 app = App("lcbench")
 image = Image(python_version="3.12")
-# The reference runs workloads on a joined machine only when they pin it.
-MACHINE = os.environ.get("LCBENCH_MACHINE") or None
 
 
 @app.function(
     name="echo",
     image=image,
-    machine=MACHINE,
     cpu=0.25,
     memory="256Mi",
     concurrency=4,
@@ -34,7 +31,6 @@ def echo(x: int) -> int:
 @app.function(
     name="hold",
     image=image,
-    machine=MACHINE,
     cpu=0.25,
     memory="256Mi",
     keep_warm=60,
@@ -54,7 +50,6 @@ class Pong(BaseModel):
     route="/ping",
     methods=["POST"],
     image=image,
-    machine=MACHINE,
     cpu=0.25,
     memory="256Mi",
     concurrency=64,
@@ -75,7 +70,6 @@ CALLBACK_URL = os.environ.get("LCBENCH_CALLBACK_URL") or None
     route="/pingcb",
     methods=["POST"],
     image=image,
-    machine=MACHINE,
     cpu=0.25,
     memory="256Mi",
     concurrency=64,
@@ -93,7 +87,6 @@ def pingcb(n: int = 0) -> Pong:
     route="/coldping",
     methods=["POST"],
     image=image,
-    machine=MACHINE,
     cpu=0.25,
     memory="256Mi",
     keep_warm=1,
@@ -133,7 +126,6 @@ async def events(scope, receive, send):
 stream = app.asgi(
     name="stream",
     image=image,
-    machine=MACHINE,
     cpu=0.25,
     memory="256Mi",
     concurrent_requests=64,

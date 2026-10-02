@@ -1,7 +1,7 @@
 """Serve an HTTP workload on the listening socket the supervisor passes in.
 
 Endpoints turn a JSON body and the query into arguments and the return value
-into a response, as the reference platform did. ASGI and realtime workloads
+into a response. ASGI and realtime workloads
 serve the loaded application as it is. uvicorn speaks HTTP/1.1 and WebSockets
 on the socket; the supervisor in front of it admits requests and forwards
 them.
@@ -309,7 +309,7 @@ Headers = list[tuple[bytes, bytes]]
 
 
 def endpoint_response(result: Any) -> tuple[int, Headers, bytes]:
-    """Map a return value to a response, as the reference platform did.
+    """Map a return value to a response.
 
     Response objects pass through; `(body, status)` and `(body, status,
     headers)` set the status and headers; bytes are octet-stream; strings are

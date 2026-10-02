@@ -73,7 +73,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
 	}
-	// Secrets override user values of the same name, as in the reference.
+	// Secrets override user values of the same name.
 	for _, key := range slices.Sorted(maps.Keys(spec.GetSecrets())) {
 		env = append(env, key+"="+spec.GetSecrets()[key])
 	}

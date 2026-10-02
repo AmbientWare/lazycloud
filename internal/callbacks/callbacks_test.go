@@ -239,11 +239,13 @@ func TestAFloodFromOneWorkspaceDoesNotDelayAnother(t *testing.T) {
 	vault := newSecrets(t, pool)
 	var mu sync.Mutex
 	var order []string
+	// Arrival order, recorded before the receiver's delay: a wave's requests
+	// all arrive before any of them finishes and frees a slot for the next.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(20 * time.Millisecond)
 		mu.Lock()
 		order = append(order, r.Header.Get("X-Task-ID"))
 		mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()

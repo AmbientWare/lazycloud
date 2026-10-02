@@ -1,4 +1,19 @@
-# Local services
+# Local stack
+
+`deploy/local/run.sh start` starts the services below, builds the binaries
+and the managed Python runtime, migrates, creates the `dev` user, workspace
+and token, and runs the server, scheduler and agent as host processes. It
+prints the SDK environment to export; `deploy/local/run.sh stop` ends them.
+State, logs and credentials live in `.lazycloud/`.
+
+With that environment exported, `lazycloud deploy` and the SDK work against
+the stack, and `lazycloud machine join --name m1 --workspaces dev` enrolls
+another machine from the agent release run.sh published. The end-to-end
+Python checks run with `LAZYCLOUD_TEST_ENDPOINT`, `LAZYCLOUD_TEST_TOKEN` and
+`LAZYCLOUD_TEST_WORKSPACE` set to the exported values: `uv run --group dev
+pytest -x -s python/tests/acceptance`.
+
+## Services
 
 `docker compose up -d --wait postgres object-store` starts PostgreSQL on
 127.0.0.1:25432 and Garage's S3 API on 127.0.0.1:23900 and on the Docker

@@ -1,20 +1,52 @@
 # Repository rules
 
-Read [update.md](update.md) before planning or changing an owner. Follow its target
-architecture, product baseline and completion requirements. Resolve
-conflicts before implementation. Keep task plans and progress with the task.
-
 Guidance lives in AGENTS.md files, which Claude Code also loads; add no
 CLAUDE.md beside them. These files contain development standards and
-constraints.
+constraints. Keep task plans and progress with the task, not in the tree.
+
+## Architecture
+
+- Processes: `cmd/server` serves the public API, the host connection (gRPC)
+  and the edge that forwards workload HTTP, WebSocket and TCP traffic.
+  `cmd/scheduler` runs execution planning, placement, the cloud fleet, cron,
+  callbacks, email and sweeps; replicas share passes through advisory locks
+  and one elected leader runs the timers. `cmd/agent` runs on each host and
+  supervises its containers. `cmd/supervisor` is PID 1 in every workload
+  container and runs the language runner (`python/runner`) over the local
+  runner protocol. `web/` is the dashboard.
+- Owners are packages under `internal/`: control (apps, releases), execution
+  (admission, attempts, container lifecycle, replica counts), scheduling
+  (placement), compute (hosts, fleet, agent releases), identity, billing,
+  storage, images, edge, schedules, secrets, observability, notifications.
+  Each package comment names what it owns.
+- PostgreSQL is the single durable authority. A transaction that changes
+  state also calls `pg_notify`, and `internal/database` listeners wake the
+  waiters and scheduler loops once it commits; leader timers catch work no
+  notification announces. There is no Redis. Object stores and host caches
+  hold bytes.
+- Host runtime packages (agent, supervisor, diskengine) have no database
+  access and reach the control plane only through the host protocol;
+  depguard in `.golangci.yml` enforces it.
+- Contracts live in `contracts/`: `openapi.yaml` (public API),
+  `host/v1/*.proto` (host session, data and container link) and
+  `runner.yaml` (local runner protocol). Go bindings come from `go generate`
+  (oapi-codegen, buf, sqlc), Python models from `datamodel-codegen` profiles
+  in pyproject.toml, TypeScript types from `bun run apigen`. Regenerate every
+  binding in the change that edits a contract.
+- Containers hold no platform credential. In-container SDK calls go to the
+  container API socket the supervisor serves; the agent forwards each call
+  as `ContainerAPI` tagged with the container, and the server authorizes it
+  against the container's current assignment and workspace.
+- `migrations/` is one ordered SQL chain; `server migrate` and server start
+  apply it.
 
 ## Ownership and implementation
 
 - Build backend and host runtime code in Go. Keep the public SDK, CLI and
   Python runner in Python, and the frontend in TypeScript.
-- Name code for its responsibility: execution, scheduler, agent. No GoRuntime,
-  go_backend, new_api, V2 or legacy wrappers in product code. Actual public
-  protocol versions are distinct from implementation migration labels.
+- Name code for its responsibility: execution, scheduler, agent. No language,
+  version or legacy labels in product names; public protocol versions such as
+  `/v1` are the exception.
 - Domain modules own decisions, workflows and transitions. Repositories own
   queries. Binaries own composition and process lifetime. Transports validate,
   authorize, invoke an owner and map typed results.
@@ -27,8 +59,9 @@ constraints.
 - Prefer concrete dependencies. Define interfaces at the consumer, and only for
   actual substitution or external boundaries. Avoid service locators, giant dependency bundles, forwarding
   layers, speculative frameworks and abstractions used only by tests.
-- PostgreSQL owns durable state; Redis owns transient coordination and rebuildable
-  projections; object stores and filesystems own bytes. No duplicate authorities.
+- PostgreSQL owns durable state and NOTIFY wake-ups; object stores and
+  filesystems own bytes. No duplicate authorities. A cache or projection
+  names its durable source and how it rebuilds.
 - Use one production implementation. No fake success, weaker test backends,
   compatibility shims or fallback implementations. Delete superseded paths.
 - SDK and runner remain independent of backend implementations. Cross-language
@@ -36,9 +69,8 @@ constraints.
 
 ## Development
 
-- Use one root Go module with a pinned `toolchain` directive, added with the
-  first Go code. Pin code generators and linters as `tool` dependencies in
-  go.mod. Keep dependencies small and justified. Use gofmt, go vet,
+- Use one root Go module with a pinned `toolchain` directive. Pin code
+  generators and linters as `tool` dependencies in go.mod. Keep dependencies small and justified. Use gofmt, go vet,
   golangci-lint and focused tests.
 - Use typed identifiers and typed string constants for enums, checked for
   exhaustive switches. Never let a Go zero value stand for "omitted"; use
@@ -73,19 +105,17 @@ constraints.
 - Name the invariant behind each transaction, lease and lock. Acquire ownership
   when work can execute, fence stale owners and keep retries bounded and fair.
   A batch failure must not discard successful results.
-- Design new resource APIs and typed errors; backward compatibility is not
-  required. Keep operation IDs stable within the new API, paginate collections,
-  and coordinate changed contracts with SDK, CLI, runner and web consumers.
+- Design resource APIs with typed errors. Keep operation IDs stable, paginate
+  collections, and coordinate changed contracts with SDK, CLI, runner and web
+  consumers.
 - Authorize each requested workspace against token scope and membership. Only an
   administrator may reach tenant workspaces without membership. Worker commands
   must also match current assignment authority.
 - Separate wire/storage/domain types only where meanings differ. Do not copy
   every model into every layer. Update contracts and Python/runner/web consumers
   together; avoid hand-maintained parallel schemas.
-- Use a fresh schema and SQL migration chain for the new platform. Freeze every
-  revision once deployed. Old migration history remains in the pinned reference;
-  do not import it or add compatibility bridges by default. Production resets
-  and data imports require separately authorized scope.
+- Freeze every migration once deployed; add a new one for each change.
+  Production resets and data imports require separately authorized scope.
 
 ## Acceptance
 
@@ -95,23 +125,24 @@ constraints.
 - Retain tests only for unique proof of authorization, integrity, durability,
   concurrency, cleanup or public behavior. Do not test implementation shape,
   mock call order, wiring, snapshots or behavior already proven elsewhere.
-- Owner tests live beside code; root tests cover cross-owner behavior. Do not
-  import old backend code or E2E internals to make replacement tests pass.
+- Owner tests live beside code; `acceptance/` covers cross-owner workflows
+  against real PostgreSQL, Docker and the managed runtime.
 - Run focused checks with visible output. Use gofmt, go vet, golangci-lint and
-  targeted `go test -race` once Go code exists; use pytest -x for Python. Broad gates support
+  targeted `go test -race`; use pytest -x for Python. Owner tests need
+  `docker compose -f compose.test.yaml up -d --wait`. Broad gates support
   releases or changes that span those owners.
 - Measure admission/placement separately from capacity wait and user execution.
   Record affected latency, queries, bytes, round trips and contention with idle,
   active and growing-backlog workloads.
 - Missing services or credentials are acceptance gaps, not permission for mocks.
   Name unverified boundaries and clean up every task resource.
-- Deleting baseline code is preparation. Compare completed equivalent capability
-  against the pinned reference before claiming simplification or performance.
+- Back simplification and performance claims with before/after measurements of
+  the same capability.
 
 ## Safety and delivery
 
-- Inspect dirty trees and preserve unrelated work. The reference checkout is
-  read-only. Never copy its credentials, environment or runtime state.
+- Inspect dirty trees and preserve unrelated work. Never copy another
+  checkout's credentials, environment or runtime state.
 - Local backends use isolated local databases, queues and development credentials.
   Do not inherit another checkout's .env. Reset only task-owned Compose projects.
 - Inspect external systems before changing them. Delete only exact task-owned
@@ -122,9 +153,9 @@ constraints.
   default-test first. Verify profiles and STS identity. Never change accounts
   to bypass a failure or copy credentials into workloads. CI uses OIDC.
 - Use a task branch and one PR per coherent change. Review and pass relevant
-  checks before merge or deployment. Do not ship an incomplete replacement.
-- Use the parallel-agent protocol in update.md when delegating. Assign disjoint
-  owners/files after their contracts are agreed; one integrator owns shared
-  definitions and root build files. Verify returned work and integrated evidence.
+  checks before merge or deployment.
+- When delegating, agree contracts first, then assign disjoint owners and files;
+  one integrator owns shared definitions and root build files. Verify returned
+  work and integrated evidence.
 - Finish the requested scope, then stop. No commit attribution trailers.
   Report outcomes, blockers and unverified boundaries briefly.

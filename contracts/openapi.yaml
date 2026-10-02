@@ -582,7 +582,7 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         default: { $ref: "#/components/responses/Error" }
 
-  # Control packet: apps, deployments, task listing, containers and logs.
+  # Control: apps, deployments, task listing, containers and logs.
 
   /v1/workspaces/{workspace}/apps:
     parameters:
@@ -1967,7 +1967,7 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
-  # Endpoints packet: HTTP workloads, custom domains and previews.
+  # Endpoints: HTTP workloads, custom domains and previews.
 
   /v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/invoke:
     parameters:
@@ -3809,7 +3809,7 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
-    # Control packet parameters.
+    # Control parameters.
     AppRefPath:
       name: app
       in: path
@@ -5490,7 +5490,7 @@ components:
         revision: { type: string }
         expires_at: { type: string, format: date-time }
 
-    # Control packet schemas.
+    # Control
 
     AppRef:
       description: An app name or id.
@@ -5918,7 +5918,7 @@ components:
           type: string
         time: { type: string, format: date-time }
 
-    # Endpoints packet schemas.
+    # Endpoints
 
     HttpSpec:
       description: >-

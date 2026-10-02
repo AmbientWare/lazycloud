@@ -18,7 +18,7 @@ type InvalidCronError struct {
 func (e *InvalidCronError) Error() string { return e.Message }
 
 // Cron is a parsed expression. Times are UTC and minute-precise. The syntax
-// and matching follow croniter, which the reference used.
+// and matching follow croniter.
 type Cron struct {
 	expression string
 	minutes    [60]bool
@@ -89,8 +89,8 @@ const searchYears = 28
 
 // ParseCron normalizes and parses a schedule: five cron fields, an alias
 // such as @hourly, or `every N` minutes, hours or days. Normalization
-// lowercases, collapses whitespace and rewrites intervals as cron fields,
-// as the reference did. An expression that can never fire is invalid.
+// lowercases, collapses whitespace and rewrites intervals as cron fields.
+// An expression that can never fire is invalid.
 func ParseCron(expression string) (Cron, error) {
 	normalized := strings.ToLower(strings.Join(strings.Fields(expression), " "))
 	if normalized == "" {

@@ -1,6 +1,6 @@
-"""Before/after rows for one platform from two result files.
+"""Markdown A/B rows from two result files; the latest record of each scenario wins.
 
-    python compare.py <before.jsonl> <after.jsonl>
+python compare.py <a.jsonl> <b.jsonl>
 """
 
 from __future__ import annotations
@@ -13,7 +13,9 @@ def load(path: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for line in open(path):
         d = json.loads(line)
-        if d["scenario"] == "remote" and d["cold"].get("n", 0) < out.get("remote", {}).get("cold", {}).get("n", 0):
+        if d["scenario"] == "remote" and d["cold"].get("n", 0) < out.get("remote", {}).get(
+            "cold", {}
+        ).get("n", 0):
             continue
         out[d["scenario"]] = d
     return out
@@ -28,9 +30,23 @@ def rows(r: dict[str, dict]) -> dict[str, str]:
     out = {}
     if "remote" in r:
         phases = r["remote"]["cold_phases"]
-        out["cold .remote() p50 / p95 ms"] = f"{r['remote']['cold']['p50']:g} / {r['remote']['cold']['p95']:g}"
-        out["cold assigned-to-ready ms (median)"] = f"{median([p['container_ready_ms'] for p in phases]):g}"
+        out["cold .remote() p50 / p95 ms"] = (
+            f"{r['remote']['cold']['p50']:g} / {r['remote']['cold']['p95']:g}"
+        )
+        out["cold assigned-to-ready ms (median)"] = (
+            f"{median([p['container_ready_ms'] for p in phases]):g}"
+        )
         out["warm .remote() p50 ms"] = f"{r['remote']['warm']['p50']:g}"
+    if "deploy" in r:
+        out["deploy p50 s"] = f"{r['deploy']['deploy']['p50'] / 1000:g}"
+    for name, label in (("endpoint-warm", "warm endpoint"), ("endpoint-cold", "cold endpoint")):
+        if name in r:
+            out[f"{label} p50 / p95 ms"] = (
+                f"{r[name]['latency']['p50']:g} / {r[name]['latency']['p95']:g}"
+            )
+    if "endpoint-callback" in r:
+        d = r["endpoint-callback"]["callback_delay"]
+        out["callback delay p50 / p95 ms"] = f"{d.get('p50', '-')} / {d.get('p95', '-')}"
     for name in ("map-200", "map-2000", "map-10000", "map-2000-schedulers-2"):
         if name not in r:
             continue
@@ -52,10 +68,10 @@ def rows(r: dict[str, dict]) -> dict[str, str]:
 
 
 def main() -> None:
-    before, after = rows(load(sys.argv[1])), rows(load(sys.argv[2]))
-    print("| Measure | Before | After |\n| --- | --- | --- |")
-    for key in before | after:
-        print(f"| {key} | {before.get(key, '-')} | {after.get(key, '-')} |")
+    a, b = rows(load(sys.argv[1])), rows(load(sys.argv[2]))
+    print("| Measure | A | B |\n| --- | --- | --- |")
+    for key in a | b:
+        print(f"| {key} | {a.get(key, '-')} | {b.get(key, '-')} |")
 
 
 if __name__ == "__main__":

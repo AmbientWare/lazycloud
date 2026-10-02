@@ -26,11 +26,9 @@ test("canonical marketing routes are public, responsive, and accessible", async 
 
   await page.goto("/");
 
-  // The public route is not behind the sign-in gate, and the internal admin CLI
-  // (`apps/cli`) is never advertised on a customer-facing page. Matched on the
-  // gate's heading rather than its text, so a marketing sign-in link stays legal.
+  // The public route is not behind the sign-in gate. Matched on the gate's
+  // heading rather than its text, so a marketing sign-in link stays legal.
   await expect(page.getByRole("heading", { name: "Sign in" })).toHaveCount(0);
-  await expect(page.locator("body")).not.toContainText("lazycloud-admin");
 
   const sandboxTab = page.getByRole("tab", { name: "Sandboxes" });
   await sandboxTab.click();

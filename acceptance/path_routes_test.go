@@ -67,8 +67,7 @@ func readAll(t *testing.T, resp *http.Response) string {
 }
 
 // The dashboard reaches deployed endpoints and ASGI apps same-origin on the
-// API host with its session, as the reference's API served them: the
-// workload sees neither credential, streams stream, and another workspace's
+// API host with its session: the workload sees neither credential, streams stream, and another workspace's
 // path is refused.
 func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 	p := startPlatform(t)

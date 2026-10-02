@@ -214,11 +214,13 @@ func planNumber(line, key string) int {
 }
 
 // constantCost fails each scan whose buffers grew from small to large by
-// more than slack: a read that walks the grown rows exceeds it many times.
+// more than slack and to more than double: a read that walks the grown rows
+// exceeds both many times, while index upkeep on a write varies by a few
+// dozen pages with how the B-trees happen to split.
 func constantCost(t *testing.T, small, large map[string]int, slack int, grown string) {
 	t.Helper()
 	for name, before := range small {
-		if after := large[name]; after > before+slack {
+		if after := large[name]; after > before+slack && after > 2*before {
 			t.Errorf("%s reads %d buffers after %s, %d before: its cost follows the grown rows", name, after, grown, before)
 		}
 	}

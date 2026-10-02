@@ -10,8 +10,7 @@ import (
 )
 
 // workloadRoutes serves deployed endpoints and ASGI apps on the API host,
-// as the reference platform's API did, so the dashboard reaches them
-// same-origin with its session:
+// so the dashboard reaches them same-origin with its session:
 //
 //	/v1/workspaces/{workspace}/apps/{app}/workloads/{endpoint|asgi}/{name}[/versions/{version}]/invoke[/{path...}]
 //

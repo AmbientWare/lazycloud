@@ -1,11 +1,13 @@
 #!/bin/sh
 # deploy/local/run.sh on benchmark ports, Compose project and state directory,
-# so it runs beside other local stacks.
-# Usage: rewrite-stack.sh start|stop|agent-stop|agent-start|scheduler2|down
+# so it runs beside other local stacks. Builds the tree at $LCBENCH_TREE, by
+# default the checkout holding this script.
+# Usage: stack.sh start|stop|agent-stop|agent-start|scheduler2|scheduler2-stop|down
 set -eu
-cd "$(dirname "$0")/../.."
-state=${LCBENCH_STATE:-/tmp/lcbench/new}
-compose="docker compose -p lcbench-new -f compose.yaml -f acceptance/bench/compose.rewrite.yaml"
+bench=$(cd "$(dirname "$0")" && pwd)
+cd "${LCBENCH_TREE:-$bench/../..}"
+state=${LCBENCH_STATE:-/tmp/lcbench/stack}
+compose="docker compose -p lcbench -f compose.yaml -f $bench/compose.bench.yaml"
 export GOTOOLCHAIN=go1.27.1
 export LAZYCLOUD_DATABASE_URL="postgres://lazycloud:lazycloud@127.0.0.1:26432/lazycloud?sslmode=disable"
 export LAZYCLOUD_OBJECT_STORE_ENDPOINT=http://127.0.0.1:26900
@@ -69,6 +71,8 @@ start() {
   if [ ! -f "$state/token" ]; then
     bin/server admin create-user --email dev@lazycloud.local --admin >/dev/null
     bin/server admin create-workspace --name dev --owner-email dev@lazycloud.local >/dev/null
+    # The backlog phase measures fairness between two workspaces.
+    bin/server admin create-workspace --name dev2 --owner-email dev@lazycloud.local >/dev/null
     bin/server admin create-token --email dev@lazycloud.local --name dev >"$state/token"
   fi
   bin/server admin set-complimentary --email dev@lazycloud.local
@@ -87,7 +91,7 @@ case "${1:-}" in
   stop) stop ;;
   agent-stop) kill "$(cat "$state/agent.pid")"; rm -f "$state/agent.pid" ;;
   agent-start) agent ;;
-  scheduler-stop2) [ ! -f "$state/scheduler2.pid" ] || { kill "$(cat "$state/scheduler2.pid")" || true; rm -f "$state/scheduler2.pid"; } ;;
+  scheduler2-stop) [ ! -f "$state/scheduler2.pid" ] || { kill "$(cat "$state/scheduler2.pid")" || true; rm -f "$state/scheduler2.pid"; } ;;
   scheduler2)
     bin/scheduler >"$state/logs/scheduler2.log" 2>&1 &
     echo $! >"$state/scheduler2.pid" ;;
@@ -100,5 +104,5 @@ case "${1:-}" in
       [ -z "$host" ] || docker ps -aq --filter "label=lazycloud.host-id=$host" | xargs -r docker rm -f >/dev/null
     fi
     $compose down -v ;;
-  *) echo "usage: $0 start|stop|agent-stop|agent-start|scheduler2|down" >&2; exit 2 ;;
+  *) echo "usage: $0 start|stop|agent-stop|agent-start|scheduler2|scheduler2-stop|down" >&2; exit 2 ;;
 esac

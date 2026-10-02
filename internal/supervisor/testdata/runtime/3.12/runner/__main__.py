@@ -1,8 +1,7 @@
 """A minimal runner for host runtime tests.
 
 It speaks contracts/runner.yaml with JSON payloads only, so tests exercise the
-supervisor and agent against the real protocol without the Python packet's
-runner. Inputs are {"args": [...], "kwargs": {...}}.
+supervisor and agent against the real protocol without python/runner. Inputs are {"args": [...], "kwargs": {...}}.
 """
 
 import importlib

@@ -66,7 +66,7 @@ it("lists a workload's runs with View run when its row opens", async () => {
   );
   await act(() => router.load());
 
-  // The workload stays one row, as the reference showed it.
+  // The workload stays one row.
   const workload = await screen.findByText("summarize");
   expect(screen.queryByText("View run")).toBeNull();
   const details = workload.closest("details");

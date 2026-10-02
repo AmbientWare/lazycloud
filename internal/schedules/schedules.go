@@ -25,7 +25,7 @@ import (
 const fireBatch = 100
 
 // noArguments is the cloudpickled `{"args": [], "kwargs": {}}` every
-// occurrence passes, as in the reference: a scheduled function takes no
+// occurrence passes: a scheduled function takes no
 // arguments, and a pickled input keeps a cloudpickled result, so any return
 // value is kept. It is plain protocol-4 pickle of builtins.
 var noArguments = []byte("\x80\x04\x95\x19\x00\x00\x00\x00\x00\x00\x00}\x94(\x8c\x04args\x94]\x94\x8c\x06kwargs\x94}\x94u.") //nolint:gochecknoglobals // constant bytes

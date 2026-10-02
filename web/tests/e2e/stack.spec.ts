@@ -188,8 +188,8 @@ test("the playground calls an endpoint, and an ASGI app answers the session on t
   await expect(page.getByText(/^HTTP 200/)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(`"hello": "${who}"`)).toBeVisible();
 
-  // The workload page offers no playground for an ASGI app, as the
-  // reference did not; its path answers the page's own session the same way.
+  // The workload page offers no playground for an ASGI app; its path
+  // answers the page's own session the same way.
   await page.goto(`/w/${workspace}/apps/${app}/workloads/asgi/service`);
   await expect(page.getByRole("heading", { name: "service" })).toBeVisible();
   const asgi = await page.evaluate(async (path) => {

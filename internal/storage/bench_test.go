@@ -8,7 +8,7 @@ import (
 	. "github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-// Run with -bench . -benchtime 5000x. The figures go to tasks/storage.md.
+// Run with -bench . -benchtime 5000x.
 
 func BenchmarkQueuePut(b *testing.B) {
 	f := newFixture(b, `{}`)

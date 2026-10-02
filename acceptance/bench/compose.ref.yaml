@@ -1,9 +1,0 @@
-# Overrides the reference compose.yaml for an isolated benchmark stack.
-# Copied into the reference checkout as compose.bench.yaml.
-services:
-  postgres:
-    # Durable defaults (fsync on); pg_stat_statements counts recurring queries.
-    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all", "-c", "pg_stat_statements.max=10000"]
-  connection-ingress:
-    ports: !override
-      - "127.0.0.1:31443:443"

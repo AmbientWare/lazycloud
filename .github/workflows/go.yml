@@ -16,7 +16,7 @@ on:
       - ".golangci.yml"
       - "**/sqlc.yaml"
   push:
-    branches: [main, go-rewrite]
+    branches: [main]
 
 permissions:
   contents: read

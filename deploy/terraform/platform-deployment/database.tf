@@ -3,7 +3,7 @@
 # group and admin; size them in the dashboard or with
 # `pscale size cluster list --engine neki`. Processes connect to the router
 # on 5432 over TLS; the router pools backends itself, so there is no
-# PgBouncer. The org must have joined the Neki Platform Preview.
+# client-side pooler. The org must have joined the Neki Platform Preview.
 resource "planetscale_neki_branch" "main" {
   organization       = var.planetscale_organization
   database           = var.deployment

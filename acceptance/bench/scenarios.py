@@ -1,10 +1,10 @@
-"""Benchmark scenarios, run with one platform's own SDK through sdk.sh.
+"""Benchmark scenarios, run with the tree's own SDK through sdk.sh.
 
-    sdk.sh ref|new python -m scenarios <scenario> [args]
+    sdk.sh python -m scenarios <scenario> [args]
 
-Each scenario prints one JSON object and appends it to
-$LCBENCH_STATE_ROOT/results/<target>.jsonl. Timings come from the client
-clock; phase breakdowns come from each platform's own PostgreSQL rows.
+Each scenario prints one JSON object and appends it to $LCBENCH_RESULTS
+(default $LCBENCH_ROOT/results.jsonl). Timings come from the client clock;
+phase breakdowns come from the stack's PostgreSQL rows.
 """
 
 from __future__ import annotations
@@ -23,10 +23,11 @@ from pathlib import Path
 import httpx
 import sample
 
-TARGET = os.environ["LCBENCH_TARGET"]
-STATE = Path(os.environ.get("LCBENCH_STATE_ROOT", "/tmp/lcbench"))
+ROOT = Path(os.environ.get("LCBENCH_ROOT", "/tmp/lcbench"))
+STATE = Path(os.environ.get("LCBENCH_STATE", ROOT / "stack"))
+RESULTS = Path(os.environ.get("LCBENCH_RESULTS", ROOT / "results.jsonl"))
 TOKEN = os.environ["LAZYCLOUD_TOKEN"]
-PG = f"{sample.PROJECT[TARGET]}-postgres-1"
+PG = sample.POSTGRES
 
 
 def sql(query: str) -> list[list[str]]:
@@ -74,13 +75,12 @@ def dist(values: list[float], scale: float = 1000.0) -> dict:
 
 def record(name: str, result: dict) -> None:
     result = {
-        "target": TARGET,
         "scenario": name,
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         **result,
     }
-    (STATE / "results").mkdir(parents=True, exist_ok=True)
-    with (STATE / "results" / f"{TARGET}.jsonl").open("a") as f:
+    RESULTS.parent.mkdir(parents=True, exist_ok=True)
+    with RESULTS.open("a") as f:
         f.write(json.dumps(result) + "\n")
     print(json.dumps(result, indent=1))
 
@@ -91,20 +91,12 @@ def epoch(column: str) -> str:
 
 # Per-task timeline columns: created, container created, assigned, ready,
 # attempt started, attempt finished, task finished.
-if TARGET == "ref":
-    TASKS = f"""select t.id, {epoch("t.created_at")}, {epoch("c.created_at")}, {epoch("c.scheduling_assigned_at")},
-        {epoch("c.workload_ready_at")}, {epoch("a.started_at")}, {epoch("a.finished_at")}, {epoch("t.finished_at")}, t.status, t.workspace_id, c.id
-      from tasks t left join task_attempts a on a.task_id = t.id and a.attempt_number = t.attempt_number
-      left join containers c on c.id = a.container_id"""
-    ACTIVE_CONTAINERS = """select count(*) from containers c join stubs s on s.id = c.stub_id
-      where s.name = '{name}' and c.status in ('pending', 'running')"""
-else:
-    TASKS = f"""select t.id, {epoch("t.created_at")}, {epoch("c.created_at")}, {epoch("c.assigned_at")},
-        {epoch("c.ready_at")}, {epoch("a.started_at")}, {epoch("a.finished_at")}, {epoch("t.finished_at")}, t.status, t.workspace_id, c.id
-      from tasks t left join attempts a on a.id = t.current_attempt_id
-      left join containers c on c.id = a.container_id"""
-    ACTIVE_CONTAINERS = """select count(*) from containers c join releases r on r.id = c.release_id
-      join workloads w on w.id = r.workload_id where w.name = '{name}' and c.state <> 'stopped'"""
+TASKS = f"""select t.id, {epoch("t.created_at")}, {epoch("c.created_at")}, {epoch("c.assigned_at")},
+    {epoch("c.ready_at")}, {epoch("a.started_at")}, {epoch("a.finished_at")}, {epoch("t.finished_at")}, t.status, t.workspace_id, c.id
+  from tasks t left join attempts a on a.id = t.current_attempt_id
+  left join containers c on c.id = a.container_id"""
+ACTIVE_CONTAINERS = """select count(*) from containers c join releases r on r.id = c.release_id
+  join workloads w on w.id = r.workload_id where w.name = '{name}' and c.state <> 'stopped'"""
 
 
 def tasks_since(t0: float) -> list[list[float | str | None]]:
@@ -169,7 +161,7 @@ def deploy(runs: str = "5") -> None:
         times.append(elapsed)
         for url in re.findall(r"http://[a-z0-9-]+\.lazycloud\.localhost:\d+[^\s,│]*", out.stdout):
             urls[url.split("//")[1].split("-")[0]] = url
-    (STATE / f"{TARGET}-urls.json").write_text(json.dumps(urls))
+    (STATE / "urls.json").write_text(json.dumps(urls))
     record("deploy", {"deploy": dist(times), "failures": failures, "urls": urls})
 
 
@@ -227,9 +219,9 @@ def remote(runs: str = "5", warm: str = "30") -> None:
 
 def _sampled(fn):
     """Run fn while sampling platform cost; return (fn result, cost delta)."""
-    before = sample.snapshot(TARGET)
+    before = sample.snapshot()
     value = fn()
-    return value, sample.delta(before, sample.snapshot(TARGET))
+    return value, sample.delta(before, sample.snapshot())
 
 
 def map_(n: str, label: str = "") -> None:
@@ -365,7 +357,7 @@ def fairness(t0: str, released: str) -> None:
 
 
 def _urls() -> dict:
-    return json.loads((STATE / f"{TARGET}-urls.json").read_text())
+    return json.loads((STATE / "urls.json").read_text())
 
 
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "content-type": "application/json"}
@@ -510,7 +502,7 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
     lock = threading.Lock()
 
     class Hook(http.server.BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             body = self.rfile.read(int(self.headers.get("content-length") or 0))
             now = time.time()
             try:
@@ -532,7 +524,7 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
         # a one-second retransmit to the measured delay.
         request_queue_size = 1024
 
-    server = Server(("0.0.0.0", CALLBACK_PORT), Hook)  # noqa: S104
+    server = Server(("0.0.0.0", CALLBACK_PORT), Hook)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     ended: dict[str, float] = {}
     began: dict[str, float] = {}
@@ -551,7 +543,9 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
             time.sleep(0.1)
 
     async def main() -> None:
-        limits = httpx.Limits(max_connections=int(concurrency) + 10, max_keepalive_connections=int(concurrency) + 10)
+        limits = httpx.Limits(
+            max_connections=int(concurrency) + 10, max_keepalive_connections=int(concurrency) + 10
+        )
         gate = asyncio.Semaphore(int(concurrency))
         async with httpx.AsyncClient(timeout=300, headers=HEADERS, limits=limits) as client:
 
@@ -601,17 +595,27 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
             missing = max(0, len(ends) - len(firsts))
             duplicates = sum(len(v) - 1 for v in arrived.values())
             matched = "arrival order"
-    record("endpoint-callback", {
-        "requests": int(n), "concurrency": int(concurrency), "wall_s": round(wall[0], 2),
-        "latency": dist(lat), "codes": codes, "matched_by": matched,
-        "callback_delay": dist(delays), "callback_since_request": dist(totals), "callbacks_missing": missing, "callbacks_duplicated": duplicates,
-    })
+    record(
+        "endpoint-callback",
+        {
+            "requests": int(n),
+            "concurrency": int(concurrency),
+            "wall_s": round(wall[0], 2),
+            "latency": dist(lat),
+            "codes": codes,
+            "matched_by": matched,
+            "callback_delay": dist(delays),
+            "callback_since_request": dist(totals),
+            "callbacks_missing": missing,
+            "callbacks_duplicated": duplicates,
+        },
+    )
 
 
 def idle(seconds: str = "120", label: str = "default") -> None:
-    before = sample.snapshot(TARGET)
+    before = sample.snapshot()
     time.sleep(float(seconds))
-    record(f"idle-{label}", sample.delta(before, sample.snapshot(TARGET)))
+    record(f"idle-{label}", sample.delta(before, sample.snapshot()))
 
 
 SCENARIOS = {
@@ -620,11 +624,13 @@ SCENARIOS = {
     "map": map_,
     "map-server": map_server,
     "backlog": backlog,
-    "fairness": fairness, "submit": submit,
+    "fairness": fairness,
+    "submit": submit,
     "endpoint-warm": endpoint_warm,
     "endpoint-cold": endpoint_cold,
     "endpoint-sse": endpoint_sse,
-    "endpoint-burst": endpoint_burst, "endpoint-callback": endpoint_callback,
+    "endpoint-burst": endpoint_burst,
+    "endpoint-callback": endpoint_callback,
     "idle": idle,
 }
 
