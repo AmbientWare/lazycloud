@@ -10,7 +10,7 @@ import (
 
 var offerNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 
-func oneZone(region, zone, zoneID string) Network {
+func oneZone(zone, zoneID string) Network {
 	return Network{Subnets: []Subnet{{ID: "subnet-" + zoneID, Zone: zone, ZoneID: zoneID}}}
 }
 
@@ -26,7 +26,7 @@ func fleetRates(t *testing.T) []billing.ComputeRate {
 func offerInputs(t *testing.T) OfferInputs {
 	return OfferInputs{
 		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t),
-		Networks: map[string]Network{"us-east-2": oneZone("us-east-2", "us-east-2a", "use2-az1")},
+		Networks: map[string]Network{"us-east-2": oneZone("us-east-2a", "use2-az1")},
 	}
 }
 
@@ -96,7 +96,7 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 
 func TestOfferCostIsComputeRootDiskAndPublicIPv4(t *testing.T) {
 	in := offerInputs(t)
-	in.Networks = map[string]Network{"us-west-1": oneZone("us-west-1", "us-west-1a", "usw1-az1")}
+	in.Networks = map[string]Network{"us-west-1": oneZone("us-west-1a", "usw1-az1")}
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
 	serving := RankOffers(DefaultPolicy(), Requirement{}, false, in)
 	reserve := RankOffers(DefaultPolicy(), Requirement{}, true, in)
@@ -165,7 +165,7 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 func TestRefusalsCoolTheOfferAndTwoInARegionMoveBuyingToTheNext(t *testing.T) {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "m7i.xlarge")}
-	in.Networks["us-east-1"] = oneZone("us-east-1", "us-east-1a", "use1-az1")
+	in.Networks["us-east-1"] = oneZone("us-east-1a", "use1-az1")
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
 	refused := func(instanceType string, at time.Time) OfferCooldown {
 		return OfferCooldown{Region: "us-east-2", InstanceType: instanceType, Market: MarketOnDemand, RefusedAt: at, Until: at.Add(10 * time.Minute)}
@@ -199,7 +199,7 @@ func TestOffersPreferTheRegionOrderThenTheEmptierZone(t *testing.T) {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
 	in.Networks = map[string]Network{
-		"us-east-1": oneZone("us-east-1", "us-east-1a", "use1-az1"),
+		"us-east-1": oneZone("us-east-1a", "use1-az1"),
 		"us-east-2": {Subnets: []Subnet{{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}}},
 	}
 	in.ZoneHosts = map[string]int{"use2-az1": 3, "use2-az2": 1}

@@ -90,15 +90,6 @@ func (h FleetHost) hourly() int64 {
 	return *h.HourlyMicros
 }
 
-// stoppedMicros is what the host costs stopped: its root disk.
-func (h FleetHost) stoppedMicros() int64 {
-	t, ok := CatalogTypeNamed(h.InstanceType)
-	if !ok {
-		return 0
-	}
-	return rootDiskMicros(h.Region, t.RootGiB(h.hibernating()))
-}
-
 // capacity is the host as placement sees it.
 func (h FleetHost) capacity() HostCapacity {
 	free := h.free()
@@ -396,7 +387,7 @@ func (ps *pass) hibernationShapes(m ReserveMarket) []FleetCapacity {
 	}
 	var shapes []FleetCapacity
 	for _, h := range ps.inMarket(m, func(h FleetHost) bool { return h.State != FleetFailed && h.State != FleetTerminating }) {
-		if t, ok := CatalogTypeNamed(h.InstanceType); ok && t.Hibernates {
+		if t, ok := ps.typeNamed(h.InstanceType); ok && t.Hibernates {
 			shapes = append(shapes, t.Usable(ps.s.Offers.ReportedMemory[t.Name]))
 		}
 	}
@@ -430,6 +421,24 @@ func boolKey(b bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// typeNamed finds a type in the snapshot's catalog.
+func (ps *pass) typeNamed(name string) (CatalogType, bool) {
+	i := slices.IndexFunc(ps.s.Offers.Catalog, func(t CatalogType) bool { return t.Name == name })
+	if i < 0 {
+		return CatalogType{}, false
+	}
+	return ps.s.Offers.Catalog[i], true
+}
+
+// stoppedMicros is what a host costs stopped: its root disk.
+func (ps *pass) stoppedMicros(h FleetHost) int64 {
+	t, ok := ps.typeNamed(h.InstanceType)
+	if !ok {
+		return 0
+	}
+	return rootDiskMicros(h.Region, t.RootGiB(h.hibernating()))
 }
 
 func (ps *pass) cooled(h FleetHost) bool {
@@ -996,7 +1005,7 @@ func (ps *pass) retain(v *marketView) {
 // leave returns a leaving host to the reserve while the market's reserve
 // without it falls short, and drains it otherwise.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
-	_, catalogued := CatalogTypeNamed(h.InstanceType)
+	_, catalogued := ps.typeNamed(h.InstanceType)
 	if ps.reserveRoom > 0 && catalogued && !v.t.Stopped.Empty() && !ps.reserveHeld(v).Covers(v.t.Stopped) {
 		mode := ReserveStop
 		if h.HibernationConfigured && v.m.GPU == "" {
@@ -1081,11 +1090,11 @@ func (ps *pass) retire(v *marketView) {
 	needUsable, needFast, needCommitted := usable.Lower(v.t.Stopped), fast.Lower(hibernation), committed.Lower(hibernation)
 	candidates := slices.DeleteFunc(slices.Clone(reserves), func(h *FleetHost) bool { return h.Protected || h.State == FleetStopping })
 	growable := func(h *FleetHost) bool {
-		_, ok := CatalogTypeNamed(h.InstanceType)
+		_, ok := ps.typeNamed(h.InstanceType)
 		return ok && !ps.cooled(*h)
 	}
 	slices.SortStableFunc(candidates, func(a, b *FleetHost) int {
-		return cmp.Or(boolOrder(growable(a), growable(b)), cmp.Compare(b.stoppedMicros(), a.stoppedMicros()),
+		return cmp.Or(boolOrder(growable(a), growable(b)), cmp.Compare(ps.stoppedMicros(*b), ps.stoppedMicros(*a)),
 			cmp.Compare(b.Usable.CPUMillis, a.Usable.CPUMillis), cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes),
 			strings.Compare(a.ID.String(), b.ID.String()))
 	})
