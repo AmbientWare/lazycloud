@@ -185,14 +185,19 @@ memory with Redis invalidation and wrote `last_used_at` per authentication.
   The reference held the request until cleanup finished.
 - Accepting or declining an invitation also withdraws its unsent email.
 - Workspace audit history is not carried over; no parity item shows it.
+- Settings → Tokens drops the "Disabled by admin" line (tokens have no
+  admin disable) and shows `expired` on expired tokens, which the reference
+  listed as `active`.
+- `workspace list` shows a workspace being deleted as `name (deleting)`, and
+  workspace `--json` follows the API `Workspace` (`state`, `role`).
+- Emails say "LazyCloud"; the reference's title-cased "Lazycloud" was a typo
+  of the product name.
 
 ## Gaps
 
 - No GitHub App or Resend credentials exist locally, so real GitHub sign-in
   and real email delivery are unverified; locally emails stay `queued` and
   `/auth/github/start` redirects to `provider_unavailable`.
-- `workspace create --cloud aws` refuses: cloud connections belong to the
-  compute packet.
 - Admin user management (role, disable) and the unfunded-storage email are
   outside these sections (Dashboard admin settings; billing).
 - An upload presigned before a workspace's deletion and finished afterwards

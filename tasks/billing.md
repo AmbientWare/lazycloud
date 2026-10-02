@@ -118,6 +118,9 @@ one response.
   absent rather than empty strings, pages use `next_cursor`.
 - Only the current plan terms exist (`free-v2`, `team-v3`, `business-v2`); a
   fresh schema has no subscriber on earlier terms.
+- The pricing catalog is `/v1/pricing` like every API path; the
+  reference's `/api/v1` prefix is gone. docs/platform/plans.mdx links it and
+  says compute bills from readiness.
 
 ## Evidence
 

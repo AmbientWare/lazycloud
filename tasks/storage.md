@@ -83,9 +83,8 @@ PostgreSQL holds metadata and authority; the object store holds bytes.
   `cat`, `mkdir` and `umount` beside GeeseFS. Its script detaches the mount
   when GeeseFS ends, because GeeseFS cannot unmount itself there and a dead
   FUSE mount would break every workload bound to it.
-- Retention: `Storage.ArtifactRetention` returns the Free plan's 1 day for
-  every workspace. Billing owns plans; Team (30 days) and Business (90) need
-  that one function to read the plan once billing lands.
+- Retention: `Storage.ArtifactRetention` asks billing for the plan's window
+  (Free 1 day, Team 30, Business 90; `TestRetentionFollowsThePlan`).
 - `github.com/aws/aws-sdk-go-v2/service/sts` v1.51.1 is the one new Go
   dependency, for AWS grants.
 
@@ -118,7 +117,6 @@ PostgreSQL holds metadata and authority; the object store holds bytes.
   download and preview use presigned URLs with the content type and
   disposition set, instead of the server reading whole objects into memory.
   Listing hides expired artifacts the sweep has not removed yet.
-- Artifact usage has no cost fields until billing lands.
 - Queues: a stored empty message differs from an empty queue (the reference
   returned empty bytes for both). Messages are at most 1 MiB. Queues have no
   put-rate statistic: counting puts on the queue row would serialize puts.
@@ -137,6 +135,13 @@ PostgreSQL holds metadata and authority; the object store holds bytes.
 - A `Disk` size must be whole 4096-byte blocks; the reference accepted any
   byte count and then failed at attach.
 - List pages default to 50 entries, the identity packet's shared `Limit`.
+- `--json` output and SDK returns for volumes, disks and artifacts follow
+  the API models: `Volume.create()` returns the API `Volume` (`size_bytes`,
+  `used_by`), disks name their `holder`, and `artifact list` prints
+  `{artifacts, next_cursor}` with `size_bytes`, `app`, `state` and
+  `stored_at`. docs/cli/storage.mdx says `next_cursor`.
+- Artifact deletes finish in the request, so the dashboard has no
+  "Deleting", "Deletion failed" or "Retry deletion" row states.
 
 ## Measurements
 
@@ -233,7 +238,6 @@ API. All 9 pass; the offline suite passes too.
   addressing. Resolution is unit-tested against the environment and a Pod
   Identity endpoint, not against AWS.
 - Dashboard pages come with the web packet; their APIs are here.
-- Retention by plan waits for billing.
 
 ## Progress
 

@@ -144,11 +144,23 @@ SaaS, and the edge routes only verified ones.
   routes always authenticate, also for public workloads, whose own hosts
   stay open; the reference also served `/public/{id}` paths unauthenticated.
   Functions keep their invoke operations.
+- The reference's stub host `<stub_id>.<base>` is the release host
+  `<release id>.<base>` (`HttpUrls.release_url`).
+- An unknown host on the edge listener answers 404 ("no workload answers on
+  this host"); the edge has its own listener, so there is no API to fall
+  through to.
+- A function invoked over HTTP answers `{task, result}` (`Invocation`)
+  instead of `FunctionInvokeResponse`.
+- `Endpoint` and `ASGI` objects no longer carry `stub_id`, `endpoint`,
+  `token`, `timeout` or client attributes; `serve()` returns a `Preview`.
+- A custom `domain=` must equal a registered domain, as the reference code
+  required; docs/platform/domains.mdx now says so instead of allowing names
+  under it.
+- Only verified (`ready`) domains route.
 
 ## Handed off
 
-- `checkpoint_enabled` and endpoint shells belong to the workloads packet;
-  the SDK rejects them on HTTP workloads until it lands them.
+- `checkpoint_enabled` and endpoint shells landed with the workloads packet.
 
 ## Gaps
 
@@ -160,8 +172,6 @@ SaaS, and the edge routes only verified ones.
   cluster.
 - gVisor needs `--host-uds` for the supervisor's HTTP socket; only runc is
   verified.
-- The reference docs say a domain may be a subdomain of a registered name;
-  its code and this rewrite require an exact match.
 
 ## Evidence
 

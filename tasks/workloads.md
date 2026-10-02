@@ -223,6 +223,13 @@ supervisor Docker tests under it; all pass but the GPU test.
 - SSH host keys are per pod and the CA per workspace, stored sealed; the
   reference derived both from one workspace secret, so neither could rotate.
 - Filesystem images leave out files the container's user cannot read.
+- `Container.attach()` returns a `ContainerAttachment` (output, exit code,
+  stop reason) and `Container` takes `workspace=` instead of
+  `endpoint=`/`token=`.
+- The SSH config's ProxyCommand and certificate command run
+  `<python> -m lazycloud.cli.main ssh-proxy|ssh-cert` with the running
+  interpreter, so an older `lazycloud` first on PATH cannot answer them.
+- `container checkpoint --checkpoint-id` takes a snapshot id.
 
 ## Gaps
 

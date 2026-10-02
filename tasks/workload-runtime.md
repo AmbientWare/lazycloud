@@ -179,6 +179,10 @@ Measurements (one host, 24 CPUs, Docker 29, same stack):
   The reference stopped the whole container.
 - A container cannot call `/v1/me` (403): it acts for a workspace, not a
   user.
+- Callback bodies follow the API: `error` is the failure object
+  (`kind`, `type`, `message`, `traceback`) and `data` is the result payload
+  (`encoding` with `value` or `data`).
+- `Secret` has no `control_client` property.
 
 ## Remaining gaps
 

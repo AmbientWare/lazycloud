@@ -77,13 +77,13 @@ visual parity.
   directory rows.
 - The playground covers functions and endpoints, as the reference did; an
   ASGI app answers on its same-origin path but has no playground.
+- Endpoint and ASGI requests appear on their workload page; the Tasks
+  page, an app's recent tasks and activity charts count function tasks.
 
 ## Gaps
 
 - Devbox root disks need `nbd-client` and root on the host; on this host a
   devbox start fails with that reason, which the page shows.
-- `lazycloud devbox ... ssh` fails with "No such command 'ssh-proxy'" in the
-  CLI (workloads packet).
 
 ## Pre-existing UI issues for the user to decide
 
