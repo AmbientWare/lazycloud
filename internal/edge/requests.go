@@ -53,9 +53,9 @@ const (
 type requestRecord struct {
 	id, workspace, app, workload, release uuid.UUID
 	// container is the last container offered the request, or nil.
-	container                   uuid.UUID
-	method, path                string
-	status                      int
+	container    uuid.UUID
+	method, path string
+	status       int
 	// callback is set when the release names a callback_url.
 	callback                    bool
 	started                     time.Time
