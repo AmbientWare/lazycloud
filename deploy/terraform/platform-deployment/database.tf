@@ -12,13 +12,17 @@ resource "planetscale_neki_branch" "main" {
   deletion_protected = true
 }
 
-# The server migrates at start, so its role needs DDL: `postgres`.
+# The server migrates at start, so its role needs DDL: `postgres`. The role
+# owns the schema it migrated; replacing the role (`-replace` rotates its
+# password) hands that schema to `postgres`, which the new role inherits,
+# instead of failing on or dropping the owned tables.
 resource "planetscale_neki_role" "platform" {
   organization    = var.planetscale_organization
   database        = planetscale_neki_branch.main.database
   branch          = planetscale_neki_branch.main.name
   name            = "platform"
   inherited_roles = ["postgres"]
+  successor       = "postgres"
 }
 
 locals {
