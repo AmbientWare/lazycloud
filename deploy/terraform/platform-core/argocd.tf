@@ -2,9 +2,9 @@
 # else from deploy/argocd/apps on main.
 
 locals {
-  # The platform NodeClass and the Spot NodePool, applied with the Argo CD
-  # release so the first nodes exist before any Argo CD application syncs.
-  # Auto Mode chooses sizes from pod requests.
+  # The platform NodeClass and the Spot NodePool. They install on their own
+  # before Argo CD, whose pre-install hooks already need a node. Auto Mode
+  # chooses sizes from pod requests.
   node_capacity = [
     {
       apiVersion = "eks.amazonaws.com/v1"
@@ -104,6 +104,18 @@ resource "kubernetes_secret_v1" "argocd_repository" {
   }
 }
 
+resource "helm_release" "node_capacity" {
+  name      = "node-capacity"
+  chart     = "${path.module}/node-capacity"
+  namespace = "kube-system"
+  values    = [yamlencode({ objects = local.node_capacity })]
+
+  depends_on = [
+    aws_eks_access_policy_association.node,
+    aws_iam_role_policy_attachment.node,
+  ]
+}
+
 resource "helm_release" "argocd" {
   name       = "argocd"
   repository = "https://argoproj.github.io/argo-helm"
@@ -117,12 +129,8 @@ resource "helm_release" "argocd" {
   # argocd.<domain>.
   values = [yamlencode(merge(local.argocd_resources, {
     server       = merge(local.argocd_resources.server, { service = { type = "ClusterIP" }, extraArgs = ["--insecure"] })
-    extraObjects = concat(local.node_capacity, [local.root_application])
+    extraObjects = [local.root_application]
   }))]
 
-  depends_on = [
-    kubernetes_secret_v1.argocd_repository,
-    aws_eks_access_policy_association.node,
-    aws_iam_role_policy_attachment.node,
-  ]
+  depends_on = [kubernetes_secret_v1.argocd_repository, helm_release.node_capacity]
 }
