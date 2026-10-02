@@ -40,6 +40,16 @@ jobs:
       BRANCH: prod
       VERSION: ${{ inputs.version }}
     steps:
+      - name: Refuse anyone but a repository admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission)"
+          if [ "$permission" != admin ]; then
+            echo "::error::$ACTOR has $permission access; only a repository admin runs this."
+            exit 1
+          fi
       - name: Validate the version
         run: |
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then

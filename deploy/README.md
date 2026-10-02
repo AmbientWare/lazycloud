@@ -8,7 +8,7 @@ version, Deploy records it on the `prod` branch, and Argo CD syncs the chart
 
 | Command | What it does |
 | --- | --- |
-| `gh workflow run ship.yml -f bump=patch` (or `minor`, `major`) | Tags the next version on main, runs every check, pushes the server, scheduler and web images after a reviewer approves, publishes the CLI to PyPI, then calls Deploy |
+| `gh workflow run ship.yml -f bump=patch` (or `minor`, `major`) | Tags the next version on main, runs every check, pushes the server, scheduler and web images, publishes the CLI to PyPI, then calls Deploy |
 | `gh workflow run deploy.yml -f version=<x.y.z>` | Writes `prod` as that version's tree plus `values-deployment.yaml`; an earlier version rolls back. Migrations do not roll back |
 | `gh workflow run node-images.yml` | Bakes the CPU and GPU node images into every fleet region; its summary holds the `LAZYCLOUD_FLEET_IMAGES` value for the env file |
 
@@ -53,7 +53,7 @@ document in us-east-1 and the account's GitHub OIDC provider.
 1. Apply `platform-core` with `cluster_api_cidrs` set to your address.
 2. Apply `platform-deployment`. **Care:** it needs the operator document and
    a PlanetScale organization enrolled in Neki.
-3. Apply `github` with `release_reviewer_user_ids`.
+3. Apply `github`.
 4. Run Node images and commit its `LAZYCLOUD_FLEET_IMAGES` into the env file.
 5. Run Ship.
 6. **Care:** apply `platform-deployment` again with `host_load_balancer` and
