@@ -157,7 +157,10 @@ func (e *Edge) invoke(w http.ResponseWriter, r *http.Request, t target) {
 	case errors.As(err, &tooMany):
 		writeError(w, http.StatusTooManyRequests, tooMany.Error())
 		return
-	case errors.Is(err, execution.ErrNotAccepting), errors.Is(err, execution.ErrNotFound):
+	case errors.Is(err, execution.ErrNotAccepting):
+		writeError(w, http.StatusConflict, "the function is stopped or its app is paused")
+		return
+	case errors.Is(err, execution.ErrNotFound):
 		writeError(w, http.StatusNotFound, "the function is not deployed")
 		return
 	case errors.Is(err, execution.ErrPayloadTooLarge):
