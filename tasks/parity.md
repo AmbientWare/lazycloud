@@ -474,8 +474,8 @@ Scope notes:
   Delivered: cli/update.py, self_update.py identical; code reading only.
 - [ ] `lazycloud app export` typed client codegen with `remote()` for functions and `request()` for endpoints/ASGI via OpenAPI (CLI/apps.py:24, SDK/client_codegen.py)
   Gap: functions only (test_app_export.py); no endpoint `request()` or ASGI OpenAPI methods. About 1-1.5 days.
-- [ ] `lazycloud.env` helpers `is_local`, `is_remote`, `local_entrypoint`, `env_value`, and `SdkEnvVar` (SDK/env.py)
-  Gap: env.py identical and `is_local`/`is_remote` work in containers, but containers get no `WORKSPACE_NAME`/`WORKSPACE_ID`, so `env_value(SdkEnvVar.WorkspaceName)` returns its default; `GatewayToken`/`GatewayHttpUrl` are never set by design. Under 1 h in internal/agent once #442 lands.
+- [x] `lazycloud.env` helpers `is_local`, `is_remote`, `local_entrypoint`, `env_value`, and `SdkEnvVar` (SDK/env.py)
+  Intentional: env.py identical; `is_local`/`is_remote` work in containers and `WORKSPACE_NAME` is set (`TestContainersNameTheirWorkspace`). No workspace id or gateway token in containers: tasks/workload-runtime.md.
 - [x] `lazycloud.schema` fields (String, Integer, Number, Boolean, JSON, File, Image, Object, Schema) for `inputs=`/`outputs=` (SDK/schema.py)
   Delivered: schema.py identical; runner applies `inputs`/`outputs`; test_python_function_contracts.py.
 - [x] Destructive commands prompt for confirmation, skipped with `-y` (CLI/components/prompts.py)

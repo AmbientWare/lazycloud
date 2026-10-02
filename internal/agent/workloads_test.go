@@ -479,6 +479,25 @@ func TestPodCommandExitReportsItsCode(t *testing.T) {
 	}
 }
 
+// A container learns its workspace from the environment the SDK reads.
+func TestContainersNameTheirWorkspace(t *testing.T) {
+	e := newEnv(t)
+	e.startAgent()
+	session := e.session()
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"sh", "-c", "echo ws=$WORKSPACE_NAME sdk=$LAZYCLOUD_WORKSPACE"}})
+	start.GetStart().Workspace = "acme"
+	id := start.GetStart().GetContainerId()
+	session.send(t, start)
+	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(e.server.containerLog(id), "ws=acme sdk=acme") {
+		if time.Now().After(deadline) {
+			t.Fatalf("workspace missing from the environment: %q", e.server.containerLog(id))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // A blocked pod reaches nothing from its first instruction on; an update
 // allowing one address opens exactly that once the host reports it, and an
 // update for an exited container is ignored.

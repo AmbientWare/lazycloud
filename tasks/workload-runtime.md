@@ -183,6 +183,11 @@ Measurements (one host, 24 CPUs, Docker 29, same stack):
   (`kind`, `type`, `message`, `traceback`) and `data` is the result payload
   (`encoding` with `value` or `data`).
 - `Secret` has no `control_client` property.
+- Containers get `WORKSPACE_NAME` (and `LAZYCLOUD_WORKSPACE`) but not
+  `WORKSPACE_ID`, `GATEWAY_TOKEN` or the gateway URL: the API addresses
+  workspaces by name and containers hold no platform credential, so
+  `SdkEnvVar.WorkspaceId`, `GatewayToken` and `GatewayHttpUrl` read their
+  defaults inside a container.
 
 ## Remaining gaps
 
