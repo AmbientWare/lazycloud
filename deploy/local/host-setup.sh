@@ -11,11 +11,13 @@ set -eu
 
 # gVisor ships one tarball per release with runsc, its containerd shim and the
 # helper binaries runsc runs from gvisor-bin/ beside itself. The release and
-# its digests are pinned.
-release=20260928
+# its digests are pinned in deploy/host-pins.sh, which node images share.
+# shellcheck source=SCRIPTDIR/../host-pins.sh
+. "$(dirname "$0")/../host-pins.sh"
+release=$GVISOR_RELEASE
 case "$(uname -m)" in
-  x86_64) arch=x86_64 sha=c8d3a9fd4d4c4f5b8ff213caa4517356be128d18659ec4cde37828fe797f61a9725a602a846c81a8ed19c057a996515d31c081eba343ed4613a89951ba32ed59 ;;
-  aarch64) arch=aarch64 sha=926538a4f20056d44838f230297ecec9192db2562e2523a207295f706b76126725f2ff7b4e59d747147510c5714057eeec862a0f77d43bf625746592b5f51b00 ;;
+  x86_64) arch=x86_64 sha=$GVISOR_SHA512_X86_64 ;;
+  aarch64) arch=aarch64 sha=$GVISOR_SHA512_AARCH64 ;;
   *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 work=$(mktemp -d)

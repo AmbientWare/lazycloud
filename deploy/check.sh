@@ -97,5 +97,5 @@ done
 
 docker run --rm -v "$PWD:/repo:ro" -w /repo "$actionlint" -no-color
 # shellcheck disable=SC2046 # one word per script
-docker run --rm -v "$PWD:/repo:ro" -w /repo "$shellcheck" $(find deploy -name '*.sh' -not -path '*/.terraform/*' | sort)
+docker run --rm -v "$PWD:/repo:ro" -w /repo "$shellcheck" -x $(find deploy -name '*.sh' -not -path '*/.terraform/*' | sort)
 echo "deploy checks passed"

@@ -233,7 +233,7 @@ data "aws_iam_policy_document" "node_images" {
   statement {
     sid       = "LaunchTaggedBakeInstances"
     actions   = ["ec2:RunInstances", "ec2:CreateTags"]
-    resources = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*", "arn:aws:ec2:*:*:network-interface/*"]
+    resources = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*"]
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/lazycloud:node-image-bake"
@@ -244,7 +244,7 @@ data "aws_iam_policy_document" "node_images" {
   statement {
     sid       = "LaunchInFleetNetworks"
     actions   = ["ec2:RunInstances"]
-    resources = ["arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*::image/*"]
+    resources = ["arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*", "arn:aws:ec2:*::image/*"]
   }
 
   statement {

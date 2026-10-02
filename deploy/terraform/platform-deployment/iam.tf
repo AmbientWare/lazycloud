@@ -106,11 +106,10 @@ data "aws_iam_policy_document" "control_plane" {
   statement {
     sid     = "LaunchTaggedFleetHosts"
     actions = ["ec2:RunInstances", "ec2:CreateTags"]
+    # The launcher tags the instance and its volumes.
     resources = [
       "${local.arn_prefix}:ec2:*:${local.account_id}:instance/*",
       "${local.arn_prefix}:ec2:*:${local.account_id}:volume/*",
-      "${local.arn_prefix}:ec2:*:${local.account_id}:network-interface/*",
-      "${local.arn_prefix}:ec2:*:${local.account_id}:spot-instances-request/*",
     ]
     condition {
       test     = "StringEquals"
@@ -125,6 +124,8 @@ data "aws_iam_policy_document" "control_plane" {
     resources = [
       "${local.arn_prefix}:ec2:*:${local.account_id}:subnet/*",
       "${local.arn_prefix}:ec2:*:${local.account_id}:security-group/*",
+      "${local.arn_prefix}:ec2:*:${local.account_id}:network-interface/*",
+      "${local.arn_prefix}:ec2:*:${local.account_id}:spot-instances-request/*",
       "${local.arn_prefix}:ec2:*::image/*",
     ]
   }
