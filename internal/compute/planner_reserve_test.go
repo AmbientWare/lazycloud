@@ -422,3 +422,138 @@ func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
 		t.Fatalf("connection host idle for a minute is %s, want ready", phase)
 	}
 }
+
+// publishedMarket is the plan the last pass published for market.
+func publishedMarket(t *testing.T, o owners, preemptible bool, gpu string) compute.PublishedMarket {
+	t.Helper()
+	markets, err := o.compute.PublishedPlan(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range markets {
+		if m.Preemptible == preemptible && m.GPUType == gpu {
+			return m
+		}
+	}
+	t.Fatalf("no published market preemptible=%t gpu=%q", preemptible, gpu)
+	return compute.PublishedMarket{}
+}
+
+// Containers that arrived in the last ten minutes and a schedule due within
+// a provision raise their markets' targets above the floors.
+func TestRecentArrivalsAndDueSchedulesRaiseTheTargets(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16_000, Memory: 64 * gib})
+	release := newRelease(t, o.pool, dev, `{}`)
+	run(t, o.pool, `
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+select $1, $2, 'ready', $3, 1, 1000, 1 << 30, now(), now() from generate_series(1, 4)`, dev, release, uuid.UUID(host))
+	nightly := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}, "resources": {"cpu_millis": 8000, "memory_mib": 16384}}`)
+	run(t, o.pool, `insert into schedules (workload_id, expression, next_fire_at)
+	                select workload_id, '0 * * * *', now() + interval '2 minutes' from releases where id = $1`, nightly)
+
+	plan(t, o)
+	if spot := publishedMarket(t, o, true, ""); spot.WarmTarget.CPUMillis <= 4000 {
+		t.Fatalf("Spot warm target %+v after four 1-vCPU arrivals, want above their load", spot.WarmTarget)
+	}
+	if od := publishedMarket(t, o, false, ""); od.WarmTarget.CPUMillis < 8000 {
+		t.Fatalf("on-demand warm target %+v with an 8-vCPU run due in two minutes, want room for it", od.WarmTarget)
+	}
+}
+
+// Planned capacity uses the memory hosts of a type reported, nominal until
+// one has.
+func TestPlannedCapacityUsesTheMemoryHostsOfTheTypeReported(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+	pendingContainer(t, o.pool, dev, release, 1000, 4*gib)
+	if r := planCapacity(t, o); r.Requested != 1 {
+		t.Fatalf("plan %+v, want one host", r)
+	}
+	if got := requested(t, o); len(got) != 1 || !strings.HasPrefix(got[0], "m7i.large ") {
+		t.Fatalf("requested %v, want an m7i.large by its nominal memory", got)
+	}
+	run(t, o.pool, "delete from hosts")
+	reported := fleetHost(t, o, compute.PhaseReady, compute.MarketOnDemand, "m7i.large", "i-0000000000000fa01")
+	run(t, o.pool, "update hosts set memory_bytes = 3 * (1::bigint << 30), session_epoch = 1 where id = $1", uuid.UUID(reported))
+	if r := planCapacity(t, o); r.Requested != 1 {
+		t.Fatalf("plan %+v, want one host", r)
+	}
+	if got := requested(t, o); len(got) != 1 || strings.HasPrefix(got[0], "m7i.large ") {
+		t.Fatalf("requested %v, want a larger type than the m7i.large hosts report", got)
+	}
+}
+
+// A reserve pass in an empty fleet buys the warm floors to serve and the
+// stopped floors as reserves that hibernate.
+func TestAReservePassBuysTheFloorsAsServingHostsAndHibernatingReserves(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	spotPrices(t, o)
+	if r := plan(t, o); !r.Published || r.Requested == 0 {
+		t.Fatalf("plan %+v, want floors bought", r)
+	}
+	for _, market := range []string{"spot", "on_demand"} {
+		serving := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode is null", market)
+		reserves := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode = 'hibernate'", market)
+		if serving == 0 || reserves == 0 {
+			t.Errorf("%s market bought %d serving hosts and %d hibernating reserves, want both", market, serving, reserves)
+		}
+	}
+}
+
+// Reserves beyond the targets retire; a reserve prepared for an older agent
+// release the target still needs resumes to prepare again.
+func TestSurplusReservesRetireAndAStaleOneRefreshes(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
+		Version: "1.0.0", RolloutPercent: 100,
+		SHA256: map[string]string{"amd64": strings.Repeat("a1", 32), "arm64": strings.Repeat("b2", 32)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reserves []uuid.UUID
+	for _, instance := range []string{"i-0000000000000fb01", "i-0000000000000fb02", "i-0000000000000fb03"} {
+		reserves = append(reserves, uuid.UUID(stoppedReserve(t, o, compute.MarketOnDemand, "m7i.2xlarge", instance)))
+	}
+	// One resumes for the empty warm floor, one keeps the stopped target and
+	// the third retires.
+	if r := plan(t, o); r.Retired != 1 || r.Resumed != 1 {
+		t.Fatalf("plan %+v, want one of three reserves retired and one resumed", r)
+	}
+	for phase, want := range map[string]int{"terminating": 1, "resuming": 1, "stopped": 1} {
+		if n := scan[int](t, o.pool, "select count(*) from hosts where id = any($1) and phase = $2", reserves, phase); n != want {
+			t.Errorf("%d reserves %s, want %d", n, phase, want)
+		}
+	}
+
+	stale := stoppedReserve(t, o, compute.MarketSpot, "m7i.2xlarge", "i-0000000000000fb04")
+	run(t, o.pool, "update hosts set prepared_agent_version = '0.9.0' where id = $1", uuid.UUID(stale))
+	staleMarkets(t, o)
+	if r := plan(t, o); r.Resumed != 1 {
+		t.Fatalf("plan %+v, want the stale reserve refreshed", r)
+	}
+	if h := hostRowOf(t, o, stale); h.Phase != string(compute.PhaseResuming) || h.ReserveMode == nil || !h.ResumeRequested {
+		t.Fatalf("stale reserve %+v, want resuming with its reserve mode kept", h)
+	}
+}
+
+// A market short of running free room for Pressure brings the reserve pass
+// forward to EarlyPlanInterval; without pressure it waits for
+// PlanInterval.
+func TestAShortMarketBringsTheReservePassForward(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+	plan(t, o)
+	run(t, o.pool, "update fleet_markets set generated_at = now() - interval '25 seconds', pressure_since = null")
+	if r := plan(t, o); r.Published {
+		t.Fatal("a pass 25 seconds after the plan published again, with no market short for 5 seconds yet")
+	}
+	run(t, o.pool, `update fleet_markets set generated_at = now() - interval '25 seconds',
+	                pressure_since = case when pressure_since is not null then now() - interval '10 seconds' end`)
+	if r := plan(t, o); !r.Published {
+		t.Fatal("a market short for 10 seconds did not bring the reserve pass forward")
+	}
+}
