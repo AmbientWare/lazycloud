@@ -150,8 +150,12 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 			// A reserve outlives a stop, so its request must too. EC2
 			// relaunches a persistent request's instance when it ends, so
 			// the request is tagged for cleanup and cancelled first.
+			// EC2 refuses a persistent request whose instance would
+			// terminate itself, so a guest shutdown stops it, and
+			// reconcile retires a reserve that stopped unasked.
 			spot.SpotInstanceType = ec2types.SpotInstanceTypePersistent
 			spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorStop
+			input.InstanceInitiatedShutdownBehavior = ec2types.ShutdownBehaviorStop
 			if opts.hibernate {
 				spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorHibernate
 			}

@@ -298,6 +298,14 @@ func (f *fakeEC2) cancel(call awsCall) awsReply {
 
 // run launches one instance, on a persistent Spot request when asked.
 func (f *fakeEC2) run(call awsCall) awsReply {
+	if call.Form.Get("InstanceInitiatedShutdownBehavior") == "terminate" &&
+		call.Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") == "persistent" {
+		// EC2's answer on 2026-10-02: a persistent request's instance
+		// cannot terminate itself.
+		return ec2Error(http.StatusBadRequest, "InvalidParameterCombination", "The request with instanceInitiatedShutdownBehavior "+
+			"'terminate' is not supported when instanceInterruptionBehavior is set to '"+
+			call.Form.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior")+"'.")
+	}
 	f.launched++
 	id := fmt.Sprintf("i-%017x", 0xa0000+f.launched)
 	i := &fakeInstance{
