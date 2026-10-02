@@ -116,26 +116,6 @@ func ForecastDemand(p Policy, now time.Time, arrivals, scheduled []Arrival, pend
 	return f
 }
 
-// ActivationKind is how a host became ready to serve.
-type ActivationKind string
-
-const (
-	// ActivationProvision is a launch.
-	ActivationProvision ActivationKind = "provision"
-	// ActivationBoot is a start of a plainly stopped reserve.
-	ActivationBoot ActivationKind = "boot"
-	// ActivationResume is a start of a hibernated reserve.
-	ActivationResume ActivationKind = "resume"
-)
-
-// ResumeOutcome says whether a resume restored memory.
-type ResumeOutcome string
-
-const (
-	ResumeMemoryRestored ResumeOutcome = "memory_restored"
-	ResumeColdBoot       ResumeOutcome = "cold_boot"
-)
-
 // ActivationStat aggregates recent activations of one kind on one hardware.
 type ActivationStat struct {
 	Kind         ActivationKind

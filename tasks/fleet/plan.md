@@ -191,7 +191,7 @@ requested -> provisioning -> booting -> joining -> ready
 ready <-> draining -> terminating -> deleted
 ready -> preparing -> stopping -> stopped -> resuming -> joining -> ready
 joining -> preparing                 (reserve_mode set: bought for reserve or refreshing)
-preparing -> ready                   (agent refused: work arrived, update in flight)
+preparing -> ready                   (agent refused: work arrived; an update in flight keeps it in `preparing`)
 stopping -> stopped | resuming       (a pass may resume a reserve still stopping)
 stopped -> terminating               (retire reserve)
 resuming -> terminating              (StartInstances refused for capacity)
