@@ -2,7 +2,7 @@
 
 Packet: container API, secrets, schedules, lifecycle hooks, `in_process`
 slots and task callbacks (tasks/wave-2.md). Migration
-`migrations/0004_workload_runtime.sql`; protobuf fields 10-19 in existing
+`migrations/0001_schema.sql` (Secrets, Schedules, Callbacks); protobuf fields 10-19 in existing
 host and container messages.
 
 ## Outcome
@@ -84,7 +84,7 @@ cron in UTC, each occurrence admitted once. Hooks, `in_process` threads and
 
 ## Progress
 
-- [x] Contracts: migration 0004, protobuf, OpenAPI (secrets, schedules,
+- [x] Contracts: schema, protobuf, OpenAPI (secrets, schedules,
   FunctionSpec runtime fields, Function.schedule, Task lineage), runner
   protocol (hooks, concurrency, lineage, `output` frame)
 - [x] Server: container principal, lineage, start failure, callback outbox,

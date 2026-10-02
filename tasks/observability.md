@@ -3,7 +3,7 @@
 Parity section "Logs, events and metrics" from tasks/parity.md, except what
 other packets own: `lazycloud logs` and `container list/stop/attach`
 (control), `container checkpoint` (workloads) and callbacks (workload
-runtime). Migration `migrations/0010_observability.sql`; protobuf fields
+runtime). Schema: Observability in `migrations/0001_schema.sql`; protobuf fields
 80-89.
 
 ## Outcome
@@ -106,7 +106,7 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   published by the transaction that made it.
 - One `change` event per committed statement carries a list of changes.
   Topics: apps, deployments, tasks, containers, storage.secrets,
-  storage.volumes and usage (migration 0014). Compute pages
+  storage.volumes and usage. Compute pages
   poll.
 - Container metrics take a range and step and are downsampled; the
   reference returned the newest 500 raw entries of a Redis stream, minus

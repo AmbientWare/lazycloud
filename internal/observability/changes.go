@@ -21,8 +21,8 @@ import (
 )
 
 // ChannelChanges carries committed resource changes. Statement-level
-// triggers in migrations/0010_observability.sql send one notification per
-// statement and workspace; see that file for the payload.
+// triggers in migrations/0001_schema.sql send one notification per
+// statement and workspace; see its change stream section for the payload.
 const ChannelChanges = "lc_changes"
 
 // ChangesConfig bounds the change hub's memory.

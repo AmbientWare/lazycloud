@@ -1,6 +1,6 @@
 # Billing and usage
 
-Packet: billing (wave 3). Migration 0009, no protobuf range. Parity sections:
+Packet: billing (wave 3). Schema: Billing in `migrations/0001_schema.sql`; no protobuf range. Parity sections:
 "Billing and plans" in tasks/parity.md, usage metering, and the plan-limit
 seams other packets left.
 

@@ -128,14 +128,14 @@ Each packet delivers its parity sections from tasks/parity.md one to one,
 across the Go owners, host runtime, contracts and the Python SDK and CLI.
 Dashboard pages come in the web packet once their APIs exist.
 
-| Packet | Parity sections | Migration | Proto field range |
+| Packet | Parity sections | Schema | Proto field range |
 | --- | --- | --- | --- |
-| identity | Auth and accounts; Workspaces, members and invitations | 0002 | none |
-| control | Apps and deployments; Functions and tasks (rest); Logs CLI | 0003 | 60-69 |
-| workload-runtime | Container API; Secrets; Schedules; lifecycle hooks; callbacks; in_process slots | 0004 | 10-19 |
-| images | Images | 0005 | 20-29 |
-| endpoints | Endpoints, ASGI and realtime; Custom domains; HTTP function invoke; serve | 0006 | 30-39 |
-| storage | Volumes and disks; Artifacts; Maps and queues | 0007 | 40-49 |
+| identity | Auth and accounts; Workspaces, members and invitations | Identity, Notifications | none |
+| control | Apps and deployments; Functions and tasks (rest); Logs CLI | Control | 60-69 |
+| workload-runtime | Container API; Secrets; Schedules; lifecycle hooks; callbacks; in_process slots | Secrets, Schedules, Callbacks | 10-19 |
+| images | Images | Images | 20-29 |
+| endpoints | Endpoints, ASGI and realtime; Custom domains; HTTP function invoke; serve | Edge | 30-39 |
+| storage | Volumes and disks; Artifacts; Maps and queues | Storage | 40-49 |
 
 Shared-file rules for concurrent packets:
 

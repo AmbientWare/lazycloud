@@ -2,7 +2,7 @@
 
 Parity sections: "Operations and administration" and "Local development, CI
 and deployment" in update.md, plus the dashboard's admin settings Users API.
-Migration 0012 is allocated and unused: nothing here needs schema.
+Nothing here needs schema.
 
 ## Scope decisions (user)
 

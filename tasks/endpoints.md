@@ -2,7 +2,7 @@
 
 Parity sections: "Endpoints, ASGI and realtime", "Custom domains", and
 `lazycloud serve` with `App.serve`/`Function.serve`/`Endpoint.serve` from "CLI
-misc". Migration `0006_endpoints.sql`, protobuf field range 30-39.
+misc". Schema: Edge in `migrations/0001_schema.sql`, protobuf field range 30-39.
 
 ## Outcome
 
@@ -27,7 +27,7 @@ SaaS, and the edge routes only verified ones.
 - Edge (`internal/edge`, in the server binary, own listener). Host labels
   resolve from an in-memory route table: `<subdomain>`, `-latest`, `-vN`,
   `<release id>` (the reference's stub URL), `<container id>` and verified
-  custom hostnames. Triggers in 0006 send `lc_route` when workloads, apps,
+  custom hostnames. Edge triggers send `lc_route` when workloads, apps,
   routes or domains change and `lc_endpoint` (workload id) when a container
   of the workload changes state; the edge refreshes from them and rebuilds
   after a listener reconnect. It authenticates with identity (cached 5 s per
@@ -65,7 +65,7 @@ SaaS, and the edge routes only verified ones.
 ## Plan
 
 1. Contracts: OpenAPI, data.proto, StartContainer/Configure fields, runner
-   `load.http`, migration 0006.
+   `load.http`, schema.
 2. Control: HTTP specs in deploy, route claims (Propose commits).
 3. Runner HTTP mode, supervisor HTTP mode, agent data client, edge, server
    wiring; deploy and request an endpoint end to end.
@@ -105,7 +105,7 @@ SaaS, and the edge routes only verified ones.
 - `callback_url=` on an endpoint, ASGI or realtime app calls the webhook
   once per request after it ends, as the reference called back each
   request's task: the edge writes the callback with the request's record
-  (migrations/0016_request_callbacks.sql) and callbacks delivers it signed
+  (migrations/0001_schema.sql, Callbacks) and callbacks delivers it signed
   like a task's, with `task_id`, `root_task_id` and `request_id` set to the
   `X-Request-Id`, `X-Request-ID` added, and `data` holding `status_code` and
   `body_size_bytes`. A 5xx is `failed`, a client that left (499)

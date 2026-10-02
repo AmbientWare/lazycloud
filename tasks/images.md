@@ -15,7 +15,7 @@ tasks/parity.md.
   Dockerfile, the architecture and the build context digest. `img_` plus 24
   hex characters of it is the public image id. Equal definitions in any
   workspace share one image.
-- Schema (`migrations/0005_images.sql`). `images` is global: digest, id,
+- Schema (Images in `migrations/0001_schema.sql`). `images` is global: digest, id,
   Dockerfile, Python version, architecture and, once published, the pullable
   reference. `workspace_images` records which workspaces resolved an image;
   only they can read or deploy it, because resolving proves the workspace
@@ -113,7 +113,7 @@ The reference was not measured under the same conditions.
   step mounts the ones it reads itself. The agent writes the values to
   files of the builder's secret mount and deletes them when the build ends.
   The workspace and each secret's version are part of the image identity
-  (migrations/0017_image_build_options.sql), so no workspace gets an image
+  (migrations/0001_schema.sql), so no workspace gets an image
   built with another's secrets. BuildKit keeps secret values out of step
   cache keys, so after each FROM the Dockerfile declares
   `ARG LAZYCLOUD_BUILD_SECRET_VERSIONS=<digest of the versions>`: a rotated
@@ -169,10 +169,6 @@ The reference was not measured under the same conditions.
 | Shared cache and global force | Caches are scoped per workspace; forced rebuilds publish to `workspace_images.reference`; releases pin `ImageSpec.reference` | `TestForcedRebuildsAndCachesStayInTheirWorkspace`, `TestDeployPinsTheImageReference` |
 | SSRF through base images and token realms | Private, loopback and link-local registry hosts are refused by name; every dial except the platform registry passes a Control hook that refuses non-public addresses; no proxy | `TestBaseImagesMustBePublicRegistries`, `TestRegistryLookupsNeverDialPrivateAddresses` |
 | Unbounded build output | An attempt stores at most 8 MiB and 100,000 lines, counted under the build row lock, with one truncation marker | `TestBuildOutputIsCappedPerAttempt` |
-
-`migrations/0005_images.sql` changed in place (forced builds, workspace
-references, log counters). Local databases that applied the earlier 0005
-need a reset.
 
 Host registry logins (deploy review, PR #443): on ECR every host command
 gets a login of its own, minted from a session of the registry host role
@@ -239,4 +235,4 @@ reads only. Tests: `TestHostLoginsAreScopedToTheCommandsRepositories`,
   `Execution.CreateBuildContainer` takes the GPU count (`containers.gpu_count`);
   placement (`PendingContainers`), compute demand (`PendingDemand`) and
   capacity (`AvailableCapacity`) read a build's model through
-  `build_gpus()` (migration 0017); proto `ImageBuild.secrets` (11).
+  `build_gpus()`; proto `ImageBuild.secrets` (11).

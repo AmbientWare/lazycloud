@@ -2,7 +2,7 @@
 
 Parity section "Compute (managed, AWS connect, joined machines)" in
 tasks/parity.md, plus agent install, enrollment, updates and interruptions.
-Migration `migrations/0008_compute.sql`, protobuf fields 70-79.
+Schema: Compute in `migrations/0001_schema.sql`, protobuf fields 70-79.
 
 Outcome: `lazycloud machine join --name gpu-1 --workspaces dev` on a Linux
 host runs the agent, the machine shows `ready` in `machine list`, and
@@ -125,7 +125,7 @@ aws` and `cloud authorize` put the same fleet in a customer account.
 
 ## Progress
 
-- [x] Contracts: migration 0008, host fields 70-79, compute API, admin fleet API
+- [x] Contracts: schema, host fields 70-79, compute API, admin fleet API
 - [x] Compute owner and AWS provider (aws-sdk-go-v2 against AWS endpoints)
 - [x] Scheduling constraints and pending reasons
 - [x] Host session, API, install endpoints, server and scheduler wiring
