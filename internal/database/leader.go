@@ -10,11 +10,20 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // leadRetry paces new attempts after the leader connection fails.
 const leadRetry = time.Second
+
+// lockNotAvailable is SQLSTATE 55P03, which ends a lock wait that passed
+// lock_timeout.
+const lockNotAvailable = "55P03"
+
+// errStillStandby ends a wait for the lock that timed out while another
+// session leads.
+var errStillStandby = errors.New("another session leads")
 
 // Lead elects one leader among the processes that call it with the same
 // name, until ctx ends. It holds a session advisory lock on a connection
@@ -32,13 +41,17 @@ const leadRetry = time.Second
 // A router such as Neki's answers pg_backend_pid() itself, so the check
 // cannot match pg_locks against it. The leader instead also locks a random
 // key only it knows, and holds the lead while one backend holds both locks.
+// Neki also ends a lock wait after its lock_timeout; a standby then simply
+// waits again.
 func Lead(ctx context.Context, pool *pgxpool.Pool, name string, check time.Duration, leading func(bool), logger *slog.Logger) error {
 	for {
 		err := holdLead(ctx, pool, name, check, leading)
 		if ctx.Err() != nil {
 			return nil //nolint:nilerr // Cancellation is the normal stop.
 		}
-		logger.WarnContext(ctx, "leadership lost", "name", name, "error", err)
+		if !errors.Is(err, errStillStandby) {
+			logger.WarnContext(ctx, "leadership lost", "name", name, "error", err)
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -57,6 +70,9 @@ func holdLead(ctx context.Context, pool *pgxpool.Pool, name string, check time.D
 	conn := pooled.Hijack()
 	defer conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // Closing a dead leader connection has no recovery.
 	if _, err := conn.Exec(ctx, "select pg_advisory_lock(hashtextextended($1, 0))", name); err != nil {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == lockNotAvailable {
+			return errStillStandby
+		}
 		return fmt.Errorf("wait for leadership: %w", err)
 	}
 	var mark [8]byte
