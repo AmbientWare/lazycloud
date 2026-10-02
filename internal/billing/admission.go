@@ -347,6 +347,22 @@ func AdmitDisk(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, declaredByte
 	return nil
 }
 
+// AdmitStorage refuses new stored bytes, a volume, a volume upload or an
+// artifact, to a workspace whose owner cannot pay for them. Reads and
+// deletes stay open so the owner can take data out.
+func AdmitStorage(ctx context.Context, db DBTX, workspace uuid.UUID) error {
+	q := New(db)
+	owner, err := q.WorkspaceOwner(ctx, workspace)
+	if err != nil {
+		return fmt.Errorf("read workspace owner: %w", err)
+	}
+	s, err := readStanding(ctx, q, owner)
+	if err != nil {
+		return err
+	}
+	return s.fundsRefusal()
+}
+
 // AdmitCustomDomain refuses a custom domain to a workspace whose owner's
 // plan has none; Team and Business include them.
 func AdmitCustomDomain(ctx context.Context, tx pgx.Tx, workspace uuid.UUID) error {

@@ -57,6 +57,9 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 	if err != nil {
 		return apitypes.ArtifactUpload{}, fmt.Errorf("read artifact task: %w", err)
 	}
+	if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
+		return apitypes.ArtifactUpload{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
+	}
 	retention, err := s.ArtifactRetention(ctx, workspace)
 	if err != nil {
 		return apitypes.ArtifactUpload{}, err
