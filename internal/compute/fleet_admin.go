@@ -162,9 +162,6 @@ func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
 				CPUMillis: n.Capacity.CPUMillis - n.Allocated.CPUMillis, MemoryBytes: n.Capacity.MemoryBytes - n.Allocated.MemoryBytes,
 				GPUs: n.Capacity.GPUs - n.Allocated.GPUs,
 			})
-			if n.Containers == 0 && c.fleet.HeadroomFloor > 0 {
-				m.WarmTarget.add(n.Capacity)
-			}
 		}
 		if states[k] == nil {
 			states[k] = map[FleetState]*FleetStateCapacity{}
