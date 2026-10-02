@@ -636,7 +636,12 @@ func sweepAcceptance(t *testing.T, client *ec2.Client) {
 			t.Errorf("sweep: terminate %v: %v", ids, err)
 		}
 	}
-	if ids := live(); len(ids) > 0 {
-		t.Errorf("acceptance instances still live after the sweep: %v", ids)
+	// EC2 may list a terminated instance as running for a few seconds.
+	for range 12 {
+		if len(live()) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Second)
 	}
+	t.Errorf("acceptance instances still live after the sweep: %v", live())
 }
