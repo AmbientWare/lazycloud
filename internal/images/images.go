@@ -88,12 +88,45 @@ type Config struct {
 	// ECR, when set, logs in to Registry, an ECR registry, with tokens minted
 	// from these AWS credentials instead of Auth.
 	ECR *aws.Config
+	// HostRole is the role ECR logins for hosts are minted from, each in a
+	// session whose policy names the repositories of one command. It may
+	// read and write every repository under Repository.
+	HostRole string
 	// ManagedBase is the image a definition without a base starts from;
 	// {version} is replaced with its Python version.
 	ManagedBase string
 }
 
-func (c Config) imagesRepository() string { return c.Registry + "/" + c.Repository + "/images" }
+// Repositories under Repository, by what they hold. A built image has a
+// repository of its own, named by its digest, which every workspace that
+// resolved its definition may pull; caches and filesystem images have one
+// per workspace. Host logins name these repositories, so a host can reach
+// only what its command needs.
+func (c Config) imageRepository(digest []byte) string {
+	return c.Repository + "/images/" + hex.EncodeToString(digest)
+}
+
+func (c Config) cacheRepository(workspace uuid.UUID) string {
+	return c.Repository + "/cache/" + workspace.String()
+}
+
+func (c Config) filesystemRepository(workspace identity.WorkspaceID) string {
+	return c.Repository + "/filesystems/" + workspace.String()
+}
+
+// repositoryOf is the repository path of reference, an image in Registry
+// under Repository.
+func (c Config) repositoryOf(reference string) (string, bool) {
+	path, ok := strings.CutPrefix(reference, c.Registry+"/")
+	if !ok {
+		return "", false
+	}
+	path, _, _ = strings.Cut(path, "@")
+	if slash := strings.LastIndex(path, "/"); strings.Contains(path[slash+1:], ":") {
+		path = path[:slash+1] + strings.SplitN(path[slash+1:], ":", 2)[0]
+	}
+	return path, strings.HasPrefix(path, c.Repository+"/")
+}
 
 func (c Config) registryHost() string { return c.Registry }
 
@@ -431,7 +464,12 @@ func (i *Images) PullOf(ctx context.Context, id, reference string) (Pull, error)
 	}
 	pull := Pull{Reference: reference, Platform: "linux/" + architecture}
 	if strings.HasPrefix(reference, i.config.Registry+"/") {
-		if pull.Auth, err = i.login.auth(ctx); err != nil {
+		repository, ok := i.config.repositoryOf(reference)
+		if !ok {
+			return Pull{}, fmt.Errorf("image %s is outside the platform's workload repositories", reference)
+		}
+		access := hostAccess{pull: []string{repository}}
+		if pull.Auth, err = i.login.host(ctx, access, time.Now().Add(pullWindow)); err != nil {
 			return Pull{}, err
 		}
 	}
@@ -600,22 +638,26 @@ func (i *Images) BuildCommandOf(ctx context.Context, start execution.BuildStart)
 			return BuildCommand{}, fmt.Errorf("decode registry logins: %w", err)
 		}
 	}
-	platform, err := i.login.auth(ctx)
+	// A workspace's images on one base share a cache. Workspaces never share
+	// one: a build could write any cache entry it can push, and caches hold
+	// the workspace's build contexts.
+	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + dockerfileBase(row.Dockerfile)))
+	image, cache := i.config.imageRepository(row.Digest), i.config.cacheRepository(row.WorkspaceID)
+	// The build pushes only its image and its workspace's cache, until its
+	// deadline.
+	platform, err := i.login.host(ctx, hostAccess{push: []string{image, cache}}, row.DeadlineAt.Add(time.Minute))
 	if err != nil {
 		return BuildCommand{}, err
 	}
 	if platform != nil {
 		auth[i.config.registryHost()] = *platform
 	}
-	// A workspace's images on one base share a cache. Workspaces never share
-	// one: a build could write any cache entry it can push.
-	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + dockerfileBase(row.Dockerfile)))
 	return BuildCommand{
 		Build: start.Build, Attempt: start.Attempt, Dockerfile: row.Dockerfile,
 		Context: row.ContextSha256, ContextWorkspace: identity.WorkspaceID(row.WorkspaceID),
 		Platform:       "linux/" + row.Architecture,
-		PushRepository: i.config.imagesRepository(),
-		CacheRef:       i.config.Registry + "/" + i.config.Repository + "/cache:" + hex.EncodeToString(scope[:16]),
+		PushRepository: i.config.Registry + "/" + image,
+		CacheRef:       i.config.Registry + "/" + cache + ":" + hex.EncodeToString(scope[:16]),
 		Insecure:       i.config.Insecure, Auth: auth, Deadline: row.DeadlineAt,
 	}, nil
 }
@@ -639,12 +681,16 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 	if err != nil {
 		return err
 	}
+	digest, err := i.queries.BuildImageDigest(ctx, build)
+	if err != nil {
+		return fmt.Errorf("read build: %w", err)
+	}
 	var reference string
 	if outcome.Failure == "" {
 		if !manifestDigest.MatchString(outcome.Digest) {
 			return invalid("digest %q is not sha256:<hex>", outcome.Digest)
 		}
-		reference = i.config.imagesRepository() + "@" + outcome.Digest
+		reference = i.config.Registry + "/" + i.config.imageRepository(digest) + "@" + outcome.Digest
 		auth, err := i.login.auth(ctx)
 		if err != nil {
 			return err
@@ -652,10 +698,6 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 		if _, err := i.resolver.pin(ctx, reference, auth, i.config.Insecure); err != nil {
 			return fmt.Errorf("check pushed image: %w", err)
 		}
-	}
-	digest, err := i.queries.BuildImageDigest(ctx, build)
-	if err != nil {
-		return fmt.Errorf("read build: %w", err)
 	}
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)

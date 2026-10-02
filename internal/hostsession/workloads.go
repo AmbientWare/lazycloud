@@ -126,7 +126,7 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 		if sess.sent[id] || sess.server.images == nil {
 			continue
 		}
-		repository, insecure, auth, err := sess.server.images.FilesystemTarget(ctx, pub.Workspace)
+		repository, insecure, auth, err := sess.server.images.FilesystemTarget(ctx, pub.Workspace, pub.Deadline)
 		if err != nil {
 			return err
 		}

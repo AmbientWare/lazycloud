@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 // ecrRefresh is how long before its expiry an ECR login is replaced. It
@@ -19,25 +20,36 @@ const ecrRefresh = 2 * time.Hour
 
 // platformLogin is the platform registry's login: Config.Auth, or, with
 // Config.ECR, a token GetAuthorizationToken mints from the server's AWS
-// credentials. ECR tokens last 12 hours, so the login is replaced before
-// ecrRefresh remains.
+// credentials. The server's own login (auth) can read and write every
+// workload repository and never leaves the server; hosts get logins scoped
+// to one command (host). ECR tokens last 12 hours, so the server's login is
+// replaced before ecrRefresh remains.
 type platformLogin struct {
 	static *Auth
 	ecr    *ecr.Client
+	// ecrConfig, sts, hostRole and repositoryARN mint host logins.
+	ecrConfig     aws.Config
+	sts           *sts.Client
+	hostRole      string
+	repositoryARN string
 
 	mu      sync.Mutex
 	current *Auth
 	expires time.Time
+	hosts   map[string]hostLogin
 }
 
 func newPlatformLogin(config Config) *platformLogin {
-	login := &platformLogin{static: config.Auth}
+	login := &platformLogin{static: config.Auth, hostRole: config.HostRole, hosts: map[string]hostLogin{}}
 	if config.ECR != nil {
 		cfg := config.ECR.Copy()
 		if match := ecrHost.FindStringSubmatch(config.Registry); match != nil {
 			cfg.Region = match[1]
 		}
 		login.ecr = ecr.NewFromConfig(cfg)
+		login.ecrConfig = cfg
+		login.sts = sts.NewFromConfig(cfg)
+		login.repositoryARN = ecrRepositoryARN(config.Registry)
 	}
 	return login
 }

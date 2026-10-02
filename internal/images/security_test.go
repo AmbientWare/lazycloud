@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
@@ -156,7 +157,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	container := placeAndStart(t, f, host)
-	published := pushRandom(t, f.registry+"/lazycloud/images:first")
+	published := pushRandom(t, f.imageRepository(t, first.Image.ID)+":first")
 	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: published}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +193,13 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 			t.Fatal(err)
 		}
 		caches[command.CacheRef] = true
+		workspace := a
+		if start.Build != forced.Build.ID {
+			workspace = b
+		}
+		if !strings.HasPrefix(command.CacheRef, f.registry+"/lazycloud/cache/"+uuid.UUID(workspace).String()+":") {
+			t.Errorf("cache %s is outside its workspace's repository", command.CacheRef)
+		}
 		if start.Build == forced.Build.ID {
 			forcedContainer = start.Container
 		}
@@ -204,7 +212,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rebuilt := pushRandom(t, f.registry+"/lazycloud/images:rebuilt")
+	rebuilt := pushRandom(t, f.imageRepository(t, first.Image.ID)+":rebuilt")
 	if err := f.images.CompleteBuild(t.Context(), host, forcedContainer, images.BuildOutcome{Digest: rebuilt}); err != nil {
 		t.Fatal(err)
 	}

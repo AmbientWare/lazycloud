@@ -235,6 +235,12 @@ func serve(ctx context.Context, args []string) error {
 			return fmt.Errorf("load AWS configuration for the image registry: %w", err)
 		}
 		cfg.images.ECR = &awsConfig
+		// Hosts get logins from sessions of this role, each scoped to one
+		// command's repositories.
+		cfg.images.HostRole = os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN")
+		if cfg.images.HostRole == "" {
+			return errors.New("an ECR image registry needs LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN, the role host logins are scoped from")
+		}
 	}
 	// Secrets stay out of the process arguments.
 	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")
