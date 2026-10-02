@@ -116,6 +116,8 @@ def http_workload_spec(
         )
     if owner.env:
         spec["environment"] = dict(owner.env)
+    if getattr(owner, "metadata", None):
+        spec["metadata"] = dict(owner.metadata)
     if owner.secrets:
         spec["secrets"] = list(dict.fromkeys(owner.secrets))
     if owner.volumes:
@@ -170,7 +172,6 @@ def unsupported_http_options(owner: Any) -> list[str]:
             for volume in owner.volumes
         ),
         "callback_url": bool(owner.callback_url),
-        "metadata": bool(getattr(owner, "metadata", None)),
     }
     found.extend(name for name, present in declared.items() if present)
     return found

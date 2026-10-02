@@ -261,6 +261,7 @@ def announce(ctx):
     autoscaler={"min_containers": 1, "max_containers": 2},
     on_start=announce,
     on_retry=[announce, "reports:announce"],
+    metadata={"team": "data"},
 )
 def nightly() -> None:
     pass
@@ -282,6 +283,7 @@ def test_deploy_maps_workload_runtime_options(
     assert spec["callback_url"] == "https://hooks.example.com/tasks"
     assert spec["in_process"] is True
     assert spec["keep_warm_seconds"] == -1
+    assert spec["metadata"] == {"team": "data"}
     assert spec["lifecycle_hooks"] == {
         "on_start": ["reports:announce"],
         "on_retry": ["reports:announce", "reports:announce"],
@@ -439,7 +441,6 @@ def test_invalid_placement_options_fail_where_declared(
 @pytest.mark.parametrize(
     ("decorator", "option"),
     [
-        ('@app.function(metadata={"team": "data"})', "metadata"),
         (
             "@app.function(volumes=[lazycloud.CloudBucket("
             '"models", "/models", lazycloud.CloudBucketConfig())])',

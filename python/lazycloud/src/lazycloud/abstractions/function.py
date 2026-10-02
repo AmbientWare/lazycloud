@@ -306,7 +306,6 @@ class Function(Generic[P, R]):
                 volume.config is not None and volume.config.get("auth_mode") != "secret_references"
                 for volume in self.volumes
             ),
-            "metadata": bool(self.metadata),
         }
         found = [name for name, present in declared.items() if present]
         policy = self._retry_policy()
@@ -359,6 +358,8 @@ class Function(Generic[P, R]):
             spec["max_pending_tasks"] = self.max_pending_tasks
         if self.env:
             spec["environment"] = dict(self.env)
+        if self.metadata:
+            spec["metadata"] = dict(self.metadata)
         if self.volumes:
             spec["volumes"] = [_volume_spec(volume) for volume in self.volumes]
         if self.cron:

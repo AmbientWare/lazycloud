@@ -3720,6 +3720,10 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /** @description Custom metadata stored with the workload's release. */
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** @description Run the function on this UTC schedule. */
             cron?: string;
             /** @description Secrets the container receives as environment variables of the same name. */

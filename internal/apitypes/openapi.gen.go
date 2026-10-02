@@ -5393,7 +5393,10 @@ type WorkloadSpec struct {
 	// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
 	LifecycleHooks  *LifecycleHooks `json:"lifecycle_hooks,omitempty"`
 	MaxPendingTasks *int            `json:"max_pending_tasks,omitempty"`
-	Name            WorkloadName    `json:"name"`
+
+	// Metadata Custom metadata stored with the workload's release.
+	Metadata *map[string]interface{} `json:"metadata,omitempty"`
+	Name     WorkloadName            `json:"name"`
 
 	// Placement Where a workload's containers may run.
 	Placement *Placement `json:"placement,omitempty"`

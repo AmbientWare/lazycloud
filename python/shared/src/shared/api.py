@@ -3258,6 +3258,10 @@ class WorkloadSpec(BaseModel):
     autoscaler: Autoscaler | None = None
     max_pending_tasks: Annotated[int, Field(ge=1, le=1000000)] = 100
     environment: dict[str, str] | None = None
+    metadata: Annotated[
+        dict[str, Any] | None,
+        Field(description="Custom metadata stored with the workload's release.", max_length=64),
+    ] = None
     cron: Annotated[
         str | None,
         Field(description="Run the function on this UTC schedule.", max_length=160, min_length=1),

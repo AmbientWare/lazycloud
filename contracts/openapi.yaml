@@ -4489,6 +4489,11 @@ components:
         environment:
           type: object
           additionalProperties: { type: string }
+        metadata:
+          description: Custom metadata stored with the workload's release.
+          type: object
+          maxProperties: 64
+          additionalProperties: true
         # Five cron fields, an alias such as @hourly, or `every N` minutes
         # (m, at most 59), hours (h, at most 23) or days (d, at most 31).
         # Deploy stores the normalized expression.
