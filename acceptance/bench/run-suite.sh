@@ -63,7 +63,9 @@ for phase in $phases; do
   echo "== $target $phase" >&2
   case $phase in
     deploy) run deploy 5 ;;
-    remote) run remote 5 30 ;;
+    # The first container on a new host also prepares its image; the
+    # reference was measured with its image built, so warm up first.
+    remote) run remote 1 0 >/dev/null; run remote 5 30 ;;
     endpoints)
       run endpoint-warm 1000
       run endpoint-sse 50 1
