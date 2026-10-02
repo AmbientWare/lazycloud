@@ -116,7 +116,7 @@ func TestChangeStreamOverHTTP(t *testing.T) {
 	e.deploy()
 	e.nextChange(events, apitypes.ChangeTopicDeployments)
 
-	fnPath := "/v1/workspaces/acme/apps/reports/functions/summarize_sales/tasks"
+	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/tasks"
 	raw := json.RawMessage(`{"args": [], "kwargs": {}}`)
 	submit := apitypes.SubmitTasksRequest{Inputs: []apitypes.TaskInput{{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}}}
 	var first, second apitypes.SubmitTasksResponse
@@ -153,17 +153,13 @@ func TestChangeStreamOverHTTP(t *testing.T) {
 func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
 	e := newEnv(t)
 	e.deploy()
-	var deployments apitypes.DeploymentPage
-	if status := e.do("GET", "/v1/workspaces/acme/deployments", e.owner, nil, &deployments); status != 200 || len(deployments.Deployments) != 1 {
-		t.Fatalf("deployments: %d", status)
-	}
 	unknown := uuid.NewString()
-	deployment := deployments.Deployments[0].Id.String()
+	workload := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
 	var apiErr apitypes.Error
 	for _, path := range []string{
 		"/v1/workspaces/acme/metrics/tasks",
 		"/v1/workspaces/acme/metrics/activity",
-		"/v1/workspaces/acme/deployments/" + deployment + "/performance",
+		workload + "/performance",
 		"/v1/workspaces/acme/containers/" + unknown + "/metrics",
 		"/v1/workspaces/acme/tasks/" + unknown + "/timeline",
 	} {
@@ -174,7 +170,7 @@ func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
 	for path, want := range map[string]int{
 		"/v1/workspaces/acme/metrics/tasks":                                                        200,
 		"/v1/workspaces/acme/metrics/activity?window_seconds=900":                                  200,
-		"/v1/workspaces/acme/deployments/" + deployment + "/performance":                           200,
+		workload + "/performance":                                                                  200,
 		"/v1/workspaces/acme/metrics/activity?window_seconds=30":                                   400,
 		"/v1/workspaces/acme/metrics/tasks?function=summarize_sales":                               400,
 		"/v1/workspaces/acme/metrics/activity?window_seconds=60&start=2026-01-01T00:00:00Z":        400,
@@ -182,7 +178,7 @@ func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
 		"/v1/workspaces/acme/containers/" + unknown + "/lifecycle":                                 404,
 		"/v1/workspaces/acme/tasks/" + unknown + "/timeline":                                       404,
 		"/v1/workspaces/acme/tasks/" + unknown + "/call-graph":                                     404,
-		"/v1/workspaces/acme/deployments/" + unknown + "/performance":                              404,
+		"/v1/workspaces/acme/apps/reports/workloads/function/unknown/performance":                  404,
 		"/v1/workspaces/acme/metrics/tasks?start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z":    400,
 		"/v1/workspaces/acme/metrics/activity?window_seconds=604800":                               200,
 		"/v1/me/activity?window_seconds=86400&start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z": 400,

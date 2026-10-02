@@ -19,11 +19,12 @@ import { countLabel } from "@/lib/format";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import {
   performanceQueryOptions,
-  WorkloadNotFoundError,
+  isWorkloadKind,
+  workloadNotFound,
   workloadQueryOptions,
   workloadRunning,
-  type Workload,
 } from "@/lib/queries/deployments";
+import type { WorkloadRef } from "@/lib/queries/workspace-keys";
 import { requestsQueryOptions, servesRequests, tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -55,34 +56,44 @@ function WorkloadDetailRoute() {
 
 function WorkloadDetailPage() {
   const { app, kind, name } = Route.useParams();
+  // The API refuses a kind it does not define as an invalid request, so an
+  // unknown kind is answered here as the workload it cannot name.
+  if (!isWorkloadKind(kind)) return <WorkloadNotFound name={name} />;
+  return <WorkloadDetail address={{ app, kind, name }} />;
+}
+
+function WorkloadNotFound({ name }: { name: string }) {
+  return (
+    <PanelEmpty message={`No deployed workload named ${name} in this app`} className="h-full" />
+  );
+}
+
+function WorkloadDetail({ address }: { address: WorkloadRef }) {
+  const { app, name } = address;
   const { workspace } = useWorkspace();
   const [podInstanceStatus, setPodInstanceStatus] = useState<PodInstanceStatusFilter>("active");
-  const query = useQuery(workloadQueryOptions(workspace.name, app, kind, name));
-  const loaded = query.data?.deployment;
+  const query = useQuery(workloadQueryOptions(workspace.name, address));
+  const loaded = query.data?.workload;
   // Only a Pod lists its containers; a devbox is one machine whose status names it.
-  const listsInstances = loaded?.kind === "pod" && loaded.role !== "devbox";
   const containers = useInfiniteQuery(
-    containersQueryOptions(workspace.name, {
-      deployment: loaded?.id,
+    containersQueryOptions(workspace.name, address, {
       live: podInstanceStatus === "active",
-      enabled: listsInstances,
+      enabled: loaded?.kind === "pod" && loaded.role !== "devbox",
     }),
   );
 
   if (query.isPending) return <WorkloadSkeleton />;
-  if (query.error instanceof WorkloadNotFoundError) {
-    return <PanelEmpty message={query.error.message} className="h-full" />;
-  }
+  if (workloadNotFound(query.error)) return <WorkloadNotFound name={name} />;
   if (query.isError) return <PanelError message={query.error.message} />;
 
-  const workload = query.data;
-  const { deployment, release } = workload;
+  const detail = query.data;
+  const { workload, release } = detail;
   const isPublic = release.spec.authorized === false;
-  const isPod = deployment.kind === "pod";
+  const isPod = workload.kind === "pod";
   const kindFact = (
     <span key="kind" className="flex items-center gap-1.5">
-      <StubKindIcon kind={deployment.kind} className="size-3.5" />
-      {kindLabel(workload)}
+      <StubKindIcon kind={workload.kind} className="size-3.5" />
+      {kindLabel(detail)}
     </span>
   );
   const backLink = (
@@ -92,20 +103,20 @@ function WorkloadDetailPage() {
       className="flex h-8 min-w-0 items-center gap-1.5 rounded-md border border-input bg-card px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:border-brand/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       <ArrowLeft className="size-3.5 shrink-0" aria-hidden="true" />
-      {deployment.app}
+      {workload.app}
     </Link>
   );
 
-  if (deployment.role === "devbox") {
+  if (workload.role === "devbox") {
     return (
       <WorkspacePage
-        title={<span className="mono">{deployment.name}</span>}
+        title={<span className="mono">{workload.name}</span>}
         description={
           <PageFacts
             items={[
               kindFact,
               <span key="version" className="mono">
-                v{deployment.version}
+                v{workload.version}
               </span>,
               isPublic ? "Public" : "Token required",
             ]}
@@ -113,42 +124,42 @@ function WorkloadDetailPage() {
         }
         actions={
           <>
-            <DevboxActions workspace={workspace.name} deploymentId={deployment.id} />
+            <DevboxActions workspace={workspace.name} workload={workload} />
             {backLink}
           </>
         }
         headerDetails={
           <PanelErrorBoundary title="Devbox status could not be displayed">
-            <DevboxConnect workspace={workspace.name} deploymentId={deployment.id} />
+            <DevboxConnect workspace={workspace.name} workload={workload} />
           </PanelErrorBoundary>
         }
         contentClassName="flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)] xl:overflow-hidden"
       >
-        <DevboxWorkspace workspace={workspace.name} workload={deployment} spec={release.spec} />
+        <DevboxWorkspace workspace={workspace.name} workload={workload} spec={release.spec} />
       </WorkspacePage>
     );
   }
 
-  const showsInvoke = workloadRunning(deployment) && PLAYGROUND_KINDS.has(deployment.kind);
+  const showsInvoke = workloadRunning(workload) && PLAYGROUND_KINDS.has(workload.kind);
   const containerList = selectContainerList(containers.data, containers.hasNextPage);
 
   return (
     <WorkspacePage
-      title={<span className="mono">{deployment.name}</span>}
+      title={<span className="mono">{workload.name}</span>}
       description={
         <PageFacts
           items={[
             kindFact,
             <span key="version" className="mono">
-              v{deployment.version}
+              v{workload.version}
             </span>,
             isPublic ? "Public" : "Token required",
-            countLabel(deployment.running_containers, "running", "running"),
+            countLabel(workload.running_containers, "running", "running"),
           ]}
         />
       }
       actions={backLink}
-      headerDetails={<WorkloadOperation workspace={workspace.name} workload={workload} />}
+      headerDetails={<WorkloadOperation workspace={workspace.name} detail={detail} />}
       contentClassName={
         isPod
           ? "flex flex-col overflow-y-auto lg:overflow-hidden"
@@ -156,8 +167,8 @@ function WorkloadDetailPage() {
       }
     >
       <Tabs
-        key={JSON.stringify([app, deployment.kind, deployment.name])}
-        defaultValue={defaultInspectorTab(workload, showsInvoke)}
+        key={JSON.stringify([app, workload.kind, workload.name])}
+        defaultValue={defaultInspectorTab(detail, showsInvoke)}
         className={`panel flex flex-col overflow-hidden rounded-md ${isPod ? "min-h-0 flex-1" : "shrink-0 xl:min-h-0"}`}
       >
         <LinearTabsList
@@ -168,13 +179,13 @@ function WorkloadDetailPage() {
           {isPod ? <LinearTab value="instances">Instances</LinearTab> : null}
           <LinearTab value="versions">Versions</LinearTab>
           <LinearTab value="configuration">Configuration</LinearTab>
-          {OBSERVABLE_KINDS.has(deployment.kind) ? <LinearTab value="call">Call</LinearTab> : null}
+          {OBSERVABLE_KINDS.has(workload.kind) ? <LinearTab value="call">Call</LinearTab> : null}
         </LinearTabsList>
 
         {showsInvoke ? (
           <TabsContent value="invoke" className="m-0 min-h-0 flex-1 overflow-hidden">
             <PanelErrorBoundary title="Invoke could not be displayed">
-              <Playground workspace={workspace.name} workload={workload} />
+              <Playground workspace={workspace.name} detail={detail} />
             </PanelErrorBoundary>
           </TabsContent>
         ) : null}
@@ -183,7 +194,7 @@ function WorkloadDetailPage() {
           <TabsContent value="instances" className="m-0 min-h-0 flex-1 overflow-hidden">
             <PodInstances
               workspace={workspace.name}
-              deployment={deployment}
+              workload={workload}
               statusFilter={podInstanceStatus}
               onStatusFilterChange={setPodInstanceStatus}
               containers={containerList.items}
@@ -201,7 +212,7 @@ function WorkloadDetailPage() {
           value="versions"
           className={`m-0 min-h-0 flex-1 overflow-auto ${isPod ? "" : "max-xl:flex-none"}`}
         >
-          <VersionHistory workspace={workspace.name} workload={deployment} />
+          <VersionHistory workspace={workspace.name} workload={workload} />
         </TabsContent>
 
         <TabsContent
@@ -210,10 +221,10 @@ function WorkloadDetailPage() {
         >
           <WorkloadConfiguration spec={release.spec} />
         </TabsContent>
-        {OBSERVABLE_KINDS.has(deployment.kind) ? (
+        {OBSERVABLE_KINDS.has(workload.kind) ? (
           <TabsContent value="call" className="m-0 min-h-0 flex-1 overflow-auto max-xl:flex-none">
             <PanelErrorBoundary title="Call methods could not be displayed">
-              <CallMethods workspace={workspace.name} workload={workload} />
+              <CallMethods workspace={workspace.name} detail={detail} />
             </PanelErrorBoundary>
           </TabsContent>
         ) : null}
@@ -225,8 +236,8 @@ function WorkloadDetailPage() {
           contentClassName="flex flex-col overflow-hidden p-0"
           className="min-h-[24rem] shrink-0 xl:min-h-0"
         >
-          <WorkloadLatency workspace={workspace.name} deployment={deployment} />
-          <WorkloadRuns workspaceName={workspace.name} deployment={deployment} />
+          <WorkloadLatency workspace={workspace.name} workload={workload} />
+          <WorkloadRuns workspaceName={workspace.name} workload={workload} />
         </Panel>
       ) : null}
     </WorkspacePage>
@@ -235,12 +246,12 @@ function WorkloadDetailPage() {
 
 function WorkloadLatency({
   workspace,
-  deployment,
+  workload,
 }: {
   workspace: string;
-  deployment: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
 }) {
-  const latency = useQuery(performanceQueryOptions(workspace, deployment.id));
+  const latency = useQuery(performanceQueryOptions(workspace, workload));
 
   if (!(latency.isPending || latency.isError || latencyHasSignal(latency.data?.buckets))) {
     return null;
@@ -253,7 +264,7 @@ function WorkloadLatency({
           buckets={latency.data?.buckets}
           pending={latency.isPending}
           error={latency.error}
-          kind={deployment.kind}
+          kind={workload.kind}
         />
       </PanelErrorBoundary>
     </div>
@@ -262,12 +273,12 @@ function WorkloadLatency({
 
 function WorkloadRuns({
   workspaceName,
-  deployment,
+  workload,
 }: {
   workspaceName: string;
-  deployment: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
 }) {
-  const { app, kind, name } = deployment;
+  const { app, kind, name } = workload;
   const requests = servesRequests(kind);
   const tasks = useQuery({
     ...tasksQueryOptions(workspaceName, { app, function: name }),
@@ -308,17 +319,20 @@ function WorkloadSkeleton() {
   );
 }
 
-function defaultInspectorTab({ deployment, release }: Workload, showsInvoke: boolean): string {
-  if (deployment.kind === "pod") return "instances";
+function defaultInspectorTab(
+  { workload, release }: Schemas["WorkloadDetail"],
+  showsInvoke: boolean,
+): string {
+  if (workload.kind === "pod") return "instances";
   if (showsInvoke && !release.spec.cron) return "invoke";
   return "versions";
 }
 
-function kindLabel({ deployment, release }: Workload): string {
+function kindLabel({ workload, release }: Schemas["WorkloadDetail"]): string {
   // A scheduled function still reads as a schedule here: it is what the person
   // looking at the list is scanning for, even though it is a function.
   if (release.spec.cron) return "Schedule";
-  if (deployment.role === "devbox") return "Devbox";
+  if (workload.role === "devbox") return "Devbox";
   const labels: Record<Schemas["WorkloadKind"], string> = {
     function: "Function",
     endpoint: "Endpoint",
@@ -326,5 +340,5 @@ function kindLabel({ deployment, release }: Workload): string {
     pod: "Pod",
     sandbox: "Sandbox",
   };
-  return labels[deployment.kind];
+  return labels[workload.kind];
 }

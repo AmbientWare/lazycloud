@@ -7,7 +7,12 @@ cd "$(dirname "$0")/../.."
 state=.lazycloud
 export GOTOOLCHAIN=go1.27.1
 export LAZYCLOUD_DATABASE_URL="postgres://lazycloud:lazycloud@127.0.0.1:25432/lazycloud?sslmode=disable"
-export LAZYCLOUD_OBJECT_STORE_ENDPOINT=http://127.0.0.1:23900
+# Presigned URLs name this endpoint, and workload containers send artifact and
+# volume bytes to them, so it is the Docker bridge gateway rather than
+# loopback. This machine reaches it too.
+LAZYCLOUD_DOCKER_BRIDGE_IP=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+export LAZYCLOUD_DOCKER_BRIDGE_IP
+export LAZYCLOUD_OBJECT_STORE_ENDPOINT="http://$LAZYCLOUD_DOCKER_BRIDGE_IP:23900"
 export LAZYCLOUD_OBJECT_STORE_REGION=garage
 export LAZYCLOUD_OBJECT_STORE_BUCKET=lazycloud
 export LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID=GK1a2b3c4d5e6f708192a3b4c5

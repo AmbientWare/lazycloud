@@ -28,14 +28,14 @@ insert into workspace_images (workspace_id, image_digest) select ws.id, img.dige
 	}
 	imageID := "img_000000000000000000000001"
 	forged := "docker.io/attacker/image@sha256:" + strings.Repeat("f", 64)
-	spec := apitypes.FunctionSpec{
-		Name: "summarize_sales", Handler: new("reports:summarize_sales"), Source: apitypes.SourceRef{Sha256: source},
+	spec := apitypes.WorkloadSpec{
+		Kind: apitypes.WorkloadKindFunction, Name: "summarize_sales", Handler: new("reports:summarize_sales"), Source: apitypes.SourceRef{Sha256: source},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312, ImageId: &imageID, Reference: &forged},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 	}
 	var apiErr apitypes.Error
 	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
-		apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}}, &apiErr); status != 400 {
+		apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}}, &apiErr); status != 400 {
 		t.Fatalf("a caller cannot choose the reference: %d %+v", status, apiErr)
 	}
 	spec.Image.Reference = nil
@@ -43,7 +43,7 @@ insert into workspace_images (workspace_id, image_digest) select ws.id, img.dige
 		t.Helper()
 		var d apitypes.Deployment
 		if status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
-			apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}}, &d); status != 200 || len(d.Releases) != 1 {
+			apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}}, &d); status != 200 || len(d.Releases) != 1 {
 			t.Fatalf("deploy: %d %+v", status, d)
 		}
 		return d.Releases[0]

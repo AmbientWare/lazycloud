@@ -21,7 +21,7 @@ const (
 // resolveRuntime fills the workload runtime options of out, resolved from
 // spec: the normalized cron, the keep-warm default it implies, the callback
 // URL, in_process and the lifecycle hooks.
-func resolveRuntime(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
+func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	if spec.Cron != nil {
 		cron, err := schedules.ParseCron(*spec.Cron)
 		if err != nil {

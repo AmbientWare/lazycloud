@@ -127,7 +127,7 @@ func TestSpawnFromARunningTaskRecordsItAsParent(t *testing.T) {
 	}
 
 	body := []byte(`{"inputs": [{"encoding": "json", "value": {"args": [1]}}]}`)
-	reply, err := call(ctx, h.client, container, "POST", "/v1/workspaces/ws/apps/reports/functions/summarize/tasks", body,
+	reply, err := call(ctx, h.client, container, "POST", "/v1/workspaces/ws/apps/reports/workloads/function/summarize/tasks", body,
 		map[string]string{hostsession.TaskHeader: parent.String()})
 	if err != nil || reply.status != 201 {
 		t.Fatalf("spawn: %d %s %v", reply.status, reply.body, err)

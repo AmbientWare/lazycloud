@@ -1,4 +1,4 @@
-"""API calls for HTTP workloads, previews and custom domains."""
+"""API calls for previews, HTTP requests and custom domains."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from shared.api import (
     DomainRequest,
     HttpRequest,
     HttpRequestList,
-    HttpWorkload,
     Preview,
     PreviewRequest,
     PreviewSync,
@@ -27,26 +26,6 @@ PREVIEW_WAIT_SECONDS = 60
 # Added to a long poll's hold so the read does not time out first.
 _WAIT_MARGIN_SECONDS = 15.0
 _SYNC_TIMEOUT_SECONDS = 300.0
-
-
-def get_http_workload(
-    client: ApiClient,
-    workspace: str,
-    app: str,
-    name: str,
-    *,
-    asgi: bool,
-    version: int | None = None,
-) -> HttpWorkload:
-    """An endpoint, or an ASGI or realtime app, and the URLs it answers on."""
-
-    collection = "asgi" if asgi else "endpoints"
-    return client._send(
-        HttpWorkload,
-        "GET",
-        _path("v1", "workspaces", workspace, "apps", app, collection, name),
-        params={"version": version} if version is not None else None,
-    )
 
 
 def create_preview(client: ApiClient, workspace: str, app: str, request: PreviewRequest) -> Preview:
@@ -187,7 +166,6 @@ __all__ = [
     "PREVIEW_WAIT_SECONDS",
     "create_preview",
     "get_domain",
-    "get_http_workload",
     "get_preview",
     "http_request_logs",
     "list_domains",

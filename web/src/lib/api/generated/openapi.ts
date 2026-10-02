@@ -483,34 +483,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/tasks": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
-            };
-            cookie?: never;
-        };
-        get: operations["getFunction"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -714,14 +694,13 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases": {
+    "/v1/workspaces/{workspace}/apps/{app}/releases": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
             };
             cookie?: never;
         };
@@ -729,16 +708,16 @@ export interface paths {
         put?: never;
         /**
          * A release that runs this definition, for calls from a working tree
-         * @description Returns the function's release with the same resolved definition when one exists, including the active one, or creates an unversioned release that is never active. Submits name it with `release_id`. The app and function are created when missing but are not deployed.
+         * @description Returns the workload's release with the same resolved definition when one exists, including the active one, or creates an unversioned release that is never active. Submits and instances name it by id. The app and workload are created when missing but are not deployed.
          */
-        post: operations["prepareFunctionRelease"];
+        post: operations["prepareRelease"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments": {
+    "/v1/workspaces/{workspace}/workloads": {
         parameters: {
             query?: never;
             header?: never;
@@ -747,8 +726,8 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Deployed workloads, by app and name */
-        get: operations["listDeployments"];
+        /** Deployed workloads, by app, name and kind */
+        get: operations["listWorkloads"];
         put?: never;
         post?: never;
         delete?: never;
@@ -757,39 +736,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
-        /** The deployment with the definition its active version runs */
-        get: operations["getDeployment"];
+        /** The workload, the definition its active version runs and where it answers */
+        get: operations["getWorkload"];
         put?: never;
         post?: never;
         /**
          * Delete the workload and every version of it
          * @description Queued and running tasks are cancelled and its containers stop. The name is free for a later deploy, which starts again at version 1.
          */
-        delete: operations["deleteDeployment"];
+        delete: operations["deleteWorkload"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/stop": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/stop": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -799,47 +780,74 @@ export interface paths {
          * Stop admission and drain the workload, keeping its definition
          * @description Queued tasks are cancelled; running tasks finish.
          */
-        post: operations["stopDeployment"];
+        post: operations["stopWorkload"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/start": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/start": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         get?: never;
         put?: never;
         /** Start the workload again, optionally on an earlier version */
-        post: operations["startDeployment"];
+        post: operations["startWorkload"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/versions": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/scale": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hold a pod at a number of containers
+         * @description The count holds until the next scale, whatever the pod's connections. Only an active pod of an active app scales; a pod with a disk runs at most one container, and an always-on pod (keep_warm -1) cannot scale to zero. Functions and endpoints follow their autoscaler.
+         */
+        post: operations["scaleWorkload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         /** Deployed versions, newest first */
-        get: operations["listDeploymentVersions"];
+        get: operations["listWorkloadVersions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -848,14 +856,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/logs": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/logs": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -863,7 +872,54 @@ export interface paths {
          * Log lines of every task of the workload, one JSON LogEntry per line
          * @description A followed stream stays open until the client closes it and writes a blank line after 15 seconds without entries.
          */
-        get: operations["streamDeploymentLogs"];
+        get: operations["streamWorkloadLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        /** Containers of the workload's releases, newest first */
+        get: operations["listWorkloadContainers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Run time percentiles, outcomes and cold starts per time bucket
+         * @description Tasks fall in the bucket they were submitted in; a duration is from start to finish of a finished task. A cold start is a container started for the workload. The default range is the last 24 hours.
+         */
+        get: operations["getWorkloadPerformance"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1730,35 +1786,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/invoke": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-            };
-            cookie?: never;
-        };
-        /** An endpoint, its active release and the URLs it answers on */
-        get: operations["getEndpoint"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/invoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -1775,15 +1810,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/versions/{version}/invoke": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/versions/{version}/invoke": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-                version: number;
+                name: components["parameters"]["WorkloadPath"];
+                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -1791,7 +1826,7 @@ export interface paths {
         put?: never;
         /**
          * Send a request to an endpoint version through the API host
-         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         * @description As requestEndpointPath, pinned to one deployed version.
          */
         post: operations["requestEndpointPathVersion"];
         delete?: never;
@@ -1800,14 +1835,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/invoke": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/invoke": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -1815,7 +1850,7 @@ export interface paths {
         put?: never;
         /**
          * Send a request to an ASGI or realtime app through the API host
-         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         * @description As requestEndpointPath, for an ASGI or realtime app.
          */
         post: operations["requestAsgiPath"];
         delete?: never;
@@ -1824,15 +1859,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/versions/{version}/invoke": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/versions/{version}/invoke": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-                version: number;
+                name: components["parameters"]["WorkloadPath"];
+                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -1840,7 +1875,7 @@ export interface paths {
         put?: never;
         /**
          * Send a request to an ASGI or realtime app version through the API host
-         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         * @description As requestEndpointPath, for one deployed version of an ASGI or realtime app.
          */
         post: operations["requestAsgiPathVersion"];
         delete?: never;
@@ -1849,35 +1884,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/invoke": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-            };
-            cookie?: never;
-        };
-        /** An ASGI or realtime app, its active release and the URLs it answers on */
-        get: operations["getAsgi"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/invoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -1894,15 +1908,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/versions/{version}/invoke": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/versions/{version}/invoke": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
-                version: number;
+                name: components["parameters"]["WorkloadPath"];
+                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -2220,30 +2234,6 @@ export interface paths {
         };
         /** Every task of the task's call graph, from its root */
         get: operations["getTaskCallGraph"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/performance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Run time percentiles, outcomes and cold starts per time bucket
-         * @description Tasks fall in the bucket they were submitted in; a duration is from start to finish of a finished task. A cold start is a container started for the deployment. The default range is the last 24 hours.
-         */
-        get: operations["getDeploymentPerformance"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2837,38 +2827,14 @@ export interface paths {
         patch: operations["updateMachine"];
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/scale": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Hold a pod at a number of containers
-         * @description The count holds until the next scale, whatever the pod's connections. Only an active pod of an active app scales; a pod with a disk runs at most one container, and an always-on pod (keep_warm -1) cannot scale to zero.
-         */
-        post: operations["scaleDeployment"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/devbox": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -2882,20 +2848,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/start": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox/start": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         get?: never;
         put?: never;
-        /** Start the devbox now, activating its deployment if it is stopped */
+        /** Start the devbox now, activating its workload if it is stopped */
         post: operations["startDevbox"];
         delete?: never;
         options?: never;
@@ -2903,14 +2869,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/stop": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox/stop": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -2918,7 +2884,7 @@ export interface paths {
         put?: never;
         /**
          * Stop the devbox's container until the next connection or start
-         * @description The deployment stays active; the root disk is saved as the container stops.
+         * @description The workload stays active; the root disk is saved as the container stops.
          */
         post: operations["stopDevbox"];
         delete?: never;
@@ -3409,14 +3375,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/pods/{pod}/ssh": {
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/ssh": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                pod: components["schemas"]["WorkloadName"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -3701,10 +3667,10 @@ export interface components {
             expires_at: string;
         };
         DeploymentRequest: {
-            /** @description At least one, unless prune deletes every deployed function. */
-            functions: components["schemas"]["FunctionSpec"][];
+            /** @description At least one, unless prune deletes every deployed workload. */
+            workloads: components["schemas"]["WorkloadSpec"][];
             /**
-             * @description Delete every function of the app that is not listed.
+             * @description Delete every workload of the app that is not listed.
              * @default false
              */
             prune?: boolean;
@@ -3712,9 +3678,9 @@ export interface components {
         Deployment: {
             app: components["schemas"]["App"];
             releases: components["schemas"]["Release"][];
-            /** @description Functions the prune deleted. */
+            /** @description Workloads the prune deleted. */
             pruned: components["schemas"]["WorkloadName"][];
-            /** @description Versions of the pruned functions. */
+            /** @description Versions of the pruned workloads. */
             removed_versions: number;
         };
         App: {
@@ -3729,7 +3695,9 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
-        FunctionSpec: {
+        /** @description One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function. */
+        WorkloadSpec: {
+            kind: components["schemas"]["WorkloadKind"];
             name: components["schemas"]["WorkloadName"];
             /** @description module:qualname within the source archive; pods have none */
             handler?: string;
@@ -3832,24 +3800,16 @@ export interface components {
         Release: {
             /** Format: uuid */
             id: string;
-            function: components["schemas"]["WorkloadName"];
+            name: components["schemas"]["WorkloadName"];
             /** @description The deployed version; absent for a release only working-tree calls use. */
             version?: number;
             /** Format: date-time */
             created_at: string;
-            spec: components["schemas"]["FunctionSpec"];
-            /** @description Where an HTTP workload answers, following the active release. */
+            spec: components["schemas"]["WorkloadSpec"];
+            /** @description Where a pod or HTTP workload answers, following the active release. */
             url?: string;
             /** @description The HTTP workload on the API host, following the active release. */
             invoke_path?: string;
-        };
-        Function: {
-            name: components["schemas"]["WorkloadName"];
-            app: components["schemas"]["AppName"];
-            /** @enum {string} */
-            state: "active" | "stopped";
-            active_release: components["schemas"]["Release"];
-            schedule?: components["schemas"]["Schedule"];
         };
         /** @description A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`. */
         Payload: {
@@ -4446,7 +4406,8 @@ export interface components {
             /** @description Versions the workload has now. */
             versions: number;
         };
-        DeployedWorkload: {
+        /** @description A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}. */
+        Workload: {
             /** Format: uuid */
             id: string;
             app: components["schemas"]["AppName"];
@@ -4474,14 +4435,20 @@ export interface components {
             scaling?: components["schemas"]["Scaling"];
             /** @description Where a pod or HTTP workload answers. */
             url?: string;
-            /** @description The definition the active version runs; only getDeployment answers it. */
-            active_release?: components["schemas"]["Release"];
         };
-        DeploymentPage: {
-            deployments: components["schemas"]["DeployedWorkload"][];
+        WorkloadDetail: {
+            workload: components["schemas"]["Workload"];
+            /** @description The definition the active version runs, or the version the request names. */
+            release: components["schemas"]["Release"];
+            http?: components["schemas"]["HttpUrls"];
+            /** @description When a scheduled function runs. */
+            schedule?: components["schemas"]["Schedule"];
+        };
+        WorkloadPage: {
+            workloads: components["schemas"]["Workload"][];
             next_cursor?: string;
         };
-        StartDeploymentRequest: {
+        StartWorkloadRequest: {
             /** @description Make this deployed version active before starting. */
             version?: number;
         };
@@ -4681,13 +4648,8 @@ export interface components {
         /** @enum {string} */
         HttpMethod: "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT" | "TRACE";
         Hostname: string;
-        HttpWorkload: {
-            name: components["schemas"]["WorkloadName"];
-            app: components["schemas"]["AppName"];
-            kind: components["schemas"]["HttpKind"];
-            /** @enum {string} */
-            state: "active" | "stopped";
-            release: components["schemas"]["Release"];
+        /** @description Where an endpoint or ASGI app answers, for the release a describe names. */
+        HttpUrls: {
             /** @description Follows the active release across deploys. */
             url: string;
             /** @description Pinned to the release's version. */
@@ -4747,7 +4709,7 @@ export interface components {
             next?: string;
         };
         PreviewRequest: {
-            spec: components["schemas"]["FunctionSpec"];
+            spec: components["schemas"]["WorkloadSpec"];
             /**
              * @description Stop after this long; 0 runs until stopped.
              * @default 0
@@ -5043,9 +5005,9 @@ export interface components {
             cold_starts: number;
             status_counts: components["schemas"]["TaskStatusCounts"];
         };
-        DeploymentPerformance: {
+        WorkloadPerformance: {
             /** Format: uuid */
-            deployment_id: string;
+            workload_id: string;
             window_seconds: number;
             /** Format: date-time */
             start: string;
@@ -6330,7 +6292,9 @@ export interface components {
         WorkspacePath: components["schemas"]["Name"];
         AppPath: components["schemas"]["AppName"];
         RequestPath: string;
-        FunctionPath: components["schemas"]["WorkloadName"];
+        KindPath: components["schemas"]["WorkloadKind"];
+        WorkloadPath: components["schemas"]["WorkloadName"];
+        VersionPath: number;
         TaskPath: string;
         SecretPath: components["schemas"]["SecretName"];
         /** @description The next_cursor of the previous page. */
@@ -6346,15 +6310,12 @@ export interface components {
         ImageBuildPath: string;
         /** @description The app's name or id. */
         AppRefPath: components["schemas"]["AppRef"];
-        /** @description The workload id. */
-        DeploymentPath: string;
         ContainerPath: string;
         PageLimit: number;
         /** @description Return entries with an id greater than this. */
         LogAfter: number;
         /** @description Start with only the last this many stored entries. */
         LogTail: number;
-        EndpointPath: components["schemas"]["WorkloadName"];
         PreviewPath: string;
         /** @description Describe this version instead of the active one. */
         VersionQuery: number;
@@ -7120,31 +7081,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    getFunction: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The function and its active release */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Function"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     submitTasks: {
         parameters: {
             query?: never;
@@ -7152,7 +7088,7 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -7439,20 +7375,19 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    prepareFunctionRelease: {
+    prepareRelease: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FunctionSpec"];
+                "application/json": components["schemas"]["WorkloadSpec"];
             };
         };
         responses: {
@@ -7468,11 +7403,14 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    listDeployments: {
+    listWorkloads: {
         parameters: {
             query?: {
                 app?: components["schemas"]["AppName"];
+                kind?: components["schemas"]["WorkloadKind"];
                 name?: components["schemas"]["WorkloadName"];
+                /** @description Only the workload with this id. */
+                id?: string;
                 /** @description Part of the app or workload name. */
                 search?: string;
                 limit?: components["parameters"]["PageLimit"];
@@ -7487,123 +7425,160 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of deployments */
+            /** @description One page of workloads */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeploymentPage"];
+                    "application/json": components["schemas"]["WorkloadPage"];
                 };
             };
             default: components["responses"]["Error"];
         };
     };
-    getDeployment: {
+    getWorkload: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Describe this version instead of the active one. */
+                version?: components["parameters"]["VersionQuery"];
+            };
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The deployment and its active release */
+            /** @description The workload and its release */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeployedWorkload"];
+                    "application/json": components["schemas"]["WorkloadDetail"];
                 };
             };
             default: components["responses"]["Error"];
         };
     };
-    deleteDeployment: {
+    deleteWorkload: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The deleted deployment */
+            /** @description The deleted workload */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeployedWorkload"];
+                    "application/json": components["schemas"]["Workload"];
                 };
             };
             default: components["responses"]["Error"];
         };
     };
-    stopDeployment: {
+    stopWorkload: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The stopped deployment */
+            /** @description The stopped workload */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeployedWorkload"];
+                    "application/json": components["schemas"]["Workload"];
                 };
             };
             default: components["responses"]["Error"];
         };
     };
-    startDeployment: {
+    startWorkload: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["StartDeploymentRequest"];
+                "application/json": components["schemas"]["StartWorkloadRequest"];
             };
         };
         responses: {
-            /** @description The started deployment */
+            /** @description The started workload */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeployedWorkload"];
+                    "application/json": components["schemas"]["Workload"];
                 };
             };
             default: components["responses"]["Error"];
         };
     };
-    listDeploymentVersions: {
+    scaleWorkload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description The workload after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkloadVersions: {
         parameters: {
             query?: {
                 limit?: components["parameters"]["PageLimit"];
@@ -7613,8 +7588,9 @@ export interface operations {
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -7632,7 +7608,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    streamDeploymentLogs: {
+    streamWorkloadLogs: {
         parameters: {
             query?: {
                 /** @description Return entries with an id greater than this. */
@@ -7644,8 +7620,9 @@ export interface operations {
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -7658,6 +7635,71 @@ export interface operations {
                 };
                 content: {
                     "application/x-ndjson": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkloadContainers: {
+        parameters: {
+            query?: {
+                /** @description Only containers that have not stopped. */
+                live?: boolean;
+                limit?: components["parameters"]["PageLimit"];
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of containers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkloadPerformance: {
+        parameters: {
+            query?: {
+                /** @description Seconds per bucket. A range holds at most 500 buckets and 31 days. */
+                window_seconds?: components["parameters"]["WindowSeconds"];
+                /** @description The start of the range, inclusive. */
+                start?: components["parameters"]["RangeStart"];
+                /** @description The end of the range, exclusive; defaults to now. */
+                end?: components["parameters"]["RangeEnd"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                kind: components["parameters"]["KindPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Buckets that saw tasks or cold starts, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadPerformance"];
                 };
             };
             default: components["responses"]["Error"];
@@ -7758,10 +7800,6 @@ export interface operations {
                 live?: boolean;
                 /** @description Only the containers of this app's workloads. */
                 app?: components["schemas"]["AppName"];
-                /** @description Only the containers of this workload of `app`; requires it. */
-                function?: components["schemas"]["WorkloadName"];
-                /** @description Only containers of this workload's releases. */
-                deployment?: string;
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -9147,34 +9185,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    getEndpoint: {
-        parameters: {
-            query?: {
-                /** @description Describe this version instead of the active one. */
-                version?: components["parameters"]["VersionQuery"];
-            };
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The endpoint */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HttpWorkload"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     requestEndpointPath: {
         parameters: {
             query?: never;
@@ -9182,7 +9192,7 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -9204,8 +9214,8 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-                version: number;
+                name: components["parameters"]["WorkloadPath"];
+                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -9227,7 +9237,7 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -9249,8 +9259,8 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-                version: number;
+                name: components["parameters"]["WorkloadPath"];
+                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -9265,34 +9275,6 @@ export interface operations {
             };
         };
     };
-    getAsgi: {
-        parameters: {
-            query?: {
-                /** @description Describe this version instead of the active one. */
-                version?: components["parameters"]["VersionQuery"];
-            };
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                endpoint: components["parameters"]["EndpointPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The ASGI app */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HttpWorkload"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     invokeFunction: {
         parameters: {
             query?: {
@@ -9303,7 +9285,7 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -9335,8 +9317,8 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                function: components["parameters"]["FunctionPath"];
-                version: number;
+                name: components["parameters"]["WorkloadPath"];
+                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -9818,38 +9800,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskCallGraph"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    getDeploymentPerformance: {
-        parameters: {
-            query?: {
-                /** @description Seconds per bucket. A range holds at most 500 buckets and 31 days. */
-                window_seconds?: components["parameters"]["WindowSeconds"];
-                /** @description The start of the range, inclusive. */
-                start?: components["parameters"]["RangeStart"];
-                /** @description The end of the range, exclusive; defaults to now. */
-                end?: components["parameters"]["RangeEnd"];
-            };
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Buckets that saw tasks or cold starts, oldest first */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeploymentPerformance"];
                 };
             };
             default: components["responses"]["Error"];
@@ -10699,43 +10649,14 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    scaleDeployment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScaleRequest"];
-            };
-        };
-        responses: {
-            /** @description The deployment after the change */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeployedWorkload"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     getDevbox: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -10759,8 +10680,8 @@ export interface operations {
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -10784,8 +10705,8 @@ export interface operations {
             header?: never;
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
-                /** @description The workload id. */
-                deployment: components["parameters"]["DeploymentPath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -11565,7 +11486,7 @@ export interface operations {
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
-                pod: components["schemas"]["WorkloadName"];
+                name: components["parameters"]["WorkloadPath"];
             };
             cookie?: never;
         };
@@ -11582,3 +11503,104 @@ export interface operations {
         };
     };
 }
+type FlattenedDeepRequired<T> = {
+    [K in keyof T]-?: FlattenedDeepRequired<T[K] extends unknown[] | undefined | null ? Extract<T[K], unknown[]>[number] : T[K]>;
+};
+type ReadonlyArray<T> = [
+    Exclude<T, undefined>
+] extends [
+    unknown[]
+] ? Readonly<Exclude<T, undefined>> : Readonly<Exclude<T, undefined>[]>;
+export const errorCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ErrorCode"]> = ["invalid_request", "unauthenticated", "forbidden", "not_found", "conflict", "payload_too_large", "unsupported", "too_many_pending_tasks", "task_not_finished", "unavailable", "internal", "payment_required", "limit_reached"];
+export const userStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UserStatus"]> = ["active", "disabled"];
+export const platformRoleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PlatformRole"]> = ["administrator", "member"];
+export const workspaceStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkspaceState"]> = ["active", "deleting"];
+export const workspaceRoleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkspaceRole"]> = ["owner", "administrator", "member"];
+export const workspaceRequestCloudValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkspaceRequest"]["cloud"]> = ["aws"];
+export const tokenStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TokenStatus"]> = ["active", "expired"];
+export const deviceTokenStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DeviceTokenStatus"]> = ["pending", "slow_down", "approved", "denied", "expired"];
+export const deviceCodeStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DeviceCodeStatus"]> = ["pending", "approved", "denied", "expired"];
+export const invitationRoleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["InvitationRole"]> = ["administrator", "member"];
+export const deliveryStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DeliveryState"]> = ["queued", "sent", "delivered", "bounced", "complained", "failed", "discarded"];
+export const uploadTargetMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UploadTarget"]["method"]> = ["PUT"];
+export const imageSpecPython_versionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageSpec"]["python_version"]> = ["3.10", "3.11", "3.12", "3.13", "3.14"];
+export const retryPolicyBackoffValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["backoff"]> = ["fixed", "exponential"];
+export const payloadEncodingValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Payload"]["encoding"]> = ["json", "cloudpickle"];
+export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
+export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
+export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "start_failed", "system", "dependency_failed"];
+export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogEntry"]["stream"]> = ["stdout", "stderr", "system"];
+export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
+export const workloadRefKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadRef"]["kind"]> = ["function"];
+export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
+export const diskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskStatus"]> = ["detached", "attached", "saving"];
+export const artifactStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Artifact"]["state"]> = ["uploading", "stored"];
+export const appStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AppState"]> = ["active", "paused", "deleted"];
+export const liveAppStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LiveAppState"]> = ["active", "paused"];
+export const workloadStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadState"]> = ["active", "stopped", "deleted"];
+export const deploymentPlanActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DeploymentPlanAction"]> = ["add", "redeploy", "retain", "remove"];
+export const workloadKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadKind"]> = ["function", "endpoint", "asgi", "pod", "sandbox"];
+export const containerStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerState"]> = ["pending", "starting", "ready", "draining", "stopped"];
+export const stopReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["StopReason"]> = ["stopped", "load_error", "start_failed", "crashed", "out_of_memory", "host_lost", "exited"];
+export const containerPurposeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerPurpose"]> = ["serve", "instance", "shell"];
+export const imageArchitectureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageArchitecture"]> = ["amd64", "arm64"];
+export const imageDefinitionArchitectureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageDefinition"]["architecture"]> = ["amd64", "arm64"];
+export const imageStepKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageStepKind"]> = ["shell", "pip", "micromamba", "uv_project", "poetry_project", "pyproject", "micromamba_environment"];
+export const imageBuildStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageBuildStatus"]> = ["building", "succeeded", "failed"];
+export const imageBuildPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageBuildPhase"]> = ["queued", "starting", "building", "finished"];
+export const httpKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["HttpKind"]> = ["endpoint", "asgi", "realtime"];
+export const httpMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["HttpMethod"]> = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"];
+export const domainPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DomainPhase"]> = ["awaiting_verification", "validating", "ready", "action_required"];
+export const domainErrorCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DomainErrorCode"]> = ["verification_timed_out", "certificate_failed", "hostname_rejected", "upstream_unavailable"];
+export const previewStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewState"]> = ["starting", "ready", "stopped"];
+export const previewKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewKind"]> = ["function", "endpoint", "asgi", "realtime"];
+export const containerLogEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerLogEntry"]["stream"]> = ["stdout", "stderr", "system"];
+export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "containers", "storage.secrets"];
+export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
+export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
+export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "image", "source", "create", "runtime", "draining"];
+export const attemptOutcomeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AttemptOutcome"]> = ["running", "succeeded", "failed", "timed_out", "cancelled", "lost"];
+export const taskEventKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskEventKind"]> = ["submitted", "attempt_started", "attempt_finished", "retry_scheduled", "finished"];
+export const activityMeasureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityMeasure"]> = ["containers", "tasks", "cpu", "memory", "gpu"];
+export const activityUnitValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityUnit"]> = ["starts", "cores", "gibibytes", "gpus"];
+export const activitySeriesKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivitySeriesKind"]> = ["app", "unassigned", "other"];
+export const gpuTypeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["GpuType"]> = ["T4", "A10G", "L4", "L40S", "A100-40", "A100-80", "H100", "H200", "any"];
+export const regionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Region"]> = ["us-east", "us-west", "eu-central", "eu-north", "ap-southeast"];
+export const machineLifecycleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineLifecycle"]> = ["requested", "provisioning", "booting", "joining", "ready", "draining", "stopping", "stopped", "resuming", "terminating", "deleted", "failed"];
+export const machineFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineFailure"]> = ["agent_download_failed", "runtime_install_failed", "network_join_failed", "provider_identity_failed", "agent_enrollment_failed", "worker_image_pull_failed", "worker_start_failed", "worker_readiness_failed", "bootstrap_timed_out", "host_preflight_failed", "service_lost", "machine_record_deleted", "provider_stopped", "provider_terminated", "unknown"];
+export const capacityStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["CapacityState"]> = ["available", "draining", "preempting", "cordoned"];
+export const preflightCheckSeverityValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreflightCheck"]["severity"]> = ["info", "warning", "error"];
+export const machineProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Machine"]["provider"]> = ["agent"];
+export const computeInstanceProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["provider"]> = ["aws"];
+export const computeInstanceMarketValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["market"]> = ["spot", "on_demand"];
+export const computeSummaryCostCurrencyValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeSummary"]["cost"]["currency"]> = ["USD"];
+export const computeWorkloadKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeWorkload"]["kind"]> = ["function"];
+export const awsConnectionPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "reconnect_pending", "retiring_authorization", "disconnect_draining", "revoking", "verifying_revocation", "action_required"];
+export const awsConnectionActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionAction"]> = ["authorize", "validate", "reconnect", "cancel_reconnect", "remove", "retry"];
+export const awsAuthorizationPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "retiring", "retired"];
+export const awsAuthorizationErrorValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationError"]> = ["assume_role_denied", "external_id_not_enforced", "account_mismatch", "permission_drift", "stack_drift", "upstream_unavailable"];
+export const awsAuthorizationGenerationAuthorization_modeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationGeneration"]["authorization_mode"]> = ["managed_stack", "existing_role"];
+export const awsStackActionRequestCapabilitiesValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsStackAction"]["request"]["Capabilities"]> = ["CAPABILITY_NAMED_IAM"];
+export const awsStackActionRequestOnFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsStackAction"]["request"]["OnFailure"]> = ["DELETE"];
+export const fleetStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetState"]> = ["serving", "starting", "draining", "preparing", "stopping", "unavailable", "failed", "terminating", "stopped", "hibernate_unverified", "image_saved"];
+export const fleetNodeProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetNode"]["provider"]> = ["agent", "aws"];
+export const planIdValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PlanId"]> = ["free", "team", "business"];
+export const termsVersionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TermsVersion"]> = ["free-v2", "team-v3", "business-v2"];
+export const billingOwnerValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BillingOwner"]> = ["platform_fleet", "connected_cloud", "self_hosted"];
+export const rateClassValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RateClass"]> = ["auto", "pinned", "non_preemptible", "pinned_non_preemptible"];
+export const billingStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BillingStatus"]> = ["active", "past_due"];
+export const reloadPauseReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ReloadPauseReason"]> = ["declined", "action_required"];
+export const creditPaymentStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["CreditPaymentStatus"]> = ["pending", "action_required", "succeeded", "declined", "cancelled"];
+export const creditPurchaseKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["CreditPurchase"]["kind"]> = ["manual", "automatic"];
+export const usageCostGroupValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UsageCostGroup"]> = ["app", "workload", "task"];
+export const usageCostCategoryValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UsageCostCategory"]> = ["image-build", "disk", "unattributed"];
+export const usageCostBucketValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UsageCostBucket"]> = ["hour", "day"];
+export const billedDimensionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BilledDimension"]> = ["compute_runtime", "network_egress", "volume_storage", "disk"];
+export const usageCostComponentKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UsageCostComponentKind"]> = ["container_time", "cpu", "memory", "gpu", "volume_storage", "disk", "egress"];
+export const podKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PodKind"]> = ["pod", "devbox", "sandbox"];
+export const podRoleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PodRole"]> = ["pod", "devbox"];
+export const devboxStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DevboxState"]> = ["running", "starting", "stopped"];
+export const devboxPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DevboxPhase"]> = ["stopped", "queued", "pulling_image", "restoring_disk", "starting", "running", "stopping", "failed"];
+export const killRequestSignalValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["KillRequest"]["signal"]> = ["TERM", "KILL", "INT", "HUP", "QUIT", "USR1", "USR2"];
+export const memorySnapshotStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MemorySnapshotState"]> = ["pending", "available", "failed"];
+export const sandboxStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["SandboxStatus"]> = ["pending", "running", "stopping", "stopped", "failed"];

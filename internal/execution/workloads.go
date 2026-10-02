@@ -103,7 +103,7 @@ type Instance struct {
 	// Ports are the ports exposed through the edge: the release's and those
 	// exposed since.
 	Ports []int
-	Spec  apitypes.FunctionSpec
+	Spec  apitypes.WorkloadSpec
 }
 
 // CreateInstance admits and records a pending instance, which placement
@@ -142,7 +142,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		if !row.Live {
 			return &ConflictError{Reason: "the workload is deleted or its app is paused"}
 		}
-		var spec apitypes.FunctionSpec
+		var spec apitypes.WorkloadSpec
 		if err := json.Unmarshal(row.Spec, &spec); err != nil {
 			return fmt.Errorf("decode release spec: %w", err)
 		}
@@ -179,7 +179,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 	return e.Instance(ctx, workspace, ContainerID(id))
 }
 
-func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec apitypes.FunctionSpec, req InstanceRequest) (InsertInstanceParams, error) {
+func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec apitypes.WorkloadSpec, req InstanceRequest) (InsertInstanceParams, error) {
 	kind := apitypes.WorkloadKind(row.Kind)
 	pod := kind == apitypes.WorkloadKindPod || kind == apitypes.WorkloadKindSandbox
 	if !req.Shell && !pod {
@@ -190,9 +190,6 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	}
 	if req.Shell && req.Snapshot != nil {
 		return InsertInstanceParams{}, &InvalidError{Reason: "a shell container does not restore a snapshot"}
-	}
-	if p := spec.Pod; req.Snapshot != nil && p != nil && ((p.BlockNetwork != nil && *p.BlockNetwork) || (p.AllowList != nil && len(*p.AllowList) > 0)) {
-		return InsertInstanceParams{}, &InvalidError{Reason: "an instance with a network policy cannot restore a snapshot: it would run before its filter applies"}
 	}
 	if spec.Pod != nil && spec.Pod.Kind == apitypes.PodKindDevbox {
 		return InsertInstanceParams{}, &InvalidError{Reason: "a devbox runs one container; connect to it instead"}
@@ -257,7 +254,7 @@ func (e *Execution) Instance(ctx context.Context, workspace identity.WorkspaceID
 
 // exposedPorts are the release's ports, then the ones exposed since, once
 // each.
-func exposedPorts(spec apitypes.FunctionSpec, extra []int32) []int {
+func exposedPorts(spec apitypes.WorkloadSpec, extra []int32) []int {
 	var ports []int
 	seen := map[int]bool{}
 	add := func(p int) {
@@ -276,7 +273,7 @@ func exposedPorts(spec apitypes.FunctionSpec, extra []int32) []int {
 }
 
 // PodPorts are the ports a pod or sandbox release declares, by name order.
-func PodPorts(spec apitypes.FunctionSpec) []int {
+func PodPorts(spec apitypes.WorkloadSpec) []int {
 	if spec.Pod == nil || spec.Pod.Ports == nil {
 		return nil
 	}
@@ -310,7 +307,7 @@ func gpuCount(r apitypes.Resources) int {
 	return 0
 }
 
-func gpuModels(spec apitypes.FunctionSpec) []billing.GPUType {
+func gpuModels(spec apitypes.WorkloadSpec) []billing.GPUType {
 	if spec.Resources.Gpu == nil {
 		return nil
 	}
@@ -321,12 +318,12 @@ func gpuModels(spec apitypes.FunctionSpec) []billing.GPUType {
 	return out
 }
 
-func pinned(spec apitypes.FunctionSpec) bool {
+func pinned(spec apitypes.WorkloadSpec) bool {
 	p := spec.Placement
 	return p != nil && ((p.Region != nil && *p.Region != "") || (p.AvailabilityZone != nil && *p.AvailabilityZone != ""))
 }
 
-func preemptible(spec apitypes.FunctionSpec) bool {
+func preemptible(spec apitypes.WorkloadSpec) bool {
 	p := spec.Placement
 	return p == nil || p.Preemptible == nil || *p.Preemptible
 }
@@ -571,7 +568,7 @@ type ContainerRoute struct {
 	// Accepting is false once the workload is stopped or its app paused.
 	Accepting bool
 	Ports     []int
-	Spec      apitypes.FunctionSpec
+	Spec      apitypes.WorkloadSpec
 	// CreatedBy is the function container that started the instance.
 	CreatedBy *ContainerID
 }
@@ -610,7 +607,7 @@ type PodRoute struct {
 	Workspace     identity.WorkspaceID
 	WorkspaceName string
 	Accepting     bool
-	Spec          apitypes.FunctionSpec
+	Spec          apitypes.WorkloadSpec
 }
 
 // PodRelease reads a pod or sandbox release for routing; ErrNotFound for

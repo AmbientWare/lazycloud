@@ -25,7 +25,7 @@ type StartCommand struct {
 	Workspace     identity.WorkspaceID
 	WorkspaceName string
 	Source        storage.Digest
-	Spec          apitypes.FunctionSpec
+	Spec          apitypes.WorkloadSpec
 	Slots         int
 	CPUMillis     int64
 	MemoryBytes   int64
@@ -80,7 +80,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		return out, fmt.Errorf("list starting containers: %w", err)
 	}
 	for _, row := range starting {
-		var spec apitypes.FunctionSpec
+		var spec apitypes.WorkloadSpec
 		if err := json.Unmarshal(row.Spec, &spec); err != nil {
 			return out, fmt.Errorf("decode release spec: %w", err)
 		}

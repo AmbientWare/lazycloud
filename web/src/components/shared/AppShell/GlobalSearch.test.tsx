@@ -37,10 +37,10 @@ it("asks the server for matching apps, workloads and tasks", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = new URL((input as Request).url);
     requests.push(url);
-    if (url.pathname.endsWith("/deployments")) {
+    if (url.pathname.endsWith("/workloads")) {
       const named = url.searchParams.get("search") === "greet";
       return Response.json({
-        deployments: named
+        workloads: named
           ? [
               {
                 id: "workload-1",
@@ -88,7 +88,7 @@ it("asks the server for matching apps, workloads and tasks", async () => {
   const searched = requests
     .filter((url) => url.searchParams.get("search") === "greet")
     .map((url) => url.pathname.split("/").at(-1));
-  expect([...new Set(searched)].sort()).toEqual(["apps", "deployments", "tasks"]);
+  expect([...new Set(searched)].sort()).toEqual(["apps", "tasks", "workloads"]);
 
   // The query filtered out the highlighted "Apps" destination, so the first
   // remaining result is highlighted and Enter opens it.

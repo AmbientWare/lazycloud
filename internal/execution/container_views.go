@@ -47,12 +47,10 @@ type Container struct {
 	Image string
 }
 
-// ContainerFilter narrows a container listing by app and function name, or
-// by workload. Function requires App.
+// ContainerFilter narrows a container listing by app name or by workload.
 type ContainerFilter struct {
 	Live     bool
 	App      *string
-	Function *string
 	Workload *uuid.UUID
 }
 
@@ -73,14 +71,11 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 		}
 		before = id
 	}
-	if filter.Function != nil && filter.App == nil {
-		return ContainerPage{}, fmt.Errorf("%w: function needs app", ErrInvalidFilter)
-	}
 	size := pageSize(limit)
 	var rows []ContainerViewRow
 	if filter.Live {
 		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{
-			WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function, Before: before,
+			WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before,
 			WorkloadID: filter.Workload, MaxRows: size + 1,
 		})
 		if err != nil {
@@ -91,7 +86,7 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 		}
 	} else {
 		r, err := e.queries.ListContainers(ctx, ListContainersParams{
-			WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function, Before: before,
+			WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before,
 			WorkloadID: filter.Workload, MaxRows: size + 1,
 		})
 		if err != nil {

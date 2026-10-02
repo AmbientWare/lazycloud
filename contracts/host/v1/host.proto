@@ -370,6 +370,10 @@ message StartContainer {
   // workload's automatic snapshot starts the container cold and reports
   // restore_failed; any other failed restore fails the start.
   SnapshotRestore restore = 92;
+  // The container may be snapshotted, or restores one: a pod, sandbox or
+  // devbox, or a function with checkpoints. Its network is set up so a
+  // restored copy gets one the same way.
+  bool checkpointable = 93;
 }
 
 message PodWorkload {

@@ -442,6 +442,19 @@ func (s *serverSession) phase(t *testing.T, container string, phase hostproto.Co
 	}).GetContainer()
 }
 
+// adoptedReady waits until an adopted container is ready: in the Hello when
+// its supervisor reconnected before the session opened, or in a later
+// report.
+func (s *serverSession) adoptedReady(t *testing.T, container string) {
+	t.Helper()
+	for _, r := range s.hello.GetContainers() {
+		if r.GetContainerId() == container && r.GetPhase() == hostproto.ContainerPhase_CONTAINER_PHASE_READY {
+			return
+		}
+	}
+	s.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+}
+
 func (e *env) startCommand(handler string, slots int32) *hostproto.ServerMessage {
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   uuid.NewString(),

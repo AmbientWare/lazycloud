@@ -36,6 +36,7 @@ SNAPSHOT = "0192f0a0-0000-7000-8000-0000000000e1"
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
 TEAM = "/v1/workspaces/team"
 BOX = f"{TEAM}/containers/{CONTAINER}"
+WEB = f"{TEAM}/apps/tools/workloads/pod/web"
 
 TOOLS = """\
 import lazycloud
@@ -81,7 +82,7 @@ def _cli(*args: str) -> Result:
 
 
 def _release(spec: dict[str, Any], **extra: object) -> dict[str, object]:
-    return {"id": RELEASE, "function": spec["name"], "created_at": NOW, "spec": spec, **extra}
+    return {"id": RELEASE, "name": spec["name"], "created_at": NOW, "spec": spec, **extra}
 
 
 def _instance(state: str = "pending", **extra: object) -> dict[str, object]:
@@ -168,27 +169,27 @@ def _serve_releases(api: FakeApi, stored: set[str]) -> None:
 
     @api.route("POST", f"{TEAM}/apps/tools/deployments")
     def deploy(request: ApiRequest) -> Reply:
-        functions: list[dict[str, Any]] = request.json()["functions"]
+        workloads: list[dict[str, Any]] = request.json()["workloads"]
         return json_reply(
             {
                 "app": {
                     "id": DEPLOYMENT,
                     "name": "tools",
                     "state": "active",
-                    "workloads": len(functions),
+                    "workloads": len(workloads),
                     "running_containers": 0,
                     "created_at": NOW,
                 },
                 "releases": [
                     _release(spec, version=1, url=f"https://{spec['name']}.example.test")
-                    for spec in functions
+                    for spec in workloads
                 ],
                 "pruned": [],
                 "removed_versions": 0,
             }
         )
 
-    api.route("POST", f"{TEAM}/apps/tools/functions/[^/]+/releases")(
+    api.route("POST", f"{TEAM}/apps/tools/releases")(
         lambda request: json_reply(_release(request.json()))
     )
 
@@ -203,7 +204,8 @@ def test_app_deploy_sends_pods_and_devboxes_with_their_defaults_and_never_sandbo
 
     assert result.exit_code == 0, result.output
     (request,) = fake_api.calls("POST", f"{TEAM}/apps/tools/deployments")
-    web, box = request.json()["functions"]
+    web, box = request.json()["workloads"]
+    assert (web["kind"], box["kind"]) == ("pod", "pod")
     assert "handler" not in web
     assert web["pod"] == {
         "kind": "pod",
@@ -288,7 +290,7 @@ def test_pod_instances_start_from_the_prepared_release_and_terminate(
     assert run.exit_code == 0, run.output
     assert CONTAINER in run.output
     # The prepared release is reused for later instances from this process.
-    assert len(fake_api.calls("POST", f"{TEAM}/apps/tools/functions/web/releases")) == 1
+    assert len(fake_api.calls("POST", f"{TEAM}/apps/tools/releases")) == 1
 
 
 def test_pod_lifecycle_resolves_its_deployment_by_app_and_name(
@@ -296,20 +298,18 @@ def test_pod_lifecycle_resolves_its_deployment_by_app_and_name(
 ) -> None:
     tools = _project(tmp_path, monkeypatch)
 
-    @fake_api.route("GET", f"{TEAM}/deployments")
-    def deployments(request: ApiRequest) -> Reply:
+    @fake_api.route("GET", f"{TEAM}/workloads")
+    def workloads(request: ApiRequest) -> Reply:
         named = request.query.get("name") == ["web"]
-        return json_reply({"deployments": [_deployed()] if named else []})
+        return json_reply({"workloads": [_deployed()] if named else []})
 
     for action in ("stop", "start", "scale"):
-        fake_api.route("POST", f"{TEAM}/deployments/{DEPLOYMENT}/{action}")(
+        fake_api.route("POST", f"{WEB}/{action}")(
             lambda request: json_reply(
                 _deployed(scaling={"min_containers": 2, "max_containers": 2})
             )
         )
-    fake_api.route("DELETE", f"{TEAM}/deployments/{DEPLOYMENT}")(
-        lambda request: json_reply(_deployed(state="deleted"))
-    )
+    fake_api.route("DELETE", WEB)(lambda request: json_reply(_deployed(state="deleted")))
 
     tools.web.scale(2)
     tools.web.pause()
@@ -317,17 +317,15 @@ def test_pod_lifecycle_resolves_its_deployment_by_app_and_name(
     tools.web.delete()
     scaled = _cli("deployment", "scale", "web", "--containers", "2")
 
-    assert {tuple(r.query["app"]) for r in fake_api.calls("GET", f"{TEAM}/deployments")[:4]} == {
+    assert {tuple(r.query["app"]) for r in fake_api.calls("GET", f"{TEAM}/workloads")[:4]} == {
         ("tools",)
     }
-    assert [r.json() for r in fake_api.calls("POST", f"{TEAM}/deployments/{DEPLOYMENT}/scale")] == [
+    assert [r.json() for r in fake_api.calls("POST", f"{WEB}/scale")] == [
         {"containers": 2},
         {"containers": 2},
     ]
-    assert fake_api.calls("POST", f"{TEAM}/deployments/{DEPLOYMENT}/start")[0].json() == {
-        "version": 1
-    }
-    assert len(fake_api.calls("DELETE", f"{TEAM}/deployments/{DEPLOYMENT}")) == 1
+    assert fake_api.calls("POST", f"{WEB}/start")[0].json() == {"version": 1}
+    assert len(fake_api.calls("DELETE", WEB)) == 1
     assert scaled.exit_code == 0, scaled.output
     assert "Set web to 2 containers." in scaled.output
 
@@ -356,8 +354,9 @@ def test_sandbox_create_prepares_an_empty_workspace_waits_and_exposes_its_ports(
 
     empty = io.BytesIO()
     zipfile.ZipFile(empty, "w").close()
-    (release,) = fake_api.calls("POST", f"{TEAM}/apps/tools/functions/scratch/releases")
+    (release,) = fake_api.calls("POST", f"{TEAM}/apps/tools/releases")
     spec = release.json()
+    assert (spec["kind"], spec["name"]) == ("sandbox", "scratch")
     assert spec["source"] == {"sha256": hashlib.sha256(empty.getvalue()).hexdigest()}
     assert spec["pod"] == {
         "kind": "sandbox",
@@ -704,7 +703,7 @@ def test_devbox_list_pages_and_status_reports_the_devbox(fake_api: FakeApi) -> N
             return json_reply({"hosts": [_host()]})
         return json_reply({"hosts": [_host()], "next_cursor": "c2"})
 
-    fake_api.route("GET", f"{TEAM}/deployments/{DEPLOYMENT}/devbox")(
+    fake_api.route("GET", f"{TEAM}/apps/tools/workloads/pod/box/devbox")(
         lambda request: json_reply(
             {
                 "deployment_id": DEPLOYMENT,
@@ -744,11 +743,11 @@ def test_devbox_list_pages_and_status_reports_the_devbox(fake_api: FakeApi) -> N
 def test_ssh_names_why_a_pod_cannot_be_reached(fake_api: FakeApi) -> None:
     fake_api.route("GET", f"{TEAM}/ssh/hosts")(lambda request: json_reply({"hosts": []}))
 
-    @fake_api.route("GET", f"{TEAM}/deployments")
-    def deployments(request: ApiRequest) -> Reply:
+    @fake_api.route("GET", f"{TEAM}/workloads")
+    def workloads(request: ApiRequest) -> Reply:
         if request.query.get("name") == ["web"]:
-            return json_reply({"deployments": [_deployed(state="stopped")]})
-        return json_reply({"deployments": []})
+            return json_reply({"workloads": [_deployed(state="stopped")]})
+        return json_reply({"workloads": []})
 
     missing = _cli("ssh", "nothing")
     stopped = _cli("ssh", "web")

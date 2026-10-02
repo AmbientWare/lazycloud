@@ -141,6 +141,11 @@ def get(api: httpx.Client, path: str, **params: Any) -> Any:
     return response.json()
 
 
+def _container_starts(api: httpx.Client) -> int:
+    """Containers started across the caller's account in the activity range."""
+    return get(api, "/v1/me/activity", measure="containers", window_seconds=900)["total"]
+
+
 def _deploy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, ModuleType]:
     app = f"ob{uuid.uuid4().hex[:10]}"
     module = f"{app}_mod"
@@ -158,6 +163,7 @@ def test_observability_end_to_end(
     ws = f"/v1/workspaces/{WORKSPACE}"
     stream = Stream()
     app, module = _deploy(tmp_path, monkeypatch)
+    starts_before = _container_starts(api)
 
     # Live updates: the stream reports the task's transitions as they commit.
     call = module.burn.spawn(8)
@@ -213,9 +219,7 @@ def test_observability_end_to_end(
     assert batch.status_code == 200 and len(batch.json()["lifecycles"]) >= 2
 
     # Workload performance and workspace metrics.
-    deployments = get(api, f"{ws}/deployments", app=app)["deployments"]
-    burn = next(d for d in deployments if d["name"] == "burn")
-    perf = get(api, f"{ws}/deployments/{burn['id']}/performance")
+    perf = get(api, f"{ws}/apps/{app}/workloads/function/burn/performance")
     bucket = perf["buckets"][-1]
     assert bucket["count"] == 1 and bucket["cold_starts"] == 1 and bucket["p50_ms"] >= 8000, perf
     task_metrics = get(api, f"{ws}/metrics/tasks", app=app)
@@ -227,8 +231,12 @@ def test_observability_end_to_end(
     # Account metrics across the caller's workspaces.
     account = get(api, "/v1/me/metrics")
     assert account["containers"]["running"] >= 3 and account["concurrency"]["cpu_containers"] >= 3
-    starts = get(api, "/v1/me/activity", measure="containers", window_seconds=900)
-    assert any(s.get("app") == app and s["total"] == 3 for s in starts["series"]), starts
+    # Series past the limit fold into "other", so in a busy account this app
+    # may have no series of its own; its three starts still count.
+    starts = get(api, "/v1/me/activity", measure="containers", window_seconds=900, limit=20)
+    assert _container_starts(api) >= starts_before + 3, starts
+    mine = [s for s in starts["series"] if s.get("app") == app]
+    assert not mine or mine[0]["total"] == 3, starts
     cpu = get(api, "/v1/me/activity", measure="cpu", window_seconds=900)
     assert cpu["unit"] == "cores" and cpu["total"] > 0
     stream.close()

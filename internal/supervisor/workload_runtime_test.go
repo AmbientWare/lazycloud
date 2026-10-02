@@ -103,7 +103,9 @@ func TestInProcessSlotsShareOneRunnerAndCancelRestartsIt(t *testing.T) {
 	if elapsed := time.Since(began); elapsed > 1900*time.Millisecond {
 		t.Fatalf("two 1 s attempts on two threads took %s", elapsed)
 	}
-	if outputs["s1"] != "thread runs s1\n" || outputs["s2"] != "thread runs s2\n" {
+	// Each output message is a line without its newline, as from a slot's
+	// own pipes.
+	if outputs["s1"] != "thread runs s1" || outputs["s2"] != "thread runs s2" {
 		t.Fatalf("attributed output %q", outputs)
 	}
 
@@ -233,12 +235,12 @@ func TestInProcessOutputSurvivesLargeWritesAndSplitSecrets(t *testing.T) {
 
 	c.run(t, "big", `{"args": ["big"]}`)
 	m, output := c.until(t, finished("big"))
-	if m.GetFinished().GetSuccess() == nil || len(output["big"]) != 2<<20+1 {
+	if m.GetFinished().GetSuccess() == nil || len(output["big"]) != 2<<20 {
 		t.Fatalf("a 2 MiB write: %v, %d bytes of output", m, len(output["big"]))
 	}
 	c.run(t, "split", `{"args": ["split", "hunter2-hunter2"]}`)
 	_, output = c.until(t, finished("split"))
-	if output["split"] != "********\n" {
+	if output["split"] != "********" {
 		t.Fatalf("a secret split across frames came out as %q", output["split"])
 	}
 }

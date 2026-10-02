@@ -438,16 +438,17 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			DiskLimitBytes: diskLimit,
 			GpuCount:       gpusOf(start.Spec.Resources),
 		},
-		Function:    function,
-		Pod:         pod,
-		Docker:      start.Spec.DockerEnabled != nil && *start.Spec.DockerEnabled,
-		Restore:     restore,
-		Disks:       disksOut(start.Spec),
-		Http:        http,
-		Environment: env,
-		Volumes:     volumes,
-		Secrets:     secretValues,
-		Workspace:   start.WorkspaceName,
+		Function:       function,
+		Pod:            pod,
+		Docker:         start.Spec.DockerEnabled != nil && *start.Spec.DockerEnabled,
+		Restore:        restore,
+		Checkpointable: execution.Checkpointable(start.Kind, start.Purpose, start.Spec),
+		Disks:          disksOut(start.Spec),
+		Http:           http,
+		Environment:    env,
+		Volumes:        volumes,
+		Secrets:        secretValues,
+		Workspace:      start.WorkspaceName,
 	}}}, nil
 }
 
@@ -481,7 +482,7 @@ func stopMessage(id string, container execution.ContainerID, grace time.Duration
 
 // httpServing configures an HTTP workload's workers, or nil for a task
 // workload. Each worker admits the spec's concurrency.
-func httpServing(spec apitypes.FunctionSpec) *hostproto.HttpServing {
+func httpServing(spec apitypes.WorkloadSpec) *hostproto.HttpServing {
 	if spec.Http == nil {
 		return nil
 	}

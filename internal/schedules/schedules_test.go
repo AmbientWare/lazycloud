@@ -48,13 +48,13 @@ select id from ws`, source).Scan(&ws)
 
 func (f fixture) deploy(t *testing.T, cron *string, maxPending int) {
 	t.Helper()
-	spec := apitypes.FunctionSpec{
-		Name: "nightly", Handler: new("app:nightly"), Source: apitypes.SourceRef{Sha256: source},
+	spec := apitypes.WorkloadSpec{
+		Kind: apitypes.WorkloadKindFunction, Name: "nightly", Handler: new("app:nightly"), Source: apitypes.SourceRef{Sha256: source},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 		Cron:      cron, MaxPendingTasks: &maxPending,
 	}
-	if _, err := f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}}); err != nil {
+	if _, err := f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -100,12 +100,16 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	if first == nil || first.Expression != "*/5 * * * *" || !first.NextRunAt.After(deployed) {
 		t.Fatalf("schedule after deploy: %+v", first)
 	}
-	fn, err := f.control.GetFunction(t.Context(), f.workspace, "reports", "nightly")
+	id, err := f.control.FindWorkload(t.Context(), f.workspace, control.WorkloadRef{App: "reports", Kind: apitypes.WorkloadKindFunction, Name: "nightly"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *fn.ActiveRelease.Spec.KeepWarmSeconds != 0 {
-		t.Fatalf("a scheduled function keeps containers warm for %d s", *fn.ActiveRelease.Spec.KeepWarmSeconds)
+	release, err := f.control.Release(t.Context(), f.workspace, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *release.Spec.KeepWarmSeconds != 0 {
+		t.Fatalf("a scheduled function keeps containers warm for %d s", *release.Spec.KeepWarmSeconds)
 	}
 
 	f.deploy(t, ptr("@hourly"), 10)
@@ -119,8 +123,8 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	}
 
 	var invalid *control.InvalidSpecError
-	_, err = f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{{
-		Name: "bad", Handler: new("app:bad"), Source: apitypes.SourceRef{Sha256: source},
+	_, err = f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{{
+		Kind: apitypes.WorkloadKindFunction, Name: "bad", Handler: new("app:bad"), Source: apitypes.SourceRef{Sha256: source},
 		Image: apitypes.ImageSpec{PythonVersion: apitypes.N312}, Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 		Cron: ptr("every 60m"),
 	}}})

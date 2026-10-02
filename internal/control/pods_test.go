@@ -10,9 +10,12 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
-func pod(name string, kind apitypes.PodKind) apitypes.FunctionSpec {
+func pod(name string, kind apitypes.PodKind) apitypes.WorkloadSpec {
 	spec := function(name)
-	spec.Handler = nil
+	spec.Kind, spec.Handler = apitypes.WorkloadKindPod, nil
+	if kind == apitypes.PodKindSandbox {
+		spec.Kind = apitypes.WorkloadKindSandbox
+	}
 	spec.Pod = &apitypes.PodSpec{Kind: kind, Command: &[]string{"python", "-m", "http.server", "8080"}, Ports: &map[string]int{"http": 8080}}
 	return spec
 }
@@ -20,19 +23,18 @@ func pod(name string, kind apitypes.PodKind) apitypes.FunctionSpec {
 func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 	cases := []struct {
 		name       string
-		spec       func() apitypes.FunctionSpec
+		spec       func() apitypes.WorkloadSpec
 		keepWarm   int
 		authorized bool
 		ssh        bool
-		kind       apitypes.WorkloadKind
 	}{
-		{"pod", func() apitypes.FunctionSpec { return pod("web", apitypes.PodKindPod) }, 600, false, false, apitypes.WorkloadKindPod},
-		{"sandbox", func() apitypes.FunctionSpec { return pod("box", apitypes.PodKindSandbox) }, 600, false, false, apitypes.WorkloadKindSandbox},
-		{"devbox", func() apitypes.FunctionSpec {
+		{"pod", func() apitypes.WorkloadSpec { return pod("web", apitypes.PodKindPod) }, 600, false, false},
+		{"sandbox", func() apitypes.WorkloadSpec { return pod("box", apitypes.PodKindSandbox) }, 600, false, false},
+		{"devbox", func() apitypes.WorkloadSpec {
 			s := pod("dev", apitypes.PodKindDevbox)
 			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 1 << 30, MountPath: "/"}}
 			return s
-		}, 1800, false, true, apitypes.WorkloadKindPod},
+		}, 1800, false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -41,8 +43,8 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
-			if *out.KeepWarmSeconds != c.keepWarm || *out.Authorized != c.authorized || *out.Pod.Ssh != c.ssh || KindOf(out) != c.kind {
-				t.Fatalf("resolved keep_warm %d authorized %v ssh %v kind %s", *out.KeepWarmSeconds, *out.Authorized, *out.Pod.Ssh, KindOf(out))
+			if *out.KeepWarmSeconds != c.keepWarm || *out.Authorized != c.authorized || *out.Pod.Ssh != c.ssh {
+				t.Fatalf("resolved keep_warm %d authorized %v ssh %v", *out.KeepWarmSeconds, *out.Authorized, *out.Pod.Ssh)
 			}
 			if c.name == "devbox" && (out.Placement == nil || *out.Placement.Preemptible) {
 				t.Fatal("a devbox may be preempted")
@@ -52,50 +54,49 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 }
 
 func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
-	withDisk := func(s apitypes.FunctionSpec, name, path string) apitypes.FunctionSpec {
+	withDisk := func(s apitypes.WorkloadSpec, name, path string) apitypes.WorkloadSpec {
 		s.Disks = &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: 1 << 30, MountPath: path}}
 		return s
 	}
 	cases := map[string]struct {
-		spec   apitypes.FunctionSpec
+		spec   apitypes.WorkloadSpec
 		reason string
 	}{
-		"handler":              {func() apitypes.FunctionSpec { s := pod("web", apitypes.PodKindPod); s.Handler = new("a:b"); return s }(), "not a handler"},
-		"function without one": {func() apitypes.FunctionSpec { s := function("f"); s.Handler = nil; return s }(), "handler is required"},
+		"handler": {func() apitypes.WorkloadSpec { s := pod("web", apitypes.PodKindPod); s.Handler = new("a:b"); return s }(), "not a handler"},
+		"kind of another section": {func() apitypes.WorkloadSpec {
+			s := pod("box", apitypes.PodKindSandbox)
+			s.Kind = apitypes.WorkloadKindPod
+			return s
+		}(), "does not match"},
+		"function without one": {func() apitypes.WorkloadSpec { s := function("f"); s.Handler = nil; return s }(), "handler is required"},
 		"devbox without disk":  {pod("dev", apitypes.PodKindDevbox), "needs a root disk"},
-		"devbox ssh off": {func() apitypes.FunctionSpec {
+		"devbox ssh off": {func() apitypes.WorkloadSpec {
 			s := withDisk(pod("dev", apitypes.PodKindDevbox), "dev", "/")
 			s.Pod.Ssh = new(false)
 			return s
 		}(), "cannot turn ssh off"},
 		"root disk on a pod": {withDisk(pod("web", apitypes.PodKindPod), "web", "/"), "only a devbox"},
-		"private tcp": {func() apitypes.FunctionSpec {
+		"private tcp": {func() apitypes.WorkloadSpec {
 			s := pod("web", apitypes.PodKindPod)
 			s.Pod.Tcp, s.Authorized = new(true), new(true)
 			return s
 		}(), "requires a public Pod"},
-		"docker with a network policy": {func() apitypes.FunctionSpec {
+		"docker with a network policy": {func() apitypes.WorkloadSpec {
 			s := pod("web", apitypes.PodKindSandbox)
 			s.DockerEnabled, s.Pod.BlockNetwork = new(true), new(true)
 			return s
 		}(), "cannot be combined"},
-		"checkpoint with a network policy": {func() apitypes.FunctionSpec {
-			s := pod("web", apitypes.PodKindPod)
-			s.Checkpoint = &apitypes.CheckpointSpec{ReadinessPath: new("/"), ReadinessPort: new(8080)}
-			s.Pod.BlockNetwork = new(true)
-			return s
-		}(), "restored pod would run before"},
-		"bad cidr": {func() apitypes.FunctionSpec {
+		"bad cidr": {func() apitypes.WorkloadSpec {
 			s := pod("web", apitypes.PodKindPod)
 			s.Pod.AllowList = &[]string{"example.com"}
 			return s
 		}(), "not an IP address"},
-		"checkpoint without readiness": {func() apitypes.FunctionSpec {
+		"checkpoint without readiness": {func() apitypes.WorkloadSpec {
 			s := pod("web", apitypes.PodKindPod)
 			s.Checkpoint = &apitypes.CheckpointSpec{}
 			return s
 		}(), "checkpoint_readiness_path"},
-		"disk with two containers": {func() apitypes.FunctionSpec {
+		"disk with two containers": {func() apitypes.WorkloadSpec {
 			s := withDisk(pod("web", apitypes.PodKindPod), "data", "/data")
 			s.Autoscaler = &apitypes.Autoscaler{MaxContainers: new(2)}
 			return s
@@ -112,16 +113,16 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 	}
 }
 
-func TestDeploymentsOfEveryKindReadTheirActiveRelease(t *testing.T) {
+func TestWorkloadsOfEveryKindReadTheirActiveRelease(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	deploy(t, c, ws, false, pod("web", apitypes.PodKindPod), pod("scratch", apitypes.PodKindSandbox))
-	page, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{}, 10, "")
-	if err != nil || len(page.Deployments) != 2 {
-		t.Fatalf("deployments %+v %v", page.Deployments, err)
+	page, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{}, 10, "")
+	if err != nil || len(page.Workloads) != 2 {
+		t.Fatalf("deployments %+v %v", page.Workloads, err)
 	}
-	for _, d := range page.Deployments {
-		release, err := c.ActiveRelease(t.Context(), ws, WorkloadID(d.Id))
+	for _, d := range page.Workloads {
+		release, err := c.Release(t.Context(), ws, WorkloadID(d.Id), nil)
 		if err != nil {
 			t.Fatalf("%s release: %v", d.Name, err)
 		}
@@ -129,7 +130,7 @@ func TestDeploymentsOfEveryKindReadTheirActiveRelease(t *testing.T) {
 			t.Fatalf("%s (%s) release %+v, want %v with its pod section", d.Name, d.Kind, release, *d.ReleaseId)
 		}
 	}
-	if _, err := c.ActiveRelease(t.Context(), ws, WorkloadID(uuid.New())); !errors.Is(err, ErrNotFound) {
+	if _, err := c.Release(t.Context(), ws, WorkloadID(uuid.New()), nil); !errors.Is(err, ErrVersionNotFound) {
 		t.Fatalf("release of an unknown workload: %v", err)
 	}
 }
@@ -142,7 +143,7 @@ func TestPodsDeployAndPrepareUnderTheirKind(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), "select w.kind from workloads w join releases r on r.workload_id = w.id where r.id = $1", d.Releases[0].Id).Scan(&kind); err != nil || kind != "pod" {
 		t.Fatalf("deployed kind %q, %v", kind, err)
 	}
-	release, err := c.PrepareRelease(t.Context(), ws, "reports", "box", pod("box", apitypes.PodKindSandbox))
+	release, err := c.PrepareRelease(t.Context(), ws, "reports", pod("box", apitypes.PodKindSandbox))
 	if err != nil {
 		t.Fatal(err)
 	}

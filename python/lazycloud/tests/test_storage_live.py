@@ -26,7 +26,7 @@ from lazycloud.abstractions.disk import DiskOperationError
 from lazycloud.cli.main import build_public_cli
 from lazycloud.clients.api import ApiError
 from lazycloud.control import api_client, resolve_control_client_config
-from shared.api import ErrorCode
+from shared.api import ErrorCode, WorkloadKind
 from typer.testing import CliRunner, Result
 
 from lazycloud import Artifact, Disk, Map, Queue, Volume
@@ -334,7 +334,14 @@ def test_artifacts_save_for_a_task(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert [item["filename"] for item in searched["artifacts"]] == ["plots.zip"]
     usage = _json("artifact", "usage")
     assert usage["count"] >= 3
-    assert set(usage) == {"count", "size_bytes", "retention_seconds"}
+    assert set(usage) == {
+        "count",
+        "size_bytes",
+        "estimated_monthly_nanos",
+        "accrued_nanos",
+        "accrued_since",
+        "retention_seconds",
+    }
 
     assert _json("artifact", "delete", zipped.artifact_id, "-y") == {"deleted": zipped.artifact_id}
     artifact.delete()
@@ -368,7 +375,8 @@ def record(text: str) -> str:
     try:
         config = resolve_control_client_config()
         with api_client(config) as client:
-            spec = client.get_function(config.workspace, _APP, "record").active_release.spec
+            workload = client.get_workload(config.workspace, _APP, WorkloadKind.function, "record")
+            spec = workload.release.spec
         assert spec.resources.disk_mib == 2048
         assert [(item.name, item.mount_path, item.read_only) for item in spec.volumes or []] == [
             (name, f"/volumes/{name}", False)

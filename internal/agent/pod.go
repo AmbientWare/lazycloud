@@ -75,6 +75,9 @@ func (c *container) podLabels(labels map[string]string) error {
 	if c.docker {
 		labels[labelDocker] = "true"
 	}
+	if c.checkpointable {
+		labels[labelCheckpointable] = "true"
+	}
 	if c.pod == nil {
 		return nil
 	}
@@ -102,6 +105,7 @@ func (c *container) podLabels(labels map[string]string) error {
 // podFromLabels restores what podLabels recorded.
 func (c *container) podFromLabels(labels map[string]string) error {
 	c.docker = labels[labelDocker] == "true"
+	c.checkpointable = labels[labelCheckpointable] == "true"
 	encoded, ok := labels[labelPod]
 	if !ok {
 		return nil

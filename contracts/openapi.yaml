@@ -519,26 +519,11 @@ paths:
               schema: { $ref: "#/components/schemas/Deployment" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/apps/{app}/functions/{function}:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/tasks:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/FunctionPath"
-    get:
-      operationId: getFunction
-      responses:
-        "200":
-          description: The function and its active release
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Function" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/FunctionPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
       operationId: submitTasks
       summary: Admit one task per input against the function's active release
@@ -742,25 +727,24 @@ paths:
               schema: { $ref: "#/components/schemas/DeploymentPlan" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases:
+  /v1/workspaces/{workspace}/apps/{app}/releases:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/FunctionPath"
     post:
-      operationId: prepareFunctionRelease
+      operationId: prepareRelease
       tags: [control]
       summary: A release that runs this definition, for calls from a working tree
       description: >-
-        Returns the function's release with the same resolved definition when
+        Returns the workload's release with the same resolved definition when
         one exists, including the active one, or creates an unversioned
-        release that is never active. Submits name it with `release_id`. The
-        app and function are created when missing but are not deployed.
+        release that is never active. Submits and instances name it by id.
+        The app and workload are created when missing but are not deployed.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/FunctionSpec" }
+            schema: { $ref: "#/components/schemas/WorkloadSpec" }
       responses:
         "200":
           description: The release
@@ -769,20 +753,27 @@ paths:
               schema: { $ref: "#/components/schemas/Release" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments:
+  /v1/workspaces/{workspace}/workloads:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
     get:
-      operationId: listDeployments
+      operationId: listWorkloads
       tags: [control]
-      summary: Deployed workloads, by app and name
+      summary: Deployed workloads, by app, name and kind
       parameters:
         - name: app
           in: query
           schema: { $ref: "#/components/schemas/AppName" }
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/WorkloadKind" }
         - name: name
           in: query
           schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: id
+          in: query
+          description: Only the workload with this id.
+          schema: { type: string, format: uuid }
         - name: search
           in: query
           description: Part of the app or workload name.
@@ -791,29 +782,33 @@ paths:
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: One page of deployments
+          description: One page of workloads
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DeploymentPage" }
+              schema: { $ref: "#/components/schemas/WorkloadPage" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     get:
-      operationId: getDeployment
+      operationId: getWorkload
       tags: [control]
-      summary: The deployment with the definition its active version runs
+      summary: The workload, the definition its active version runs and where it answers
+      parameters:
+        - $ref: "#/components/parameters/VersionQuery"
       responses:
         "200":
-          description: The deployment and its active release
+          description: The workload and its release
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+              schema: { $ref: "#/components/schemas/WorkloadDetail" }
         default: { $ref: "#/components/responses/Error" }
     delete:
-      operationId: deleteDeployment
+      operationId: deleteWorkload
       tags: [control]
       summary: Delete the workload and every version of it
       description: >-
@@ -821,55 +816,89 @@ paths:
         name is free for a later deploy, which starts again at version 1.
       responses:
         "200":
-          description: The deleted deployment
+          description: The deleted workload
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+              schema: { $ref: "#/components/schemas/Workload" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/stop:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/stop:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
-      operationId: stopDeployment
+      operationId: stopWorkload
       tags: [control]
       summary: Stop admission and drain the workload, keeping its definition
       description: Queued tasks are cancelled; running tasks finish.
       responses:
         "200":
-          description: The stopped deployment
+          description: The stopped workload
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+              schema: { $ref: "#/components/schemas/Workload" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/start:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/start:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
-      operationId: startDeployment
+      operationId: startWorkload
       tags: [control]
       summary: Start the workload again, optionally on an earlier version
       requestBody:
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/StartDeploymentRequest" }
+            schema: { $ref: "#/components/schemas/StartWorkloadRequest" }
       responses:
         "200":
-          description: The started deployment
+          description: The started workload
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+              schema: { $ref: "#/components/schemas/Workload" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/versions:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/scale:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
+    post:
+      operationId: scaleWorkload
+      tags: [workloads]
+      summary: Hold a pod at a number of containers
+      description: >-
+        The count holds until the next scale, whatever the pod's
+        connections. Only an active pod of an active app scales; a pod with a
+        disk runs at most one container, and an always-on pod (keep_warm -1)
+        cannot scale to zero. Functions and endpoints follow their autoscaler.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScaleRequest" }
+      responses:
+        "200":
+          description: The workload after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/versions:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     get:
-      operationId: listDeploymentVersions
+      operationId: listWorkloadVersions
       tags: [control]
       summary: Deployed versions, newest first
       parameters:
@@ -883,12 +912,14 @@ paths:
               schema: { $ref: "#/components/schemas/VersionPage" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/logs:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/logs:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     get:
-      operationId: streamDeploymentLogs
+      operationId: streamWorkloadLogs
       tags: [control]
       summary: Log lines of every task of the workload, one JSON LogEntry per line
       description: >-
@@ -906,6 +937,57 @@ paths:
           content:
             application/x-ndjson:
               schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
+    get:
+      operationId: listWorkloadContainers
+      tags: [control]
+      summary: Containers of the workload's releases, newest first
+      parameters:
+        - name: live
+          in: query
+          description: Only containers that have not stopped.
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of containers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/KindPath"
+      - $ref: "#/components/parameters/WorkloadPath"
+    get:
+      operationId: getWorkloadPerformance
+      tags: [observability]
+      summary: Run time percentiles, outcomes and cold starts per time bucket
+      description: >-
+        Tasks fall in the bucket they were submitted in; a duration is from
+        start to finish of a finished task. A cold start is a container started
+        for the workload. The default range is the last 24 hours.
+      parameters:
+        - $ref: "#/components/parameters/WindowSeconds"
+        - $ref: "#/components/parameters/RangeStart"
+        - $ref: "#/components/parameters/RangeEnd"
+      responses:
+        "200":
+          description: Buckets that saw tasks or cold starts, oldest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkloadPerformance" }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/tasks:
@@ -1000,14 +1082,6 @@ paths:
           in: query
           description: Only the containers of this app's workloads.
           schema: { $ref: "#/components/schemas/AppName" }
-        - name: function
-          in: query
-          description: Only the containers of this workload of `app`; requires it.
-          schema: { $ref: "#/components/schemas/WorkloadName" }
-        - name: deployment
-          in: query
-          description: Only containers of this workload's releases.
-          schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -1947,29 +2021,11 @@ paths:
 
   # Endpoints packet: HTTP workloads, custom domains and previews.
 
-  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/EndpointPath"
-    get:
-      operationId: getEndpoint
-      summary: An endpoint, its active release and the URLs it answers on
-      parameters:
-        - $ref: "#/components/parameters/VersionQuery"
-      responses:
-        "200":
-          description: The endpoint
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/HttpWorkload" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/EndpointPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
       operationId: requestEndpointPath
       summary: Send a request to an endpoint through the API host
@@ -1985,97 +2041,55 @@ paths:
         default:
           description: The workload's own response, or an Error from the platform.
 
-  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/versions/{version}/invoke:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/versions/{version}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/EndpointPath"
-      - name: version
-        in: path
-        required: true
-        schema: { type: integer, minimum: 1 }
+      - $ref: "#/components/parameters/WorkloadPath"
+      - $ref: "#/components/parameters/VersionPath"
     post:
       operationId: requestEndpointPathVersion
       summary: Send a request to an endpoint version through the API host
-      description: >-
-        Any method, and any path after /invoke, which becomes the request's
-        path. The request is forwarded to the workload as its own host would
-        forward it, with the same admission, records and token policy, and
-        streams both ways; WebSockets upgrade. The browser's session cookie
-        (from the dashboard origin for anything but GET and HEAD) or a bearer
-        token authenticates it, and neither reaches the workload.
+      description: As requestEndpointPath, pinned to one deployed version.
       x-lazycloud-opaque: true
       responses:
         default:
           description: The workload's own response, or an Error from the platform.
 
-  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/invoke:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/EndpointPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
       operationId: requestAsgiPath
       summary: Send a request to an ASGI or realtime app through the API host
-      description: >-
-        Any method, and any path after /invoke, which becomes the request's
-        path. The request is forwarded to the workload as its own host would
-        forward it, with the same admission, records and token policy, and
-        streams both ways; WebSockets upgrade. The browser's session cookie
-        (from the dashboard origin for anything but GET and HEAD) or a bearer
-        token authenticates it, and neither reaches the workload.
+      description: As requestEndpointPath, for an ASGI or realtime app.
       x-lazycloud-opaque: true
       responses:
         default:
           description: The workload's own response, or an Error from the platform.
 
-  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/versions/{version}/invoke:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/versions/{version}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/EndpointPath"
-      - name: version
-        in: path
-        required: true
-        schema: { type: integer, minimum: 1 }
+      - $ref: "#/components/parameters/WorkloadPath"
+      - $ref: "#/components/parameters/VersionPath"
     post:
       operationId: requestAsgiPathVersion
       summary: Send a request to an ASGI or realtime app version through the API host
-      description: >-
-        Any method, and any path after /invoke, which becomes the request's
-        path. The request is forwarded to the workload as its own host would
-        forward it, with the same admission, records and token policy, and
-        streams both ways; WebSockets upgrade. The browser's session cookie
-        (from the dashboard origin for anything but GET and HEAD) or a bearer
-        token authenticates it, and neither reaches the workload.
+      description: As requestEndpointPath, for one deployed version of an ASGI or realtime app.
       x-lazycloud-opaque: true
       responses:
         default:
           description: The workload's own response, or an Error from the platform.
 
-  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/EndpointPath"
-    get:
-      operationId: getAsgi
-      summary: An ASGI or realtime app, its active release and the URLs it answers on
-      parameters:
-        - $ref: "#/components/parameters/VersionQuery"
-      responses:
-        "200":
-          description: The ASGI app
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/HttpWorkload" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/FunctionPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
       operationId: invokeFunction
       summary: Run the function's active release with JSON arguments
@@ -2096,15 +2110,12 @@ paths:
               schema: { $ref: "#/components/schemas/Invocation" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/versions/{version}/invoke:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/versions/{version}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/FunctionPath"
-      - name: version
-        in: path
-        required: true
-        schema: { type: integer, minimum: 1 }
+      - $ref: "#/components/parameters/WorkloadPath"
+      - $ref: "#/components/parameters/VersionPath"
     post:
       operationId: invokeFunctionVersion
       summary: Run one version of the function with JSON arguments
@@ -2476,30 +2487,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TaskCallGraph" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/deployments/{deployment}/performance:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
-    get:
-      operationId: getDeploymentPerformance
-      tags: [observability]
-      summary: Run time percentiles, outcomes and cold starts per time bucket
-      description: >-
-        Tasks fall in the bucket they were submitted in; a duration is from
-        start to finish of a finished task. A cold start is a container started
-        for the deployment. The default range is the last 24 hours.
-      parameters:
-        - $ref: "#/components/parameters/WindowSeconds"
-        - $ref: "#/components/parameters/RangeStart"
-        - $ref: "#/components/parameters/RangeEnd"
-      responses:
-        "200":
-          description: Buckets that saw tasks or cold starts, oldest first
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/DeploymentPerformance" }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/metrics/tasks:
@@ -3172,36 +3159,11 @@ paths:
 
   # Workloads: pods, devboxes, sandboxes, shells and SSH.
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/scale:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
-    post:
-      operationId: scaleDeployment
-      tags: [workloads]
-      summary: Hold a pod at a number of containers
-      description: >-
-        The count holds until the next scale, whatever the pod's
-        connections. Only an active pod of an active app scales; a pod with a
-        disk runs at most one container, and an always-on pod (keep_warm -1)
-        cannot scale to zero.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ScaleRequest" }
-      responses:
-        "200":
-          description: The deployment after the change
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/DeployedWorkload" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/deployments/{deployment}/devbox:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     get:
       operationId: getDevbox
       tags: [workloads]
@@ -3214,14 +3176,15 @@ paths:
               schema: { $ref: "#/components/schemas/Devbox" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/devbox/start:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox/start:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
       operationId: startDevbox
       tags: [workloads]
-      summary: Start the devbox now, activating its deployment if it is stopped
+      summary: Start the devbox now, activating its workload if it is stopped
       responses:
         "200":
           description: The devbox after the request
@@ -3230,15 +3193,16 @@ paths:
               schema: { $ref: "#/components/schemas/Devbox" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/deployments/{deployment}/devbox/stop:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox/stop:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/DeploymentPath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/WorkloadPath"
     post:
       operationId: stopDevbox
       tags: [workloads]
       summary: Stop the devbox's container until the next connection or start
-      description: The deployment stays active; the root disk is saved as the container stops.
+      description: The workload stays active; the root disk is saved as the container stops.
       responses:
         "200":
           description: The devbox after the request
@@ -3791,14 +3755,11 @@ paths:
               schema: { $ref: "#/components/schemas/SshHostPage" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/apps/{app}/pods/{pod}/ssh:
+  /v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/ssh:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/AppPath"
-      - name: pod
-        in: path
-        required: true
-        schema: { $ref: "#/components/schemas/WorkloadName" }
+      - $ref: "#/components/parameters/WorkloadPath"
     get:
       operationId: openSshTunnel
       tags: [workloads]
@@ -3842,11 +3803,21 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
-    FunctionPath:
-      name: function
+    KindPath:
+      name: kind
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/WorkloadKind" }
+    WorkloadPath:
+      name: name
       in: path
       required: true
       schema: { $ref: "#/components/schemas/WorkloadName" }
+    VersionPath:
+      name: version
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
     TaskPath:
       name: task
       in: path
@@ -3905,12 +3876,6 @@ components:
       required: true
       description: The app's name or id.
       schema: { $ref: "#/components/schemas/AppRef" }
-    DeploymentPath:
-      name: deployment
-      in: path
-      required: true
-      description: The workload id.
-      schema: { type: string, format: uuid }
     ContainerPath:
       name: container
       in: path
@@ -3930,11 +3895,6 @@ components:
       in: query
       description: Start with only the last this many stored entries.
       schema: { type: integer, minimum: 1, maximum: 1000 }
-    EndpointPath:
-      name: endpoint
-      in: path
-      required: true
-      schema: { $ref: "#/components/schemas/WorkloadName" }
     PreviewPath:
       name: preview
       in: path
@@ -4434,15 +4394,15 @@ components:
 
     DeploymentRequest:
       type: object
-      required: [functions]
+      required: [workloads]
       properties:
-        functions:
-          description: At least one, unless prune deletes every deployed function.
+        workloads:
+          description: At least one, unless prune deletes every deployed workload.
           type: array
           maxItems: 200
-          items: { $ref: "#/components/schemas/FunctionSpec" }
+          items: { $ref: "#/components/schemas/WorkloadSpec" }
         prune:
-          description: Delete every function of the app that is not listed.
+          description: Delete every workload of the app that is not listed.
           type: boolean
           default: false
 
@@ -4455,11 +4415,11 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Release" }
         pruned:
-          description: Functions the prune deleted.
+          description: Workloads the prune deleted.
           type: array
           items: { $ref: "#/components/schemas/WorkloadName" }
         removed_versions:
-          description: Versions of the pruned functions.
+          description: Versions of the pruned workloads.
           type: integer
 
     App:
@@ -4478,10 +4438,15 @@ components:
           minimum: 0
         created_at: { type: string, format: date-time }
 
-    FunctionSpec:
+    WorkloadSpec:
+      description: >-
+        One workload's definition. `kind` names what it deploys as and which
+        section it carries: `http` for an endpoint or ASGI app, `pod` for a
+        pod or sandbox, neither for a function.
       type: object
-      required: [name, source, image, resources]
+      required: [kind, name, source, image, resources]
       properties:
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
         name: { $ref: "#/components/schemas/WorkloadName" }
         handler:
           description: "module:qualname within the source archive; pods have none"
@@ -4689,33 +4654,21 @@ components:
 
     Release:
       type: object
-      required: [id, function, created_at, spec]
+      required: [id, name, created_at, spec]
       properties:
         id: { type: string, format: uuid }
-        function: { $ref: "#/components/schemas/WorkloadName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
         version:
           description: The deployed version; absent for a release only working-tree calls use.
           type: integer
         created_at: { type: string, format: date-time }
-        spec: { $ref: "#/components/schemas/FunctionSpec" }
+        spec: { $ref: "#/components/schemas/WorkloadSpec" }
         url:
-          description: Where an HTTP workload answers, following the active release.
+          description: Where a pod or HTTP workload answers, following the active release.
           type: string
         invoke_path:
           description: The HTTP workload on the API host, following the active release.
           type: string
-
-    Function:
-      type: object
-      required: [name, app, state, active_release]
-      properties:
-        name: { $ref: "#/components/schemas/WorkloadName" }
-        app: { $ref: "#/components/schemas/AppName" }
-        state:
-          type: string
-          enum: [active, stopped]
-        active_release: { $ref: "#/components/schemas/Release" }
-        schedule: { $ref: "#/components/schemas/Schedule" }
 
     Payload:
       description: >-
@@ -5678,7 +5631,10 @@ components:
           description: Versions the workload has now.
           type: integer
 
-    DeployedWorkload:
+    Workload:
+      description: >-
+        A deployed workload, addressed as
+        /apps/{app}/workloads/{kind}/{name}.
       type: object
       required: [id, app, name, kind, state, running_containers, created_at]
       properties:
@@ -5709,20 +5665,30 @@ components:
         url:
           description: Where a pod or HTTP workload answers.
           type: string
-        active_release:
-          description: The definition the active version runs; only getDeployment answers it.
-          allOf: [{ $ref: "#/components/schemas/Release" }]
 
-    DeploymentPage:
+    WorkloadDetail:
       type: object
-      required: [deployments]
+      required: [workload, release]
       properties:
-        deployments:
+        workload: { $ref: "#/components/schemas/Workload" }
+        release:
+          description: The definition the active version runs, or the version the request names.
+          allOf: [{ $ref: "#/components/schemas/Release" }]
+        http: { $ref: "#/components/schemas/HttpUrls" }
+        schedule:
+          description: When a scheduled function runs.
+          allOf: [{ $ref: "#/components/schemas/Schedule" }]
+
+    WorkloadPage:
+      type: object
+      required: [workloads]
+      properties:
+        workloads:
           type: array
-          items: { $ref: "#/components/schemas/DeployedWorkload" }
+          items: { $ref: "#/components/schemas/Workload" }
         next_cursor: { type: string }
 
-    StartDeploymentRequest:
+    StartWorkloadRequest:
       type: object
       properties:
         version:
@@ -6047,18 +6013,11 @@ components:
       maxLength: 253
       pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 
-    HttpWorkload:
+    HttpUrls:
+      description: Where an endpoint or ASGI app answers, for the release a describe names.
       type: object
-      required: [name, app, kind, state, release, url, version_url, release_url, invoke_path, version_invoke_path]
+      required: [url, version_url, release_url, invoke_path, version_invoke_path]
       properties:
-        name: { $ref: "#/components/schemas/WorkloadName" }
-        app: { $ref: "#/components/schemas/AppName" }
-        kind: { $ref: "#/components/schemas/HttpKind" }
-        state:
-          type: string
-          enum: [active, stopped]
-        release:
-          $ref: "#/components/schemas/Release"
         url:
           description: Follows the active release across deploys.
           type: string
@@ -6154,7 +6113,7 @@ components:
       type: object
       required: [spec]
       properties:
-        spec: { $ref: "#/components/schemas/FunctionSpec" }
+        spec: { $ref: "#/components/schemas/WorkloadSpec" }
         timeout_seconds:
           description: Stop after this long; 0 runs until stopped.
           type: integer
@@ -6520,11 +6479,11 @@ components:
         cold_starts: { type: integer }
         status_counts: { $ref: "#/components/schemas/TaskStatusCounts" }
 
-    DeploymentPerformance:
+    WorkloadPerformance:
       type: object
-      required: [deployment_id, window_seconds, start, end, buckets]
+      required: [workload_id, window_seconds, start, end, buckets]
       properties:
-        deployment_id: { type: string, format: uuid }
+        workload_id: { type: string, format: uuid }
         window_seconds: { type: integer }
         start: { type: string, format: date-time }
         end: { type: string, format: date-time }

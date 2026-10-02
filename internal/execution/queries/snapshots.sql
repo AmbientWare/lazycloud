@@ -1,9 +1,11 @@
 -- name: LockSnapshotSource :one
 -- A container that can be snapshotted: ready, on a host, in the workspace.
-select c.id, c.host_id, c.release_id::uuid as release_id, c.state
+select c.id, c.host_id, c.release_id::uuid as release_id, c.state, c.purpose, w.kind, r.spec
 from containers c
+join releases r on r.id = c.release_id
+join workloads w on w.id = r.workload_id
 where c.id = @id and c.workspace_id = @workspace_id
-for share;
+for share of c;
 
 -- name: InsertSnapshot :one
 insert into memory_snapshots (id, workspace_id, release_id, container_id, automatic, state)

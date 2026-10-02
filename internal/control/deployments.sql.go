@@ -12,91 +12,34 @@ import (
 	"github.com/google/uuid"
 )
 
-const listDeployments = `-- name: ListDeployments :many
-select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
-       (select count(*) from releases wr
-        join containers c on c.release_id = wr.id
-        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
-from apps a
-join workloads w on w.app_id = a.id
-join releases r on r.id = w.active_release_id
-where a.workspace_id = $1
-  and a.state <> 'deleted'
-  and w.desired_state <> 'deleted'
-  and ($2::text is null or a.name = $2::text)
-  and ($3::text is null or w.name = $3::text)
-  and ($4::text is null
-       or strpos(a.name, $4::text) > 0 or strpos(lower(w.name), $4::text) > 0)
-  and (a.name, w.name) > ($5::text, $6::text)
-order by a.name, w.name
-limit $7
+const findWorkload = `-- name: FindWorkload :one
+select w.id
+from workloads w
+join apps a on a.id = w.app_id
+where a.workspace_id = $1 and a.name = $2 and a.state <> 'deleted'
+  and w.kind = $3 and w.name = $4 and w.desired_state <> 'deleted'
+  and w.active_release_id is not null
 `
 
-type ListDeploymentsParams struct {
+type FindWorkloadParams struct {
 	WorkspaceID uuid.UUID
-	App         *string
-	Name        *string
-	Search      *string
-	AfterApp    string
-	AfterName   string
-	MaxRows     int32
+	AppName     string
+	Kind        string
+	Name        string
 }
 
-type ListDeploymentsRow struct {
-	ID                uuid.UUID
-	AppName           string
-	Name              string
-	Kind              string
-	DesiredState      string
-	AppState          string
-	Version           *int32
-	ReleaseID         uuid.UUID
-	CreatedAt         time.Time
-	DeployedAt        time.Time
-	RunningContainers int32
-}
-
-// Deployed live workloads of live apps by app and name after the cursor.
-// state <> 'stopped' lets the running count read the live-container index.
-func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]ListDeploymentsRow, error) {
-	rows, err := q.db.Query(ctx, listDeployments,
+// The deployed live workload an app, kind and name address; a workload only
+// working-tree calls created has no active release and is not addressable.
+func (q *Queries) FindWorkload(ctx context.Context, arg FindWorkloadParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, findWorkload,
 		arg.WorkspaceID,
-		arg.App,
+		arg.AppName,
+		arg.Kind,
 		arg.Name,
-		arg.Search,
-		arg.AfterApp,
-		arg.AfterName,
-		arg.MaxRows,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListDeploymentsRow
-	for rows.Next() {
-		var i ListDeploymentsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.AppName,
-			&i.Name,
-			&i.Kind,
-			&i.DesiredState,
-			&i.AppState,
-			&i.Version,
-			&i.ReleaseID,
-			&i.CreatedAt,
-			&i.DeployedAt,
-			&i.RunningContainers,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const listVersions = `-- name: ListVersions :many
@@ -136,6 +79,102 @@ func (q *Queries) ListVersions(ctx context.Context, arg ListVersionsParams) ([]L
 			&i.Version,
 			&i.CreatedAt,
 			&i.Active,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkloads = `-- name: ListWorkloads :many
+select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
+from apps a
+join workloads w on w.app_id = a.id
+join releases r on r.id = w.active_release_id
+where a.workspace_id = $1
+  and a.state <> 'deleted'
+  and w.desired_state <> 'deleted'
+  and ($2::text is null or a.name = $2::text)
+  and ($3::text is null or w.kind = $3::text)
+  and ($4::text is null or w.name = $4::text)
+  and ($5::uuid is null or w.id = $5::uuid)
+  and ($6::text is null
+       or strpos(a.name, $6::text) > 0 or strpos(lower(w.name), $6::text) > 0)
+  and (a.name, w.name, w.kind) > ($7::text, $8::text, $9::text)
+order by a.name, w.name, w.kind
+limit $10
+`
+
+type ListWorkloadsParams struct {
+	WorkspaceID uuid.UUID
+	App         *string
+	Kind        *string
+	Name        *string
+	ID          *uuid.UUID
+	Search      *string
+	AfterApp    string
+	AfterName   string
+	AfterKind   string
+	MaxRows     int32
+}
+
+type ListWorkloadsRow struct {
+	ID                uuid.UUID
+	AppName           string
+	Name              string
+	Kind              string
+	DesiredState      string
+	AppState          string
+	Version           *int32
+	ReleaseID         uuid.UUID
+	CreatedAt         time.Time
+	DeployedAt        time.Time
+	RunningContainers int32
+}
+
+// Deployed live workloads of live apps by app, name and kind after the
+// cursor. state <> 'stopped' lets the running count read the live-container
+// index.
+func (q *Queries) ListWorkloads(ctx context.Context, arg ListWorkloadsParams) ([]ListWorkloadsRow, error) {
+	rows, err := q.db.Query(ctx, listWorkloads,
+		arg.WorkspaceID,
+		arg.App,
+		arg.Kind,
+		arg.Name,
+		arg.ID,
+		arg.Search,
+		arg.AfterApp,
+		arg.AfterName,
+		arg.AfterKind,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkloadsRow
+	for rows.Next() {
+		var i ListWorkloadsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.Name,
+			&i.Kind,
+			&i.DesiredState,
+			&i.AppState,
+			&i.Version,
+			&i.ReleaseID,
+			&i.CreatedAt,
+			&i.DeployedAt,
+			&i.RunningContainers,
 		); err != nil {
 			return nil, err
 		}
@@ -263,20 +302,23 @@ func (q *Queries) SetWorkloadState(ctx context.Context, arg SetWorkloadStatePara
 	return err
 }
 
-const workloadActiveRelease = `-- name: WorkloadActiveRelease :one
+const workloadRelease = `-- name: WorkloadRelease :one
 select r.id, w.name, r.version, r.created_at, r.spec
 from workloads w
 join apps a on a.id = w.app_id
-join releases r on r.id = w.active_release_id
-where a.workspace_id = $1 and w.id = $2
+join releases r on r.id = coalesce(
+    (select v.id from releases v where v.workload_id = w.id and v.version = $1::int),
+    case when $1::int is null then w.active_release_id end)
+where a.workspace_id = $2 and w.id = $3
 `
 
-type WorkloadActiveReleaseParams struct {
+type WorkloadReleaseParams struct {
+	Version     *int32
 	WorkspaceID uuid.UUID
 	ID          uuid.UUID
 }
 
-type WorkloadActiveReleaseRow struct {
+type WorkloadReleaseRow struct {
 	ID        uuid.UUID
 	Name      string
 	Version   *int32
@@ -284,9 +326,10 @@ type WorkloadActiveReleaseRow struct {
 	Spec      []byte
 }
 
-func (q *Queries) WorkloadActiveRelease(ctx context.Context, arg WorkloadActiveReleaseParams) (WorkloadActiveReleaseRow, error) {
-	row := q.db.QueryRow(ctx, workloadActiveRelease, arg.WorkspaceID, arg.ID)
-	var i WorkloadActiveReleaseRow
+// The release of the workload's active version, or of the given version.
+func (q *Queries) WorkloadRelease(ctx context.Context, arg WorkloadReleaseParams) (WorkloadReleaseRow, error) {
+	row := q.db.QueryRow(ctx, workloadRelease, arg.Version, arg.WorkspaceID, arg.ID)
+	var i WorkloadReleaseRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,

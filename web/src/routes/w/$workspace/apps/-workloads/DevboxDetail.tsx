@@ -96,36 +96,36 @@ function stopSettled(devbox: Devbox, stoppingContainerId: string | undefined): b
 /** Shell, Start and Stop for the devbox header. */
 export function DevboxActions({
   workspace,
-  deploymentId,
+  workload,
 }: {
   workspace: string;
-  deploymentId: string;
+  workload: Schemas["Workload"];
 }) {
   const queryClient = useQueryClient();
   // The container a stop was asked of, held until the server answers the stop.
   const [stopRequest, setStopRequest] = useState<{ containerId: string | undefined } | null>(null);
   const stopRequested = stopRequest !== null;
   const status = useQuery(
-    devboxQueryOptions(workspace, deploymentId, { awaitingChange: stopRequested }),
+    devboxQueryOptions(workspace, workload, { awaitingChange: stopRequested }),
   );
   const devbox = status.data;
-  const key = workspaceQueryKeys.deployments.devbox(workspace, deploymentId);
+  const key = workspaceQueryKeys.workloads.devbox(workspace, workload);
   // A poll that left before the request could land after its answer and undo it.
   const cancelPolls = () => queryClient.cancelQueries({ queryKey: key });
   const start = useMutation({
-    ...startDevboxMutationOptions(workspace, deploymentId),
+    ...startDevboxMutationOptions(workspace, workload),
     onMutate: cancelPolls,
     onSuccess: async (next) => {
       queryClient.setQueryData(key, next);
-      // A start switches a stopped deployment back on.
+      // A start switches a stopped workload back on.
       await queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.deployments.root(workspace),
+        queryKey: workspaceQueryKeys.workloads.root(workspace),
       });
     },
     onError: () => queryClient.invalidateQueries({ queryKey: key }),
   });
   const stop = useMutation({
-    ...stopDevboxMutationOptions(workspace, deploymentId),
+    ...stopDevboxMutationOptions(workspace, workload),
     onMutate: cancelPolls,
     onSuccess: (next) => queryClient.setQueryData(key, next),
     onError: () => {
@@ -220,12 +220,12 @@ export function DevboxActions({
 /** How to reach a devbox and what it is doing, from the server's devbox status. */
 export function DevboxConnect({
   workspace,
-  deploymentId,
+  workload,
 }: {
   workspace: string;
-  deploymentId: string;
+  workload: Schemas["Workload"];
 }) {
-  const status = useQuery(devboxQueryOptions(workspace, deploymentId));
+  const status = useQuery(devboxQueryOptions(workspace, workload));
   const devbox = status.data;
 
   if (status.isError) return <PanelError message={status.error.message} />;
@@ -357,17 +357,16 @@ export function DevboxWorkspace({
   spec,
 }: {
   workspace: string;
-  workload: Schemas["DeployedWorkload"];
-  spec: Schemas["FunctionSpec"];
+  workload: Schemas["Workload"];
+  spec: Schemas["WorkloadSpec"];
 }) {
-  const deploymentId = workload.id;
-  const status = useQuery(devboxQueryOptions(workspace, deploymentId));
+  const status = useQuery(devboxQueryOptions(workspace, workload));
   const devbox = status.data;
 
   return (
     <>
       <Tabs
-        key={deploymentId}
+        key={workload.id}
         defaultValue="files"
         className="panel flex min-h-[32rem] flex-col overflow-hidden rounded-md xl:min-h-0"
       >
