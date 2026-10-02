@@ -6896,7 +6896,7 @@ components:
           format: uuid
         app: { type: string }
         name: { type: string }
-        kind: { type: string, enum: [function] }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
         machine:
           description: The machine the workload is pinned to; empty when unpinned.
           type: string

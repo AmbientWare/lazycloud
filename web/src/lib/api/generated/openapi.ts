@@ -5303,8 +5303,7 @@ export interface components {
             deployment_id: string;
             app: string;
             name: string;
-            /** @enum {string} */
-            kind: "function";
+            kind: components["schemas"]["WorkloadKind"];
             /** @description The machine the workload is pinned to; empty when unpinned. */
             machine: string;
             /** Format: int64 */
@@ -11572,7 +11571,6 @@ export const machineProviderValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const computeInstanceProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["provider"]> = ["aws"];
 export const computeInstanceMarketValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["market"]> = ["spot", "on_demand"];
 export const computeSummaryCostCurrencyValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeSummary"]["cost"]["currency"]> = ["USD"];
-export const computeWorkloadKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeWorkload"]["kind"]> = ["function"];
 export const awsConnectionPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "reconnect_pending", "retiring_authorization", "disconnect_draining", "revoking", "verifying_revocation", "action_required"];
 export const awsConnectionActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionAction"]> = ["authorize", "validate", "reconnect", "cancel_reconnect", "remove", "retry"];
 export const awsAuthorizationPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "retiring", "retired"];

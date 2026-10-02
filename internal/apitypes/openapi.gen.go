@@ -535,21 +535,6 @@ func (e ComputeSummaryCostCurrency) Valid() bool {
 	}
 }
 
-// Defines values for ComputeWorkloadKind.
-const (
-	ComputeWorkloadKindFunction ComputeWorkloadKind = "function"
-)
-
-// Valid indicates whether the value is a known member of the ComputeWorkloadKind enum.
-func (e ComputeWorkloadKind) Valid() bool {
-	switch e {
-	case ComputeWorkloadKindFunction:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ContainerLogEntryStream.
 const (
 	ContainerLogEntryStreamStderr ContainerLogEntryStream = "stderr"
@@ -2859,19 +2844,18 @@ type ComputeWorkload struct {
 	CpuMillicores int64  `json:"cpu_millicores"`
 
 	// DeploymentId The workload id.
-	DeploymentId openapi_types.UUID  `json:"deployment_id"`
-	Gpu          []GpuType           `json:"gpu"`
-	GpuCount     int                 `json:"gpu_count"`
-	Kind         ComputeWorkloadKind `json:"kind"`
+	DeploymentId openapi_types.UUID `json:"deployment_id"`
+	Gpu          []GpuType          `json:"gpu"`
+	GpuCount     int                `json:"gpu_count"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
 
 	// Machine The machine the workload is pinned to; empty when unpinned.
 	Machine  string `json:"machine"`
 	MemoryMb int64  `json:"memory_mb"`
 	Name     string `json:"name"`
 }
-
-// ComputeWorkloadKind defines model for ComputeWorkload.Kind.
-type ComputeWorkloadKind string
 
 // ComputeWorkloadPage defines model for ComputeWorkloadPage.
 type ComputeWorkloadPage struct {

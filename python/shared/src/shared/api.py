@@ -1688,7 +1688,7 @@ class ComputeWorkload(BaseModel):
     deployment_id: Annotated[UUID, Field(description="The workload id.")]
     app: str
     name: str
-    kind: Literal["function"]
+    kind: WorkloadKind
     machine: Annotated[
         str, Field(description="The machine the workload is pinned to; empty when unpinned.")
     ]

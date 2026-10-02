@@ -111,7 +111,7 @@ func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorklo
 			gpus[n] = apitypes.GpuType(g)
 		}
 		out.Workloads = append(out.Workloads, apitypes.ComputeWorkload{
-			DeploymentId: w.ID, App: w.App, Name: w.Name, Kind: apitypes.ComputeWorkloadKind(w.Kind), Machine: w.Machine,
+			DeploymentId: w.ID, App: w.App, Name: w.Name, Kind: apitypes.WorkloadKind(w.Kind), Machine: w.Machine,
 			CpuMillicores: w.CPUMillis, MemoryMb: w.MemoryBytes >> 20, Gpu: gpus, GpuCount: w.GPUCount,
 		})
 	}
