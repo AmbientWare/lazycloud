@@ -16,9 +16,8 @@ data "terraform_remote_state" "deployment" {
 locals {
   repository = split("/", var.github_repository)[1]
   core       = data.terraform_remote_state.core.outputs
-  # Every environment admits jobs from main only. images also waits for a
-  # reviewer before each image push or node image bake; release publishes
-  # to PyPI.
+  # Every environment admits jobs from main only, and the workflows that use
+  # them refuse anyone but a repository admin; release publishes to PyPI.
   environments = toset(["images", "release", "prod"])
   environment_variables = {
     images  = { AWS_IMAGE_RELEASE_ROLE_ARN = aws_iam_role.workflow["ship"].arn, AWS_NODE_IMAGE_ROLE_ARN = aws_iam_role.workflow["node-images"].arn, IMAGE_REGISTRY = local.core.release_registry }
@@ -34,13 +33,6 @@ resource "github_repository_environment" "environment" {
   for_each    = local.environments
   repository  = local.repository
   environment = each.key
-
-  dynamic "reviewers" {
-    for_each = each.key == "images" ? [1] : []
-    content {
-      users = var.release_reviewer_user_ids
-    }
-  }
 
   deployment_branch_policy {
     protected_branches     = false
