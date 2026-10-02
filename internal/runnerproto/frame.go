@@ -11,7 +11,9 @@ import (
 
 // Frame size limits from contracts/runner.yaml.
 const (
-	MaxHeaderBytes  = 1 << 20
+	// A header holds a result's display: up to 1 MiB of PNG as base64
+	// beside its text, or HTML and text.
+	MaxHeaderBytes  = 4 << 20
 	MaxPayloadBytes = 64 << 20
 )
 

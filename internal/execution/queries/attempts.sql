@@ -21,7 +21,7 @@ update attempts set state = @state, finished_at = now() where id = @id;
 update tasks set status = 'succeeded', finished_at = now() where id = @id;
 
 -- name: InsertTaskResult :exec
-insert into task_results (task_id, encoding, data) values (@task_id, @encoding, @data);
+insert into task_results (task_id, encoding, data, display) values (@task_id, @encoding, @data, sqlc.narg(display));
 
 -- name: RequeueTask :exec
 update tasks

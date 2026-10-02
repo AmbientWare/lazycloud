@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import pickle
@@ -48,6 +49,27 @@ def echo(value):
 
 def make_set():
     return {1, 2}
+
+
+class Table:
+    def __repr__(self):
+        return "Table(rows=1)"
+
+    def _repr_html_(self):
+        return "<table><tr><td>1</td></tr></table>"
+
+
+class Chart:
+    def _repr_png_(self):
+        return b"\\x89PNG\\r\\n\\x1a\\nchart"
+
+
+def table():
+    return Table()
+
+
+def chart():
+    return Chart()
 
 
 def fail():
@@ -145,6 +167,27 @@ def test_cloudpickle_invocation_round_trips_python_objects(
     assert header["type"] == "succeeded"
     assert header["result_encoding"] == "cloudpickle"
     assert cloudpickle.loads(payload) == value
+    assert header["display"] == {"text": "{'set': {1, 2}, 'bytes': b'\\x00\\xff'}"}
+
+
+def test_pickled_results_carry_the_text_and_rendering_the_value_defines(
+    workdir: Path, start_runner: StartRunner
+) -> None:
+    no_arguments = cloudpickle_bytes({"args": [], "kwargs": {}})
+    table = start_runner(workdir)
+    table.load("handlers:table")
+    header, _ = table.invoke(no_arguments, encoding="cloudpickle")
+    assert header["display"] == {
+        "text": "Table(rows=1)",
+        "rich": {"kind": "html", "html": "<table><tr><td>1</td></tr></table>"},
+    }
+
+    chart = start_runner(workdir)
+    chart.load("handlers:chart")
+    header, _ = chart.invoke(no_arguments, encoding="cloudpickle")
+    rich = header["display"]["rich"]
+    assert (rich["kind"], rich["media_type"]) == ("image", "image/png")
+    assert base64.b64decode(rich["value_base64"]) == b"\x89PNG\r\n\x1a\nchart"
 
 
 def test_failures_report_the_error_and_keep_serving(

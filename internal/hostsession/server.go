@@ -290,6 +290,14 @@ func (s *Server) CompleteTask(ctx context.Context, req *hostproto.CompleteTaskRe
 		}
 		outcome.State = execution.AttemptSucceeded
 		outcome.Result = &execution.Payload{Encoding: encoding, Data: o.Success.GetResult()}
+		if raw := o.Success.GetDisplay(); len(raw) > 0 && encoding == execution.EncodingCloudpickle {
+			display, err := resultDisplay(raw)
+			if err != nil {
+				// The result stands; only its view is lost.
+				s.logger.WarnContext(ctx, "dropping a result display", "error", err)
+			}
+			outcome.Result.Display = display
+		}
 	case *hostproto.CompleteTaskRequest_Failure:
 		failure, ok := failureIn(o.Failure)
 		if !ok {

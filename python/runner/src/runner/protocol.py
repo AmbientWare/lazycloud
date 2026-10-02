@@ -23,6 +23,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from shared.errors import InvalidInputError
+from shared.function_display import build_function_result_display
+from shared.function_payloads import FunctionResultImageDisplay
 from shared.lifecycle import LifecycleHookName, LifecycleHooks, LifecycleTaskContext
 from shared.serialization import to_json_value
 from shared.task_context import task_context
@@ -38,17 +40,20 @@ from runner.protocol_models import (
     Encoding,
     Failed,
     Invoke,
+    Kind,
     Load,
     Loaded,
     LoadFailed,
     Output,
+    ResultDisplay,
+    RichDisplay,
     RunnerError,
     Stream,
     Succeeded,
 )
 
 RUNNER_FD_ENV = "LAZYCLOUD_RUNNER_FD"
-MAX_HEADER_BYTES = 1 << 20
+MAX_HEADER_BYTES = 4 << 20
 MAX_PAYLOAD_BYTES = 64 << 20
 PROTOCOL_ERROR_EXIT = 2
 LOAD_FAILED_EXIT = 1
@@ -276,7 +281,10 @@ class _Attempts:
             run_task_hooks(self._hooks, LifecycleHookName.Success, done)
             run_task_hooks(self._hooks, LifecycleHookName.Finish, done)
         succeeded = Succeeded(
-            type="succeeded", attempt_id=invoke.attempt_id, result_encoding=encoding
+            type="succeeded",
+            attempt_id=invoke.attempt_id,
+            result_encoding=encoding,
+            display=_display(result) if encoding is Encoding.cloudpickle else None,
         )
         return succeeded, encoded
 
@@ -345,6 +353,19 @@ class _DependencyUnpickler(pickle.Unpickler):
         if encoding is Encoding.json:
             return json.loads(payload)
         return pickle.loads(payload)
+
+
+def _display(result: Any) -> ResultDisplay:
+    """How a pickled result shows where it is never loaded, as the value renders itself."""
+    shown = build_function_result_display(result)
+    rich: RichDisplay | None = None
+    if isinstance(shown.rich, FunctionResultImageDisplay):
+        rich = RichDisplay(
+            kind=Kind.image, media_type="image/png", value_base64=shown.rich.value_base64
+        )
+    elif shown.rich is not None:
+        rich = RichDisplay(kind=Kind.html, html=shown.rich.html)
+    return ResultDisplay(text=shown.text, rich=rich)
 
 
 def _encode_result(result: Any, encoding: Encoding) -> bytes:

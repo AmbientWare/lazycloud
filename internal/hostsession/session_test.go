@@ -3,8 +3,11 @@ package hostsession_test
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -326,6 +329,85 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 
 // A container whose start cannot be built fails alone: the host's session
 // stays open and its other containers still start.
+// A pickled result keeps the display its runner made when it is a valid
+// one, and loses only the display, never the result, when a runner forges
+// one: an image that is no PNG, HTML beside an image, an unknown field or
+// text past the limit.
+func TestPickledResultsKeepOnlyAValidDisplay(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.startingContainer(host)
+	stream := open(t, ctx, h.client)
+	receive(t, stream) // start
+	if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_Container{Container: &hostproto.ContainerReport{
+		ContainerId: container.String(), Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY, ObservedAt: timestamppb.Now(),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nchart"))
+	displays := []struct {
+		raw  string
+		kept bool
+	}{
+		{`{"text": "Table(rows=1)", "rich": {"kind": "html", "html": "<table><td>1</td></table>"}}`, true},
+		{`{"text": "Chart()", "rich": {"kind": "image", "media_type": "image/png", "value_base64": "` + png + `"}}`, true},
+		{`{"text": "x", "rich": {"kind": "image", "media_type": "image/png", "value_base64": "` + base64.StdEncoding.EncodeToString([]byte("<svg onload=alert(1)>")) + `"}}`, false},
+		{`{"text": "x", "rich": {"kind": "image", "media_type": "image/png", "value_base64": "` + png + `", "html": "<b>"}}`, false},
+		{`{"text": "x", "script": "alert(1)"}`, false},
+		{`{"text": "` + strings.Repeat("a", 64<<10+1) + `"}`, false},
+	}
+	inputs := make([]execution.TaskInput, len(displays))
+	for n := range inputs {
+		inputs[n] = execution.TaskInput{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [], "kwargs": {}}`)}}
+	}
+	if _, err := h.execution.Submit(t.Context(), execution.SubmitRequest{Workspace: ws, App: "reports", Function: "summarize", Inputs: inputs}); err != nil {
+		t.Fatal(err)
+	}
+	// The container's slots bound the claims, so each claim is completed
+	// before the next.
+	claim := func() *hostproto.ClaimedTask {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+			resp, err := h.client.ClaimTasks(ctx, &hostproto.ClaimTasksRequest{ContainerId: container.String(), MaxTasks: 1, WaitSeconds: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(resp.GetTasks()) == 1 {
+				return resp.GetTasks()[0]
+			}
+		}
+		t.Fatal("no task to claim")
+		return nil
+	}
+	for n, d := range displays {
+		claimed := claim()
+		if _, err := h.client.CompleteTask(ctx, &hostproto.CompleteTaskRequest{
+			ContainerId: container.String(), AttemptId: claimed.GetAttemptId(),
+			Outcome: &hostproto.CompleteTaskRequest_Success{Success: &hostproto.TaskSuccess{
+				Encoding: hostproto.PayloadEncoding_PAYLOAD_ENCODING_CLOUDPICKLE, Result: []byte("pickle"), Display: []byte(d.raw),
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		result, err := h.execution.TaskResult(t.Context(), ws, execution.TaskID(uuid.MustParse(claimed.GetTaskId())))
+		if err != nil || string(result.Data) != "pickle" {
+			t.Fatalf("display %d: the result is kept whatever its display: %q %v", n, result.Data, err)
+		}
+		if (result.Display != nil) != d.kept {
+			t.Fatalf("display %d kept = %v, want %v: %s", n, result.Display != nil, d.kept, result.Display)
+		}
+		if d.kept {
+			var want, got any
+			if err := json.Unmarshal([]byte(d.raw), &want); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(result.Display, &got); err != nil || !reflect.DeepEqual(want, got) {
+				t.Fatalf("display %d is kept as sent: %s", n, result.Display)
+			}
+		}
+	}
+}
+
 func TestUnbuildableStartFailsOnlyItsContainer(t *testing.T) {
 	h := start(t)
 	host, ctx := h.enroll()

@@ -291,7 +291,13 @@ func payloadOut(p execution.Payload) apitypes.Payload {
 		return apitypes.Payload{Encoding: apitypes.PayloadEncodingJson, Value: &value}
 	case execution.EncodingCloudpickle:
 		data := p.Data
-		return apitypes.Payload{Encoding: apitypes.PayloadEncodingCloudpickle, Data: &data}
+		out := apitypes.Payload{Encoding: apitypes.PayloadEncodingCloudpickle, Data: &data}
+		var display apitypes.ResultDisplay
+		// The host session checked the display before execution kept it.
+		if len(p.Display) > 0 && json.Unmarshal(p.Display, &display) == nil {
+			out.Display = &display
+		}
+		return out
 	}
 	return apitypes.Payload{Encoding: apitypes.PayloadEncoding(p.Encoding)}
 }

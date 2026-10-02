@@ -4692,6 +4692,32 @@ components:
         data:
           type: string
           format: byte
+        display: { $ref: "#/components/schemas/ResultDisplay" }
+
+    ResultDisplay:
+      description: >-
+        How a cloudpickle result shows without loading it, as the runner
+        rendered the value where it ran: its text and, when the value
+        defines `_repr_png_` or `_repr_html_`, that rendering. Absent for
+        JSON results and arguments.
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, maxLength: 65536 }
+        rich: { $ref: "#/components/schemas/RichDisplay" }
+
+    RichDisplay:
+      description: >-
+        `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an
+        HTML fragment of at most 262144 characters, which the dashboard
+        shows in a sandboxed frame without scripts or network access.
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [image, html] }
+        media_type: { type: string, enum: [image/png] }
+        value_base64: { type: string, maxLength: 1398104 }
+        html: { type: string, maxLength: 262144 }
 
     SubmitTasksRequest:
       type: object
@@ -5882,9 +5908,7 @@ components:
         # A source archive the workspace uploaded with the files the build reads.
         context: { $ref: "#/components/schemas/SourceRef" }
         secrets:
-          description: >-
-            Workspace secrets each build step reads as environment variables
-            through a secret mount; they never reach the image.
+          description: Workspace secrets the build steps read as environment variables.
           type: array
           maxItems: 64
           items: { type: string, pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$" }

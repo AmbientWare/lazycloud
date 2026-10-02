@@ -87,6 +87,14 @@ visual parity.
   every declared port.
 - The Tasks page's Workload filter lists an app's functions once an App is
   chosen: workload names are unique only within an app.
+- A pickled result's Rendered and Text views show the `Payload.display`
+  the runner made of the value where it ran, as in the reference; nothing
+  unpickles it. The host session keeps a display only when it is a PNG or
+  an HTML fragment within the limits, and the rendered HTML's sandboxed
+  frame also carries a Content-Security-Policy that loads nothing from the
+  network, so result HTML cannot reveal who viewed it
+  (`TestPickledResultsKeepOnlyAValidDisplay`, ResultBody.test.tsx). The
+  runner's frame header limit is 4 MiB so a 1 MiB PNG fits as base64.
 
 ## Gaps
 

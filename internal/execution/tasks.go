@@ -253,7 +253,7 @@ func (e *Execution) TaskResult(ctx context.Context, workspace identity.Workspace
 	if row.Encoding == nil {
 		return Payload{}, fmt.Errorf("%w: task %s", ErrNoResult, row.Status)
 	}
-	return Payload{Encoding: Encoding(*row.Encoding), Data: row.Data}, nil
+	return Payload{Encoding: Encoding(*row.Encoding), Data: row.Data, Display: row.Display}, nil
 }
 
 // RerunTask submits the task's input again, with the same upstream tasks, to

@@ -22,6 +22,9 @@ var ErrStaleAttempt = errors.New("attempt is no longer running")
 type Payload struct {
 	Encoding Encoding
 	Data     []byte
+	// Display is how a cloudpickle result shows without loading it, an
+	// apitypes.ResultDisplay the host session checked; nil without one.
+	Display json.RawMessage
 }
 
 // AttemptOutcome is how an attempt ended.
@@ -76,6 +79,7 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 		}
 		if err := q.InsertTaskResult(ctx, InsertTaskResultParams{
 			TaskID: task.ID, Encoding: string(outcome.Result.Encoding), Data: outcome.Result.Data,
+			Display: []byte(outcome.Result.Display),
 		}); err != nil {
 			return fmt.Errorf("insert result: %w", err)
 		}

@@ -26,17 +26,23 @@ func (q *Queries) FailTask(ctx context.Context, arg FailTaskParams) error {
 }
 
 const insertTaskResult = `-- name: InsertTaskResult :exec
-insert into task_results (task_id, encoding, data) values ($1, $2, $3)
+insert into task_results (task_id, encoding, data, display) values ($1, $2, $3, $4)
 `
 
 type InsertTaskResultParams struct {
 	TaskID   uuid.UUID
 	Encoding string
 	Data     []byte
+	Display  []byte
 }
 
 func (q *Queries) InsertTaskResult(ctx context.Context, arg InsertTaskResultParams) error {
-	_, err := q.db.Exec(ctx, insertTaskResult, arg.TaskID, arg.Encoding, arg.Data)
+	_, err := q.db.Exec(ctx, insertTaskResult,
+		arg.TaskID,
+		arg.Encoding,
+		arg.Data,
+		arg.Display,
+	)
 	return err
 }
 

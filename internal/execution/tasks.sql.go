@@ -356,7 +356,7 @@ func (q *Queries) TaskForRerun(ctx context.Context, arg TaskForRerunParams) (Tas
 }
 
 const taskResult = `-- name: TaskResult :one
-select t.status, r.encoding, r.data
+select t.status, r.encoding, r.data, r.display
 from tasks t
 left join task_results r on r.task_id = t.id
 where t.id = $1 and t.workspace_id = $2
@@ -371,12 +371,18 @@ type TaskResultRow struct {
 	Status   string
 	Encoding *string
 	Data     []byte
+	Display  []byte
 }
 
 func (q *Queries) TaskResult(ctx context.Context, arg TaskResultParams) (TaskResultRow, error) {
 	row := q.db.QueryRow(ctx, taskResult, arg.ID, arg.WorkspaceID)
 	var i TaskResultRow
-	err := row.Scan(&i.Status, &i.Encoding, &i.Data)
+	err := row.Scan(
+		&i.Status,
+		&i.Encoding,
+		&i.Data,
+		&i.Display,
+	)
 	return i, err
 }
 

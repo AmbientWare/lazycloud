@@ -180,6 +180,39 @@ func (e OutputType) Valid() bool {
 	}
 }
 
+// Defines values for RichDisplayKind.
+const (
+	Html  RichDisplayKind = "html"
+	Image RichDisplayKind = "image"
+)
+
+// Valid indicates whether the value is a known member of the RichDisplayKind enum.
+func (e RichDisplayKind) Valid() bool {
+	switch e {
+	case Html:
+		return true
+	case Image:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RichDisplayMediaType.
+const (
+	Imagepng RichDisplayMediaType = "image/png"
+)
+
+// Valid indicates whether the value is a known member of the RichDisplayMediaType enum.
+func (e RichDisplayMediaType) Valid() bool {
+	switch e {
+	case Imagepng:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SucceededType.
 const (
 	SucceededTypeSucceeded SucceededType = "succeeded"
@@ -326,6 +359,27 @@ type OutputStream string
 // OutputType defines model for Output.Type.
 type OutputType string
 
+// ResultDisplay How a cloudpickle result shows where it is never loaded: its text (the pretty-printed repr, at most 65536 characters) and, when the value defines `_repr_png_` or `_repr_html_`, that rendering.
+type ResultDisplay struct {
+	// Rich `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters.
+	Rich *RichDisplay `json:"rich,omitempty"`
+	Text string       `json:"text"`
+}
+
+// RichDisplay `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters.
+type RichDisplay struct {
+	Html        *string               `json:"html,omitempty"`
+	Kind        RichDisplayKind       `json:"kind"`
+	MediaType   *RichDisplayMediaType `json:"media_type,omitempty"`
+	ValueBase64 *string               `json:"value_base64,omitempty"`
+}
+
+// RichDisplayKind defines model for RichDisplay.Kind.
+type RichDisplayKind string
+
+// RichDisplayMediaType defines model for RichDisplay.MediaType.
+type RichDisplayMediaType string
+
 // RunnerError defines model for RunnerError.
 type RunnerError struct {
 	Message   string  `json:"message"`
@@ -337,9 +391,12 @@ type RunnerError struct {
 
 // Succeeded The payload is the encoded return value.
 type Succeeded struct {
-	AttemptId      string        `json:"attempt_id"`
-	ResultEncoding Encoding      `json:"result_encoding"`
-	Type           SucceededType `json:"type"`
+	AttemptId string `json:"attempt_id"`
+
+	// Display How a cloudpickle result shows where it is never loaded: its text (the pretty-printed repr, at most 65536 characters) and, when the value defines `_repr_png_` or `_repr_html_`, that rendering.
+	Display        *ResultDisplay `json:"display,omitempty"`
+	ResultEncoding Encoding       `json:"result_encoding"`
+	Type           SucceededType  `json:"type"`
 }
 
 // SucceededType defines model for Succeeded.Type.

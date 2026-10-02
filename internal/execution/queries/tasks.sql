@@ -110,7 +110,7 @@ join task_inputs i on i.task_id = t.id
 where t.id = @id and t.workspace_id = @workspace_id;
 
 -- name: TaskResult :one
-select t.status, r.encoding, r.data
+select t.status, r.encoding, r.data, r.display
 from tasks t
 left join task_results r on r.task_id = t.id
 where t.id = @id and t.workspace_id = @workspace_id;

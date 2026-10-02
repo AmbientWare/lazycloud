@@ -289,14 +289,16 @@ class Encoding(str, Enum):
     cloudpickle = "cloudpickle"
 
 
-class Payload(APIModel):
-    encoding: Encoding
-    value: Any | None = None
-    data: Base64Bytes | None = None
+class Kind(str, Enum):
+    image = "image"
+    html = "html"
 
 
-class TaskInput(Payload):
-    depends_on: Annotated[list[UUID] | None, Field(max_length=100)] = None
+class RichDisplay(APIModel):
+    kind: Kind
+    media_type: Literal["image/png"] | None = None
+    value_base64: Annotated[str | None, Field(max_length=1398104)] = None
+    html: Annotated[str | None, Field(max_length=262144)] = None
 
 
 class TaskStatus(str, Enum):
@@ -2239,14 +2241,14 @@ class CreditPaymentStatus(str, Enum):
     cancelled = "cancelled"
 
 
-class Kind(str, Enum):
+class Kind1(str, Enum):
     manual = "manual"
     automatic = "automatic"
 
 
 class CreditPurchase(APIModel):
     id: UUID
-    kind: Kind
+    kind: Kind1
     amount_nanos: int
     status: CreditPaymentStatus
     checkout_url: Annotated[
@@ -2811,17 +2813,9 @@ class Resources(APIModel):
     ] = None
 
 
-class SubmitTasksRequest(APIModel):
-    inputs: Annotated[list[TaskInput], Field(max_length=1000, min_length=1)]
-    release_id: Annotated[
-        UUID | None,
-        Field(
-            description="Run on this release, such as a prepared one, instead of the active one."
-        ),
-    ] = None
-    parent_task_id: Annotated[
-        UUID | None, Field(description="The task that submits these, which becomes their parent.")
-    ] = None
+class ResultDisplay(APIModel):
+    text: Annotated[str, Field(max_length=65536)]
+    rich: RichDisplay | None = None
 
 
 class TaskPendingProgress(APIModel):
@@ -3032,7 +3026,7 @@ class ImageDefinition(APIModel):
     secrets: Annotated[
         list[Secret1] | None,
         Field(
-            description="Workspace secrets each build step reads as environment variables through a secret mount; they never reach the image.",
+            description="Workspace secrets the build steps read as environment variables.",
             max_length=64,
         ),
     ] = None
@@ -3341,6 +3335,17 @@ class Release(APIModel):
     ] = None
 
 
+class Payload(APIModel):
+    encoding: Encoding
+    value: Any | None = None
+    data: Base64Bytes | None = None
+    display: ResultDisplay | None = None
+
+
+class TaskInput(Payload):
+    depends_on: Annotated[list[UUID] | None, Field(max_length=100)] = None
+
+
 class Task(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -3452,6 +3457,19 @@ class Deployment(APIModel):
     releases: list[Release]
     pruned: Annotated[list[WorkloadName], Field(description="Workloads the prune deleted.")]
     removed_versions: Annotated[int, Field(description="Versions of the pruned workloads.")]
+
+
+class SubmitTasksRequest(APIModel):
+    inputs: Annotated[list[TaskInput], Field(max_length=1000, min_length=1)]
+    release_id: Annotated[
+        UUID | None,
+        Field(
+            description="Run on this release, such as a prepared one, instead of the active one."
+        ),
+    ] = None
+    parent_task_id: Annotated[
+        UUID | None, Field(description="The task that submits these, which becomes their parent.")
+    ] = None
 
 
 class SubmitTasksResponse(APIModel):

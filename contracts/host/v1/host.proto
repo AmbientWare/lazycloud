@@ -621,6 +621,10 @@ message CompleteTaskRequest {
 message TaskSuccess {
   PayloadEncoding encoding = 1;
   bytes result = 2;
+  // A cloudpickle result's ResultDisplay (contracts/runner.yaml) as the
+  // runner sent it, JSON; empty without one. The server checks it before it
+  // keeps it.
+  bytes display = 3;
 }
 
 enum AttemptFailureKind {

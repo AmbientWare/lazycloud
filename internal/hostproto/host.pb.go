@@ -4279,9 +4279,13 @@ func (*CompleteTaskRequest_Success) isCompleteTaskRequest_Outcome() {}
 func (*CompleteTaskRequest_Failure) isCompleteTaskRequest_Outcome() {}
 
 type TaskSuccess struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Encoding      PayloadEncoding        `protobuf:"varint,1,opt,name=encoding,proto3,enum=lazycloud.host.v1.PayloadEncoding" json:"encoding,omitempty"`
-	Result        []byte                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Encoding PayloadEncoding        `protobuf:"varint,1,opt,name=encoding,proto3,enum=lazycloud.host.v1.PayloadEncoding" json:"encoding,omitempty"`
+	Result   []byte                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
+	// A cloudpickle result's ResultDisplay (contracts/runner.yaml) as the
+	// runner sent it, JSON; empty without one. The server checks it before it
+	// keeps it.
+	Display       []byte `protobuf:"bytes,3,opt,name=display,proto3" json:"display,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4326,6 +4330,13 @@ func (x *TaskSuccess) GetEncoding() PayloadEncoding {
 func (x *TaskSuccess) GetResult() []byte {
 	if x != nil {
 		return x.Result
+	}
+	return nil
+}
+
+func (x *TaskSuccess) GetDisplay() []byte {
+	if x != nil {
+		return x.Display
 	}
 	return nil
 }
@@ -6254,10 +6265,11 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"attempt_id\x18\x02 \x01(\tR\tattemptId\x12:\n" +
 	"\asuccess\x18\x03 \x01(\v2\x1e.lazycloud.host.v1.TaskSuccessH\x00R\asuccess\x12:\n" +
 	"\afailure\x18\x04 \x01(\v2\x1e.lazycloud.host.v1.TaskFailureH\x00R\afailureB\t\n" +
-	"\aoutcome\"e\n" +
+	"\aoutcome\"\x7f\n" +
 	"\vTaskSuccess\x12>\n" +
 	"\bencoding\x18\x01 \x01(\x0e2\".lazycloud.host.v1.PayloadEncodingR\bencoding\x12\x16\n" +
-	"\x06result\x18\x02 \x01(\fR\x06result\"\x9c\x01\n" +
+	"\x06result\x18\x02 \x01(\fR\x06result\x12\x18\n" +
+	"\adisplay\x18\x03 \x01(\fR\adisplay\"\x9c\x01\n" +
 	"\vTaskFailure\x129\n" +
 	"\x04kind\x18\x01 \x01(\x0e2%.lazycloud.host.v1.AttemptFailureKindR\x04kind\x124\n" +
 	"\x05error\x18\x02 \x01(\v2\x1e.lazycloud.host.v1.RunnerErrorR\x05error\x12\x1c\n" +
