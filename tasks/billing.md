@@ -224,9 +224,13 @@ the shape it billed. Container time and GPUs bill as reserved; the open,
 accrued remainder of a live container is estimated at its reservation.
 `TestMeteringBillsTheGreaterOfReservationAndMeasuredUse`.
 
+Grouping costs by task splits each container ledger entry among the
+attempts that ran in it by the time they overlapped it, at read time;
+idle container time stays on the workload's row and concurrent attempts
+share by overlap. `TestCostsByTaskSplitContainerTimeAmongItsRuns`.
+
 ## Gaps
 
-- Grouping by task equals grouping by workload: no container runs one task.
 - The cost of storage scans at scale is not measured; only the container
   pass is.
 - Stripe test mode does not cover these:

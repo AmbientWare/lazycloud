@@ -36,6 +36,7 @@ type costCursor struct {
 	Workspace uuid.UUID `json:"w"`
 	App       uuid.UUID `json:"a"`
 	Workload  uuid.UUID `json:"l"`
+	Task      uuid.UUID `json:"t"`
 	Category  string    `json:"g"`
 	Disk      uuid.UUID `json:"d"`
 }
@@ -54,14 +55,16 @@ func checkWindow(start, end time.Time) error {
 // workload, most expensive first, with the whole window's total. The
 // account pays for every workspace it owns, so rows carry their workspace.
 // Each disk is its own row; volumes are usage without an app, and an app's
-// artifacts are its own row by workload. No container runs for one task, so
-// grouping by task groups by workload.
+// artifacts are its own row by workload. Grouping by task splits each
+// workload's container cost among its runs by the time they ran, leaving
+// idle container time on the workload's row.
 func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apitypes.UsageCostPage, error) {
 	if err := checkWindow(q.Start, q.End); err != nil {
 		return apitypes.UsageCostPage{}, err
 	}
 	params := CostRowsParams{
-		ByWorkload: q.GroupBy != apitypes.UsageCostGroupApp, UserID: user, StartAt: q.Start, EndAt: q.End,
+		ByWorkload: q.GroupBy != apitypes.UsageCostGroupApp, ByTask: q.GroupBy == apitypes.UsageCostGroupTask,
+		UserID: user, StartAt: q.Start, EndAt: q.End,
 		WorkspaceID: q.Workspace, AppID: q.App, RowLimit: int32(q.Limit + 1), //nolint:gosec // The API bounds the limit to 200.
 	}
 	if q.Category != nil {
@@ -78,6 +81,7 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 		}
 		params.HasCursor, params.AfterCost, params.AfterWorkspace = true, c.Cost, c.Workspace
 		params.AfterApp, params.AfterWorkload, params.AfterCategory, params.AfterDisk = c.App, c.Workload, c.Category, c.Disk
+		params.AfterTask = c.Task
 	}
 	rows, err := b.queries.CostRows(ctx, params)
 	if err != nil {
@@ -96,7 +100,7 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 		last := rows[q.Limit-1]
 		raw, err := json.Marshal(costCursor{
 			Cost: last.CostNanos, Workspace: last.WorkspaceID, App: last.AppKey, Workload: last.WorkloadKey,
-			Category: last.Category, Disk: last.DiskKey,
+			Task: last.TaskKey, Category: last.Category, Disk: last.DiskKey,
 		})
 		if err != nil {
 			return apitypes.UsageCostPage{}, fmt.Errorf("encode cursor: %w", err)
@@ -193,6 +197,10 @@ func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
 		if names, ok := n.workloads[id]; ok && out.AppName != nil {
 			out.WorkloadName, out.WorkloadKind = &names[0], &names[1]
 		}
+	}
+	if r.TaskKey != uuid.Nil {
+		id := r.TaskKey
+		out.TaskId = &id
 	}
 	switch r.Category {
 	case categoryImageBuild:

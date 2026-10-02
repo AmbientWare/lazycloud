@@ -402,8 +402,8 @@ Scope notes:
   Delivered: CreditPrompt.tsx, same threshold and copy; code reading only.
 - [x] Public `/pricing` page and pricing catalog `/api/v1/pricing` (WEB/routes/pricing.lazy.tsx, Q/pricing.ts)
   Intentional: pricing.lazy.tsx; internal/api/billing_test.go catalog test. `/v1/pricing` path: tasks/billing.md.
-- [ ] Usage page: range control, usage cost, amount covered by subscription credits, spend chart by category, breakdown by app and workload with runtime and cost, "View run", image builds, usage without an app (WEB/routes/w/$workspace/usage/index.tsx and -components/*)
-  Gap: usage routes match; `TestStorageIsMeteredAndShownOnTheUsagePage`. Usage is metered per container, so runs have no rows, cost or "View run" (tasks/billing.md Gaps): about 1-1.5 days.
+- [x] Usage page: range control, usage cost, amount covered by subscription credits, spend chart by category, breakdown by app and workload with runtime and cost, "View run", image builds, usage without an app (WEB/routes/w/$workspace/usage/index.tsx and -components/*)
+  Intentional: usage routes over `/v1/billing/costs`; `TestStorageIsMeteredAndShownOnTheUsagePage`, `TestCostsByTaskSplitContainerTimeAmongItsRuns` (runs with their share and "View run"). Runs listed under each app: tasks/web.md.
 - [x] Stripe webhook `/webhooks/stripe` (R/apps/api/src/api/server/routers/webhooks.py:63)
   Delivered: internal/api/webhooks.go; `TestWebhooksAreVerifiedAndStoredOnce`, `TestStripeTestMode`.
 
