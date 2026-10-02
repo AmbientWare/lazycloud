@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# Public home of the HTTP API error, which exported clients raise and callers catch.
+from lazycloud._shared.http.errors import HttpApiError, http_api_error_from_body
+
 
 class SdkError(RuntimeError):
     pass
@@ -154,6 +157,7 @@ __all__ = [
     "ConfigurationError",
     "DeploymentNotFoundError",
     "FunctionNotDeployedError",
+    "HttpApiError",
     "InvalidFunctionArgumentsError",
     "MapSubmissionError",
     "ObjectUploadError",
@@ -169,4 +173,5 @@ __all__ = [
     "UnsupportedFeatureError",
     "VolumeUploadError",
     "WorkspaceNotFoundError",
+    "http_api_error_from_body",
 ]
