@@ -43,6 +43,16 @@ jobs:
         run: |
           echo "::error::Ship runs from main; this run is on ${GITHUB_REF}."
           exit 1
+      - name: Refuse anyone but a repository admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission)"
+          if [ "$permission" != admin ]; then
+            echo "::error::$ACTOR has $permission access; only a repository admin runs this."
+            exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
@@ -109,7 +119,7 @@ jobs:
     needs: [version, go, python, web, checks]
     runs-on: ubuntu-26.04
     # The image release role trusts only this workflow, from main, in this
-    # environment, whose reviewers approve each push.
+    # environment.
     environment: images
     permissions:
       contents: read
