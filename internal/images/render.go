@@ -60,6 +60,10 @@ type spec struct {
 	env          map[string]string
 	dockerfile   string
 	context      []byte
+	// secrets are the workspace secrets rendered steps read, sorted.
+	secrets []string
+	// gpu is the GPU model the build runs on, or empty.
+	gpu string
 }
 
 // minorVersion is "3.12" for "3.12" and "3.12.11".
@@ -69,12 +73,6 @@ func minorVersion(version string) string {
 }
 
 func validate(def apitypes.ImageDefinition) (spec, error) {
-	if def.Gpu != nil && *def.Gpu != "" {
-		return spec{}, fmt.Errorf("%w: GPU builds need GPU capacity, which the platform does not offer yet", ErrUnsupported)
-	}
-	if def.Secrets != nil && len(*def.Secrets) > 0 {
-		return spec{}, fmt.Errorf("%w: build secrets need workspace secrets, which the platform does not offer yet", ErrUnsupported)
-	}
 	if !pythonVersionPattern.MatchString(def.PythonVersion) {
 		return spec{}, invalid("python_version %q is not 3.10 to 3.14 or a patch release of them", def.PythonVersion)
 	}
@@ -138,6 +136,22 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 			}
 		}
 		s.env = *def.Env
+	}
+	if def.Secrets != nil {
+		for _, name := range *def.Secrets {
+			if !envNamePattern.MatchString(name) {
+				return spec{}, invalid("secret name %q is invalid", name)
+			}
+		}
+		s.secrets = slices.Compact(slices.Sorted(slices.Values(*def.Secrets)))
+	}
+	if def.Gpu != nil && *def.Gpu != "" {
+		// One model, not a preference: it is the machine the image is
+		// built on.
+		if gpu := apitypes.GpuType(*def.Gpu); !gpu.Valid() || gpu == apitypes.Any {
+			return spec{}, invalid("gpu %q is not a GPU model; name one such as L4 or A100-80", *def.Gpu)
+		}
+		s.gpu = *def.Gpu
 	}
 	if def.Context != nil {
 		digest, err := parseSha256(def.Context.Sha256)
@@ -270,6 +284,7 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 			lines = append(lines, "WORKDIR "+workdir)
 		}
 	}
+	user := len(lines)
 	for _, key := range sortedKeys(s.env) {
 		lines = append(lines, "ENV "+key+"="+dockerValue(s.env[key]))
 	}
@@ -289,7 +304,35 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 		check := fmt.Sprintf("import sys; assert sys.version_info[:%d] == (%s), sys.version", len(parts), tuple)
 		lines = append(lines, "RUN python -c "+shellQuote(check))
 	}
+	s.addRunFlags(lines[user:])
 	return pinDockerfile(strings.Join(lines, "\n")+"\n", pin)
+}
+
+// gpuDevice names every GPU in the build container's CDI spec, which lists
+// only the GPUs the container holds.
+const gpuDevice = "nvidia.com/gpu=*"
+
+// addRunFlags gives each RUN instruction of the rendered steps every build
+// secret, as a secret mount the step sees as an environment variable, and
+// for a GPU build the container's GPUs. Neither reaches a layer or the
+// image's history. A Dockerfile's own RUN lines name the mounts they need.
+func (s spec) addRunFlags(lines []string) {
+	var flags []string
+	for _, name := range s.secrets {
+		flags = append(flags, "--mount=type=secret,id="+name+",env="+name+",required=true")
+	}
+	if s.gpu != "" {
+		flags = append(flags, "--device="+gpuDevice)
+	}
+	if len(flags) == 0 {
+		return
+	}
+	prefix := "RUN " + strings.Join(flags, " ") + " "
+	for n, line := range lines {
+		if strings.HasPrefix(line, "RUN ") {
+			lines[n] = prefix + strings.TrimPrefix(line, "RUN ")
+		}
+	}
 }
 
 // pythonSetup returns the interpreter later steps install with and the
@@ -619,15 +662,26 @@ func splitReference(ref string) (repository, tag, digest string) {
 	return repository, tag, digest
 }
 
-// imageDigest is the image identity: the rendered Dockerfile, the architecture and
-// the context the build reads.
-func imageDigest(dockerfile, architecture string, context []byte) []byte {
-	encoded, _ := json.Marshal(struct { //nolint:errchkjson // Strings and bytes always encode.
+// buildInputs are what a build reads besides its Dockerfile and context.
+// Empty fields leave the identity of an image without them unchanged.
+type buildInputs struct {
+	// Workspace is set when the build reads its secrets.
+	Workspace string `json:"workspace,omitempty"`
+	// Secrets maps each secret to its version.
+	Secrets map[string]string `json:"secrets,omitempty"`
+	GPU     string            `json:"gpu,omitempty"`
+}
+
+// imageDigest is the image identity: the rendered Dockerfile, the
+// architecture, the context the build reads and its other inputs.
+func imageDigest(dockerfile, architecture string, context []byte, inputs buildInputs) []byte {
+	encoded, _ := json.Marshal(struct { //nolint:errchkjson // Strings, bytes and string maps always encode.
 		Version      int    `json:"version"`
 		Architecture string `json:"architecture"`
 		Dockerfile   string `json:"dockerfile"`
 		Context      []byte `json:"context"`
-	}{identityVersion, architecture, dockerfile, context})
+		buildInputs
+	}{identityVersion, architecture, dockerfile, context, inputs})
 	sum := sha256.Sum256(encoded)
 	return sum[:]
 }

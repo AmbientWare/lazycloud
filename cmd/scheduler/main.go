@@ -149,11 +149,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	crons := schedules.NewSchedules(pool, exec)
-	deliverer := callbacks.NewCallbacks(pool, secrets.NewSecrets(pool, masterKey), callbacks.CallbackConfig{
+	vault := secrets.NewSecrets(pool, masterKey)
+	deliverer := callbacks.NewCallbacks(pool, vault, callbacks.CallbackConfig{
 		AllowPrivateTargets: os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1",
 	}, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
-	im := images.NewImages(pool, exec, images.Config{})
+	im := images.NewImages(pool, exec, vault, images.Config{})
 	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")

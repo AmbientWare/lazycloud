@@ -20,7 +20,7 @@ select c.id, c.workspace_id, c.cpu_millis, c.memory_bytes, c.capacity_wait, ws.c
        coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)))::text[] as gpus,
+       array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)))::text[] as gpus,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count
 from containers c
 join workspaces ws on ws.id = c.workspace_id

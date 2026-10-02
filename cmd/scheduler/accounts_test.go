@@ -20,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -35,7 +36,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	store := storage.NewStorage(pool, storagetest.Config())
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, images.Config{}), storage: store, logger: logger,
+		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), images.Config{}), storage: store, logger: logger,
 	}
 
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -152,7 +153,7 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 	exec := execution.NewExecution(pool)
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, images.Config{}),
+		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), images.Config{}),
 		storage: storage.NewStorage(pool, storagetest.Config()), logger: logger,
 	}
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -307,4 +308,14 @@ select host.id, ctr.id from host, ctr`, uuid.UUID(ws), release).Scan(&host, &con
 		t.Fatal(err)
 	}
 	return compute.HostID(host), execution.ContainerID(container)
+}
+
+// testVault returns a secrets owner with a fixed development master key.
+func testVault(t *testing.T, pool *pgxpool.Pool) *secrets.Secrets {
+	t.Helper()
+	key, err := secrets.NewFileKey(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return secrets.NewSecrets(pool, key)
 }

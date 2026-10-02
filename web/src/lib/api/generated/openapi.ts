@@ -4568,9 +4568,9 @@ export interface components {
             /** @description A Dockerfile that replaces the base image and Python setup. */
             dockerfile?: string;
             context?: components["schemas"]["SourceRef"];
-            /** @description Workspace secrets the build reads as build arguments. */
+            /** @description Workspace secrets each build step reads as environment variables through a secret mount; they never reach the image. */
             secrets?: string[];
-            /** @description The GPU model the build runs on. */
+            /** @description The GPU model the build runs on and its steps use; one model, not any. */
             gpu?: string;
         };
         /** @enum {string} */

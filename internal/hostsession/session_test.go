@@ -73,7 +73,7 @@ func start(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"})
+	im := images.NewImages(pool, e, vault, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"})
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim",

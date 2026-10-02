@@ -2,6 +2,7 @@ package images_test
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 const registryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
@@ -83,8 +85,23 @@ type fixture struct {
 	pool      *pgxpool.Pool
 	images    *images.Images
 	execution *execution.Execution
+	secrets   *secrets.Secrets
 	registry  string
 	listener  *database.Listener
+}
+
+// newVault returns a secrets owner with a random master key.
+func newVault(t *testing.T, pool *pgxpool.Pool) *secrets.Secrets {
+	t.Helper()
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secrets.NewFileKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return secrets.NewSecrets(pool, key)
 }
 
 func newFixture(t *testing.T) fixture {
@@ -92,7 +109,8 @@ func newFixture(t *testing.T) fixture {
 	registry := startRegistry(t)
 	pool := dbtest.New(t)
 	exec := execution.NewExecution(pool)
-	im := images.NewImages(pool, exec, images.Config{
+	vault := newVault(t, pool)
+	im := images.NewImages(pool, exec, vault, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true,
 		ManagedBase: registry + "/library/python:{version}-slim",
 	})
@@ -102,7 +120,7 @@ func newFixture(t *testing.T) fixture {
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(ctx) })
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	return fixture{pool: pool, images: im, execution: exec, registry: registry, listener: listener}
+	return fixture{pool: pool, images: im, execution: exec, secrets: vault, registry: registry, listener: listener}
 }
 
 func (f fixture) workspace(t *testing.T, name string) identity.WorkspaceID {
@@ -381,9 +399,15 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 	if _, err := f.images.Resolve(t.Context(), ws, context); !errors.As(err, &invalid) {
 		t.Fatalf("a context the workspace did not upload is rejected: %v", err)
 	}
-	gpu := apitypes.ImageDefinition{PythonVersion: "3.12", Gpu: ptr("A100")}
-	if _, err := f.images.Resolve(t.Context(), ws, gpu); !errors.Is(err, images.ErrUnsupported) {
-		t.Fatalf("GPU builds are unsupported: %v", err)
+	for _, model := range []string{"A100", "any"} {
+		gpu := apitypes.ImageDefinition{PythonVersion: "3.12", Gpu: ptr(model)}
+		if _, err := f.images.Resolve(t.Context(), ws, gpu); !errors.As(err, &invalid) {
+			t.Fatalf("a GPU build names one model, not %q: %v", model, err)
+		}
+	}
+	secret := apitypes.ImageDefinition{PythonVersion: "3.12", Secrets: &[]string{"TOKEN"}}
+	if _, err := f.images.Resolve(t.Context(), ws, secret); !errors.As(err, &invalid) {
+		t.Fatalf("a secret the workspace does not have is rejected: %v", err)
 	}
 	unreachable := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: ptr("registry.invalid/python:3.12")}
 	if _, err := f.images.Resolve(t.Context(), ws, unreachable); !errors.Is(err, images.ErrRegistryUnavailable) {
@@ -392,3 +416,152 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// withSecret is a definition with a build step whose RUN reads TOKEN.
+func withSecret() apitypes.ImageDefinition {
+	return apitypes.ImageDefinition{PythonVersion: "3.12", Commands: &[]string{`test -n "$TOKEN"`}, Secrets: &[]string{"TOKEN", "TOKEN"}}
+}
+
+// A build secret is part of the image identity with its workspace and
+// version, reaches the build only as a secret mount the build step names,
+// and a build whose secret was deleted before it started fails.
+func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	a, b := f.workspace(t, "a"), f.workspace(t, "b")
+	const value = "s3cr3t-token-value"
+	for _, ws := range []identity.WorkspaceID{a, b} {
+		if _, err := f.secrets.Set(ctx, ws, "TOKEN", value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inA, err := f.images.Resolve(ctx, a, withSecret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inB, err := f.images.Resolve(ctx, b, withSecret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inA.Image.ID == inB.Image.ID {
+		t.Fatal("another workspace's secret of the same name builds another image")
+	}
+	var dockerfile string
+	if err := f.pool.QueryRow(ctx, "select dockerfile from images where id = $1", inA.Image.ID).Scan(&dockerfile); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dockerfile, "RUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<") || strings.Contains(dockerfile, value) {
+		t.Fatalf("the step mounts the secret and the Dockerfile never holds its value:\n%s", dockerfile)
+	}
+	if _, err := f.secrets.Set(ctx, a, "TOKEN", "rotated"); err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := f.images.Build(ctx, a, withSecret(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.Image.ID == inA.Image.ID || rotated.Build == nil {
+		t.Fatalf("a new secret version builds a new image: %+v", rotated)
+	}
+
+	host := f.host(t)
+	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+		t.Fatal(err)
+	}
+	starts, err := f.execution.BuildStarts(ctx, host)
+	if err != nil || len(starts) != 1 {
+		t.Fatalf("want one build start, got %v %v", starts, err)
+	}
+	command, err := f.images.BuildCommandOf(ctx, starts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(command.Secrets) != 1 || command.Secrets["TOKEN"] != "rotated" || command.GPUs != 0 {
+		t.Fatalf("the build command carries the current secret value and no GPU: %+v", command)
+	}
+	if err := f.secrets.Delete(ctx, a, "TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.images.BuildCommandOf(ctx, starts[0]); !errors.Is(err, images.ErrStaleBuild) {
+		t.Fatalf("a build whose secret is gone does not start: %v", err)
+	}
+	build, err := f.images.GetBuild(ctx, f.listener, a, rotated.Build.ID, 0)
+	if err != nil || build.Status != images.BuildFailed || !strings.Contains(build.Failure, "secret TOKEN was deleted") {
+		t.Fatalf("it fails naming the secret: %+v %v", build, err)
+	}
+}
+
+// A GPU build waits for a host with its model, holds one of its GPUs and
+// asks its steps for it.
+func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	ws := f.workspace(t, "a")
+	def := numpy()
+	def.Gpu = ptr("L4")
+	r, err := f.images.Build(ctx, ws, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, err := f.images.Resolve(ctx, ws, numpy()); err != nil || plain.Image.ID == r.Image.ID {
+		t.Fatalf("the GPU model is part of the image identity: %v", err)
+	}
+	var dockerfile string
+	if err := f.pool.QueryRow(ctx, "select dockerfile from images where id = $1", r.Image.ID).Scan(&dockerfile); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dockerfile, "RUN --device=nvidia.com/gpu=* ") {
+		t.Fatalf("the build steps ask for the GPU:\n%s", dockerfile)
+	}
+	place := func() {
+		t.Helper()
+		if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gpuHost := func(model string) compute.HostID {
+		t.Helper()
+		var id uuid.UUID
+		if err := f.pool.QueryRow(ctx, `
+insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, gpu_type, gpu_count, last_seen_at)
+values ('g', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint << 34, $1, 1, now()) returning id`, model).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return compute.HostID(id)
+	}
+	cpu, other := f.host(t), gpuHost("T4")
+	place()
+	for _, host := range []compute.HostID{cpu, other} {
+		if starts, err := f.execution.BuildStarts(ctx, host); err != nil || len(starts) != 0 {
+			t.Fatalf("a GPU build never lands on a host without its model: %v %v", starts, err)
+		}
+	}
+	l4 := gpuHost("L4")
+	place()
+	starts, err := f.execution.BuildStarts(ctx, l4)
+	if err != nil || len(starts) != 1 {
+		t.Fatalf("the build is placed on the L4 host: %v %v", starts, err)
+	}
+	command, err := f.images.BuildCommandOf(ctx, starts[0])
+	if err != nil || command.GPUs != 1 {
+		t.Fatalf("the build holds one GPU: %+v %v", command, err)
+	}
+	var gpuType string
+	var gpuCount int
+	if err := f.pool.QueryRow(ctx, "select gpu_type, gpu_count from containers where id = $1", uuid.UUID(starts[0].Container)).Scan(&gpuType, &gpuCount); err != nil {
+		t.Fatal(err)
+	}
+	if gpuType != "L4" || gpuCount != 1 {
+		t.Fatalf("billing sees the build's GPU: %s x%d", gpuType, gpuCount)
+	}
+	// The host's one GPU is held: a second GPU build waits.
+	second := def
+	second.Commands = &[]string{"true"}
+	if _, err := f.images.Build(ctx, ws, second, false); err != nil {
+		t.Fatal(err)
+	}
+	place()
+	if starts, err := f.execution.BuildStarts(ctx, l4); err != nil || len(starts) != 1 {
+		t.Fatalf("the host's one GPU holds one build: %v %v", starts, err)
+	}
+}

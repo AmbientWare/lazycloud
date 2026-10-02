@@ -305,7 +305,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		return err
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, exec, cfg.images)
+	im := images.NewImages(pool, exec, vault, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
 	comp := compute.NewCompute(pool, exec, cfg.compute)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {

@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -47,13 +46,7 @@ func (i *Images) failBuild(ctx context.Context, id uuid.UUID, digest []byte, rea
 		if BuildStatus(build.State) != BuildBuilding {
 			return nil
 		}
-		if err := i.execution.StopBuildContainers(ctx, tx, id); err != nil {
-			return err
-		}
-		if err := q.FailBuild(ctx, FailBuildParams{ID: id, Failure: reason}); err != nil {
-			return fmt.Errorf("fail build: %w", err)
-		}
-		return database.Notify(ctx, tx, database.ChannelImageBuild, id.String())
+		return i.failLocked(ctx, tx, id, reason)
 	})
 	if err != nil {
 		return fmt.Errorf("fail build %s: %w", id, err)

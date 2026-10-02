@@ -155,7 +155,10 @@ Each returns the image, so they chain.
   created with `from_micromamba()`.
 - `with_envs(env_vars, clear=False)` sets environment variables from a
   mapping, `"KEY=value"` strings, or a sequence of them.
-- `with_secrets(secrets)` makes workspace secrets available during the build.
+- `with_secrets(secrets)` gives each build step these workspace secrets as
+  environment variables. They never reach the image or its history; a
+  `from_dockerfile()` step reads one with
+  `RUN --mount=type=secret,id=NAME,env=NAME`.
 - `with_docker()` installs Docker so containers using the image can run their
   own daemon.
 - `build_with_gpu(hint)` runs the build on a GPU worker of the given model.

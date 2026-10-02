@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -49,6 +51,8 @@ const (
 	buildDockerfileDir = "/build/dockerfile"
 	buildOutDir        = "/build/out"
 	buildDockerConfig  = "/build/docker"
+	buildSecretsDir    = "/build/secrets"
+	buildCDIDir        = "/build/cdi"
 )
 
 const (
@@ -118,10 +122,22 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	if _, err := c.a.images.ensure(ctx, builderImage, nil, ""); err != nil {
 		return startFailed(err)
 	}
+	// The secrets leave the host when the build ends, whatever its outcome.
+	defer func() { _ = os.RemoveAll(filepath.Join(c.dir, "secrets")) }()
 	if err := c.prepareBuildFiles(ctx, build); err != nil {
 		return startFailed(err)
 	}
-	if err := c.a.createBuilder(ctx, c, spec); err != nil {
+	var gpus []string
+	if n := int(spec.GetResources().GetGpuCount()); n > 0 {
+		var err error
+		if gpus, err = c.a.allocateGPUs(c, n); err != nil {
+			return startFailed(err)
+		}
+		if err := writeBuildCDI(ctx, filepath.Join(c.dir, "cdi"), gpus); err != nil {
+			return startFailed(err)
+		}
+	}
+	if err := c.a.createBuilder(ctx, c, spec, gpus); err != nil {
 		return startFailed(err)
 	}
 	c.mu.Lock()
@@ -214,6 +230,84 @@ func (c *container) prepareBuildFiles(ctx context.Context, build *hostproto.Imag
 	if err := os.WriteFile(filepath.Join(c.dir, "docker", "config.json"), config, 0o644); err != nil { //nolint:gosec // The builder reads it as another user; the directory goes when the container does.
 		return fmt.Errorf("write registry logins: %w", err)
 	}
+	if len(build.GetSecrets()) == 0 {
+		return nil
+	}
+	// One file per secret, which the builder hands BuildKit as a secret;
+	// runBuild removes them when the build ends.
+	secrets := filepath.Join(c.dir, "secrets")
+	if err := os.MkdirAll(secrets, 0o700); err != nil {
+		return fmt.Errorf("create build secrets directory: %w", err)
+	}
+	if err := os.Chmod(secrets, 0o755); err != nil { //nolint:gosec // The builder reads it as another user.
+		return fmt.Errorf("open build secrets directory: %w", err)
+	}
+	for name, value := range build.GetSecrets() {
+		if !envName.MatchString(name) {
+			return fmt.Errorf("build secret name %q is invalid", name)
+		}
+		if err := os.WriteFile(filepath.Join(secrets, name), []byte(value), 0o644); err != nil { //nolint:gosec // As above.
+			return fmt.Errorf("write build secret: %w", err)
+		}
+	}
+	return nil
+}
+
+// envName is a build secret's name, which is also the environment variable
+// the steps read and a file name.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// buildCDIAnnotation lets BuildKit give the device to a step without a
+// device entitlement.
+const buildCDIAnnotation = "org.mobyproject.buildkit.device.autoallow"
+
+// writeBuildCDI writes a CDI spec into dir naming only the GPUs the build
+// holds, from the host's NVIDIA Container Toolkit. BuildKit gives them to
+// each RUN step that asks for nvidia.com/gpu=*.
+func writeBuildCDI(ctx context.Context, dir string, gpus []string) error {
+	out, err := exec.CommandContext(ctx, "nvidia-ctk", "cdi", "generate", "--format=json", "--device-name-strategy=uuid").Output()
+	if err != nil {
+		return fmt.Errorf("generate the GPU CDI spec: %w", err)
+	}
+	type device struct {
+		Name           string            `json:"name"`
+		Annotations    map[string]string `json:"annotations,omitempty"`
+		ContainerEdits json.RawMessage   `json:"containerEdits"`
+	}
+	var spec struct {
+		CDIVersion     string          `json:"cdiVersion"`
+		Kind           string          `json:"kind"`
+		Devices        []device        `json:"devices"`
+		ContainerEdits json.RawMessage `json:"containerEdits,omitempty"`
+	}
+	if err := json.Unmarshal(out, &spec); err != nil {
+		return fmt.Errorf("decode the GPU CDI spec: %w", err)
+	}
+	held := spec.Devices[:0]
+	for _, d := range spec.Devices {
+		if slices.Contains(gpus, d.Name) {
+			d.Annotations = map[string]string{buildCDIAnnotation: "true"}
+			held = append(held, d)
+		}
+	}
+	if len(held) != len(gpus) {
+		return fmt.Errorf("the GPU CDI spec names %d of the build's %d GPUs", len(held), len(gpus))
+	}
+	spec.Devices = held
+	// Device annotations need CDI 0.6.0; the versions are 0.x.0.
+	if spec.CDIVersion < "0.6.0" {
+		spec.CDIVersion = "0.6.0"
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return fmt.Errorf("encode the GPU CDI spec: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // The builder reads it as another user.
+		return fmt.Errorf("create CDI directory: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nvidia.json"), encoded, 0o644); err != nil { //nolint:gosec // As above.
+		return fmt.Errorf("write the GPU CDI spec: %w", err)
+	}
 	return nil
 }
 
@@ -242,7 +336,7 @@ func dockerConfig(auths map[string]*hostproto.RegistryAuth) ([]byte, error) {
 	return encoded, nil
 }
 
-func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto.StartContainer) error {
+func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto.StartContainer, gpus []string) error {
 	build := spec.GetBuild()
 	insecure := ""
 	if build.GetInsecureRegistry() {
@@ -262,6 +356,25 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 			"--import-cache", "type=registry,ref="+ref+insecure,
 			"--export-cache", "type=registry,ref="+ref+",mode=max"+insecure)
 	}
+	mounts := []mount.Mount{
+		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "context"), Target: buildContextDir, ReadOnly: true},
+		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "dockerfile"), Target: buildDockerfileDir, ReadOnly: true},
+		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "out"), Target: buildOutDir},
+		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "docker"), Target: buildDockerConfig, ReadOnly: true},
+	}
+	// Secrets reach BuildKit as files of the builder's secret mount; the
+	// Dockerfile mounts each into the steps that read it.
+	if len(build.GetSecrets()) > 0 {
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: filepath.Join(c.dir, "secrets"), Target: buildSecretsDir, ReadOnly: true})
+		for _, name := range slices.Sorted(maps.Keys(build.GetSecrets())) {
+			args = append(args, "--secret", "id="+name+",src="+buildSecretsDir+"/"+name)
+		}
+	}
+	env := []string{"DOCKER_CONFIG=" + buildDockerConfig}
+	if len(gpus) > 0 {
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: filepath.Join(c.dir, "cdi"), Target: buildCDIDir, ReadOnly: true})
+		env = append(env, "BUILDKITD_FLAGS=--cdi-spec-dir="+buildCDIDir)
+	}
 	labels := maps.Clone(a.cfg.Labels)
 	if labels == nil {
 		labels = map[string]string{}
@@ -275,7 +388,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 			Image:      builderImage,
 			Entrypoint: []string{"buildctl-daemonless.sh"},
 			Cmd:        args,
-			Env:        []string{"DOCKER_CONFIG=" + buildDockerConfig},
+			Env:        env,
 			Labels:     labels,
 		},
 		HostConfig: &containertypes.HostConfig{
@@ -287,13 +400,8 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 			MaskedPaths:   []string{},
 			ReadonlyPaths: []string{},
 			NetworkMode:   containertypes.NetworkMode(a.cfg.BuildNetwork),
-			Mounts: []mount.Mount{
-				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "context"), Target: buildContextDir, ReadOnly: true},
-				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "dockerfile"), Target: buildDockerfileDir, ReadOnly: true},
-				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "out"), Target: buildOutDir},
-				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "docker"), Target: buildDockerConfig, ReadOnly: true},
-			},
-			Resources: containerResources(spec.GetResources(), a.capacity, limit, nil),
+			Mounts:        mounts,
+			Resources:     containerResources(spec.GetResources(), a.capacity, limit, gpus),
 		},
 	}
 	_, err := a.docker.ContainerCreate(ctx, options)

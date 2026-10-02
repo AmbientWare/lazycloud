@@ -131,7 +131,7 @@ func TestRegistryLookupsNeverDialPrivateAddresses(t *testing.T) {
 	t.Cleanup(registry.Close)
 	host := strings.TrimPrefix(registry.URL, "http://")
 	pool := dbtest.New(t)
-	im := images.NewImages(pool, execution.NewExecution(pool), images.Config{
+	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), images.Config{
 		Registry: host, Repository: "lazycloud", Insecure: true, ManagedBase: host + "/library/python:{version}-slim",
 	})
 	ws := fixture{pool: pool}.workspace(t, "a")

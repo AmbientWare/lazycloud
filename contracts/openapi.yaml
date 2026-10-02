@@ -5882,12 +5882,14 @@ components:
         # A source archive the workspace uploaded with the files the build reads.
         context: { $ref: "#/components/schemas/SourceRef" }
         secrets:
-          description: Workspace secrets the build reads as build arguments.
+          description: >-
+            Workspace secrets each build step reads as environment variables
+            through a secret mount; they never reach the image.
           type: array
           maxItems: 64
           items: { type: string, pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$" }
         gpu:
-          description: The GPU model the build runs on.
+          description: The GPU model the build runs on and its steps use; one model, not any.
           type: string
           maxLength: 64
 

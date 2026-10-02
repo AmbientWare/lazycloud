@@ -3725,7 +3725,7 @@ type ImageDefinition struct {
 	Dockerfile *string            `json:"dockerfile,omitempty"`
 	Env        *map[string]string `json:"env,omitempty"`
 
-	// Gpu The GPU model the build runs on.
+	// Gpu The GPU model the build runs on and its steps use; one model, not any.
 	Gpu *string `json:"gpu,omitempty"`
 
 	// Micromamba Micromamba provides Python and the base environment.
@@ -3735,7 +3735,7 @@ type ImageDefinition struct {
 	// PythonVersion A supported minor release or an exact patch release.
 	PythonVersion string `json:"python_version"`
 
-	// Secrets Workspace secrets the build reads as build arguments.
+	// Secrets Workspace secrets each build step reads as environment variables through a secret mount; they never reach the image.
 	Secrets *[]string    `json:"secrets,omitempty"`
 	Steps   *[]ImageStep `json:"steps,omitempty"`
 }

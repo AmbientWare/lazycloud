@@ -3030,10 +3030,17 @@ class ImageDefinition(BaseModel):
     context: SourceRef | None = None
     secrets: Annotated[
         list[Secret1] | None,
-        Field(description="Workspace secrets the build reads as build arguments.", max_length=64),
+        Field(
+            description="Workspace secrets each build step reads as environment variables through a secret mount; they never reach the image.",
+            max_length=64,
+        ),
     ] = None
     gpu: Annotated[
-        str | None, Field(description="The GPU model the build runs on.", max_length=64)
+        str | None,
+        Field(
+            description="The GPU model the build runs on and its steps use; one model, not any.",
+            max_length=64,
+        ),
     ] = None
 
 

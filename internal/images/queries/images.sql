@@ -2,8 +2,8 @@
 -- The update locks the image row, so build requests for one image run one
 -- at a time. An image that needs no build is ready on insert, and becomes
 -- ready when a request finds it is its public base.
-insert into images (digest, id, dockerfile, python_version, architecture, reference, ready_at)
-values (@digest, @id, @dockerfile, @python_version, @architecture,
+insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu, reference, ready_at)
+values (@digest, @id, @dockerfile, @python_version, @architecture, @build_secrets, @build_gpu,
         sqlc.narg(reference), case when sqlc.narg(reference)::text is null then null else now() end)
 on conflict (digest) do update
 set reference = coalesce(images.reference, excluded.reference),
@@ -62,7 +62,7 @@ select coalesce((select c.state from containers c where c.image_build_id = @id o
 
 -- name: BuildToStart :one
 select b.id, b.state, b.workspace_id, b.context_sha256, b.registry_auth, b.deadline_at,
-       i.digest, i.dockerfile, i.architecture
+       i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu
 from image_builds b
 join images i on i.digest = b.image_digest
 where b.id = @id;
@@ -120,6 +120,9 @@ limit @max_entries;
 
 -- name: BuildImageDigest :one
 select image_digest from image_builds where id = @id;
+
+-- name: ImageBuildGPU :one
+select build_gpu from images where digest = @digest;
 
 -- name: SourceRegistered :one
 select exists (select 1 from source_objects where workspace_id = @workspace_id and sha256 = @sha256)::bool;

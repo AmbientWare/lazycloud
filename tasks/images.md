@@ -61,7 +61,7 @@ tasks/parity.md.
 | `Image(...)` with Python 3.10-3.14 or a patch release, packages, commands, base image and creds, env vars, image id, architecture | `test_sdk_image_build.py` (definition mapping, version forms, architecture); e2e numpy deploy |
 | `from_registry`, `from_dockerfile`, `from_id` | e2e private `from_registry`; `test_sdk_image_build.py` (`from_id`, dockerfile context) |
 | `from_uv`, `from_poetry`, `from_pyproject`, `from_micromamba` | e2e `from_uv` deploy and call; SDK tests for identity stable across code edits |
-| Builders `add_commands` ... `with_docker` | SDK mapping tests; `with_secrets` and `build_with_gpu` reject as `unsupported` (gaps) |
+| Builders `add_commands` ... `with_docker` | SDK mapping tests; `with_secrets`: `TestBuildSecretsAreMountedAndKeyTheImage`, `TestAgentBuildSecretsReachOnlyTheStepThatMountsThem`; `build_with_gpu`: `TestGPUBuildsArePlacedOnlyOnTheirModel` |
 | `verify`, `exists`, `build`, `spec`, `get_credentials_from_env` | `test_sdk_image_build.py` |
 | Credential names per registry | `TestRegistryCredentialNames`; e2e private registry with basic auth, and the wrong-password error |
 | Content-addressed cache, code edits never rebuild | `TestEqualDefinitionsShareOneImageAuthorizedPerWorkspace`, `TestConcurrentBuildRequestsJoinOneBuild`; e2e `from_uv` code edit shows `cached` |
@@ -105,6 +105,22 @@ the base image.
 The reference was not measured under the same conditions.
 
 ## Intentional differences
+
+- `with_secrets` gives each rendered build step the secrets as environment
+  variables through BuildKit secret mounts
+  (`RUN --mount=type=secret,id=NAME,env=NAME,required=true`); the reference
+  declared them as `ARG`s, which build history keeps. A `from_dockerfile()`
+  step mounts the ones it reads itself. The agent writes the values to
+  files of the builder's secret mount and deletes them when the build ends.
+  The workspace and each secret's version are part of the image identity
+  (migrations/0016_image_build_options.sql), so a rotated secret builds a
+  new image and no workspace gets an image built with another's secrets. A
+  build reads the values current when it starts; one whose secret was
+  deleted by then fails naming it.
+- `build_with_gpu` names one model, as the reference's hint did; `any` and
+  unknown models are refused at resolve, since the model is the machine
+  the image is built on. The model is part of the identity, and the build
+  container holds one GPU of it, which billing prices like a workload's.
 
 - Default images start from `python:<version>-slim` (Debian slim, CPython)
   instead of Debian slim plus uv-managed CPython. `Image()` then needs no
@@ -163,11 +179,13 @@ registry integration.
 - ECR base images: the `GetAuthorizationToken` exchange is unverified
   without AWS credentials; GCR, ACR and NGC logins are covered by the name
   mapping test only.
-- `build_with_gpu` and `with_secrets` reject as `unsupported`. Workspace
-  secrets exist now, so `with_secrets` needs the images owner to resolve
-  them at build time and key the image identity on their versions (about a
-  day); GPU builds need GPU build capacity. `machine=` on `build()` is
-  unsupported: builds do not use machine pinning.
+- GPU builds are unverified on a GPU host: none exists locally. Placement,
+  the held GPU, billing's GPU type and the refusal of `any` and unknown
+  models are tested; that BuildKit's rootless steps reach the device
+  through the agent's CDI spec (`nvidia-ctk cdi generate`, filtered to the
+  held GPUs, `--cdi-spec-dir`, `RUN --device=nvidia.com/gpu=*`) is not.
+  `machine=` on `build()` is unsupported: builds do not use machine
+  pinning.
 - Architecture: arm64 is part of the identity and the build platform, but
   hosts do not report an architecture, so placement cannot match it.
 - Base registry logins are stored in plaintext on the build row until it
@@ -190,3 +208,8 @@ registry integration.
 - `compose.yaml` adds `registry` (3.1.2, the current Distribution release);
   `deploy/local/run.sh` sets the registry and `-build-network host`.
 - The server now requires `LAZYCLOUD_IMAGE_REGISTRY`.
+- Build secrets and GPU builds: `NewImages` takes the secrets owner;
+  `Execution.CreateBuildContainer` takes the GPU count (`containers.gpu_count`);
+  placement (`PendingContainers`), compute demand (`PendingDemand`) and
+  capacity (`AvailableCapacity`) read a build's model through
+  `build_gpus()` (migration 0016); proto `ImageBuild.secrets` (11).

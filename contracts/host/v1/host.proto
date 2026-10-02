@@ -501,6 +501,10 @@ message ImageBuild {
   // Credentials by registry host for base images, the push and the cache.
   map<string, RegistryAuth> registry_auth = 9;
   google.protobuf.Timestamp deadline = 10;
+  // Workspace secrets by name that the Dockerfile mounts as build secrets.
+  // They reach the builder as files of its secret mount, never as its
+  // environment or a build argument.
+  map<string, string> secrets = 11;
 }
 
 message Source {

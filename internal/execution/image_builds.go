@@ -28,16 +28,17 @@ type BuildContainer struct {
 	ExitMessage string
 }
 
-// CreateBuildContainer requests a container for build in tx and wakes
-// placement. workspace is charged for its capacity, so billing admits it
-// first and refuses it when the account cannot pay or runs the most
-// containers its plan allows.
-func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis, memoryBytes int64) (ContainerID, error) {
+// CreateBuildContainer requests a container for build in tx, holding gpus
+// GPUs of the model the build names, and wakes placement. workspace is
+// charged for its capacity, so billing admits it first and refuses it when
+// the account cannot pay or runs the most containers its plan allows.
+func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis, memoryBytes int64, gpus int) (ContainerID, error) {
 	if _, err := billing.Admit(ctx, tx, billing.Request{Workspace: uuid.UUID(workspace), Start: 1, Cold: true}); err != nil {
 		return ContainerID{}, err
 	}
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
+		GpuCount: int32(gpus), //nolint:gosec // A build holds at most one GPU.
 	})
 	if err != nil {
 		return ContainerID{}, fmt.Errorf("create build container: %w", err)

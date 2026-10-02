@@ -58,6 +58,10 @@ func (sess *session) syncBuilds(ctx context.Context, derived map[string]bool) er
 			continue
 		}
 		msg, err := sess.server.buildStartMessage(ctx, id, start)
+		if errors.Is(err, images.ErrStaleBuild) {
+			// The build failed before it could start; its container stops.
+			continue
+		}
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
@@ -83,6 +87,7 @@ func (s *Server) buildStartMessage(ctx context.Context, id string, start executi
 		InsecureRegistry: command.Insecure,
 		RegistryAuth:     map[string]*hostproto.RegistryAuth{},
 		Deadline:         timestamppb.New(command.Deadline),
+		Secrets:          command.Secrets,
 	}
 	for host, auth := range command.Auth {
 		build.RegistryAuth[host] = registryAuthOut(&auth)
@@ -99,8 +104,11 @@ func (s *Server) buildStartMessage(ctx context.Context, id string, start executi
 	cpu, memory, memoryLimit := images.BuildResources()
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId: start.Container.String(),
-		Resources:   &hostproto.Resources{CpuMillis: cpu, MemoryBytes: memory, MemoryLimitBytes: memoryLimit},
-		Build:       build,
+		Resources: &hostproto.Resources{
+			CpuMillis: cpu, MemoryBytes: memory, MemoryLimitBytes: memoryLimit,
+			GpuCount: int32(command.GPUs), //nolint:gosec // A build holds at most one GPU.
+		},
+		Build: build,
 	}}}, nil
 }
 
