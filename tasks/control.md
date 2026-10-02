@@ -59,8 +59,8 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
   with the stop reason and exits nonzero for anything but a requested stop.
 - `TaskResult.exit_code` is `None`: tasks fail with a typed failure, not an
   exit code.
-- `capacity_limit` and `provisioning_compute` are defined but not produced
-  until compute provisions hosts and enforces limits.
+- `capacity_limit` and `provisioning_compute` come from the compute
+  packet's capacity controller.
 - `deployment stop NAME-vN` is refused unless N is the active version, and
   `delete NAME-vN` is always refused: stop and delete act on the workload.
 - `task result` shows the decoded value, as slice 1 did.
@@ -69,6 +69,60 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
 - A deploy may list no function only with prune, which deletes every
   deployed function, as the reference's prune of an empty app did.
 - Upstream tasks must be in the submitting workspace.
+- Status words follow the public API in the SDK and CLI too: `queued`,
+  `running`, `succeeded`, `failed`, `cancelled`. A retry is `queued` with
+  pending reason `retry`, and a timeout is `failed` with failure kind
+  `timeout`; there is no `expired`. docs/concepts/tasks-and-logs.mdx says so.
+- Short ids in the terminal (Task step, Runtime step, pending card, the
+  "Connecting" step) and the dashboard show the last 8 characters. Ids are
+  UUIDv7, whose leading characters are a timestamp that ids made together
+  share, so the reference's first 8 would not tell tasks apart.
+- `deploy()` on an app, function, endpoint or pod returns the API's
+  `Deployment` (app, releases, pruned, removed_versions) instead of
+  `AppDeployResult` or `DeployStubResponse`, and takes no `external_url=`:
+  URLs come from the server. docs/concepts/pods.mdx reads
+  `releases[0].url`.
+- Waits long-poll the server, so `poll_interval_seconds` is gone from
+  `FunctionCall.result/get/gather` and `Task.result/wait/async_wait`.
+  `FunctionCall(task)` wraps a `Task`; the snapshot attributes `complete`,
+  `error`, `exit_code`, `status` and `workspace_id` are gone (read
+  `call.task.get()` or `call.result()`). A wait past its timeout raises
+  `TimeoutError`, a failure re-raises the remote exception or
+  `RemoteTaskError` (`TaskOperationError` is gone), `logs()` returns
+  `LogEntry` (`data`), and `cancel()`, `Task.get()` and `Task.view()` return
+  the API `Task`. `TaskPendingProgress.for_reason` is gone with the
+  generated model.
+- `spawn_map` submits up to 1,000 inputs per request instead of one request
+  per input, 8 at a time; a failed later batch raises `MapSubmissionError`
+  with the calls already admitted. Ctrl-C during `map` cancels the tasks not
+  yet yielded.
+- `map` waits for each result without the reference's client-side deadline
+  of one task timeout, which reported a task still queued behind others as
+  failed; the server enforces each task's timeout.
+- A dropped connection during `.remote()` resumes following for up to 600 s
+  before it cancels the task; the reference cancelled at once.
+- Redeploying an unchanged workload keeps its active version (the spec
+  digest matches); docs/concepts/workflow.mdx says so.
+- `logs --json` prints a list of log entries (`id`, `task_id`, `attempt`,
+  `stream`, `data`, `time`) instead of `{"data": [...], "next": ""}`, and
+  `--task-id`/`--container-id` take ids.
+- `container list` names each container by its workload and shows the
+  container states `pending`, `starting`, `ready`, `draining`, `stopped`.
+- `app show` shows name, state, workloads and created, as `app list` does.
+- `Deployment.invoke_url()` returns the workload's URL, `url_type="stub"`
+  the active release's own host and `port=` a pod's port; `url_type` is a
+  string, `"deployment"` or `"stub"`, instead of `GatewayUrlKind`.
+- An app deploys in one request, so it lands whole or not at all; up to 4
+  distinct images build at once and the source uploads once. The reference
+  ran 4 per-resource deploys at a time and could leave some finished after
+  a failure.
+- `App.plan()` and `deploy --diff --json` return the API `DeploymentPlan`
+  (`app`, `prune`, `items`) without a snapshot, since deploy and prune are
+  one request.
+- `Function.prepare()` returns the working-tree release id instead of a stub
+  id and `Function.serve()` returns a `Preview`. `Function` has no `stub_id`,
+  `endpoint`, `token`, `timeout`, `control_client` or `deployment_client`:
+  releases replace stubs and the client comes from the profile.
 
 ## Plan
 

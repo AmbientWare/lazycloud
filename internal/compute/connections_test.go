@@ -221,6 +221,10 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 		"a role in another account":     {AWSAccountID: "111111111111", RoleARN: "arn:aws:iam::222222222222:role/lazycloud"},
 		"networks without a role":       {AWSAccountID: "111111111111", Networks: fleetNetworks()},
 		"an external ID without a role": {AWSAccountID: "111111111111", ExternalID: strings.Repeat("x", 40)},
+		"a network keyed by a region alias": {
+			AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud",
+			Networks: map[string]compute.Network{"us-east": fleetNetworks()["us-east-2"]},
+		},
 	} {
 		if _, err := o.compute.Connect(ctx, alice, req); !errors.As(err, &invalid) {
 			t.Errorf("%s: %v, want InvalidError", name, err)

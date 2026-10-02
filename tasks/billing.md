@@ -118,6 +118,9 @@ one response.
   absent rather than empty strings, pages use `next_cursor`.
 - Only the current plan terms exist (`free-v2`, `team-v3`, `business-v2`); a
   fresh schema has no subscriber on earlier terms.
+- The pricing catalog is `/v1/pricing` like every API path; the
+  reference's `/api/v1` prefix is gone. docs/platform/plans.mdx links it and
+  says compute bills from readiness.
 
 ## Evidence
 
@@ -213,11 +216,6 @@ adds one live-container count and one account read to its transaction.
 
 ## Gaps
 
-- Handoffs to endpoints, which has not merged: call
-  `billing.AdmitCustomDomain` on custom-domain creation and
-  `billing.RecordEgress` with per-workspace byte totals. Until then egress
-  has no source, the custom-domain count in `/v1/billing` is zero and plan
-  changes do not check domains.
 - CPU and memory bill at the reservation only. "The greater of reservation
   and measured use" can now read observability's container metrics, but
   billing does not do that yet.

@@ -169,8 +169,8 @@ gpu_image = Image.from_registry(
 custom_image = Image.from_dockerfile("./Dockerfile", context_dir=".")
 ```
 
-`Image.from_id(image_id)` reuses an image the workspace already built, given
-its `img_` ID.
+`Image.from_id(image_id)` reuses an image the workspace already built, or a
+sandbox filesystem snapshot, given the `img_` ID the build or snapshot returned.
 
 ### Private registries
 

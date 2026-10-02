@@ -1606,7 +1606,7 @@ class Sandbox(ControlClientConfigMixin):
         """Declared options the platform cannot run yet, by name."""
         from lazycloud.abstractions.pod import container_unsupported_options
 
-        return container_unsupported_options(self.volumes, self.metadata)
+        return container_unsupported_options(self.volumes)
 
     def require_supported(self) -> None:
         unsupported = self.unsupported_options()

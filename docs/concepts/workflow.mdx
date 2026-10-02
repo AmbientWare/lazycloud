@@ -65,7 +65,8 @@ A deployment keeps running after your terminal and machine are off. Containers
 start on demand and [scale](/concepts/scaling) with load, endpoints get a stable
 URL, schedules start firing, and other deployed code and
 [exported clients](/concepts/apps#call-deployed-workloads-from-other-projects)
-can call its functions. Each deploy records a new version.
+can call its functions. Each deploy that changes a workload records a new
+version; redeploying unchanged code keeps the current one.
 
 ## Where a call goes
 

@@ -22,6 +22,7 @@ from typing_extensions import Self
 
 from lazycloud._terminal import theme
 from lazycloud._terminal.cards import notice_card
+from lazycloud._terminal.formatting import short_id
 from lazycloud._terminal.streams import error_console, json_output_active
 
 ProgressCallback: TypeAlias = Callable[[int], None]
@@ -344,7 +345,7 @@ def _pending_card(task_id: str, pending: TaskPendingProgress) -> RenderableType:
     }[pending.reason]
     return notice_card(
         pending.message,
-        title=f"Task {task_id[:8]} · pending {elapsed}",
+        title=f"Task {short_id(task_id)} · pending {elapsed}",
         hint=hint,
         tone="warning"
         if pending.reason

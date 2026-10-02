@@ -104,7 +104,7 @@ func (q *Queries) InsertPreviewRelease(ctx context.Context, arg InsertPreviewRel
 const previewRow = `-- name: PreviewRow :one
 select p.release_id, p.kind, p.lease_expires_at, p.deadline_at, p.created_at,
        (p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()))::bool as live,
-       w.name, a.name as app_name, rel.spec
+       w.name, a.name as app_name, rel.spec, rel.load_error
 from previews p
 join releases rel on rel.id = p.release_id
 join workloads w on w.id = rel.workload_id
@@ -127,6 +127,7 @@ type PreviewRowRow struct {
 	Name           string
 	AppName        string
 	Spec           []byte
+	LoadError      *string
 }
 
 func (q *Queries) PreviewRow(ctx context.Context, arg PreviewRowParams) (PreviewRowRow, error) {
@@ -142,6 +143,7 @@ func (q *Queries) PreviewRow(ctx context.Context, arg PreviewRowParams) (Preview
 		&i.Name,
 		&i.AppName,
 		&i.Spec,
+		&i.LoadError,
 	)
 	return i, err
 }

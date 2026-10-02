@@ -130,7 +130,7 @@ def compute_workloads(
     if json_output_enabled(ctx):
         print_payload(ctx, ComputeWorkloadPage(workloads=workloads).model_dump(mode="json"))
         return
-    rows = [[item.name, item.kind, item.machine] for item in workloads]
+    rows = [[item.name, item.kind.value, item.machine] for item in workloads]
     console.print(table("Compute workloads", ["name", "kind", "machine"], rows))
 
 

@@ -261,6 +261,7 @@ def announce(ctx):
     autoscaler={"min_containers": 1, "max_containers": 2},
     on_start=announce,
     on_retry=[announce, "reports:announce"],
+    metadata={"team": "data"},
 )
 def nightly() -> None:
     pass
@@ -282,6 +283,7 @@ def test_deploy_maps_workload_runtime_options(
     assert spec["callback_url"] == "https://hooks.example.com/tasks"
     assert spec["in_process"] is True
     assert spec["keep_warm_seconds"] == -1
+    assert spec["metadata"] == {"team": "data"}
     assert spec["lifecycle_hooks"] == {
         "on_start": ["reports:announce"],
         "on_retry": ["reports:announce", "reports:announce"],
@@ -439,7 +441,6 @@ def test_invalid_placement_options_fail_where_declared(
 @pytest.mark.parametrize(
     ("decorator", "option"),
     [
-        ('@app.function(metadata={"team": "data"})', "metadata"),
         (
             "@app.function(volumes=[lazycloud.CloudBucket("
             '"models", "/models", lazycloud.CloudBucketConfig())])',
@@ -988,9 +989,9 @@ def test_remote_reports_why_a_queued_task_waits(
 
     assert updates == [(task_id, TaskPendingReason.CapacityBusy), (task_id, None)]
     stderr = capsys.readouterr().err
-    assert f"Task {task_id[:8]} · pending" in stderr
+    assert f"Task {task_id[-8:]} · pending" in stderr
     assert "Waiting for an available function container." in stderr
-    assert f"{task_id[:8]} succeeded" in stderr
+    assert f"{task_id[-8:]} succeeded" in stderr
 
 
 def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:

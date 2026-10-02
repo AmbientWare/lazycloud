@@ -4,38 +4,46 @@ from __future__ import annotations
 
 import hashlib
 import io
+import queue
 import re
+import threading
 import zipfile
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
+from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from shared.api import Deployment as AppDeployment
 from shared.api import (
+    DeploymentPlanRequest,
     DeploymentRequest,
     Release,
     SourceUploadRequest,
     SubmitTasksRequest,
     Workload,
+    WorkloadIdentity,
+    WorkloadKind,
     WorkloadSpec,
 )
 
+from lazycloud._terminal.formatting import short_id
 from lazycloud.clients.api import ApiClient
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import (
     AmbiguousDeploymentError,
     DeploymentNotFoundError,
     SdkError,
-    UnsupportedFeatureError,
 )
 from lazycloud.references import (
     HandlerReferenceError,
     source_root_handler_reference,
 )
 from lazycloud.session.task import (
+    TERMINAL_STATUSES,
     Task,
     TaskSubscription,
     decode_payload,
@@ -52,6 +60,8 @@ from lazycloud.terminal import Terminal, TerminalStep, humanize_bytes
 
 if TYPE_CHECKING:
     from lazycloud.abstractions.image import Image, ImageBuildResult
+
+MAX_IMAGE_PREPARATIONS = 4
 
 _VERSIONED_NAME = re.compile(r"(?P<name>.+)-v(?P<version>[1-9][0-9]*)")
 
@@ -81,6 +91,10 @@ class DeploymentOperationError(SdkError):
     pass
 
 
+class ImageBuildError(DeploymentOperationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class AppFunctions:
     """The functions of one app that a deployment makes current."""
@@ -88,6 +102,30 @@ class AppFunctions:
     app: str
     functions: tuple[WorkloadDefinition, ...]
     prune: bool = False
+
+
+def plan_request(target: AppFunctions, *, name: str | None = None) -> DeploymentPlanRequest:
+    """The plan request for a deployment of `target`; `name` overrides each workload's name."""
+    return DeploymentPlanRequest(
+        workloads=[
+            WorkloadIdentity(kind=workload_kind(function), name=name or function.resource_name)
+            for function in target.functions
+        ],
+        prune=target.prune,
+    )
+
+
+def workload_kind(workload: object) -> WorkloadKind:
+    from lazycloud.abstractions.endpoint import ASGI, Endpoint
+    from lazycloud.abstractions.pod import Pod
+
+    if isinstance(workload, Pod):
+        return WorkloadKind.pod
+    if isinstance(workload, Endpoint):
+        return WorkloadKind.endpoint
+    if isinstance(workload, ASGI):
+        return WorkloadKind.asgi
+    return WorkloadKind.function
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +145,20 @@ class DeploymentSubmission:
     @property
     def task_id(self) -> str:
         return self.task.task_id
+
+    @property
+    def output(self) -> str:
+        """What the task printed so far."""
+        return self.task.output()
+
+    @property
+    def done(self) -> bool:
+        return self.task.get().status in TERMINAL_STATUSES
+
+    @property
+    def exit_code(self) -> int | None:
+        """Always None: tasks fail with a typed failure rather than an exit code."""
+        return None
 
     def result(self, *, wait: bool = False) -> object:
         """The task's value; a task that did not succeed raises."""
@@ -144,10 +196,32 @@ class Deployment:
         return str(release) if release is not None else ""
 
     def invoke_url(self, *, port: int | None = None, url_type: str | None = None) -> str:
-        """Where the pod or HTTP workload answers; only its first port has a URL."""
-        if port is None and url_type is None and self.deployment.url:
-            return self.deployment.url
-        raise UnsupportedFeatureError(f"deployment {self.name}", ["invoke_url"])
+        """Where the workload answers, following its active release.
+
+        `url_type="stub"` pins the active release's own host instead, and
+        `port` picks one of a pod's ports.
+        """
+        if url_type not in (None, "deployment", "stub"):
+            raise ValueError(f"url_type must be 'deployment' or 'stub', not {url_type!r}")
+        workload = self.deployment
+        if port is not None and workload.kind is not WorkloadKind.pod:
+            raise ValueError("only a pod's URL takes a port")
+        url = workload.url
+        if url is None:
+            client, workspace = self.client._session()
+            detail = client.get_workload(workspace, workload.app, workload.kind, workload.name)
+            url = detail.release.url
+        if url is None:
+            raise LookupError(f"deployment {self.name} has no URL")
+        parts = urlsplit(url)
+        label, _, base = (parts.hostname or "").partition(".")
+        if url_type == "stub" and workload.kind is not WorkloadKind.pod:
+            label = self.stub_id
+        if port is not None:
+            # A pod port answers on <release>-<port>.<base>.
+            label = f"{label.rsplit('-', 1)[0]}-{port}"
+        netloc = f"{label}.{base}" + (f":{parts.port}" if parts.port else "")
+        return urlunsplit(parts._replace(netloc=netloc))
 
     def submit(
         self, *args: object, kwargs: dict[str, object] | None = None
@@ -253,9 +327,10 @@ class DeploymentClient:
         """Submit one task with these arguments to the deployment's active version."""
         client, workspace = self._session()
         selected = self.get(deployment) if isinstance(deployment, str) else deployment
+        parent = parent_task_id()
         request = SubmitTasksRequest(
             inputs=[task_input(args, kwargs or {}, workspace=workspace)],
-            parent_task_id=parent_task_id(),
+            **({"parent_task_id": parent} if parent is not None else {}),
         )
         response = client.submit_tasks(workspace, selected.app, selected.name, request)
         return DeploymentSubmission(Task(str(response.tasks[0].id), workspace, client))
@@ -285,29 +360,46 @@ def deploy_functions(
     specs = _workload_specs(
         functions, client=client, workspace=workspace, source_root=source_root, terminal=terminal
     )
-    deployments: list[AppDeployment] = []
+    # With several apps, every app takes its new workloads before any app
+    # loses an omitted one, so a refused later app leaves nothing pruned.
+    staged = len(targets) > 1 and any(target.prune for target in targets)
+
+    def request(target: AppFunctions, *, prune: bool) -> DeploymentRequest:
+        return DeploymentRequest(
+            workloads=[specs[id(function)] for function in target.functions], prune=prune
+        )
+
+    deployments: list[AppDeployment | None] = []
     for target in targets:
+        if staged and not target.functions:
+            # An app with no workloads only prunes, in the second pass.
+            deployments.append(None)
+            continue
         with ExitStack() as stack:
             steps = [
                 stack.enter_context(terminal.step("Runtime", function.resource_name))
                 for function in target.functions
             ]
             deployment = client.deploy_app(
-                workspace,
-                target.app,
-                DeploymentRequest(
-                    workloads=[specs[id(function)] for function in target.functions],
-                    prune=target.prune,
-                ),
+                workspace, target.app, request(target, prune=target.prune and not staged)
             )
             releases = {release.name: release for release in deployment.releases}
             for function, step in zip(target.functions, steps, strict=True):
                 _runtime_done(step, function.resource_name, releases[function.resource_name])
-        if target.prune:
-            with terminal.step("Prune", target.app) as step:
-                step.done(f"{deployment.removed_versions} deployment versions removed")
         deployments.append(deployment)
-    return deployments
+    for n, target in enumerate(targets):
+        if not target.prune:
+            continue
+        with terminal.step("Prune", target.app) as step:
+            if staged:
+                # The specs are unchanged, so this reuses the releases just made.
+                deployments[n] = client.deploy_app(
+                    workspace, target.app, request(target, prune=True)
+                )
+            done = deployments[n]
+            assert done is not None
+            step.done(f"{done.removed_versions} deployment versions removed")
+    return [deployment for deployment in deployments if deployment is not None]
 
 
 def prepare_release(
@@ -427,27 +519,66 @@ def _prepare_images(
     workspace: str,
     terminal: Terminal,
 ) -> dict[int, ImageBuildResult]:
-    """Make each distinct image ready once, keyed by the function's id()."""
-    by_definition: dict[str, ImageBuildResult] = {}
-    results: dict[int, ImageBuildResult] = {}
+    """Make each distinct image ready once, keyed by the function's id().
+
+    Up to `MAX_IMAGE_PREPARATIONS` distinct images build at once.
+    """
+    distinct: dict[str, Image] = {}
+    keys: dict[int, str] = {}
     for function in functions:
         image = function.image
         key = image.explicit_image_id or image.definition().model_dump_json()
-        result = by_definition.get(key)
-        if result is None:
-            result = image.build(client, workspace=workspace, terminal=terminal)
-            if not result.success:
-                build = f" build {result.build_id}" if result.build_id else ""
-                image_name = f" {result.image_id}" if result.image_id else ""
-                msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
-                raise DeploymentOperationError(msg)
-            by_definition[key] = result
-        results[id(function)] = result
-    return results
+        distinct.setdefault(key, image)
+        keys[id(function)] = key
+
+    def build(image: Image) -> ImageBuildResult:
+        result = image.build(client, workspace=workspace, terminal=terminal)
+        if not result.success:
+            build = f" build {result.build_id}" if result.build_id else ""
+            image_name = f" {result.image_id}" if result.image_id else ""
+            msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
+            raise ImageBuildError(msg)
+        return result
+
+    # Daemon threads, so a failed build or Ctrl+C returns at once instead of
+    # waiting for the other builds' remote polling to end.
+    finished: queue.SimpleQueue[tuple[str, ImageBuildResult | None, BaseException | None]] = (
+        queue.SimpleQueue()
+    )
+
+    def run(key: str, image: Image) -> None:
+        try:
+            finished.put((key, build(image), None))
+        except BaseException as error:
+            finished.put((key, None, error))
+
+    waiting = list(distinct.items())
+    results: dict[str, ImageBuildResult] = {}
+
+    def start_next() -> None:
+        key, image = waiting.pop(0)
+        threading.Thread(
+            target=copy_context().run,
+            args=(run, key, image),
+            name="deployment-image",
+            daemon=True,
+        ).start()
+
+    for _ in range(min(MAX_IMAGE_PREPARATIONS, len(waiting))):
+        start_next()
+    while len(results) < len(distinct):
+        key, result, error = finished.get()
+        if error is not None:
+            raise error
+        assert result is not None
+        results[key] = result
+        if waiting:
+            start_next()
+    return {function_id: results[key] for function_id, key in keys.items()}
 
 
 def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:
-    step.done(f"{name} · {str(release.id)[:8]}")
+    step.done(f"{name} · {short_id(release.id)}")
 
 
 def _source_placement(

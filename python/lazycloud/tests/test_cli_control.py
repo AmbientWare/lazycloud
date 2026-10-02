@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.main import build_public_cli
-from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.session.deployment import DeploymentClient
 from typer.testing import CliRunner, Result
 
@@ -319,5 +318,31 @@ def test_deployment_handles_submit_to_the_active_version(fake_api: FakeApi) -> N
     assert submission.result(wait=True) == 12
     (request,) = fake_api.calls("POST", submitted)
     assert "release_id" not in request.json()
-    with pytest.raises(UnsupportedFeatureError):
-        deployment.invoke_url()
+
+    detail = f"{TEAM}/apps/reports/workloads/function/summarize_sales"
+    url = "https://summarize-sales-0123abcd-latest.lazycloud.test"
+    fake_api.route("GET", detail)(
+        lambda _: json_reply(
+            {
+                "workload": _deployment(),
+                "release": {
+                    "id": RELEASE_ID,
+                    "name": "summarize_sales",
+                    "version": 3,
+                    "created_at": NOW,
+                    "spec": {
+                        "name": "summarize_sales",
+                        "kind": "function",
+                        "source": {"sha256": "0" * 64},
+                        "image": {"python_version": "3.12"},
+                        "resources": {"cpu_millis": 250, "memory_mib": 256},
+                    },
+                    "url": url,
+                },
+            }
+        )
+    )
+    assert deployment.invoke_url() == url
+    assert deployment.invoke_url(url_type="stub") == f"https://{RELEASE_ID}.lazycloud.test"
+    with pytest.raises(ValueError, match="only a pod"):
+        deployment.invoke_url(port=8080)

@@ -283,7 +283,7 @@ function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schem
                     <span className="mono min-w-0 flex-1 truncate text-[13px]">{itemName}</span>
                   )}
                   <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-                    <LiveRelativeTime value={item.modified_at} />
+                    {item.modified_at ? <LiveRelativeTime value={item.modified_at} /> : null}
                   </span>
                   {!item.is_dir ? (
                     <span className="mono w-16 shrink-0 text-right text-[11px] text-muted-foreground">

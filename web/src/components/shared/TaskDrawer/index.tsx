@@ -4,6 +4,7 @@ import { Ban, Loader2, RotateCcw } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
+import { ShellButton } from "@/components/shared/ShellDialog";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
@@ -222,6 +223,9 @@ function TaskDrawerBody({
             <StatusChip status={facts.status} live={facts.status === "running"} />
           </span>
           <div className="ml-auto flex shrink-0 items-center gap-2 max-sm:w-full max-sm:justify-end">
+            {task && facts.status === "running" && row.container_id ? (
+              <ShellButton containerId={row.container_id} running />
+            ) : null}
             {task && finished ? (
               <Button
                 variant="outline"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/control"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -201,6 +202,9 @@ func (s *Server) GetWorkload(ctx context.Context, req GetWorkloadRequestObject) 
 		out.Http = &urls
 		out.Release.Url, out.Release.InvokePath = &urls.Url, &urls.InvokePath
 	case apitypes.WorkloadKindFunction:
+		url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
+		path := edge.InvokePath(ws.Name, req.App, req.Kind, req.Name, nil)
+		out.Release.Url, out.Release.InvokePath = &url, &path
 		schedule, err := s.owners.Schedules.ForFunction(ctx, ws.ID, req.App, req.Name)
 		if err != nil {
 			return nil, err

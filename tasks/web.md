@@ -77,13 +77,21 @@ visual parity.
   directory rows.
 - The playground covers functions and endpoints, as the reference did; an
   ASGI app answers on its same-origin path but has no playground.
+- Endpoint and ASGI requests appear on their workload page; the Tasks
+  page, an app's recent tasks and activity charts count function tasks.
+- Call snippets use the workload's latest URL, which keeps answering
+  after a redeploy or prune, instead of the version URL.
+- The sandbox page offers Save image and Snapshot memory whenever the
+  sandbox is ready; a host that cannot snapshot answers with the error. The
+  Network tab lists published ports only, since `Sandbox.create` publishes
+  every declared port.
+- The Tasks page's Workload filter lists an app's functions once an App is
+  chosen: workload names are unique only within an app.
 
 ## Gaps
 
 - Devbox root disks need `nbd-client` and root on the host; on this host a
   devbox start fails with that reason, which the page shows.
-- `lazycloud devbox ... ssh` fails with "No such command 'ssh-proxy'" in the
-  CLI (workloads packet).
 
 ## Pre-existing UI issues for the user to decide
 

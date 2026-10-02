@@ -3720,6 +3720,10 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /** @description Custom metadata stored with the workload's release. */
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** @description Run the function on this UTC schedule. */
             cron?: string;
             /** @description Secrets the container receives as environment variables of the same name. */
@@ -3806,9 +3810,9 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             spec: components["schemas"]["WorkloadSpec"];
-            /** @description Where a pod or HTTP workload answers, following the active release. */
+            /** @description Where the workload answers, following the active release. */
             url?: string;
-            /** @description The HTTP workload on the API host, following the active release. */
+            /** @description The workload on the API host, following the active release. */
             invoke_path?: string;
         };
         /** @description A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`. */
@@ -4018,8 +4022,7 @@ export interface components {
         VolumeFilePath: string;
         WorkloadRef: {
             app: components["schemas"]["AppName"];
-            /** @enum {string} */
-            kind: "function";
+            kind: components["schemas"]["WorkloadKind"];
             name: components["schemas"]["WorkloadName"];
         };
         /** @description A volume, or with `cloud_bucket` an S3 bucket, mounted into every container of the workload. A platform volume is created on first use. */
@@ -4731,6 +4734,9 @@ export interface components {
             container_id?: string;
             /** @description Where the preview answers; a function preview takes tasks through the API. */
             url: string;
+            /** @description Why the preview stopped on its own, such as load_error. */
+            stop_reason?: components["schemas"]["StopReason"];
+            error?: string;
             /** Format: date-time */
             expires_at?: string;
             /** Format: date-time */
@@ -5304,8 +5310,7 @@ export interface components {
             deployment_id: string;
             app: string;
             name: string;
-            /** @enum {string} */
-            kind: "function";
+            kind: components["schemas"]["WorkloadKind"];
             /** @description The machine the workload is pinned to; empty when unpinned. */
             machine: string;
             /** Format: int64 */
@@ -11531,7 +11536,6 @@ export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<compon
 export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "start_failed", "system", "dependency_failed"];
 export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogEntry"]["stream"]> = ["stdout", "stderr", "system"];
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
-export const workloadRefKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadRef"]["kind"]> = ["function"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
 export const diskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskStatus"]> = ["detached", "attached", "saving"];
 export const artifactStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Artifact"]["state"]> = ["uploading", "stored"];
@@ -11574,7 +11578,6 @@ export const machineProviderValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const computeInstanceProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["provider"]> = ["aws"];
 export const computeInstanceMarketValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["market"]> = ["spot", "on_demand"];
 export const computeSummaryCostCurrencyValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeSummary"]["cost"]["currency"]> = ["USD"];
-export const computeWorkloadKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeWorkload"]["kind"]> = ["function"];
 export const awsConnectionPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "reconnect_pending", "retiring_authorization", "disconnect_draining", "revoking", "verifying_revocation", "action_required"];
 export const awsConnectionActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionAction"]> = ["authorize", "validate", "reconnect", "cancel_reconnect", "remove", "retry"];
 export const awsAuthorizationPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "retiring", "retired"];

@@ -317,10 +317,7 @@ class Endpoint(Generic[P, R]):
 
     def unsupported_options(self) -> list[str]:
         """Declared options the platform cannot run yet, by name."""
-        found = unsupported_http_options(self)
-        if self.inputs is not None or self.outputs is not None:
-            found.append("inputs/outputs schemas")
-        return found
+        return unsupported_http_options(self)
 
     def require_supported(self) -> None:
         unsupported = self.unsupported_options()

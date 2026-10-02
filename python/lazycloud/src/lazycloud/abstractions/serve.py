@@ -38,7 +38,11 @@ from lazycloud.clients.endpoints import (
 )
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import SdkError
-from lazycloud.source_sync import collect_source_files, ensure_source_ignore_file
+from lazycloud.source_sync import (
+    SOURCE_IGNORE_FILE_WRITTEN_NOTICE,
+    collect_source_files,
+    ensure_source_ignore_file,
+)
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
@@ -302,7 +306,7 @@ class WorkspaceSyncer:
 
     def start(self) -> None:
         if ensure_source_ignore_file(self.root):
-            self.terminal.detail("Wrote .lazycloudignore")
+            self.terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
         self._thread = threading.Thread(target=self._run, name="serve-sync", daemon=True)
         self._thread.start()
 
@@ -417,6 +421,8 @@ class ServePreviewSession:
             # timeout, or a lapsed lease.
             state = get_preview(self.client, self.workspace, self.preview.id)
             if state.state is PreviewState.stopped:
+                if state.error:
+                    self.terminal.error(state.error)
                 self.terminal.warn("serve container stopped")
                 return
             self.terminal.warn("serve attach stream ended; retrying")
@@ -459,8 +465,12 @@ def serve_workload(
             stop_preview(client, selected, preview.id)
             raise
         if preview.state is PreviewState.stopped:
-            step.fail("stopped before it was ready")
-            raise ServeError(f"the preview of {spec.name} stopped before its container was ready")
+            reason = preview.stop_reason.value if preview.stop_reason else "stopped"
+            step.fail(f"{reason} before it was ready")
+            detail = f": {preview.error}" if preview.error else ""
+            raise ServeError(
+                f"the preview of {spec.name} stopped before its container was ready{detail}"
+            )
         step.done("ready")
     record = write_serve_preview(
         kind=kind,

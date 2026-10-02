@@ -46,7 +46,13 @@ func (s *Server) previewOut(ctx context.Context, p control.Preview) (apitypes.Pr
 			out.State = apitypes.PreviewStateReady
 		}
 	}
-	if !p.Live {
+	// A handler that cannot import ends the preview: no container of it
+	// starts again, so serve shows why instead of waiting.
+	if p.LoadError != nil {
+		reason := apitypes.StopReasonLoadError
+		out.StopReason, out.Error = &reason, p.LoadError
+	}
+	if !p.Live || p.LoadError != nil {
 		out.State = apitypes.PreviewStateStopped
 	}
 	return out, nil
@@ -105,6 +111,7 @@ func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (G
 	deadline := time.After(wait)
 	poll := time.NewTicker(500 * time.Millisecond)
 	defer poll.Stop()
+	var renewed time.Time
 	for {
 		out, err := s.previewOut(ctx, p)
 		if err != nil {
@@ -112,6 +119,14 @@ func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (G
 		}
 		if out.State != apitypes.PreviewStateStarting || wait == 0 {
 			return GetPreview200JSONResponse(out), nil
+		}
+		// A caller waiting for the container follows the preview, so a slow
+		// start (a new host, a large image) does not outlast the lease.
+		if time.Since(renewed) >= renewEvery {
+			if _, err := s.owners.Control.RenewPreview(ctx, p.Release); err != nil {
+				return nil, err
+			}
+			renewed = time.Now()
 		}
 		select {
 		case <-wake:

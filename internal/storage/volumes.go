@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -30,8 +31,16 @@ func volumeOut(id uuid.UUID, name string, size int64, measured *time.Time, creat
 	}
 }
 
-// CreateVolume creates the named volume, or returns the active one.
+// CreateVolume creates the named volume, or returns the active one. Only a
+// new volume needs credit, so get-or-create keeps working on an unfunded
+// account.
 func (s *Storage) CreateVolume(ctx context.Context, workspace identity.WorkspaceID, name string) (apitypes.Volume, error) {
+	if existing, err := s.GetVolume(ctx, workspace, name); !errors.Is(err, ErrNotFound) {
+		return existing, err
+	}
+	if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
+		return apitypes.Volume{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
+	}
 	if err := s.queries.InsertVolume(ctx, InsertVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: name}); err != nil {
 		return apitypes.Volume{}, fmt.Errorf("insert volume: %w", err)
 	}
@@ -89,7 +98,7 @@ func (s *Storage) addVolumeUsers(ctx context.Context, workspace identity.Workspa
 	}
 	for _, u := range users {
 		v := &volumes[index[u.Volume]]
-		v.UsedBy = append(v.UsedBy, apitypes.WorkloadRef{App: u.App, Kind: apitypes.WorkloadRefKind(u.Kind), Name: u.Workload})
+		v.UsedBy = append(v.UsedBy, apitypes.WorkloadRef{App: u.App, Kind: apitypes.WorkloadKind(u.Kind), Name: u.Workload})
 	}
 	return nil
 }
@@ -423,6 +432,9 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 	}
 	lifetime := presignLifetime(req.ExpiresSeconds)
 	if req.Method == apitypes.PresignVolumeFileRequestMethodPut || req.Method == apitypes.PresignVolumeFileRequestMethodUploadPart {
+		if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
+			return apitypes.PresignedUrl{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
+		}
 		// A write URL outliving a delete would recreate files.
 		lifetime = min(lifetime, uploadLifetime)
 	}
@@ -479,6 +491,9 @@ func (s *Storage) CreateVolumeUpload(ctx context.Context, workspace identity.Wor
 	rel, err := filePath(req.Path)
 	if err != nil {
 		return apitypes.MultipartUpload{}, err
+	}
+	if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
+		return apitypes.MultipartUpload{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 	}
 	partSize := int64(5 << 20)
 	if req.PartSizeBytes != nil {

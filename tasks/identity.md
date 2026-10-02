@@ -170,29 +170,43 @@ memory with Redis invalidation and wrote `last_used_at` per authentication.
 ## Intentional differences from the reference
 
 - The `/callback` page exchange is gone: the server callback sets the
-  HttpOnly session cookie and redirects to `return_to` or `/dashboard`. The
-  reference sent `/callback#code=` and the page traded it for a token kept in
-  JavaScript; with an HttpOnly cookie no token reaches the page.
+  HttpOnly session cookie and redirects to `return_to`, which the dashboard
+  sets to `/callback#code=<destination>`; the page clears the fragment,
+  confirms the session with `/v1/me` and goes to the destination or
+  `/dashboard`. The reference's fragment carried a code the
+  page traded for a token kept in JavaScript; with an HttpOnly cookie no
+  token reaches the page.
 - A first GitHub sign-in whose verified primary email matches an account
   without a GitHub identity links to it, so `server admin create-user
   --admin` bootstraps an administrator who then signs in. The reference
   linked only by a pre-recorded GitHub user id.
 - `lazycloud login` without `--workspace` stores the account's owned
   workspace, else its only one. The reference stored none and let the
-  server resolve it per request; paths now name the workspace.
+  server resolve it per request; paths now name the workspace. An account
+  that owns none and belongs to several fails with "Choose a workspace for
+  this profile" and a hint to pass `--workspace`, since the server has no
+  current workspace to fall back on.
+- `workspace rename` with no workspace in the profile fails with "No
+  workspace is selected" and a hint to run `workspace use`, for the same
+  reason.
 - `workspace delete` returns once deletion has begun ("Deleted X; its data is
   removed in the background"), because hosts stop containers asynchronously.
   The reference held the request until cleanup finished.
 - Accepting or declining an invitation also withdraws its unsent email.
 - Workspace audit history is not carried over; no parity item shows it.
+- Settings → Tokens drops the "Disabled by admin" line (tokens have no
+  admin disable) and shows `expired` on expired tokens, which the reference
+  listed as `active`.
+- `workspace list` shows a workspace being deleted as `name (deleting)`, and
+  workspace `--json` follows the API `Workspace` (`state`, `role`).
+- Emails say "LazyCloud"; the reference's title-cased "Lazycloud" was a typo
+  of the product name.
 
 ## Gaps
 
 - No GitHub App or Resend credentials exist locally, so real GitHub sign-in
   and real email delivery are unverified; locally emails stay `queued` and
   `/auth/github/start` redirects to `provider_unavailable`.
-- `workspace create --cloud aws` refuses: cloud connections belong to the
-  compute packet.
 - Admin user management (role, disable) and the unfunded-storage email are
   outside these sections (Dashboard admin settings; billing).
 - An upload presigned before a workspace's deletion and finished afterwards

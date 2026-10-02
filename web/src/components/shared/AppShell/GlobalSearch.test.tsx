@@ -56,7 +56,10 @@ it("asks the server for matching apps, workloads and tasks", async () => {
     }
     if (url.pathname.endsWith("/tasks")) {
       return Response.json({
-        tasks: url.searchParams.get("search") === "greet" ? [task("4f1c2d3e-0000")] : [],
+        tasks:
+          url.searchParams.get("search") === "greet"
+            ? [task("01a0f9ec-4273-79b4-a153-7a121e5d034c")]
+            : [],
       });
     }
     return Response.json({ apps: [] });
@@ -84,7 +87,7 @@ it("asks the server for matching apps, workloads and tasks", async () => {
   });
 
   expect(await screen.findByText("Function")).toBeVisible();
-  expect(await screen.findByText(/^Running · 4f1c2d3e$/)).toBeVisible();
+  expect(await screen.findByText(/^Running · 1e5d034c$/)).toBeVisible();
   const searched = requests
     .filter((url) => url.searchParams.get("search") === "greet")
     .map((url) => url.pathname.split("/").at(-1));

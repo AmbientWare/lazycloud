@@ -535,21 +535,6 @@ func (e ComputeSummaryCostCurrency) Valid() bool {
 	}
 }
 
-// Defines values for ComputeWorkloadKind.
-const (
-	ComputeWorkloadKindFunction ComputeWorkloadKind = "function"
-)
-
-// Valid indicates whether the value is a known member of the ComputeWorkloadKind enum.
-func (e ComputeWorkloadKind) Valid() bool {
-	switch e {
-	case ComputeWorkloadKindFunction:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ContainerLogEntryStream.
 const (
 	ContainerLogEntryStreamStderr ContainerLogEntryStream = "stderr"
@@ -2191,21 +2176,6 @@ func (e WorkloadKind) Valid() bool {
 	}
 }
 
-// Defines values for WorkloadRefKind.
-const (
-	WorkloadRefKindFunction WorkloadRefKind = "function"
-)
-
-// Valid indicates whether the value is a known member of the WorkloadRefKind enum.
-func (e WorkloadRefKind) Valid() bool {
-	switch e {
-	case WorkloadRefKindFunction:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for WorkloadState.
 const (
 	WorkloadStateActive  WorkloadState = "active"
@@ -2874,19 +2844,18 @@ type ComputeWorkload struct {
 	CpuMillicores int64  `json:"cpu_millicores"`
 
 	// DeploymentId The workload id.
-	DeploymentId openapi_types.UUID  `json:"deployment_id"`
-	Gpu          []GpuType           `json:"gpu"`
-	GpuCount     int                 `json:"gpu_count"`
-	Kind         ComputeWorkloadKind `json:"kind"`
+	DeploymentId openapi_types.UUID `json:"deployment_id"`
+	Gpu          []GpuType          `json:"gpu"`
+	GpuCount     int                `json:"gpu_count"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
 
 	// Machine The machine the workload is pinned to; empty when unpinned.
 	Machine  string `json:"machine"`
 	MemoryMb int64  `json:"memory_mb"`
 	Name     string `json:"name"`
 }
-
-// ComputeWorkloadKind defines model for ComputeWorkload.Kind.
-type ComputeWorkloadKind string
 
 // ComputeWorkloadPage defines model for ComputeWorkloadPage.
 type ComputeWorkloadPage struct {
@@ -4329,11 +4298,15 @@ type Preview struct {
 	App         AppName             `json:"app"`
 	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
 	CreatedAt   time.Time           `json:"created_at"`
+	Error       *string             `json:"error,omitempty"`
 	ExpiresAt   *time.Time          `json:"expires_at,omitempty"`
 	Id          openapi_types.UUID  `json:"id"`
 	Kind        PreviewKind         `json:"kind"`
 	Name        WorkloadName        `json:"name"`
 	State       PreviewState        `json:"state"`
+
+	// StopReason Why the preview stopped on its own, such as load_error.
+	StopReason *StopReason `json:"stop_reason,omitempty"`
 
 	// Url Where the preview answers; a function preview takes tasks through the API.
 	Url string `json:"url"`
@@ -4472,14 +4445,14 @@ type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// InvokePath The HTTP workload on the API host, following the active release.
+	// InvokePath The workload on the API host, following the active release.
 	InvokePath *string      `json:"invoke_path,omitempty"`
 	Name       WorkloadName `json:"name"`
 
 	// Spec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
 	Spec WorkloadSpec `json:"spec"`
 
-	// Url Where a pod or HTTP workload answers, following the active release.
+	// Url Where the workload answers, following the active release.
 	Url *string `json:"url,omitempty"`
 
 	// Version The deployed version; absent for a release only working-tree calls use.
@@ -5370,13 +5343,12 @@ type WorkloadPerformance struct {
 
 // WorkloadRef defines model for WorkloadRef.
 type WorkloadRef struct {
-	App  AppName         `json:"app"`
-	Kind WorkloadRefKind `json:"kind"`
-	Name WorkloadName    `json:"name"`
-}
+	App AppName `json:"app"`
 
-// WorkloadRefKind defines model for WorkloadRef.Kind.
-type WorkloadRefKind string
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
+}
 
 // WorkloadSpec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
 type WorkloadSpec struct {
@@ -5425,7 +5397,10 @@ type WorkloadSpec struct {
 	// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
 	LifecycleHooks  *LifecycleHooks `json:"lifecycle_hooks,omitempty"`
 	MaxPendingTasks *int            `json:"max_pending_tasks,omitempty"`
-	Name            WorkloadName    `json:"name"`
+
+	// Metadata Custom metadata stored with the workload's release.
+	Metadata *map[string]interface{} `json:"metadata,omitempty"`
+	Name     WorkloadName            `json:"name"`
 
 	// Placement Where a workload's containers may run.
 	Placement *Placement `json:"placement,omitempty"`

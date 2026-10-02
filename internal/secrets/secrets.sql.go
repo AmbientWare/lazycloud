@@ -182,7 +182,7 @@ from apps a
 join workloads w on w.app_id = a.id
 join releases r on r.id = w.active_release_id
 cross join lateral jsonb_array_elements_text(coalesce(r.spec -> 'secrets', '[]'::jsonb)) as s(name)
-where a.workspace_id = $1 and w.desired_state = 'active'
+where a.workspace_id = $1 and a.state <> 'deleted' and w.desired_state = 'active'
   and s.name = any($2::text[])
 order by a.name, w.kind, w.name
 `

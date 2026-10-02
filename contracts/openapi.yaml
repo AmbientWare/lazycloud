@@ -4489,6 +4489,11 @@ components:
         environment:
           type: object
           additionalProperties: { type: string }
+        metadata:
+          description: Custom metadata stored with the workload's release.
+          type: object
+          maxProperties: 64
+          additionalProperties: true
         # Five cron fields, an alias such as @hourly, or `every N` minutes
         # (m, at most 59), hours (h, at most 23) or days (d, at most 31).
         # Deploy stores the normalized expression.
@@ -4664,10 +4669,10 @@ components:
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/WorkloadSpec" }
         url:
-          description: Where a pod or HTTP workload answers, following the active release.
+          description: Where the workload answers, following the active release.
           type: string
         invoke_path:
-          description: The HTTP workload on the API host, following the active release.
+          description: The workload on the API host, following the active release.
           type: string
 
     Payload:
@@ -5007,9 +5012,7 @@ components:
       required: [app, kind, name]
       properties:
         app: { $ref: "#/components/schemas/AppName" }
-        kind:
-          type: string
-          enum: [function]
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
         name: { $ref: "#/components/schemas/WorkloadName" }
 
     VolumeMountSpec:
@@ -6142,6 +6145,10 @@ components:
         url:
           description: Where the preview answers; a function preview takes tasks through the API.
           type: string
+        stop_reason:
+          description: Why the preview stopped on its own, such as load_error.
+          allOf: [{ $ref: "#/components/schemas/StopReason" }]
+        error: { type: string }
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
 
@@ -6898,7 +6905,7 @@ components:
           format: uuid
         app: { type: string }
         name: { type: string }
-        kind: { type: string, enum: [function] }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
         machine:
           description: The machine the workload is pinned to; empty when unpinned.
           type: string

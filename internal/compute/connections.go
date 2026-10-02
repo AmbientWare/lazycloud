@@ -241,6 +241,8 @@ type ConnectRequest struct {
 	ExternalID string
 }
 
+var awsRegionPattern = regexp.MustCompile(`^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$`)
+
 var roleARNPattern = regexp.MustCompile(`^arn:(aws|aws-us-gov|aws-cn):iam::([0-9]{12}):role/[A-Za-z0-9+=,.@_/-]{1,512}$`)
 
 // Connect creates the account's AWS connection with a pending
@@ -259,6 +261,11 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 		}
 	} else if len(req.Networks) > 0 {
 		return Connection{}, &InvalidError{Message: "AWS network may only be supplied with an existing role"}
+	}
+	for region := range req.Networks {
+		if !awsRegionPattern.MatchString(region) {
+			return Connection{}, &InvalidError{Message: fmt.Sprintf("AWS network key %q is not an AWS region such as us-east-2", region)}
+		}
 	}
 	if c.fleet.PrincipalARN == "" {
 		return Connection{}, &UnavailableError{Message: "AWS account connections are not configured on this platform"}
@@ -710,11 +717,11 @@ func (c *Compute) WorkspaceConnection(ctx context.Context, account identity.User
 		return uuid.UUID{}, err
 	}
 	if conn == nil {
-		return uuid.UUID{}, &ConflictError{Message: "connect an AWS account with `lazycloud cloud connect aws` before creating a workspace there"}
+		return uuid.UUID{}, &ConflictError{Message: "no AWS account is connected; run `lazycloud cloud connect aws` first"}
 	}
 	if !conn.HostsWorkloads() {
 		return uuid.UUID{}, &ConflictError{Message: fmt.Sprintf(
-			"connected AWS account %s is %s; a workspace can only be created there once it is ready", conn.AWSAccountID, conn.Phase)}
+			"the connected AWS account is %s; a workspace can be created there once `lazycloud cloud status` reports ready", conn.Phase)}
 	}
 	return conn.ID, nil
 }

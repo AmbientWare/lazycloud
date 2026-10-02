@@ -11,10 +11,16 @@ from rich.console import Group, RenderableType
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
-from shared.http.deployment_plans import DeploymentPlanAction
+from shared.api import DeploymentPlanAction
 from shared.serialization import to_json_value
 
 from lazycloud._terminal import theme
+
+
+def short_id(value: object, length: int = 8) -> str:
+    """The end of an ID. Platform IDs are UUIDv7, whose first digits are a
+    timestamp that IDs made close together share."""
+    return str(value)[-length:]
 
 
 def label(value: str) -> str:

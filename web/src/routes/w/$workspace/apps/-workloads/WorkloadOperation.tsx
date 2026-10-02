@@ -89,7 +89,7 @@ function ScheduleFacts({ detail }: { detail: Schemas["WorkloadDetail"] }) {
         value={
           !schedule ? (
             "-"
-          ) : workload.state !== "active" ? (
+          ) : workload.state !== "active" || workload.app_state === "paused" ? (
             "Disabled"
           ) : (
             <LiveRelativeTime value={schedule.next_run_at} />

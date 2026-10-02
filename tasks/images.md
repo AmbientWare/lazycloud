@@ -77,6 +77,12 @@ Docker and BuildKit: `TestCompletedBuildPublishesOnlyAPushedDigest`,
 `TestAgentReportsAFailedBuildWithItsOutputTail`,
 `TestAgentStopsABuildWithoutAnOutcome`.
 
+The parity sweep (2026-10-01, compose project `parity-sweep`) built
+`Image.from_poetry` (poetry.lock), `Image.from_pyproject` and
+`Image.from_micromamba` (conda-forge `six`) on a private stack; each function
+imported `six` 1.17.0, the micromamba one from `/opt/micromamba/bin/python3`,
+and one deploy prepared the three images at once.
+
 The integrated run used a private stack (compose project `imgpkt`, ports
 36xxx): numpy and `from_uv` images built, deployed and called; a private base
 with `REGISTRY_USERNAME`/`REGISTRY_PASSWORD` built; an agent restart during a
@@ -124,6 +130,9 @@ The reference was not measured under the same conditions.
   registry are used by id through `Image.from_id`.
 - `ImageSpec.base` is empty for the platform image instead of the Debian
   digest.
+- `Image.verify()` returns an `ImageVerification`; `ImageBuildResult`
+  has no `responses` and `Image` no `context_object_id`. The client argument
+  is optional and `workspace=` selects the workspace.
 
 ## Review fixes
 
@@ -154,11 +163,11 @@ registry integration.
 - ECR base images: the `GetAuthorizationToken` exchange is unverified
   without AWS credentials; GCR, ACR and NGC logins are covered by the name
   mapping test only.
-- `build_with_gpu` and `with_secrets` reject as `unsupported` until GPU
-  capacity and workspace secrets exist. `machine=` on `build()` is
-  unsupported until joined machines exist.
-- `from_id` accepts built image ids; sandbox snapshots become images when
-  sandboxes land.
+- `build_with_gpu` and `with_secrets` reject as `unsupported`. Workspace
+  secrets exist now, so `with_secrets` needs the images owner to resolve
+  them at build time and key the image identity on their versions (about a
+  day); GPU builds need GPU build capacity. `machine=` on `build()` is
+  unsupported: builds do not use machine pinning.
 - Architecture: arm64 is part of the identity and the build platform, but
   hosts do not report an architecture, so placement cannot match it.
 - Base registry logins are stored in plaintext on the build row until it

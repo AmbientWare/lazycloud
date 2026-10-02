@@ -106,8 +106,8 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   silently. A Redis outage lost the reference's changes; here a change is
   published by the transaction that made it.
 - One `change` event per committed statement carries a list of changes.
-  Topics: apps, deployments, tasks, containers, storage.secrets. Compute,
-  volume and usage topics come with those packets.
+  Topics: apps, deployments, tasks, containers, storage.secrets. Compute pages
+  poll; volumes and usage have no topic yet (gap).
 - Container metrics take a range and step and are downsampled; the
   reference returned the newest 500 raw entries of a Redis stream, minus
   other event types. GPU memory and utilization are measured; the reference
@@ -124,7 +124,7 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   draining, from durable timestamps and host reports, instead of the
   reference worker's twenty internal phases.
 - Account activity derives allocations from container lifetimes, not the
-  billing ledger. GPU allocation is zero until containers carry GPUs.
+  billing ledger. GPU allocation counts the GPUs each container's release names.
 - Account concurrency counts every live container in owned workspaces as a
   CPU container: containers have no GPUs yet.
 

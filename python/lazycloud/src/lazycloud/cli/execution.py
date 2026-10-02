@@ -9,15 +9,13 @@ from pydantic import JsonValue
 from shared.api import (
     Deployment,
     DeploymentPlan,
-    DeploymentPlanRequest,
     PodKind,
     Release,
-    WorkloadIdentity,
-    WorkloadKind,
 )
 
 from lazycloud._invocation import prepare_arguments
 from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.formatting import short_id
 from lazycloud._terminal.streams import console
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
@@ -55,6 +53,7 @@ from lazycloud.session.deployment import (
     DeploymentClient,
     WorkloadDefinition,
     deploy_functions,
+    plan_request,
 )
 from lazycloud.terminal_shell import InteractiveShell
 
@@ -128,11 +127,12 @@ def deploy(
             _emit_deployment_plans(ctx, [plan])
             return
         if not isinstance(target, Function | Endpoint | ASGI | Pod):
-            invoke_handler_method(
+            response = invoke_handler_method(
                 target,
                 "deploy",
                 kwargs={"workspace": selected_workspace, "source_root": source_root},
             )
+            print_payload(ctx, response)
             return
         deployment = target.deploy(workspace=selected_workspace, source_root=source_root)
     release = next(item for item in deployment.releases if item.name == target.resource_name)
@@ -153,7 +153,7 @@ def _release_summary(name: str, release: Release) -> dict[str, JsonValue]:
         summary["url"] = release.url
     spec = release.spec
     if spec.pod is not None and spec.pod.kind is not PodKind.sandbox:
-        summary["role"] = spec.pod.kind.value
+        summary["role"] = "service" if spec.pod.kind is PodKind.pod else spec.pod.kind.value
         if spec.keep_warm_seconds is not None:
             summary["keep_warm"] = (
                 "always" if spec.keep_warm_seconds == -1 else f"{spec.keep_warm_seconds}s"
@@ -163,24 +163,7 @@ def _release_summary(name: str, release: Release) -> dict[str, JsonValue]:
 
 
 def _plan(client: ApiClient, workspace: str, target: AppFunctions) -> DeploymentPlan:
-    request = DeploymentPlanRequest(
-        workloads=[
-            WorkloadIdentity(kind=_workload_kind(function), name=function.resource_name)
-            for function in target.functions
-        ],
-        prune=target.prune,
-    )
-    return client.plan_deployment(workspace, target.app, request)
-
-
-def _workload_kind(workload: object) -> WorkloadKind:
-    if isinstance(workload, Pod):
-        return WorkloadKind.pod
-    if isinstance(workload, Endpoint):
-        return WorkloadKind.endpoint
-    if isinstance(workload, ASGI):
-        return WorkloadKind.asgi
-    return WorkloadKind.function
+    return client.plan_deployment(workspace, target.app, plan_request(target))
 
 
 def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlan]) -> None:
@@ -196,7 +179,7 @@ def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlan]) -> N
             "deployment actions",
             ["App", "Kind", "Workload", "Action", "Existing versions"],
             [
-                [plan.app, item.kind, item.name, item.action.value, item.versions]
+                [plan.app, item.kind, item.name, item.action, item.versions]
                 for plan in plans
                 for item in plan.items
             ],
@@ -417,7 +400,7 @@ def open_existing_shell(
     workspace: str | None = None,
 ) -> None:
     _require_interactive_output(ctx)
-    indicator = ConnectingIndicator(container_id[:12]).start()
+    indicator = ConnectingIndicator(short_id(container_id, 12)).start()
     try:
         shell_client = Shell(
             workspace=current_workspace(workspace),
@@ -438,7 +421,7 @@ def open_shell_session(
     indicator: ConnectingIndicator | None = None,
 ) -> None:
     _require_interactive_output(ctx)
-    waiting = indicator or ConnectingIndicator(session.container_id[:12]).start()
+    waiting = indicator or ConnectingIndicator(short_id(session.container_id, 12)).start()
     try:
         shell_client = Shell(
             workspace=current_workspace(workspace),

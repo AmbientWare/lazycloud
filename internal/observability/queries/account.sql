@@ -36,7 +36,8 @@ group by 1, 2, 3, 4;
 
 -- name: Allocations :many
 -- Reserved amount-seconds per workspace, app and bucket, where the amount
--- weighs CPU and memory reservations. A container reserves capacity on its
+-- weighs CPU, memory and GPU reservations; a container reserves the GPUs
+-- its release names. A container reserves capacity on its
 -- host from assignment until it stops. The live partial index and the
 -- stopped index together find every container alive in the range without
 -- reading older history.
@@ -60,7 +61,7 @@ select alive.workspace_id, a.id as app_id, a.name as app_name, buckets.bucket::t
        sum(extract(epoch from
                least(coalesce(alive.stopped_at, now()), buckets.bucket + @bucket_width::interval)
                - greatest(alive.assigned_at, buckets.bucket))
-           * alive.amount)::float8 as value
+           * (alive.amount + coalesce(release_gpus(r.spec), 0) * sqlc.arg(per_gpu)::float8))::float8 as value
 from alive
 join buckets on alive.assigned_at < buckets.bucket + @bucket_width::interval
             and coalesce(alive.stopped_at, now()) > buckets.bucket

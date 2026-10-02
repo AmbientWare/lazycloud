@@ -33,7 +33,7 @@ from lazycloud.exceptions import (
     UnsupportedFeatureError,
 )
 from lazycloud.json_contracts import parse_json_value
-from lazycloud.session.deployment import DeploymentOperationError
+from lazycloud.session.deployment import DeploymentOperationError, ImageBuildError
 
 _TOKEN_PATTERN = re.compile(r"\b(?:rt|lc)_[A-Za-z0-9_-]{8,}\b")
 _BEARER_PATTERN = re.compile(r"(Bearer\s+)([A-Za-z0-9._~+/=-]{12,})", re.IGNORECASE)
@@ -119,6 +119,14 @@ def normalize_exception(
     task_error = _task_error_details(exc, message)
     if task_error is not None:
         return task_error
+
+    if any(isinstance(item, ImageBuildError) for item in exception_chain(exc)):
+        return ClientErrorDetails(
+            type="image_build_failed",
+            title="Image build failed",
+            message=message,
+            hint="Fix the failing build step shown above, then run the command again.",
+        )
 
     if _is_forbidden_error(exc):
         return ClientErrorDetails(
@@ -399,7 +407,7 @@ def _task_error_details(
             return ClientErrorDetails(
                 type="task_cancelled",
                 title="Task cancelled",
-                message=str(item),
+                message="The task was cancelled before it completed.",
                 exit_code=130,
             )
         if isinstance(item, RemoteTaskError):
@@ -408,7 +416,9 @@ def _task_error_details(
                 type="task_timeout" if timed_out else "task_failed",
                 title="Task timed out" if timed_out else "Task failed",
                 message=str(item),
-                hint="Check `lazycloud task logs` for the failing operation.",
+                hint="Check the task logs and its execution timeout."
+                if timed_out
+                else "Check the task logs for the failing operation.",
             )
     return None
 
@@ -523,7 +533,7 @@ def _client_connection_hint(exc: BaseException) -> str:
 
 
 CLIENT_ERROR_POLICY = CliErrorPolicy(
-    auth_hint=f"Run `{CLIENT_CLI_NAME} login --token <token>` to sign in again.",
+    auth_hint=f"Run `{CLIENT_CLI_NAME} login` to sign in again.",
     connection_hint=_client_connection_hint,
     timeout_hint="Retry the command or check service logs if the operation keeps timing out.",
     debug_hint="Run the command again with `--debug` to see the full traceback.",

@@ -58,6 +58,7 @@ from shared.serialization import to_json_value
 from shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
 
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
+from lazycloud._terminal.formatting import short_id
 from lazycloud.abstractions.image import Image, ImageBuildResult
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -305,7 +306,6 @@ class Function(Generic[P, R]):
                 volume.config is not None and volume.config.get("auth_mode") != "secret_references"
                 for volume in self.volumes
             ),
-            "metadata": bool(self.metadata),
         }
         found = [name for name, present in declared.items() if present]
         policy = self._retry_policy()
@@ -358,6 +358,8 @@ class Function(Generic[P, R]):
             spec["max_pending_tasks"] = self.max_pending_tasks
         if self.env:
             spec["environment"] = dict(self.env)
+        if self.metadata:
+            spec["metadata"] = dict(self.metadata)
         if self.volumes:
             spec["volumes"] = [_volume_spec(volume) for volume in self.volumes]
         if self.cron:
@@ -443,7 +445,9 @@ class Function(Generic[P, R]):
             terminal=self.terminal,
         )[0]
 
-    def serve(self, *, timeout: int = 0, sync_dir: str | None = None) -> Preview:
+    def serve(
+        self, *, timeout: int = 0, workspace: str | None = None, sync_dir: str | None = None
+    ) -> Preview:
         """Run a preview container that follows the working tree until Ctrl+C.
 
         `.remote()`, `.spawn()`, `.map()` and `lazycloud run` from this machine
@@ -452,7 +456,12 @@ class Function(Generic[P, R]):
         from lazycloud.abstractions.serve import serve_workload
 
         return serve_workload(
-            self, kind="function", authorized=True, timeout=timeout, sync_dir=sync_dir or "."
+            self,
+            kind="function",
+            authorized=True,
+            timeout=timeout,
+            sync_dir=sync_dir or ".",
+            workspace=workspace or self.workspace,
         )
 
     def shell(
@@ -524,15 +533,15 @@ class Function(Generic[P, R]):
         calls = self.spawn_map(inputs)
         for n, call in enumerate(calls):
             try:
-                value = call.get()
+                result = call.result(wait=True)
             except KeyboardInterrupt:
                 _cancel_tasks([c.task for c in calls[n:]])
                 raise
-            except Exception as exc:
-                self._error(f"Task failed during map: {exc}")
+            if not result.ok:
+                self._error(f"Task failed during map: {result.error or result.status.value}")
                 yield None
                 continue
-            yield value
+            yield result.value
 
     def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
         """Submit one task with JSON arguments; its result comes back as JSON."""
@@ -546,7 +555,7 @@ class Function(Generic[P, R]):
     def run_task(self, task: Task) -> Any:
         """Follow a submitted task's output until it finishes, then return its outcome."""
         with self._task_step() as step:
-            step.update(f"{task.task_id[:8]} submitted")
+            step.update(f"{short_id(task.task_id)} submitted")
             return self._follow(task, step)
 
     def _remote_call(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> R:
@@ -554,7 +563,7 @@ class Function(Generic[P, R]):
         payload = self._input(args, kwargs, workspace)
         with self._task_step() as step:
             task = self._submit(client, workspace, [payload])[0]
-            step.update(f"{task.task_id[:8]} submitted")
+            step.update(f"{short_id(task.task_id)} submitted")
             return cast(R, self._follow(task, step))
 
     def _follow(self, task: Task, step: TerminalStep) -> Any:
@@ -580,7 +589,7 @@ class Function(Generic[P, R]):
                 raise FunctionOperationError(msg) from exc
             raise
         reporter.update(task.task_id, None)
-        step.update(f"{task.task_id[:8]} {view.status.value}")
+        step.update(f"{short_id(task.task_id)} {view.status.value}")
         return task.outcome(view)
 
     def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str) -> TaskInput:
@@ -683,16 +692,7 @@ class Function(Generic[P, R]):
 
         `spec()` validates the combination when the function is declared.
         """
-        placement: dict[str, Any] = {}
-        if self.machine:
-            placement["machine"] = self.machine
-        if self.region is not None:
-            placement["region"] = self.region
-        if self.availability_zone:
-            placement["availability_zone"] = self.availability_zone
-        if not self.preemptible:
-            placement["preemptible"] = False
-        return placement
+        return placement_fields(self)
 
     def _retry_policy(self) -> RetryPolicy:
         policy = retry_policy_config(
@@ -762,7 +762,7 @@ class _QueuedTaskWatcher:
             else:
                 if view.status is not status:
                     status = view.status
-                    self.step.update(f"{self.task.task_id[:8]} {status.value}")
+                    self.step.update(f"{short_id(self.task.task_id)} {status.value}")
                 self.reporter.update(self.task.task_id, view.pending)
                 if view.status is not TaskStatus.queued:
                     return
@@ -855,6 +855,20 @@ def _memory_mib(value: str | int) -> int:
         msg = "memory needs a size such as 512Mi"
         raise FunctionOperationError(msg)
     return mib
+
+
+def placement_fields(owner: Any) -> dict[str, Any]:
+    """The machine, region, zone and market a workload sets; empty runs anywhere."""
+    placement: dict[str, Any] = {}
+    if owner.machine:
+        placement["machine"] = owner.machine
+    if owner.region is not None:
+        placement["region"] = owner.region
+    if owner.availability_zone:
+        placement["availability_zone"] = owner.availability_zone
+    if not owner.preemptible:
+        placement["preemptible"] = False
+    return placement
 
 
 def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:

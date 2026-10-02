@@ -16,14 +16,23 @@ import (
 const deploymentPerformance = `-- name: DeploymentPerformance :many
 with t as (
     select date_bin($1::interval, tk.created_at, to_timestamp(0)) as bucket,
-           tk.status,
-           case when tk.started_at is not null and tk.finished_at is not null
-                then extract(epoch from tk.finished_at - tk.started_at) * 1000 end as run_ms
+           tk.status::text as status,
+           (case when tk.started_at is not null and tk.finished_at is not null
+                 then extract(epoch from tk.finished_at - tk.started_at) * 1000 end)::float8 as run_ms
     from tasks tk
     where tk.workload_id = $2
       and tk.id >= $3
       and tk.id < $4
       and tk.created_at >= $5 and tk.created_at < $6
+    union all
+    select date_bin($1::interval, h.started_at, to_timestamp(0)) as bucket,
+           (case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end)::text as status,
+           h.duration_ms::float8 as run_ms
+    from http_requests h
+    where h.workload_id = $2
+      and h.id >= $3
+      and h.id < $4
+      and h.started_at >= $5 and h.started_at < $6
 ), task_buckets as (
     select bucket, count(run_ms)::int as finished,
            percentile_cont(0.5) within group (order by run_ms) as p50_ms,
@@ -78,6 +87,9 @@ type DeploymentPerformanceRow struct {
 	Cancelled  int32
 }
 
+// A function's calls are its tasks; an endpoint's or ASGI app's are its
+// request records, failed for a 5xx answer and cancelled when the caller
+// left first (499).
 func (q *Queries) DeploymentPerformance(ctx context.Context, arg DeploymentPerformanceParams) ([]DeploymentPerformanceRow, error) {
 	rows, err := q.db.Query(ctx, deploymentPerformance,
 		arg.BucketWidth,

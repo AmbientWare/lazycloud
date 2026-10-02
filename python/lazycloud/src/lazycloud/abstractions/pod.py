@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -357,7 +357,7 @@ class Pod:
 
     def unsupported_options(self) -> list[str]:
         """Declared options the platform cannot run yet, by name."""
-        return container_unsupported_options(self.volumes, self.metadata)
+        return container_unsupported_options(self.volumes)
 
     def require_supported(self) -> None:
         from lazycloud.exceptions import UnsupportedFeatureError
@@ -569,9 +569,7 @@ class Pod:
         return self.client
 
 
-def container_unsupported_options(
-    volumes: list[VolumeMount], metadata: Mapping[str, Any]
-) -> list[str]:
+def container_unsupported_options(volumes: list[VolumeMount]) -> list[str]:
     """Declared pod or sandbox options the platform cannot run yet, by name."""
     declared = {
         # Hosts have no credentials of their own for a user's bucket.
@@ -579,7 +577,6 @@ def container_unsupported_options(
             volume.config is not None and volume.config.get("auth_mode") != "secret_references"
             for volume in volumes
         ),
-        "metadata": bool(metadata),
     }
     return [name for name, present in declared.items() if present]
 
@@ -621,6 +618,8 @@ def container_workload_spec(
         spec["keep_warm_seconds"] = keep_warm
     if owner.env:
         spec["environment"] = dict(owner.env)
+    if owner.metadata:
+        spec["metadata"] = dict(owner.metadata)
     if owner.secrets:
         spec["secrets"] = list(dict.fromkeys(owner.secrets))
     if owner.volumes:
