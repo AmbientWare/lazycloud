@@ -33,8 +33,9 @@ review.
    "expired" message, as the reference did (FleetSettings.tsx:111-123).
 2. `FleetNodes`: list platform hosts with an instance id, so refused launches
    never show; map phases and reserve facts to states: `preparing`,
-   `stopping`, `stopped` (plain stop), `hibernate_unverified` (hibernated,
-   evidence unknown or failed), `image_saved` (hibernated, evidence saved),
+   `stopping`, `stopped` (plain stop, or a hibernation whose evidence failed
+   or is unavailable), `hibernate_unverified` (hibernated, evidence
+   unknown), `image_saved` (hibernated, evidence saved),
    `starting` for `resuming`. `ready` is serving on the target agent, or for
    a reserve, prepared for the target agent. Keep the cursor and limit.
 3. API mapping in `fleet.go`; drop the zeros at lines 54-55.
@@ -61,7 +62,13 @@ All four plan steps are done.
   `preparedFor` became `onRelease(host, version, release)` in
   planner_snapshot.go, so Nodes and the planner share one mapping; the
   OpenAPI descriptions of `warm_target`, `FleetNode.ready` and
-  `FleetSummary.plan`.
+  `FleetSummary.plan`; migration 0006, index `hosts_platform` on platform
+  hosts that still exist, so Nodes and the rollout skip deleted history
+  (`TestFleetAdminReadsStayFlatAsDeletedHostsGrow`: 2 and 42 buffers with
+  1,000 or 20,000 deleted hosts; 646 and 686 without the index).
+- The rollout's connected rule matches `fleetStateOf`, including an emptied
+  consolidating host
+  (`TestFleetRolloutAndNodesAgreeOnAnEmptiedConsolidatingHost`).
 - FleetSettings.tsx needed no change.
 
 Parity lines (internal/api, web):
