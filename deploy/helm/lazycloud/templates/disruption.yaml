@@ -1,0 +1,19 @@
+{{/*
+Each workload loses at most one pod to a voluntary disruption.
+maxUnavailable rather than minAvailable: at one replica a minAvailable budget
+blocks every node drain.
+*/}}
+{{- range $name := list "server" "scheduler" "web" "cloudflared" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lazycloud.labels" (list $ $name) | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+{{- end }}

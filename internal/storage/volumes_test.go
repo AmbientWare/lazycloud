@@ -115,9 +115,10 @@ func TestVolumeFiles(t *testing.T) {
 func TestBrowserUploadsFromTheDashboard(t *testing.T) {
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
-	cfg := storagetest.Config()
+	var s *Storage
+	cfg := withLinks(t, func() *Storage { return s })
 	cfg.BrowserOrigin = "https://dashboard.test/"
-	s := NewStorage(f.pool, cfg)
+	s = NewStorage(f.pool, cfg)
 	if _, err := s.CreateVolume(ctx, f.ws, "data"); err != nil {
 		t.Fatal(err)
 	}

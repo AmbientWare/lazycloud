@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
@@ -156,7 +157,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	container := placeAndStart(t, f, host)
-	published := pushRandom(t, f.registry+"/lazycloud/images:first")
+	published := pushRandom(t, f.imageRepository(t, first.Image.ID)+":first")
 	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: published}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +188,18 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 	caches := map[string]bool{}
 	var forcedContainer execution.ContainerID
 	for _, start := range starts {
-		command, err := f.images.BuildCommandOf(t.Context(), start)
+		command, err := f.images.BuildCommandOf(t.Context(), host, start)
 		if err != nil {
 			t.Fatal(err)
 		}
 		caches[command.CacheRef] = true
+		workspace := a
+		if start.Build != forced.Build.ID {
+			workspace = b
+		}
+		if !strings.HasPrefix(command.CacheRef, f.registry+"/lazycloud/cache/"+uuid.UUID(workspace).String()+":") {
+			t.Errorf("cache %s is outside its workspace's repository", command.CacheRef)
+		}
 		if start.Build == forced.Build.ID {
 			forcedContainer = start.Container
 		}
@@ -204,7 +212,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rebuilt := pushRandom(t, f.registry+"/lazycloud/images:rebuilt")
+	rebuilt := pushRandom(t, f.workspaceImageRepository(t, a, first.Image.ID)+":rebuilt")
 	if err := f.images.CompleteBuild(t.Context(), host, forcedContainer, images.BuildOutcome{Digest: rebuilt}); err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +223,57 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 	refB, err := f.images.Deployable(t.Context(), b, first.Image.ID, "3.12")
 	if err != nil || !strings.HasSuffix(refB, published) {
 		t.Fatalf("other workspaces keep the published image: %s %v", refB, err)
+	}
+}
+
+// A customer controls a connected account's or joined machine's host, so
+// what a build there pushes is its workspace's image alone: it goes to that
+// workspace's repository and never becomes the image other workspaces
+// resolve, even those that joined the build.
+func TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.workspace(t, "a"), f.workspace(t, "b")
+	host := f.host(t)
+	first, err := f.images.Build(t.Context(), a, numpy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined, err := f.images.Build(t.Context(), b, numpy(), false); err != nil || joined.Build == nil || joined.Build.ID != first.Build.ID {
+		t.Fatalf("b joins the build: %+v %v", joined, err)
+	}
+	container := placeAndStart(t, f, host)
+	// The host is a joined machine from here on, as if the build had been
+	// placed on one.
+	if _, err := f.pool.Exec(t.Context(), "update hosts set kind = 'machine' where id = $1", uuid.UUID(host)); err != nil {
+		t.Fatal(err)
+	}
+	start := execution.BuildStart{Container: container, Build: first.Build.ID, Attempt: 1}
+	command, err := f.images.BuildCommandOf(t.Context(), host, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := f.workspaceImageRepository(t, a, first.Image.ID)
+	if command.PushRepository != own {
+		t.Fatalf("a customer host pushes to %s, want the workspace's repository %s", command.PushRepository, own)
+	}
+	shared := pushRandom(t, f.imageRepository(t, first.Image.ID)+":poisoned")
+	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: shared}); err == nil {
+		t.Fatal("a customer host completed its build with a digest in the shared repository")
+	}
+	digest := pushRandom(t, own+":built")
+	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: digest}); err != nil {
+		t.Fatal(err)
+	}
+	if ref, err := f.images.Deployable(t.Context(), a, first.Image.ID, "3.12"); err != nil || ref != own+"@"+digest {
+		t.Fatalf("the building workspace deploys its own build: %s %v", ref, err)
+	}
+	other, err := f.images.Get(t.Context(), b, first.Image.ID)
+	if err != nil || other.Reference != nil {
+		t.Fatalf("another workspace sees a customer host's build: %+v %v", other, err)
+	}
+	again, err := f.images.Build(t.Context(), b, numpy(), false)
+	if err != nil || again.Build == nil || again.Build.ID == first.Build.ID {
+		t.Fatalf("the other workspace builds again: %+v %v", again, err)
 	}
 }
 

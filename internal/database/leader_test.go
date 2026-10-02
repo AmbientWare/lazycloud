@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
@@ -84,5 +86,49 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 	}
 	if !candidates[other].leading.Load() {
 		t.Fatal("the standby did not take over after the leader stopped")
+	}
+}
+
+// The leader's check finds its own session's lock and nothing else: not
+// another session's hold, not another name, not a lock it released. Names
+// cover both signs of the 64-bit key, whose high half pg_locks keeps apart.
+func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
+	ctx := t.Context()
+	pool := dbtest.New(t)
+	acquire := func() *pgxpool.Conn {
+		t.Helper()
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(conn.Release)
+		return conn
+	}
+	holds := func(conn *pgxpool.Conn, name string) bool {
+		t.Helper()
+		held, err := database.HoldsLead(ctx, conn.Conn(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return held
+	}
+	leader, other := acquire(), acquire()
+	for _, name := range []string{"scheduler_leader", "test_leader"} {
+		var key int64
+		if err := leader.QueryRow(ctx, "select hashtextextended($1, 0)", name).Scan(&key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.Exec(ctx, "select pg_advisory_lock(hashtextextended($1, 0))", name); err != nil {
+			t.Fatal(err)
+		}
+		if !holds(leader, name) || holds(other, name) || holds(leader, name+"_other") {
+			t.Fatalf("%s (key %d): the check must see the lock in the holding session only", name, key)
+		}
+		if _, err := leader.Exec(ctx, "select pg_advisory_unlock(hashtextextended($1, 0))", name); err != nil {
+			t.Fatal(err)
+		}
+		if holds(leader, name) {
+			t.Fatalf("%s: the check sees a released lock", name)
+		}
 	}
 }

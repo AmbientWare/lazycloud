@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -30,7 +31,8 @@ type fixture struct {
 func newFixture(t testing.TB, spec string) *fixture {
 	t.Helper()
 	pool := dbtest.New(t)
-	f := &fixture{t: t, pool: pool, storage: NewStorage(pool, storagetest.Config())}
+	f := &fixture{t: t, pool: pool}
+	f.storage = NewStorage(pool, withLinks(t, func() *Storage { return f.storage }))
 	f.ws = f.workspace("ws-" + uuid.NewString()[:8])
 	var app, workload uuid.UUID
 	f.exec(`insert into apps (workspace_id, name, state) values ($1, 'app', 'active') returning id`, &app, uuid.UUID(f.ws))
@@ -102,6 +104,24 @@ func send(t *testing.T, url string, body []byte) (int, string) {
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode, resp.Header.Get("ETag")
+}
+
+// withLinks is the development store with download links served the way
+// the API serves them, by the storage that store returns.
+func withLinks(t testing.TB, store func() *Storage) Config {
+	t.Helper()
+	links := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		url, err := store().OpenLink(r.Context(), r.URL.Path[len("/v1/links/"):], r.Method == http.MethodHead)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Redirect(w, r, url, http.StatusFound)
+	}))
+	t.Cleanup(links.Close)
+	cfg := storagetest.Config()
+	cfg.Links = Links{URL: links.URL + "/v1/links/", Key: []byte("download links of the storage tests")}
+	return cfg
 }
 
 func get(t *testing.T, url string) (int, []byte, http.Header) {

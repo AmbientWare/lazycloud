@@ -1,10 +1,11 @@
 {{- if .Values.networkPolicy.enabled }}
 {{/*
-Ingress is denied to every pod of the release except what is listed: the
-ingress connector to the API and edge ports, agent hosts to the host port,
-other server pods to the relay port, the kubelet's node addresses to the
-probe ports and scrapers to the metrics ports. An empty list admits nobody;
-a rule with no peers would admit everyone, so none is rendered.
+Ingress is denied to every pod of the release except what is listed:
+cloudflared to the API, edge and web ports, load balancers to the host and
+TCP ports, other server pods to the relay port, the kubelet's node
+addresses to the probe ports and scrapers to the metrics ports. An empty
+list admits nobody; a rule with no peers would admit everyone, so none is
+rendered.
 */}}
 {{- $np := .Values.networkPolicy }}
 {{- if not $np.nodeCIDRs }}
@@ -34,41 +35,16 @@ spec:
       app.kubernetes.io/name: server
   policyTypes: [Ingress]
   ingress:
-    {{- with $np.ingressFrom }}
-    - from:
-        {{- toYaml . | nindent 8 }}
-      ports:
-        - port: http
-    {{- end }}
-    {{- with $np.edgeFrom }}
-    - from:
-        {{- toYaml . | nindent 8 }}
-      ports:
-        - port: edge
-    {{- end }}
-    {{- with $np.hostCIDRs }}
-    - from:
-        {{- range . }}
-        - ipBlock: { cidr: {{ . }} }
-        {{- end }}
-      ports:
-        - port: hosts
-    {{- end }}
+    {{- include "lazycloud.podPeers" (dict "names" (list "cloudflared") "ports" (list "http" "edge")) | nindent 4 }}
     # Edges relay to the server pod that holds a host's data connection.
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: server
-      ports:
-        - port: relay
-    {{- with $np.nodeCIDRs }}
-    - from:
-        {{- range . }}
-        - ipBlock: { cidr: {{ . }} }
-        {{- end }}
-      ports:
-        - port: health
+    {{- include "lazycloud.podPeers" (dict "names" (list "server") "ports" (list "relay")) | nindent 4 }}
+    {{- with $np.hostCIDRs }}
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" . "ports" (list "hosts")) | nindent 4 }}
     {{- end }}
+    {{- if and .Values.server.tcpService.enabled $np.tcpCIDRs }}
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.tcpCIDRs "ports" (list "edge-tcp")) | nindent 4 }}
+    {{- end }}
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.nodeCIDRs "ports" (list "health")) | nindent 4 }}
     {{- with $np.metricsFrom }}
     - from:
         {{- toYaml . | nindent 8 }}
@@ -88,18 +64,57 @@ spec:
       app.kubernetes.io/name: scheduler
   policyTypes: [Ingress]
   ingress:
-    {{- with $np.nodeCIDRs }}
-    - from:
-        {{- range . }}
-        - ipBlock: { cidr: {{ . }} }
-        {{- end }}
-      ports:
-        - port: health
-    {{- end }}
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.nodeCIDRs "ports" (list "health")) | nindent 4 }}
     {{- with $np.metricsFrom }}
     - from:
         {{- toYaml . | nindent 8 }}
       ports:
         - port: metrics
     {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web
+  labels:
+    {{- include "lazycloud.labels" (list . "web") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  policyTypes: [Ingress]
+  ingress:
+    {{- include "lazycloud.podPeers" (dict "names" (list "cloudflared") "ports" (list "http")) | nindent 4 }}
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.nodeCIDRs "ports" (list "http")) | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cloudflared
+  labels:
+    {{- include "lazycloud.labels" (list . "cloudflared") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  policyTypes: [Ingress]
+  ingress:
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.nodeCIDRs "ports" (list "metrics")) | nindent 4 }}
+{{- if .Values.telemetry.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "lazycloud.labels" (list . "otel-collector") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  policyTypes: [Ingress]
+  ingress:
+    {{- include "lazycloud.podPeers" (dict "names" (list "server" "scheduler") "ports" (list "otlp")) | nindent 4 }}
+    {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.nodeCIDRs "ports" (list "health")) | nindent 4 }}
+{{- end }}
 {{- end }}

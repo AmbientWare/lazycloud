@@ -1,0 +1,42 @@
+{{- $domain := include "lazycloud.domain" . -}}
+{{/*
+Public HTTP ingress. The tunnel is locally managed, so this ConfigMap is
+the whole routing table: rules are ordered and the first match wins.
+Cloudflare balances the tunnel over every connector, and the replicas
+spread over nodes and zones.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared
+  labels:
+    {{- include "lazycloud.labels" (list . "cloudflared") | nindent 4 }}
+data:
+  config.yaml: |
+    tunnel: {{ required "cloudflared.tunnelId is required" .Values.cloudflared.tunnelId }}
+    credentials-file: /etc/cloudflared/credentials.json
+    no-autoupdate: true
+    originRequest:
+      connectTimeout: 10s
+      # Log and event streams hold a response open; buffering would stall them.
+      disableChunkedEncoding: false
+    ingress:
+      {{- if .Values.cloudflared.argocd }}
+      # Argo CD's sign-in page. It precedes the wildcard, which would
+      # otherwise take the name.
+      - hostname: argocd.{{ $domain }}
+        service: http://argocd-server.argocd:80
+      {{- end }}
+      # The API, browser sign-in, provider webhooks and agent installs.
+      - hostname: {{ $domain }}
+        path: ^/(v1|auth|webhooks|install)(/|$)
+        service: http://server:80
+      # Everything else on the apex is the dashboard.
+      - hostname: {{ $domain }}
+        service: http://web:80
+      # Generated workload hosts; every path forwards.
+      - hostname: "*.{{ $domain }}"
+        service: http://server-edge:80
+      # Customer hostnames, proxied by Cloudflare for SaaS with their own
+      # Host header. The edge serves only verified domains.
+      - service: http://server-edge:80

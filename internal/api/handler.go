@@ -91,6 +91,8 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 	mux.HandleFunc("POST /webhooks/resend", s.receiveResendWebhook)
 	mux.HandleFunc("POST /webhooks/stripe", s.receiveStripeWebhook)
 	s.installRoutes(mux)
+	// Download links carry their own signature; GET also serves HEAD.
+	mux.HandleFunc("GET "+LinksPath+"{token}", s.openLink)
 	mux.Handle("/", s.authenticate(ops))
 	// Workload routes stream past the API's body limit.
 	outer := http.NewServeMux()

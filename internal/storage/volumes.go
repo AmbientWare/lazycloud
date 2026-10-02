@@ -436,28 +436,23 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 			return apitypes.PresignedUrl{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 		}
 		// A write URL outliving a delete would recreate files.
-		lifetime = min(lifetime, uploadLifetime)
+		if lifetime, err = s.signedLifetime(ctx, min(lifetime, uploadLifetime)); err != nil {
+			return apitypes.PresignedUrl{}, err
+		}
 	}
 	key := aws.String(prefix + rel)
 	expires := s3.WithPresignExpires(lifetime)
 	var url string
 	switch req.Method {
-	case apitypes.PresignVolumeFileRequestMethodGet:
-		input := &s3.GetObjectInput{Bucket: aws.String(bucket), Key: key}
+	case apitypes.PresignVolumeFileRequestMethodGet, apitypes.PresignVolumeFileRequestMethodHead:
+		// Reads are links, which the API presigns as they are used.
+		l := link{Bucket: bucket, Key: prefix + rel, Expires: time.Now().Add(lifetime).Unix()}
 		if req.Download != nil && *req.Download {
-			input.ResponseContentDisposition = aws.String(mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)}))
+			l.Disposition = mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)})
 		}
-		r, err := s.presign.PresignGetObject(ctx, input, expires)
-		if err != nil {
-			return apitypes.PresignedUrl{}, fmt.Errorf("presign get: %w", err)
+		if url, err = s.linkURL(ctx, l); err != nil {
+			return apitypes.PresignedUrl{}, err
 		}
-		url = r.URL
-	case apitypes.PresignVolumeFileRequestMethodHead:
-		r, err := s.presign.PresignHeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: key}, expires)
-		if err != nil {
-			return apitypes.PresignedUrl{}, fmt.Errorf("presign head: %w", err)
-		}
-		url = r.URL
 	case apitypes.PresignVolumeFileRequestMethodPut:
 		r, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: key}, expires)
 		if err != nil {
@@ -499,12 +494,16 @@ func (s *Storage) CreateVolumeUpload(ctx context.Context, workspace identity.Wor
 	if req.PartSizeBytes != nil {
 		partSize = *req.PartSizeBytes
 	}
-	uploadID, parts, err := s.startMultipart(ctx, bucket, prefix+rel, "", req.SizeBytes, partSize, uploadLifetime)
+	lifetime, err := s.signedLifetime(ctx, uploadLifetime)
+	if err != nil {
+		return apitypes.MultipartUpload{}, err
+	}
+	uploadID, parts, err := s.startMultipart(ctx, bucket, prefix+rel, "", req.SizeBytes, partSize, lifetime)
 	if err != nil {
 		return apitypes.MultipartUpload{}, err
 	}
 	return apitypes.MultipartUpload{
-		UploadId: uploadID, Path: rel, PartSizeBytes: partSize, Parts: parts, ExpiresAt: time.Now().Add(uploadLifetime),
+		UploadId: uploadID, Path: rel, PartSizeBytes: partSize, Parts: parts, ExpiresAt: time.Now().Add(lifetime),
 	}, nil
 }
 

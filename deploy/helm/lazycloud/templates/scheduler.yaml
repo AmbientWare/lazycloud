@@ -41,6 +41,12 @@ spec:
               value: "0.0.0.0:9090"
             - name: LAZYCLOUD_SECRETS_KEY_FILE
               value: /run/lazycloud/secrets/secrets.key
+            # The launcher writes these into each instance's user data.
+            {{- include "lazycloud.hostEnv" . | nindent 12 }}
+            {{- include "lazycloud.awsEnv" . | nindent 12 }}
+            {{- if .Values.telemetry.enabled }}
+            {{- include "lazycloud.telemetryEnv" . | nindent 12 }}
+            {{- end }}
             {{- include "lazycloud.env" (list . "scheduler") | trim | nindent 12 }}
           ports:
             - name: health
@@ -63,15 +69,3 @@ spec:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: scheduler
-  labels:
-    {{- include "lazycloud.labels" (list . "scheduler") | nindent 4 }}
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: scheduler

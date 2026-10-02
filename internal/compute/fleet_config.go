@@ -18,6 +18,7 @@ import (
 //	LAZYCLOUD_FLEET_NODE_ROLE_ARN     role platform instances run as
 //	LAZYCLOUD_FLEET_INSTANCE_PROFILE  its instance profile
 //	LAZYCLOUD_FLEET_NETWORKS          {"us-east-2": {"vpc_id", "security_group_id", "subnets": [{"id", "zone", "zone_id"}]}}
+//	LAZYCLOUD_FLEET_IMAGES            {"cpu": {"us-east-2": "ami-..."}, "gpu": {...}}; unset uses stock Amazon Linux
 //	LAZYCLOUD_FLEET_MAX_HOSTS         live cloud hosts per owner (20)
 //	LAZYCLOUD_FLEET_IDLE_TIMEOUT      idle time before a host drains (5m)
 //	LAZYCLOUD_FLEET_HEADROOM          idle hosts each market keeps (0)
@@ -36,6 +37,12 @@ func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	if raw := getenv("LAZYCLOUD_FLEET_NETWORKS"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &f.Networks); err != nil {
 			return Fleet{}, fmt.Errorf("LAZYCLOUD_FLEET_NETWORKS: %w", err)
+		}
+	}
+	if raw := getenv("LAZYCLOUD_FLEET_IMAGES"); raw != "" {
+		f.Images = &NodeImages{}
+		if err := json.Unmarshal([]byte(raw), f.Images); err != nil {
+			return Fleet{}, fmt.Errorf("LAZYCLOUD_FLEET_IMAGES: %w", err)
 		}
 	}
 	var err error

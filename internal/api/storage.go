@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -296,7 +297,21 @@ func (s *Server) GetArtifact(ctx context.Context, req GetArtifactRequestObject) 
 	return GetArtifact200JSONResponse(artifact), nil
 }
 
-// PresignArtifact presigns a GET of an artifact.
+// LinksPath is where download links are served under the public URL.
+const LinksPath = "/v1/links/"
+
+// openLink redirects a download link to a presigned read of its object.
+func (s *Server) openLink(w http.ResponseWriter, r *http.Request) {
+	url, err := s.owners.Storage.OpenLink(r.Context(), r.PathValue("token"), r.Method == http.MethodHead)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, url, http.StatusFound) //nolint:gosec // The target is our object store, presigned for a link this server signed.
+}
+
+// PresignArtifact returns a download link of an artifact.
 func (s *Server) PresignArtifact(ctx context.Context, req PresignArtifactRequestObject) (PresignArtifactResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {

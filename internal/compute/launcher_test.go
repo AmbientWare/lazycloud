@@ -150,6 +150,69 @@ func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
 	}
 }
 
+func TestPlatformHostsLaunchFromTheBakedNodeImageOfTheirRegion(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}}})
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want 1", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 1 || calls[0].Form.Get("ClientToken") != host.String() || calls[0].Form.Get("ImageId") != "ami-0baked" {
+		t.Fatalf("RunInstances %v, want the baked us-east-2 image", calls)
+	}
+}
+
+// A region the bake did not reach launches nothing rather than a stock
+// image without gVisor.
+func TestPlatformHostsWithoutANodeImageForTheirRegionFail(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-west-2": "ami-0west"}}})
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	if n := launch(t, o); n != 0 {
+		t.Fatalf("launched %d without a node image", n)
+	}
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseFailed) {
+		t.Fatalf("host without a node image is %s, want failed", phase)
+	}
+	if n := len(emulator.calls("RunInstances")); n != 0 {
+		t.Fatalf("%d RunInstances calls for a host without an image", n)
+	}
+}
+
+// A connected account launches the platform's baked image, which the
+// platform shares with that account first.
+func TestConnectionHostsLaunchTheBakedImageSharedWithTheirAccount(t *testing.T) {
+	emulator := newAWS(t)
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{
+		PrincipalARN: platformPrincipal, Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}},
+	})))
+	publish(t, o.compute)
+	customer := newCustomerAWS(emulator)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	ws := newWorkspace(t, o.pool, "prod", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, ws)
+	emulator.on("ModifyImageAttribute", func(awsCall) awsReply { return modifyImageAttributeReply() })
+	emulator.on("RunInstances", launched(t))
+	host := requestedHost(t, o, ws, `{}`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want 1", n)
+	}
+	shares := emulator.calls("ModifyImageAttribute")
+	if len(shares) != 1 || shares[0].AccessKey != platformAccessKey || shares[0].Form.Get("ImageId") != "ami-0baked" ||
+		shares[0].Form.Get("LaunchPermission.Add.1.UserId") != "111111111111" {
+		t.Fatalf("ModifyImageAttribute calls %v, want the platform sharing ami-0baked with 111111111111", shares)
+	}
+	runs := emulator.calls("RunInstances")
+	if len(runs) != 1 || runs[0].Form.Get("ClientToken") != host.String() || runs[0].Form.Get("ImageId") != "ami-0baked" ||
+		runs[0].AccessKey != assumedKey(conn.Active.RoleARN) {
+		t.Fatalf("RunInstances calls %v, want ami-0baked launched through the connection role", runs)
+	}
+}
+
 func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	var failing atomic.Bool

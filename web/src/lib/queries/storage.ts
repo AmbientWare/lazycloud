@@ -238,7 +238,7 @@ export function deleteVolumePath(workspace: string, volume: string, path: string
   );
 }
 
-/** A short-lived presigned GET that browsers save as a file; it carries no session. */
+/** A short-lived download link that browsers save as a file; it carries no session. */
 export async function volumeDownloadUrl(
   workspace: string,
   volume: string,
@@ -253,7 +253,7 @@ export async function volumeDownloadUrl(
   return presigned.url;
 }
 
-/** Have the browser save a presigned URL; the store's response names the file. */
+/** Have the browser save a download link; the store's response names the file. */
 export function saveUrl(url: string, filename: string): void {
   const anchor = document.createElement("a");
   anchor.href = url;

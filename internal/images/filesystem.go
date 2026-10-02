@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -36,8 +37,19 @@ func (i *Images) RegisterFilesystem(ctx context.Context, workspace identity.Work
 	return id, nil
 }
 
-// FilesystemTarget is where a host pushes a workspace's filesystem images,
-// whether the registry speaks plain HTTP, and its login.
-func (i *Images) FilesystemTarget(workspace identity.WorkspaceID) (repository string, insecure bool, auth *Auth) {
-	return i.config.Registry + "/" + i.config.Repository + "/filesystems/" + workspace.String(), i.config.Insecure, i.config.Auth
+// FilesystemRepository is where a host pushes a workspace's filesystem
+// images.
+func (i *Images) FilesystemRepository(workspace identity.WorkspaceID) string {
+	return i.config.Registry + "/" + i.config.filesystemRepository(workspace)
+}
+
+// FilesystemTarget is FilesystemRepository, whether the registry speaks
+// plain HTTP, and a login that may push there and nowhere else until
+// deadline.
+func (i *Images) FilesystemTarget(ctx context.Context, workspace identity.WorkspaceID, deadline time.Time) (repository string, insecure bool, auth *Auth, err error) {
+	access := hostAccess{push: []string{i.config.filesystemRepository(workspace)}}
+	if auth, err = i.login.host(ctx, access, deadline.Add(time.Minute)); err != nil {
+		return "", false, nil, err
+	}
+	return i.FilesystemRepository(workspace), i.config.Insecure, auth, nil
 }

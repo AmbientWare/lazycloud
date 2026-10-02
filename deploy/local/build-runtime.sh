@@ -54,7 +54,7 @@ for version in "${versions[@]}"; do
   # Console scripts carry the build host's interpreter path, direct_url.json
   # names the temporary wheel directory and uv_cache.json the install time;
   # none belongs in the mounted runtime, which must build the same each time.
-  rm -rf "$target/bin"
+  rm -rf "${target:?}/bin"
   find "$target" -path '*.dist-info/RECORD' -exec sed -i -E '/\.dist-info\/(direct_url|uv_cache)\.json,/d' {} +
   find "$target" -path '*.dist-info/*' \( -name direct_url.json -o -name uv_cache.json \) -delete
   find "$target" -name __pycache__ -type d -prune -exec rm -rf {} +

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -36,6 +37,7 @@ const masterKeyBytes = 32
 type FileKey struct {
 	id   string
 	aead cipher.AEAD
+	key  []byte
 }
 
 // LoadFileKey reads a master key file. The file must hold exactly 32 bytes
@@ -93,7 +95,15 @@ func NewFileKey(key []byte) (*FileKey, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(key)
-	return &FileKey{id: "file:" + hex.EncodeToString(sum[:8]), aead: aead}, nil
+	return &FileKey{id: "file:" + hex.EncodeToString(sum[:8]), aead: aead, key: slices.Clone(key)}, nil
+}
+
+// Derive returns a 32-byte key for purpose, the same from every process
+// that holds this master key and unrelated to it or to another purpose.
+func (k *FileKey) Derive(purpose string) []byte {
+	mac := hmac.New(sha256.New, k.key)
+	mac.Write([]byte(purpose))
+	return mac.Sum(nil)
 }
 
 // KeyID names the key by a digest prefix, so a replaced key file is

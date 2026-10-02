@@ -27,7 +27,7 @@ var connectionTemplate string
 
 // TemplateVersion names the connection template; validation refuses stacks
 // made from another one.
-const TemplateVersion = "2026-09-30.v1"
+const TemplateVersion = "2026-10-01.v1"
 
 // connectionRegion is where connection stacks are created.
 const connectionRegion = "us-east-2"

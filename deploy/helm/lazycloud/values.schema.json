@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["image", "secrets", "config", "serviceAccounts", "server", "scheduler", "migrations"],
+  "required": ["domain", "release", "image", "secrets", "config", "serviceAccounts", "server", "scheduler", "web", "cloudflared", "migrations"],
   "definitions": {
     "envName": { "type": "string", "pattern": "^LAZYCLOUD_[A-Z0-9_]+$" },
     "settings": {
@@ -11,9 +11,10 @@
     },
     "secretKeys": { "type": "array", "items": { "$ref": "#/definitions/envName" }, "uniqueItems": true },
     "digest": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64})?$" },
+    "image": { "type": "string", "pattern": "^[^\\s]+@sha256:[0-9a-f]{64}$" },
     "component": {
       "type": "object",
-      "required": ["repository", "replicas", "config", "secretKeys", "resources"],
+      "required": ["repository", "replicas", "resources"],
       "properties": {
         "repository": { "type": "string", "minLength": 1 },
         "digest": { "$ref": "#/definitions/digest" },
@@ -25,31 +26,46 @@
     }
   },
   "properties": {
+    "domain": { "type": "string", "pattern": "^([a-z0-9-]+\\.)+[a-z]{2,}$|^$" },
+    "awsRegion": { "type": "string" },
+    "release": {
+      "type": "object",
+      "required": ["version"],
+      "properties": { "version": { "type": "string" } }
+    },
     "image": {
       "type": "object",
-      "required": ["registry", "tag"],
+      "required": ["registry"],
       "properties": {
         "registry": { "type": "string" },
-        "tag": { "type": "string" },
         "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
       }
     },
     "secrets": {
       "type": "object",
-      "required": ["name", "masterKey"],
-      "properties": { "name": { "type": "string", "minLength": 1 }, "masterKey": { "type": "string", "minLength": 1 } }
+      "required": ["name", "masterKey", "tunnelCredentials"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "masterKey": { "type": "string", "minLength": 1 },
+        "tunnelCredentials": { "type": "string", "minLength": 1 }
+      }
     },
     "externalSecrets": {
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
+        "documents": {
+          "type": "object",
+          "properties": { "platform": { "type": "string" }, "operator": { "type": "string" } },
+          "additionalProperties": false
+        },
         "data": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
             "required": ["document", "property"],
             "properties": {
-              "document": { "type": "string" },
+              "document": { "enum": ["platform", "operator"] },
               "property": { "type": "string" },
               "decodingStrategy": { "enum": ["None", "Base64", "Base64URL", "Auto"] }
             },
@@ -61,12 +77,11 @@
     "config": { "$ref": "#/definitions/settings" },
     "networkPolicy": {
       "type": "object",
-      "required": ["enabled", "ingressFrom", "edgeFrom", "hostCIDRs", "nodeCIDRs", "metricsFrom"],
+      "required": ["enabled", "hostCIDRs", "tcpCIDRs", "nodeCIDRs", "metricsFrom"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "ingressFrom": { "type": "array", "items": { "type": "object" } },
-        "edgeFrom": { "type": "array", "items": { "type": "object" } },
         "hostCIDRs": { "type": "array", "items": { "type": "string" } },
+        "tcpCIDRs": { "type": "array", "items": { "type": "string" } },
         "nodeCIDRs": { "type": "array", "items": { "type": "string" } },
         "metricsFrom": { "type": "array", "items": { "type": "object" } }
       }
@@ -75,33 +90,60 @@
       "allOf": [
         { "$ref": "#/definitions/component" },
         {
-          "required": ["drainDelaySeconds", "hostService", "edgeService"],
+          "required": ["config", "secretKeys", "drainDelaySeconds", "hostService", "tcpService"],
           "properties": {
             "drainDelaySeconds": { "type": "integer", "minimum": 0 },
-            "edgeService": {
-              "type": "object",
-              "properties": {
-                "type": { "enum": ["ClusterIP", "LoadBalancer"] }
-              }
-            },
             "hostService": {
               "type": "object",
+              "required": ["type"],
               "properties": {
                 "type": {
-                  "description": "Plaintext gRPC until the agent speaks TLS; never a LoadBalancer or NodePort.",
-                  "enum": ["ClusterIP"]
-                }
+                  "description": "LoadBalancer terminates TLS with certificateArn; ClusterIP keeps hosts inside the cluster. Never NodePort: the port serves plaintext gRPC.",
+                  "enum": ["ClusterIP", "LoadBalancer"]
+                },
+                "certificateArn": { "type": "string" }
               }
+            },
+            "tcpService": {
+              "type": "object",
+              "required": ["enabled", "port"],
+              "properties": { "enabled": { "type": "boolean" }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 } }
             }
           }
         }
       ]
     },
-    "scheduler": { "$ref": "#/definitions/component" },
+    "scheduler": {
+      "allOf": [{ "$ref": "#/definitions/component" }, { "required": ["config", "secretKeys"] }]
+    },
+    "web": { "$ref": "#/definitions/component" },
+    "cloudflared": {
+      "type": "object",
+      "required": ["replicas", "image"],
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "image": { "$ref": "#/definitions/image" },
+        "tunnelId": { "type": "string" },
+        "argocd": { "type": "boolean" }
+      }
+    },
     "migrations": {
       "type": "object",
       "required": ["secretKeys"],
       "properties": { "secretKeys": { "$ref": "#/definitions/secretKeys" } }
+    },
+    "agentRelease": {
+      "type": "object",
+      "properties": { "rollout": { "type": "integer", "minimum": 0, "maximum": 100 } }
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/image" },
+        "endpoint": { "type": "string" },
+        "sampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" }
+      }
     }
   }
 }

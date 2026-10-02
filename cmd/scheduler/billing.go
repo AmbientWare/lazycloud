@@ -37,10 +37,10 @@ type billingLoops struct {
 
 // newBillingLoops reads the Stripe credentials from the environment;
 // without them payments are off and metering still runs.
-func newBillingLoops(pool *pgxpool.Pool, exec *execution.Execution, store *storage.Storage, logger *slog.Logger) *billingLoops {
+func newBillingLoops(pool, session *pgxpool.Pool, exec *execution.Execution, store *storage.Storage, logger *slog.Logger) *billingLoops {
 	cfg := billing.Config{Stripe: billing.StripeConfig{
 		SecretKey: os.Getenv("LAZYCLOUD_STRIPE_API_KEY"), WebhookSecret: os.Getenv("LAZYCLOUD_STRIPE_WEBHOOK_SECRET"),
-	}}
+	}, SessionPool: session}
 	if cfg.Stripe.SecretKey == "" {
 		logger.Warn("payments are off: set LAZYCLOUD_STRIPE_API_KEY; usage is metered against credit only")
 	}

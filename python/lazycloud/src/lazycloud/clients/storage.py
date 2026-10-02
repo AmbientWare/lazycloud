@@ -294,9 +294,9 @@ def put_presigned(url: str, content: bytes) -> str:
 
 
 def get_presigned(url: str) -> bytes:
-    """The bytes at a presigned GET URL."""
+    """The bytes at a download URL, following its redirect to the store."""
     try:
-        response = httpx.get(url, timeout=_TRANSFER_TIMEOUT)
+        response = httpx.get(url, timeout=_TRANSFER_TIMEOUT, follow_redirects=True)
     except httpx.HTTPError as exc:
         raise ApiConnectionError("GET", "presigned download", _reason(exc)) from exc
     _check_transfer(response, "download")
@@ -304,9 +304,9 @@ def get_presigned(url: str) -> bytes:
 
 
 def download_presigned(url: str, destination: Path) -> None:
-    """Stream a presigned GET into a file, replacing it."""
+    """Stream a download URL into a file, replacing it."""
     try:
-        with httpx.stream("GET", url, timeout=_TRANSFER_TIMEOUT) as response:
+        with httpx.stream("GET", url, timeout=_TRANSFER_TIMEOUT, follow_redirects=True) as response:
             if response.status_code >= 300:
                 response.read()
                 _check_transfer(response, "download")
