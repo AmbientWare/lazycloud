@@ -5366,7 +5366,7 @@ export interface components {
             gpu_type: string;
             /** @description Unreserved capacity on serving hosts. */
             warm_free: components["schemas"]["FleetCapacity"];
-            /** @description The idle capacity the headroom floor keeps. */
+            /** @description The free capacity on serving hosts the plan keeps. */
             warm_target: components["schemas"]["FleetCapacity"];
             /** @description Stopped reserves prepared for the agent release they should run. */
             reserve_ready: components["schemas"]["FleetCapacity"];
@@ -5381,6 +5381,7 @@ export interface components {
         FleetSummary: {
             /** Format: date-time */
             observed_at: string;
+            /** @description The planner's last published plan; absent once it expires. */
             plan?: {
                 /** Format: date-time */
                 generated_at: string;
@@ -5416,7 +5417,7 @@ export interface components {
             capacity: components["schemas"]["FleetCapacity"];
             allocated: components["schemas"]["FleetCapacity"];
             containers: number;
-            /** @description Serving and on the target agent release. */
+            /** @description Serving on the agent release the host should run, or a stopped reserve prepared for it. */
             ready: boolean;
         };
         FleetNodePage: {

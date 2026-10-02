@@ -3486,7 +3486,7 @@ type FleetMarket struct {
 	// WarmFree Unreserved capacity on serving hosts.
 	WarmFree FleetCapacity `json:"warm_free"`
 
-	// WarmTarget The idle capacity the headroom floor keeps.
+	// WarmTarget The free capacity on serving hosts the plan keeps.
 	WarmTarget FleetCapacity `json:"warm_target"`
 }
 
@@ -3505,7 +3505,7 @@ type FleetNode struct {
 	Preemptible bool              `json:"preemptible"`
 	Provider    FleetNodeProvider `json:"provider"`
 
-	// Ready Serving and on the target agent release.
+	// Ready Serving on the agent release the host should run, or a stopped reserve prepared for it.
 	Ready  bool   `json:"ready"`
 	Region string `json:"region"`
 
@@ -3539,7 +3539,9 @@ type FleetStateCapacity struct {
 // FleetSummary defines model for FleetSummary.
 type FleetSummary struct {
 	ObservedAt time.Time `json:"observed_at"`
-	Plan       *struct {
+
+	// Plan The planner's last published plan; absent once it expires.
+	Plan *struct {
 		ExpiresAt   time.Time     `json:"expires_at"`
 		GeneratedAt time.Time     `json:"generated_at"`
 		Markets     []FleetMarket `json:"markets"`

@@ -7040,7 +7040,7 @@ components:
           description: Unreserved capacity on serving hosts.
           allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
         warm_target:
-          description: The idle capacity the headroom floor keeps.
+          description: The free capacity on serving hosts the plan keeps.
           allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
         reserve_ready:
           description: Stopped reserves prepared for the agent release they should run.
@@ -7064,6 +7064,7 @@ components:
       properties:
         observed_at: { type: string, format: date-time }
         plan:
+          description: The planner's last published plan; absent once it expires.
           type: object
           required: [generated_at, expires_at, markets]
           properties:
@@ -7110,7 +7111,9 @@ components:
         allocated: { $ref: "#/components/schemas/FleetCapacity" }
         containers: { type: integer }
         ready:
-          description: Serving and on the target agent release.
+          description: >-
+            Serving on the agent release the host should run, or a stopped
+            reserve prepared for it.
           type: boolean
 
     FleetNodePage:
