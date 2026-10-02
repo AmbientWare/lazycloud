@@ -146,7 +146,12 @@ repository named by its digest, so equal definitions still share one image
 and one build, and a pull login reaches that image's repository alone.
 Caches and filesystem snapshots have a repository per workspace. A build
 may push only to its image and its workspace's cache, a snapshot only to
-its workspace's snapshots; nothing else pushes. The server's own login
+its workspace's snapshots; nothing else pushes. Only a build on a platform
+host publishes the shared image: a forced rebuild, a build on a connected
+account's or joined machine's host, and every build of a workspace bound
+to a connected account push to `workspace-images/<workspace>/<digest>`
+and publish for their workspace alone
+(`TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces`). The server's own login
 reads only. Tests: `TestHostLoginsAreScopedToTheCommandsRepositories`,
 `TestRepositoryOfAReference`, `TestCompletedBuildPublishesOnlyAPushedDigest`,
 `TestForcedRebuildsAndCachesStayInTheirWorkspace`.
