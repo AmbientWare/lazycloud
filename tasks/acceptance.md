@@ -94,6 +94,103 @@ container.
    autoscaler adds containers. That is better than the reference (24.5 s with
    44 errors), but it is the slowest rewrite path.
 
+## Performance fixes (branch perf-fixes)
+
+Before is go-rewrite at dd0071467 and after is perf-fixes merged with
+568ebaf0e. Both ran on the same host and stack, fresh each time, through the
+same sequence (deploy, remote, maps, replicas). The raw files are
+`results/new-before.jsonl` and `results/new-after-same-sequence.jsonl`. The
+full suite against the reference is `results/report-after.md`.
+
+**1. Per-completion statements walked the queued backlog.** Statistics
+taken while the queue is empty make the planner treat the queued partial
+indexes as free and walk them. The dependency locks now read tasks by key.
+`OFFSET 0` keeps the status test out of the locking scan, and terminal
+dependents are locked and then dropped. The release batch reads the first
+rows an index yields. Planning finds queued releases with a skip scan and
+counts demand only up to `max_containers * tasks_per_container`.
+
+| At 10,000 queued, statistics from before the queue filled | Before | After |
+| --- | --- | --- |
+| LockQueuedDependents, buffers | 191 | 2 |
+| LockDependentClosure, buffers | 182 | 8 |
+| LockQueuedWithDependents (batch of 10), buffers | 12,639 | 30 |
+| PlanningReleases queued candidates, buffers | 132 | 7 |
+| map 10,000: DB blocks per task | 2,416 | 567 |
+| map 2,000: DB blocks per task | 984 | 555 |
+
+Server span for the 10,000-input map did not change beyond noise (14.8 s
+before, 7.4 to 15.4 s across the after runs). The remaining per-claim cost is
+the claim query passing dead `tasks_queued` entries under fast churn. That is
+about 300 buffers a claim late in a 10,000-input map, and it grows with
+churn, not with the backlog.
+
+**2. Container readiness.** The managed runtime shipped without bytecode and
+is mounted read-only, so every start compiled every module it imported. It
+now ships unchecked-hash bytecode. The runner imports uvicorn only for HTTP
+workers. The generated API models build on first use (`APIModel`,
+`defer_build`).
+
+| | Before | After | Reference |
+| --- | --- | --- | --- |
+| Runner and app import, ms | 950 | 540 | |
+| Runtime stage (start to ready), ms | 941 | 535 to 600 | |
+| Assigned to ready, median ms | 1,109 | 644 to 730 (3 runs) | 722 |
+| Cold `.remote()` p50 / p95, ms | 1,278 / 1,343 | 866 / 1,054 | 1,318 / 1,425 |
+| Cold endpoint p50, ms | 1,124 | 780 | 903 |
+
+Docker create and start takes 95 to 340 ms of that and varies with the
+host's other containers.
+
+**3. Idle polling grew with scheduler replicas.** One replica leads through
+a session advisory lock, and the others block inside PostgreSQL waiting for
+it. Only the leader runs timed passes. While no task is queued or running
+and no container is live, quiet loops wait for a NOTIFY or a 30 s safety
+tick. Schedules and callbacks sleep until their next due time, and a schedule
+change notifies `lc_schedule`. Every replica still runs passes when woken.
+
+| Idle, whole stack | Before | After | Reference |
+| --- | --- | --- | --- |
+| PG statements/s, 1 scheduler | 46.4 | 7.9 | 108 |
+| PG statements/s, 2 schedulers | 90.8 | 7.8 | 108 |
+| PG bytes/s, 1 / 2 schedulers | 11.7k / 25.0k | 3.6k / 3.1k | 112k / 114k |
+| Scheduler passes/s, 1 / 2 replicas (guard; before is the old timing) | 6.0 / 12.0 | 0.17 / 0.17 | |
+
+**4. Idle reads of retained rows.** With 20,042 stopped containers no idle
+statement scans `containers` whole, before or after. The 93-row scans in the
+first run were the planner reading a tiny table. Three real history reads
+are fixed:
+- Each host report read every attempt that host's live containers finished in
+  the last ten minutes. It now reads the `attempts_ended_unseen` partial index
+  (migration 0013).
+- The live-work probe uses ordered partial-index lookups. EXISTS let the
+  planner scan history for a match.
+- The planning skip scan above.
+
+Idle statements fell from 49.6 to 8.0/s at that history. Idle rows read
+match the reference within noise: 143 to 221/s against 200 to 221/s.
+
+**Guards** run against real PostgreSQL in CI time:
+- `TestPerCompletionCostIgnoresBacklog` (internal/execution, 2 s) runs EXPLAIN
+  ANALYZE on ten per-completion and claim statements at 100 and 10,000 queued
+  over 20,000 finished tasks. It checks fresh and stale statistics and custom
+  and generic plans. It fails if buffers grow by more than 20 or a node over
+  tasks, attempts or containers reads more than 500 rows. It fails on the
+  pre-fix queries.
+- `TestRecurringScansReadOnlyLiveRows` (internal/execution, 1 s) checks the
+  same bounds for fifteen recurring idle statements between 1,000 and 21,000
+  finished tasks.
+- `TestIdlePassesDoNotGrowWithReplicas` (cmd/scheduler, 17 s) runs two real
+  schedulers. It fails above 1.5 idle passes/s or if the second replica adds
+  more than 0.5/s. Per-replica polling measured 6 and 12.
+- `TestLeadElectsOneAndHandsOver` (internal/database, 3 s) covers election,
+  session loss and handover.
+
+Against the reference after the fixes, the rewrite is ahead in every measured
+scenario except idle rows read, which is level within noise
+(`results/report-after.md`). Assigned to ready ranged 644 to 730 ms across
+three runs against the reference's single 722 ms measurement.
+
 ## Reference defects found
 
 - After an agent stop and start with a container stopped mid-cleanup, the
