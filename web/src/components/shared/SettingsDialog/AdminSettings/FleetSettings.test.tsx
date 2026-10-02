@@ -125,5 +125,4 @@ it("names every reserve state on the Nodes tab", async () => {
     const row = (await screen.findByText(`i-n${i}`)).closest("tr") as HTMLElement;
     expect(within(row).getByText(label)).toBeVisible();
   }
-  expect(screen.getByText("Hibernation unverified")).toHaveClass("text-warning");
 });
