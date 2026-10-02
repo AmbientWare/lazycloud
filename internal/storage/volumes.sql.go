@@ -431,7 +431,7 @@ from apps a
 join workloads w on w.app_id = a.id
 join releases r on r.id = w.active_release_id
 cross join lateral jsonb_array_elements(coalesce(r.spec -> 'volumes', '[]'::jsonb)) as m(spec)
-where a.workspace_id = $1 and w.desired_state = 'active'
+where a.workspace_id = $1 and a.state <> 'deleted' and w.desired_state = 'active'
   and m.spec -> 'cloud_bucket' is null
   and (m.spec ->> 'name') = any($2::text[])
 order by a.name, w.kind, w.name
