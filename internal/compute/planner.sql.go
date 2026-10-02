@@ -189,7 +189,7 @@ func (q *Queries) FailPreparing(ctx context.Context, arg FailPreparingParams) ([
 }
 
 const fleetMarkets = `-- name: FleetMarkets :many
-select market, plan, generated_at, expires_at, (expires_at > now())::bool as current, pressure_since,
+select market::text as market, plan, generated_at, expires_at, pressure_since,
        consolidating_host, consolidation_started_at, consolidation_cooldown_until
 from fleet_markets
 order by market
@@ -200,14 +200,15 @@ type FleetMarketsRow struct {
 	Plan                       []byte
 	GeneratedAt                time.Time
 	ExpiresAt                  time.Time
-	Current                    bool
 	PressureSince              *time.Time
 	ConsolidatingHost          *uuid.UUID
 	ConsolidationStartedAt     *time.Time
 	ConsolidationCooldownUntil *time.Time
 }
 
-// The published markets; current is false once a plan expired.
+// The published markets. An expired plan is no plan; readers compare
+// expires_at with their clock. The cast gives sqlc a row type apart from
+// the admin FleetMarket.
 func (q *Queries) FleetMarkets(ctx context.Context) ([]FleetMarketsRow, error) {
 	rows, err := q.db.Query(ctx, fleetMarkets)
 	if err != nil {
@@ -222,7 +223,6 @@ func (q *Queries) FleetMarkets(ctx context.Context) ([]FleetMarketsRow, error) {
 			&i.Plan,
 			&i.GeneratedAt,
 			&i.ExpiresAt,
-			&i.Current,
 			&i.PressureSince,
 			&i.ConsolidatingHost,
 			&i.ConsolidationStartedAt,

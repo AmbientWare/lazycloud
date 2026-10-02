@@ -140,8 +140,10 @@ where until > now() or refused_at > now() - make_interval(secs => @window_second
 order by connection_key, region, instance_type, market;
 
 -- name: FleetMarkets :many
--- The published markets; current is false once a plan expired.
-select market, plan, generated_at, expires_at, (expires_at > now())::bool as current, pressure_since,
+-- The published markets. An expired plan is no plan; readers compare
+-- expires_at with their clock. The cast gives sqlc a row type apart from
+-- the admin FleetMarket.
+select market::text as market, plan, generated_at, expires_at, pressure_since,
        consolidating_host, consolidation_started_at, consolidation_cooldown_until
 from fleet_markets
 order by market;
