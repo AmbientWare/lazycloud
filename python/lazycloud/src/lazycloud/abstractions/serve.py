@@ -38,7 +38,11 @@ from lazycloud.clients.endpoints import (
 )
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import SdkError
-from lazycloud.source_sync import collect_source_files, ensure_source_ignore_file
+from lazycloud.source_sync import (
+    SOURCE_IGNORE_FILE_WRITTEN_NOTICE,
+    collect_source_files,
+    ensure_source_ignore_file,
+)
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
@@ -302,7 +306,7 @@ class WorkspaceSyncer:
 
     def start(self) -> None:
         if ensure_source_ignore_file(self.root):
-            self.terminal.detail("Wrote .lazycloudignore")
+            self.terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
         self._thread = threading.Thread(target=self._run, name="serve-sync", daemon=True)
         self._thread.start()
 
@@ -417,7 +421,7 @@ class ServePreviewSession:
             # timeout, or a lapsed lease.
             state = get_preview(self.client, self.workspace, self.preview.id)
             if state.state is PreviewState.stopped:
-                self.terminal.warn("serve container stopped")
+                self.terminal.warn("serve container stopped; its exit code is not reported")
                 return
             self.terminal.warn("serve attach stream ended; retrying")
             time.sleep(self.reconnect_seconds)
