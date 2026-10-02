@@ -11,6 +11,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -80,10 +81,12 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	case "migrate":
 		fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 		dbURL := databaseFlag(fs)
+		sessionURL := sessionFlag(fs)
 		if err := fs.Parse(args); err != nil {
 			return fmt.Errorf("parse flags: %w", err)
 		}
-		return withPool(ctx, *dbURL, func(pool *pgxpool.Pool) error { return database.Migrate(ctx, pool) })
+		// The migration lock belongs to a session.
+		return withPool(ctx, cmp.Or(*sessionURL, *dbURL), func(pool *pgxpool.Pool) error { return database.Migrate(ctx, pool) })
 	case "admin":
 		return admin(ctx, args, out)
 	}
@@ -109,6 +112,11 @@ func databaseFlag(fs *flag.FlagSet) *string {
 	return fs.String("database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
 }
 
+func sessionFlag(fs *flag.FlagSet) *string {
+	return fs.String("database-session-url", env("LAZYCLOUD_DATABASE_SESSION_URL", ""),
+		"direct PostgreSQL URL of connections that hold session state; empty uses -database-url (LAZYCLOUD_DATABASE_SESSION_URL)")
+}
+
 func withPool(ctx context.Context, url string, fn func(*pgxpool.Pool) error) error {
 	if url == "" {
 		return errors.New("the database URL is required: set LAZYCLOUD_DATABASE_URL or -database-url")
@@ -126,7 +134,7 @@ type serveConfig struct {
 	httpAddr      string
 	grpcAddr      string
 	healthAddr    string
-	listenURL     string
+	sessionURL    *string
 	objectStore   storage.Config
 	imageTemplate string
 	secretsKey    string
@@ -153,8 +161,7 @@ func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cfg serveConfig
 	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
-	fs.StringVar(&cfg.listenURL, "database-listen-url", env("LAZYCLOUD_DATABASE_LISTEN_URL", ""),
-		"PostgreSQL URL of LISTEN connections, which hold their session; empty uses -database-url (LAZYCLOUD_DATABASE_LISTEN_URL)")
+	cfg.sessionURL = sessionFlag(fs)
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
 	fs.StringVar(&cfg.healthAddr, "health-addr", env("LAZYCLOUD_HEALTH_ADDR", ""), "address of /healthz and /readyz, unset for none (LAZYCLOUD_HEALTH_ADDR)")
@@ -258,14 +265,18 @@ func serve(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	return withPool(ctx, cfg.databaseURL, func(pool *pgxpool.Pool) error {
-		if err := database.Migrate(ctx, pool); err != nil {
+		session, closeSession, err := database.OpenSession(ctx, *cfg.sessionURL, pool)
+		if err != nil {
+			return err
+		}
+		defer closeSession()
+		if err := database.Migrate(ctx, session); err != nil {
 			return err
 		}
 		var ls listeners
 		// The servers close them too; this covers a failed setup.
 		defer func() { ls.close() }()
 		var lc net.ListenConfig
-		var err error
 		for _, l := range []struct {
 			addr string
 			into *net.Listener
@@ -277,7 +288,7 @@ func serve(ctx context.Context, args []string) error {
 				return fmt.Errorf("listen on %s: %w", l.addr, err)
 			}
 		}
-		return serveWith(ctx, pool, cfg, tel, logger, ls)
+		return serveWith(ctx, pool, session, cfg, tel, logger, ls)
 	})
 }
 
@@ -295,19 +306,15 @@ func (ls listeners) close() {
 	}
 }
 
-// serveWith serves on the listeners until ctx ends, then drains.
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
+// serveWith serves on the listeners until ctx ends, then drains. LISTEN
+// connections come from session (database.OpenSession).
+func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
-	listenPool, closeListen, err := database.OpenListen(ctx, cfg.listenURL, pool)
-	if err != nil {
-		return err
-	}
-	defer closeListen()
 	// Billing supplies plan limits once it lands; until then account
 	// metrics leave them out.
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
-	changes := observability.NewChanges(listenPool, observability.DefaultChangesConfig(), tel.Registry, logger)
-	listener := database.NewListener(listenPool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
+	changes := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
+	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
 	cfg.objectStore.BrowserOrigin = cfg.identity.PublicURL
@@ -337,7 +344,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if relayURL == "" {
 		relayURL = cfg.relayAddr
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, ListenPool: listenPool}
+	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session}
 	var tcpConfig edge.TCPConfig
 	if ls.tcp != nil {
 		if cfg.tcp.url == "" || cfg.tcp.cert == "" || cfg.tcp.key == "" {

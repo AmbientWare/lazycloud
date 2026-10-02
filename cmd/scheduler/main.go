@@ -101,7 +101,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	defer pool.Close()
-	if err := database.Migrate(ctx, pool); err != nil {
+	// LISTEN, the metering lock and the migration lock hold session state.
+	session, closeSession, err := database.OpenSession(ctx, os.Getenv("LAZYCLOUD_DATABASE_SESSION_URL"), pool)
+	if err != nil {
+		return err
+	}
+	defer closeSession()
+	if err := database.Migrate(ctx, session); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
@@ -154,14 +160,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, images.Config{})
-	// LISTEN connections hold their session, so a pooling proxy may need
-	// them on their own URL.
-	listenPool, closeListen, err := database.OpenListen(ctx, os.Getenv("LAZYCLOUD_DATABASE_LISTEN_URL"), pool)
-	if err != nil {
-		return err
-	}
-	defer closeListen()
-	listener := database.NewListener(listenPool, logger, database.ChannelExecution, database.ChannelImageBuild,
+	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelFleetWake()
@@ -343,7 +342,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	accounts.start(ctx, group, beats)
-	newBillingLoops(pool, exec, store, logger).start(ctx, group)
+	newBillingLoops(pool, session, exec, store, logger).start(ctx, group)
 	if healthListener != nil {
 		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
 		group.Go(func() error {

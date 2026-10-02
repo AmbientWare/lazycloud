@@ -5,6 +5,7 @@
 package billing
 
 import (
+	"cmp"
 	"errors"
 	"log/slog"
 	"strings"
@@ -52,11 +53,15 @@ type Config struct {
 	// people back under it.
 	PublicURL string
 	Stripe    StripeConfig
+	// SessionPool holds the metering lock, a session advisory lock
+	// (database.OpenSession); nil uses the pool.
+	SessionPool *pgxpool.Pool
 }
 
 // Billing is the billing owner.
 type Billing struct {
 	pool    *pgxpool.Pool
+	session *pgxpool.Pool
 	queries *Queries
 	rates   rates
 	stripe  *stripeProvider
@@ -69,7 +74,7 @@ type Billing struct {
 // answers ErrPaymentsUnavailable.
 func NewBilling(pool *pgxpool.Pool, cfg Config, logger *slog.Logger) *Billing {
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
-	b := &Billing{pool: pool, queries: New(pool), rates: newRates(), cfg: cfg, logger: logger}
+	b := &Billing{pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), rates: newRates(), cfg: cfg, logger: logger}
 	if cfg.Stripe.SecretKey != "" {
 		b.stripe = newStripeProvider(cfg.Stripe)
 	}

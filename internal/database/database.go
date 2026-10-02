@@ -28,16 +28,18 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// OpenListen returns the pool LISTEN connections come from: its own pool
-// at url, which a pooling proxy can route to a connection that keeps its
-// session, or main when url is empty. Each listener holds one connection
-// for its lifetime. close releases the pool it opened.
-func OpenListen(ctx context.Context, url string, main *pgxpool.Pool) (pool *pgxpool.Pool, closePool func(), err error) {
+// OpenSession returns the pool of connections that keep state in their
+// session: LISTEN, session advisory locks and the migration lock. A
+// transaction pooler runs a session's later statements on other backends,
+// where that state is gone, so these connect through url, a direct
+// connection; main serves everything else. An empty url uses main.
+// closePool releases the pool it opened.
+func OpenSession(ctx context.Context, url string, main *pgxpool.Pool) (pool *pgxpool.Pool, closePool func(), err error) {
 	if url == "" {
 		return main, func() {}, nil
 	}
 	if pool, err = Open(ctx, url); err != nil {
-		return nil, nil, fmt.Errorf("listen pool: %w", err)
+		return nil, nil, fmt.Errorf("session pool: %w", err)
 	}
 	return pool, pool.Close, nil
 }

@@ -54,7 +54,7 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- serveWith(ctx, pool, cfg, tel, slog.New(slog.DiscardHandler), ls)
+		done <- serveWith(ctx, pool, pool, cfg, tel, slog.New(slog.DiscardHandler), ls)
 	}()
 
 	waitFor(t, probes+"/readyz", http.StatusOK)
