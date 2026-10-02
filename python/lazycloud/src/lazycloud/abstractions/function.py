@@ -444,7 +444,9 @@ class Function(Generic[P, R]):
             terminal=self.terminal,
         )[0]
 
-    def serve(self, *, timeout: int = 0, sync_dir: str | None = None) -> Preview:
+    def serve(
+        self, *, timeout: int = 0, workspace: str | None = None, sync_dir: str | None = None
+    ) -> Preview:
         """Run a preview container that follows the working tree until Ctrl+C.
 
         `.remote()`, `.spawn()`, `.map()` and `lazycloud run` from this machine
@@ -453,7 +455,12 @@ class Function(Generic[P, R]):
         from lazycloud.abstractions.serve import serve_workload
 
         return serve_workload(
-            self, kind="function", authorized=True, timeout=timeout, sync_dir=sync_dir or "."
+            self,
+            kind="function",
+            authorized=True,
+            timeout=timeout,
+            sync_dir=sync_dir or ".",
+            workspace=workspace or self.workspace,
         )
 
     def shell(
