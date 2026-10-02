@@ -135,7 +135,7 @@ SaaS, and the edge routes only verified ones.
 
 - The API host serves deployed endpoints and ASGI apps on path routes, as
   the reference's API did, so the dashboard calls them same-origin with its
-  session: `/v1/workspaces/{ws}/apps/{app}/{endpoints|asgi}/{name}[/versions/{n}]/invoke[/{path}]`,
+  session: `/v1/workspaces/{ws}/apps/{app}/workloads/{endpoint|asgi}/{name}[/versions/{n}]/invoke[/{path}]`,
   any method, streaming and WebSockets through the edge with its
   admission, records and billing refusals. The session cookie (Origin
   checked for mutations) or a bearer token authenticates; neither reaches

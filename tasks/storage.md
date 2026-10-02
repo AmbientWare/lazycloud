@@ -125,6 +125,8 @@ PostgreSQL holds metadata and authority; the object store holds bytes.
   through `:` are gone.
 - `m[missing]` raises `KeyError` in the SDK (the reference returned None,
   which broke `MutableMapping`).
+- Map keys need at least one character; `m[""]` fails validation, because a
+  key is a URL path segment.
 - Function `disk=` is the writable layer limit, sent as `resources.disk_mib`.
   Docker enforces it only on overlay2 over XFS with project quotas; other
   hosts log at startup that the limit is not enforced.
