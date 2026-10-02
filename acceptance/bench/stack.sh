@@ -70,12 +70,13 @@ start() {
   bin/server admin publish-agent-release -version "$release" -dist "$LAZYCLOUD_AGENT_DIST_DIR" >/dev/null
   if [ ! -f "$state/token" ]; then
     bin/server admin create-user --email dev@lazycloud.local --admin >/dev/null
+    # Complimentary first: its entitlements allow the second workspace.
+    bin/server admin set-complimentary --email dev@lazycloud.local
     bin/server admin create-workspace --name dev --owner-email dev@lazycloud.local >/dev/null
     # The backlog phase measures fairness between two workspaces.
     bin/server admin create-workspace --name dev2 --owner-email dev@lazycloud.local >/dev/null
     bin/server admin create-token --email dev@lazycloud.local --name dev >"$state/token"
   fi
-  bin/server admin set-complimentary --email dev@lazycloud.local
   [ -f "$state/agent/identity.json" ] || bin/server admin create-join-token >"$state/join-token"
 
   bin/server serve >"$state/logs/server.log" 2>&1 &
