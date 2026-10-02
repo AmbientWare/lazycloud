@@ -51,6 +51,7 @@ type Endpoints struct {
 	EC2            string
 	STS            string
 	CloudFormation string
+	ServiceQuotas  string
 }
 
 // Network is where instances launch in one region.
