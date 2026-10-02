@@ -76,7 +76,8 @@ provider packet merges.
 
 - Branched from origin/fleet-capacity-plan, rebased onto the provider
   packet's schema commit `325b25cd86d077e50b34aacd7c49d9894c41ef7f` on
-  origin/fleet-provider.
+  origin/fleet-provider; after the review, rebased onto
+  origin/fleet-capacity-plan at `37911167`, with the provider merged.
 - Agent: suspend.go (timerfd clock jumps, sleep gap, resume reconnect),
   reserve.go (PrepareReserve), Hello fields 72-73, proto fields 71.
 - Compute and host session: migration 0004, reserve_session.go and .sql,
@@ -113,6 +114,18 @@ provider packet merges.
   the host row's creation to its first session, resume and boot from
   `resume_requested_at` to the Hello. Rows older than a day are pruned on
   insert.
+- An agent update never sends a reserve into service. The session sends no
+  PrepareReserve while an update is offered or `updating_until` is set,
+  and a refusal marked `ReserveReady.updating` (a trial not yet committed)
+  keeps the host preparing and is asked again on a later sync. plan.md's
+  "preparing -> ready (agent refused: work arrived, update in flight)"
+  becomes "work arrived"; an update in flight keeps the host preparing.
+- A host the planner resumes while it is still stopping never slept and
+  sends no new Hello, so its session ends with Aborted when it finds the
+  host resuming; the agent's next Hello settles the resume.
+- A resume that joins also ends the last stop's facts
+  (`stop_requested_at`, `force_stop_at`, `hibernate_refused_at`,
+  `stopped_at`), even when the actuator never recorded the start.
 - P1 (approved), in its own commit: the agent writes no kmsg marker, and
   the resume report proves the hibernation. Settling a resume writes
   `image_evidence`: memory restored makes it `saved`, a cold boot after a

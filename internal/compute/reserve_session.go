@@ -95,11 +95,10 @@ func (c *Compute) ReserveSync(ctx context.Context, host HostID, agent AgentState
 	if err != nil {
 		return "", nil, fmt.Errorf("read reserve host: %w", err)
 	}
-	switch Phase(row.Phase) {
-	case PhaseResuming:
+	if Phase(row.Phase) == PhaseResuming {
 		return ReserveRejoin, nil, nil
-	case PhasePreparing:
-	default:
+	}
+	if Phase(row.Phase) != PhasePreparing {
 		return ReserveIdle, nil, nil
 	}
 	if row.Updating {
