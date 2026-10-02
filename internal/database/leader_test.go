@@ -1,14 +1,17 @@
 package database_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -138,4 +141,76 @@ func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
 			t.Fatalf("%s: the check sees a released lock", name)
 		}
 	}
+}
+
+// A standby whose lock wait passes lock_timeout, as Neki's router imposes,
+// waits again without reporting lost leadership, and leads once the lock is
+// free.
+func TestStandbyWaitsAgainAfterLockTimeout(t *testing.T) {
+	ctx := t.Context()
+	pool := dbtest.New(t)
+	var dbName string
+	if err := pool.QueryRow(ctx, "select current_database()").Scan(&dbName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "alter database "+pgx.Identifier{dbName}.Sanitize()+" set lock_timeout = '100ms'"); err != nil {
+		t.Fatal(err)
+	}
+	pool.Reset()
+	holder, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Release()
+	if _, err := holder.Exec(ctx, "select pg_advisory_lock(hashtextextended('test_leader', 0))"); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	var leading atomic.Bool
+	leadCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if err := database.Lead(leadCtx, pool, "test_leader", 100*time.Millisecond, leading.Store, logger); err != nil {
+			t.Error(err)
+		}
+	})
+	defer wg.Wait()
+	defer cancel()
+
+	time.Sleep(time.Second)
+	if leading.Load() {
+		t.Fatal("the standby leads while another session holds the lock")
+	}
+	if strings.Contains(logs.String(), "leadership lost") {
+		t.Fatalf("a timed-out wait reported lost leadership:\n%s", logs.String())
+	}
+	if _, err := holder.Exec(ctx, "select pg_advisory_unlock(hashtextextended('test_leader', 0))"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); !leading.Load() && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !leading.Load() {
+		t.Fatal("the standby did not lead once the lock was free")
+	}
+}
+
+// syncBuffer is a bytes.Buffer the leader's goroutine and the test share.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
