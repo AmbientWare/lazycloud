@@ -1,0 +1,313 @@
+{
+ "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02",
+ "published": {
+  "us-east-2": "2026-09-25T17:45:21Z",
+  "us-west-1": "2026-09-25T17:45:21Z",
+  "us-east-1": "2026-09-25T17:45:21Z",
+  "us-west-2": "2026-09-25T17:45:21Z"
+ },
+ "hourly_micros": {
+  "c6a.2xlarge": {
+   "us-east-1": 306000,
+   "us-east-2": 306000,
+   "us-west-1": 381600,
+   "us-west-2": 306000
+  },
+  "c6a.4xlarge": {
+   "us-east-1": 612000,
+   "us-east-2": 612000,
+   "us-west-1": 763200,
+   "us-west-2": 612000
+  },
+  "c6a.8xlarge": {
+   "us-east-1": 1224000,
+   "us-east-2": 1224000,
+   "us-west-1": 1526400,
+   "us-west-2": 1224000
+  },
+  "c6i.8xlarge": {
+   "us-east-1": 1360000,
+   "us-east-2": 1360000,
+   "us-west-1": 1696000,
+   "us-west-2": 1360000
+  },
+  "c7i.2xlarge": {
+   "us-east-1": 357000,
+   "us-east-2": 357000,
+   "us-west-1": 445200,
+   "us-west-2": 357000
+  },
+  "g4dn.12xlarge": {
+   "us-east-1": 3912000,
+   "us-east-2": 3912000,
+   "us-west-1": 4694000,
+   "us-west-2": 3912000
+  },
+  "g4dn.16xlarge": {
+   "us-east-1": 4352000,
+   "us-east-2": 4352000,
+   "us-west-1": 5222000,
+   "us-west-2": 4352000
+  },
+  "g4dn.2xlarge": {
+   "us-east-1": 752000,
+   "us-east-2": 752000,
+   "us-west-1": 902000,
+   "us-west-2": 752000
+  },
+  "g4dn.4xlarge": {
+   "us-east-1": 1204000,
+   "us-east-2": 1204000,
+   "us-west-1": 1445000,
+   "us-west-2": 1204000
+  },
+  "g4dn.8xlarge": {
+   "us-east-1": 2176000,
+   "us-east-2": 2176000,
+   "us-west-1": 2611000,
+   "us-west-2": 2176000
+  },
+  "g4dn.metal": {
+   "us-east-1": 7824000,
+   "us-east-2": 7824000,
+   "us-west-1": 9389000,
+   "us-west-2": 7824000
+  },
+  "g4dn.xlarge": {
+   "us-east-1": 526000,
+   "us-east-2": 526000,
+   "us-west-1": 631000,
+   "us-west-2": 526000
+  },
+  "g5.12xlarge": {
+   "us-east-1": 5672000,
+   "us-east-2": 5672000,
+   "us-west-2": 5672000
+  },
+  "g5.16xlarge": {
+   "us-east-1": 4096000,
+   "us-east-2": 4096000,
+   "us-west-2": 4096000
+  },
+  "g5.24xlarge": {
+   "us-east-1": 8144000,
+   "us-east-2": 8144000,
+   "us-west-2": 8144000
+  },
+  "g5.2xlarge": {
+   "us-east-1": 1212000,
+   "us-east-2": 1212000,
+   "us-west-2": 1212000
+  },
+  "g5.48xlarge": {
+   "us-east-1": 16288000,
+   "us-east-2": 16288000,
+   "us-west-2": 16288000
+  },
+  "g5.4xlarge": {
+   "us-east-1": 1624000,
+   "us-east-2": 1624000,
+   "us-west-2": 1624000
+  },
+  "g5.8xlarge": {
+   "us-east-1": 2448000,
+   "us-east-2": 2448000,
+   "us-west-2": 2448000
+  },
+  "g5.xlarge": {
+   "us-east-1": 1006000,
+   "us-east-2": 1006000,
+   "us-west-2": 1006000
+  },
+  "g6.12xlarge": {
+   "us-east-1": 4601600,
+   "us-east-2": 4601600,
+   "us-west-2": 4601600
+  },
+  "g6.16xlarge": {
+   "us-east-1": 3396800,
+   "us-east-2": 3396800,
+   "us-west-2": 3396800
+  },
+  "g6.24xlarge": {
+   "us-east-1": 6675200,
+   "us-east-2": 6675200,
+   "us-west-2": 6675200
+  },
+  "g6.2xlarge": {
+   "us-east-1": 977600,
+   "us-east-2": 977600,
+   "us-west-2": 977600
+  },
+  "g6.48xlarge": {
+   "us-east-1": 13350400,
+   "us-east-2": 13350400,
+   "us-west-2": 13350400
+  },
+  "g6.4xlarge": {
+   "us-east-1": 1323200,
+   "us-east-2": 1323200,
+   "us-west-2": 1323200
+  },
+  "g6.8xlarge": {
+   "us-east-1": 2014400,
+   "us-east-2": 2014400,
+   "us-west-2": 2014400
+  },
+  "g6.xlarge": {
+   "us-east-1": 804800,
+   "us-east-2": 804800,
+   "us-west-2": 804800
+  },
+  "g6e.12xlarge": {
+   "us-east-1": 10492640,
+   "us-east-2": 10492640,
+   "us-west-2": 10492640
+  },
+  "g6e.16xlarge": {
+   "us-east-1": 7577190,
+   "us-east-2": 7577190,
+   "us-west-2": 7577190
+  },
+  "g6e.24xlarge": {
+   "us-east-1": 15065590,
+   "us-east-2": 15065590,
+   "us-west-2": 15065590
+  },
+  "g6e.2xlarge": {
+   "us-east-1": 2242080,
+   "us-east-2": 2242080,
+   "us-west-2": 2242080
+  },
+  "g6e.48xlarge": {
+   "us-east-1": 30131180,
+   "us-east-2": 30131180,
+   "us-west-2": 30131180
+  },
+  "g6e.4xlarge": {
+   "us-east-1": 3004240,
+   "us-east-2": 3004240,
+   "us-west-2": 3004240
+  },
+  "g6e.8xlarge": {
+   "us-east-1": 4528560,
+   "us-east-2": 4528560,
+   "us-west-2": 4528560
+  },
+  "g6e.xlarge": {
+   "us-east-1": 1861000,
+   "us-east-2": 1861000,
+   "us-west-2": 1861000
+  },
+  "m6a.2xlarge": {
+   "us-east-1": 345600,
+   "us-east-2": 345600,
+   "us-west-1": 403200,
+   "us-west-2": 345600
+  },
+  "m6a.4xlarge": {
+   "us-east-1": 691200,
+   "us-east-2": 691200,
+   "us-west-1": 806400,
+   "us-west-2": 691200
+  },
+  "m6a.8xlarge": {
+   "us-east-1": 1382400,
+   "us-east-2": 1382400,
+   "us-west-1": 1612800,
+   "us-west-2": 1382400
+  },
+  "m7i.12xlarge": {
+   "us-east-1": 2419200,
+   "us-east-2": 2419200,
+   "us-west-1": 2822400,
+   "us-west-2": 2419200
+  },
+  "m7i.16xlarge": {
+   "us-east-1": 3225600,
+   "us-east-2": 3225600,
+   "us-west-1": 3763200,
+   "us-west-2": 3225600
+  },
+  "m7i.2xlarge": {
+   "us-east-1": 403200,
+   "us-east-2": 403200,
+   "us-west-1": 470400,
+   "us-west-2": 403200
+  },
+  "m7i.4xlarge": {
+   "us-east-1": 806400,
+   "us-east-2": 806400,
+   "us-west-1": 940800,
+   "us-west-2": 806400
+  },
+  "m7i.8xlarge": {
+   "us-east-1": 1612800,
+   "us-east-2": 1612800,
+   "us-west-1": 1881600,
+   "us-west-2": 1612800
+  },
+  "m7i.large": {
+   "us-east-1": 100800,
+   "us-east-2": 100800,
+   "us-west-1": 117600,
+   "us-west-2": 100800
+  },
+  "m7i.xlarge": {
+   "us-east-1": 201600,
+   "us-east-2": 201600,
+   "us-west-1": 235200,
+   "us-west-2": 201600
+  },
+  "p4d.24xlarge": {
+   "us-east-1": 21957642,
+   "us-east-2": 21957640,
+   "us-west-2": 21957640
+  },
+  "p4de.24xlarge": {
+   "us-east-1": 27447050,
+   "us-west-2": 27447050
+  },
+  "p5.48xlarge": {
+   "us-east-1": 55040000,
+   "us-east-2": 55040000,
+   "us-west-1": 68800000,
+   "us-west-2": 55040000
+  },
+  "p5.4xlarge": {
+   "us-east-1": 6880000,
+   "us-east-2": 6880000,
+   "us-west-2": 6880000
+  },
+  "p5en.48xlarge": {
+   "us-east-1": 63296000,
+   "us-east-2": 63296000,
+   "us-west-1": 79120000,
+   "us-west-2": 63296000
+  },
+  "r6a.2xlarge": {
+   "us-east-1": 453600,
+   "us-east-2": 453600,
+   "us-west-1": 504000,
+   "us-west-2": 453600
+  },
+  "r6a.4xlarge": {
+   "us-east-1": 907200,
+   "us-east-2": 907200,
+   "us-west-1": 1008000,
+   "us-west-2": 907200
+  },
+  "r6a.8xlarge": {
+   "us-east-1": 1814400,
+   "us-east-2": 1814400,
+   "us-west-1": 2016000,
+   "us-west-2": 1814400
+  },
+  "r7i.2xlarge": {
+   "us-east-1": 529200,
+   "us-east-2": 529200,
+   "us-west-1": 588000,
+   "us-west-2": 529200
+  }
+ }
+}
