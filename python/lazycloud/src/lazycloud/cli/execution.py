@@ -153,7 +153,7 @@ def _release_summary(name: str, release: Release) -> dict[str, JsonValue]:
         summary["url"] = release.url
     spec = release.spec
     if spec.pod is not None and spec.pod.kind is not PodKind.sandbox:
-        summary["role"] = spec.pod.kind.value
+        summary["role"] = "service" if spec.pod.kind is PodKind.pod else spec.pod.kind.value
         if spec.keep_warm_seconds is not None:
             summary["keep_warm"] = (
                 "always" if spec.keep_warm_seconds == -1 else f"{spec.keep_warm_seconds}s"

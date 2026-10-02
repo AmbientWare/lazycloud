@@ -11,7 +11,7 @@ from rich.console import Group, RenderableType
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
-from shared.http.deployment_plans import DeploymentPlanAction
+from shared.api import DeploymentPlanAction
 from shared.serialization import to_json_value
 
 from lazycloud._terminal import theme
