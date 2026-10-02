@@ -176,12 +176,54 @@ function RichView({ rich }: { rich: RichDisplay }) {
   );
 }
 
+// What inertHtml removes, as the host session does before it keeps a
+// display: elements that navigate the frame, load a document or run code,
+// and attributes that navigate, load or submit.
+const DROPPED_ELEMENTS =
+  "script,iframe,frame,frameset,object,applet,noscript,template,form,portal,meta,base,link,embed,set,animate,animateMotion,animateTransform";
+const DROPPED_ATTRIBUTES = new Set([
+  "href",
+  "xlink:href",
+  "action",
+  "formaction",
+  "srcset",
+  "ping",
+  "http-equiv",
+  "srcdoc",
+  "background",
+  "poster",
+  "data",
+  "codebase",
+  "manifest",
+  "target",
+]);
+
+/**
+ * The HTML with everything that could redirect the frame, load from the
+ * network or run code removed. DOMParser builds an inert document: nothing
+ * in it runs or loads while it is cleaned.
+ */
+function inertHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html");
+  doc.querySelectorAll(DROPPED_ELEMENTS).forEach((element) => element.remove());
+  for (const element of doc.body.querySelectorAll("*")) {
+    for (const { name, value } of [...element.attributes]) {
+      const key = name.toLowerCase();
+      const inlineImage = key === "src" && /^\s*data:image\//i.test(value);
+      if (key.startsWith("on") || DROPPED_ATTRIBUTES.has(key) || (key === "src" && !inlineImage)) {
+        element.removeAttribute(name);
+      }
+    }
+  }
+  return doc.body.innerHTML;
+}
+
 /**
  * The HTML a result renders runs in a frame with no scripts, its own opaque
  * origin and a policy that loads nothing from the network, so it can neither
- * act on the dashboard nor reveal who viewed it. The frame cannot read our
- * stylesheet, so the rules a bare table needs on the dark panel travel with
- * the document.
+ * act on the dashboard nor reveal who viewed it, and without anything that
+ * could navigate the frame. The frame cannot read our stylesheet, so the
+ * rules a bare table needs on the dark panel travel with the document.
  */
 function htmlDocument(html: string): string {
   return (
@@ -197,7 +239,7 @@ function htmlDocument(html: string): string {
     "th{font-weight:600}" +
     "img,svg{max-width:100%}" +
     "</style></head><body>" +
-    html +
+    inertHtml(html) +
     "</body></html>"
   );
 }
