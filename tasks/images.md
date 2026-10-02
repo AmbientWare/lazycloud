@@ -113,10 +113,20 @@ The reference was not measured under the same conditions.
   step mounts the ones it reads itself. The agent writes the values to
   files of the builder's secret mount and deletes them when the build ends.
   The workspace and each secret's version are part of the image identity
-  (migrations/0017_image_build_options.sql), so a rotated secret builds a
-  new image and no workspace gets an image built with another's secrets. A
-  build reads the values current when it starts; one whose secret was
-  deleted by then fails naming it.
+  (migrations/0017_image_build_options.sql), so no workspace gets an image
+  built with another's secrets. BuildKit keeps secret values out of step
+  cache keys, so after each FROM the Dockerfile declares
+  `ARG LAZYCLOUD_BUILD_SECRET_VERSIONS=<digest of the versions>`: a rotated
+  secret changes every later RUN's key and the steps run again instead of
+  coming back from the workspace's cache
+  (`TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange`). The digest
+  names versions, not values, and shows in the image history. A build reads
+  the values current when it starts; one whose secret was deleted by then
+  fails naming it.
+- GPU builds are admitted like GPU workloads: billing checks the model
+  against the plan and counts the build's card against the account's GPUs,
+  on the first container and on the one recovery starts
+  (`TestGPUBuildsAreAdmittedByTheirModelAndGPUs`).
 - `build_with_gpu` names one model, as the reference's hint did; `any` and
   unknown models are refused at resolve, since the model is the machine
   the image is built on. The model is part of the identity, and the build

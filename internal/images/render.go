@@ -62,6 +62,9 @@ type spec struct {
 	context      []byte
 	// secrets are the workspace secrets rendered steps read, sorted.
 	secrets []string
+	// secretVersionsKey is a digest of the versions of secrets, set once
+	// they are read.
+	secretVersionsKey string
 	// gpu is the GPU model the build runs on, or empty.
 	gpu string
 }
@@ -305,7 +308,30 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 		lines = append(lines, "RUN python -c "+shellQuote(check))
 	}
 	s.addRunFlags(lines[user:])
-	return pinDockerfile(strings.Join(lines, "\n")+"\n", pin)
+	return pinDockerfile(strings.Join(s.withSecretVersions(lines), "\n")+"\n", pin)
+}
+
+// secretVersionsArg is the build argument that carries a digest of the
+// build secrets' versions.
+const secretVersionsArg = "LAZYCLOUD_BUILD_SECRET_VERSIONS"
+
+// withSecretVersions declares secretVersionsArg after every FROM. BuildKit
+// keeps a secret's value out of a step's cache key, so without it a rotated
+// secret would reuse the workspace's cached steps; a declared argument is
+// part of the environment of every RUN after it, which makes the version
+// part of their key. The digest names versions, not values.
+func (s spec) withSecretVersions(lines []string) []string {
+	if s.secretVersionsKey == "" {
+		return lines
+	}
+	out := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		out = append(out, line)
+		if fields := strings.Fields(line); len(fields) > 0 && strings.EqualFold(fields[0], "FROM") {
+			out = append(out, "ARG "+secretVersionsArg+"="+s.secretVersionsKey)
+		}
+	}
+	return out
 }
 
 // gpuDevice names every GPU in the build container's CDI spec, which lists

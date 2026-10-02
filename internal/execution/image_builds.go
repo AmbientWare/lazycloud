@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,17 +29,31 @@ type BuildContainer struct {
 	ExitMessage string
 }
 
-// CreateBuildContainer requests a container for build in tx, holding gpus
-// GPUs of the model the build names, and wakes placement. workspace is
-// charged for its capacity, so billing admits it first and refuses it when
-// the account cannot pay or runs the most containers its plan allows.
-func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis, memoryBytes int64, gpus int) (ContainerID, error) {
-	if _, err := billing.Admit(ctx, tx, billing.Request{Workspace: uuid.UUID(workspace), Start: 1, Cold: true}); err != nil {
+// CreateBuildContainer requests a container for build in tx and wakes
+// placement. A build on gpu, a model, holds one card of it; "" is a CPU
+// build. workspace is charged for its capacity, so billing admits it first
+// and refuses it when the account cannot pay, may not use the model, or runs
+// the most containers or GPUs its plan allows.
+func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis, memoryBytes int64, gpu string) (ContainerID, error) {
+	req := billing.Request{Workspace: uuid.UUID(workspace), Start: 1, Cold: true}
+	if gpu != "" {
+		req.GPUs, req.GPUModels = 1, []billing.GPUType{billing.GPUType(gpu)}
+	}
+	grant, err := billing.Admit(ctx, tx, req)
+	if err != nil {
 		return ContainerID{}, err
+	}
+	if grant.Start == 0 {
+		return ContainerID{}, &billing.LimitError{Message: "the account holds the most containers or GPUs its plan allows"}
+	}
+	// Placement gives the build the model admission granted, which is the
+	// one it named.
+	if gpu != "" && !slices.Contains(grant.GPUModels, billing.GPUType(gpu)) {
+		return ContainerID{}, &billing.PaymentRequiredError{Message: "this account may not use " + gpu}
 	}
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
-		GpuCount: int32(gpus), //nolint:gosec // A build holds at most one GPU.
+		GpuCount: int32(len(req.GPUModels)), //nolint:gosec // At most one GPU.
 	})
 	if err != nil {
 		return ContainerID{}, fmt.Errorf("create build container: %w", err)

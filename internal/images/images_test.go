@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
@@ -487,6 +488,24 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	if rotated.Image.ID == inA.Image.ID || rotated.Build == nil {
 		t.Fatalf("a new secret version builds a new image: %+v", rotated)
 	}
+	// The steps' cache key changes too, so the build runs them again.
+	versionsArg := func(id string) string {
+		t.Helper()
+		var d string
+		if err := f.pool.QueryRow(ctx, "select dockerfile from images where id = $1", id).Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(d, "\n") {
+			if strings.HasPrefix(line, "ARG LAZYCLOUD_BUILD_SECRET_VERSIONS=") {
+				return line
+			}
+		}
+		t.Fatalf("no secret versions argument in:\n%s", d)
+		return ""
+	}
+	if versionsArg(inA.Image.ID) == versionsArg(rotated.Image.ID) {
+		t.Fatal("the secret versions argument follows the secret's version")
+	}
 
 	host := f.host(t)
 	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
@@ -512,6 +531,40 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	build, err := f.images.GetBuild(ctx, f.listener, a, rotated.Build.ID, 0)
 	if err != nil || build.Status != images.BuildFailed || !strings.Contains(build.Failure, "secret TOKEN was deleted") {
 		t.Fatalf("it fails naming the secret: %+v %v", build, err)
+	}
+}
+
+// A GPU build is admitted like a GPU workload: an account without a card
+// may build only on the models its plan allows and holds at most its GPUs.
+func TestGPUBuildsAreAdmittedByTheirModelAndGPUs(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	ws := f.workspace(t, "a")
+	if _, err := f.pool.Exec(ctx, `
+update billing_accounts set complimentary_since = null, payment_method_attached_at = null;
+update billing_balances set balance_nanos = 1000000000000`); err != nil {
+		t.Fatal(err)
+	}
+	build := func(model, command string) error {
+		def := numpy()
+		def.Gpu, def.Commands = ptr(model), &[]string{command}
+		_, err := f.images.Build(ctx, ws, def, false)
+		return err
+	}
+	var unpaid *billing.PaymentRequiredError
+	if err := build("H100", "true"); !errors.As(err, &unpaid) {
+		t.Fatalf("a model the plan does not allow is refused: %v", err)
+	}
+	if err := build("L4", "true"); err != nil {
+		t.Fatal(err)
+	}
+	var limit *billing.LimitError
+	if err := build("L4", "echo second"); !errors.As(err, &limit) {
+		t.Fatalf("a GPU past the plan's GPUs is refused: %v", err)
+	}
+	var builds int
+	if err := f.pool.QueryRow(ctx, "select count(*) from containers where image_build_id is not null and gpu_count = 1").Scan(&builds); err != nil || builds != 1 {
+		t.Fatalf("only the admitted build has a container: %d %v", builds, err)
 	}
 }
 

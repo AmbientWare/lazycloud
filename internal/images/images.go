@@ -292,6 +292,14 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 		}
 		out.secretVersions[name] = secret.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	}
+	if len(out.secretVersions) > 0 {
+		versions, err := json.Marshal(out.secretVersions)
+		if err != nil {
+			return prepared{}, fmt.Errorf("encode secret versions: %w", err)
+		}
+		sum := sha256.Sum256(versions)
+		s.secretVersionsKey = hex.EncodeToString(sum[:16])
+	}
 	// The managed base is the platform's choice; every other image is the
 	// user's and must come from a public registry other than the platform's.
 	managed := ""
@@ -431,7 +439,7 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
 		}
-		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, buildGPUs(p.spec.gpu)); err != nil {
+		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu); err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelImageBuild, row.ID.String()); err != nil {
@@ -999,7 +1007,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		if err != nil {
 			return fmt.Errorf("read build GPU: %w", err)
 		}
-		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes, buildGPUs(gpu))
+		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes, gpu)
 		var unpaid *billing.PaymentRequiredError
 		var limit *billing.LimitError
 		if errors.As(err, &unpaid) || errors.As(err, &limit) {

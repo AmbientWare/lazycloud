@@ -223,6 +223,50 @@ func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
 	}
 }
 
+// BuildKit keeps a secret's value out of the cache key, so a step reading a
+// rotated secret reuses the cached layer unless the secret versions argument
+// the images owner renders changes with it.
+func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
+	e := newEnv(t)
+	registry := startTestRegistry(t)
+	e.startAgent()
+	session := e.session()
+	build := func(versions, secret string) string {
+		t.Helper()
+		start := buildCommand(registry, "FROM "+testBuildBase+"\nARG LAZYCLOUD_BUILD_SECRET_VERSIONS="+versions+
+			"\nRUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<'LAZYCLOUD_STEP'\n"+
+			"printf %s \"$TOKEN\" > /proof\nLAZYCLOUD_STEP\n")
+		start.GetStart().GetBuild().Secrets = map[string]string{"TOKEN": secret}
+		session.send(t, start)
+		var outcome *hostproto.CompleteImageBuildRequest
+		select {
+		case outcome = <-e.server.builds:
+		case <-time.After(5 * time.Minute):
+			t.Fatal("the build reported no outcome")
+		}
+		session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+		reference := registry + "/lazycloud/images@" + outcome.GetDigest()
+		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
+		if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
+			t.Fatalf("%v\noutput:\n%s", err, e.server.buildOutput())
+		}
+		proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(proof)
+	}
+	if got := build("v1", "first"); got != "first" {
+		t.Fatalf("the first build read %q", got)
+	}
+	if got := build("v1", "second"); got != "first" {
+		t.Fatalf("with the same versions the cached step stands: %q", got)
+	}
+	if got := build("v2", "second"); got != "second" {
+		t.Fatalf("new versions run the step again: %q", got)
+	}
+}
+
 func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
