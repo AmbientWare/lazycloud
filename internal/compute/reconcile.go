@@ -85,6 +85,8 @@ func (c *Compute) reconcileRegions(ctx context.Context) ([]ownerRegion, error) {
 type observedInstance struct {
 	state ec2types.InstanceStateName
 	host  string
+	// started is when EC2 last started the instance.
+	started time.Time
 }
 
 func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, connection *uuid.UUID, region string) error {
@@ -111,7 +113,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		}
 		for _, r := range page.Reservations {
 			for _, i := range r.Instances {
-				o := observedInstance{state: i.State.Name}
+				o := observedInstance{state: i.State.Name, started: aws.ToTime(i.LaunchTime)}
 				for _, t := range i.Tags {
 					if aws.ToString(t.Key) == tagHost {
 						o.host = aws.ToString(t.Value)
@@ -138,6 +140,10 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		stopped := seen && (o.state == ec2types.InstanceStateNameStopped || o.state == ec2types.InstanceStateNameStopping)
 		updating := h.UpdatingUntil != nil && time.Now().Before(*h.UpdatingUntil)
 		phase := Phase(h.Phase)
+		// A reserve's instance stops because the fleet asked: stopping and
+		// stopped are expected, and a stop EC2 accepted completes here when
+		// the actuator has not seen it yet.
+		reserve := phase == PhaseStopping || phase == PhaseStopped || phase == PhaseResuming
 		switch {
 		case phase == PhaseTerminating && terminated:
 			err = c.hostGone(ctx, h.ID, "", "")
@@ -148,6 +154,18 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			err = c.terminate(ctx, scope, region, instance)
 		case gone:
 			err = c.hostGone(ctx, h.ID, FailureProviderGone, "The provider terminated the instance")
+		case phase == PhaseStopping && o.state == ec2types.InstanceStateNameStopped && h.StopRequestedAt != nil:
+			err = c.reserveStopped(ctx, h.ID)
+		case phase == PhaseResuming && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
+			if err = c.hostGone(ctx, h.ID, FailureBootstrapTimedOut, "The reserve did not resume in time"); err == nil {
+				err = c.terminate(ctx, scope, region, instance)
+			}
+		case phase == PhaseStopped && !stopped && time.Since(o.started) > c.fleet.BootTimeout:
+			// Started without a resume and never put back.
+			if err = c.hostGone(ctx, h.ID, FailureUnknown, "The reserve started without a resume"); err == nil {
+				err = c.terminate(ctx, scope, region, instance)
+			}
+		case reserve:
 		case stopped:
 			if err = c.hostGone(ctx, h.ID, FailureProviderStopped, "The provider stopped the instance"); err == nil {
 				err = c.terminate(ctx, scope, region, instance)
@@ -171,6 +189,13 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		}
 		if err != nil {
 			logger.ErrorContext(ctx, "reconcile host", "host_id", h.ID, "instance_id", instance, "error", err)
+		}
+	}
+	if connection == nil {
+		// Reserves are platform hosts; only the platform holds persistent
+		// Spot requests.
+		if err := c.cancelOrphanSpotRequests(ctx, logger, client); err != nil {
+			logger.ErrorContext(ctx, "cancel orphan spot requests", "region", region, "error", err)
 		}
 	}
 	var orphans []string
@@ -227,4 +252,52 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, failure Failure,
 		}
 		return notifyMachines(ctx, tx, host)
 	})
+}
+
+// cancelOrphanSpotRequests ends the fleet's persistent Spot requests whose
+// host is gone, with every instance they launched. A request whose launch
+// answer was lost still has a live host and is spared.
+func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Logger, client *ec2.Client) error {
+	out, err := client.DescribeSpotInstanceRequests(ctx, &ec2.DescribeSpotInstanceRequestsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}},
+			{Name: aws.String("state"), Values: []string{"open", "active", "disabled"}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("describe spot requests: %w", err)
+	}
+	hosts := map[string]uuid.UUID{}
+	var tagged []uuid.UUID
+	for _, r := range out.SpotInstanceRequests {
+		for _, t := range r.Tags {
+			if id, err := uuid.Parse(aws.ToString(t.Value)); err == nil && aws.ToString(t.Key) == tagHost {
+				hosts[aws.ToString(r.SpotInstanceRequestId)] = id
+				tagged = append(tagged, id)
+			}
+		}
+	}
+	if len(out.SpotInstanceRequests) == 0 {
+		return nil
+	}
+	known, err := c.queries.KnownHostIDs(ctx, tagged)
+	if err != nil {
+		return fmt.Errorf("read known hosts: %w", err)
+	}
+	live := map[uuid.UUID]bool{}
+	for _, id := range known {
+		live[id] = true
+	}
+	for _, r := range out.SpotInstanceRequests {
+		request := aws.ToString(r.SpotInstanceRequestId)
+		if host, ok := hosts[request]; ok && live[host] {
+			continue
+		}
+		if err := endSpotRequest(ctx, client, request); err != nil {
+			logger.ErrorContext(ctx, "end orphan spot request", "spot_request_id", request, "error", err)
+			continue
+		}
+		logger.WarnContext(ctx, "orphan spot request cancelled", "spot_request_id", request)
+	}
+	return nil
 }

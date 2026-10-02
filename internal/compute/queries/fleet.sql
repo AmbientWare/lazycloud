@@ -82,14 +82,16 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_count,
-          h.launch_attempts;
+          h.launch_attempts, h.reserve_mode;
 
 -- name: RecordLaunch :execrows
 update hosts
 set instance_id = @instance_id, availability_zone = @availability_zone, availability_zone_id = @availability_zone_id,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
     launched_at = now(), launch_lease_until = null, updated_at = now(),
-    authorization_id = sqlc.narg(authorization_id), node_role_arn = @node_role_arn
+    authorization_id = sqlc.narg(authorization_id), node_role_arn = @node_role_arn,
+    spot_request_id = sqlc.narg(spot_request_id), node_image = @node_image,
+    hibernation_configured = @hibernation_configured
 where id = @id and phase = 'requested';
 
 -- name: FailHost :exec
@@ -99,9 +101,10 @@ set phase = 'failed', failure = @failure, phase_message = @message, phase_at = n
 where id = @id;
 
 -- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
-values (@connection_key, @region, @instance_type, @market, now() + make_interval(secs => @seconds::float8), @reason)
-on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason;
+insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
+values (@connection_key, @region, @instance_type, @market, now() + make_interval(secs => @seconds::float8), @reason, now())
+on conflict (connection_key, region, instance_type, market)
+do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at;
 
 -- name: MarkIdle :exec
 -- A ready cloud host is idle from when its last container stopped. The WHERE
@@ -167,7 +170,7 @@ where cc.phase not in ('awaiting_authorization', 'validating');
 
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until
+select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at
 from hosts
 where provider = 'aws' and region = @region
   and connection_id is not distinct from sqlc.narg(connection_id)::uuid

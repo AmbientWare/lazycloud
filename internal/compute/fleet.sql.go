@@ -75,7 +75,7 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_count,
-          h.launch_attempts
+          h.launch_attempts, h.reserve_mode
 `
 
 type ClaimLaunchesParams struct {
@@ -93,6 +93,7 @@ type ClaimLaunchesRow struct {
 	Market           *string
 	GpuCount         int32
 	LaunchAttempts   int32
+	ReserveMode      *string
 }
 
 // Requested hosts whose launch is not held by another launcher. The lease
@@ -116,6 +117,7 @@ func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([
 			&i.Market,
 			&i.GpuCount,
 			&i.LaunchAttempts,
+			&i.ReserveMode,
 		); err != nil {
 			return nil, err
 		}
@@ -287,7 +289,7 @@ func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) error {
 }
 
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until
+select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at
 from hosts
 where provider = 'aws' and region = $1
   and connection_id is not distinct from $2::uuid
@@ -301,14 +303,15 @@ type FleetHostsInRegionParams struct {
 }
 
 type FleetHostsInRegionRow struct {
-	ID            uuid.UUID
-	Phase         string
-	State         string
-	InstanceID    *string
-	LaunchedAt    *time.Time
-	LastSeenAt    *time.Time
-	PhaseAt       time.Time
-	UpdatingUntil *time.Time
+	ID              uuid.UUID
+	Phase           string
+	State           string
+	InstanceID      *string
+	LaunchedAt      *time.Time
+	LastSeenAt      *time.Time
+	PhaseAt         time.Time
+	UpdatingUntil   *time.Time
+	StopRequestedAt *time.Time
 }
 
 // Cloud hosts of one owner and region the provider should know about.
@@ -330,6 +333,7 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 			&i.LastSeenAt,
 			&i.PhaseAt,
 			&i.UpdatingUntil,
+			&i.StopRequestedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -506,9 +510,10 @@ func (q *Queries) InFlightHosts(ctx context.Context) ([]InFlightHostsRow, error)
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
-values ($1, $2, $3, $4, now() + make_interval(secs => $5::float8), $6)
-on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason
+insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
+values ($1, $2, $3, $4, now() + make_interval(secs => $5::float8), $6, now())
+on conflict (connection_key, region, instance_type, market)
+do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at
 `
 
 type InsertCooldownParams struct {
@@ -780,17 +785,22 @@ update hosts
 set instance_id = $1, availability_zone = $2, availability_zone_id = $3,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
     launched_at = now(), launch_lease_until = null, updated_at = now(),
-    authorization_id = $4, node_role_arn = $5
-where id = $6 and phase = 'requested'
+    authorization_id = $4, node_role_arn = $5,
+    spot_request_id = $6, node_image = $7,
+    hibernation_configured = $8
+where id = $9 and phase = 'requested'
 `
 
 type RecordLaunchParams struct {
-	InstanceID         *string
-	AvailabilityZone   string
-	AvailabilityZoneID string
-	AuthorizationID    *uuid.UUID
-	NodeRoleArn        *string
-	ID                 uuid.UUID
+	InstanceID            *string
+	AvailabilityZone      string
+	AvailabilityZoneID    string
+	AuthorizationID       *uuid.UUID
+	NodeRoleArn           *string
+	SpotRequestID         *string
+	NodeImage             *string
+	HibernationConfigured bool
+	ID                    uuid.UUID
 }
 
 func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int64, error) {
@@ -800,6 +810,9 @@ func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int
 		arg.AvailabilityZoneID,
 		arg.AuthorizationID,
 		arg.NodeRoleArn,
+		arg.SpotRequestID,
+		arg.NodeImage,
+		arg.HibernationConfigured,
 		arg.ID,
 	)
 	if err != nil {

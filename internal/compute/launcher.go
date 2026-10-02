@@ -22,10 +22,15 @@ const (
 	launchLease = 2 * time.Minute
 	// maxLaunchAttempts bounds launches that keep failing without an answer.
 	maxLaunchAttempts = 5
-	// rootVolumeGiB is each instance's encrypted root disk.
+	// rootVolumeGiB is each instance's encrypted root disk; a host launched
+	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
-	cpuImage      = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-	gpuImage      = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
+	// maxRootVolumeGiB is the largest root a hibernating host grows to.
+	maxRootVolumeGiB = 2048
+	// hibernationMemoryLimit is the RAM EC2 hibernates under.
+	hibernationMemoryLimit = 150 * gib
+	cpuImage               = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+	gpuImage               = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
 )
 
 // Tags on every instance the fleet launches.
@@ -98,6 +103,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 		}
 		return false, fmt.Errorf("share node image: %w", err)
 	}
+	opts := launchOptionsFor(h)
 	tags := []ec2types.Tag{
 		{Key: aws.String(tagFleet), Value: aws.String(c.fleet.Name)},
 		{Key: aws.String(tagHost), Value: aws.String(h.ID.String())},
@@ -118,7 +124,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 		BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
 			DeviceName: aws.String("/dev/xvda"),
 			Ebs: &ec2types.EbsBlockDevice{
-				VolumeSize: aws.Int32(rootVolumeGiB), VolumeType: ec2types.VolumeTypeGp3,
+				VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
 				Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true),
 			},
 		}},
@@ -134,14 +140,27 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	if target.instanceProfile != "" {
 		input.IamInstanceProfile = &ec2types.IamInstanceProfileSpecification{Name: aws.String(target.instanceProfile)}
 	}
+	if opts.hibernate {
+		input.HibernationOptions = &ec2types.HibernationOptionsRequest{Configured: aws.Bool(true)}
+	}
 	if h.Market != nil && Market(*h.Market) == MarketSpot {
-		input.InstanceMarketOptions = &ec2types.InstanceMarketOptionsRequest{
-			MarketType: ec2types.MarketTypeSpot,
-			SpotOptions: &ec2types.SpotMarketOptions{
-				SpotInstanceType:             ec2types.SpotInstanceTypeOneTime,
-				InstanceInterruptionBehavior: ec2types.InstanceInterruptionBehaviorTerminate,
-			},
+		spot := &ec2types.SpotMarketOptions{
+			SpotInstanceType:             ec2types.SpotInstanceTypeOneTime,
+			InstanceInterruptionBehavior: ec2types.InstanceInterruptionBehaviorTerminate,
 		}
+		if opts.persistent {
+			// A reserve outlives a stop, so its request must too. EC2
+			// relaunches a persistent request's instance when it ends, so
+			// the request is tagged for cleanup and cancelled first.
+			spot.SpotInstanceType = ec2types.SpotInstanceTypePersistent
+			spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorStop
+			if opts.hibernate {
+				spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorHibernate
+			}
+			input.TagSpecifications = append(input.TagSpecifications,
+				ec2types.TagSpecification{ResourceType: ec2types.ResourceTypeSpotInstancesRequest, Tags: tags[:2]})
+		}
+		input.InstanceMarketOptions = &ec2types.InstanceMarketOptionsRequest{MarketType: ec2types.MarketTypeSpot, SpotOptions: spot}
 	}
 	out, err := c.aws().ec2(target.scope, h.Region).RunInstances(ctx, input)
 	if err != nil {
@@ -166,6 +185,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	n, err := c.queries.RecordLaunch(ctx, RecordLaunchParams{
 		ID: h.ID, InstanceID: instance.InstanceId, AvailabilityZone: zone, AvailabilityZoneID: zoneID,
 		AuthorizationID: target.authorization, NodeRoleArn: nilIfEmpty(target.nodeRole),
+		SpotRequestID: nilIfEmpty(aws.ToString(instance.SpotInstanceRequestId)), NodeImage: instance.ImageId, HibernationConfigured: opts.hibernate,
 	})
 	if err != nil {
 		return false, fmt.Errorf("record launch: %w", err)
@@ -177,6 +197,49 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
 		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market))
 	return true, nil
+}
+
+// launchOptions are the parts of a launch a reserve changes.
+type launchOptions struct {
+	rootGiB int32
+	// hibernate launches the instance able to hibernate.
+	hibernate bool
+	// persistent buys Spot on a persistent request that stops instead of
+	// terminating.
+	persistent bool
+}
+
+// launchOptionsFor sizes a launch. A platform host bought for the reserve
+// hibernates when it asks to and its type can: RAM under EC2's limit, and
+// room on the root for a RAM-size image. A Spot reserve keeps its request
+// across stops. Serving and connection hosts launch as before.
+func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
+	opts := launchOptions{rootGiB: rootVolumeGiB}
+	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
+		return opts
+	}
+	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot
+	memory, known := nominalMemory(h.InstanceType)
+	if ReserveMode(*h.ReserveMode) != ReserveHibernate || !known || memory >= hibernationMemoryLimit {
+		return opts
+	}
+	swap := int32((memory + gib - 1) / gib) //nolint:gosec // Under 150 by the check above.
+	if rootVolumeGiB+swap > maxRootVolumeGiB {
+		return opts
+	}
+	opts.rootGiB += swap
+	opts.hibernate = true
+	return opts
+}
+
+// nominalMemory is the RAM of a catalog type.
+func nominalMemory(instanceType string) (int64, bool) {
+	for _, t := range catalog() {
+		if t.Name == instanceType {
+			return t.MemoryBytes, true
+		}
+	}
+	return 0, false
 }
 
 // nodeImage is the AMI a host launches from: the baked image of its region
@@ -309,9 +372,18 @@ func (c *Compute) bootstrap(host uuid.UUID, release AgentRelease) string {
 	}, "\n")
 }
 
-// terminate stops an instance in scope.
+// terminate ends an instance in scope. A Spot reserve's persistent
+// request is cancelled first, or EC2 would launch a replacement.
 func (c *Compute) terminate(ctx context.Context, scope awsScope, region, instance string) error {
-	_, err := c.aws().ec2(scope, region).TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+	client := c.aws().ec2(scope, region)
+	request, err := c.spotRequestOf(ctx, instance)
+	if err != nil {
+		return err
+	}
+	if request != "" {
+		return endSpotRequest(ctx, client, request)
+	}
+	_, err = client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
 	if err != nil && awsCode(err) != "InvalidInstanceID.NotFound" {
 		return fmt.Errorf("terminate %s: %w", instance, err)
 	}

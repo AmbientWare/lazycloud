@@ -60,6 +60,11 @@ func newAWS(t *testing.T) *awsEmulator {
 	server := httptest.NewServer(http.HandlerFunc(a.serve))
 	t.Cleanup(server.Close)
 	a.url = server.URL
+	// Reconcile lists the platform's persistent Spot requests in every
+	// region; tests that hold some answer with their own handler.
+	a.on("DescribeSpotInstanceRequests", func(awsCall) awsReply {
+		return ok(`<DescribeSpotInstanceRequestsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotInstanceRequestSet/></DescribeSpotInstanceRequestsResponse>`)
+	})
 	return a
 }
 

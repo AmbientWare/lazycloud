@@ -334,6 +334,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			if _, err := comp.Launch(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "launch pass", "error", err)
 			}
+			if _, err := comp.Actuate(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "reserve actuator pass", "error", err)
+			}
 			if _, err := comp.Retire(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "retire pass", "error", err)
 			}
