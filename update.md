@@ -87,7 +87,7 @@ requiring explicit scope and authorization.
   something uses, such as stack bootstrap.
 - TypeScript owns the existing frontend. Future TypeScript and Go SDKs should use
   the same public protocol without depending on Python implementation details.
-- The Python shared package supports retained consumers. Reduce it as contracts
+- `lazycloud._shared` holds what the SDK and runner share. Reduce it as contracts
   and consumers change; never turn it into a second backend.
 
 Use ordinary domain names such as control, execution, scheduler, compute, agent

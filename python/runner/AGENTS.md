@@ -1,9 +1,9 @@
 # Runner
 
-- Execute inside user containers with shared contracts and user code only. No
-  backend dependencies. Serve the local runner protocol; transport, heartbeats,
-  result transfer and draining belong to the host runtime. Keep module
-  entrypoints importable.
+- Execute inside user containers with `lazycloud._shared`, `lazycloud.contracts`
+  and user code only. No backend dependencies. Serve the local runner protocol;
+  transport, heartbeats, result transfer and draining belong to the host
+  runtime. Keep module entrypoints importable.
 - Report guarded user imports as user failures. Ship the read-only content-addressed
   runner artifact with its worker image.
 - Keep invocation identity/output in context variables, not process globals.

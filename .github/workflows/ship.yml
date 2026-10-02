@@ -155,11 +155,10 @@ jobs:
               "$RUNNER_TEMP/images.json"
           } >>"$GITHUB_STEP_SUMMARY"
 
-  # The SDK and its exact shared-package dependency carry the same version.
-  # Trusted publishing: PyPI accepts this workflow's OIDC token for both
-  # projects, configured as owner AmbientWare, repository lazycloud, workflow
-  # ship.yml, environment release. PyPI does not accept a reusable workflow
-  # as a publisher, so the step lives here.
+  # Trusted publishing: PyPI accepts this workflow's OIDC token for the
+  # lazycloud-client project, configured as owner AmbientWare, repository
+  # lazycloud, workflow ship.yml, environment release. PyPI does not accept a
+  # reusable workflow as a publisher, so the step lives here.
   python-package:
     name: Publish the Python package
     needs: [version, go, python, web, checks]
@@ -181,28 +180,22 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          uv version --frozen --package lazycloud-shared "$VERSION"
           uv version --frozen --package lazycloud-client "$VERSION"
-          pin='"lazycloud-shared==[^"]*"'
-          test "$(grep -c "$pin" python/lazycloud/pyproject.toml)" = 1
-          sed -i "s/$pin/\"lazycloud-shared==$VERSION\"/" python/lazycloud/pyproject.toml
           git --no-pager diff --stat
-      - name: Build wheels and sdists
+      - name: Build the wheel and sdist
         run: |
           set -euo pipefail
-          uv build --package lazycloud-shared -o dist/pypi
           uv build --package lazycloud-client -o dist/pypi
           ls -1 dist/pypi
-      - name: Install the wheels into an empty environment
+      - name: Install the wheel into an empty environment
         run: |
           set -euo pipefail
           for python in 3.10 3.11 3.12 3.13 3.14; do
             uv run --isolated --no-project --python "$python" \
-              --with dist/pypi/lazycloud_shared-*.whl --with dist/pypi/lazycloud_client-*.whl \
-              -- lazycloud --help >/dev/null
+              --with dist/pypi/lazycloud_client-*.whl -- lazycloud --help >/dev/null
             uv run --isolated --no-project --python "$python" \
-              --with dist/pypi/lazycloud_shared-*.whl --with dist/pypi/lazycloud_client-*.whl \
-              -- python -c "import lazycloud, shared"
+              --with dist/pypi/lazycloud_client-*.whl \
+              -- python -c "import lazycloud, lazycloud.cli.main"
           done
       - uses: actions/upload-artifact@v7
         with:
