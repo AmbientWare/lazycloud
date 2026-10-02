@@ -707,23 +707,24 @@ func (q *Queries) RetireReserves(ctx context.Context, ids []uuid.UUID) ([]uuid.U
 
 const returnToReserve = `-- name: ReturnToReserve :many
 update hosts h
-set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(), reserve_mode = v.mode,
+set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
+    reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
     light_since = null, updated_at = now()
-from (select unnest($1::uuid[]) as id, unnest($2::text[]) as mode) v
-where h.id = v.id and h.phase = 'ready' and h.capacity_state = 'available'
+where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id
 `
 
 type ReturnToReserveParams struct {
-	Ids   []uuid.UUID
-	Modes []string
+	HibernateIds []uuid.UUID
+	Ids          []uuid.UUID
 }
 
-// Idle serving hosts start proving they may stop into the reserve; a host
-// that took a container since the snapshot stays.
+// Idle serving hosts start proving they may stop into the reserve, each in
+// the mode the planner chose; a host that took a container since the
+// snapshot stays.
 func (q *Queries) ReturnToReserve(ctx context.Context, arg ReturnToReserveParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, returnToReserve, arg.Ids, arg.Modes)
+	rows, err := q.db.Query(ctx, returnToReserve, arg.HibernateIds, arg.Ids)
 	if err != nil {
 		return nil, err
 	}

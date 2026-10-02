@@ -181,13 +181,14 @@ where h.id = v.id and h.phase = 'stopped'
 returning h.id;
 
 -- name: ReturnToReserve :many
--- Idle serving hosts start proving they may stop into the reserve; a host
--- that took a container since the snapshot stays.
+-- Idle serving hosts start proving they may stop into the reserve, each in
+-- the mode the planner chose; a host that took a container since the
+-- snapshot stays.
 update hosts h
-set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(), reserve_mode = v.mode,
+set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
+    reserve_mode = case when h.id = any(@hibernate_ids::uuid[]) then 'hibernate' else 'stop' end,
     light_since = null, updated_at = now()
-from (select unnest(@ids::uuid[]) as id, unnest(@modes::text[]) as mode) v
-where h.id = v.id and h.phase = 'ready' and h.capacity_state = 'available'
+where h.id = any(@ids::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id;
 

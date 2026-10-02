@@ -154,15 +154,13 @@ type waitRow struct {
 
 // fleetWrites are a pass's intents, each written by one statement.
 type fleetWrites struct {
-	stuck, uncordon, drains, retirePreparing, retires, cordons []uuid.UUID
-	buys                                                       []requestedHost
-	resumes                                                    []uuid.UUID
-	refresh                                                    []bool
-	returns                                                    []uuid.UUID
-	modes                                                      []string
-	light                                                      []lightRow
-	cools                                                      []coolRow
-	markets                                                    []marketRow
+	stuck, uncordon, drains, retirePreparing, retires, cordons, returns, hibernate []uuid.UUID
+	buys                                                                           []requestedHost
+	resumes                                                                        []uuid.UUID
+	refresh                                                                        []bool
+	light                                                                          []lightRow
+	cools                                                                          []coolRow
+	markets                                                                        []marketRow
 }
 
 // requestedHost is a host to buy as InsertRequestedHosts takes it.
@@ -518,7 +516,9 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID, choose func(Fl
 			hosts[i] = uuid.UUID(*a.Host)
 		case ActionReturnToReserve:
 			ps.w.returns = append(ps.w.returns, uuid.UUID(*a.Host))
-			ps.w.modes = append(ps.w.modes, string(*a.Mode))
+			if *a.Mode == ReserveHibernate {
+				ps.w.hibernate = append(ps.w.hibernate, uuid.UUID(*a.Host))
+			}
 		case ActionDrain:
 			ps.w.drains = append(ps.w.drains, uuid.UUID(*a.Host))
 		case ActionRetireReserve:
@@ -735,7 +735,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 	}
 	if len(ps.w.returns) > 0 {
-		returned, err := q.ReturnToReserve(ctx, ReturnToReserveParams{Ids: ps.w.returns, Modes: ps.w.modes})
+		returned, err := q.ReturnToReserve(ctx, ReturnToReserveParams{Ids: ps.w.returns, HibernateIds: ps.w.hibernate})
 		if err != nil {
 			return fmt.Errorf("return hosts to the reserve: %w", err)
 		}
