@@ -528,11 +528,16 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
     class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
+        # Deliveries arrive in parallel; a short backlog drops SYNs and adds
+        # a one-second retransmit to the measured delay.
+        request_queue_size = 1024
 
     server = Server(("0.0.0.0", CALLBACK_PORT), Hook)  # noqa: S104
     threading.Thread(target=server.serve_forever, daemon=True).start()
     ended: dict[str, float] = {}
+    began: dict[str, float] = {}
     ends: list[float] = []
+    starts: list[float] = []
     lat: list[float] = []
     codes: dict[str, int] = {}
 
@@ -552,7 +557,7 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
 
             async def one(i: int, timed: bool) -> None:
                 async with gate:
-                    t = time.perf_counter()
+                    t, wall_start = time.perf_counter(), time.time()
                     try:
                         r = await client.post(url, json={"n": i})
                         code = str(r.status_code)
@@ -563,8 +568,9 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
                         lat.append(time.perf_counter() - t)
                         codes[code] = codes.get(code, 0) + 1
                         ends.append(time.time())
+                        starts.append(wall_start)
                         if request:
-                            ended[request] = ends[-1]
+                            ended[request], began[request] = ends[-1], wall_start
 
             # Warm up, and let the warm-up's callbacks land before timing.
             await asyncio.gather(*(one(i, False) for i in range(20)))
@@ -582,6 +588,7 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
     with lock:
         if ended:
             delays = [arrived[r][0] - t for r, t in ended.items() if r in arrived]
+            totals = [arrived[r][0] - t for r, t in began.items() if r in arrived]
             missing = sum(1 for r in ended if r not in arrived)
             duplicates = sum(len(v) - 1 for r, v in arrived.items() if r in ended)
             matched = "request id"
@@ -590,13 +597,14 @@ def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "18
             # end with the n-th callback to arrive.
             firsts = sorted(v[0] for v in arrived.values())
             delays = [a - e for a, e in zip(firsts, sorted(ends), strict=False)]
+            totals = [a - b for a, b in zip(firsts, sorted(starts), strict=False)]
             missing = max(0, len(ends) - len(firsts))
             duplicates = sum(len(v) - 1 for v in arrived.values())
             matched = "arrival order"
     record("endpoint-callback", {
         "requests": int(n), "concurrency": int(concurrency), "wall_s": round(wall[0], 2),
         "latency": dist(lat), "codes": codes, "matched_by": matched,
-        "callback_delay": dist(delays), "callbacks_missing": missing, "callbacks_duplicated": duplicates,
+        "callback_delay": dist(delays), "callback_since_request": dist(totals), "callbacks_missing": missing, "callbacks_duplicated": duplicates,
     })
 
 

@@ -36,7 +36,7 @@ func TestQueuedCallbacksWakeAnIdleScheduler(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
-	waitStatus(t, "http://"+health+"/readyz", http.StatusOK)
+	waitOK(t, "http://"+health+"/readyz")
 	// Past the start-up passes, the delivery loop waits for a wake.
 	time.Sleep(2 * time.Second)
 

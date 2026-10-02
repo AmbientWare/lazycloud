@@ -32,8 +32,8 @@ func TestSchedulerReadinessAndShutdown(t *testing.T) {
 	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
 
 	base := "http://" + addr
-	waitStatus(t, base+"/readyz", http.StatusOK)
-	waitStatus(t, base+"/healthz", http.StatusOK)
+	waitOK(t, base+"/readyz")
+	waitOK(t, base+"/healthz")
 
 	cancel()
 	select {
@@ -140,8 +140,8 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// waitStatus polls url until it answers status, for up to 15 seconds.
-func waitStatus(t *testing.T, url string, status int) {
+// waitOK polls url until it answers 200, for up to 15 seconds.
+func waitOK(t *testing.T, url string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
@@ -154,12 +154,12 @@ func waitStatus(t *testing.T, url string, status int) {
 		if err == nil {
 			body, _ = io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode == status {
+			if resp.StatusCode == http.StatusOK {
 				return
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("GET %s did not return %d within 15s (last error %v, body %q)", url, status, err, body)
+			t.Fatalf("GET %s did not return 200 within 15s (last error %v, body %q)", url, err, body)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

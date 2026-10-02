@@ -43,7 +43,7 @@ func TestIdlePassesDoNotGrowWithReplicas(t *testing.T) {
 		go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
 		// Ready means the replica read its settings and finished a first
 		// pass of every loop.
-		waitStatus(t, "http://"+health+"/readyz", http.StatusOK)
+		waitOK(t, "http://"+health+"/readyz")
 		metrics = append(metrics, "http://"+scrape+"/metrics")
 		time.Sleep(settle)
 		before := passes(t, metrics)
