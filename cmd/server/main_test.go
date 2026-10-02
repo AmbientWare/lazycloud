@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"errors"
+	"flag"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,5 +154,25 @@ func waitFor(t *testing.T, url string, status int) {
 			t.Fatalf("GET %s did not return %d within 10s (last error %v)", url, status, err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Flag help prints each flag's default, and the database flags default to
+// URLs that carry the password.
+func TestHelpOmitsDatabaseCredentials(t *testing.T) {
+	t.Setenv("LAZYCLOUD_DATABASE_URL", "postgres://user:database-password@db/lazycloud")
+	t.Setenv("LAZYCLOUD_DATABASE_SESSION_URL", "postgres://user:session-password@db/lazycloud")
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	var help strings.Builder
+	fs.SetOutput(&help)
+	dbURL, sessionURL := databaseFlag(fs), sessionFlag(fs)
+	if err := fs.Parse([]string{"-help"}); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("parse -help = %v, want flag.ErrHelp", err)
+	}
+	if strings.Contains(help.String(), "password") {
+		t.Fatalf("help printed a credential:\n%s", help.String())
+	}
+	if *dbURL != os.Getenv("LAZYCLOUD_DATABASE_URL") || *sessionURL != os.Getenv("LAZYCLOUD_DATABASE_SESSION_URL") {
+		t.Fatalf("flags = %q, %q; want the environment's URLs", *dbURL, *sessionURL)
 	}
 }
