@@ -313,7 +313,7 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 
 // secretVersionsArg is the build argument that carries a digest of the
 // build secrets' versions.
-const secretVersionsArg = "LAZYCLOUD_BUILD_SECRET_VERSIONS"
+const secretVersionsArg = "LAZYCLOUD_BUILD_SECRET_VERSIONS" //nolint:gosec // A name, not a credential.
 
 // withSecretVersions declares secretVersionsArg after every FROM. BuildKit
 // keeps a secret's value out of a step's cache key, so without it a rotated
