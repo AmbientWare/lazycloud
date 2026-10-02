@@ -43,11 +43,76 @@ review.
 
 ## Progress
 
+Branch `fleet-api-web` from `origin/fleet-planner`, rebased onto
+`d8af821fa34cdca94e7a5028a9062f09cbfa8fd5` (the planner's review fixes).
+All four plan steps are done.
+
+- `Fleet` returns the newest reserve pass's markets from `fleet_markets`
+  (`PublishedPlan`) while they are current, CPU markets first; no row or an
+  expired one is no plan. Reserve ready and target are the plan's
+  `reserve_ready` and `stopped_target`; allocated is its load; states and
+  reason are the published ones. The zeros in fleet.go are gone, and so are
+  `compute.FleetMarket`, the 10,000-host scan and the network reason.
+- The rollout is one grouped SQL count (`FleetRollout`).
+- `FleetNodes` lists platform hosts with an instance id; the state is the
+  planner's `fleetStateOf`, and `Ready` is computed in compute with
+  `onRelease`.
+- `Propose:` commits: `fleetStateOf` takes a `hostStanding` and
+  `preparedFor` became `onRelease(host, version, release)` in
+  planner_snapshot.go, so Nodes and the planner share one mapping; the
+  OpenAPI descriptions of `warm_target`, `FleetNode.ready` and
+  `FleetSummary.plan`.
+- FleetSettings.tsx needed no change.
+
+Parity lines (internal/api, web):
+
+- `GET /v1/fleet`: `TestFleetReturnsThePublishedPlanUntilItExpires` (runs
+  the real pass, checks every number against the published plan, the
+  hibernated host as reserve ready, the plan omitted before publication and
+  after expiry).
+- `GET /v1/fleet/nodes` reserve states and readiness, refused launch absent,
+  paging, rollout: `TestFleetNodesListReserveStatesAndNeverARefusedLaunch`.
+- Administrators only: `TestFleetIsForAdministratorsOnly` (its host now has
+  an instance).
+- Dashboard: FleetSettings.test.tsx (published targets and expanded states,
+  unavailable, expired, reserve state labels on Nodes).
+
 ## Intentional differences
+
+- An expired plan is omitted, as the reference's `published()` did; the
+  "expired" message shows when a loaded plan lapses on an open page,
+  "unavailable" after a refresh.
+- The reference also hid a plan published for another agent release. The
+  published plan carries no release; its `reserve_ready` counts reserves
+  prepared for the target at the pass, at most 60 s old.
+- A host bought for the reserve, or a reserve refreshing, shows "Preparing
+  reserve" while it starts (the planner's mapping, so Nodes and Capacity
+  agree); the reference showed Starting. A resume to serve shows Starting.
+- A requested host not launched yet has no instance and is not on Nodes,
+  though the plan counts it as starting.
+- `ready` follows the rollout: a host outside a partial rollout is ready on
+  its own release, as `AnswerReserve` decides.
+- Rollout phases count stopped, stopping and preparing hosts as `reserve`,
+  not `offline`; `complete` still means no connected host on another
+  release.
 
 ## Evidence
 
+- `go test -race ./internal/api ./internal/compute` pass; `./check.sh`
+  passes; `bun run test` for AdminSettings passes (6); `bun run apigen`,
+  `go generate` and the api datamodel-codegen profile leave the tree clean.
+- `acceptance/neki/check.sh`: 682 checked, 0 router failures.
+- Screenshots (Playwright, own stack: Compose project `lcapiweb`, Postgres
+  27432, server 29080-29083, dashboard 29173, state in `.lazycloud/apiweb`,
+  taken down with its volume): /tmp/lazycloud-api-web-shots/
+  fleet-capacity.png, fleet-capacity-expanded.png, fleet-nodes.png,
+  fleet-expired.png, fleet-unavailable.png. The stack had no planner, so
+  the plan rows were seeded in SQL; the API tests cover the real pass.
+
 ## Gaps and unverified boundaries
+
+- The page against a planner-published plan on real hosts runs on prod in
+  the acceptance packet.
 
 ## Verification
 
