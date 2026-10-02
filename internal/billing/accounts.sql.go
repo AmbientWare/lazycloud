@@ -160,14 +160,10 @@ func (q *Queries) ResumeReload(ctx context.Context, userID uuid.UUID) error {
 }
 
 const setComplimentary = `-- name: SetComplimentary :execrows
-with account as (
-    update billing_accounts a
-    set complimentary_since = case when $1::bool then coalesce(a.complimentary_since, now()) end,
-        updated_at = now()
-    where a.user_id = $2
-    returning a.user_id
-)
-update billing_balances b set due = true where b.user_id in (select account.user_id from account)
+update billing_accounts a
+set complimentary_since = case when $1::bool then coalesce(a.complimentary_since, now()) end,
+    updated_at = now()
+where a.user_id = $2
 `
 
 type SetComplimentaryParams struct {
@@ -175,7 +171,6 @@ type SetComplimentaryParams struct {
 	UserID        uuid.UUID
 }
 
-// Waiving marks the balance due, so the rollup covers usage from then on.
 func (q *Queries) SetComplimentary(ctx context.Context, arg SetComplimentaryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setComplimentary, arg.Complimentary, arg.UserID)
 	if err != nil {

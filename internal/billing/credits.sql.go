@@ -13,15 +13,10 @@ import (
 )
 
 const grantCredit = `-- name: GrantCredit :one
-with lot as (
-    insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
-    values ($1, $2, $3, $4, $5, $6)
-    on conflict (user_id, source) do nothing
-    returning id
-), due as (
-    update billing_balances set due = true where user_id = $1 and exists (select 1 from lot)
-)
-select id from lot
+insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
+values ($1, $2, $3, $4, $5, $6)
+on conflict (user_id, source) do nothing
+returning id
 `
 
 type GrantCreditParams struct {
@@ -33,8 +28,7 @@ type GrantCreditParams struct {
 	ExpiresAt   *time.Time
 }
 
-// A grant is written once per source; the account becomes due so the new
-// credit covers any negative balance first.
+// A grant is written once per source; no row when the source was granted.
 func (q *Queries) GrantCredit(ctx context.Context, arg GrantCreditParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, grantCredit,
 		arg.UserID,
@@ -63,6 +57,16 @@ func (q *Queries) LotBySource(ctx context.Context, arg LotBySourceParams) (uuid.
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const markBalancesDue = `-- name: MarkBalancesDue :exec
+update billing_balances set due = true where user_id = any($1::uuid[])
+`
+
+// The accounts get a rollup on its next pass.
+func (q *Queries) MarkBalancesDue(ctx context.Context, userIds []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markBalancesDue, userIds)
+	return err
 }
 
 const reverseCredit = `-- name: ReverseCredit :exec

@@ -248,12 +248,20 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 			if err != nil {
 				return fmt.Errorf("prune functions: %w", err)
 			}
-			for _, row := range rows {
+			ids := make([]uuid.UUID, len(rows))
+			for n, row := range rows {
+				ids[n] = row.ID
 				pruned = append(pruned, row.Name)
-				removed += int(row.Versions)
 			}
 			sort.Strings(pruned)
 			if len(rows) > 0 {
+				// The app row locked by UpsertApp serializes deploys, so the
+				// pruned workloads gain no releases before this count.
+				versions, err := q.CountReleaseVersions(ctx, ids)
+				if err != nil {
+					return fmt.Errorf("count pruned versions: %w", err)
+				}
+				removed = int(versions)
 				// Planning retires the deleted workloads' releases.
 				if err := database.Notify(ctx, tx, database.ChannelExecution, appRow.ID.String()); err != nil {
 					return err

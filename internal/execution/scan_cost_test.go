@@ -240,6 +240,7 @@ func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
 
 	scans := []scan{
 		{"planning releases", planningReleases, []any{uuid.Nil, planningBatch}},
+		{"queued available", queuedAvailable, []any{[]uuid.UUID{f.release}, int64(5)}},
 		{"serving releases", servingReleases, []any{int32(startFailureLimit), uuid.Nil, int32(planningBatch)}},
 		{"pod releases", podReleases, []any{int32(startFailureLimit), uuid.Nil, int32(planningBatch)}},
 		{"live work", hasLiveWork, nil},

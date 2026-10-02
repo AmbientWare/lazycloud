@@ -37,7 +37,10 @@ type PlanResult struct {
 
 // releasePlan is what one release's decision changed.
 type releasePlan struct {
-	release   PlanningReleasesRow
+	release PlanningReleasesRow
+	// queued counts the release's due queued tasks up to the demand that
+	// changes its decision.
+	queued    int
 	created   []uuid.UUID
 	stopped   []uuid.UUID
 	drained   []drainedContainer
@@ -109,9 +112,13 @@ func (e *Execution) planBatch(ctx context.Context, logger *slog.Logger, after uu
 			return fmt.Errorf("list planning releases: %w", err)
 		}
 		out.releases = len(releases)
+		queued, err := countQueued(ctx, tx, releases)
+		if err != nil {
+			return err
+		}
 		for _, release := range releases {
 			out.last = release.ReleaseID
-			plan, err := e.planReleaseIsolated(ctx, tx, release)
+			plan, err := e.planReleaseIsolated(ctx, tx, release, queued[release.ReleaseID])
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -129,14 +136,47 @@ func (e *Execution) planBatch(ctx context.Context, logger *slog.Logger, after uu
 	return out, nil
 }
 
+// countQueued counts each release's due queued tasks up to
+// max_containers * tasks_per_container, past which demand changes no
+// decision. The cap is a plain LIMIT, so releases sharing one share a
+// statement, and the statements share one round trip.
+func countQueued(ctx context.Context, tx pgx.Tx, releases []PlanningReleasesRow) (map[uuid.UUID]int, error) {
+	byCap := map[int64][]uuid.UUID{}
+	for _, release := range releases {
+		limit := int64(max(release.MaxContainers, 1)) * int64(max(release.TasksPerContainer, 1))
+		byCap[limit] = append(byCap[limit], release.ReleaseID)
+	}
+	queued := make(map[uuid.UUID]int, len(releases))
+	if len(byCap) == 0 {
+		return queued, nil
+	}
+	batch := &pgx.Batch{}
+	for limit, ids := range byCap {
+		batch.Queue(queuedAvailable, ids, limit).Query(func(rows pgx.Rows) error {
+			counted, err := pgx.CollectRows(rows, pgx.RowToStructByPos[QueuedAvailableRow])
+			if err != nil {
+				return fmt.Errorf("read queued counts: %w", err)
+			}
+			for _, row := range counted {
+				queued[row.ReleaseID] = int(row.Available)
+			}
+			return nil
+		})
+	}
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		return nil, fmt.Errorf("count queued tasks: %w", err)
+	}
+	return queued, nil
+}
+
 // planReleaseIsolated runs one release's decision in a savepoint, so its
 // failure rolls back only its own changes.
-func (e *Execution) planReleaseIsolated(ctx context.Context, tx pgx.Tx, release PlanningReleasesRow) (releasePlan, error) {
+func (e *Execution) planReleaseIsolated(ctx context.Context, tx pgx.Tx, release PlanningReleasesRow, queued int) (releasePlan, error) {
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
 		return releasePlan{}, fmt.Errorf("begin savepoint: %w", err)
 	}
-	plan := releasePlan{release: release}
+	plan := releasePlan{release: release, queued: queued}
 	if release.Stopping {
 		err = e.stopRelease(ctx, savepoint, &plan)
 	} else {
@@ -162,7 +202,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		minimum = int(release.MinContainers)
 	}
 	desired := desiredContainers(
-		int(release.QueuedAvailable)+int(release.Running),
+		plan.queued+int(release.Running),
 		int(release.TasksPerContainer), minimum, int(release.MaxContainers),
 	)
 	// Draining containers still hold resources and count against the

@@ -19,16 +19,18 @@ returning id;
 
 -- name: UpdateGitHubProfile :exec
 -- The email follows GitHub's verified primary address unless another
--- account holds it.
+-- account holds it. users.email is unique, so the left join adds at most
+-- one row: the other holder, if any.
 update users u
 set display_name = @display_name, avatar_url = @avatar_url,
     github_user_id = @github_user_id, github_login = @github_login,
     email = case
-        when sqlc.narg(email)::text is null then u.email
-        when exists (select 1 from users o where o.email = sqlc.narg(email)::text and o.id <> u.id) then u.email
+        when sqlc.narg(email)::text is null or o.id is not null then u.email
         else sqlc.narg(email)::text
     end,
     updated_at = now()
+from (select 1) one
+left join users o on o.email = sqlc.narg(email)::text and o.id <> @id
 where u.id = @id;
 
 -- name: OwnedWorkspace :one

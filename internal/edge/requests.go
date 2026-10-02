@@ -283,14 +283,22 @@ func (e *Edge) insertRequests(ctx context.Context, batch []requestRecord) error 
 		if err := q.InsertRequests(ctx, p); err != nil {
 			return fmt.Errorf("insert request records: %w", err)
 		}
-		callbacks, err := q.InsertRequestCallbacks(ctx, InsertRequestCallbacksParams{Ids: p.Ids, MaxPending: maxPendingCallbacks})
+		states, err := q.InsertRequestCallbacks(ctx, InsertRequestCallbacksParams{Ids: p.Ids, MaxPending: maxPendingCallbacks})
 		if err != nil {
 			return fmt.Errorf("insert request callbacks: %w", err)
 		}
-		if callbacks.Dropped > 0 {
-			e.logger.WarnContext(ctx, "request callbacks dropped: their release has the most waiting", "callbacks", callbacks.Dropped, "max_pending", maxPendingCallbacks)
+		var queued, dropped int
+		for _, state := range states {
+			if state == "pending" {
+				queued++
+			} else {
+				dropped++
+			}
 		}
-		if callbacks.Queued > 0 {
+		if dropped > 0 {
+			e.logger.WarnContext(ctx, "request callbacks dropped: their release has the most waiting", "callbacks", dropped, "max_pending", maxPendingCallbacks)
+		}
+		if queued > 0 {
 			if err := database.Notify(ctx, tx, database.ChannelCallback, ""); err != nil {
 				return err //nolint:wrapcheck // Notify names the channel
 			}
