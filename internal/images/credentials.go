@@ -2,7 +2,6 @@ package images
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -208,13 +207,5 @@ func exchangeECR(ctx context.Context, region, accessKey, secretKey, sessionToken
 	if len(out.AuthorizationData) == 0 {
 		return nil, fmt.Errorf("ECR returned no authorization data")
 	}
-	decoded, err := base64.StdEncoding.DecodeString(aws.ToString(out.AuthorizationData[0].AuthorizationToken))
-	if err != nil {
-		return nil, fmt.Errorf("decode ECR token: %w", err)
-	}
-	user, password, ok := strings.Cut(string(decoded), ":")
-	if !ok {
-		return nil, fmt.Errorf("ECR token is not user:password")
-	}
-	return &Auth{Username: user, Password: password}, nil
+	return decodeECRToken(aws.ToString(out.AuthorizationData[0].AuthorizationToken))
 }

@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -167,7 +168,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.identity.PublicURL, "public-url", env("LAZYCLOUD_PUBLIC_URL", "http://127.0.0.1:8080"), "dashboard origin for sign-in, device login and invitation links (LAZYCLOUD_PUBLIC_URL)")
 	fs.StringVar(&cfg.identity.GitHub.ClientID, "github-client-id", env("LAZYCLOUD_GITHUB_CLIENT_ID", ""), "GitHub App client id for dashboard sign-in (LAZYCLOUD_GITHUB_CLIENT_ID)")
 	fs.StringVar(&cfg.api.ClientReleaseVersion, "client-release-version", env("LAZYCLOUD_CLIENT_RELEASE_VERSION", ""), "CLI version older clients are told to update to (LAZYCLOUD_CLIENT_RELEASE_VERSION)")
-	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
+	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to; an ECR host without LAZYCLOUD_IMAGE_REGISTRY_USERNAME logs in with AWS credentials (LAZYCLOUD_IMAGE_REGISTRY)")
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
 	fs.StringVar(&cfg.edgeAddr, "edge-addr", env("LAZYCLOUD_EDGE_ADDR", "127.0.0.1:8082"), "workload traffic address (LAZYCLOUD_EDGE_ADDR)")
@@ -213,8 +214,17 @@ func serve(ctx context.Context, args []string) error {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
 	cfg.images.ManagedBase = cfg.imageTemplate
-	if user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); user != "" {
+	// An ECR registry without a static login takes tokens minted from the
+	// AWS default credential chain, such as the pod's identity.
+	switch user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); {
+	case user != "":
 		cfg.images.Auth = &images.Auth{Username: user, Password: os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_PASSWORD")}
+	case images.IsECR(cfg.images.Registry):
+		awsConfig, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("load AWS configuration for the image registry: %w", err)
+		}
+		cfg.images.ECR = &awsConfig
 	}
 	// Secrets stay out of the process arguments.
 	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")

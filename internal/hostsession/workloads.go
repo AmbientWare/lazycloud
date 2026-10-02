@@ -126,7 +126,10 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 		if sess.sent[id] || sess.server.images == nil {
 			continue
 		}
-		repository, insecure, auth := sess.server.images.FilesystemTarget(pub.Workspace)
+		repository, insecure, auth, err := sess.server.images.FilesystemTarget(ctx, pub.Workspace)
+		if err != nil {
+			return err
+		}
 		msg := &hostproto.PublishFilesystem{
 			ContainerId: pub.Container.String(), RequestId: pub.Request.String(), Repository: repository,
 			InsecureRegistry: insecure, RegistryAuth: registryAuthOut(auth), Deadline: timestamppb.New(pub.Deadline),
@@ -228,7 +231,7 @@ func (s *Server) CompleteFilesystemImage(ctx context.Context, req *hostproto.Com
 	err = s.execution.FinishFilesystemImage(ctx, hostFrom(ctx), container, request, failure, func(ws identity.WorkspaceID) (string, error) {
 		// The host names only a digest in the repository this workspace's
 		// images go to.
-		repository, _, _ := s.images.FilesystemTarget(ws)
+		repository := s.images.FilesystemRepository(ws)
 		digest, ok := strings.CutPrefix(req.GetReference(), repository+"@sha256:")
 		if !ok || !isHexDigest(digest) {
 			return "", fmt.Errorf("the host reported %q, not an image in %s", req.GetReference(), repository)

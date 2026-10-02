@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -84,6 +85,9 @@ type Config struct {
 	Insecure bool
 	// Auth logs in to Registry; nil reads and pushes anonymously.
 	Auth *Auth
+	// ECR, when set, logs in to Registry, an ECR registry, with tokens minted
+	// from these AWS credentials instead of Auth.
+	ECR *aws.Config
 	// ManagedBase is the image a definition without a base starts from;
 	// {version} is replaced with its Python version.
 	ManagedBase string
@@ -100,13 +104,15 @@ type Images struct {
 	execution *execution.Execution
 	resolver  *resolver
 	config    Config
+	login     *platformLogin
 	ecr       ecrToken
 }
 
 // NewImages returns the images owner.
 func NewImages(pool *pgxpool.Pool, exec *execution.Execution, config Config) *Images {
 	return &Images{
-		pool: pool, queries: New(pool), execution: exec, resolver: newResolver(config.Registry), config: config, ecr: exchangeECR,
+		pool: pool, queries: New(pool), execution: exec, resolver: newResolver(config.Registry), config: config,
+		login: newPlatformLogin(config), ecr: exchangeECR,
 	}
 }
 
@@ -236,7 +242,9 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 		var auth *Auth
 		switch {
 		case platform:
-			auth = i.config.Auth
+			if auth, err = i.login.auth(ctx); err != nil {
+				return "", err
+			}
 		case host == baseHost && baseAuth != nil:
 			auth = baseAuth
 		}
@@ -423,7 +431,9 @@ func (i *Images) PullOf(ctx context.Context, id, reference string) (Pull, error)
 	}
 	pull := Pull{Reference: reference, Platform: "linux/" + architecture}
 	if strings.HasPrefix(reference, i.config.Registry+"/") {
-		pull.Auth = i.config.Auth
+		if pull.Auth, err = i.login.auth(ctx); err != nil {
+			return Pull{}, err
+		}
 	}
 	return pull, nil
 }
@@ -590,8 +600,12 @@ func (i *Images) BuildCommandOf(ctx context.Context, start execution.BuildStart)
 			return BuildCommand{}, fmt.Errorf("decode registry logins: %w", err)
 		}
 	}
-	if i.config.Auth != nil {
-		auth[i.config.registryHost()] = *i.config.Auth
+	platform, err := i.login.auth(ctx)
+	if err != nil {
+		return BuildCommand{}, err
+	}
+	if platform != nil {
+		auth[i.config.registryHost()] = *platform
 	}
 	// A workspace's images on one base share a cache. Workspaces never share
 	// one: a build could write any cache entry it can push.
@@ -631,7 +645,11 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 			return invalid("digest %q is not sha256:<hex>", outcome.Digest)
 		}
 		reference = i.config.imagesRepository() + "@" + outcome.Digest
-		if _, err := i.resolver.pin(ctx, reference, i.config.Auth, i.config.Insecure); err != nil {
+		auth, err := i.login.auth(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := i.resolver.pin(ctx, reference, auth, i.config.Insecure); err != nil {
 			return fmt.Errorf("check pushed image: %w", err)
 		}
 	}
