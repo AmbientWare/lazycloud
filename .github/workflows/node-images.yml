@@ -1,0 +1,72 @@
+name: Node images
+
+# Bakes the fleet's CPU and GPU node images (deploy/ami) and copies them to
+# every fleet region. Images change only with deploy/ami/node-setup.sh or
+# deploy/host-pins.sh; an unchanged recipe reuses the existing images. The
+# summary holds the LAZYCLOUD_FLEET_IMAGES value to commit into the
+# deployment's environment file, which the next Ship deploys.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: node-images
+  cancel-in-progress: false
+
+jobs:
+  bake:
+    name: Bake the ${{ matrix.variant }} image
+    runs-on: ubuntu-26.04
+    # The bake role trusts only this workflow, from main, in this environment.
+    environment: images
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cpu, gpu]
+    steps:
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Node images runs from main; this run is on ${GITHUB_REF}."
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_NODE_IMAGE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Bake and copy
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: deploy/ami/bake.sh --variant "$VARIANT" >"$VARIANT.json"
+      # Matrix jobs share no outputs, so each map travels as an artifact.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: node-image-${{ matrix.variant }}
+          path: ${{ matrix.variant }}.json
+          if-no-files-found: error
+
+  record:
+    name: Record the images
+    needs: bake
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: node-image-*
+          merge-multiple: true
+      - name: Summarize
+        run: |
+          set -euo pipefail
+          images="$(jq -c -n --slurpfile cpu cpu.json --slurpfile gpu gpu.json '{cpu: $cpu[0], gpu: $gpu[0]}')"
+          {
+            echo "## Node images"
+            echo
+            echo "Set in deploy/helm/lazycloud/environments/prod.yaml:"
+            echo
+            echo '```yaml'
+            echo "  LAZYCLOUD_FLEET_IMAGES: '$images'"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

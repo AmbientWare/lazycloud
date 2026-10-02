@@ -1,7 +1,7 @@
 name: Web owner
 
 on:
-  # The release workflow runs it before publishing images.
+  # Ship runs it before publishing images.
   workflow_call:
   pull_request:
     paths:
