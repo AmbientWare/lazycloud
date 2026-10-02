@@ -106,8 +106,8 @@ Scope notes:
   Delivered: soft-deleted apps, workspace-scoped volumes and secrets, `artifacts.app_id on delete set null` (migrations/0007_storage.sql). Schema reading only.
 
 ## Functions and tasks
-- [ ] `@app.function(...)` options: image, name, cpu, memory, disk, gpu, gpu_count, timeout_seconds, concurrency, in_process, cron, keep_warm, max_pending_tasks, autoscaler, retries(3), retry_policy, retry_delay_seconds, callback_url, authorized, env, secrets, volumes, on_start/on_running/on_success/on_error/on_retry/on_failure/on_finish, task_policy, inputs, outputs, docker_enabled, preemptible, region, availability_zone, machine, metadata (SDK/abstractions/app.py:245)
-  Gap: every option maps (`test_deploy_uploads_the_source_once_and_maps_function_options`, `test_deploy_maps_workload_runtime_options` incl. `metadata`, `test_deploy_maps_storage_options`, `test_deploy_maps_gpu_and_placement_options`; live metadata read back) except a non-default `retry_policy.retry_on_statuses`, which is refused: about half a day for a `retry_on` list of failure kinds.
+- [x] `@app.function(...)` options: image, name, cpu, memory, disk, gpu, gpu_count, timeout_seconds, concurrency, in_process, cron, keep_warm, max_pending_tasks, autoscaler, retries(3), retry_policy, retry_delay_seconds, callback_url, authorized, env, secrets, volumes, on_start/on_running/on_success/on_error/on_retry/on_failure/on_finish, task_policy, inputs, outputs, docker_enabled, preemptible, region, availability_zone, machine, metadata (SDK/abstractions/app.py:245)
+  Delivered: every option maps: `test_deploy_uploads_the_source_once_and_maps_function_options`, `test_deploy_maps_workload_runtime_options` (incl. `metadata`), `test_deploy_maps_storage_options`, `test_deploy_maps_gpu_and_placement_options`, `test_deploy_maps_retry_on_statuses_to_the_failures_retried`.
 - [x] `Function.local()`, plain call, `.remote()`, `.async_remote()` (SDK/abstractions/function.py:243,488,564)
   Delivered: `test_remote_streams_output_resumes_dropped_logs_and_returns_the_value`, `test_remote_failure_reraises_the_remote_exception` (original exception re-raised: tasks/function-execution.md). On a paused app deployed calls are refused and working-tree calls and previews run, as in the reference (`TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped`).
 - [x] `.spawn()`, `.async_spawn()` return `FunctionCall`; `.spawn_map(inputs)` submits up to 8 at a time (SDK/abstractions/function.py:517,525,574)
@@ -122,8 +122,8 @@ Scope notes:
   Delivered: `test_function_calls_in_arguments_become_dependencies`, dependencies_test.go, runner `test_dependency_frames_resolve_upstream_results_for_the_next_invoke`, live nested spawn (tasks/control.md).
 - [x] `Task.from_id(id, workspace=)`, `.get()`, `.view()`, `.pending_progress`, `.result()`, `.wait()`, `.async_wait()`, `.logs()`, `.output()`, `.subscribe()`, `.cancel()` (SDK/session/task.py:138)
   Intentional: `test_task_handles_read_results_logs_and_reruns`. API `Task` returns: tasks/control.md.
-- [ ] `RetryPolicy(max_attempts, delay_seconds, backoff=RetryBackoff.Fixed|Exponential, max_delay_seconds, retry_on_statuses)`, `TaskPolicy(timeout_seconds)` (SH/tasks.py:30-70)
-  Gap: fixed/exponential backoff and max delay work (internal/execution `NextAttemptDelay`), but a non-default `retry_on_statuses` is refused. About half a day.
+- [x] `RetryPolicy(max_attempts, delay_seconds, backoff=RetryBackoff.Fixed|Exponential, max_delay_seconds, retry_on_statuses)`, `TaskPolicy(timeout_seconds)` (SH/tasks.py:30-70)
+  Delivered: internal/execution `RetryPolicyOf`, `NextAttemptDelay`, `Retries`; `retry_on_statuses` maps to `retry_on` failure kinds (failed: user_error and lost; timeout: timeout). `TestRetryableFailureRequeuesUntilAttemptsRunOut`, `TestRetryOnRetriesOnlyTheNamedFailures`, `test_deploy_maps_retry_on_statuses_to_the_failures_retried`.
 - [x] `current_task_id()`, `current_root_task_id()` (SDK/__init__.py)
   Delivered: `test_calls_inside_a_container_run_the_active_release_as_children`, python/tests/acceptance/test_workload_runtime.py.
 - [x] Arguments and results use cloudpickle from the SDK and JSON over HTTP, `--json` and exported clients; 16 MiB cap each (DOCS/concepts/functions.mdx)

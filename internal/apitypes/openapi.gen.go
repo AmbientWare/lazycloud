@@ -1801,6 +1801,27 @@ func (e RetryPolicyBackoff) Valid() bool {
 	}
 }
 
+// Defines values for RetryPolicyRetryOn.
+const (
+	RetryPolicyRetryOnLost      RetryPolicyRetryOn = "lost"
+	RetryPolicyRetryOnTimeout   RetryPolicyRetryOn = "timeout"
+	RetryPolicyRetryOnUserError RetryPolicyRetryOn = "user_error"
+)
+
+// Valid indicates whether the value is a known member of the RetryPolicyRetryOn enum.
+func (e RetryPolicyRetryOn) Valid() bool {
+	switch e {
+	case RetryPolicyRetryOnLost:
+		return true
+	case RetryPolicyRetryOnTimeout:
+		return true
+	case RetryPolicyRetryOnUserError:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxStatus.
 const (
 	SandboxStatusFailed   SandboxStatus = "failed"
@@ -4527,10 +4548,16 @@ type RetryPolicy struct {
 	// MaxAttempts Attempts including the first.
 	MaxAttempts     int      `json:"max_attempts"`
 	MaxDelaySeconds *float32 `json:"max_delay_seconds,omitempty"`
+
+	// RetryOn The failures another attempt follows; absent means all three.
+	RetryOn *[]RetryPolicyRetryOn `json:"retry_on,omitempty"`
 }
 
 // RetryPolicyBackoff defines model for RetryPolicy.Backoff.
 type RetryPolicyBackoff string
+
+// RetryPolicyRetryOn defines model for RetryPolicy.RetryOn.
+type RetryPolicyRetryOn string
 
 // Sandbox defines model for Sandbox.
 type Sandbox struct {

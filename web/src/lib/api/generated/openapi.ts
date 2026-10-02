@@ -3792,6 +3792,8 @@ export interface components {
              */
             backoff?: "fixed" | "exponential";
             max_delay_seconds?: number;
+            /** @description The failures another attempt follows; absent means all three. */
+            retry_on?: ("user_error" | "timeout" | "lost")[];
         };
         Autoscaler: {
             /** @default 0 */
@@ -11530,6 +11532,7 @@ export const deliveryStateValues: ReadonlyArray<FlattenedDeepRequired<components
 export const uploadTargetMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UploadTarget"]["method"]> = ["PUT"];
 export const imageSpecPython_versionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageSpec"]["python_version"]> = ["3.10", "3.11", "3.12", "3.13", "3.14"];
 export const retryPolicyBackoffValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["backoff"]> = ["fixed", "exponential"];
+export const retryPolicyRetry_onValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["retry_on"]> = ["user_error", "timeout", "lost"];
 export const payloadEncodingValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Payload"]["encoding"]> = ["json", "cloudpickle"];
 export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];

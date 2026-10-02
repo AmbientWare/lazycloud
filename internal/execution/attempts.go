@@ -92,12 +92,18 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 		if outcome.Failure == nil {
 			return fmt.Errorf("%s attempt without a failure", outcome.State)
 		}
+		var policy RetryPolicy
+		retry := false
 		if outcome.Failure.Kind.Retryable() && int(task.AttemptCount) < int(task.MaxAttempts) {
 			var spec apitypes.WorkloadSpec
 			if err := json.Unmarshal(task.Spec, &spec); err != nil {
 				return fmt.Errorf("decode release spec: %w", err)
 			}
-			delay := RetryPolicyOf(spec).NextAttemptDelay(int(task.AttemptCount) + 1)
+			policy = RetryPolicyOf(spec)
+			retry = policy.Retries(outcome.Failure.Kind)
+		}
+		if retry {
+			delay := policy.NextAttemptDelay(int(task.AttemptCount) + 1)
 			if err := q.RequeueTask(ctx, RequeueTaskParams{ID: task.ID, DelaySeconds: delay.Seconds()}); err != nil {
 				return fmt.Errorf("requeue task: %w", err)
 			}

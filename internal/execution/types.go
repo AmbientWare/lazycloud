@@ -5,6 +5,7 @@ package execution
 
 import (
 	"math"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -145,6 +146,14 @@ type RetryPolicy struct {
 	Delay       time.Duration
 	Exponential bool
 	MaxDelay    time.Duration
+	// RetryOn narrows the retryable failure kinds; nil retries them all.
+	RetryOn []FailureKind
+}
+
+// Retries reports whether a failure of kind is followed by another attempt
+// while attempts remain.
+func (p RetryPolicy) Retries(kind FailureKind) bool {
+	return kind.Retryable() && (p.RetryOn == nil || slices.Contains(p.RetryOn, kind))
 }
 
 // RetryPolicyOf resolves spec defaults: without a policy a function gets one
@@ -163,6 +172,12 @@ func RetryPolicyOf(spec apitypes.WorkloadSpec) RetryPolicy {
 	}
 	if p.MaxDelaySeconds != nil {
 		policy.MaxDelay = seconds(float64(*p.MaxDelaySeconds))
+	}
+	if p.RetryOn != nil {
+		policy.RetryOn = []FailureKind{}
+		for _, kind := range *p.RetryOn {
+			policy.RetryOn = append(policy.RetryOn, FailureKind(kind))
+		}
 	}
 	return policy
 }
