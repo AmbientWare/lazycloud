@@ -267,8 +267,13 @@ func (r liveReserve) cycle(launched time.Time) {
 	r.move(compute.PhaseResuming)
 	asked := time.Now()
 	r.act()
-	if scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
-		t.Fatalf("start not recorded; host %s", r.phase())
+	// Another reserve's actuator pass may hold this host's claim.
+	for scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
+		if time.Since(asked) > time.Minute {
+			t.Fatalf("start not recorded; host %s", r.phase())
+		}
+		time.Sleep(2 * time.Second)
+		r.act()
 	}
 	started := r.until(ec2types.InstanceStateNameRunning, 10*time.Minute, func() {})
 	r.timings.add(r.c.name()+": start to running", started.Sub(asked))
