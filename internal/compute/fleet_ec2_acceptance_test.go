@@ -36,10 +36,11 @@ const acceptanceRegion = "us-east-2"
 // terminate through the actuator and reconciliation as the fleet expects.
 // The hosts cannot reach a server, so the test stands in for their
 // sessions' phase moves. It runs only with LAZYCLOUD_EC2_ACCEPTANCE_PROFILE
-// naming the platform account's profile, and
-// LAZYCLOUD_EC2_ACCEPTANCE_RUNS lifecycle runs (default 1) of three
-// instances at a time; every instance and Spot request tagged for the
-// acceptance fleet is ended when it finishes. With
+// naming the platform account's profile. Each reserve kind runs
+// LAZYCLOUD_EC2_ACCEPTANCE_RUNS cycles (default 1), the GPU one
+// LAZYCLOUD_EC2_ACCEPTANCE_GPU_RUNS, one instance per kind at a time; every
+// instance and Spot request tagged for the acceptance fleet is ended when
+// it finishes. With
 // LAZYCLOUD_FLEET_SPOT_SNAPSHOT naming a file it writes the Spot prices it
 // read there.
 func TestRealEC2Fleet(t *testing.T) {
@@ -69,22 +70,50 @@ func TestRealEC2Fleet(t *testing.T) {
 		checkQuotas(t, o, cfg, networks)
 	})
 
-	runs := 1
-	if s := os.Getenv("LAZYCLOUD_EC2_ACCEPTANCE_RUNS"); s != "" {
-		if _, err := fmt.Sscan(s, &runs); err != nil {
-			t.Fatalf("LAZYCLOUD_EC2_ACCEPTANCE_RUNS: %v", err)
-		}
-	}
+	runs := envCount(t, "LAZYCLOUD_EC2_ACCEPTANCE_RUNS", 1)
+	gpuRuns := envCount(t, "LAZYCLOUD_EC2_ACCEPTANCE_GPU_RUNS", runs)
 	timings := &lifecycleTimings{byPath: map[string][]time.Duration{}}
-	for run := range runs {
-		t.Run(fmt.Sprintf("lifecycle_%d", run+1), func(t *testing.T) {
-			lifecycleRun(t, cfg, client, networks[acceptanceRegion], timings)
+	t.Run("lifecycle", func(t *testing.T) {
+		o := newOwners(t, compute.Config{
+			InstallURL: "https://lazycloud.invalid", ServerAddress: "lazycloud.invalid:443",
+			Fleet: compute.Fleet{Name: acceptanceFleet, AWS: cfg, MaxHosts: 3, Networks: map[string]compute.Network{acceptanceRegion: networks[acceptanceRegion]}},
 		})
-	}
+		publish(t, o.compute)
+		for _, c := range []reserveCase{
+			{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate},
+			{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveStop},
+			{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1},
+		} {
+			cycles := runs
+			if c.gpus > 0 {
+				cycles = gpuRuns
+			}
+			t.Run(strings.ReplaceAll(c.name(), " ", "_"), func(t *testing.T) {
+				t.Parallel()
+				for range cycles {
+					r, launched := launchReserve(t, o, client, networks[acceptanceRegion], c, timings)
+					r.cycle(launched)
+				}
+			})
+		}
+	})
 	for _, path := range slices.Sorted(maps.Keys(timings.byPath)) {
 		d := slices.Sorted(slices.Values(timings.byPath[path]))
 		t.Logf("%s: p50 %s over %d %v", path, d[len(d)/2], len(d), d)
 	}
+}
+
+func envCount(t *testing.T, name string, fallback int) int {
+	t.Helper()
+	s := os.Getenv(name)
+	if s == "" {
+		return fallback
+	}
+	var n int
+	if _, err := fmt.Sscan(s, &n); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return n
 }
 
 // lifecycleTimings collects the durations of every lifecycle run by path.
@@ -99,62 +128,62 @@ func (l *lifecycleTimings) add(path string, d time.Duration) {
 	l.byPath[path] = append(l.byPath[path], d.Round(time.Second))
 }
 
-// reserveCase is one reserve the lifecycle launches.
+// reserveCase is one reserve the lifecycle launches. Each case runs its
+// cycles one after another, so at most one instance per case lives.
 type reserveCase struct {
 	instanceType string
 	market       compute.Market
 	mode         compute.ReserveMode
 	gpus         int
-	// zone pins the launch: us-east-2a refused m7i.large for capacity on
-	// 2026-10-02.
-	zone string
 }
 
 func (c reserveCase) name() string {
 	return c.instanceType + " " + string(c.market) + " " + string(c.mode)
 }
 
-// lifecycleRun launches an on-demand m7i.large that hibernates, a Spot
-// m7i.large on a persistent request and an on-demand g4dn.xlarge that stop
-// plainly, in one launcher pass, and drives each through stop, start and
-// termination.
-func lifecycleRun(t *testing.T, cfg aws.Config, client *ec2.Client, network compute.Network, timings *lifecycleTimings) {
-	o := newOwners(t, compute.Config{
-		InstallURL: "https://lazycloud.invalid", ServerAddress: "lazycloud.invalid:443",
-		Fleet: compute.Fleet{Name: acceptanceFleet, AWS: cfg, MaxHosts: 3, Networks: map[string]compute.Network{acceptanceRegion: network}},
-	})
-	publish(t, o.compute)
-	cases := []reserveCase{
-		{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate, zone: "us-east-2b"},
-		{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveStop, zone: "us-east-2c"},
-		{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1, zone: "us-east-2b"},
+// launchReserve asks for a reserve of the case and launches it through the
+// launcher, in the next zone when one refuses the type for capacity (on
+// 2026-10-02 us-east-2a and us-east-2c each refused m7i.large).
+func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.Network, c reserveCase, timings *lifecycleTimings) (liveReserve, time.Time) {
+	typ, ok := compute.CatalogTypeNamed(c.instanceType)
+	if !ok {
+		t.Fatalf("%s is not in the catalog", c.instanceType)
 	}
-	hosts := make([]uuid.UUID, len(cases))
-	for n, c := range cases {
-		typ, ok := compute.CatalogTypeNamed(c.instanceType)
-		if !ok {
-			t.Fatalf("%s is not in the catalog", c.instanceType)
-		}
-		hosts[n] = scan[uuid.UUID](t, o.pool, `
+	for _, subnet := range network.Subnets {
+		host := scan[uuid.UUID](t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
                    instance_type, market, reserve_mode)
-values ($1, 'offline', 'platform', 'aws', 'requested', $2, $3, $4, $5, $6, $7, $8, $9, $10)
-returning id`, fmt.Sprintf("acceptance-%d", n), typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion, c.zone,
+values ('acceptance', 'offline', 'platform', 'aws', 'requested', $1, $2, $3, $4, $5, $6, $7, $8, $9)
+returning id`, typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion, subnet.Zone,
 			c.instanceType, string(c.market), string(c.mode))
-	}
-	launched := time.Now()
-	if n, err := o.compute.Launch(t.Context(), discard()); err != nil || n != len(cases) {
-		t.Fatalf("launch: %d %v; %v", n, err, scan[[]string](t, o.pool, "select array_agg(phase || ': ' || phase_message) from hosts"))
-	}
-	t.Run("reserves", func(t *testing.T) {
-		for n, c := range cases {
-			t.Run(strings.ReplaceAll(c.name(), " ", "_"), func(t *testing.T) {
-				t.Parallel()
-				r := liveReserve{t: t, o: o, client: client, host: hosts[n], c: c, timings: timings}
-				r.cycle(launched)
-			})
+		launched := time.Now()
+		for {
+			if _, err := o.compute.Launch(t.Context(), discard()); err != nil {
+				t.Fatalf("launch: %v", err)
+			}
+			var instance *string
+			var phase, message string
+			if err := o.pool.QueryRow(t.Context(), "select instance_id, phase, phase_message from hosts where id = $1", host).Scan(&instance, &phase, &message); err != nil {
+				t.Fatal(err)
+			}
+			if instance != nil {
+				return liveReserve{t: t, o: o, client: client, host: host, c: c, timings: timings}, launched
+			}
+			if phase == string(compute.PhaseFailed) {
+				if !strings.Contains(message, "InsufficientInstanceCapacity") {
+					t.Fatalf("%s launch failed: %s", c.name(), message)
+				}
+				t.Logf("%s in %s: %s", c.name(), subnet.Zone, message)
+				break
+			}
+			if time.Since(launched) > time.Minute {
+				t.Fatalf("%s not launched after a minute: %s %s", c.name(), phase, message)
+			}
+			time.Sleep(time.Second)
 		}
-	})
+	}
+	t.Fatalf("no zone of %s launched %s", acceptanceRegion, c.name())
+	return liveReserve{}, time.Time{}
 }
 
 // liveReserve drives one launched host through its lifecycle.
@@ -191,11 +220,17 @@ func (r liveReserve) reconcile() {
 
 func (r liveReserve) instance() ec2types.Instance {
 	id := scan[string](r.t, r.o.pool, "select instance_id from hosts where id = $1", r.host)
-	out, err := r.client.DescribeInstances(r.t.Context(), &ec2.DescribeInstancesInput{InstanceIds: []string{id}})
-	if err != nil || len(out.Reservations) != 1 || len(out.Reservations[0].Instances) != 1 {
-		r.t.Fatalf("describe %s: %v", id, err)
+	for start := time.Now(); ; time.Sleep(2 * time.Second) {
+		out, err := r.client.DescribeInstances(r.t.Context(), &ec2.DescribeInstancesInput{InstanceIds: []string{id}})
+		// EC2 may not list an instance for a few seconds after launching it.
+		if strings.Contains(fmt.Sprint(err), "InvalidInstanceID.NotFound") && time.Since(start) < 30*time.Second {
+			continue
+		}
+		if err != nil || len(out.Reservations) != 1 || len(out.Reservations[0].Instances) != 1 {
+			r.t.Fatalf("describe %s: %v", id, err)
+		}
+		return out.Reservations[0].Instances[0]
 	}
-	return out.Reservations[0].Instances[0]
 }
 
 // until polls EC2 every 2 seconds, running step between polls, until the
