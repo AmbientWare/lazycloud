@@ -336,7 +336,7 @@ with batch as (
     select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id
     from containers c
     where c.state = 'pending'
-    order by c.created_at, c.id
+    order by c.created_at
     limit $1
 )
 select ws.connection_id, b.cpu_millis, b.memory_bytes,
@@ -371,7 +371,9 @@ type PendingDemandRow struct {
 }
 
 // The oldest pending containers, up to the batch, grouped by what they need
-// from a host, each with the host bought for it (the zero id for none).
+// from a host, each with the host bought for it (the zero id for none). The
+// batch follows the pending index alone: ordering ties by id would sort a
+// whole backlog created in one statement.
 func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]PendingDemandRow, error) {
 	rows, err := q.db.Query(ctx, pendingDemand, batchSize)
 	if err != nil {

@@ -225,23 +225,34 @@ select 'provision', 'm7i.4xlarge', 'us-east-2', 240, 'ready', now() - interval '
 		statements int64
 		wall       time.Duration
 		buffers    map[string]int
+		// plans keeps each scan's costliest plan, to show when it grew.
+		plans map[string]string
 	}
 	measure := func(label string) cost {
-		costExec(t, pool, "update containers set capacity_wait = null, capacity_host_id = null where state = 'pending'")
+		// Undo the last pass, touching only the rows it wrote: rewriting the
+		// whole backlog would leave dead versions whose cleanup, and so the
+		// heap pages the batch spans, follows autovacuum's timing.
+		costExec(t, pool, `update containers set capacity_wait = null, capacity_host_id = null
+where state = 'pending' and (capacity_wait is not null or capacity_host_id is not null)`)
 		costExec(t, pool, "delete from hosts where phase = 'requested'")
 		costExec(t, pool, "delete from fleet_markets")
+		// Measure on clean pages and current statistics, whatever
+		// autovacuum has done under the load of other tests.
+		costExec(t, pool, "vacuum (analyze)")
 		counter.n.Store(0)
 		start := time.Now()
 		result, err := c.Plan(t.Context(), slog.New(slog.DiscardHandler))
 		if err != nil || !result.Published {
 			t.Fatalf("plan %+v %v, want a reserve pass", result, err)
 		}
-		out := cost{statements: counter.n.Load(), wall: time.Since(start), buffers: map[string]int{}}
+		out := cost{statements: counter.n.Load(), wall: time.Since(start), buffers: map[string]int{}, plans: map[string]string{}}
 		var row []string
 		for _, s := range scans {
 			for _, mode := range []string{"auto", "force_generic_plan"} {
 				plan := explainPlan(t, pool, mode, s.query, s.args...)
-				out.buffers[s.name] = max(out.buffers[s.name], planBuffers(plan))
+				if b := planBuffers(plan); b >= out.buffers[s.name] {
+					out.buffers[s.name], out.plans[s.name] = b, mode+"\n"+plan
+				}
 				if rows := containerRows(plan); rows > demandBatch+100 {
 					t.Errorf("%s: %s (%s) reads %d container or task rows:\n%s", label, s.name, mode, rows, plan)
 				}
@@ -265,14 +276,22 @@ insert into containers (workspace_id, release_id, state, slots, cpu_millis, memo
 select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
 from (select active_release_id, app_id from workloads order by id limit 1) w
 join apps a on a.id = w.app_id, generate_series(1, 10000)`)
+	// And the oldest backlog created in one statement, so thousands of
+	// pending containers share one created_at.
+	costExec(t, pool, `
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at)
+select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30, now() - interval '1 hour'
+from (select active_release_id, app_id from workloads order by id offset 1 limit 1) w
+join apps a on a.id = w.app_id, generate_series(1, 5000)`)
 	costExec(t, pool, "analyze")
-	large := measure("10,000 pending and 10,000 on a warm cron function, 20,000 finished")
+	large := measure("15,000 pending, 10,000 more on a warm cron function, 20,000 finished")
 	if large.statements != small.statements {
 		t.Errorf("the pass sent %d statements at 10,000 pending and %d at 2,000, want a fixed number", large.statements, small.statements)
 	}
 	for name, before := range small.buffers {
 		if after := large.buffers[name]; after > before+20 && after > 2*before {
-			t.Errorf("%s reads %d buffers at 10,000 pending and 20,000 finished, %d at 2,000 and 1,000", name, after, before)
+			t.Errorf("%s reads %d buffers at 10,000 pending and 20,000 finished, %d at 2,000 and 1,000:\n%s\nbefore:\n%s",
+				name, after, before, large.plans[name], small.plans[name])
 		}
 	}
 }
