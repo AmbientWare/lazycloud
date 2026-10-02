@@ -1,11 +1,17 @@
 # Benchmarks
 
-A manual A/B harness for two commits of the platform. CI does not run it; the
-Go guard tests (per-completion query cost against a growing backlog, idle
-passes against scheduler replicas, callback promptness) are the regression
-gate.
+A manual A/B harness for two commits of the platform. CI runs it only when
+someone starts the Benchmark workflow; the Go guard tests (per-completion
+query cost against a growing backlog, idle passes against scheduler
+replicas, callback promptness) are the regression gate.
 
 ## Compare two commits
+
+On GitHub, run the Benchmark workflow: `gh workflow run benchmark.yml -f
+head=<branch> [-f base=main] [-f phases="remote maps"]`. Both commits run on
+one hosted runner; the run summary holds the table.
+
+Locally:
 
 ```sh
 acceptance/bench/ab.sh <commit-a> <commit-b> [phase...]
