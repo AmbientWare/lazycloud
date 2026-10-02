@@ -60,7 +60,8 @@ Two options narrow that:
 - `region` and `availability_zone` pin placement within the workspace's cloud.
   Regions are `"us-east"`, `"us-west"`, `"eu-central"`, `"eu-north"`, and
   `"ap-southeast"`. Pinning costs more, needs a plan that allows it, and can't
-  combine with `machine`.
+  combine with `machine`. Only `"us-east"` and `"us-west"` have managed
+  capacity today, so a workload pinned elsewhere waits.
 
 ## Defaults
 

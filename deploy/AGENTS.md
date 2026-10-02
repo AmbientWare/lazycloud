@@ -1,17 +1,17 @@
 # Deployment
 
-- Keep canonical Compose, typed settings and health checks aligned with real
-  dependencies. Operational instructions belong in the deployment README.
-- Migrate before new processes run. Preserve writer compatibility or stop old
-  owners before the cutover; never roll back to code incompatible with the schema.
-- Validate the changed runtime boundary, not health checks alone. Recreate shared
-  network namespaces with their sidecars and reload ingress after API replacement.
-- Run workers through enrolled agents, with distinct identities/state and explicit
-  networking. Keep service settings and every deployment consumer synchronized.
-- Release one complete immutable manifest with platform/worker images, agent and
-  AMIs. Promote the same artifacts; do not rebuild during deployment or app builds.
-  Activate compatible releases through their durable owner.
-- Terraform owns non-secret infrastructure descriptors, Helm runtime settings and
-  secret bindings, CI builds/releases, and Argo installs. CI does not run Helm.
-- Root Argo tracks main; deployment values track their deployment branch. Preserve
-  operator-controlled pauses and update affected runbooks.
+- deploy/README.md describes the production deployment, what each setting
+  comes from and the bring-up runbook. Keep it current with changes here.
+- One way to do each thing: Terraform owns infrastructure and the chart's
+  infrastructure values, the chart owns runtime settings and secret
+  bindings, Ship builds and Deploy records, Argo CD installs. CI never runs
+  Terraform or Helm against a cluster.
+- Every setting the chart gives a process must be one its binary reads;
+  `deploy/check.sh` enforces it. Bind each secret only to the processes
+  that read it.
+- Pin versions exactly: providers, charts, images by digest, actions by
+  commit. Change pins and lock files together.
+- Grant IAM for calls the binaries make, scoped to tagged or named
+  resources; say in a comment why a wildcard stays.
+- Run `deploy/check.sh` before committing. Applies, syncs, bakes and
+  workflow runs against real accounts need the user's go-ahead.

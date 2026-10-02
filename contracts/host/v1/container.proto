@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package lazycloud.host.v1;
+
+import "google/protobuf/timestamp.proto";
+import "host/v1/host.proto";
+
+option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
+
+// ContainerLink connects the supervisor (PID 1 in a container) to the agent.
+// The agent serves it on a Unix socket it creates for that container alone, so
+// the socket identifies the container. Agent and supervisor ship together.
+service ContainerLink {
+  rpc Connect(stream SupervisorMessage) returns (stream SupervisorCommand);
+  // API forwards one request to the container API, which the agent relays
+  // to HostService.ContainerAPI. The agent sets head.container_id and
+  // bounds body size and concurrent calls per container.
+  rpc API(stream APIRequest) returns (stream APIResponse);
+}
+
+message SupervisorMessage {
+  oneof body {
+    SlotsReady ready = 1;
+    LoadFailed load_failed = 2;
+    AttemptFinished finished = 3;
+    OutputChunk output = 4;
+    // A pod's command ended on its own; the supervisor exits with its code.
+    CommandExited command_exited = 90;
+    // The supervisor closed its sockets for a Detach.
+    Detached detached = 91;
+  }
+}
+
+message CommandExited {
+  int32 exit_code = 1;
+}
+
+// SlotsReady reports that every slot loaded its handler. The supervisor sends
+// it again whenever it reconnects, so a restarted agent learns which attempts
+// already occupy slots.
+message SlotsReady {
+  int32 slots = 1;
+  repeated string running_attempts = 2;
+}
+
+message LoadFailed {
+  RunnerError error = 1;
+}
+
+message AttemptFinished {
+  string attempt_id = 1;
+  oneof outcome {
+    TaskSuccess success = 2;
+    TaskFailure failure = 3;
+  }
+}
+
+// OutputChunk is output a slot wrote while running an attempt. attempt_id is
+// empty for output outside an attempt, such as during import.
+message OutputChunk {
+  string attempt_id = 1;
+  LogStream stream = 2;
+  string data = 3;
+  google.protobuf.Timestamp time = 4;
+  // The HTTP request, by its X-Request-Id, an HTTP worker wrote this for.
+  string request_id = 30;
+}
+
+message SupervisorCommand {
+  oneof body {
+    Configure configure = 1;
+    RunAttempt run = 2;
+    CancelSlot cancel = 3;
+    Drain drain = 4;
+    // Reload restarts every runner once its current work finishes, so new
+    // source in the workspace takes effect.
+    Reload reload = 30;
+    Detach detach = 90;
+  }
+}
+
+// Configure is the first command. The supervisor starts `slots` runner
+// processes with runner_command in working_directory.
+message Configure {
+  string handler = 1;
+  int32 slots = 2;
+  repeated string runner_command = 3;
+  string working_directory = 4;
+  // Run every slot as a thread of one runner process.
+  bool in_process = 10;
+  LifecycleHooks hooks = 11;
+  // Environment variables holding secret values; their values are replaced
+  // in task output.
+  repeated string secret_env = 12;
+  // Set for HTTP workloads. The supervisor serves HTTP on http_socket and
+  // forwards each request to a worker with a free slot.
+  HttpServing http = 30;
+  string http_socket = 31;
+  // Set for pods, devboxes, sandboxes and shell containers: the supervisor
+  // runs this instead of runner slots, and is ready once it runs and any
+  // health check passes. handler and slots are unused.
+  PodProcess pod = 90;
+  // Where the supervisor serves its control API: processes, files, shells,
+  // SSH and port tunnels. Every container serves it.
+  string control_socket = 91;
+  // Start a Docker daemon before any runner or command.
+  bool docker = 92;
+}
+
+message PodProcess {
+  // The command to run. Empty runs no workload process: the container idles
+  // for shells, SSH and API processes until it is stopped.
+  repeated string command = 1;
+  string working_directory = 2;
+  HealthCheck health = 3;
+  // Serve SSH with this identity.
+  SshServer ssh = 4;
+  // A devbox's root disk mounted at this directory: the supervisor seeds it
+  // from the image on first use and runs everything with it as /.
+  string root = 5;
+  // Ports the command listens on, which readiness waits for when there is no
+  // health check.
+  repeated int32 ports = 6;
+}
+
+message RunAttempt {
+  string task_id = 1;
+  string attempt_id = 2;
+  PayloadEncoding input_encoding = 3;
+  bytes input = 4;
+  google.protobuf.Timestamp deadline = 5;
+  int32 attempt_number = 10;
+  int32 max_attempts = 11;
+  string root_task_id = 12;
+  string parent_task_id = 13;
+  repeated DependencyResult dependencies = 60;
+}
+
+// CancelSlot kills the process running the attempt and starts a replacement.
+message CancelSlot {
+  string attempt_id = 1;
+}
+
+// Drain lets running attempts and requests finish, then exits the
+// supervisor. HTTP workloads refuse new requests as busy while draining.
+message Drain {}
+
+message Reload {}
+
+// Detach precedes a checkpoint, which no runtime takes while the container
+// holds a socket on the host. The supervisor closes its control and HTTP
+// sockets and every connection on them, answers Detached, and opens them
+// again once it reconnects after the agent closed and reopened the link.
+// A container restored from the checkpoint does the same on its new link.
+message Detach {}
+
+message Detached {}

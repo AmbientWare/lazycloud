@@ -1,0 +1,29 @@
+# The build context is the repository root. Send only what the images build
+# from; local state, credentials and .env files never enter a build.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!migrations/
+!pyproject.toml
+!uv.lock
+!python/
+!deploy/local/build-runtime.sh
+!deploy/local/fetch-geesefs.sh
+!deploy/images/web.conf
+!web/
+web/node_modules/
+web/dist/
+web/.tanstack/
+web/tests/
+web/playwright-report/
+web/test-results/
+**/.env*
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/build/
+**/*.egg-info/
+**/tests/
+**/*_test.go

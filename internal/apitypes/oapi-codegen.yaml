@@ -1,0 +1,8 @@
+package: apitypes
+output: openapi.gen.go
+generate:
+  models: true
+output-options:
+  nullable-type: true
+  # LogEntry is the NDJSON line schema; no operation references it directly.
+  skip-prune: true

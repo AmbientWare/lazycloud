@@ -1,104 +1,161 @@
 # Repository rules
 
-Edit `AGENTS.md`, never its `CLAUDE.md` symlink. Add that symlink with any new
-guidance file. Keep instructions limited to repository standards and constraints;
-exclude feature plans, PR details and progress tracking.
+Guidance lives in AGENTS.md files, which Claude Code also loads; add no
+CLAUDE.md beside them. These files contain development standards and
+constraints. Keep task plans and progress with the task, not in the tree.
 
-## Ownership and code
+## Architecture
 
-- Domain packages own decisions and workflows; repositories map and query
-  persistence; apps own composition and process lifetime. Handlers, commands,
-  schedulers and workers call the responsible owner through explicit dependencies.
-- Keep cross-service coordination separate from each service's domain decisions.
-  Give shared behavior and configuration one owner; separate configuration only
-  for distinct permissions, tenant isolation or lifetimes.
-- `shared` owns backend-free contracts, `lazycloud` the public SDK/CLI, and
-  `runner` code inside user containers. SDK and runner depend only on shared
-  contracts and user code. Providers implement neutral domain protocols.
-- PostgreSQL/SQLAlchemy/Alembic own durable state; Redis owns transient
-  coordination; object stores and filesystems own bytes. Do not duplicate stores.
-- Fix ownership, models, boundaries and signatures. Do not hide defects with
-  `type: ignore`, broad `Any`/`object`, casts, checker exceptions, shims,
-  compatibility wrappers or fallback imports.
-- Use one production implementation. No fake success, weaker backends or switches
-  that give tests another path. Missing capabilities fail with a named reason.
-  Remove obsolete paths and update consumers together.
-- Use Python 3.12 types, Pydantic v2 at boundaries, precise enums/dataclasses/
-  protocols and selective exports. Preserve omitted values versus explicit zero.
-  Read consumers before changing an enum, status, sentinel, default or contract.
-- Work from the root with `uv`; use Bun for web packages, `apply_patch` for
-  manual edits, and Ruff for Python formatting/imports.
-- Comments explain only non-obvious current constraints. Load the `unslop` skill
-  before writing prose. Describe LazyCloud directly; name external products only
-  for actual dependencies, integrations or operational steps.
+- Processes: `cmd/server` serves the public API, the host connection (gRPC)
+  and the edge that forwards workload HTTP, WebSocket and TCP traffic.
+  `cmd/scheduler` runs execution planning, placement, the cloud fleet, cron,
+  callbacks, email and sweeps; replicas share passes through advisory locks
+  and one elected leader runs the timers. `cmd/agent` runs on each host and
+  supervises its containers. `cmd/supervisor` is PID 1 in every workload
+  container and runs the language runner (`python/runner`) over the local
+  runner protocol. `web/` is the dashboard.
+- Owners are packages under `internal/`: control (apps, releases), execution
+  (admission, attempts, container lifecycle, replica counts), scheduling
+  (placement), compute (hosts, fleet, agent releases), identity, billing,
+  storage, images, edge, schedules, secrets, observability, notifications.
+  Each package comment names what it owns.
+- PostgreSQL is the single durable authority. A transaction that changes
+  state also calls `pg_notify`, and `internal/database` listeners wake the
+  waiters and scheduler loops once it commits; leader timers catch work no
+  notification announces. There is no Redis. Object stores and host caches
+  hold bytes.
+- Host runtime packages (agent, supervisor, diskengine) have no database
+  access and reach the control plane only through the host protocol;
+  depguard in `.golangci.yml` enforces it.
+- Contracts live in `contracts/`: `openapi.yaml` (public API),
+  `host/v1/*.proto` (host session, data and container link) and
+  `runner.yaml` (local runner protocol). Go bindings come from `go generate`
+  (oapi-codegen, buf, sqlc), Python models from `datamodel-codegen` profiles
+  in pyproject.toml, TypeScript types from `bun run apigen`. Regenerate every
+  binding in the change that edits a contract.
+- Containers hold no platform credential. In-container SDK calls go to the
+  container API socket the supervisor serves; the agent forwards each call
+  as `ContainerAPI` tagged with the container, and the server authorizes it
+  against the container's current assignment and workspace.
+- `migrations/` is one ordered SQL chain; `server migrate` and server start
+  apply it.
 
-## Database and contracts
+## Ownership and implementation
 
-- Filter, aggregate and project in SQL. Lookups must not load collections.
-  Recurring work scans live resources and due work, batches shared reads and
-  reuses snapshots rather than scanning retained history.
-- Keep locks only for concrete concurrency invariants; use the narrowest scope
-  and measure contention. Budget recurring reads across replicas and cadence.
-  For changed polling/reconciliation/lookups, record query counts and returned
-  bytes before/after with representative history, idle and active; verify the
-  deployed rate in query insights.
-- Use `/api/v1/<resource>` for resources and `/gateway/*` for RPC. Authorize
-  every requested workspace against token scope and membership; only an
-  administrator may reach a tenant workspace without membership.
-- FastAPI handlers validate, authorize, call one service and map typed results.
-  JSON payloads use `HttpModel`, precise response models, stable operation IDs,
-  `{data, next}` lists, `datetime` and `204` for bodiless success.
-- Services raise `shared.errors`; central handlers map `ErrorResponse`.
-  SDK/CLI transport errors use `HttpApiError`. Synchronize contracts, SDK/CLI,
-  runner and web Zod consumers in the same change.
-- `0001_relational_baseline` and every deployed migration are frozen.
-  Add a chained Alembic revision; never infer permission for a production reset.
+- Build backend and host runtime code in Go. Keep the public SDK, CLI and
+  Python runner in Python, and the frontend in TypeScript.
+- Name code for its responsibility: execution, scheduler, agent. No language,
+  version or legacy labels in product names; public protocol versions such as
+  `/v1` are the exception.
+- Domain modules own decisions, workflows and transitions. Repositories own
+  queries. Binaries own composition and process lifetime. Transports validate,
+  authorize, invoke an owner and map typed results.
+- Execution owns admission, workload scaling and container lifecycle; scheduling
+  owns placement; compute owns machine capacity. Give each decision and state
+  one owner. Keep cross-owner coordination explicit and small.
+- Start with one package per owner. Add a package or process only for a concrete
+  dependency, security, scaling, reuse or lifetime boundary. No package or service
+  per entity.
+- Prefer concrete dependencies. Define interfaces at the consumer, and only for
+  actual substitution or external boundaries. Avoid service locators, giant dependency bundles, forwarding
+  layers, speculative frameworks and abstractions used only by tests.
+- PostgreSQL owns durable state and NOTIFY wake-ups; object stores and
+  filesystems own bytes. No duplicate authorities. A cache or projection
+  names its durable source and how it rebuilds.
+- Use one production implementation. No fake success, weaker test backends,
+  compatibility shims or fallback implementations. Delete superseded paths.
+- SDK and runner remain independent of backend implementations. Cross-language
+  contracts are language-neutral; Python code serialization stays explicit.
+
+## Development
+
+- Use one root Go module with a pinned `toolchain` directive. Pin code
+  generators and linters as `tool` dependencies in go.mod. Keep dependencies small and justified. Use gofmt, go vet,
+  golangci-lint and focused tests.
+- Use typed identifiers and typed string constants for enums, checked for
+  exhaustive switches. Never let a Go zero value stand for "omitted"; use
+  pointers or explicit optional types where absence differs from zero.
+  Distinguish absence, rejection and failure. Do not replace domain types with
+  untyped maps or stringify errors before transport boundaries.
+- Pass dependencies explicitly from main. No package-level mutable state and no
+  init side effects. Share memory only behind a named owner; keep mutex scopes
+  narrow and never hold one across network, disk or channel waits.
+- Every goroutine has an owner that waits for it and a context that stops it.
+  Bound queues, in-flight work and concurrency. Propagate cancellation and
+  deadlines. Account for partial completion during shutdown and retries. Run
+  tests with the race detector.
+- Wrap errors with context (`%w`); match them with errors.Is/As, not strings. Do
+  not ignore returned errors or panic for expected failure. Avoid unsafe and cgo
+  unless a demonstrated need is documented. Memory safety does not prove
+  authorization or distributed concurrency.
+- `./check.sh` runs every formatter and linter as CI does; `--fix` applies the
+  formatters first.
+- Use uv from the root for Python, Ruff for formatting/imports and Bun for web.
+  Preserve declared Python support, including Python 3.10+ for SDK and runner.
+  Use Pydantic at Python wire boundaries.
+- Use apply_patch for manual edits. Read consumers before changing contracts,
+  statuses, defaults or ownership. Load unslop before writing prose. Comments
+  explain current constraints. Describe LazyCloud directly.
+
+## Data and contracts
+
+- Filter, aggregate and project in SQL. Batch actual reads and writes. Recurring
+  work scans relevant live or due resources, not retained history. Reuse scoped
+  snapshots and retain authoritative admission and assignment checks.
+- Name the invariant behind each transaction, lease and lock. Acquire ownership
+  when work can execute, fence stale owners and keep retries bounded and fair.
+  A batch failure must not discard successful results.
+- Design resource APIs with typed errors. Keep operation IDs stable, paginate
+  collections, and coordinate changed contracts with SDK, CLI, runner and web
+  consumers.
+- Authorize each requested workspace against token scope and membership. Only an
+  administrator may reach tenant workspaces without membership. Worker commands
+  must also match current assignment authority.
+- Separate wire/storage/domain types only where meanings differ. Do not copy
+  every model into every layer. Update contracts and Python/runner/web consumers
+  together; avoid hand-maintained parallel schemas.
+- Freeze every migration once deployed; add a new one for each change.
+  Production resets and data imports require separately authorized scope.
 
 ## Acceptance
 
 - Define the user-visible outcome and cheapest authoritative evidence first.
-  Validate a coherent owner or cross-owner change with focused checks; use the
-  real service/container/provider when that boundary changes. Broad gates are
-  for releases or explicit broad quality claims.
-- Add or retain a test only if it proves a material production invariant at a
-  stable owner/public boundary, provides unique evidence, and is cheaper and more
-  maintainable than production-representative acceptance. Remove encountered
-  tests that fail this gate.
-- Protect authorization, data integrity, durability, concurrency, cleanup and
-  public outcomes. Do not test implementation shape, mock call order, wiring,
-  copy, snapshots, harnesses or behavior already proven elsewhere.
-- Owner tests live beside their package/app; root tests cover cross-owner
-  behavior. Opt-in E2E runs use an exact named module or browser node, never
-  Python file paths. Do not import E2E internals into pytest.
-- Run focused tests directly, prefer `pytest -x`, and keep output observable.
-  Diagnose with bounded polling of durable state, logs and external signals;
-  investigate stalled progress instead of silently waiting for a terminal state.
-- Missing credentials/services are acceptance gaps, not permission for mocks.
-  Fix failures caused by the change; name unrelated failures and unverified
-  boundaries. Clean up every acceptance resource the task created.
+  Verify material invariants at owner/public boundaries. Use real services,
+  containers and providers when those boundaries change.
+- Retain tests only for unique proof of authorization, integrity, durability,
+  concurrency, cleanup or public behavior. Do not test implementation shape,
+  mock call order, wiring, snapshots or behavior already proven elsewhere.
+- Owner tests live beside code; `acceptance/` covers cross-owner workflows
+  against real PostgreSQL, Docker and the managed runtime.
+- Run focused checks with visible output. Use gofmt, go vet, golangci-lint and
+  targeted `go test -race`; use pytest -x for Python. Owner tests need
+  `docker compose -f compose.test.yaml up -d --wait`. Broad gates support
+  releases or changes that span those owners.
+- Measure admission/placement separately from capacity wait and user execution.
+  Record affected latency, queries, bytes, round trips and contention with idle,
+  active and growing-backlog workloads.
+- Missing services or credentials are acceptance gaps, not permission for mocks.
+  Name unverified boundaries and clean up every task resource.
+- Back simplification and performance claims with before/after measurements of
+  the same capability.
 
 ## Safety and delivery
 
-- Inspect the dirty tree, preserve unrelated work and stage intentional files.
-  Never expose secrets in output, logs, URLs, tests, comments or durable records.
-- Treat external systems as shared. Inspect before changing them; delete only
-  exact resources proven to belong to this task, preserving siblings and tenants.
-  State irreversible actions beforehand; ask when their scope or an architectural,
-  public-contract, security or cost decision is unresolved.
-- A refused tool call is a stop. Report it and wait; do not reshape or reroute it.
-- Local backends use local databases/queues and development credentials. Viewing
-  production through a local frontend does not authorize local operator credentials.
-  Local Compose state may be reset for development.
-- Authorized platform deployments use AWS `default`; disposable provider
-  acceptance checks `default-test` first. List profiles and verify STS identity.
-  Never switch deployment accounts to bypass a failure or copy credentials into
-  workloads/images/GitHub secrets. CI deployments use OIDC.
-- Use a task branch and one PR for related implementation, cleanup and fixes.
-  Finish review/checks before shipping; merge only after checks pass and deploy
-  related work together once.
-- Work sequentially by default. Delegate only disjoint owners/files when justified;
-  review returned work and integrated evidence. Verify tool and agent claims.
-- Finish the requested scope and proportionate acceptance, then stop. Do not
-  begin unrelated audits. Never add commit attribution trailers.
-- Respond briefly and lead with outcomes. Name blockers and decisions explicitly;
-  report build/CI/deployment success or failure without routine narration.
+- Inspect dirty trees and preserve unrelated work. Never copy another
+  checkout's credentials, environment or runtime state.
+- Local backends use isolated local databases, queues and development credentials.
+  Do not inherit another checkout's .env. Reset only task-owned Compose projects.
+- Inspect external systems before changing them. Delete only exact task-owned
+  resources. State irreversible actions beforehand. Ask when architectural,
+  public-contract, security, cost or destructive scope is unresolved.
+- A refused tool call is a stop. Report it and wait; do not reroute it.
+- Authorized deployments use AWS default; disposable provider acceptance checks
+  default-test first. Verify profiles and STS identity. Never change accounts
+  to bypass a failure or copy credentials into workloads. CI uses OIDC.
+- Use a task branch and one PR per coherent change. Review and pass relevant
+  checks before merge or deployment.
+- When delegating, agree contracts first, then assign disjoint owners and files;
+  one integrator owns shared definitions and root build files. Verify returned
+  work and integrated evidence.
+- Finish the requested scope, then stop. No commit attribution trailers.
+  Report outcomes, blockers and unverified boundaries briefly.

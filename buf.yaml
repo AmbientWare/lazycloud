@@ -1,0 +1,14 @@
+version: v2
+modules:
+  - path: contracts
+lint:
+  use:
+    - STANDARD
+  # Host and container messages are named for what they carry, and one
+  # contract directory holds one package.
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+    - SERVICE_SUFFIX
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE

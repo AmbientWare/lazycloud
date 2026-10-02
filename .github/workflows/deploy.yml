@@ -1,107 +1,107 @@
 name: Deploy
 
+# Records a published version for prod: the prod branch becomes the
+# version's tagged tree plus values-deployment.yaml, which merges
+# platform-deployment's values.json with the version. Argo CD syncs the
+# branch. Ship calls it; run it by hand to roll back to an earlier version.
+# Only the prod environment's deploy key may push prod (the github root's
+# ruleset), so no workflow token can, and the environment admits main only.
+
 on:
   workflow_dispatch:
     inputs:
-      deployment:
-        type: choice
-        default: prod
-        options: [prod, staging]
-        required: true
-      release_manifest_url:
-        description: Complete published release to select, including for rollback.
+      version:
+        description: A version Ship published, such as 1.4.2; an earlier one rolls back.
         type: string
         required: true
   workflow_call:
     inputs:
-      deployment:
-        type: string
-        required: true
-      release_manifest_url:
+      version:
         type: string
         required: true
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
-  group: deploy-${{ inputs.deployment }}
+  group: deploy-prod
   cancel-in-progress: false
 
 jobs:
-  select:
-    name: Record the selected release
+  record:
+    name: Record the version
     runs-on: ubuntu-26.04
-    environment: ${{ inputs.deployment }}
+    # The deploy role trusts only this workflow on main in this environment.
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
     env:
-      DEPLOYMENT: lazycloud-${{ inputs.deployment }}
-      BRANCH: ${{ inputs.deployment }}
-      RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
+      DEPLOYMENT: lazycloud-prod
+      BRANCH: prod
+      VERSION: ${{ inputs.version }}
     steps:
-      - name: Validate deployment
+      - name: Validate the version
         run: |
-          case "$BRANCH" in prod|staging) ;; *) exit 1 ;; esac
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - uses: azure/setup-helm@v4
-        with:
-          version: v3.16.3
-      - name: Resolve the published source
-        run: |
-          set -euo pipefail
-          uv run --frozen --group workspace python - <<'PY'
-          import os
-          from pathlib import Path
-          from provider_clients.release import fetch_release_manifest
-          manifest = fetch_release_manifest(os.environ["RELEASE_MANIFEST_URL"])
-          Path(os.environ["RUNNER_TEMP"], "release-manifest.json").write_text(manifest.model_dump_json())
-          with open(os.environ["GITHUB_ENV"], "a") as out:
-              out.write(f"COMMIT={manifest.source_revision}\n")
-          PY
-      - name: Render the deployment from the published source
-        env:
-          INFRASTRUCTURE_CONFIG_URI: ${{ vars.INFRASTRUCTURE_CONFIG_URI }}
-          LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ${{ vars.LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL }}
-          LAZYCLOUD_OBJECT_STORE_REGION_NAME: ${{ vars.LAZYCLOUD_OBJECT_STORE_REGION_NAME }}
-          LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: ${{ vars.LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE }}
-        run: |
-          set -euo pipefail
-          git fetch --depth=1 origin "$COMMIT"
-          git checkout --detach "$COMMIT"
-          uv run --frozen --group workspace python -m deploy.object_storage download \
-            --uri "$INFRASTRUCTURE_CONFIG_URI" --file "$RUNNER_TEMP/infrastructure.json"
-          git ls-remote --heads origin "refs/heads/$BRANCH" > "$RUNNER_TEMP/deployment-ref"
-          previous="$(cut -f1 "$RUNNER_TEMP/deployment-ref")"
-          echo "PREVIOUS_DEPLOYMENT=$previous" >> "$GITHUB_ENV"
-          previous_args=()
-          if [ -n "$previous" ]; then
-            git fetch --depth=1 origin "$previous"
-            git show "$previous:deploy/chart/values-deployment.yaml" > "$RUNNER_TEMP/previous-values.yaml"
-            git show "$previous:deploy/chart/values.yaml" > "$RUNNER_TEMP/previous-chart-values.yaml"
-            previous_args=(--previous-values "$RUNNER_TEMP/previous-values.yaml" --previous-chart-values "$RUNNER_TEMP/previous-chart-values.yaml")
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version $VERSION is not major.minor.patch"
+            exit 1
           fi
-          uv run --frozen --group workspace python -m deploy.chart_values \
-            --infrastructure "$RUNNER_TEMP/infrastructure.json" \
-            --environment "deploy/chart/environments/$BRANCH.yaml" \
-            --deployment "$DEPLOYMENT" --manifest "$RUNNER_TEMP/release-manifest.json" \
-            "${previous_args[@]}" --output "$RUNNER_TEMP/values-deployment.yaml"
-          helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
-          helm template "$DEPLOYMENT" deploy/chart --namespace "$DEPLOYMENT" \
-            -f "$RUNNER_TEMP/values-deployment.yaml" > "$RUNNER_TEMP/rendered.yaml"
-      - name: Record the release for Argo CD
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.PROD_DEPLOY_KEY }}
+      # A v* tag anyone created on a branch commit is not a release.
+      - name: Check the version is on main
         run: |
           set -euo pipefail
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "v$VERSION^{commit}" FETCH_HEAD; then
+            echo "::error::v$VERSION is not a commit of main."
+            exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Read the deployment's values
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          aws s3 cp "s3://$DEPLOYMENT-deploy-$account/values.json" "$RUNNER_TEMP/infrastructure.json"
+          jq --arg version "$VERSION" '. * {release: {version: $version}}' "$RUNNER_TEMP/infrastructure.json" \
+            >"$RUNNER_TEMP/values-deployment.yaml"
+      # Argo would otherwise sync a version whose pods cannot pull.
+      - name: Check every image of the version exists
+        run: |
+          set -euo pipefail
+          registry="$(jq -r .image.registry "$RUNNER_TEMP/values-deployment.yaml")"
+          prefix="${registry#*/}"
+          for image in server scheduler web; do
+            aws ecr describe-images --repository-name "$prefix/$image" --image-ids "imageTag=$VERSION" \
+              --query 'imageDetails[0].imageDigest' --output text
+          done
+      - name: Render the chart
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/values-deployment.yaml" deploy/helm/lazycloud/values-deployment.yaml
+          helm="docker.io/alpine/helm:4.3.0@sha256:a6cf54599ccb99d90cf0712b30f03fdb3cab062e6b94e0418cc4db7e8a1464b2"
+          run_helm() {
+            docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD/deploy/helm/lazycloud:/chart:ro" "$helm" "$@" \
+              --kube-version 1.36.0 -f "/chart/environments/$BRANCH.yaml" -f /chart/values-deployment.yaml
+          }
+          run_helm lint --strict /chart
+          run_helm template lazycloud /chart --namespace "$DEPLOYMENT" >/dev/null
+      - name: Record the version for Argo CD
+        run: |
+          set -euo pipefail
+          previous="$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)"
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
-          git checkout -B "$BRANCH" "$COMMIT"
+          git checkout -B "$BRANCH" "v$VERSION"
+          # The branch needs no workflow files.
           git rm -r --quiet --cached .github
-          cp "$RUNNER_TEMP/values-deployment.yaml" deploy/chart/values-deployment.yaml
-          git add deploy/chart/values-deployment.yaml
-          git commit -m "Select release from $COMMIT"
-          git push --force-with-lease="refs/heads/$BRANCH:$PREVIOUS_DEPLOYMENT" origin "HEAD:refs/heads/$BRANCH"
-          echo "$DEPLOYMENT selected $RELEASE_MANIFEST_URL. Argo CD owns rollout; release status reports runtime completion." >> "$GITHUB_STEP_SUMMARY"
+          git add deploy/helm/lazycloud/values-deployment.yaml
+          git commit -m "Select release $VERSION"
+          git push --force-with-lease="refs/heads/$BRANCH:$previous" origin "HEAD:refs/heads/$BRANCH"
+          echo "$DEPLOYMENT selected $VERSION (previous branch head ${previous:-none}). Argo CD owns the rollout." >>"$GITHUB_STEP_SUMMARY"

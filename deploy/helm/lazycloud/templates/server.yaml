@@ -1,0 +1,244 @@
+{{- $domain := include "lazycloud.domain" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: server
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.labels" (list . "server") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.server }}
+      automountServiceAccountToken: false
+      {{- if lt (int .Values.server.terminationGracePeriodSeconds) (add (int .Values.server.drainDelaySeconds) 15) }}
+      {{- fail "server.terminationGracePeriodSeconds must cover drainDelaySeconds plus the 10 second shutdown grace and 5 seconds of margin" }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.server.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "lazycloud.spread" "server" | trim | nindent 8 }}
+      volumes:
+        {{- include "lazycloud.masterKeyVolume" . | nindent 8 }}
+        {{- if .Values.server.tcpService.enabled }}
+        - name: tcp-certificate
+          secret:
+            secretName: server-tcp-tls
+            defaultMode: 0440
+        {{- end }}
+      containers:
+        - name: server
+          image: {{ include "lazycloud.image" (list . "server") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
+            - name: LAZYCLOUD_HTTP_ADDR
+              value: "0.0.0.0:8080"
+            - name: LAZYCLOUD_EDGE_ADDR
+              value: "0.0.0.0:8082"
+            # Other server pods relay workload requests for hosts whose data
+            # connection this pod holds; bound to the pod IP, advertised as
+            # it, and reached by no Service. IPv4 pod addresses.
+            - name: LAZYCLOUD_EDGE_RELAY_ADDR
+              value: "$(POD_IP):8083"
+            - name: LAZYCLOUD_EDGE_RELAY_ADVERTISE
+              value: "$(POD_IP):8083"
+            {{- if .Values.server.tcpService.enabled }}
+            - name: LAZYCLOUD_EDGE_TCP_ADDR
+              value: "0.0.0.0:8084"
+            - name: LAZYCLOUD_EDGE_TCP_URL
+              value: {{ printf "tls://tcp.%s:%d" $domain (int .Values.server.tcpService.port) | quote }}
+            - name: LAZYCLOUD_EDGE_TCP_CERT
+              value: /run/lazycloud/tcp/tls.crt
+            - name: LAZYCLOUD_EDGE_TCP_KEY
+              value: /run/lazycloud/tcp/tls.key
+            {{- end }}
+            # The host service's load balancer terminates TLS, so the
+            # server speaks plaintext gRPC on this port and agents dial
+            # hosts.<domain>:443 with TLS.
+            - name: LAZYCLOUD_GRPC_ADDR
+              value: "0.0.0.0:8081"
+            - name: LAZYCLOUD_HEALTH_ADDR
+              value: "0.0.0.0:8090"
+            - name: LAZYCLOUD_METRICS_ADDR
+              value: "0.0.0.0:9090"
+            - name: LAZYCLOUD_SECRETS_KEY_FILE
+              value: /run/lazycloud/secrets/secrets.key
+            - name: LAZYCLOUD_DRAIN_DELAY
+              value: {{ printf "%ds" (int .Values.server.drainDelaySeconds) | quote }}
+            - name: LAZYCLOUD_PUBLIC_URL
+              value: {{ printf "https://%s" $domain | quote }}
+            - name: LAZYCLOUD_EDGE_URL
+              value: {{ printf "https://%s" $domain | quote }}
+            - name: LAZYCLOUD_CLIENT_RELEASE_VERSION
+              value: {{ include "lazycloud.version" . | quote }}
+            {{- include "lazycloud.hostEnv" . | nindent 12 }}
+            {{- include "lazycloud.awsEnv" . | nindent 12 }}
+            {{- if .Values.telemetry.enabled }}
+            {{- include "lazycloud.telemetryEnv" . | nindent 12 }}
+            {{- end }}
+            {{- include "lazycloud.env" (list . "server") | trim | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: hosts
+              containerPort: 8081
+            - name: edge
+              containerPort: 8082
+            # Other server pods only; no Service exposes it.
+            - name: relay
+              containerPort: 8083
+            {{- if .Values.server.tcpService.enabled }}
+            - name: edge-tcp
+              containerPort: 8084
+            {{- end }}
+            # Probes and scraping only; no Service exposes them.
+            - name: health
+              containerPort: 8090
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
+            {{- if .Values.server.tcpService.enabled }}
+            - name: tcp-certificate
+              mountPath: /run/lazycloud/tcp
+              readOnly: true
+            {{- end }}
+          startupProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+---
+# The API and browser sign-in, which cloudflared forwards for the apex.
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  {{- with .Values.server.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Workload traffic: endpoint, ASGI and function hosts under the domain and
+# verified custom domains, which cloudflared forwards.
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-edge
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  {{- with .Values.server.edgeService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: edge
+      port: 80
+      targetPort: edge
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-hosts
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  annotations:
+    {{- if eq .Values.server.hostService.type "LoadBalancer" }}
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ required "server.hostService.certificateArn is required: the host port serves plaintext gRPC behind a TLS load balancer" .Values.server.hostService.certificateArn | quote }}
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    # gRPC clients refuse a TLS connection that did not negotiate h2.
+    service.beta.kubernetes.io/aws-load-balancer-alpn-policy: HTTP2Only
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    # Host sessions reconnect to another server when theirs drains.
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=30
+    {{- end }}
+    {{- with .Values.server.hostService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.server.hostService.type }}
+  {{- if eq .Values.server.hostService.type "LoadBalancer" }}
+  loadBalancerClass: eks.amazonaws.com/nlb
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: hosts
+      port: {{ if eq .Values.server.hostService.type "LoadBalancer" }}443{{ else }}8081{{ end }}
+      targetPort: hosts
+{{- if .Values.server.tcpService.enabled }}
+---
+# TLS connections to TCP pods, routed by SNI. The load balancer passes them
+# through and keeps the client's address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-tcp
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=true,deregistration_delay.timeout_seconds=30
+    {{- with .Values.server.tcpService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: edge-tcp
+      port: {{ .Values.server.tcpService.port }}
+      targetPort: edge-tcp
+{{- end }}

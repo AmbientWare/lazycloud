@@ -1,7 +1,9 @@
 name: Ship
 
-# The tag defines the release version. Publishing must finish before Deploy
-# records the complete manifest for Argo; the workflow token starts no tag workflow.
+# Cuts the next v<version> tag on main, runs every owner check on it,
+# publishes the server, scheduler and web images and the Python package
+# under that version, then records the version for prod through Deploy.
+# The server image carries the agent release of the same version.
 
 on:
   workflow_dispatch:
@@ -15,10 +17,10 @@ on:
           - minor
           - major
 
-# Reusable workflows cannot request permissions their caller lacks.
-permissions:
-  contents: write
-  id-token: write
+# No job gets more than it needs: only the tag job writes contents (Deploy
+# pushes prod with the prod environment's deploy key), and only the jobs that assume an AWS role or publish to PyPI mint OIDC
+# tokens. A reusable workflow cannot request more than its caller job has.
+permissions: {}
 
 concurrency:
   group: ship
@@ -28,167 +30,193 @@ jobs:
   version:
     name: Cut the version
     runs-on: ubuntu-26.04
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.next.outputs.version }}
       commit: ${{ steps.source.outputs.commit }}
     steps:
-      # Only main. A release tags the commit it runs from, and a tag on a branch
-      # commit is a version customers can install that main never contained.
+      # A release tags the commit it runs from, and a tag on a branch commit
+      # is a version users can install that main never contained.
       - name: Refuse anything but main
         if: github.ref != 'refs/heads/main'
         run: |
           echo "::error::Ship runs from main; this run is on ${GITHUB_REF}."
           exit 1
-
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-
       - name: Record the main commit
         id: source
-        run: |
-          set -euo pipefail
-          commit="$(git rev-parse --verify HEAD)"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-
+        run: echo "commit=$(git rev-parse --verify HEAD)" >>"$GITHUB_OUTPUT"
       - name: Compute the next version
         id: next
-        shell: bash
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
           latest="$(git tag -l 'v*' | sort -V | tail -1)"
           current="${latest#v}"
           current="${current:-0.0.0}"
-          IFS=. read -r major minor patch <<<"${current}"
-          case "${{ inputs.bump }}" in
+          IFS=. read -r major minor patch <<<"$current"
+          case "$BUMP" in
             major) major=$((major + 1)); minor=0; patch=0 ;;
             minor) minor=$((minor + 1)); patch=0 ;;
             patch) patch=$((patch + 1)) ;;
           esac
-          version="${major}.${minor}.${patch}"
-          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
-            echo "::error::v${version} already exists."
+          version="$major.$minor.$patch"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version already exists."
             exit 1
           fi
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "${latest:-no tag} -> v${version} (${{ inputs.bump }})"
-
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "${latest:-no tag} -> v$version ($BUMP)"
       - name: Push the tag
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+          COMMIT: ${{ steps.source.outputs.commit }}
         run: |
           set -euo pipefail
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
-          git tag -a "v${{ steps.next.outputs.version }}" -m "Release ${{ steps.next.outputs.version }}" "${{ steps.source.outputs.commit }}"
-          git push origin "v${{ steps.next.outputs.version }}"
+          git tag -a "v$VERSION" -m "Release $VERSION" "$COMMIT"
+          git push origin "v$VERSION"
 
-  # Stamp the SDK and its exact shared-package dependency with the same version.
-  # Wheel installation runs outside the workspace before publication.
-  python-package:
-    name: Publish the Python package
+  go:
     needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go.yml
+  python:
+    needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/python.yml
+  web:
+    needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/web.yml
+  checks:
+    needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-checks.yml
+
+  images:
+    name: Publish the images
+    needs: [version, go, python, web, checks]
     runs-on: ubuntu-26.04
-    environment: release
+    # The image release role trusts only this workflow, from main, in this
+    # environment, whose reviewers approve each push.
+    environment: images
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.commit }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+          persist-credentials: false
+      - name: Release settings
+        env:
+          ROLE: ${{ vars.AWS_IMAGE_RELEASE_ROLE_ARN }}
+          REGISTRY: ${{ vars.IMAGE_REGISTRY }}
+        run: |
+          if [ -z "$ROLE" ] || [ -z "$REGISTRY" ]; then
+            echo "::error::The images environment lacks AWS_IMAGE_RELEASE_ROLE_ARN or IMAGE_REGISTRY; apply deploy/terraform/github."
+            exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          enable-cache: true
-          version: "0.11.21"
+          role-to-assume: ${{ vars.AWS_IMAGE_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build and push
+        env:
+          REGISTRY: ${{ vars.IMAGE_REGISTRY }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          docker buildx bake -f deploy/images/docker-bake.hcl release --push \
+            --metadata-file "$RUNNER_TEMP/images.json"
+      - name: Record digests
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          {
+            echo "## Images of $VERSION"
+            echo
+            jq -r 'to_entries[] | "- \(.key): `\(.value["image.name"])@\(.value["containerimage.digest"])`"' \
+              "$RUNNER_TEMP/images.json"
+          } >>"$GITHUB_STEP_SUMMARY"
 
+  # Trusted publishing: PyPI accepts this workflow's OIDC token for the
+  # lazycloud-client project, configured as owner AmbientWare, repository
+  # lazycloud, workflow ship.yml, environment release. PyPI does not accept a
+  # reusable workflow as a publisher, so the step lives here.
+  python-package:
+    name: Publish the Python package
+    needs: [version, go, python, web, checks]
+    runs-on: ubuntu-26.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.29"
       - name: Stamp the release version
-        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ needs.version.outputs.version }}"
-          uv version --frozen --package lazycloud-shared "${version}"
-          uv version --frozen --package lazycloud-client "${version}"
-          python3 - "${version}" <<'EOF'
-          import re, sys
-          from pathlib import Path
-          version = sys.argv[1]
-          path = Path("packages/lazycloud/pyproject.toml")
-          text, count = re.subn(r'"lazycloud-shared==[^"]+"', f'"lazycloud-shared=={version}"', path.read_text())
-          if count != 1:
-              sys.exit(f"expected one lazycloud-shared pin in {path}, found {count}")
-          path.write_text(text)
-          EOF
+          uv version --frozen --package lazycloud-client "$VERSION"
           git --no-pager diff --stat
-
-      - name: Build wheels and sdists
+      - name: Build the wheel and sdist
         run: |
           set -euo pipefail
-          uv build --package lazycloud-shared -o dist/pypi
           uv build --package lazycloud-client -o dist/pypi
           ls -1 dist/pypi
-
-      - name: Install the wheels into an empty environment
-        shell: bash
+      - name: Install the wheel into an empty environment
         run: |
           set -euo pipefail
           for python in 3.10 3.11 3.12 3.13 3.14; do
-            uv run --isolated --no-project --python "${python}" \
-              --with dist/pypi/lazycloud_shared-*.whl \
+            uv run --isolated --no-project --python "$python" \
+              --with dist/pypi/lazycloud_client-*.whl -- lazycloud --help >/dev/null
+            uv run --isolated --no-project --python "$python" \
               --with dist/pypi/lazycloud_client-*.whl \
-              -- lazycloud --help >/dev/null
-            uv run --isolated --no-project --python "${python}" \
-              --with dist/pypi/lazycloud_shared-*.whl \
-              --with dist/pypi/lazycloud_client-*.whl \
-              -- python -c "import lazycloud, shared; print(lazycloud.__name__)"
+              -- python -c "import lazycloud, lazycloud.cli.main"
           done
-
-      - name: Upload the package
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
         with:
           name: lazycloud-python-package
           path: dist/pypi/*
           if-no-files-found: error
-
-      # Trusted publishing: PyPI accepts this workflow's OIDC token for both
-      # projects, configured on each as owner `AmbientWare`, repository
-      # `lazycloud`, workflow `ship.yml`, environment `release`. No token is
-      # stored anywhere. The step lives here and not in release.yml because
-      # PyPI does not accept a reusable workflow as a publisher.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/pypi
-          # A re-run of the same ship rebuilds identical wheels. PyPI refuses
-          # a second upload of a version, and that refusal must not fail the
-          # deploy that follows.
+          # A re-run rebuilds identical wheels, and PyPI's refusal of a second
+          # upload must not fail the deploy that follows.
           skip-existing: true
 
-  platform:
-    needs: version
-    uses: ./.github/workflows/build-platform.yml
-    secrets: inherit
-    with:
-      commit: ${{ needs.version.outputs.commit }}
-
-  release:
-    name: Publish the release
-    # Host images are published separately. This job only builds release assets.
-    needs: [version, python-package, platform]
-    uses: ./.github/workflows/release.yml
-    secrets: inherit
+  deploy:
+    name: Record it for prod
+    needs: [version, images, python-package]
+    permissions:
+      contents: read
+      id-token: write
+    # Deploy's job reads the prod environment's deploy key itself.
+    uses: ./.github/workflows/deploy.yml
     with:
       version: ${{ needs.version.outputs.version }}
-      commit: ${{ needs.version.outputs.commit }}
-      platform_images: ${{ needs.platform.outputs.images }}
-
-  # Straight to prod, until staging runs. Then a release lands on staging here
-  # and `promote.yml` carries it to prod once it has been looked at.
-  deploy:
-    name: Deploy onto it
-    needs: [version, python-package, release]
-    uses: ./.github/workflows/deploy.yml
-    secrets: inherit
-    with:
-      deployment: prod
-      release_manifest_url: ${{ needs.release.outputs.manifest_url }}

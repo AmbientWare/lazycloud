@@ -118,7 +118,7 @@ tcp_server = app.pod(
 )
 
 deployment = tcp_server.deploy()
-address = urlsplit(deployment.invoke_url)
+address = urlsplit(deployment.releases[0].url)
 with socket.create_connection((address.hostname, address.port)) as connection:
     with ssl.create_default_context().wrap_socket(
         connection, server_hostname=address.hostname

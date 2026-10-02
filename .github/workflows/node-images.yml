@@ -1,8 +1,10 @@
-name: Connected AWS Node Images
+name: Node images
 
-# Host images change only when their operating system, container runtime,
-# networking tools, or GPU driver changes. Ship consumes the catalog this
-# workflow publishes and never bakes an AMI itself.
+# Bakes the fleet's CPU and GPU node images (deploy/ami) and copies them to
+# every fleet region. Images change only with deploy/ami/node-setup.sh or
+# deploy/host-pins.sh; an unchanged recipe reuses the existing images. The
+# summary holds the LAZYCLOUD_FLEET_IMAGES value to commit into the
+# deployment's environment file, which the next Ship deploys.
 on:
   workflow_dispatch:
 
@@ -11,102 +13,62 @@ permissions:
   id-token: write
 
 concurrency:
-  group: connected-aws-node-images
+  group: node-images
   cancel-in-progress: false
 
 jobs:
   bake:
-    name: Bake ${{ matrix.variant }} host image
+    name: Bake the ${{ matrix.variant }} image
     runs-on: ubuntu-26.04
-    environment: release
+    # The bake role trusts only this workflow, from main, in this environment.
+    environment: images
     strategy:
       fail-fast: false
       matrix:
         variant: [cpu, gpu]
-    env:
-      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
       - name: Refuse anything but main
         if: github.ref != 'refs/heads/main'
         run: |
-          echo "::error::Node Images runs from main; this run is on ${GITHUB_REF}."
+          echo "::error::Node images runs from main; this run is on ${GITHUB_REF}."
           exit 1
-
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: actions/checkout@v7
         with:
-          version: "0.11.21"
-
-      - name: Configure release AWS identity
-        uses: aws-actions/configure-aws-credentials@v5
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
-          aws-region: ${{ env.AWS_RELEASE_REGION }}
-
+          role-to-assume: ${{ vars.AWS_NODE_IMAGE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Bake and copy
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv run --group workspace python -m deploy.ami.bake \
-            --variant ${{ matrix.variant }} > ${{ matrix.variant }}-ami-ids.json
-          test -s ${{ matrix.variant }}-ami-ids.json
-
-      # Matrix jobs share one output slot, so each variant hands its map on as
-      # an artifact instead.
-      - name: Upload AMI map
-        uses: actions/upload-artifact@v7
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: deploy/ami/bake.sh --variant "$VARIANT" >"$VARIANT.json"
+      # Matrix jobs share no outputs, so each map travels as an artifact.
+      - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.variant }}-ami-ids
-          path: ${{ matrix.variant }}-ami-ids.json
+          name: node-image-${{ matrix.variant }}
+          path: ${{ matrix.variant }}.json
           if-no-files-found: error
 
-  publish:
-    name: Publish host image catalog
+  record:
+    name: Record the images
     needs: bake
     runs-on: ubuntu-26.04
-    environment: release
-    env:
-      LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ${{ vars.LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL }}
-      LAZYCLOUD_OBJECT_STORE_REGION_NAME: ${{ vars.LAZYCLOUD_OBJECT_STORE_REGION_NAME }}
-      LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: ${{ vars.LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE }}
-      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: actions/download-artifact@v7
         with:
-          version: "0.11.21"
-
-      - name: Configure release AWS identity
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
-          aws-region: ${{ env.AWS_RELEASE_REGION }}
-
-      - name: Download AMI maps
-        uses: actions/download-artifact@v7
-        with:
-          pattern: "*-ami-ids"
+          pattern: node-image-*
           merge-multiple: true
-
-      - name: Publish catalog
-        run: >-
-          uv run --group workspace python -m deploy.ami.catalog publish
-          --cpu-ami-ids "$(cat cpu-ami-ids.json)"
-          --gpu-ami-ids "$(cat gpu-ami-ids.json)"
-          --source-revision "${GITHUB_SHA}"
-          --bucket "${{ vars.OBJECT_STORE_RELEASE_BUCKET }}"
-          --public-base-url "${{ vars.RELEASE_PUBLIC_BASE_URL }}"
-          --output node-images.json
-
-      - name: Upload catalog evidence
-        uses: actions/upload-artifact@v7
-        with:
-          name: connected-aws-node-images-${{ github.sha }}
-          path: node-images.json
-          if-no-files-found: error
+      - name: Summarize
+        run: |
+          set -euo pipefail
+          images="$(jq -c -n --slurpfile cpu cpu.json --slurpfile gpu gpu.json '{cpu: $cpu[0], gpu: $gpu[0]}')"
+          {
+            echo "## Node images"
+            echo
+            echo "Set in deploy/helm/lazycloud/environments/prod.yaml:"
+            echo
+            echo '```yaml'
+            echo "  LAZYCLOUD_FLEET_IMAGES: '$images'"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

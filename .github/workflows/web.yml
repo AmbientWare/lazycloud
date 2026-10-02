@@ -1,18 +1,19 @@
 name: Web owner
 
 on:
+  # Ship runs it before publishing images.
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/web.yml"
-      - "apps/web/**"
-      - "tests/contracts/http_contract_cases.json"
+      - "web/**"
+      - "contracts/**"
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - ".github/workflows/web.yml"
-      - "apps/web/**"
-      - "tests/contracts/http_contract_cases.json"
+      - "web/**"
+      - "contracts/**"
 
 permissions:
   contents: read
@@ -28,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Vitest runs under Node. A pinned Node keeps the jsdom Web Storage
       # behaviour the tests rely on from changing with the runner image.
@@ -42,12 +45,14 @@ jobs:
           bun-version: "1.3.12"
 
       - name: Install dependencies
-        working-directory: apps/web
+        working-directory: web
         run: bun install --frozen-lockfile
 
       - name: Validate web owner
-        working-directory: apps/web
+        working-directory: web
         run: |
+          bun run apigen
+          git diff --exit-code -- src/lib/api/generated
           bun run format:check
           bun run lint
           bun run typecheck
@@ -59,5 +64,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: web-test-results
-          path: apps/web/test-results/vitest.xml
+          path: web/test-results/vitest.xml
           retention-days: 14

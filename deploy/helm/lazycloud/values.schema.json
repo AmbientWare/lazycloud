@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["domain", "release", "image", "secrets", "config", "serviceAccounts", "server", "scheduler", "web", "cloudflared", "migrations"],
+  "definitions": {
+    "envName": { "type": "string", "pattern": "^LAZYCLOUD_[A-Z0-9_]+$" },
+    "settings": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/definitions/envName" },
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "secretKeys": { "type": "array", "items": { "$ref": "#/definitions/envName" }, "uniqueItems": true },
+    "digest": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64})?$" },
+    "image": { "type": "string", "pattern": "^[^\\s]+@sha256:[0-9a-f]{64}$" },
+    "component": {
+      "type": "object",
+      "required": ["repository", "replicas", "resources"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/definitions/digest" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "config": { "$ref": "#/definitions/settings" },
+        "secretKeys": { "$ref": "#/definitions/secretKeys" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "properties": {
+    "domain": { "type": "string", "pattern": "^([a-z0-9-]+\\.)+[a-z]{2,}$|^$" },
+    "awsRegion": { "type": "string" },
+    "release": {
+      "type": "object",
+      "required": ["version"],
+      "properties": { "version": { "type": "string" } }
+    },
+    "image": {
+      "type": "object",
+      "required": ["registry"],
+      "properties": {
+        "registry": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "required": ["name", "masterKey", "tunnelCredentials"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "masterKey": { "type": "string", "minLength": 1 },
+        "tunnelCredentials": { "type": "string", "minLength": 1 }
+      }
+    },
+    "externalSecrets": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "documents": {
+          "type": "object",
+          "properties": { "platform": { "type": "string" }, "operator": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["document", "property"],
+            "properties": {
+              "document": { "enum": ["platform", "operator"] },
+              "property": { "type": "string" },
+              "decodingStrategy": { "enum": ["None", "Base64", "Base64URL", "Auto"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "config": { "$ref": "#/definitions/settings" },
+    "networkPolicy": {
+      "type": "object",
+      "required": ["enabled", "hostCIDRs", "tcpCIDRs", "nodeCIDRs", "metricsFrom"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "hostCIDRs": { "type": "array", "items": { "type": "string" } },
+        "tcpCIDRs": { "type": "array", "items": { "type": "string" } },
+        "nodeCIDRs": { "type": "array", "items": { "type": "string" } },
+        "metricsFrom": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "server": {
+      "allOf": [
+        { "$ref": "#/definitions/component" },
+        {
+          "required": ["config", "secretKeys", "drainDelaySeconds", "hostService", "tcpService"],
+          "properties": {
+            "drainDelaySeconds": { "type": "integer", "minimum": 0 },
+            "hostService": {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": {
+                  "description": "LoadBalancer terminates TLS with certificateArn; ClusterIP keeps hosts inside the cluster. Never NodePort: the port serves plaintext gRPC.",
+                  "enum": ["ClusterIP", "LoadBalancer"]
+                },
+                "certificateArn": { "type": "string" }
+              }
+            },
+            "tcpService": {
+              "type": "object",
+              "required": ["enabled", "port"],
+              "properties": { "enabled": { "type": "boolean" }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+            }
+          }
+        }
+      ]
+    },
+    "scheduler": {
+      "allOf": [{ "$ref": "#/definitions/component" }, { "required": ["config", "secretKeys"] }]
+    },
+    "web": { "$ref": "#/definitions/component" },
+    "cloudflared": {
+      "type": "object",
+      "required": ["replicas", "image"],
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "image": { "$ref": "#/definitions/image" },
+        "tunnelId": { "type": "string" },
+        "argocd": { "type": "boolean" }
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "required": ["secretKeys"],
+      "properties": { "secretKeys": { "$ref": "#/definitions/secretKeys" } }
+    },
+    "agentRelease": {
+      "type": "object",
+      "properties": { "rollout": { "type": "integer", "minimum": 0, "maximum": 100 } }
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/image" },
+        "endpoint": { "type": "string" },
+        "sampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" }
+      }
+    }
+  }
+}

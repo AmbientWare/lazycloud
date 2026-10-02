@@ -1,0 +1,154 @@
+import type { ReactNode } from "react";
+import { Link, type LinkProps } from "@tanstack/react-router";
+
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
+import { StatusChip } from "@/components/shared/StatusChip";
+import { TaskPendingNotice } from "@/components/shared/TaskPendingNotice";
+import { StubKindIcon } from "@/components/shared/StubKindIcon";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { startupBetween } from "@/lib/format";
+import { isRequest, rowFacts, type TaskRow } from "@/lib/queries/tasks";
+import { cn } from "@/lib/utils";
+import { useWorkspace } from "@/lib/workspace-context";
+
+/** Tasks, or an endpoint's or ASGI app's requests, one row each. */
+export function TaskTable({
+  tasks,
+  taskLink,
+  showApp = true,
+  showWorkload = true,
+  compact = false,
+  emptyMessage = "No tasks",
+  className,
+  continuation,
+}: {
+  tasks: readonly TaskRow[] | undefined;
+  /** Builds the drawer route for a task; keeps the drawer nested in the page context. */
+  taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
+  showApp?: boolean;
+  /** Off where every row belongs to the same workload and the page names it. */
+  showWorkload?: boolean;
+  /** Keeps workload-local activity readable without the full task inventory columns. */
+  compact?: boolean;
+  emptyMessage?: string;
+  className?: string;
+  continuation?: ReactNode;
+}) {
+  const { workspace } = useWorkspace();
+  const rows = tasks ?? [];
+
+  return (
+    <ContentTransition
+      pending={!tasks}
+      data-task-table-scroll=""
+      className={cn("overflow-auto", className)}
+    >
+      {!tasks ? (
+        <RowsSkeleton rows={5} height="h-10" />
+      ) : rows.length === 0 ? (
+        <PanelEmpty message={emptyMessage} className="h-40" />
+      ) : (
+        <>
+          <Table className={compact ? "table-fixed" : "min-w-[820px]"}>
+            <TableHeader className="sticky top-0 z-10 bg-card">
+              <TableRow className="border-b border-border hover:bg-transparent">
+                <TableHead className={compact ? "w-[38%]" : undefined}>Task</TableHead>
+                {showWorkload ? <TableHead>Workload</TableHead> : null}
+                {showApp ? <TableHead>App</TableHead> : null}
+                <TableHead className={compact ? "w-[22%]" : undefined}>Status</TableHead>
+                <TableHead className={compact ? "w-[24%]" : undefined}>Requested</TableHead>
+                {!compact ? <TableHead>Started</TableHead> : null}
+                {!compact ? <TableHead>Startup</TableHead> : null}
+                <TableHead className={compact ? "w-[16%]" : undefined}>Duration</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => {
+                const facts = rowFacts(row);
+                return (
+                  <TableRow key={row.id}>
+                    <TableCell className="max-w-[280px]">
+                      <Link
+                        {...taskLink(row.id)}
+                        className="interactive-link flex min-w-0 items-center gap-2 font-medium text-foreground"
+                      >
+                        <span className="truncate" title={row.id}>
+                          {facts.name}
+                        </span>
+                      </Link>
+                    </TableCell>
+                    {showWorkload ? (
+                      <TableCell className="max-w-[220px]">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <StubKindIcon kind={facts.kind} className="size-3 shrink-0" />
+                          <Link
+                            to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                            params={{
+                              workspace: workspace.name,
+                              app: row.app,
+                              kind: facts.kind,
+                              name: facts.name,
+                            }}
+                            className="interactive-link min-w-0 truncate text-xs text-foreground disabled:pointer-events-none"
+                          >
+                            {facts.name}
+                          </Link>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {facts.kind}
+                            {row.version ? ` · v${row.version}` : ""}
+                          </span>
+                        </span>
+                      </TableCell>
+                    ) : null}
+                    {showApp ? (
+                      <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground">
+                        <Link
+                          to="/w/$workspace/apps/$app"
+                          params={{ workspace: workspace.name, app: row.app }}
+                          className="interactive-link"
+                        >
+                          {row.app}
+                        </Link>
+                      </TableCell>
+                    ) : null}
+                    <TableCell>
+                      <StatusChip status={facts.status} live={facts.status === "running"} />
+                      {isRequest(row) ? null : <TaskPendingNotice task={row} compact />}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      <LiveRelativeTime value={facts.createdAt} />
+                    </TableCell>
+                    {!compact ? (
+                      <TableCell className="text-xs text-muted-foreground">
+                        {facts.startedAt ? <LiveRelativeTime value={facts.startedAt} /> : "—"}
+                      </TableCell>
+                    ) : null}
+                    {!compact ? (
+                      <TableCell className="text-xs tabular-nums text-muted-foreground">
+                        {startupBetween(facts.createdAt, facts.startedAt) ?? "—"}
+                      </TableCell>
+                    ) : null}
+                    <TableCell className="text-xs tabular-nums text-muted-foreground">
+                      <LiveDuration startedAt={facts.startedAt} finishedAt={facts.finishedAt} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+          {continuation}
+        </>
+      )}
+    </ContentTransition>
+  );
+}

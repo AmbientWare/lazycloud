@@ -1,4 +1,7 @@
-name: lazycloud-tests
+# Disposable services for Go owner tests: LAZYCLOUD_TEST_DATABASE_URL defaults
+# to this database, and billing's Stripe tests to this stripe-mock
+# (LAZYCLOUD_TEST_STRIPE_URL).
+name: lazycloud-go-test
 
 services:
   postgres:
@@ -7,22 +10,18 @@ services:
       POSTGRES_USER: lazycloud
       POSTGRES_PASSWORD: lazycloud
       POSTGRES_DB: postgres
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "max_connections=400"]
     ports:
-      - "127.0.0.1:15432:5432"
+      - "127.0.0.1:15442:5432"
     tmpfs:
       - /var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U lazycloud -d postgres"]
       interval: 1s
       timeout: 3s
-      retries: 10
+      retries: 20
 
-  redis:
-    image: redis:8-alpine
+  stripe-mock:
+    image: stripe/stripe-mock:v0.205.0@sha256:ff32647993847be491e68533e2881c90434fa8d5df40246ee5f7d41253422081
     ports:
-      - "127.0.0.1:16379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 1s
-      timeout: 3s
-      retries: 10
+      - "127.0.0.1:12111:12111"
