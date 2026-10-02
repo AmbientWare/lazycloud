@@ -113,7 +113,7 @@ The reference was not measured under the same conditions.
   step mounts the ones it reads itself. The agent writes the values to
   files of the builder's secret mount and deletes them when the build ends.
   The workspace and each secret's version are part of the image identity
-  (migrations/0016_image_build_options.sql), so a rotated secret builds a
+  (migrations/0017_image_build_options.sql), so a rotated secret builds a
   new image and no workspace gets an image built with another's secrets. A
   build reads the values current when it starts; one whose secret was
   deleted by then fails naming it.
@@ -229,4 +229,4 @@ reads only. Tests: `TestHostLoginsAreScopedToTheCommandsRepositories`,
   `Execution.CreateBuildContainer` takes the GPU count (`containers.gpu_count`);
   placement (`PendingContainers`), compute demand (`PendingDemand`) and
   capacity (`AvailableCapacity`) read a build's model through
-  `build_gpus()` (migration 0016); proto `ImageBuild.secrets` (11).
+  `build_gpus()` (migration 0017); proto `ImageBuild.secrets` (11).

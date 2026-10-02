@@ -40,11 +40,11 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 			return fmt.Errorf("ensure workload: %w", err)
 		}
 		// Execution admits tasks to a deployed version only while the
-		// workload is active, so a stopped workload's calls need a
-		// working-tree release even for unchanged code.
+		// workload is active and its app is not paused, so their calls
+		// need a working-tree release even for unchanged code.
 		existing, err := q.ReleaseByDigest(ctx, ReleaseByDigestParams{
 			WorkloadID: workload.ID, SpecDigest: f.digest, ActiveReleaseID: workload.ActiveReleaseID,
-			UnversionedOnly: WorkloadState(workload.DesiredState) != WorkloadActive,
+			UnversionedOnly: WorkloadState(workload.DesiredState) != WorkloadActive || AppState(appRow.State) != AppActive,
 		})
 		if err == nil {
 			out = apitypes.Release{

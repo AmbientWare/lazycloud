@@ -1,7 +1,7 @@
 import type { QueryKey } from "@tanstack/react-query";
 
 import type { Schemas } from "@/lib/api/client";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export type WorkspaceInvalidationTarget = {
   queryKey: QueryKey;
@@ -64,11 +64,19 @@ export function workspaceInvalidationTargets(
       ]);
     case "storage.secrets":
       return [{ queryKey: keys.storage.secrets(workspace) }];
+    // A deleted volume stops accruing storage cost.
+    case "storage.volumes":
+      return compact([
+        { queryKey: keys.storage.volumes(workspace) },
+        change.change === "deleted" && { queryKey: accountQueryKeys.usage.root(), expensive: true },
+      ]);
+    case "usage":
+      return [{ queryKey: accountQueryKeys.usage.root(), expensive: true }];
   }
 }
 
 function compact(
-  targets: Array<WorkspaceInvalidationTarget | "" | undefined>,
+  targets: Array<WorkspaceInvalidationTarget | "" | false | undefined>,
 ): WorkspaceInvalidationTarget[] {
   return targets.filter((target): target is WorkspaceInvalidationTarget => Boolean(target));
 }

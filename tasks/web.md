@@ -95,6 +95,11 @@ visual parity.
   network, so result HTML cannot reveal who viewed it
   (`TestPickledResultsKeepOnlyAValidDisplay`, ResultBody.test.tsx). The
   runner's frame header limit is 4 MiB so a 1 MiB PNG fits as base64.
+- On the usage page a function's workload row, as the reference showed it,
+  also lists its runs when opened, each with its share of the container
+  cost and "View run"; idle container time stays on the workload. The
+  reference showed runs only for usage without an app, which the rewrite
+  does not have: every run belongs to an app.
 
 ## Gaps
 

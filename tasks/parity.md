@@ -106,10 +106,10 @@ Scope notes:
   Delivered: soft-deleted apps, workspace-scoped volumes and secrets, `artifacts.app_id on delete set null` (migrations/0007_storage.sql). Schema reading only.
 
 ## Functions and tasks
-- [ ] `@app.function(...)` options: image, name, cpu, memory, disk, gpu, gpu_count, timeout_seconds, concurrency, in_process, cron, keep_warm, max_pending_tasks, autoscaler, retries(3), retry_policy, retry_delay_seconds, callback_url, authorized, env, secrets, volumes, on_start/on_running/on_success/on_error/on_retry/on_failure/on_finish, task_policy, inputs, outputs, docker_enabled, preemptible, region, availability_zone, machine, metadata (SDK/abstractions/app.py:245)
-  Gap: every option maps (`test_deploy_uploads_the_source_once_and_maps_function_options`, `test_deploy_maps_workload_runtime_options` incl. `metadata`, `test_deploy_maps_storage_options`, `test_deploy_maps_gpu_and_placement_options`; live metadata read back) except a non-default `retry_policy.retry_on_statuses`, which is refused: about half a day for a `retry_on` list of failure kinds.
-- [ ] `Function.local()`, plain call, `.remote()`, `.async_remote()` (SDK/abstractions/function.py:243,488,564)
-  Gap: `test_remote_streams_output_resumes_dropped_logs_and_returns_the_value`, `test_remote_failure_reraises_the_remote_exception` (original exception re-raised: tasks/function-execution.md). On a paused app the reference refused deployed calls (409 "app is not active") but ran laptop working-tree calls, whose stubs had no app; the rewrite refuses both (`accepting` in internal/execution/admission.go, `TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped`). Admitting them also needs planning.sql to start their containers: about 2 h after #442 merges.
+- [x] `@app.function(...)` options: image, name, cpu, memory, disk, gpu, gpu_count, timeout_seconds, concurrency, in_process, cron, keep_warm, max_pending_tasks, autoscaler, retries(3), retry_policy, retry_delay_seconds, callback_url, authorized, env, secrets, volumes, on_start/on_running/on_success/on_error/on_retry/on_failure/on_finish, task_policy, inputs, outputs, docker_enabled, preemptible, region, availability_zone, machine, metadata (SDK/abstractions/app.py:245)
+  Delivered: every option maps: `test_deploy_uploads_the_source_once_and_maps_function_options`, `test_deploy_maps_workload_runtime_options` (incl. `metadata`), `test_deploy_maps_storage_options`, `test_deploy_maps_gpu_and_placement_options`, `test_deploy_maps_retry_on_statuses_to_the_failures_retried`.
+- [x] `Function.local()`, plain call, `.remote()`, `.async_remote()` (SDK/abstractions/function.py:243,488,564)
+  Delivered: `test_remote_streams_output_resumes_dropped_logs_and_returns_the_value`, `test_remote_failure_reraises_the_remote_exception` (original exception re-raised: tasks/function-execution.md). On a paused app deployed calls are refused and working-tree calls and previews run, as in the reference (`TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped`).
 - [x] `.spawn()`, `.async_spawn()` return `FunctionCall`; `.spawn_map(inputs)` submits up to 8 at a time (SDK/abstractions/function.py:517,525,574)
   Intentional: `test_spawn_map_submits_in_batches_and_keeps_input_order`. Batched spawn_map: tasks/control.md.
 - [x] `.map(inputs)` yields results in input order and `None` for a failed item (SDK/abstractions/function.py:578)
@@ -122,8 +122,8 @@ Scope notes:
   Delivered: `test_function_calls_in_arguments_become_dependencies`, dependencies_test.go, runner `test_dependency_frames_resolve_upstream_results_for_the_next_invoke`, live nested spawn (tasks/control.md).
 - [x] `Task.from_id(id, workspace=)`, `.get()`, `.view()`, `.pending_progress`, `.result()`, `.wait()`, `.async_wait()`, `.logs()`, `.output()`, `.subscribe()`, `.cancel()` (SDK/session/task.py:138)
   Intentional: `test_task_handles_read_results_logs_and_reruns`. API `Task` returns: tasks/control.md.
-- [ ] `RetryPolicy(max_attempts, delay_seconds, backoff=RetryBackoff.Fixed|Exponential, max_delay_seconds, retry_on_statuses)`, `TaskPolicy(timeout_seconds)` (SH/tasks.py:30-70)
-  Gap: fixed/exponential backoff and max delay work (internal/execution `NextAttemptDelay`), but a non-default `retry_on_statuses` is refused. About half a day.
+- [x] `RetryPolicy(max_attempts, delay_seconds, backoff=RetryBackoff.Fixed|Exponential, max_delay_seconds, retry_on_statuses)`, `TaskPolicy(timeout_seconds)` (SH/tasks.py:30-70)
+  Delivered: internal/execution `RetryPolicyOf`, `NextAttemptDelay`, `Retries`; `retry_on_statuses` maps to `retry_on` failure kinds (failed: user_error and lost; timeout: timeout). `TestRetryableFailureRequeuesUntilAttemptsRunOut`, `TestRetryOnRetriesOnlyTheNamedFailures`, `test_deploy_maps_retry_on_statuses_to_the_failures_retried`.
 - [x] `current_task_id()`, `current_root_task_id()` (SDK/__init__.py)
   Delivered: `test_calls_inside_a_container_run_the_active_release_as_children`, python/tests/acceptance/test_workload_runtime.py.
 - [x] Arguments and results use cloudpickle from the SDK and JSON over HTTP, `--json` and exported clients; 16 MiB cap each (DOCS/concepts/functions.mdx)
@@ -384,8 +384,8 @@ Scope notes:
   Delivered: JoinMachineDialog.tsx; status follows the returned machine id. Code reading only.
 
 ## Billing and plans
-- [ ] Plans Free/Team/Business: prepaid credit balance, trial and subscription credit, per-second compute (DOCS/platform/plans.mdx)
-  Gap: internal/billing/ratecard.go, same terms; `TestTrialCoversUsageAndNewCreditPaysDebtFirst`, `TestSubscriptionCreditIsSpentBeforePurchasedCredit`, `TestStripeTestMode`. CPU and memory bill at the reservation only, while docs/platform/plans.mdx says the greater of reservation and measured use (tasks/billing.md Gaps): about 1 day.
+- [x] Plans Free/Team/Business: prepaid credit balance, trial and subscription credit, per-second compute (DOCS/platform/plans.mdx)
+  Delivered: internal/billing/ratecard.go, same terms; `TestTrialCoversUsageAndNewCreditPaysDebtFirst`, `TestSubscriptionCreditIsSpentBeforePurchasedCredit`, `TestStripeTestMode`; CPU and memory bill at the greater of reservation and measured use (`TestMeteringBillsTheGreaterOfReservationAndMeasuredUse`).
 - [x] Placement multipliers: preemptible=False 3× CPU/memory; pinned region 1.5× (DOCS/platform/plans.mdx)
   Delivered: ratecard.go `placements()`; `TestContainersPriceTheirGPUPlacementAndMachine`.
 - [x] Limits: concurrency, zero balance stops work, monthly usage limit resets on the 1st, 30-day unfunded retention (DOCS/platform/plans.mdx)
@@ -402,8 +402,8 @@ Scope notes:
   Delivered: CreditPrompt.tsx, same threshold and copy; code reading only.
 - [x] Public `/pricing` page and pricing catalog `/api/v1/pricing` (WEB/routes/pricing.lazy.tsx, Q/pricing.ts)
   Intentional: pricing.lazy.tsx; internal/api/billing_test.go catalog test. `/v1/pricing` path: tasks/billing.md.
-- [ ] Usage page: range control, usage cost, amount covered by subscription credits, spend chart by category, breakdown by app and workload with runtime and cost, "View run", image builds, usage without an app (WEB/routes/w/$workspace/usage/index.tsx and -components/*)
-  Gap: usage routes match; `TestStorageIsMeteredAndShownOnTheUsagePage`. Usage is metered per container, so runs have no rows, cost or "View run" (tasks/billing.md Gaps): about 1-1.5 days.
+- [x] Usage page: range control, usage cost, amount covered by subscription credits, spend chart by category, breakdown by app and workload with runtime and cost, "View run", image builds, usage without an app (WEB/routes/w/$workspace/usage/index.tsx and -components/*)
+  Intentional: usage routes over `/v1/billing/costs`; `TestStorageIsMeteredAndShownOnTheUsagePage`, `TestCostsByTaskSplitContainerTimeAmongItsRuns`, UsageRows.test.tsx (a workload row opens into its runs with "View run"). Runs inside workload rows: tasks/web.md.
 - [x] Stripe webhook `/webhooks/stripe` (R/apps/api/src/api/server/routers/webhooks.py:63)
   Delivered: internal/api/webhooks.go; `TestWebhooksAreVerifiedAndStoredOnce`, `TestStripeTestMode`.
 
@@ -424,8 +424,8 @@ Scope notes:
   Intentional: ContainerMetricsCharts/*; `TestMetricSamplesComeOnlyFromTheAssignedHost`, test_observability.py. Downsampling and no disk chart: tasks/observability.md. GPU sampling unverified.
 - [x] Account metrics drawer: containers, concurrency vs plan limits, tasks and failures over 24h, activity by app/resource/time range (WEB/components/shared/AppShell/AccountMetrics/*)
   Delivered: AccountMetrics/*; `TestAccountMetricsAndActivity` (CPU, GPU and container activity).
-- [ ] Live updates over the SSE change stream `/api/v1/events/changes/stream`, plus container event summaries (WEB/components/shared/WorkspaceLiveUpdates/index.tsx, Q/events.ts)
-  Gap: change hub, WorkspaceLiveUpdates; `TestChangeStreamDeliversCommittedChangesOfItsWorkspace`, `TestChangeStreamOverHTTP`. Volumes and usage have no topic, so those lists do not refresh live. About 1-2 h (a trigger migration).
+- [x] Live updates over the SSE change stream `/api/v1/events/changes/stream`, plus container event summaries (WEB/components/shared/WorkspaceLiveUpdates/index.tsx, Q/events.ts)
+  Intentional: change hub, WorkspaceLiveUpdates; topics apps, deployments, tasks, containers, secrets, volumes and usage: `TestChangeStreamDeliversCommittedChangesOfItsWorkspace`, `TestChangeStreamOverHTTP`, `TestVolumeAndUsageChangesArePublished`, workspace-invalidations.test.ts. `/v1` path and per-statement events: tasks/observability.md.
 
 ## Notifications
 - [x] Transactional email outbox (Resend): 8 attempts with backoff, bodies purged after 2 days, delivery reports via `/webhooks/resend` (R/packages/notifications/src/notifications/outbox.py, R/apps/api/src/api/server/routers/webhooks.py:127)
@@ -440,8 +440,8 @@ Scope notes:
 ## Dashboard
 - [x] `/dashboard` opens the last-used or first workspace; `/w/$workspace` goes to Apps (WEB/routes/dashboard.tsx, WEB/routes/w/$workspace/index.tsx)
   Delivered: dashboard.tsx identical; smoke e2e "dashboard entry lands on Apps and the responsive shell switches workspaces".
-- [ ] App shell: nav Apps/Tasks/Storage/Usage, global search (⌘/Ctrl-K or "/"), account menu (Settings, Sign out), Settings addressed as `?settings=billing|tokens|compute|domains|admin` (WEB/components/shared/AppShell/index.tsx, GlobalSearch.tsx, WEB/components/shared/SettingsDialog/view.ts)
-  Gap: AppShell identical, GlobalSearch.test.tsx; global search no longer finds sandboxes (`listSandboxes` has no search). About 2 h.
+- [x] App shell: nav Apps/Tasks/Storage/Usage, global search (⌘/Ctrl-K or "/"), account menu (Settings, Sign out), Settings addressed as `?settings=billing|tokens|compute|domains|admin` (WEB/components/shared/AppShell/index.tsx, GlobalSearch.tsx, WEB/components/shared/SettingsDialog/view.ts)
+  Delivered: AppShell identical; global search asks the server for apps, workloads, tasks and sandboxes (`GlobalSearch.test.tsx`, `TestSandboxSearchMatchesNameAppAndContainerID`).
 - [x] Apps list: cards with 24h activity sparkline and latest workload, actions (pause/resume/delete), quickstart empty state (WEB/routes/w/$workspace/apps/index.tsx, -components/QuickstartEmptyState.tsx)
   Delivered: apps/index.tsx; apps.test.ts, onboarding e2e, stack e2e "a deployed app is listed".
 - [x] App detail: header Pause/Resume/Delete, activity chart, workloads table (type filter, status/version/containers/deployed, delete workload), recent tasks, sandboxes (WEB/routes/w/$workspace/apps/$appId.tsx, -components/*)
@@ -474,8 +474,8 @@ Scope notes:
   Delivered: cli/update.py, self_update.py identical; code reading only.
 - [x] `lazycloud app export` typed client codegen with `remote()` for functions and `request()` for endpoints/ASGI via OpenAPI (CLI/apps.py:24, SDK/client_codegen.py)
   Delivered: test_app_export.py (functions, endpoint `request()` with typed returns, ASGI OpenAPI path/query/body methods, public apps without the token).
-- [ ] `lazycloud.env` helpers `is_local`, `is_remote`, `local_entrypoint`, `env_value`, and `SdkEnvVar` (SDK/env.py)
-  Gap: env.py identical and `is_local`/`is_remote` work in containers, but containers get no `WORKSPACE_NAME`/`WORKSPACE_ID`, so `env_value(SdkEnvVar.WorkspaceName)` returns its default; `GatewayToken`/`GatewayHttpUrl` are never set by design. Under 1 h in internal/agent once #442 lands.
+- [x] `lazycloud.env` helpers `is_local`, `is_remote`, `local_entrypoint`, `env_value`, and `SdkEnvVar` (SDK/env.py)
+  Intentional: env.py identical; `is_local`/`is_remote` work in containers and `WORKSPACE_NAME` is set (`TestContainersNameTheirWorkspace`). No workspace id or gateway token in containers: tasks/workload-runtime.md.
 - [x] `lazycloud.schema` fields (String, Integer, Number, Boolean, JSON, File, Image, Object, Schema) for `inputs=`/`outputs=` (SDK/schema.py)
   Delivered: schema.py identical; runner applies `inputs`/`outputs`; test_python_function_contracts.py.
 - [x] Destructive commands prompt for confirmation, skipped with `-y` (CLI/components/prompts.py)

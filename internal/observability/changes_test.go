@@ -196,3 +196,37 @@ func TestClaimsPublishStartedTasksOffTheClaimTransaction(t *testing.T) {
 		t.Fatalf("started change %+v", started)
 	}
 }
+
+// Volumes and metered usage publish too: a created, measured or deleted
+// volume, and one usage change per workspace for each batch of charges.
+func TestVolumeAndUsageChangesArePublished(t *testing.T) {
+	f := newFixture(t, `{}`)
+	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
+
+	var volume uuid.UUID
+	if err := f.pool.QueryRow(t.Context(), "insert into volumes (workspace_id, name) values ($1, 'data') returning id", uuid.UUID(f.workspace)).Scan(&volume); err != nil {
+		t.Fatal(err)
+	}
+	_, event := nextEvent(t, sub)
+	if c := event.Changes[0]; c.Topic != apitypes.ChangeTopicStorageVolumes || c.Change != apitypes.ChangeKindCreated || *c.ResourceId != volume.String() {
+		t.Fatalf("volume created %+v", event)
+	}
+	f.exec1("update volumes set size_bytes = 4096, size_measured_at = now() where id = $1", volume)
+	if _, event = nextEvent(t, sub); event.Changes[0].Change != apitypes.ChangeKindUpdated {
+		t.Fatalf("volume measured %+v", event)
+	}
+	f.exec1("update volumes set state = 'deleting', deleted_at = now() where id = $1", volume)
+	if _, event = nextEvent(t, sub); event.Changes[0].Change != apitypes.ChangeKindDeleted {
+		t.Fatalf("volume deleted %+v", event)
+	}
+
+	f.exec1(`insert into ledger_entries (source_kind, source_id, started_at, ended_at, user_id, workspace_id, billing_owner, rate_class,
+                            gpu_count, cpu_millis, memory_bytes, pricing_version, container_nanos, cpu_nanos, memory_nanos, gpu_nanos)
+select 'container', gen_random_uuid(), now() - interval '1 minute' * g, now() - interval '1 minute' * (g - 1), m.user_id, $1,
+       'platform_fleet', 'auto', 0, 1000, 1 << 30, 'v1', 1, 1, 1, 0
+from workspace_members m, generate_series(1, 3) g where m.workspace_id = $1`, uuid.UUID(f.workspace))
+	_, event = nextEvent(t, sub)
+	if len(event.Changes) != 1 || event.Changes[0].Topic != apitypes.ChangeTopicUsage || *event.Changes[0].Count != 3 {
+		t.Fatalf("usage change %+v", event)
+	}
+}

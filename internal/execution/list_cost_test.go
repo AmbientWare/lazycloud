@@ -37,6 +37,8 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 		{"app containers", listContainers, []any{f.workspace, "app", uuid.Max, nil, page}},
 		{"live containers", listLiveContainers, []any{f.workspace, nil, uuid.Max, nil, page}},
 		{"pending facts", pendingFacts, []any{[]uuid.UUID{queued}}},
+		{"sandboxes", listSandboxes, []any{f.workspace, uuid.Max, nil, nil, page}},
+		{"sandboxes searched", listSandboxes, []any{f.workspace, uuid.Max, nil, "box", page}},
 	}
 	for _, history := range []int{0, 10_000} {
 		if history > 0 {
@@ -53,6 +55,10 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 				if strings.Contains(plan, "Seq Scan on "+table) {
 					t.Errorf("%s scans every row of %s:\n%s", listing.name, table, plan)
 				}
+			}
+			// Sandboxes are instances; the workspace's other containers stay unread.
+			if strings.HasPrefix(listing.name, "sandboxes") && !strings.Contains(plan, "containers_instances_recent") {
+				t.Errorf("%s reads the workspace's container history:\n%s", listing.name, plan)
 			}
 		}
 	}

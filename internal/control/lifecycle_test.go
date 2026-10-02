@@ -271,6 +271,34 @@ func TestStoppedWorkloadRunsUnchangedWorkingTreeCalls(t *testing.T) {
 	}
 }
 
+// A paused app's unchanged code runs from the laptop on its own
+// working-tree release, which execution admits while the app is paused,
+// as the reference ran laptop calls outside the app.
+func TestPausedAppRunsUnchangedWorkingTreeCalls(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	deployed := deploy(t, c, ws, false, function("summarize"))
+	if _, err := c.PauseApp(t.Context(), ws, "reports"); err != nil {
+		t.Fatal(err)
+	}
+	release, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize"))
+	if err != nil || release.Id == deployed.Releases[0].Id || release.Version != nil {
+		t.Fatalf("prepare on a paused app %+v %v, want a new unversioned release", release, err)
+	}
+	e := execution.NewExecution(pool)
+	input := []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}}}
+	if _, err := e.Submit(t.Context(), execution.SubmitRequest{
+		Workspace: ws, App: "reports", Function: "summarize", Release: &release.Id, Inputs: input,
+	}); err != nil {
+		t.Fatalf("working-tree submit to a paused app %v", err)
+	}
+	if _, err := e.Submit(t.Context(), execution.SubmitRequest{
+		Workspace: ws, App: "reports", Function: "summarize", Inputs: input,
+	}); !errors.Is(err, execution.ErrNotAccepting) {
+		t.Fatalf("deployed submit to a paused app %v", err)
+	}
+}
+
 func TestPruneWithoutFunctionsDeletesTheDeployedOnes(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)

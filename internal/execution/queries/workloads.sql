@@ -313,8 +313,12 @@ from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-where c.workspace_id = @workspace_id and w.kind = 'sandbox' and c.id < @before
+where c.workspace_id = @workspace_id and c.purpose = 'instance' and w.kind = 'sandbox' and c.id < @before
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'))
+  and (sqlc.narg('search')::text is null
+       or strpos(lower(w.name), sqlc.narg('search')::text) > 0
+       or strpos(a.name, sqlc.narg('search')::text) > 0
+       or strpos(c.id::text, sqlc.narg('search')::text) > 0)
 order by c.id desc
 limit @max_rows;
 
@@ -331,7 +335,7 @@ from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-where c.workspace_id = @workspace_id and w.kind = 'sandbox'
+where c.workspace_id = @workspace_id and c.purpose = 'instance' and w.kind = 'sandbox'
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'));
 
 -- name: SandboxCreatedDays :many
@@ -340,7 +344,7 @@ from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-where c.workspace_id = @workspace_id and w.kind = 'sandbox' and c.created_at > now() - interval '30 days'
+where c.workspace_id = @workspace_id and c.purpose = 'instance' and w.kind = 'sandbox' and c.created_at > now() - interval '30 days'
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'))
 group by 1
 order by 1;

@@ -46,11 +46,11 @@ select r.id as release_id,
        a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
         and ws.state = 'active')::bool as active,
-       -- A paused or deleted app, a deleted workload, a deleting workspace,
-       -- or a stopped workload's deployed versions wind down; working-tree
-       -- releases of a stopped workload keep running.
-       (a.state <> 'active' or w.desired_state = 'deleted' or ws.state = 'deleting'
-        or (w.desired_state = 'stopped' and r.version is not null))::bool as stopping,
+       -- A deleted app or workload and a deleting workspace wind down; a
+       -- paused app's or stopped workload's deployed versions do too, while
+       -- their working-tree releases keep running.
+       (a.state = 'deleted' or w.desired_state = 'deleted' or ws.state = 'deleting'
+        or (r.version is not null and (a.state <> 'active' or w.desired_state = 'stopped')))::bool as stopping,
        -- Deletion also cancels running tasks.
        (a.state = 'deleted' or w.desired_state = 'deleted')::bool as retiring,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,

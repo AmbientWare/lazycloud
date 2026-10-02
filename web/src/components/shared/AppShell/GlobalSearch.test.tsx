@@ -22,7 +22,7 @@ const workspace: Schemas["Workspace"] = {
   created_at: "2026-07-21T10:00:00Z",
 };
 
-it("asks the server for matching apps, workloads and tasks", async () => {
+it("asks the server for matching apps, workloads, tasks and sandboxes", async () => {
   // cmdk measures its list; jsdom has no layout to observe.
   vi.stubGlobal(
     "ResizeObserver",
@@ -62,6 +62,24 @@ it("asks the server for matching apps, workloads and tasks", async () => {
             : [],
       });
     }
+    if (url.pathname.endsWith("/sandboxes")) {
+      return Response.json({
+        sandboxes:
+          url.searchParams.get("search") === "greet"
+            ? [
+                {
+                  id: "01a0f9ec-4273-79b4-a153-7a121e5dbox1",
+                  release_id: "release-2",
+                  app: "journey",
+                  name: "greeter-box",
+                  status: "running",
+                  gpu: [],
+                  created_at: "2026-07-21T10:00:00Z",
+                },
+              ]
+            : [],
+      });
+    }
     return Response.json({ apps: [] });
   });
   const root = createRootRoute({
@@ -88,10 +106,11 @@ it("asks the server for matching apps, workloads and tasks", async () => {
 
   expect(await screen.findByText("Function")).toBeVisible();
   expect(await screen.findByText(/^Running · 1e5d034c$/)).toBeVisible();
+  expect(await screen.findByText("greeter-box")).toBeVisible();
   const searched = requests
     .filter((url) => url.searchParams.get("search") === "greet")
     .map((url) => url.pathname.split("/").at(-1));
-  expect([...new Set(searched)].sort()).toEqual(["apps", "tasks", "workloads"]);
+  expect([...new Set(searched)].sort()).toEqual(["apps", "sandboxes", "tasks", "workloads"]);
 
   // The query filtered out the highlighted "Apps" destination, so the first
   // remaining result is highlighted and Enter opens it.

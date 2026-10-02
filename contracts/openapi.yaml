@@ -2780,6 +2780,10 @@ paths:
           in: query
           description: Only this app's usage.
           schema: { type: string, format: uuid }
+        - name: workload_id
+          in: query
+          description: Only this workload's usage, such as its runs by task.
+          schema: { type: string, format: uuid }
         - name: category
           in: query
           schema: { $ref: "#/components/schemas/UsageCostCategory" }
@@ -3680,6 +3684,10 @@ paths:
         - name: app
           in: query
           schema: { $ref: "#/components/schemas/AppName" }
+        - name: search
+          in: query
+          description: Part of the sandbox's name, its app's name or its container id.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -4637,6 +4645,14 @@ components:
           type: number
           minimum: 0
           maximum: 86400
+        retry_on:
+          description: The failures another attempt follows; absent means all three.
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [user_error, timeout, lost]
 
     Autoscaler:
       type: object
@@ -6246,7 +6262,7 @@ components:
 
     ChangeTopic:
       type: string
-      enum: [apps, deployments, tasks, containers, storage.secrets]
+      enum: [apps, deployments, tasks, containers, storage.secrets, storage.volumes, usage]
 
     ChangeKind:
       type: string

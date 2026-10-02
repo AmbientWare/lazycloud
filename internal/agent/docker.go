@@ -86,6 +86,8 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		supervisor.SocketEnv+"="+containerLinkDir+"/"+linkSocketName,
 		supervisor.APISocketEnv+"="+containerAPISocket,
 		"LAZYCLOUD_WORKSPACE="+spec.GetWorkspace(),
+		// lazycloud.env reads the workspace as SdkEnvVar.WorkspaceName.
+		"WORKSPACE_NAME="+spec.GetWorkspace(),
 		"CONTAINER_ID="+c.id,
 	)
 	runtimeLabel, err := json.Marshal(c.runtime)

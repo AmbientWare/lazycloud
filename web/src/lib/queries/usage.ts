@@ -13,6 +13,7 @@ export type UsageCostScope = {
   groupBy: Schemas["UsageCostGroup"];
   appId?: string;
   workspaceId?: string;
+  workloadId?: string;
   category?: Schemas["UsageCostCategory"];
   limit?: number;
 };
@@ -25,7 +26,7 @@ export type UsageCostScope = {
  * rather than the one the sidebar happens to have selected.
  */
 export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCostScope) {
-  const { groupBy, appId, workspaceId, category, limit = 50 } = scope;
+  const { groupBy, appId, workspaceId, workloadId, category, limit = 50 } = scope;
   return infiniteQueryOptions({
     queryKey: accountQueryKeys.usage.costs({
       start: window.start,
@@ -33,6 +34,7 @@ export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCo
       groupBy,
       appId: appId ?? null,
       workspaceId: workspaceId ?? null,
+      workloadId: workloadId ?? null,
       category: category ?? null,
     }),
     initialPageParam: undefined as string | undefined,
@@ -47,6 +49,7 @@ export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCo
               limit,
               app_id: appId,
               workspace_id: workspaceId,
+              workload_id: workloadId,
               category,
               cursor: pageParam,
             },

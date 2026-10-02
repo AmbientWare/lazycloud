@@ -290,6 +290,41 @@ def test_deploy_maps_workload_runtime_options(
     }
 
 
+RETRY_ON = """\
+import lazycloud
+from shared.tasks import RetryPolicy, TaskStatus
+
+app = lazycloud.App("reports")
+
+
+@app.function(retry_policy=RetryPolicy(max_attempts=3, retry_on_statuses=(TaskStatus.Timeout,)))
+def flaky() -> None:
+    pass
+
+
+@app.function(retry_policy=RetryPolicy(max_attempts=3, retry_on_statuses=(TaskStatus.Cancelled,)))
+def never() -> None:
+    pass
+"""
+
+
+def test_deploy_maps_retry_on_statuses_to_the_failures_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch, RETRY_ON)
+    _serve_deployment(fake_api, stored=set())
+
+    reports.app.deploy()
+
+    (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    flaky, never = request.json()["workloads"]
+    assert flaky["retry_policy"]["retry_on"] == ["timeout"]
+    assert flaky["retry_policy"]["max_attempts"] > 1
+    # A status no attempt ends with retries nothing.
+    assert never["retry_policy"]["max_attempts"] == 1
+    assert "retry_on" not in never["retry_policy"]
+
+
 STORAGE_OPTIONS = """\
 import lazycloud
 

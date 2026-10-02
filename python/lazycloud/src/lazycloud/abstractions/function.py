@@ -89,6 +89,7 @@ from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
 from lazycloud.session.task import FunctionCall, Task, parent_task_id, task_input
 from lazycloud.terminal import Terminal, TerminalStep
+from shared import tasks as policies
 
 if TYPE_CHECKING:
     from shared.api import Deployment, Preview
@@ -307,11 +308,7 @@ class Function(Generic[P, R]):
                 for volume in self.volumes
             ),
         }
-        found = [name for name, present in declared.items() if present]
-        policy = self._retry_policy()
-        if policy.retry_on_statuses != DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE:
-            found.append("retry_policy.retry_on_statuses")
-        return found
+        return [name for name, present in declared.items() if present]
 
     def handler_reference(self) -> str:
         """The `module:qualname` the runner imports."""
@@ -338,11 +335,7 @@ class Function(Generic[P, R]):
                 "image_id": image.image_id,
             },
             "resources": _resources(self.cpu, self.memory, self.disk),
-            "retry_policy": policy.model_dump(
-                mode="json",
-                include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
-                exclude_none=True,
-            ),
+            "retry_policy": _retry_policy_spec(policy),
             "concurrency": self.concurrency,
         }
         timeout_seconds = self._effective_timeout_seconds()
@@ -817,6 +810,33 @@ def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
     if interrupted is not None:
         raise interrupted
     return failures
+
+
+# The failures each retryable status names: a failed task raised or lost
+# its container, a timed-out one ran past its timeout. No other status ends
+# an attempt.
+_RETRY_ON: dict[policies.TaskStatus, tuple[str, ...]] = {
+    policies.TaskStatus.Failed: ("user_error", "lost"),
+    policies.TaskStatus.Timeout: ("timeout",),
+}
+
+
+def _retry_policy_spec(policy: RetryPolicy) -> dict[str, Any]:
+    """The API retry policy; `retry_on_statuses` becomes the failures retried."""
+    spec = policy.model_dump(
+        mode="json",
+        include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
+        exclude_none=True,
+    )
+    if set(policy.retry_on_statuses) == set(DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE):
+        return spec
+    kinds = [kind for status in policy.retry_on_statuses for kind in _RETRY_ON.get(status, ())]
+    if kinds:
+        spec["retry_on"] = list(dict.fromkeys(kinds))
+    else:
+        # Nothing it names can end an attempt, so no attempt follows another.
+        spec["max_attempts"] = 1
+    return spec
 
 
 def _map_args(input_value: Any) -> tuple[Any, ...]:

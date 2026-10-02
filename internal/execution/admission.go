@@ -277,17 +277,16 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 // the active release while the workload and app are active, a working-tree
 // release while the app is active.
 func accepting(fn LockFunctionForSubmitRow, explicit bool) bool {
-	if apitypes.AppState(fn.AppState) != apitypes.AppStateActive {
-		return false
-	}
+	// A working-tree run and a preview, which `lazycloud serve` runs, are
+	// the caller's own code, so pausing the app or stopping the workload
+	// does not refuse them; they stop only what was deployed.
 	if explicit && fn.Version == nil {
 		return true
 	}
-	// A preview, which `lazycloud serve` runs, admits while it runs.
 	if explicit && *fn.Version < 0 {
 		return fn.PreviewLive
 	}
-	return fn.DesiredState == "active"
+	return apitypes.AppState(fn.AppState) == apitypes.AppStateActive && fn.DesiredState == "active"
 }
 
 // lockUpstream holds the upstream tasks FOR SHARE in id order and returns

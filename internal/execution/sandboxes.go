@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -36,9 +37,16 @@ func sandboxStatus(state ContainerState, reason *string) apitypes.SandboxStatus 
 	return apitypes.SandboxStatusFailed
 }
 
-// ListSandboxes returns the workspace's sandbox containers, newest first,
-// only app's when it is set.
-func (e *Execution) ListSandboxes(ctx context.Context, workspace identity.WorkspaceID, app *string, limit int, cursor string) (SandboxPage, error) {
+// SandboxFilter narrows a sandbox listing to an app and to sandboxes whose
+// name, app name or container id contains Search, ignoring case.
+type SandboxFilter struct {
+	App    *string
+	Search *string
+}
+
+// ListSandboxes returns the workspace's sandbox containers that match
+// filter, newest first.
+func (e *Execution) ListSandboxes(ctx context.Context, workspace identity.WorkspaceID, filter SandboxFilter, limit int, cursor string) (SandboxPage, error) {
 	before := uuid.Max
 	if cursor != "" {
 		id, err := uuid.Parse(cursor)
@@ -48,7 +56,14 @@ func (e *Execution) ListSandboxes(ctx context.Context, workspace identity.Worksp
 		before = id
 	}
 	size := pageSize(limit)
-	rows, err := e.queries.ListSandboxes(ctx, ListSandboxesParams{WorkspaceID: uuid.UUID(workspace), Before: before, App: app, MaxRows: size + 1})
+	var search *string
+	if filter.Search != nil {
+		lower := strings.ToLower(*filter.Search)
+		search = &lower
+	}
+	rows, err := e.queries.ListSandboxes(ctx, ListSandboxesParams{
+		WorkspaceID: uuid.UUID(workspace), Before: before, App: filter.App, Search: search, MaxRows: size + 1,
+	})
 	if err != nil {
 		return SandboxPage{}, fmt.Errorf("list sandboxes: %w", err)
 	}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { workspaceInvalidationTargets } from "./workspace-invalidations";
 
@@ -52,5 +52,18 @@ describe("workspace live invalidation ownership", () => {
       queryKey: workspaceQueryKeys.tasks.detail("dev", "task-1"),
     });
     expect(JSON.stringify(containerTargets)).not.toContain("metrics");
+  });
+
+  it("refreshes the volume list, and usage once charges or a deletion land", () => {
+    const usage = { queryKey: accountQueryKeys.usage.root(), expensive: true };
+    expect(workspaceInvalidationTargets("dev", change("storage.volumes"))).toEqual([
+      { queryKey: workspaceQueryKeys.storage.volumes("dev") },
+    ]);
+    expect(
+      workspaceInvalidationTargets("dev", change("storage.volumes", { change: "deleted" })),
+    ).toEqual([{ queryKey: workspaceQueryKeys.storage.volumes("dev") }, usage]);
+    expect(
+      workspaceInvalidationTargets("dev", change("usage", { resource_id: undefined, count: 3 })),
+    ).toEqual([usage]);
   });
 });

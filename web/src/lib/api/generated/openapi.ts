@@ -3792,6 +3792,8 @@ export interface components {
              */
             backoff?: "fixed" | "exponential";
             max_delay_seconds?: number;
+            /** @description The failures another attempt follows; absent means all three. */
+            retry_on?: ("user_error" | "timeout" | "lost")[];
         };
         Autoscaler: {
             /** @default 0 */
@@ -4808,7 +4810,7 @@ export interface components {
             time: string;
         };
         /** @enum {string} */
-        ChangeTopic: "apps" | "deployments" | "tasks" | "containers" | "storage.secrets";
+        ChangeTopic: "apps" | "deployments" | "tasks" | "containers" | "storage.secrets" | "storage.volumes" | "usage";
         /** @enum {string} */
         ChangeKind: "created" | "updated" | "deleted";
         /** @description The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id. */
@@ -10162,6 +10164,8 @@ export interface operations {
                 workspace_id?: string;
                 /** @description Only this app's usage. */
                 app_id?: string;
+                /** @description Only this workload's usage, such as its runs by task. */
+                workload_id?: string;
                 category?: components["schemas"]["UsageCostCategory"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -11393,6 +11397,8 @@ export interface operations {
         parameters: {
             query?: {
                 app?: components["schemas"]["AppName"];
+                /** @description Part of the sandbox's name, its app's name or its container id. */
+                search?: string;
                 limit?: components["parameters"]["Limit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -11545,6 +11551,7 @@ export const deliveryStateValues: ReadonlyArray<FlattenedDeepRequired<components
 export const uploadTargetMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UploadTarget"]["method"]> = ["PUT"];
 export const imageSpecPython_versionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ImageSpec"]["python_version"]> = ["3.10", "3.11", "3.12", "3.13", "3.14"];
 export const retryPolicyBackoffValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["backoff"]> = ["fixed", "exponential"];
+export const retryPolicyRetry_onValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["retry_on"]> = ["user_error", "timeout", "lost"];
 export const payloadEncodingValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Payload"]["encoding"]> = ["json", "cloudpickle"];
 export const richDisplayKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["kind"]> = ["image", "html"];
 export const richDisplayMedia_typeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["media_type"]> = ["image/png"];
@@ -11576,7 +11583,7 @@ export const domainErrorCodeValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const previewStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewState"]> = ["starting", "ready", "stopped"];
 export const previewKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewKind"]> = ["function", "endpoint", "asgi", "realtime"];
 export const containerLogEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerLogEntry"]["stream"]> = ["stdout", "stderr", "system"];
-export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "containers", "storage.secrets"];
+export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "containers", "storage.secrets", "storage.volumes", "usage"];
 export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
 export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
 export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "image", "source", "create", "runtime", "draining"];

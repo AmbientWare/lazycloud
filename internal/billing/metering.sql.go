@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const advanceCursors = `-- name: AdvanceCursors :exec
@@ -332,6 +333,84 @@ func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredConta
 	return items, nil
 }
 
+const measuredContainerUse = `-- name: MeasuredContainerUse :many
+with want as (
+    select unnest($2::uuid[]) as id,
+           unnest($3::timestamptz[]) as start_at,
+           unnest($4::timestamptz[]) as end_at
+), used as (
+    select s.container_id, s.sampled_at as at, s.cpu_usage_usec,
+           s.memory_rss_bytes::float8 * s.interval_ms / 1000 as memory_byte_seconds
+    from want
+    join container_metric_samples s on s.container_id = want.id
+         and s.sampled_at >= want.start_at and s.sampled_at < want.end_at
+    union all
+    select m.container_id, m.minute as at, m.cpu_usage_usec,
+           m.memory_rss_bytes::float8 * m.interval_ms / 1000 as memory_byte_seconds
+    from want
+    join container_metric_minutes m on m.container_id = want.id
+         and m.minute >= want.start_at and m.minute < want.end_at
+    where not exists (
+        select 1 from container_metric_samples s
+        where s.container_id = m.container_id and s.sampled_at >= m.minute and s.sampled_at < m.minute + interval '1 minute')
+)
+select container_id,
+       date_bin($1::interval, at, 'epoch'::timestamptz)::timestamptz as period,
+       (sum(cpu_usage_usec) / 1e6)::float8 as core_seconds,
+       sum(memory_byte_seconds)::float8 as memory_byte_seconds
+from used
+group by 1, 2
+`
+
+type MeasuredContainerUseParams struct {
+	Period       pgtype.Interval
+	ContainerIds []uuid.UUID
+	StartAts     []time.Time
+	EndAts       []time.Time
+}
+
+type MeasuredContainerUseRow struct {
+	ContainerID       uuid.UUID
+	Period            time.Time
+	CoreSeconds       float64
+	MemoryByteSeconds float64
+}
+
+// CPU core-seconds and memory byte-seconds each container used per metering
+// period of [start_at, end_at), read from observability's container
+// metrics: the samples while they are kept, and for minutes whose samples
+// expired the rollup's minutes, so no sample counts twice. A sample covers
+// the interval before it; a minute's memory is its peak.
+func (q *Queries) MeasuredContainerUse(ctx context.Context, arg MeasuredContainerUseParams) ([]MeasuredContainerUseRow, error) {
+	rows, err := q.db.Query(ctx, measuredContainerUse,
+		arg.Period,
+		arg.ContainerIds,
+		arg.StartAts,
+		arg.EndAts,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MeasuredContainerUseRow
+	for rows.Next() {
+		var i MeasuredContainerUseRow
+		if err := rows.Scan(
+			&i.ContainerID,
+			&i.Period,
+			&i.CoreSeconds,
+			&i.MemoryByteSeconds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const meteredArtifacts = `-- name: MeteredArtifacts :many
 select a.workspace_id, a.app_id, coalesce(a.app_id, a.workspace_id)::uuid as source_id,
        sum(a.size_bytes)::bigint as stored_bytes, min(a.stored_at)::timestamptz as first_stored_at,
@@ -494,20 +573,24 @@ func (q *Queries) MeteredVolumes(ctx context.Context) ([]MeteredVolumesRow, erro
 
 const meteringClock = `-- name: MeteringClock :one
 select now()::timestamptz as now,
-       coalesce((select stopped_since from metering_state), 'epoch'::timestamptz)::timestamptz as stopped_since
+       coalesce((select stopped_since from metering_state), 'epoch'::timestamptz)::timestamptz as stopped_since,
+       (select rolled_through from container_metric_rollup)::timestamptz as measured_through
 `
 
 type MeteringClockRow struct {
-	Now          time.Time
-	StoppedSince time.Time
+	Now             time.Time
+	StoppedSince    time.Time
+	MeasuredThrough time.Time
 }
 
-// The pass's instant and where its look-back over stopped containers
-// starts. A first pass looks back over everything.
+// The pass's instant, where its look-back over stopped containers starts,
+// and observability's rollup watermark: ingest refuses samples older than
+// it, so a container's use before it is complete. A first pass looks back
+// over everything.
 func (q *Queries) MeteringClock(ctx context.Context) (MeteringClockRow, error) {
 	row := q.db.QueryRow(ctx, meteringClock)
 	var i MeteringClockRow
-	err := row.Scan(&i.Now, &i.StoppedSince)
+	err := row.Scan(&i.Now, &i.StoppedSince, &i.MeasuredThrough)
 	return i, err
 }
 

@@ -70,6 +70,9 @@ type source struct {
 type entry struct {
 	start, end time.Time
 	charge     Charge
+	// billed is the container shape the entry charged, when measured use
+	// exceeded the reservation; nil charges the source's shape.
+	billed *Shape
 }
 
 // sourcePlan is what a pass writes for one source.
@@ -127,8 +130,10 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 	if err != nil {
 		return MeterResult{}, fmt.Errorf("read metering clock: %w", err)
 	}
-	now := clock.Now
-	containers, err := b.meteredContainers(ctx, clock.StoppedSince.Add(-stoppedLookBack))
+	now, measured := clock.Now, clock.MeasuredThrough
+	// A container that stopped after the watermark still owes the entries
+	// its use is not complete for, so the look-back reaches it until then.
+	containers, err := b.meteredContainers(ctx, minTime(clock.StoppedSince, measured).Add(-stoppedLookBack))
 	if err != nil {
 		return MeterResult{}, err
 	}
@@ -163,22 +168,31 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 		}
 		return nil
 	}
+	plans := make([]sourcePlan, 0, len(containers))
 	for _, c := range containers {
-		p, err := b.planContainer(c, now)
+		p, err := b.planContainer(c, now, measured)
 		if err != nil {
 			result.Failed++
 			b.logger.ErrorContext(ctx, "price container usage", "container_id", c.id, "error", err)
 			continue
 		}
-		if c.stoppedAt == nil {
+		if c.stoppedAt == nil || p.accrued > 0 {
 			a := accrued[c.owner]
 			if a == nil {
 				a = &accrual{}
 				accrued[c.owner] = a
 			}
 			a.nanos += p.accrued
-			a.live++
+			if c.stoppedAt == nil {
+				a.live++
+			}
 		}
+		plans = append(plans, p)
+	}
+	if err := b.chargeMeasuredUse(ctx, plans); err != nil {
+		return result, err
+	}
+	for _, p := range plans {
 		if err := add(p); err != nil {
 			return result, err
 		}
@@ -287,8 +301,10 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // planContainer decides one container's entries, its new cursor and its
 // accrued cost at now. A container is billed from ready to stopped; one on a
 // lost host ends at the host's last report, and a live one is never billed
-// past it.
-func (b *Billing) planContainer(c meteredContainer, now time.Time) (sourcePlan, error) {
+// past it. Entries price measured use, so a period is written only once
+// its use is complete at measured, observability's watermark; until then
+// it is accrued.
+func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (sourcePlan, error) {
 	shape := c.shape
 	src := source{
 		kind: kindContainer, id: c.id, owner: c.owner, workspace: c.workspace, app: c.app, workload: c.workload, shape: shape,
@@ -306,17 +322,26 @@ func (b *Billing) planContainer(c meteredContainer, now time.Time) (sourcePlan, 
 		if c.stopReason != nil && *c.stopReason == stopHostLost && c.lastSeenAt != nil && c.lastSeenAt.Before(end) {
 			end = *c.lastSeenAt
 		}
-		entries, err := b.entries(src, start, end)
-		if err != nil {
-			return sourcePlan{}, err
+		if !measured.Before(end) {
+			entries, err := b.entries(src, start, end)
+			if err != nil {
+				return sourcePlan{}, err
+			}
+			return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
 		}
-		return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
+		return b.planOpen(src, start, end, measured)
 	}
 	horizon := start
 	if c.lastSeenAt != nil {
 		horizon = maxTime(start, minTime(now, *c.lastSeenAt))
 	}
-	closed := horizon.Truncate(MeteringPeriod)
+	return b.planOpen(src, start, horizon, measured)
+}
+
+// planOpen writes the periods of [start, horizon) whose use is complete at
+// measured and accrues the rest.
+func (b *Billing) planOpen(src source, start, horizon, measured time.Time) (sourcePlan, error) {
+	closed := minTime(horizon, measured).Truncate(MeteringPeriod)
 	plan := sourcePlan{src: src, through: start}
 	if closed.After(start) {
 		entries, err := b.entries(src, start, closed)
@@ -494,16 +519,20 @@ func ledgerParams(batch []sourcePlan) ([]uuid.UUID, InsertLedgerEntriesParams, A
 			p.AppIds = append(p.AppIds, orNil(src.app))
 			p.WorkloadIds = append(p.WorkloadIds, orNil(src.workload))
 			p.Categories = append(p.Categories, src.category)
-			owner, class := src.shape.Owner, src.shape.Class
+			shape := src.shape
+			if e.billed != nil {
+				shape = *e.billed
+			}
+			owner, class := shape.Owner, shape.Class
 			if owner == "" {
 				owner, class = OwnerPlatformFleet, ClassAuto
 			}
 			p.BillingOwners = append(p.BillingOwners, string(owner))
 			p.RateClasses = append(p.RateClasses, string(class))
-			p.GpuTypes = append(p.GpuTypes, string(src.shape.GPU))
-			p.GpuCounts = append(p.GpuCounts, int32(src.shape.GPUCount)) //nolint:gosec // GPU counts are small.
-			p.CpuMillis = append(p.CpuMillis, src.shape.CPUMillis)
-			p.MemoryBytes = append(p.MemoryBytes, src.shape.MemoryBytes)
+			p.GpuTypes = append(p.GpuTypes, string(shape.GPU))
+			p.GpuCounts = append(p.GpuCounts, int32(shape.GPUCount)) //nolint:gosec // GPU counts are small.
+			p.CpuMillis = append(p.CpuMillis, shape.CPUMillis)
+			p.MemoryBytes = append(p.MemoryBytes, shape.MemoryBytes)
 			p.PricingVersions = append(p.PricingVersions, e.charge.Version)
 			p.ContainerNanos = append(p.ContainerNanos, e.charge.ContainerNanos)
 			p.CpuNanos = append(p.CpuNanos, e.charge.CPUNanos)
