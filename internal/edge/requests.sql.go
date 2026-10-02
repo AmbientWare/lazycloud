@@ -92,7 +92,9 @@ with batch as (
     on conflict (request_id) do nothing
     returning state
 )
-select count(*) filter (where state = 'failed')::int as dropped from inserted
+select count(*) filter (where state = 'pending')::int as queued,
+       count(*) filter (where state = 'failed')::int as dropped
+from inserted
 `
 
 type InsertRequestCallbacksParams struct {
@@ -100,17 +102,23 @@ type InsertRequestCallbacksParams struct {
 	MaxPending int64
 }
 
+type InsertRequestCallbacksRow struct {
+	Queued  int32
+	Dropped int32
+}
+
 // A callback per written request whose release names a callback_url: a
 // client that left (499) cancelled it, a 5xx failed it. While max_pending of
 // a release's callbacks wait, the rest are recorded as failed with the
 // reason instead of queued, so a flood of requests cannot fill the queue
 // every workspace's callbacks share. Concurrent edges can each fill the cap
-// once. A batch written again adds none. Returns the dropped count.
-func (q *Queries) InsertRequestCallbacks(ctx context.Context, arg InsertRequestCallbacksParams) (int32, error) {
+// once. A batch written again adds none. Returns the queued and dropped
+// counts.
+func (q *Queries) InsertRequestCallbacks(ctx context.Context, arg InsertRequestCallbacksParams) (InsertRequestCallbacksRow, error) {
 	row := q.db.QueryRow(ctx, insertRequestCallbacks, arg.Ids, arg.MaxPending)
-	var dropped int32
-	err := row.Scan(&dropped)
-	return dropped, err
+	var i InsertRequestCallbacksRow
+	err := row.Scan(&i.Queued, &i.Dropped)
+	return i, err
 }
 
 const insertRequests = `-- name: InsertRequests :exec

@@ -43,7 +43,7 @@ func (q *Queries) ContainerAuthority(ctx context.Context, arg ContainerAuthority
 	return i, err
 }
 
-const enqueueCallbacks = `-- name: EnqueueCallbacks :exec
+const enqueueCallbacks = `-- name: EnqueueCallbacks :execrows
 insert into task_callbacks (task_id, workspace_id, url, event, attempt, max_attempts, failure)
 select t.id, t.workspace_id, r.spec ->> 'callback_url', $1, t.attempt_count, t.max_attempts, $2::jsonb
 from tasks t
@@ -60,9 +60,12 @@ type EnqueueCallbacksParams struct {
 
 // One outbox row per task whose release names a callback_url. A repeated
 // transition for the same attempt adds nothing.
-func (q *Queries) EnqueueCallbacks(ctx context.Context, arg EnqueueCallbacksParams) error {
-	_, err := q.db.Exec(ctx, enqueueCallbacks, arg.Event, arg.Failure, arg.TaskIds)
-	return err
+func (q *Queries) EnqueueCallbacks(ctx context.Context, arg EnqueueCallbacksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueCallbacks, arg.Event, arg.Failure, arg.TaskIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const lockStartingContainer = `-- name: LockStartingContainer :one
@@ -104,4 +107,15 @@ func (q *Queries) RunningTaskOnContainer(ctx context.Context, arg RunningTaskOnC
 	var i RunningTaskOnContainerRow
 	err := row.Scan(&i.AttemptID, &i.RootTaskID)
 	return i, err
+}
+
+const wakeCallbackDelivery = `-- name: WakeCallbackDelivery :exec
+select pg_notify('lc_callback', '')
+`
+
+// Delivered when the transaction commits; the deliverer runs at once
+// instead of on its next tick. The channel is database.ChannelCallback.
+func (q *Queries) WakeCallbackDelivery(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, wakeCallbackDelivery)
+	return err
 }

@@ -168,7 +168,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, vault, images.Config{})
 	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
-		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel)
+		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel, database.ChannelCallback)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelFleetWake()
 	capacityWake, cancelCapacityWake := listener.Subscribe(database.ChannelExecution, "")
@@ -189,6 +189,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	liveWake, cancelLiveWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelLiveWake()
 	schedulesWake, cancelSchedulesWake := listener.Subscribe(schedules.Channel, "")
+	// Queued callbacks wake delivery at once rather than on its next tick.
+	callbacksWake, cancelCallbacksWake := listener.Subscribe(database.ChannelCallback, "")
+	defer cancelCallbacksWake()
 	defer cancelSchedulesWake()
 	// Planning signals placement after creating containers. One pending
 	// value is enough: placement reads every pending container.
@@ -292,7 +295,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: tick, quiet: true, due: deliverer.NextDue}, nil, nil, every("callbacks", tick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: tick, quiet: true, due: deliverer.NextDue}, callbacksWake, nil, every("callbacks", tick, func(ctx context.Context) bool {
 			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}

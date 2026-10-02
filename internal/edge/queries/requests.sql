@@ -17,7 +17,8 @@ on conflict (id) do nothing;
 -- a release's callbacks wait, the rest are recorded as failed with the
 -- reason instead of queued, so a flood of requests cannot fill the queue
 -- every workspace's callbacks share. Concurrent edges can each fill the cap
--- once. A batch written again adds none. Returns the dropped count.
+-- once. A batch written again adds none. Returns the queued and dropped
+-- counts.
 with batch as (
     select h.id, h.workspace_id, h.release_id, r.spec ->> 'callback_url' as url,
            case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end as event,
@@ -43,7 +44,9 @@ with batch as (
     on conflict (request_id) do nothing
     returning state
 )
-select count(*) filter (where state = 'failed')::int as dropped from inserted;
+select count(*) filter (where state = 'pending')::int as queued,
+       count(*) filter (where state = 'failed')::int as dropped
+from inserted;
 
 -- name: PruneRequests :execrows
 -- The oldest requests past the retention, a bounded batch at a time.
