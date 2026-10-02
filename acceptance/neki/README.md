@@ -1,0 +1,1 @@
+`acceptance/neki/check.sh [-v]` runs every sqlc query through the production Neki router on a scratch database, `lc_neki_check`, and drops it afterwards. It needs `AWS_PROFILE=default` access to `lazycloud-prod/platform`, exits non-zero on any router failure, and `-v` also lists ordinary PostgreSQL errors.
