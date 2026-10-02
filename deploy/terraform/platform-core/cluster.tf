@@ -6,7 +6,7 @@ locals {
   arn_prefix = "arn:${data.aws_partition.current.partition}"
 }
 
-# EKS Auto Mode with no built-in node pools: node_capacity.tf declares the
+# EKS Auto Mode with no built-in node pools: argocd.tf declares the
 # one pool, and Auto Mode sizes nodes from pod requests. The API answers
 # outside the VPC only to cluster_api_cidrs; IAM access entries decide who
 # may act.
