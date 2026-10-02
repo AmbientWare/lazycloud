@@ -105,6 +105,38 @@ Branch `fleet-provider` from `fleet-capacity-plan` at
 `08acf1dbcf9d4483d075f62d40b9739fcdc5109b`.
 
 - [x] Reconcile moved to reconcile.go unchanged.
+- [x] Migration 0003, phase constants, `CanBecome` table and `changePhase`.
+- [x] Launch options, actuator (`Compute.Actuate`), reserve reconcile,
+  orphan Spot request cleanup, Spot-aware `terminate`.
+- [x] Spot prices (`RefreshSpotPrices`, `SpotPrices`), 5-minute leader loop.
+- [x] IAM and node image.
+- [x] P1: hibernation evidence from EC2's stop reason; no console reads.
+- [x] P2: hourly vCPU quotas (`RefreshQuotas`, `QuotaRooms`), quota refusals
+  cool the class in the region.
+- [ ] Real EC2 run: blocked, see Gaps.
+
+Parity lines delivered, with tests (internal/compute):
+
+- Hibernation-capable reserve launch, persistent tagged Spot reserve:
+  `TestReserveLaunchesHibernateOnAPersistentSpotRequest`.
+- Hibernate after 2 minutes, retry for 10, then plain; unconfigured stops
+  plainly at once: `TestStoppingReserveHibernatesOnceEC2AllowsAndSettlesIntoTheReserve`,
+  `TestHibernationRefusalsRetryForTenMinutesThenTheReserveStopsPlainly`,
+  `TestAnInstanceThatCannotHibernateStopsPlainlyAtOnce`.
+- Forced stop after 10 minutes, lost answers:
+  `TestAStopPendingTenMinutesIsForcedAndALostStopAnswerIsNotRepeated`.
+- Refused start retires the reserve and cools its offer with `refused_at`;
+  cancel before terminate:
+  `TestResumeStartsTheReserveOnceAndARefusedSpotStartRetiresItsRequest`,
+  `TestTerminatingASpotReserveEndsEveryInstanceItsRequestLaunched`.
+- Phase table and reserve reconcile: `TestHostLifecycleAllowsTheReservePathAndNothingThatSkipsAProof`,
+  `TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests`.
+- Image evidence (P1): `TestAHibernationStoppedForAnotherReasonSavedNoImage`.
+- Spot fetch: `TestSpotPricesKeepTheLatestQuotePerZoneAndAFailedRegionKeepsItsPrices`.
+- Quotas (P2): `TestQuotaRoomIsTheQuotaLessRunningPlatformVCPUsAndARefusalCoolsTheClass`,
+  `TestQuotaClassFollowsTheInstanceFamily`.
+- Refusal codes and launch idempotency: the existing launcher tests.
+- Node image: deploy/ami/node-setup.sh, not run (see Gaps).
 
 ## Intentional differences
 
@@ -112,10 +144,57 @@ Branch `fleet-provider` from `fleet-capacity-plan` at
   (retained_pool.py:91-135).
 - Reserves exist only for platform hosts; connection hosts keep one-time
   launches and terminate on stop.
+- `hosts.hibernate_refused_at` is a column plan.md did not list; the
+  hibernation retry window starts at the first refusal, as the reference's.
+- The actuator reads each claimed instance with one DescribeInstances per
+  region before acting, so every call follows what EC2 reports now.
+- Cancel and terminate of a Spot reserve happen in one pass; the reference
+  waited a pass between them. Cancelling is synchronous.
+- Spot prices live in PostgreSQL for an hour (plan.md decision 4), not a
+  60-second cache.
+- P1: console evidence was never built. The P1 commit drops its columns
+  (`evidence_checks`, `evidence_next_at`); `image_evidence` is `saved` when
+  EC2 stopped a hibernation with `Client.UserInitiatedHibernate`, `failed`
+  for any other reason, `unavailable` for a plain or forced stop. The "cold
+  boot marks the type and region unreliable for a day" half reads
+  `fleet_activations` (0004) and belongs to agent-resume and the planner.
+- P2: quotas are read for the platform account only; connections would need
+  `servicequotas:GetServiceQuota` in the connection template. Stopped
+  platform hosts hold no quota in `QuotaRooms`.
+- `terminate` reads the host's Spot request by instance id, so Retire's
+  termination of a Spot reserve also cancels the request first without
+  changing retirement.go.
 
 ## Evidence
 
+- `go test -race ./internal/compute ./cmd/scheduler` and the api,
+  hostsession, scheduling, execution and database owner tests pass on 0003.
+- `./check.sh` passes; `terraform validate` (1.16.4) passes on a copy of
+  the deployment module.
+- `acceptance/neki/check.sh`: 662 checked, 0 router failures. The new
+  queries' ordinary errors are check constraints on dummy values.
+- `/tmp/nekicompat/check-neki.sh .`: the only rejections are 42703/42P01,
+  the columns and tables 0003 adds that prod does not have yet.
+
 ## Gaps and unverified boundaries
+
+- Real EC2 in `default-test` did not run. The operator role
+  (`lazycloud-default-test-operator`, account 534742592531) denies
+  `ec2:DescribeSubnets`, `ssm:GetParameters` (RunInstances with the SSM
+  image), `ec2:DescribeSpotInstanceRequests`, `ec2:CancelSpotInstanceRequests`,
+  `ec2:DescribeSpotPriceHistory`, `ec2:GetConsoleOutput` and
+  `servicequotas:GetServiceQuota`. No instance or request was created.
+  `TestRealEC2ReservesHibernateStopStartAndRetire` is ready for when the
+  role allows them. Unmeasured: hibernate, stop and start durations;
+  whether EC2 accepts `InstanceInitiatedShutdownBehavior=terminate` with
+  hibernation and with persistent Spot; whether stock AL2023 hibernates;
+  whether a relaunched persistent instance carries the fleet tag (the
+  tag-scoped TerminateInstances needs it); the quota codes.
+- The node image recipe was not run on an instance.
+- `nominalMemory`, `spotTypes` and `typeVCPUs` read today's `catalog()`;
+  they move to the policy packet's catalog when the planner wires it.
+- A `preparing` host whose agent never answers stays `preparing`; the
+  session or planner must bound it.
 
 ## Verification
 
