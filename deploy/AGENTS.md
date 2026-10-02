@@ -1,6 +1,6 @@
 # Deployment
 
-- tasks/deploy.md describes the production deployment, what each setting
+- deploy/README.md describes the production deployment, what each setting
   comes from and the bring-up runbook. Keep it current with changes here.
 - One way to do each thing: Terraform owns infrastructure and the chart's
   infrastructure values, the chart owns runtime settings and secret
