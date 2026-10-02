@@ -624,9 +624,10 @@ func (ps *fleetPass) settleLight(hosts []FleetHost, plan FleetPlan, chosen []Fle
 	}
 }
 
-// publish writes each platform market's row where it changed: its pressure
-// and consolidation always, its plan on a reserve pass or for a market
-// without one.
+// publish writes each platform market's row where it changed: its plan on
+// a reserve pass, its pressure and consolidation on every pass. A market
+// new since the last reserve pass waits for the next one, so the latest
+// generated_at stays the last reserve pass.
 func (ps *fleetPass) publish(plan FleetPlan, chosen []FleetAction, pressure map[string]*time.Time, due bool) error {
 	for _, mp := range plan.Markets {
 		key := mp.Market.String()
@@ -636,7 +637,10 @@ func (ps *fleetPass) publish(plan FleetPlan, chosen []FleetAction, pressure map[
 			Market: key, PressureSince: pressure[key], ConsolidatingHost: (*uuid.UUID)(rec.ConsolidatingHost),
 			ConsolidationStartedAt: rec.ConsolidationStarted, ConsolidationCooldownUntil: rec.CooldownUntil,
 		}
-		if due || !has {
+		if !due && !has {
+			continue
+		}
+		if due {
 			growth := slices.DeleteFunc(slices.Clone(chosen), func(a FleetAction) bool { return a.Market != mp.Market })
 			published := publishedMarket(mp, growth)
 			raw, err := json.Marshal(published)

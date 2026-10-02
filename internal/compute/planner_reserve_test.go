@@ -185,6 +185,11 @@ func TestRetirementWaitsForTheReservePass(t *testing.T) {
 	if r := planCapacity(t, o); r.Returned != 0 || r.Drained != 0 || r.Requested != 0 {
 		t.Fatalf("pass between reserve passes %+v, want nothing retired or bought", r)
 	}
+	// Nor does it publish a market the last reserve pass did not, which
+	// would move the reserve cadence.
+	if n := scan[int](t, o.pool, "select count(*) from fleet_markets"); n != 1 {
+		t.Fatalf("%d published markets after a pass between reserve passes, want the one published before", n)
+	}
 	staleMarkets(t, o)
 	if r := plan(t, o); !r.Published || r.Returned != 1 {
 		t.Fatalf("reserve pass %+v, want the plan published and one host returned", r)
