@@ -34,21 +34,29 @@ type Links struct {
 	Key []byte
 }
 
-// link is what a link names: one object, the response headers its reads
-// get, and when the link ends.
+// link is what a link names: one version of one object, the response
+// headers its reads get, and when the link ends. ETag is the object's when
+// the link was made, empty when nothing was there, so a link never serves
+// what is written at its key later.
 type link struct {
 	Bucket      string `json:"b"`
 	Key         string `json:"k"`
+	ETag        string `json:"v"`
 	ContentType string `json:"t,omitempty"`
 	Disposition string `json:"d,omitempty"`
 	Expires     int64  `json:"e"`
 }
 
-// linkURL returns the link for l.
-func (s *Storage) linkURL(l link) (string, error) {
+// linkURL returns the link for l, bound to the object's current version.
+func (s *Storage) linkURL(ctx context.Context, l link) (string, error) {
 	if s.config.Links.URL == "" || len(s.config.Links.Key) == 0 {
 		return "", errors.New("download links are not configured")
 	}
+	etag, err := s.objectETag(ctx, l.Bucket, l.Key)
+	if err != nil {
+		return "", err
+	}
+	l.ETag = etag
 	payload, err := json.Marshal(l)
 	if err != nil {
 		return "", fmt.Errorf("encode link: %w", err)
@@ -84,6 +92,15 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 	if left <= 0 {
 		return "", ErrNotFound
 	}
+	// The object must still be the one the link was made for. It could be
+	// replaced in the moments before the client follows the redirect.
+	etag, err := s.objectETag(ctx, l.Bucket, l.Key)
+	if err != nil {
+		return "", err
+	}
+	if etag == "" || etag != l.ETag {
+		return "", ErrNotFound
+	}
 	lifetime, err := s.signedLifetime(ctx, min(linkRedirect, left))
 	if err != nil {
 		return "", err
@@ -108,6 +125,19 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 		return "", fmt.Errorf("presign link get: %w", err)
 	}
 	return r.URL, nil
+}
+
+// objectETag is the ETag of bucket/key, or "" when nothing is there.
+func (s *Storage) objectETag(ctx context.Context, bucket, key string) (string, error) {
+	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	// HEAD has no body, so a missing bucket is NotFound too.
+	if isNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("head %s: %w", key, err)
+	}
+	return aws.ToString(head.ETag), nil
 }
 
 // signedLifetime is want, capped at how long the credentials that sign a

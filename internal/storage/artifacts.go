@@ -262,7 +262,7 @@ func (s *Storage) PresignArtifact(ctx context.Context, workspace identity.Worksp
 		disposition = "attachment"
 	}
 	expires := time.Now().Add(lifetime)
-	url, err := s.linkURL(link{
+	url, err := s.linkURL(ctx, link{
 		Bucket: s.bucket, Key: artifactKey(workspace, id), ContentType: row.ContentType,
 		Disposition: mime.FormatMediaType(disposition, map[string]string{"filename": row.Filename}), Expires: expires.Unix(),
 	})

@@ -66,4 +66,26 @@ func TestDownloadLinksLastTheirLifetimeAndOnlyTheirs(t *testing.T) {
 			t.Errorf("%s link: %v, want ErrNotFound", name, err)
 		}
 	}
+
+	// A link names the file it was made for, not whatever is at its path
+	// later; a link made before a file existed never serves one.
+	before, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{
+		Path: "b.txt", Method: apitypes.PresignVolumeFileRequestMethodGet,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RemoveVolumeFiles(ctx, f.ws, "data", "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	putFile(t, s, f, "a.txt", []byte("replaced"))
+	putFile(t, s, f, "b.txt", []byte("later"))
+	for name, url := range map[string]string{"replaced": long.Url, "made before the file": before.Url} {
+		if status, body, _ := get(t, url); status != http.StatusNotFound {
+			t.Errorf("%s: %d %q, want 404", name, status, body)
+		}
+	}
+	if status, body, _ := get(t, read(apitypes.PresignVolumeFileRequestMethodGet, nil).Url); status != http.StatusOK || string(body) != "replaced" {
+		t.Fatalf("a new link to the new file: %d %q", status, body)
+	}
 }

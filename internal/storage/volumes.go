@@ -438,7 +438,7 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 		if req.Download != nil && *req.Download {
 			l.Disposition = mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)})
 		}
-		if url, err = s.linkURL(l); err != nil {
+		if url, err = s.linkURL(ctx, l); err != nil {
 			return apitypes.PresignedUrl{}, err
 		}
 	case apitypes.PresignVolumeFileRequestMethodPut:
