@@ -273,7 +273,7 @@ Rollback after bring-up is Deploy with an earlier version.
   hosts, existing Secret); five settings that must refuse to render do;
   kubeconform 0.8.0 `-strict` on Kubernetes 1.36.0 with External Secrets,
   cert-manager and Argo CD schemas; the env check; terraform 1.16.4 fmt,
-  init with the committed locks and validate on all four roots; actionlint
+  init with the committed locks and validate on all three roots; actionlint
   1.7.12; shellcheck 0.11.0.
 - `docker buildx bake release` built server (192 MB, 110 MB of it the agent
   archive), scheduler (65 MB) and web (57 MB). The web image served `/`,
@@ -285,7 +285,14 @@ Rollback after bring-up is Deploy with an earlier version.
   `amazonlinux:2023` container. systemd, the module, the GPU driver and the
   console marker need a real bake.
 - `go test -race` for internal/compute, internal/images,
-  internal/hostsession and cmd/server.
+  internal/hostsession, internal/api, internal/database, internal/billing,
+  internal/edge, cmd/server and cmd/scheduler.
+- Read-only on 2026-10-01: `lazycloud-prod/operator` exists in us-east-1
+  and holds the seven properties the chart maps (names listed, no values
+  read out); the state bucket is versioned, encrypted and blocks public
+  access; EBS encryption by default is off in the four fleet regions, so
+  unencrypted images bake, and AMI public sharing is blocked there, which
+  per-account sharing does not need.
 
 Not run: any plan against real state, apply, destroy, cluster install, Argo
 sync, External Secrets projection, ECR push, workflow run, AMI bake, EC2
