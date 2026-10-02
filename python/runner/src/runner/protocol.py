@@ -31,7 +31,6 @@ from shared.tasks import TaskStatus
 from runner import routed_output
 from runner.handler_loading import load_handler
 from runner.hooks import hooks_from_frame, run_startup_hooks, run_task_hooks, startup_context
-from runner.http import serve_http
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
@@ -158,6 +157,10 @@ def serve(connection: Connection) -> int:
         return LOAD_FAILED_EXIT
     _flush_output()
     if load.http is not None:
+        # uvicorn and asyncio load only for HTTP workers; a function runner
+        # starts without them.
+        from runner.http import serve_http
+
         return serve_http(connection, handler, load.http)
     connection.send(Loaded(type="loaded"))
     attempt = _Attempts(handler, hooks, load.handler)

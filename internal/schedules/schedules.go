@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -64,8 +65,13 @@ func Apply(ctx context.Context, tx pgx.Tx, workload uuid.UUID, expression *strin
 	if err := q.ReplaceSchedule(ctx, ReplaceScheduleParams{WorkloadID: workload, Expression: *expression, NextFireAt: next}); err != nil {
 		return fmt.Errorf("replace schedule: %w", err)
 	}
-	return nil
+	// A quiet scheduler sleeps until the earliest occurrence it knew of.
+	return database.Notify(ctx, tx, Channel, workload.String())
 }
+
+// Channel wakes the scheduler when a schedule's next occurrence is set;
+// payload is the workload id.
+const Channel database.Channel = "lc_schedule"
 
 // Schedules runs due occurrences and reports schedule state.
 type Schedules struct {
@@ -258,4 +264,17 @@ func (s *Schedules) List(ctx context.Context, workspace identity.WorkspaceID, cu
 		}}
 	}
 	return out, next, nil
+}
+
+// NextFire reports when the earliest schedule fires next, and false when
+// there is none.
+func (s *Schedules) NextFire(ctx context.Context) (time.Time, bool, error) {
+	next, err := s.queries.NextFireAt(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("next schedule: %w", err)
+	}
+	if len(next) == 0 {
+		return time.Time{}, false, nil
+	}
+	return next[0], true, nil
 }

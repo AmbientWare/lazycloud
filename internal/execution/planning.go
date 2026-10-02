@@ -361,3 +361,14 @@ func logPlan(ctx context.Context, logger *slog.Logger, plan releasePlan) {
 		logger.InfoContext(ctx, "queued tasks cancelled", "release_id", release, "count", plan.cancelled)
 	}
 }
+
+// HasLiveWork reports whether a queued or running task or a live container
+// exists, the state that time alone can advance; without it the scheduler's
+// timed passes have nothing to do until a notification.
+func (e *Execution) HasLiveWork(ctx context.Context) (bool, error) {
+	live, err := e.queries.HasLiveWork(ctx)
+	if err != nil {
+		return false, fmt.Errorf("probe live work: %w", err)
+	}
+	return live, nil
+}

@@ -47,21 +47,21 @@ func newBillingLoops(pool, session *pgxpool.Pool, exec *execution.Execution, sto
 	return &billingLoops{billing: billing.NewBilling(pool, cfg, logger), execution: exec, storage: store, logger: logger}
 }
 
-func (b *billingLoops) start(ctx context.Context, group *errgroup.Group) {
+func (b *billingLoops) start(ctx context.Context, group *errgroup.Group, p *pace) {
 	group.Go(func() error {
-		return loop(ctx, meteringTick, nil, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: meteringTick}, nil, nil, func(ctx context.Context) bool {
 			b.meter(ctx)
 			return false
 		})
 	})
 	group.Go(func() error {
-		return loop(ctx, paymentsTick, nil, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: paymentsTick}, nil, nil, func(ctx context.Context) bool {
 			b.payments(ctx)
 			return false
 		})
 	})
 	group.Go(func() error {
-		return loop(ctx, retentionTick, nil, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: retentionTick}, nil, nil, func(ctx context.Context) bool {
 			b.retain(ctx)
 			return false
 		})

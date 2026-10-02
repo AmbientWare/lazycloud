@@ -59,6 +59,11 @@ for version in "${versions[@]}"; do
   find "$target" -path '*.dist-info/*' \( -name direct_url.json -o -name uv_cache.json \) -delete
   find "$target" -name __pycache__ -type d -prune -exec rm -rf {} +
   find "$target" -name '*.py[co]' -delete
+  # Containers mount the runtime read-only, so Python cannot cache bytecode
+  # and would compile every module on each start. Unchecked-hash bytecode
+  # holds no timestamps, so the same interpreter release builds the same bytes.
+  "$uv" run --quiet --no-project --python "$version" python -m compileall -q -j 0 \
+    --invalidation-mode unchecked-hash "$target" >/dev/null
 
   previous="$work/previous-$version"
   if [[ -e "$out/$version" ]]; then

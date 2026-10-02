@@ -169,6 +169,31 @@ func (q *Queries) LockDueSchedules(ctx context.Context, batchSize int32) ([]Lock
 	return items, nil
 }
 
+const nextFireAt = `-- name: NextFireAt :many
+select next_fire_at from schedules order by next_fire_at limit 1
+`
+
+// When the earliest schedule fires next; no row without schedules.
+func (q *Queries) NextFireAt(ctx context.Context) ([]time.Time, error) {
+	rows, err := q.db.Query(ctx, nextFireAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []time.Time
+	for rows.Next() {
+		var next_fire_at time.Time
+		if err := rows.Scan(&next_fire_at); err != nil {
+			return nil, err
+		}
+		items = append(items, next_fire_at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordOccurrence = `-- name: RecordOccurrence :exec
 update schedules
 set next_fire_at = $1,
