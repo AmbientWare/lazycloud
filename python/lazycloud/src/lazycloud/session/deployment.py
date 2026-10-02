@@ -285,9 +285,10 @@ class DeploymentClient:
         """Submit one task with these arguments to the deployment's active version."""
         client, workspace = self._session()
         selected = self.get(deployment) if isinstance(deployment, str) else deployment
+        parent = parent_task_id()
         request = SubmitTasksRequest(
             inputs=[task_input(args, kwargs or {}, workspace=workspace)],
-            parent_task_id=parent_task_id(),
+            **({"parent_task_id": parent} if parent is not None else {}),
         )
         response = client.submit_tasks(workspace, selected.app, selected.name, request)
         return DeploymentSubmission(Task(str(response.tasks[0].id), workspace, client))
