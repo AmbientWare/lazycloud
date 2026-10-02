@@ -3,12 +3,11 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.api import PodRole, Resources
-from shared.ssh import SSH_HOST_LIST_LIMIT
 from typer._click import Command, Context
 from typer.core import TyperGroup
 from typer.main import get_group
 
+from lazycloud._shared.ssh import SSH_HOST_LIST_LIMIT
 from lazycloud._terminal.cards import result_card
 from lazycloud.agent_harness import AgentHarness
 from lazycloud.cli.components.errors import ClientError
@@ -20,6 +19,7 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.cli.control import workloads
 from lazycloud.cli.ssh import AppOption, WorkspaceOption, ssh_connection
+from lazycloud.contracts.api import PodRole, Resources
 from lazycloud.session.agent_login import login_agent
 from lazycloud.session.ssh import run_ssh
 from lazycloud.terminal import humanize_bytes

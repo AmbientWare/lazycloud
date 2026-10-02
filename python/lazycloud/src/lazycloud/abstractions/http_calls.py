@@ -9,15 +9,15 @@ from urllib.parse import urlencode
 
 import httpx
 from pydantic import JsonValue, ValidationError
-from shared.api import WorkloadKind, WorkloadSpec
-from shared.autoscaling import Autoscaler
-from shared.callbacks import normalize_callback_url
-from shared.deployments import DeploymentKind
-from shared.gpu import gpu_preference
-from shared.image_building.python import python_minor_version
 
+from lazycloud._shared.autoscaling import Autoscaler
+from lazycloud._shared.callbacks import normalize_callback_url
+from lazycloud._shared.deployments import DeploymentKind
+from lazycloud._shared.gpu import gpu_preference
+from lazycloud._shared.image_building.python import python_minor_version
 from lazycloud.abstractions.metadata import lifecycle_hook_references
 from lazycloud.client_contracts import build_client_contract
+from lazycloud.contracts.api import WorkloadKind, WorkloadSpec
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.exceptions import SdkError

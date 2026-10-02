@@ -6,7 +6,9 @@ from collections.abc import Iterator
 from uuid import UUID
 
 import httpx
-from shared.api import (
+
+from lazycloud.clients.api import ApiClient, ApiConnectionError, _api_error, _path
+from lazycloud.contracts.api import (
     ContainerLogEntry,
     ContainerLogList,
     Domain,
@@ -18,8 +20,6 @@ from shared.api import (
     PreviewRequest,
     PreviewSync,
 )
-
-from lazycloud.clients.api import ApiClient, ApiConnectionError, _api_error, _path
 
 # The longest wait the API holds a preview read for a ready container.
 PREVIEW_WAIT_SECONDS = 60

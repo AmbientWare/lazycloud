@@ -52,7 +52,7 @@ start() {
   deploy/local/fetch-geesefs.sh
   # Rebuild the managed runtime whenever the Python it bundles changes; a stale
   # runtime silently lacks newer runner features.
-  digest=$(find python/shared/src python/lazycloud/src python/runner/src uv.lock -type f \
+  digest=$(find python/lazycloud/src python/runner/src uv.lock -type f \
     -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
   if [ ! -d "$state/runtime/3.12" ] || [ "$(cat "$state/runtime/.source-digest" 2>/dev/null)" != "$digest" ]; then
     deploy/local/build-runtime.sh "$state/runtime"

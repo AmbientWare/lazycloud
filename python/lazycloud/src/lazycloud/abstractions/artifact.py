@@ -12,17 +12,17 @@ from typing import BinaryIO, NamedTuple, Protocol
 from uuid import UUID
 
 from pydantic import JsonValue
-from shared.api import (
+
+from lazycloud._shared.app_identity import NAME
+from lazycloud._shared.task_context import current_task_id
+from lazycloud.clients.api import ApiConnectionError, ApiError
+from lazycloud.clients.storage import StorageClient, upload_file_parts
+from lazycloud.contracts.api import (
     CompleteArtifactRequest,
     CreateArtifactRequest,
     ErrorCode,
     PresignArtifactRequest,
 )
-from shared.app_identity import NAME
-from shared.task_context import current_task_id
-
-from lazycloud.clients.api import ApiConnectionError, ApiError
-from lazycloud.clients.storage import StorageClient, upload_file_parts
 from lazycloud.control import resolve_control_client_config, storage_client
 
 DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES = 1024 * 1024

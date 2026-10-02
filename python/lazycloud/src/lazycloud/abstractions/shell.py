@@ -4,11 +4,10 @@ import time
 from dataclasses import dataclass
 from uuid import UUID
 
-from shared.api import CreateInstanceRequest, ErrorCode
-
 from lazycloud.abstractions.workspace_sync import ContainerWorkspaceSyncer, sync_local_workspace
 from lazycloud.clients.api import ApiError
 from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, WorkloadsClient
+from lazycloud.contracts.api import CreateInstanceRequest, ErrorCode
 from lazycloud.control import ControlClientConfig, resolve_control_client_config, workloads_client
 from lazycloud.terminal_shell import InteractiveShell, ShellConnectionError
 

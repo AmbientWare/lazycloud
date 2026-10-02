@@ -19,8 +19,8 @@ from lazycloud._examples.sandboxed_coding_agent.project.sandboxed_coding_agent.a
     validate_patch_path,
     validate_patch_plan,
 )
-from shared.api import Sandbox as SandboxRow
-from shared.api import SandboxStatus
+from lazycloud.contracts.api import Sandbox as SandboxRow
+from lazycloud.contracts.api import SandboxStatus
 
 from lazycloud import Sandbox, SandboxProcessResponse
 

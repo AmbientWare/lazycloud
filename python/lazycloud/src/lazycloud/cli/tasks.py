@@ -6,7 +6,6 @@ from uuid import UUID
 
 import typer
 from pydantic import JsonValue
-from shared.api import Task as TaskView
 
 from lazycloud._terminal.cards import empty_state, notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
@@ -23,6 +22,7 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.cli.components.results import emit_python_result
 from lazycloud.cli.control import api_session
+from lazycloud.contracts.api import Task as TaskView
 from lazycloud.session.task import TERMINAL_STATUSES, Task, decode_payload
 
 task_app = typer.Typer(help="Inspect and manage tasks.")

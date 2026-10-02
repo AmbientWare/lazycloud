@@ -15,7 +15,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from shared.lifecycle import (
+from lazycloud._shared.lifecycle import (
     LifecycleHookName,
     LifecycleHooks,
     LifecycleStartupContext,

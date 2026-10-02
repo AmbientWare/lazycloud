@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.api import Domain as CustomDomainResponse
-from shared.api import DomainPhase as CustomDomainPhase
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.streams import console
@@ -17,6 +15,8 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.endpoints import get_domain, list_domains, register_domain, remove_domain
+from lazycloud.contracts.api import Domain as CustomDomainResponse
+from lazycloud.contracts.api import DomainPhase as CustomDomainPhase
 from lazycloud.control import api_client, resolve_control_client_config
 
 domain_app = typer.Typer(help="Manage the domains this workspace can serve from.")

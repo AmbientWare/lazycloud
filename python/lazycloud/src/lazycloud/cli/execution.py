@@ -6,12 +6,6 @@ from typing import Annotated, Any, Protocol, cast, runtime_checkable
 
 import typer
 from pydantic import JsonValue
-from shared.api import (
-    Deployment,
-    DeploymentPlan,
-    PodKind,
-    Release,
-)
 
 from lazycloud._invocation import prepare_arguments
 from lazycloud._terminal.cards import notice_card, result_card
@@ -42,6 +36,12 @@ from lazycloud.cli.handler_workflows import (
     load_handler_object,
 )
 from lazycloud.clients.api import ApiClient
+from lazycloud.contracts.api import (
+    Deployment,
+    DeploymentPlan,
+    PodKind,
+    Release,
+)
 from lazycloud.control import (
     api_client,
     control_workspace_scope,

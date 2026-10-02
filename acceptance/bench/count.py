@@ -70,9 +70,10 @@ REF = [
 ]
 NEW = [
     ("web/", "web"),
+    ("python/lazycloud/src/lazycloud/_shared/", "shared-contracts"),
+    ("python/lazycloud/src/lazycloud/contracts/", "shared-contracts"),
     ("python/lazycloud/", "sdk-cli"),
     ("python/runner/", "runner"),
-    ("python/shared/", "shared-contracts"),
     ("contracts/", "contracts-source"),
     ("internal/api/", "api-transport"),
     ("internal/apitypes/", "api-transport"),

@@ -18,7 +18,8 @@ from importlib import metadata
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
-from shared.enums import StringEnum
+
+from lazycloud._shared.enums import StringEnum
 
 DISTRIBUTION = "lazycloud-client"
 PYPI_RELEASE_URL = f"https://pypi.org/pypi/{DISTRIBUTION}/json"

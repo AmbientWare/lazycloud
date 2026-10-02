@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 dependencies = [
     "cloudpickle>=3,<4",
     "httpx>=0.28,<1",
-    "lazycloud-shared==0.1.0",
+    "packaging>=24,<27",
     "pathspec>=0.12,<1",
     "pillow>=11.3,<13",
     "poetry-core>=2.2,<3",

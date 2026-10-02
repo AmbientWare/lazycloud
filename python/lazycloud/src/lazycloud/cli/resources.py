@@ -9,19 +9,6 @@ from uuid import UUID
 
 import typer
 from pydantic import TypeAdapter
-from shared.api import (
-    AwsConnection,
-    AwsConnectionPhase,
-    AwsConnectionRequest,
-    AwsNetwork,
-    AwsReconnectRequest,
-    ComputeInstancePage,
-    ComputeWorkloadPage,
-    Container,
-    MachineJoinRequest,
-    MachineUpdate,
-    StopReason,
-)
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import duration
@@ -40,6 +27,19 @@ from lazycloud.cli.control import api_session
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
 from lazycloud.clients.aws import create_connection_stack
 from lazycloud.clients.compute import ComputeApi
+from lazycloud.contracts.api import (
+    AwsConnection,
+    AwsConnectionPhase,
+    AwsConnectionRequest,
+    AwsNetwork,
+    AwsReconnectRequest,
+    ComputeInstancePage,
+    ComputeWorkloadPage,
+    Container,
+    MachineJoinRequest,
+    MachineUpdate,
+    StopReason,
+)
 from lazycloud.control import (
     api_client,
     require_workspace,

@@ -6,9 +6,9 @@ from typing import Any
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
-from shared.callables import bind_arguments, prepare_callable_arguments
-from shared.function_payloads import FunctionPayloadEncoding
 
+from lazycloud._shared.callables import bind_arguments, prepare_callable_arguments
+from lazycloud._shared.function_payloads import FunctionPayloadEncoding
 from lazycloud.abstractions.metadata import SchemaInput, schema_metadata
 from lazycloud.schema import OutputValidationError, Schema, ValidationError
 

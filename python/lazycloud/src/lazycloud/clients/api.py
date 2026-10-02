@@ -11,7 +11,14 @@ from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, ValidationError
-from shared.api import (
+
+from lazycloud._shared.client_version import (
+    RECOMMENDED_CLIENT_VERSION_HEADER,
+    client_version,
+    report_client_version,
+)
+from lazycloud._shared.task_context import current_task_id
+from lazycloud.contracts.api import (
     App,
     AppPage,
     Container,
@@ -62,13 +69,6 @@ from shared.api import (
     WorkspaceList,
     WorkspaceRequest,
 )
-from shared.client_version import (
-    RECOMMENDED_CLIENT_VERSION_HEADER,
-    client_version,
-    report_client_version,
-)
-from shared.task_context import current_task_id
-
 from lazycloud.exceptions import SdkError
 
 ModelT = TypeVar("ModelT", bound=BaseModel)

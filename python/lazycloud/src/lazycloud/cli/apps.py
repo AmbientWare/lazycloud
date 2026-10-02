@@ -5,7 +5,6 @@ from uuid import UUID
 
 import typer
 from pydantic import JsonValue
-from shared.api import App, LiveAppState
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
@@ -14,6 +13,7 @@ from lazycloud.cli.app_export import app_export
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.control import api_session
 from lazycloud.clients.api import ApiClient
+from lazycloud.contracts.api import App, LiveAppState
 
 app_app = typer.Typer(help="Manage deployed applications.")
 app_app.command("export", help="Generate a typed Python package for an app.")(app_export)

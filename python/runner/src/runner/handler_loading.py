@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from shared.env import importing_user_code
+from lazycloud._shared.env import importing_user_code
 
 
 def load_handler(reference: str) -> Callable[..., Any]:

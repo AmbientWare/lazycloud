@@ -5,8 +5,8 @@ from copy import deepcopy
 from typing import Annotated, Protocol
 
 import typer
-from shared.client_version import observe_client_versions, release_is_newer
 
+from lazycloud._shared.client_version import observe_client_versions, release_is_newer
 from lazycloud._terminal.streams import error_console, json_output_active, set_json_output
 from lazycloud.cli.apps import app_app
 from lazycloud.cli.artifacts import artifact_app

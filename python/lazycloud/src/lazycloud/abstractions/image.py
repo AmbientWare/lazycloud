@@ -15,7 +15,31 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from shared.api import (
+from typing_extensions import Self
+
+from lazycloud._shared.image_building import (
+    fingerprint_build_context,
+    fingerprint_files,
+    load_requirements_file,
+    sanitize_python_packages,
+)
+from lazycloud._shared.image_building.authoring import (
+    PROJECT_BUILD_STEP_KINDS,
+    ImageBuildStep,
+    ImageBuildStepKind,
+    ImageSpec,
+    LinuxArchitecture,
+)
+from lazycloud._shared.image_building.credentials import (
+    ImageCredentialEnvVar,
+    ImageCredentialInput,
+    credential_key_names,
+    dedupe_names,
+    resolve_registry_credentials,
+)
+from lazycloud._shared.image_building.python import normalize_python_version
+from lazycloud.clients.api import ApiClient, ApiError, is_transient
+from lazycloud.contracts.api import (
     ErrorCode,
     ImageBuild,
     ImageBuildLogEntry,
@@ -24,30 +48,6 @@ from shared.api import (
     ImageDefinition,
     ImageStepKind,
 )
-from shared.image_building import (
-    fingerprint_build_context,
-    fingerprint_files,
-    load_requirements_file,
-    sanitize_python_packages,
-)
-from shared.image_building.authoring import (
-    PROJECT_BUILD_STEP_KINDS,
-    ImageBuildStep,
-    ImageBuildStepKind,
-    ImageSpec,
-    LinuxArchitecture,
-)
-from shared.image_building.credentials import (
-    ImageCredentialEnvVar,
-    ImageCredentialInput,
-    credential_key_names,
-    dedupe_names,
-    resolve_registry_credentials,
-)
-from shared.image_building.python import normalize_python_version
-from typing_extensions import Self
-
-from lazycloud.clients.api import ApiClient, ApiError, is_transient
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.session.task import retry_backoff, retry_budget_spent

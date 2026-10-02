@@ -8,7 +8,6 @@ from typing import Annotated
 from uuid import UUID
 
 import typer
-from shared.api import LogEntry
 
 from lazycloud._terminal.cards import empty_state
 from lazycloud._terminal.streams import console
@@ -19,6 +18,7 @@ from lazycloud.cli.components.output import (
     write_stream,
 )
 from lazycloud.cli.control import api_session
+from lazycloud.contracts.api import LogEntry
 from lazycloud.session.deployment import resolve_deployment
 from lazycloud.session.task import follow_log_stream
 

@@ -21,14 +21,14 @@ import traceback
 from collections.abc import Callable
 from typing import Annotated, Any
 
+from lazycloud._shared.errors import InvalidInputError
+from lazycloud._shared.function_display import build_function_result_display
+from lazycloud._shared.function_payloads import FunctionResultImageDisplay
+from lazycloud._shared.lifecycle import LifecycleHookName, LifecycleHooks, LifecycleTaskContext
+from lazycloud._shared.serialization import to_json_value
+from lazycloud._shared.task_context import task_context
+from lazycloud._shared.tasks import TaskStatus
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
-from shared.errors import InvalidInputError
-from shared.function_display import build_function_result_display
-from shared.function_payloads import FunctionResultImageDisplay
-from shared.lifecycle import LifecycleHookName, LifecycleHooks, LifecycleTaskContext
-from shared.serialization import to_json_value
-from shared.task_context import task_context
-from shared.tasks import TaskStatus
 
 from runner import routed_output
 from runner.handler_loading import load_handler

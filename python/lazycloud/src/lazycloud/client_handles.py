@@ -13,20 +13,20 @@ from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-from shared.api import (
+from typing_extensions import assert_never
+
+from lazycloud._shared.enums import StringEnum
+from lazycloud._shared.http.client_manifests import ClientContract
+from lazycloud._shared.serialization import to_json_value
+from lazycloud.abstractions.http_calls import EndpointResponse, request_timeout, send_request
+from lazycloud.clients.api import ApiClient, ApiError
+from lazycloud.contracts.api import (
     Encoding,
     ErrorCode,
     SubmitTasksRequest,
     TaskInput,
     TaskStatus,
 )
-from shared.enums import StringEnum
-from shared.http.client_manifests import ClientContract
-from shared.serialization import to_json_value
-from typing_extensions import assert_never
-
-from lazycloud.abstractions.http_calls import EndpointResponse, request_timeout, send_request
-from lazycloud.clients.api import ApiClient, ApiError
 from lazycloud.control import api_client, resolve_control_client_config
 from lazycloud.exceptions import FunctionNotDeployedError, SdkError
 from lazycloud.json_contracts import JsonValue

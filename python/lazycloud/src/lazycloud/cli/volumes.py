@@ -14,8 +14,8 @@ from lazycloud.abstractions.volume import Volume, VolumeOperationError, VolumePa
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import workspace_storage
+from lazycloud.contracts import api
 from lazycloud.terminal import humanize_bytes
-from shared import api
 
 VOLUME_SCHEME = "lazycloud://"
 

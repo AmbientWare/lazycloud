@@ -22,11 +22,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_hex
 
-from shared.api import PodRole
-from shared.ssh import SSH_LOGIN_USER, ssh_host_label
-
+from lazycloud._shared.ssh import SSH_LOGIN_USER, ssh_host_label
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.config import settings
+from lazycloud.contracts.api import PodRole
 
 SSH_KEEPALIVE_INTERVAL_SECONDS = 30
 _PRIVATE_FILE_MODE = 0o600

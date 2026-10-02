@@ -21,8 +21,10 @@ from typing import (
 )
 
 from pydantic import JsonValue
-from shared.autoscaling import Autoscaler
-from shared.deployment_records import (
+
+from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
+from lazycloud._shared.autoscaling import Autoscaler
+from lazycloud._shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
@@ -33,14 +35,12 @@ from shared.deployment_records import (
     Resources,
     VolumeMount,
 )
-from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
-from shared.function_payloads import FunctionPayloadEncoding
-from shared.gpu import GpuInput, gpu_preference
-from shared.placement import ProductRegion
-from shared.serialization import to_json_value
-from shared.tasks import RetryPolicy, TaskPolicy
-
-from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
+from lazycloud._shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
+from lazycloud._shared.function_payloads import FunctionPayloadEncoding
+from lazycloud._shared.gpu import GpuInput, gpu_preference
+from lazycloud._shared.placement import ProductRegion
+from lazycloud._shared.serialization import to_json_value
+from lazycloud._shared.tasks import RetryPolicy, TaskPolicy
 from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.abstractions.http_calls import (
     EndpointResponse,
@@ -74,10 +74,9 @@ from lazycloud.references import dotted_reference
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
-    from shared.api import Deployment, Preview, WorkloadSpec
-
     from lazycloud.abstractions.image import ImageBuildResult
     from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.contracts.api import Deployment, Preview, WorkloadSpec
 
 P = ParamSpec("P")
 R = TypeVar("R")

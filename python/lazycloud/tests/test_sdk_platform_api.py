@@ -22,6 +22,7 @@ from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.main import build_public_cli, start
 from lazycloud.clients.api import ApiError
 from lazycloud.config import get_profile, reset_settings_cache
+from lazycloud.contracts.api import TaskPendingReason, TaskStatus
 from lazycloud.exceptions import (
     FunctionNotDeployedError,
     RemoteTaskError,
@@ -30,7 +31,6 @@ from lazycloud.exceptions import (
 from lazycloud.session.deployment import DeploymentOperationError
 from lazycloud.terminal import Terminal, output
 from lazycloud.values import cloudpickle_bytes
-from shared.api import TaskPendingReason, TaskStatus
 from typer.testing import CliRunner
 
 import lazycloud
@@ -292,7 +292,7 @@ def test_deploy_maps_workload_runtime_options(
 
 RETRY_ON = """\
 import lazycloud
-from shared.tasks import RetryPolicy, TaskStatus
+from lazycloud._shared.tasks import RetryPolicy, TaskStatus
 
 app = lazycloud.App("reports")
 

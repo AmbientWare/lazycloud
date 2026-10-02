@@ -5,10 +5,10 @@ from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import JsonValue
-from shared.autoscaling import Autoscaler
-from shared.lifecycle import LifecycleHooks
-from shared.tasks import RetryPolicy, TaskPolicy, normalize_retry_policy
 
+from lazycloud._shared.autoscaling import Autoscaler
+from lazycloud._shared.lifecycle import LifecycleHooks
+from lazycloud._shared.tasks import RetryPolicy, TaskPolicy, normalize_retry_policy
 from lazycloud.references import dotted_reference
 
 

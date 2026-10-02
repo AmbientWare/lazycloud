@@ -11,7 +11,8 @@ from enum import Enum
 
 from rich.style import Style
 from rich.text import Text
-from shared.api import DeploymentPlanAction
+
+from lazycloud.contracts.api import DeploymentPlanAction
 
 SUCCESS = Style(color="green")
 ERROR = Style(color="red")

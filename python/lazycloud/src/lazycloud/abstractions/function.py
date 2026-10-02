@@ -21,19 +21,12 @@ from typing import (
 from uuid import UUID
 
 from pydantic import ValidationError
-from shared.api import (
-    Encoding,
-    ErrorCode,
-    LogEntry,
-    Stream,
-    SubmitTasksRequest,
-    TaskInput,
-    TaskStatus,
-    WorkloadSpec,
-)
-from shared.autoscaling import Autoscaler
-from shared.callbacks import normalize_callback_url
-from shared.deployment_records import (
+
+from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
+from lazycloud._shared import tasks as policies
+from lazycloud._shared.autoscaling import Autoscaler
+from lazycloud._shared.callbacks import normalize_callback_url
+from lazycloud._shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
@@ -47,17 +40,15 @@ from shared.deployment_records import (
     Resources,
     VolumeMount,
 )
-from shared.deployments import DeploymentKind
-from shared.function_payloads import FunctionPayloadEncoding
-from shared.gpu import GpuInput, gpu_preference
-from shared.image_building.python import python_minor_version
-from shared.lifecycle import LifecycleHooks
-from shared.placement import ProductRegion
-from shared.resources import parse_memory_mib
-from shared.serialization import to_json_value
-from shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
-
-from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
+from lazycloud._shared.deployments import DeploymentKind
+from lazycloud._shared.function_payloads import FunctionPayloadEncoding
+from lazycloud._shared.gpu import GpuInput, gpu_preference
+from lazycloud._shared.image_building.python import python_minor_version
+from lazycloud._shared.lifecycle import LifecycleHooks
+from lazycloud._shared.placement import ProductRegion
+from lazycloud._shared.resources import parse_memory_mib
+from lazycloud._shared.serialization import to_json_value
+from lazycloud._shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
 from lazycloud._terminal.formatting import short_id
 from lazycloud.abstractions.image import Image, ImageBuildResult
 from lazycloud.abstractions.metadata import (
@@ -77,6 +68,16 @@ from lazycloud.client_contracts import (
     schema_from_contract_return,
 )
 from lazycloud.clients.api import ApiClient, ApiError, is_transient
+from lazycloud.contracts.api import (
+    Encoding,
+    ErrorCode,
+    LogEntry,
+    Stream,
+    SubmitTasksRequest,
+    TaskInput,
+    TaskStatus,
+    WorkloadSpec,
+)
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.exceptions import (
@@ -89,12 +90,10 @@ from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
 from lazycloud.session.task import FunctionCall, Task, parent_task_id, task_input
 from lazycloud.terminal import Terminal, TerminalStep
-from shared import tasks as policies
 
 if TYPE_CHECKING:
-    from shared.api import Deployment, Preview
-
     from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.contracts.api import Deployment, Preview
 
 
 # Inputs per submit request; the API rejects larger batches.

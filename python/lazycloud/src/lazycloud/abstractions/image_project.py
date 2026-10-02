@@ -14,14 +14,14 @@ from poetry.core.constraints.version import (
     parse_constraint,
 )
 from pydantic import BaseModel, ConfigDict, Field
-from shared.image_building.authoring import (
+
+from lazycloud._shared.image_building.authoring import (
     ImageBuildStep,
     ImageBuildStepKind,
     ImageSpec,
     PythonVersion,
 )
-from shared.image_building.python import normalize_python_version
-
+from lazycloud._shared.image_building.python import normalize_python_version
 from lazycloud.source_sync import collect_source_files
 
 

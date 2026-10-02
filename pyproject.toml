@@ -8,7 +8,6 @@ requires-python = ">=3.10"
 dev = [
     "lazycloud-client==0.1.0",
     "runner",
-    "lazycloud-shared==0.1.0",
     "pytest>=9,<10",
     "ruff>=0.6",
     "basedpyright>=1.39.9",
@@ -26,13 +25,11 @@ default-groups = []
 members = [
     "python/lazycloud",
     "python/runner",
-    "python/shared",
 ]
 
 [tool.uv.sources]
 lazycloud-client = { workspace = true }
 runner = { workspace = true }
-lazycloud-shared = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]
@@ -49,7 +46,6 @@ target-version = "py312"
 "python/runner/**/*.py" = "py310"
 "python/lazycloud/**/*.py" = "py310"
 "python/lazycloud/src/lazycloud/_examples/**/*.py" = "py312"
-"python/shared/**/*.py" = "py310"
 "**/test_*_python_compatibility.py" = "py310"
 
 [tool.ruff.lint]
@@ -59,7 +55,7 @@ ignore = ["B008"]
 # datamodel-codegen formats its output but does not sort imports. Ruff does
 # not see APIModel as a pydantic model, whose list defaults are copied.
 [tool.ruff.lint.per-file-ignores]
-"python/shared/src/shared/api.py" = ["I001", "RUF012"]
+"python/lazycloud/src/lazycloud/contracts/api.py" = ["I001", "RUF012"]
 "python/runner/src/runner/protocol_models.py" = ["I001"]
 
 # Pydantic bindings for the language-neutral contracts. Regenerate with
@@ -84,8 +80,8 @@ formatters = ["ruff-format"]
 
 [tool.datamodel-codegen.profiles.api]
 input = "contracts/openapi.yaml"
-output = "python/shared/src/shared/api.py"
-base-class = "shared.contracts.APIModel"
+output = "python/lazycloud/src/lazycloud/contracts/api.py"
+base-class = "lazycloud.contracts.APIModel"
 
 [tool.datamodel-codegen.profiles.runner]
 input = "contracts/runner.yaml"

@@ -5,10 +5,9 @@ from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from shared.api import ErrorCode, SetMapEntryRequest
-
 from lazycloud.clients.api import ApiError
 from lazycloud.clients.storage import StorageClient
+from lazycloud.contracts.api import ErrorCode, SetMapEntryRequest
 from lazycloud.control import (
     ResourceControlBinding,
     storage_client,

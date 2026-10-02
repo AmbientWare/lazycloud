@@ -24,10 +24,10 @@ from typing import Any, Protocol, TypeGuard, cast
 from urllib.parse import parse_qs
 
 import uvicorn
+from lazycloud._shared.errors import InvalidInputError
+from lazycloud._shared.function_payloads import FunctionPayloadEncoding
+from lazycloud._shared.serialization import to_json_value
 from pydantic import JsonValue, TypeAdapter
-from shared.errors import InvalidInputError
-from shared.function_payloads import FunctionPayloadEncoding
-from shared.serialization import to_json_value
 
 from runner import routed_output
 from runner.invocation import call_handler

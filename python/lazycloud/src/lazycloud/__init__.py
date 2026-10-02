@@ -8,13 +8,12 @@ from typing import TYPE_CHECKING
 from lazycloud.progress import progress
 
 if TYPE_CHECKING:
-    from shared.autoscaling import Autoscaler
-    from shared.gpu import GpuType
-    from shared.image_building.authoring import LinuxArchitecture, PythonVersion
-    from shared.task_context import current_root_task_id, current_task_id
-    from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
-
     from lazycloud import env, schema
+    from lazycloud._shared.autoscaling import Autoscaler
+    from lazycloud._shared.gpu import GpuType
+    from lazycloud._shared.image_building.authoring import LinuxArchitecture, PythonVersion
+    from lazycloud._shared.task_context import current_root_task_id, current_task_id
+    from lazycloud._shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
     from lazycloud.abstractions.app import App
     from lazycloud.abstractions.artifact import Artifact
     from lazycloud.abstractions.disk import Disk
@@ -43,11 +42,8 @@ if TYPE_CHECKING:
     from lazycloud.abstractions.secret import Secret
     from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
     from lazycloud.agent_harness import AgentHarness
-    from lazycloud.progress import (
-        PendingProgressCallback,
-        TaskPendingProgress,
-        TaskPendingReason,
-    )
+    from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
+    from lazycloud.progress import PendingProgressCallback
     from lazycloud.session.deployment import Deployment
     from lazycloud.session.task import FunctionCall, Task
     from lazycloud.terminal import output
@@ -61,29 +57,29 @@ def __getattr__(name: str):
 
             return FunctionCall
         case "Autoscaler":
-            from shared.autoscaling import Autoscaler
+            from lazycloud._shared.autoscaling import Autoscaler
 
             return Autoscaler
         case "GpuType":
-            from shared.gpu import GpuType
+            from lazycloud._shared.gpu import GpuType
 
             return GpuType
         case "LinuxArchitecture" | "PythonVersion":
-            from shared.image_building.authoring import LinuxArchitecture, PythonVersion
+            from lazycloud._shared.image_building.authoring import LinuxArchitecture, PythonVersion
 
             if name == "LinuxArchitecture":
                 return LinuxArchitecture
             if name == "PythonVersion":
                 return PythonVersion
         case "current_root_task_id" | "current_task_id":
-            from shared.task_context import current_root_task_id, current_task_id
+            from lazycloud._shared.task_context import current_root_task_id, current_task_id
 
             if name == "current_root_task_id":
                 return current_root_task_id
             if name == "current_task_id":
                 return current_task_id
         case "RetryBackoff" | "RetryPolicy" | "TaskPolicy":
-            from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
+            from lazycloud._shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
 
             if name == "RetryBackoff":
                 return RetryBackoff
@@ -207,15 +203,13 @@ def __getattr__(name: str):
             from lazycloud.agent_harness import AgentHarness
 
             return AgentHarness
-        case "PendingProgressCallback" | "TaskPendingProgress" | "TaskPendingReason":
-            from lazycloud.progress import (
-                PendingProgressCallback,
-                TaskPendingProgress,
-                TaskPendingReason,
-            )
+        case "PendingProgressCallback":
+            from lazycloud.progress import PendingProgressCallback
 
-            if name == "PendingProgressCallback":
-                return PendingProgressCallback
+            return PendingProgressCallback
+        case "TaskPendingProgress" | "TaskPendingReason":
+            from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
+
             if name == "TaskPendingProgress":
                 return TaskPendingProgress
             if name == "TaskPendingReason":

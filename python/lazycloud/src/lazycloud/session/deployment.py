@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from shared.api import Deployment as AppDeployment
-from shared.api import (
+from lazycloud._terminal.formatting import short_id
+from lazycloud.clients.api import ApiClient
+from lazycloud.contracts.api import Deployment as AppDeployment
+from lazycloud.contracts.api import (
     DeploymentPlanRequest,
     DeploymentRequest,
     Release,
@@ -29,9 +31,6 @@ from shared.api import (
     WorkloadKind,
     WorkloadSpec,
 )
-
-from lazycloud._terminal.formatting import short_id
-from lazycloud.clients.api import ApiClient
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import (
     AmbiguousDeploymentError,

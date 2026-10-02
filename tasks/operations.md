@@ -125,6 +125,27 @@ which forks websockets (16.1.1 below 3.11) and numpy.
 
 Images are linux/amd64 only, like the reference.
 
+## Python package
+
+`lazycloud-client` is the only published Python package. The former
+`lazycloud-shared` lives inside it: generated API models and their bases in
+`lazycloud.contracts`, the other contracts and helpers in `lazycloud._shared`.
+The runner depends on `lazycloud-client`. Neither home imports the rest of the
+SDK, and `lazycloud/__init__` no longer loads the API models, so the runner's
+imports stay as cheap as before.
+
+Import cost in the 3.12 managed runtime (bytecode precompiled, median of 21
+`-X importtime` runs, summed top-level cumulative):
+
+| Statement | Separate package | Folded |
+| --- | --- | --- |
+| `import runner.protocol` | 92.9 ms | 91.7 ms |
+| `import runner.protocol, lazycloud` | 158.3 ms | 94.8 ms |
+| `import runner.protocol, lazycloud.abstractions.app` | 224.1 ms | 222.7 ms |
+
+A user module that declares an app still loads the API models through the
+SDK abstractions, so container starts cost the same.
+
 ## Deployment
 
 The deploy packet (tasks/deploy.md) took the chart, Terraform and release

@@ -31,10 +31,10 @@ from lazycloud.abstractions.disk import DiskOperationError
 from lazycloud.abstractions.shell import Shell
 from lazycloud.cli.main import build_public_cli
 from lazycloud.clients.api import ApiError
+from lazycloud.contracts.api import ContainerState, ErrorCode
 from lazycloud.control import resolve_control_client_config, workloads_client
 from lazycloud.session.ssh import current_cli_command
 from lazycloud.terminal_shell import InteractiveShell
-from shared.api import ContainerState, ErrorCode
 from typer.testing import CliRunner, Result
 
 from lazycloud import Disk

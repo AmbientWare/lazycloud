@@ -12,7 +12,29 @@ from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, JsonValue, ValidationError
-from shared.api import (
+from typing_extensions import Never, Self
+
+from lazycloud._shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
+from lazycloud._shared.deployment_records import (
+    DEFAULT_DISK,
+    DEFAULT_WORKLOAD_PREEMPTIBLE,
+    CpuRequest,
+    DeploymentSpec,
+    MemoryRequest,
+    Resources,
+    VolumeMount,
+    request_and_limit,
+)
+from lazycloud._shared.deployments import DeploymentKind
+from lazycloud._shared.gpu import GpuInput, gpu_preference
+from lazycloud._shared.placement import ProductRegion
+from lazycloud.abstractions.image import Image
+from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
+from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.aio import to_thread
+from lazycloud.clients.api import ApiError
+from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECONDS, WorkloadsClient
+from lazycloud.contracts.api import (
     CommandItem,
     ContainerFile,
     ContainerLifecycle,
@@ -32,30 +54,8 @@ from shared.api import (
     StopReason,
     WorkloadSpec,
 )
-from shared.api import Sandbox as SandboxRow
-from shared.api import SandboxStats as SandboxStatsResponse
-from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
-from shared.deployment_records import (
-    DEFAULT_DISK,
-    DEFAULT_WORKLOAD_PREEMPTIBLE,
-    CpuRequest,
-    DeploymentSpec,
-    MemoryRequest,
-    Resources,
-    VolumeMount,
-    request_and_limit,
-)
-from shared.deployments import DeploymentKind
-from shared.gpu import GpuInput, gpu_preference
-from shared.placement import ProductRegion
-from typing_extensions import Never, Self
-
-from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
-from lazycloud.abstractions.volume import VolumeExport, volume_mounts
-from lazycloud.aio import to_thread
-from lazycloud.clients.api import ApiError
-from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECONDS, WorkloadsClient
+from lazycloud.contracts.api import Sandbox as SandboxRow
+from lazycloud.contracts.api import SandboxStats as SandboxStatsResponse
 from lazycloud.control import ControlClientConfigMixin, workloads_client
 from lazycloud.exceptions import SdkError, UnsupportedFeatureError
 from lazycloud.json_contracts import validate_json_object

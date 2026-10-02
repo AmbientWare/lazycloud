@@ -16,10 +16,10 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from shared.deployment_records import VolumeMount
-from shared.enums import StringEnum
-from shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
 
+from lazycloud._shared.deployment_records import VolumeMount
+from lazycloud._shared.enums import StringEnum
+from lazycloud._shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
 from lazycloud.clients.storage import (
     StorageClient,
     download_presigned,
@@ -27,8 +27,8 @@ from lazycloud.clients.storage import (
     put_presigned,
     upload_file_parts,
 )
+from lazycloud.contracts import api
 from lazycloud.control import ResourceControlBinding, storage_client
-from shared import api
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
 DEFAULT_MULTIPART_CHUNK_SIZE_BYTES = 5 * 1024 * 1024
