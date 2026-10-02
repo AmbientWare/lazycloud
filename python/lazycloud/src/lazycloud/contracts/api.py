@@ -1942,9 +1942,7 @@ class FleetNode(APIModel):
     containers: int
     ready: Annotated[
         bool,
-        Field(
-            description="Serving on the agent release the host should run, or a stopped reserve prepared for it."
-        ),
+        Field(description="Serving on its agent release, or a stopped reserve prepared for it."),
     ]
 
 

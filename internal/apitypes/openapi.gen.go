@@ -3505,7 +3505,7 @@ type FleetNode struct {
 	Preemptible bool              `json:"preemptible"`
 	Provider    FleetNodeProvider `json:"provider"`
 
-	// Ready Serving on the agent release the host should run, or a stopped reserve prepared for it.
+	// Ready Serving on its agent release, or a stopped reserve prepared for it.
 	Ready  bool   `json:"ready"`
 	Region string `json:"region"`
 

@@ -5417,7 +5417,7 @@ export interface components {
             capacity: components["schemas"]["FleetCapacity"];
             allocated: components["schemas"]["FleetCapacity"];
             containers: number;
-            /** @description Serving on the agent release the host should run, or a stopped reserve prepared for it. */
+            /** @description Serving on its agent release, or a stopped reserve prepared for it. */
             ready: boolean;
         };
         FleetNodePage: {
