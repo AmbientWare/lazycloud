@@ -109,13 +109,33 @@ func billingConfig(publicURL string) billing.Config {
 	}}
 }
 
+// credential is a flag value whose default comes from the environment and
+// never prints: -help shows each flag's default, and these hold passwords.
+type credential struct{ value *string }
+
+func (c credential) String() string { return "" }
+
+func (c credential) Set(v string) error {
+	*c.value = v
+	return nil
+}
+
+func credentialVar(fs *flag.FlagSet, p *string, name, key, usage string) {
+	*p = os.Getenv(key)
+	fs.Var(credential{p}, name, usage)
+}
+
 func databaseFlag(fs *flag.FlagSet) *string {
-	return fs.String("database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
+	var url string
+	credentialVar(fs, &url, "database-url", "LAZYCLOUD_DATABASE_URL", "PostgreSQL `URL` (LAZYCLOUD_DATABASE_URL)")
+	return &url
 }
 
 func sessionFlag(fs *flag.FlagSet) *string {
-	return fs.String("database-session-url", env("LAZYCLOUD_DATABASE_SESSION_URL", ""),
-		"direct PostgreSQL URL of connections that hold session state; empty uses -database-url (LAZYCLOUD_DATABASE_SESSION_URL)")
+	var url string
+	credentialVar(fs, &url, "database-session-url", "LAZYCLOUD_DATABASE_SESSION_URL",
+		"direct PostgreSQL `URL` of connections that hold session state; empty uses -database-url (LAZYCLOUD_DATABASE_SESSION_URL)")
+	return &url
 }
 
 func withPool(ctx context.Context, url string, fn func(*pgxpool.Pool) error) error {
@@ -161,7 +181,7 @@ type serveConfig struct {
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cfg serveConfig
-	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
+	credentialVar(fs, &cfg.databaseURL, "database-url", "LAZYCLOUD_DATABASE_URL", "PostgreSQL `URL` (LAZYCLOUD_DATABASE_URL)")
 	cfg.sessionURL = sessionFlag(fs)
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
