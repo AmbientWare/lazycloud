@@ -66,6 +66,28 @@ def ping(n: int = 0) -> Pong:
     return Pong(n=n)
 
 
+# Where the benchmark listens for per-request callbacks; unset in containers.
+CALLBACK_URL = os.environ.get("LCBENCH_CALLBACK_URL") or None
+
+
+@app.endpoint(
+    name="pingcb",
+    route="/pingcb",
+    methods=["POST"],
+    image=image,
+    machine=MACHINE,
+    cpu=0.25,
+    memory="256Mi",
+    concurrency=64,
+    keep_warm=1800,
+    max_pending_tasks=5000,
+    autoscaler=Autoscaler(max_containers=4, tasks_per_container=64),
+    callback_url=CALLBACK_URL,
+)
+def pingcb(n: int = 0) -> Pong:
+    return Pong(n=n)
+
+
 @app.endpoint(
     name="coldping",
     route="/coldping",

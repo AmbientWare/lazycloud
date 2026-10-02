@@ -16,6 +16,7 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -489,6 +490,95 @@ def endpoint_burst(n: str = "1000", rounds: str = "3") -> None:
     record("endpoint-burst", {"concurrency": int(n), "rounds": results})
 
 
+CALLBACK_PORT = 29999
+
+
+def endpoint_callback(n: str = "1000", concurrency: str = "100", wait: str = "180") -> None:
+    """Requests to an endpoint with callback_url, and the callback each one owes.
+
+    A local receiver records when each request's callback arrives, keyed by
+    the task_id the platform sends, which is the request's X-Request-Id.
+    """
+    import http.server
+    import socketserver
+
+    url = _urls()["pingcb"]
+    arrived: dict[str, list[float]] = {}
+    lock = threading.Lock()
+
+    class Hook(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = self.rfile.read(int(self.headers.get("content-length") or 0))
+            now = time.time()
+            try:
+                task = str(json.loads(body).get("task_id", ""))
+            except ValueError:
+                task = ""
+            with lock:
+                arrived.setdefault(task, []).append(now)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_: object) -> None:
+            return
+
+    class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    server = Server(("0.0.0.0", CALLBACK_PORT), Hook)  # noqa: S104
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    ended: dict[str, float] = {}
+    lat: list[float] = []
+    codes: dict[str, int] = {}
+
+    async def main() -> None:
+        limits = httpx.Limits(max_connections=int(concurrency) + 10, max_keepalive_connections=int(concurrency) + 10)
+        gate = asyncio.Semaphore(int(concurrency))
+        async with httpx.AsyncClient(timeout=300, headers=HEADERS, limits=limits) as client:
+
+            async def one(i: int, record: bool) -> None:
+                async with gate:
+                    t = time.perf_counter()
+                    try:
+                        r = await client.post(url, json={"n": i})
+                        code = str(r.status_code)
+                        request = r.headers.get("x-request-id", "")
+                    except httpx.HTTPError as exc:
+                        code, request = type(exc).__name__, ""
+                    if record:
+                        lat.append(time.perf_counter() - t)
+                        codes[code] = codes.get(code, 0) + 1
+                        if request:
+                            ended[request] = time.time()
+
+            await asyncio.gather(*(one(i, False) for i in range(20)))
+            start = time.perf_counter()
+            await asyncio.gather(*(one(i, True) for i in range(int(n))))
+            nonlocal_wall.append(time.perf_counter() - start)
+
+    nonlocal_wall: list[float] = []
+    asyncio.run(main())
+    deadline = time.time() + float(wait)
+    while time.time() < deadline:
+        with lock:
+            if all(r in arrived for r in ended):
+                break
+        time.sleep(0.2)
+    server.shutdown()
+    with lock:
+        delays = [arrived[r][0] - t for r, t in ended.items() if r in arrived]
+        missing = sum(1 for r in ended if r not in arrived)
+        duplicates = sum(len(v) - 1 for r, v in arrived.items() if r in ended)
+        stray = sum(len(v) for r, v in arrived.items() if r not in ended)
+    record("endpoint-callback", {
+        "requests": int(n), "concurrency": int(concurrency), "wall_s": round(nonlocal_wall[0], 2),
+        "latency": dist(lat), "codes": codes, "with_request_id": len(ended),
+        "callback_delay": dist(delays), "callbacks_missing": missing, "callbacks_duplicated": duplicates,
+        "callbacks_unmatched": stray,
+    })
+
+
 def idle(seconds: str = "120", label: str = "default") -> None:
     before = sample.snapshot(TARGET)
     time.sleep(float(seconds))
@@ -505,7 +595,7 @@ SCENARIOS = {
     "endpoint-warm": endpoint_warm,
     "endpoint-cold": endpoint_cold,
     "endpoint-sse": endpoint_sse,
-    "endpoint-burst": endpoint_burst,
+    "endpoint-burst": endpoint_burst, "endpoint-callback": endpoint_callback,
     "idle": idle,
 }
 

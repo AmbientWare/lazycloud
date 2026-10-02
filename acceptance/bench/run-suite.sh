@@ -71,7 +71,8 @@ for phase in $phases; do
       run endpoint-sse 50 1
       run endpoint-sse 200 20
       run endpoint-burst 1000 3
-      run endpoint-cold 5 ;;
+      run endpoint-cold 5
+      run endpoint-callback 1000 100 ;;
     maps)
       run map 200
       run map 2000
