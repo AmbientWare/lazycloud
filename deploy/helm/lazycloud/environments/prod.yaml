@@ -1,0 +1,16 @@
+# Reviewed product settings of lazycloud-prod. Infrastructure facts come
+# from Terraform through values-deployment.yaml on the prod branch; this
+# file holds what a person decides.
+config:
+  LAZYCLOUD_LOG_FORMAT: json
+  # Fleet limits (internal/compute/fleet_config.go). Code defaults: 20
+  # live hosts per owner, 5m idle before a host drains, no idle headroom.
+  LAZYCLOUD_FLEET_MAX_HOSTS: "20"
+  LAZYCLOUD_FLEET_IDLE_TIMEOUT: 5m
+  LAZYCLOUD_FLEET_HEADROOM: "0"
+  # AMIs the Node images workflow baked, per region: Amazon Linux 2023 with
+  # Docker, gVisor (runsc as Docker's runtime, --host-uds=all) and nbd.
+  # Platform and connected-account hosts launch only from these; a region
+  # missing here launches nothing. Commit the workflow's output here
+  # through a reviewed PR.
+  LAZYCLOUD_FLEET_IMAGES: '{"cpu": {}, "gpu": {}}'

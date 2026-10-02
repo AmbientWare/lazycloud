@@ -1,0 +1,48 @@
+{{/*
+The server image carries the agent release of its version under
+LAZYCLOUD_AGENT_DIST_DIR and serves it at /install/agent. Once every server
+pod runs this version, this Job records it as the release hosts install
+and update to, so no host is told to fetch an archive an old pod lacks.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: publish-agent-release
+  labels:
+    {{- include "lazycloud.labels" (list . "publish-agent-release") | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.labels" (list . "publish-agent-release") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: publish
+          image: {{ include "lazycloud.image" (list . "server") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - admin
+            - publish-agent-release
+            - -version={{ include "lazycloud.version" . }}
+            - -rollout={{ int .Values.agentRelease.rollout }}
+          env:
+            - name: LAZYCLOUD_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: LAZYCLOUD_DATABASE_URL
+          resources:
+            {{- toYaml .Values.agentRelease.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}

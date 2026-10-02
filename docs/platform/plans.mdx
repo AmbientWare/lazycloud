@@ -9,8 +9,8 @@ dashboard manages it under Settings, then Billing, and the
 
 ## What you pay for
 
-Compute bills per second while a container runs, including startup, model
-loading, and warm idle time. Volumes bill per GiB-month, and API responses and
+Compute bills per second from the moment a container is ready until it stops,
+including warm idle time; pulling its image and importing its code are free. Volumes bill per GiB-month, and API responses and
 internet egress are metered. A [disk](/concepts/disks#pricing) bills per
 GiB-month for what it stores, plus its declared size while a container holds
 it, and shows as one line. Direct downloads through signed object-storage
@@ -54,7 +54,7 @@ change with placement. Volume storage includes artifacts and prorates over a
 
 On a connected AWS account, AWS bills the machines and LazyCloud charges a
 management fee as a percentage of base compute rates. The
-[pricing catalog](https://lazycloud.dev/api/v1/pricing) has every published
+[pricing catalog](https://lazycloud.dev/v1/pricing) has every published
 rate and its effective date.
 
 ## Plans

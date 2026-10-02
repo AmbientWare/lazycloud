@@ -1,0 +1,52 @@
+{{/*
+Migrations run before the workloads change, while the previous release
+still serves, and a failure stops the sync before any pod is replaced.
+Migration files are additive and frozen once deployed, so old replicas keep
+working against the new schema during the rollout. Argo CD runs this as a
+Sync hook after the Secret's waves; plain Helm runs it as a pre-upgrade
+hook. The server also migrates at start; after this Job that is a no-op
+check under the same advisory lock.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  labels:
+    {{- include "lazycloud.labels" (list . "migrate") | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    helm.sh/hook: pre-install,pre-upgrade
+    # A Job's pod template is immutable, so each release replaces the last
+    # Job; a failed one stays for inspection until then.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.labels" (list . "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "lazycloud.image" (list . "server") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          env:
+            {{- range $key := .Values.migrations.secretKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: {{ $key }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}

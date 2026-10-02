@@ -1,0 +1,96 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - bodyclose
+    - contextcheck
+    - depguard
+    - errorlint
+    - exhaustive
+    - gochecknoglobals
+    - gochecknoinits
+    - gosec
+    - nilerr
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+    - wrapcheck
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: false
+    wrapcheck:
+      ignore-package-globs:
+        - github.com/AmbientWare/lazycloud/*
+      # The defaults, plus gRPC status errors: they are the transport's typed
+      # result and wrapping them would hide their code.
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        - .WithMessagef(
+        - .WithStack(
+        - google.golang.org/grpc/status.Error(
+        - google.golang.org/grpc/internal/status.Status).Err()
+    depguard:
+      rules:
+        # Host runtime code runs on customer and platform machines. It reaches
+        # the control plane only through the host protocol.
+        host-runtime:
+          files:
+            - "**/internal/agent/**"
+            - "**/internal/diskengine/**"
+            - "**/internal/supervisor/**"
+            - "**/cmd/agent/**"
+            - "**/cmd/supervisor/**"
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: host runtime has no database access
+            - pkg: github.com/AmbientWare/lazycloud/internal/database
+              desc: host runtime has no database access
+            - pkg: github.com/AmbientWare/lazycloud/internal/execution
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/scheduling
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/compute
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/control
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/identity
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/storage
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/hostsession
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/api$
+              desc: host runtime uses the host protocol
+            - pkg: github.com/AmbientWare/lazycloud/internal/edge
+              desc: host runtime uses the host protocol
+  exclusions:
+    generated: strict
+    # check.sh installs the web packages, one of which ships Go sources.
+    paths:
+      - web/node_modules
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - wrapcheck
+          - gochecknoglobals
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/AmbientWare/lazycloud

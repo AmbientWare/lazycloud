@@ -1,0 +1,7 @@
+apiVersion: v2
+name: lazycloud
+description: The LazyCloud server, scheduler, dashboard and public ingress, with database migrations before each sync.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.33.0-0"

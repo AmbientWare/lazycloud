@@ -31,9 +31,10 @@ Calls made inside LazyCloud containers are quiet unless wrapped in
 
 ## Lifecycle
 
-A task is `pending` until a container picks it up, then `running`. If an
-attempt fails and retries remain, the same task moves to `retry`. It ends
-as `complete`, `failed`, `timeout`, `cancelled`, or `expired`.
+A task is `queued` until a container picks it up, then `running`. If an
+attempt fails and retries remain, the same task is `queued` again until its
+retry delay passes. It ends as `succeeded`, `failed`, or `cancelled`; a task
+that ran past its timeout is `failed` with a `timeout` failure.
 
 ### Why a task is pending
 
@@ -98,4 +99,6 @@ command, and the dashboard's Tasks page shows the same history.
 
 Functions, endpoints, ASGI apps, and realtime handlers accept `callback_url`.
 LazyCloud calls that webhook with execution events as the task changes state,
-so another system can react without polling.
+so another system can react without polling. Endpoints and ASGI apps call it
+once per request after the response ends, with the request's status code and
+response size; `task_id` is the request's `X-Request-Id`.

@@ -1,0 +1,318 @@
+import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { ArrowUpRight, Loader2, Play } from "lucide-react";
+
+import { PanelError } from "@/components/shared/PanelError";
+import { ContentTransition } from "@/components/shared/ContentTransition";
+import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
+import { StatusChip } from "@/components/shared/StatusChip";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { Schemas } from "@/lib/api/client";
+import {
+  invokeFunction,
+  invokeFunctionTask,
+  invokeHttp,
+  type InvokeResult,
+} from "@/lib/api/invoke";
+import type { JsonValue } from "@/lib/json";
+import { failureText, taskQueryOptions } from "@/lib/queries/tasks";
+
+import {
+  buildBody,
+  clientContract,
+  exampleBody,
+  playgroundFields,
+  playgroundPythonOnlyReason,
+  returnsPythonValue,
+  type ClientContract,
+  type PlaygroundField,
+} from "./playground-form";
+
+/**
+ * In-UI invoke for a deployed function or endpoint. The form is built from
+ * the release's recorded callable contract; flat primitive parameters get
+ * typed inputs, anything richer gets a raw JSON editor. A function runs
+ * through its invoke operation, or as a task when it returns a Python object
+ * so the task stores the result. An endpoint is called at its path on this
+ * origin, which the session authenticates.
+ */
+export function Playground({
+  workspace,
+  detail,
+}: {
+  workspace: string;
+  detail: Schemas["WorkloadDetail"];
+}) {
+  const contract = useMemo(
+    () => clientContract(detail.release.spec.client_contract),
+    [detail.release.spec.client_contract],
+  );
+  const pythonRequired = playgroundPythonOnlyReason(contract);
+  if (pythonRequired) {
+    return <p className="p-4 text-sm text-muted-foreground">{pythonRequired}</p>;
+  }
+  return <PlaygroundForm workspace={workspace} detail={detail} contract={contract} />;
+}
+
+function PlaygroundForm({
+  workspace,
+  detail,
+  contract,
+}: {
+  workspace: string;
+  detail: Schemas["WorkloadDetail"];
+  contract: ClientContract | null;
+}) {
+  const fields = useMemo(() => playgroundFields(contract), [contract]);
+  const seeded = useMemo(() => JSON.stringify(exampleBody(contract), null, 2), [contract]);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [rawText, setRawText] = useState(seeded);
+  const [inputError, setInputError] = useState<string | null>(null);
+
+  const { workload, http, release } = detail;
+  const invoke = useMutation({
+    mutationFn: (body: JsonValue) => {
+      if (http) {
+        const { route = "", methods = [] } = release.spec.http ?? {};
+        // POST carries the payload; an endpoint that takes no POST gets its first method.
+        const method = methods.length === 0 || methods.includes("POST") ? "POST" : methods[0];
+        return invokeHttp(http.invoke_path + route, method, body);
+      }
+      return returnsPythonValue(contract)
+        ? invokeFunctionTask(workspace, workload.app, workload.name, body)
+        : invokeFunction(workspace, workload.app, workload.name, body);
+    },
+  });
+
+  type BodyResult = { ok: true; body: JsonValue } | { ok: false; message: string };
+  const currentBody = (): BodyResult => {
+    if (fields !== null && fields.length > 0) {
+      const built = buildBody(fields, values);
+      if (built.error !== undefined) return { ok: false, message: built.error };
+      return { ok: true, body: built.body };
+    }
+    if (fields !== null && fields.length === 0) return { ok: true, body: {} };
+    try {
+      return { ok: true, body: JSON.parse(rawText) as JsonValue };
+    } catch {
+      return { ok: false, message: "payload must be valid JSON" };
+    }
+  };
+
+  const submit = () => {
+    const parsed = currentBody();
+    if (!parsed.ok) {
+      setInputError(parsed.message);
+      return;
+    }
+    setInputError(null);
+    invoke.mutate(parsed.body);
+  };
+
+  return (
+    <div className="content-transition min-w-0 space-y-4 p-4">
+      <div className="min-w-0 space-y-3">
+        {fields !== null && fields.length > 0 ? (
+          <div className="space-y-2.5">
+            {fields.map((field) => (
+              <FieldInput
+                key={field.name}
+                field={field}
+                value={values[field.name] ?? ""}
+                onChange={(next) => setValues((prev) => ({ ...prev, [field.name]: next }))}
+              />
+            ))}
+          </div>
+        ) : fields !== null ? (
+          <p className="text-sm text-muted-foreground">This workload takes no arguments.</p>
+        ) : (
+          <div>
+            <div className="micro-label mb-1">JSON payload</div>
+            <textarea
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              spellCheck={false}
+              aria-label="JSON payload"
+              className="mono h-24 w-full resize-none rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs outline-none focus:border-ring"
+            />
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <Button size="sm" onClick={submit} disabled={invoke.isPending}>
+            {invoke.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            Invoke
+          </Button>
+          {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
+        </div>
+        <InvokeOutcome
+          result={invoke.data}
+          error={invoke.isError ? invoke.error : null}
+          workspace={workspace}
+          workload={workload}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FieldInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: PlaygroundField;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const inputId = `playground-${field.name}`;
+  return (
+    <div className="flex items-center gap-3">
+      <label htmlFor={inputId} className="mono w-32 shrink-0 truncate text-xs" title={field.name}>
+        {field.name}
+        {field.required ? null : <span className="text-muted-foreground">?</span>}
+      </label>
+      {field.type === "boolean" ? (
+        <select
+          id={inputId}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-8 rounded-md border border-border bg-muted/40 px-2 text-xs outline-none focus:border-ring"
+        >
+          <option value="">{field.required ? "select…" : "omit"}</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      ) : (
+        <input
+          id={inputId}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={field.defaultText || field.type}
+          inputMode={field.type === "string" ? "text" : "decimal"}
+          className="mono h-8 min-w-0 flex-1 rounded-md border border-border bg-muted/40 px-2.5 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-ring"
+        />
+      )}
+      <span className="w-14 shrink-0 text-right text-[11px] text-muted-foreground">
+        {field.type}
+      </span>
+    </div>
+  );
+}
+
+function InvokeOutcome({
+  result,
+  error,
+  workspace,
+  workload,
+}: {
+  result: InvokeResult | undefined;
+  error: Error | null;
+  workspace: string;
+  workload: Schemas["Workload"];
+}) {
+  if (error) {
+    return <div className="text-xs text-destructive">{error.message}</div>;
+  }
+  if (!result) return null;
+
+  const meta = (
+    <span className="text-[11px] text-muted-foreground">
+      HTTP {result.status} · {Math.round(result.durationMs)}ms
+    </span>
+  );
+
+  if (result.ok && result.taskId) {
+    return (
+      <TaskInvokeOutcome
+        taskId={result.taskId}
+        meta={meta}
+        workspace={workspace}
+        workload={workload}
+      />
+    );
+  }
+
+  return <DirectInvokeOutcome result={result} meta={meta} />;
+}
+
+function DirectInvokeOutcome({ result, meta }: { result: InvokeResult; meta: ReactNode }) {
+  const response = result.json !== undefined ? result.json : result.bodyText || null;
+  return (
+    <section className="overflow-hidden rounded-md border border-border bg-muted/20">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {meta}
+        <StatusChip status={result.ok ? "succeeded" : "failed"} />
+      </div>
+      <ResultBody
+        error={result.ok ? null : result.bodyText || "Request failed"}
+        result={result.ok ? { encoding: "json", value: response } : null}
+      />
+    </section>
+  );
+}
+
+function TaskInvokeOutcome({
+  taskId,
+  meta,
+  workspace,
+  workload,
+}: {
+  taskId: string;
+  meta: ReactNode;
+  workspace: string;
+  workload: Schemas["Workload"];
+}) {
+  const task = useQuery(taskQueryOptions(workspace, taskId));
+
+  return (
+    <section className="overflow-hidden rounded-md border border-border bg-muted/20">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {meta}
+        {task.data ? (
+          <StatusChip status={task.data.task.status} live={task.data.task.status === "running"} />
+        ) : null}
+        <Link
+          to="/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId"
+          params={{
+            workspace,
+            app: workload.app,
+            kind: workload.kind,
+            name: workload.name,
+            taskId,
+          }}
+          className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"
+        >
+          Open task
+          <ArrowUpRight className="size-3" aria-hidden="true" />
+        </Link>
+      </div>
+      <ContentTransition pending={task.isPending}>
+        {task.isPending ? (
+          <div className="space-y-2 p-3" aria-label="Loading task result">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : task.isError ? (
+          <PanelError message={task.error.message} />
+        ) : task.data.task.failure || task.data.result ? (
+          <ResultBody
+            error={task.data.task.failure ? failureText(task.data.task.failure) : null}
+            result={task.data.result}
+          />
+        ) : (
+          <p className="p-3 text-xs text-muted-foreground">
+            {task.data.task.status === "succeeded"
+              ? "The task returned no result."
+              : "Result pending."}
+          </p>
+        )}
+      </ContentTransition>
+    </section>
+  );
+}

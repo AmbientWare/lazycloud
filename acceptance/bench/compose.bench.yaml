@@ -1,0 +1,14 @@
+# Overrides compose.yaml for an isolated benchmark stack beside other local stacks.
+services:
+  postgres:
+    # Durable defaults (fsync on); pg_stat_statements counts recurring queries.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all", "-c", "pg_stat_statements.max=10000"]
+    ports: !override
+      - "127.0.0.1:26432:5432"
+  object-store:
+    ports: !override
+      - "127.0.0.1:26900:3900"
+      - "127.0.0.1:26903:3903"
+  registry:
+    ports: !override
+      - "127.0.0.1:26000:5000"

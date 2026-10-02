@@ -1,0 +1,8 @@
+package: runnerproto
+output: runner.gen.go
+generate:
+  models: true
+output-options:
+  # The runner schemas are not referenced by any path, so pruning would drop
+  # every model.
+  skip-prune: true

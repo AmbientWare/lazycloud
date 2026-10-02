@@ -1,0 +1,111 @@
+import { Link } from "@tanstack/react-router";
+
+import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
+import { StatusChip } from "@/components/shared/StatusChip";
+import { StubKindIcon } from "@/components/shared/StubKindIcon";
+import type { Schemas } from "@/lib/api/client";
+import { startupBetween } from "@/lib/format";
+
+export function AppRecentTasksSection({
+  workspaceName,
+  app,
+  tasks,
+  pending,
+  error,
+}: {
+  workspaceName: string;
+  app: string;
+  tasks: Schemas["Task"][] | undefined;
+  pending: boolean;
+  error: string | undefined;
+}) {
+  return (
+    <div
+      role="region"
+      aria-labelledby="app-recent-tasks-heading"
+      className="min-h-[24rem] lg:h-full lg:min-h-0"
+    >
+      <Panel
+        pending={pending}
+        title={<span id="app-recent-tasks-heading">Recent tasks</span>}
+        action={<span className="text-[11px] text-muted-foreground">15 most recent</span>}
+        className="h-full"
+        contentClassName="p-0"
+      >
+        {error ? (
+          <div className="flex min-h-32 items-center justify-center px-4 text-sm text-destructive">
+            {error}
+          </div>
+        ) : pending ? (
+          <RowsSkeleton rows={4} height="h-14" />
+        ) : (tasks?.length ?? 0) === 0 ? (
+          <PanelEmpty message="No recent tasks" className="min-h-32" />
+        ) : (
+          <RecentRunsList tasks={tasks ?? []} workspaceName={workspaceName} app={app} />
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function RecentRunsList({
+  tasks,
+  workspaceName,
+  app,
+}: {
+  tasks: Schemas["Task"][];
+  workspaceName: string;
+  app: string;
+}) {
+  return (
+    <div className="divide-y divide-border/80">
+      {tasks.map((task) => (
+        <div
+          key={task.id}
+          className="interactive-row grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 px-4 py-3"
+        >
+          <span className="min-w-0">
+            <Link
+              to="/w/$workspace/apps/$app/tasks/$taskId"
+              params={{ workspace: workspaceName, app, taskId: task.id }}
+              className="interactive-link block min-w-0 truncate text-sm font-medium text-foreground"
+            >
+              {task.function}
+            </Link>
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+              <StubKindIcon kind="function" className="size-3" />
+              <Link
+                to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                params={{ workspace: workspaceName, app, kind: "function", name: task.function }}
+                className="interactive-link min-w-0 truncate"
+              >
+                {task.function}
+              </Link>
+              {task.version ? <span className="mono shrink-0">v{task.version}</span> : null}
+            </span>
+          </span>
+          <StatusChip status={task.status} live={task.status === "running"} />
+          <span className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
+            <span>
+              Requested <LiveRelativeTime value={task.created_at} />
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>Startup {startupBetween(task.created_at, task.started_at) ?? "-"}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              Duration{" "}
+              <LiveDuration
+                startedAt={task.started_at}
+                finishedAt={task.finished_at}
+                fallback="-"
+              />
+            </span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
