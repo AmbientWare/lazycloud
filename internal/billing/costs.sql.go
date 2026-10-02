@@ -107,11 +107,19 @@ with entries as (
            or ($17::text = 'disk' and e.category = 'disk')
            or ($17::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
 ), attempt_spans as (
+    -- Each entry reads its own container's attempts: finished ones through
+    -- (container_id, finished_at) from the entry's start, running ones
+    -- through the running partial index, never attempt history at large.
     select e.id, a.task_id,
            extract(epoch from least(coalesce(a.finished_at, e.ended_at), e.ended_at) - greatest(a.started_at, e.started_at))::float8 as seconds
     from entries e
-    join attempts a on a.container_id = e.source_id
-         and a.started_at < e.ended_at and (a.finished_at is null or a.finished_at > e.started_at)
+    cross join lateral (
+        select f.task_id, f.started_at, f.finished_at from attempts f
+        where f.container_id = e.source_id and f.finished_at > e.started_at and f.started_at < e.ended_at
+        union all
+        select r.task_id, r.started_at, r.finished_at from attempts r
+        where r.container_id = e.source_id and r.state = 'running' and r.finished_at is null and r.started_at < e.ended_at
+    ) a
     where $18::bool and e.source_kind = 'container' and e.category is null
 ), runs as (
     select o.id, o.task_id,
