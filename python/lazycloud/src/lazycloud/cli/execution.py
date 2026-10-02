@@ -9,11 +9,8 @@ from pydantic import JsonValue
 from shared.api import (
     Deployment,
     DeploymentPlan,
-    DeploymentPlanRequest,
     PodKind,
     Release,
-    WorkloadIdentity,
-    WorkloadKind,
 )
 
 from lazycloud._invocation import prepare_arguments
@@ -56,6 +53,7 @@ from lazycloud.session.deployment import (
     DeploymentClient,
     WorkloadDefinition,
     deploy_functions,
+    plan_request,
 )
 from lazycloud.terminal_shell import InteractiveShell
 
@@ -164,24 +162,7 @@ def _release_summary(name: str, release: Release) -> dict[str, JsonValue]:
 
 
 def _plan(client: ApiClient, workspace: str, target: AppFunctions) -> DeploymentPlan:
-    request = DeploymentPlanRequest(
-        workloads=[
-            WorkloadIdentity(kind=_workload_kind(function), name=function.resource_name)
-            for function in target.functions
-        ],
-        prune=target.prune,
-    )
-    return client.plan_deployment(workspace, target.app, request)
-
-
-def _workload_kind(workload: object) -> WorkloadKind:
-    if isinstance(workload, Pod):
-        return WorkloadKind.pod
-    if isinstance(workload, Endpoint):
-        return WorkloadKind.endpoint
-    if isinstance(workload, ASGI):
-        return WorkloadKind.asgi
-    return WorkloadKind.function
+    return client.plan_deployment(workspace, target.app, plan_request(target))
 
 
 def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlan]) -> None:

@@ -40,7 +40,7 @@ from lazycloud.control import resolve_control_client_config
 from lazycloud.exceptions import SdkError
 
 if TYPE_CHECKING:
-    from shared.api import Deployment
+    from shared.api import Deployment, DeploymentPlan, DeploymentPlanRequest
 
     from lazycloud.abstractions.endpoint import (
         ASGI,
@@ -994,8 +994,31 @@ class App:
             client=api_client(config),
             workspace=require_workspace(config),
             source_root=source_root,
-            terminal=target.functions[0].terminal,
+            terminal=target.functions[0].terminal if target.functions else None,
         )[0]
+
+    def deployment_manifest(
+        self, *, prune: bool = False, resource: str | None = None, name: str | None = None
+    ) -> DeploymentPlanRequest:
+        """The workloads a deploy of this app would make current, as a plan request."""
+        from lazycloud.session.deployment import plan_request
+
+        if prune and (resource is not None or name is not None):
+            raise AppOperationError("pruning requires the complete app without a name override")
+        return plan_request(self.deployment_target(prune=prune, resource=resource), name=name)
+
+    def plan(self, *, prune: bool = False, workspace: str | None = None) -> DeploymentPlan:
+        """What a deploy would add, redeploy, retain or remove, without deploying."""
+        from lazycloud.clients.api import ApiError
+        from lazycloud.control import api_client, require_workspace
+
+        config = resolve_control_client_config(workspace=workspace)
+        try:
+            return api_client(config).plan_deployment(
+                require_workspace(config), self.slug, self.deployment_manifest(prune=prune)
+            )
+        except ApiError as exc:
+            raise AppOperationError(str(exc)) from exc
 
     def deployment_target(
         self, *, prune: bool = False, resource: str | None = None
@@ -1013,7 +1036,7 @@ class App:
             if resource
             else tuple(item for item in self.resources if callable(getattr(item, "deploy", None)))
         )
-        if not selected:
+        if not selected and not prune:
             raise AppOperationError(f"app {self.slug} has no functions to deploy")
         workloads = tuple(cast("WorkloadDefinition", item) for item in selected)
         return AppFunctions(app=self.slug, functions=workloads, prune=prune)

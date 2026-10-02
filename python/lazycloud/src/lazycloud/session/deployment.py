@@ -15,11 +15,14 @@ from uuid import UUID
 
 from shared.api import Deployment as AppDeployment
 from shared.api import (
+    DeploymentPlanRequest,
     DeploymentRequest,
     Release,
     SourceUploadRequest,
     SubmitTasksRequest,
     Workload,
+    WorkloadIdentity,
+    WorkloadKind,
     WorkloadSpec,
 )
 
@@ -89,6 +92,30 @@ class AppFunctions:
     app: str
     functions: tuple[WorkloadDefinition, ...]
     prune: bool = False
+
+
+def plan_request(target: AppFunctions, *, name: str | None = None) -> DeploymentPlanRequest:
+    """The plan request for a deployment of `target`; `name` overrides each workload's name."""
+    return DeploymentPlanRequest(
+        workloads=[
+            WorkloadIdentity(kind=workload_kind(function), name=name or function.resource_name)
+            for function in target.functions
+        ],
+        prune=target.prune,
+    )
+
+
+def workload_kind(workload: object) -> WorkloadKind:
+    from lazycloud.abstractions.endpoint import ASGI, Endpoint
+    from lazycloud.abstractions.pod import Pod
+
+    if isinstance(workload, Pod):
+        return WorkloadKind.pod
+    if isinstance(workload, Endpoint):
+        return WorkloadKind.endpoint
+    if isinstance(workload, ASGI):
+        return WorkloadKind.asgi
+    return WorkloadKind.function
 
 
 @dataclass(frozen=True, slots=True)
