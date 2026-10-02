@@ -216,7 +216,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # Deploy's job reads the prod environment's deploy key itself.
+    # A called workflow sees its environment's secrets, the prod deploy key
+    # included, only when the caller inherits secrets.
     uses: ./.github/workflows/deploy.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.version }}
