@@ -70,6 +70,9 @@ type source struct {
 type entry struct {
 	start, end time.Time
 	charge     Charge
+	// billed is the container shape the entry charged, when measured use
+	// exceeded the reservation; nil charges the source's shape.
+	billed *Shape
 }
 
 // sourcePlan is what a pass writes for one source.
@@ -163,6 +166,7 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 		}
 		return nil
 	}
+	plans := make([]sourcePlan, 0, len(containers))
 	for _, c := range containers {
 		p, err := b.planContainer(c, now)
 		if err != nil {
@@ -179,6 +183,12 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 			a.nanos += p.accrued
 			a.live++
 		}
+		plans = append(plans, p)
+	}
+	if err := b.chargeMeasuredUse(ctx, plans); err != nil {
+		return result, err
+	}
+	for _, p := range plans {
 		if err := add(p); err != nil {
 			return result, err
 		}
@@ -494,16 +504,20 @@ func ledgerParams(batch []sourcePlan) ([]uuid.UUID, InsertLedgerEntriesParams, A
 			p.AppIds = append(p.AppIds, orNil(src.app))
 			p.WorkloadIds = append(p.WorkloadIds, orNil(src.workload))
 			p.Categories = append(p.Categories, src.category)
-			owner, class := src.shape.Owner, src.shape.Class
+			shape := src.shape
+			if e.billed != nil {
+				shape = *e.billed
+			}
+			owner, class := shape.Owner, shape.Class
 			if owner == "" {
 				owner, class = OwnerPlatformFleet, ClassAuto
 			}
 			p.BillingOwners = append(p.BillingOwners, string(owner))
 			p.RateClasses = append(p.RateClasses, string(class))
-			p.GpuTypes = append(p.GpuTypes, string(src.shape.GPU))
-			p.GpuCounts = append(p.GpuCounts, int32(src.shape.GPUCount)) //nolint:gosec // GPU counts are small.
-			p.CpuMillis = append(p.CpuMillis, src.shape.CPUMillis)
-			p.MemoryBytes = append(p.MemoryBytes, src.shape.MemoryBytes)
+			p.GpuTypes = append(p.GpuTypes, string(shape.GPU))
+			p.GpuCounts = append(p.GpuCounts, int32(shape.GPUCount)) //nolint:gosec // GPU counts are small.
+			p.CpuMillis = append(p.CpuMillis, shape.CPUMillis)
+			p.MemoryBytes = append(p.MemoryBytes, shape.MemoryBytes)
 			p.PricingVersions = append(p.PricingVersions, e.charge.Version)
 			p.ContainerNanos = append(p.ContainerNanos, e.charge.ContainerNanos)
 			p.CpuNanos = append(p.CpuNanos, e.charge.CPUNanos)

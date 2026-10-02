@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const advanceCursors = `-- name: AdvanceCursors :exec
@@ -321,6 +322,85 @@ func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredConta
 			&i.OwnerID,
 			&i.BilledThrough,
 			&i.Complete,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const measuredContainerUse = `-- name: MeasuredContainerUse :many
+with want as (
+    select unnest($2::uuid[]) as id,
+           unnest($3::timestamptz[]) as start_at,
+           unnest($4::timestamptz[]) as end_at
+), mark as (
+    select rolled_through from container_metric_rollup
+), used as (
+    select s.container_id, s.sampled_at as at, s.cpu_usage_usec,
+           s.memory_rss_bytes::float8 * s.interval_ms / 1000 as memory_byte_seconds
+    from want
+    join container_metric_samples s on s.container_id = want.id
+         and s.sampled_at >= want.start_at and s.sampled_at < want.end_at
+    where s.sampled_at >= (select rolled_through from mark)
+    union all
+    select m.container_id, m.minute as at, m.cpu_usage_usec,
+           m.memory_rss_bytes::float8 * m.interval_ms / 1000 as memory_byte_seconds
+    from want
+    join container_metric_minutes m on m.container_id = want.id
+         and m.minute >= want.start_at and m.minute < want.end_at
+    where m.minute < (select rolled_through from mark)
+)
+select container_id,
+       date_bin($1::interval, at, 'epoch'::timestamptz)::timestamptz as period,
+       (sum(cpu_usage_usec) / 1e6)::float8 as core_seconds,
+       sum(memory_byte_seconds)::float8 as memory_byte_seconds
+from used
+group by 1, 2
+`
+
+type MeasuredContainerUseParams struct {
+	Period       pgtype.Interval
+	ContainerIds []uuid.UUID
+	StartAts     []time.Time
+	EndAts       []time.Time
+}
+
+type MeasuredContainerUseRow struct {
+	ContainerID       uuid.UUID
+	Period            time.Time
+	CoreSeconds       float64
+	MemoryByteSeconds float64
+}
+
+// CPU core-seconds and memory byte-seconds each container used per metering
+// period of [start_at, end_at), read from observability's container
+// metrics: the samples the rollup has not folded yet, and the minutes it
+// folded the rest into, so no sample counts twice. A sample covers the
+// interval before it; a minute's memory is its peak.
+func (q *Queries) MeasuredContainerUse(ctx context.Context, arg MeasuredContainerUseParams) ([]MeasuredContainerUseRow, error) {
+	rows, err := q.db.Query(ctx, measuredContainerUse,
+		arg.Period,
+		arg.ContainerIds,
+		arg.StartAts,
+		arg.EndAts,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MeasuredContainerUseRow
+	for rows.Next() {
+		var i MeasuredContainerUseRow
+		if err := rows.Scan(
+			&i.ContainerID,
+			&i.Period,
+			&i.CoreSeconds,
+			&i.MemoryByteSeconds,
 		); err != nil {
 			return nil, err
 		}

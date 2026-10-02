@@ -384,8 +384,8 @@ Scope notes:
   Delivered: JoinMachineDialog.tsx; status follows the returned machine id. Code reading only.
 
 ## Billing and plans
-- [ ] Plans Free/Team/Business: prepaid credit balance, trial and subscription credit, per-second compute (DOCS/platform/plans.mdx)
-  Gap: internal/billing/ratecard.go, same terms; `TestTrialCoversUsageAndNewCreditPaysDebtFirst`, `TestSubscriptionCreditIsSpentBeforePurchasedCredit`, `TestStripeTestMode`. CPU and memory bill at the reservation only, while docs/platform/plans.mdx says the greater of reservation and measured use (tasks/billing.md Gaps): about 1 day.
+- [x] Plans Free/Team/Business: prepaid credit balance, trial and subscription credit, per-second compute (DOCS/platform/plans.mdx)
+  Delivered: internal/billing/ratecard.go, same terms; `TestTrialCoversUsageAndNewCreditPaysDebtFirst`, `TestSubscriptionCreditIsSpentBeforePurchasedCredit`, `TestStripeTestMode`; CPU and memory bill at the greater of reservation and measured use (`TestMeteringBillsTheGreaterOfReservationAndMeasuredUse`).
 - [x] Placement multipliers: preemptible=False 3× CPU/memory; pinned region 1.5× (DOCS/platform/plans.mdx)
   Delivered: ratecard.go `placements()`; `TestContainersPriceTheirGPUPlacementAndMachine`.
 - [x] Limits: concurrency, zero balance stops work, monthly usage limit resets on the 1st, 30-day unfunded retention (DOCS/platform/plans.mdx)

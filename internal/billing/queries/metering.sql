@@ -201,3 +201,37 @@ delete from egress_quarters q
 using (select unnest(@workspace_ids::uuid[]) as workspace_id, unnest(@app_ids::uuid[]) as app_id,
               unnest(@workload_ids::uuid[]) as workload_id, unnest(@quarters::timestamptz[]) as quarter) d
 where q.workspace_id = d.workspace_id and q.app_id = d.app_id and q.workload_id = d.workload_id and q.quarter = d.quarter;
+
+-- name: MeasuredContainerUse :many
+-- CPU core-seconds and memory byte-seconds each container used per metering
+-- period of [start_at, end_at), read from observability's container
+-- metrics: the samples the rollup has not folded yet, and the minutes it
+-- folded the rest into, so no sample counts twice. A sample covers the
+-- interval before it; a minute's memory is its peak.
+with want as (
+    select unnest(@container_ids::uuid[]) as id,
+           unnest(@start_ats::timestamptz[]) as start_at,
+           unnest(@end_ats::timestamptz[]) as end_at
+), mark as (
+    select rolled_through from container_metric_rollup
+), used as (
+    select s.container_id, s.sampled_at as at, s.cpu_usage_usec,
+           s.memory_rss_bytes::float8 * s.interval_ms / 1000 as memory_byte_seconds
+    from want
+    join container_metric_samples s on s.container_id = want.id
+         and s.sampled_at >= want.start_at and s.sampled_at < want.end_at
+    where s.sampled_at >= (select rolled_through from mark)
+    union all
+    select m.container_id, m.minute as at, m.cpu_usage_usec,
+           m.memory_rss_bytes::float8 * m.interval_ms / 1000 as memory_byte_seconds
+    from want
+    join container_metric_minutes m on m.container_id = want.id
+         and m.minute >= want.start_at and m.minute < want.end_at
+    where m.minute < (select rolled_through from mark)
+)
+select container_id,
+       date_bin(@period::interval, at, 'epoch'::timestamptz)::timestamptz as period,
+       (sum(cpu_usage_usec) / 1e6)::float8 as core_seconds,
+       sum(memory_byte_seconds)::float8 as memory_byte_seconds
+from used
+group by 1, 2;
