@@ -7,7 +7,9 @@ import io
 import re
 import zipfile
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
+from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -57,6 +59,8 @@ from lazycloud.terminal import Terminal, TerminalStep, humanize_bytes
 
 if TYPE_CHECKING:
     from lazycloud.abstractions.image import Image, ImageBuildResult
+
+MAX_IMAGE_PREPARATIONS = 4
 
 _VERSIONED_NAME = re.compile(r"(?P<name>.+)-v(?P<version>[1-9][0-9]*)")
 
@@ -475,23 +479,42 @@ def _prepare_images(
     workspace: str,
     terminal: Terminal,
 ) -> dict[int, ImageBuildResult]:
-    """Make each distinct image ready once, keyed by the function's id()."""
-    by_definition: dict[str, ImageBuildResult] = {}
-    results: dict[int, ImageBuildResult] = {}
+    """Make each distinct image ready once, keyed by the function's id().
+
+    Up to `MAX_IMAGE_PREPARATIONS` distinct images build at once.
+    """
+    distinct: dict[str, Image] = {}
+    keys: dict[int, str] = {}
     for function in functions:
         image = function.image
         key = image.explicit_image_id or image.definition().model_dump_json()
-        result = by_definition.get(key)
-        if result is None:
-            result = image.build(client, workspace=workspace, terminal=terminal)
-            if not result.success:
-                build = f" build {result.build_id}" if result.build_id else ""
-                image_name = f" {result.image_id}" if result.image_id else ""
-                msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
-                raise ImageBuildError(msg)
-            by_definition[key] = result
-        results[id(function)] = result
-    return results
+        distinct.setdefault(key, image)
+        keys[id(function)] = key
+
+    def build(image: Image) -> ImageBuildResult:
+        result = image.build(client, workspace=workspace, terminal=terminal)
+        if not result.success:
+            build = f" build {result.build_id}" if result.build_id else ""
+            image_name = f" {result.image_id}" if result.image_id else ""
+            msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
+            raise ImageBuildError(msg)
+        return result
+
+    with ThreadPoolExecutor(
+        max_workers=MAX_IMAGE_PREPARATIONS, thread_name_prefix="deployment-image"
+    ) as executor:
+        futures = {
+            key: executor.submit(copy_context().run, build, image)
+            for key, image in distinct.items()
+        }
+        try:
+            for future in as_completed(futures.values()):
+                future.result()
+        except BaseException:
+            for future in futures.values():
+                future.cancel()
+            raise
+    return {function_id: futures[key].result() for function_id, key in keys.items()}
 
 
 def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:
