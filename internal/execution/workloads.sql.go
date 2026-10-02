@@ -556,7 +556,7 @@ from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-where c.workspace_id = $1 and w.kind = 'sandbox' and c.id < $2
+where c.workspace_id = $1 and c.purpose = 'instance' and w.kind = 'sandbox' and c.id < $2
   and ($3::text is null or a.name = $3)
   and ($4::text is null
        or strpos(lower(w.name), $4::text) > 0
@@ -1007,7 +1007,7 @@ from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-where c.workspace_id = $1 and w.kind = 'sandbox' and c.created_at > now() - interval '30 days'
+where c.workspace_id = $1 and c.purpose = 'instance' and w.kind = 'sandbox' and c.created_at > now() - interval '30 days'
   and ($2::text is null or a.name = $2)
 group by 1
 order by 1
@@ -1056,7 +1056,7 @@ from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-where c.workspace_id = $1 and w.kind = 'sandbox'
+where c.workspace_id = $1 and c.purpose = 'instance' and w.kind = 'sandbox'
   and ($2::text is null or a.name = $2)
 `
 

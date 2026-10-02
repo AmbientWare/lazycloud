@@ -20,8 +20,8 @@ with app as (select id, workspace_id from apps where name = 'reports'),
             select id, 'sandbox', n, 'active' from app, unnest(array['Coder', 'scratch']) n returning id, name),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
              select id, 1, jsonb_build_object('kind', 'sandbox', 'name', name), sha256(name::bytea), sha256('src') from wl returning id, workload_id),
-     ctr as (insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-             select app.workspace_id, rel.id, 'pending', 1, 1000, 1 << 28 from app, rel returning id, release_id)
+     ctr as (insert into containers (workspace_id, release_id, state, purpose, slots, cpu_millis, memory_bytes)
+             select app.workspace_id, rel.id, 'pending', 'instance', 1, 1000, 1 << 28 from app, rel returning id, release_id)
 select (select ctr.id::text from ctr join rel on rel.id = ctr.release_id join wl on wl.id = rel.workload_id where wl.name = 'Coder'),
        (select ctr.id::text from ctr join rel on rel.id = ctr.release_id join wl on wl.id = rel.workload_id where wl.name = 'scratch')`).Scan(&coder, &scratch)
 	if err != nil {
