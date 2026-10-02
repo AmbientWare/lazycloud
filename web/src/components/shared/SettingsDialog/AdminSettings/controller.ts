@@ -13,10 +13,8 @@ import {
   setComplimentary,
   setUserRole,
   setUserStatus,
-  EVERY_ACCOUNT,
-  type AccountScope,
 } from "@/lib/queries/admin";
-import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys, EVERY_ACCOUNT, type AccountScope } from "@/lib/queries/workspace-keys";
 
 type BillingAccountAdmin = Schemas["BillingAccountAdmin"];
 type PlatformRole = Schemas["PlatformRole"];

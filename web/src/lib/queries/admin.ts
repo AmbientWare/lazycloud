@@ -1,17 +1,9 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
-import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys, EVERY_ACCOUNT, type AccountScope } from "@/lib/queries/workspace-keys";
 
 const PAGE_SIZE = 50;
-
-export type AccountScope = {
-  search: string;
-  role: Schemas["PlatformRole"] | null;
-  status: Schemas["UserStatus"] | null;
-};
-
-export const EVERY_ACCOUNT: AccountScope = { search: "", role: null, status: null };
 
 /**
  * Every account on the platform, as an administrator sees it, narrowed by the
