@@ -1,6 +1,6 @@
 # Storage: volumes, disks, artifacts, queues and maps
 
-Packet storage from tasks/wave-2.md. Migration `migrations/0007_storage.sql`,
+Packet storage from tasks/wave-2.md. Schema: Storage in `migrations/0001_schema.sql`,
 proto fields 40-49, OpenAPI operations tagged `storage`.
 
 Outcome: the parity sections "Volumes and disks", "Artifacts" and "Maps and

@@ -4,7 +4,7 @@ Parity sections "Pods and devboxes", "Sandboxes" and "Shells and SSH" from
 tasks/parity.md, plus the items endpoints and observability handed off:
 `checkpoint_enabled` and memory snapshots, `lazycloud container checkpoint`,
 endpoint shells, and the dashboard APIs those pages need. Migration
-`migrations/0011_workloads.sql`, protobuf fields 90-99, OpenAPI operations
+`migrations/0001_schema.sql` (Execution), protobuf fields 90-99, OpenAPI operations
 tagged `workloads`.
 
 ## Outcome
@@ -293,7 +293,7 @@ then `lazycloud deploy tools:web` for a pod, `sandbox.create()` from Python,
 
 ## Progress
 
-- [x] Contracts: migration 0011, OpenAPI, protobuf, Go dependencies
+- [x] Contracts: schema, OpenAPI, protobuf, Go dependencies
 - [x] Supervisor
 - [x] Agent
 - [x] Server: execution, SSH, API, host session, edge

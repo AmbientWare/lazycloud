@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Wake-ups from migration 0006's triggers.
+// Wake-ups from the edge triggers in migrations/0001_schema.sql.
 const (
 	// channelRoute: a workload, app, route or custom domain changed.
 	channelRoute = "lc_route"

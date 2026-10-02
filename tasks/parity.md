@@ -103,7 +103,7 @@ Scope notes:
 - [x] Where a call goes: a local preview first, then a fresh working-tree run from a laptop, then the deployed function when inside a container (DOCS/concepts/workflow.mdx)
   Delivered: function.py `_release_id`; `test_calls_inside_a_container_run_the_active_release_as_children`, `TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower`, `TestStoppedWorkloadRunsUnchangedWorkingTreeCalls`.
 - [x] Volumes, secrets and stored data survive app deletion and pruning (DOCS/concepts/apps.mdx)
-  Delivered: soft-deleted apps, workspace-scoped volumes and secrets, `artifacts.app_id on delete set null` (migrations/0007_storage.sql). Schema reading only.
+  Delivered: soft-deleted apps, workspace-scoped volumes and secrets, `artifacts.app_id on delete set null` (migrations/0001_schema.sql). Schema reading only.
 
 ## Functions and tasks
 - [x] `@app.function(...)` options: image, name, cpu, memory, disk, gpu, gpu_count, timeout_seconds, concurrency, in_process, cron, keep_warm, max_pending_tasks, autoscaler, retries(3), retry_policy, retry_delay_seconds, callback_url, authorized, env, secrets, volumes, on_start/on_running/on_success/on_error/on_retry/on_failure/on_finish, task_policy, inputs, outputs, docker_enabled, preemptible, region, availability_zone, machine, metadata (SDK/abstractions/app.py:245)

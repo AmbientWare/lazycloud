@@ -2,7 +2,7 @@
 
 Parity sections: "Auth and accounts" and "Workspaces, members and invitations"
 in tasks/parity.md, plus the email outbox from "Notifications". Migration
-`migrations/0002_identity.sql`. No protobuf.
+`migrations/0001_schema.sql` (Identity, Notifications). No protobuf.
 
 ## Outcome
 
@@ -108,7 +108,7 @@ Configuration: server `LAZYCLOUD_PUBLIC_URL`, `LAZYCLOUD_GITHUB_CLIENT_ID`,
 
 ## Progress
 
-- [x] Migration 0002
+- [x] Schema
 - [x] Identity: users, sign-in, sessions, tokens, device codes
 - [x] Identity: workspaces, members, invitations, deletion
 - [x] Notifications outbox, Resend sender, webhook, purge

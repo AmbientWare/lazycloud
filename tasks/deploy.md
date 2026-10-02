@@ -314,6 +314,17 @@ Not run: any plan against real state, apply, destroy, cluster install, Argo
 sync, External Secrets projection, ECR push, workflow run, AMI bake, EC2
 launch or Neki connection.
 
+## One schema migration
+
+No database had applied migrations 0001-0018, so they became one
+`migrations/0001_schema.sql` before the first deploy. Two scratch databases on
+the test Postgres, one migrated by `server migrate` built at c6b5eb8b0 and one
+by the same command on this tree, matched on `pg_dump --schema-only`, the
+data-only dump (one `container_metric_rollup` row), every `pg_constraint`
+definition and every column's position, type and nullability. sqlc output
+did not change. A local database migrated by the old chain records the old
+names and fails on `0001_schema.sql`; drop it and migrate again.
+
 ## Open questions and gaps
 
 - Neki is a Platform Preview ("Beta Features", no SLA) and needs an
