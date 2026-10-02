@@ -3476,10 +3476,10 @@ type FleetMarket struct {
 	// Reason Why the market cannot grow, when it cannot.
 	Reason string `json:"reason"`
 
-	// ReserveReady Always zero; the fleet keeps no stopped reserves.
+	// ReserveReady Stopped reserves prepared for the agent release they should run.
 	ReserveReady FleetCapacity `json:"reserve_ready"`
 
-	// ReserveTarget Always zero; the fleet keeps no stopped reserves.
+	// ReserveTarget The stopped reserve capacity the plan keeps.
 	ReserveTarget FleetCapacity        `json:"reserve_target"`
 	States        []FleetStateCapacity `json:"states"`
 
@@ -3509,7 +3509,7 @@ type FleetNode struct {
 	Ready  bool   `json:"ready"`
 	Region string `json:"region"`
 
-	// State A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+	// State A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 	State FleetState `json:"state"`
 }
 
@@ -3523,7 +3523,7 @@ type FleetNodePage struct {
 	ObservedAt time.Time   `json:"observed_at"`
 }
 
-// FleetState A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+// FleetState A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 type FleetState string
 
 // FleetStateCapacity defines model for FleetStateCapacity.
@@ -3532,7 +3532,7 @@ type FleetStateCapacity struct {
 	Capacity  FleetCapacity `json:"capacity"`
 	Machines  int           `json:"machines"`
 
-	// State A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+	// State A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 	State FleetState `json:"state"`
 }
 

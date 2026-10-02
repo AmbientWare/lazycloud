@@ -1885,10 +1885,11 @@ class FleetMarket(APIModel):
         FleetCapacity, Field(description="The idle capacity the headroom floor keeps.")
     ]
     reserve_ready: Annotated[
-        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+        FleetCapacity,
+        Field(description="Stopped reserves prepared for the agent release they should run."),
     ]
     reserve_target: Annotated[
-        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+        FleetCapacity, Field(description="The stopped reserve capacity the plan keeps.")
     ]
     allocated: Annotated[
         FleetCapacity, Field(description="Reservations of live containers on the market's hosts.")

@@ -7008,9 +7008,11 @@ components:
 
     FleetState:
       description: >-
-        A host's place in the fleet. stopped, hibernate_unverified,
-        image_saved, preparing and stopping belong to stopped reserves, which
-        this fleet does not keep.
+        A host's place in the fleet. preparing is a host becoming a stopped
+        reserve, bought for one or refreshing; stopping is on its way there.
+        stopped, hibernate_unverified and image_saved are stopped reserves:
+        a plain stop, a hibernation whose saved memory is not yet proven,
+        and one proven saved. starting covers a launch and a resume to serve.
       type: string
       enum: [serving, starting, draining, preparing, stopping, unavailable, failed, terminating, stopped,
              hibernate_unverified, image_saved]
@@ -7041,10 +7043,10 @@ components:
           description: The idle capacity the headroom floor keeps.
           allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
         reserve_ready:
-          description: Always zero; the fleet keeps no stopped reserves.
+          description: Stopped reserves prepared for the agent release they should run.
           allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
         reserve_target:
-          description: Always zero; the fleet keeps no stopped reserves.
+          description: The stopped reserve capacity the plan keeps.
           allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
         allocated:
           description: Reservations of live containers on the market's hosts.
