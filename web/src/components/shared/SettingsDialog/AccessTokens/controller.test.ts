@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/r
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { tokensQueryOptions } from "@/lib/queries/tokens";
 
 import { useAccessTokensController } from "./controller";
@@ -12,21 +12,21 @@ import { useAccessTokensController } from "./controller";
 describe("access tokens controller", () => {
   it("mints once and keeps the issued secret out of the query cache", async () => {
     const existing = token({ id: "existing", name: "existing" });
-    const created = token({ id: "created", name: "ci-deploy", prefix: "lc_9zz" });
+    const created = token({ id: "created", name: "ci-deploy", prefix: "lc_9zzo" });
     const createResponse = deferred<Response>();
     let createRequests = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      if (init?.method === "POST") {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if ((input as Request).method === "POST") {
         createRequests += 1;
         return createResponse.promise;
       }
-      return jsonResponse({ data: [existing], next: "" });
+      return jsonResponse({ tokens: [existing] });
     });
     const queryClient = testQueryClient();
     const { result } = renderHook(() => useAccessTokensController(false), {
       wrapper: wrapper(queryClient),
     });
-    await waitFor(() => expect(result.current.tokens).toEqual([existing]));
+    await waitFor(() => expect(ids(result.current.tokens)).toEqual(["existing"]));
 
     act(() => result.current.beginCreate());
     act(() => {
@@ -37,16 +37,16 @@ describe("access tokens controller", () => {
     expect(createRequests).toBe(1);
     expect(result.current.createMode).toBe("creating");
 
-    createResponse.resolve(jsonResponse({ token: "one-time-value", record: created }, 201));
+    createResponse.resolve(jsonResponse({ token: "lc_9zzone-time-value", record: created }, 201));
     await waitFor(() => expect(result.current.createMode).toBe("issued"));
 
     expect(result.current.issued).toEqual({
-      secret: "one-time-value",
+      secret: "lc_9zzone-time-value",
       name: "ci-deploy",
-      prefix: "lc_9zz",
+      prefix: "lc_9zzo",
     });
-    expect(cachedTokens(queryClient)).toEqual([created, existing]);
-    expect(serializedQueryState(queryClient)).not.toContain("one-time-value");
+    expect(ids(cachedTokens(queryClient))).toEqual(["created", "existing"]);
+    expect(serializedQueryState(queryClient)).not.toContain("lc_9zzone-time-value");
 
     act(() => result.current.dismissIssued());
     expect(result.current.issued).toBeNull();
@@ -58,13 +58,13 @@ describe("access tokens controller", () => {
     const sibling = token({ id: "sibling", name: "sibling" });
     let revokeRequests = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      if (String(input).endsWith("/revoke")) {
+      if ((input as Request).method === "DELETE") {
         revokeRequests += 1;
         return revokeRequests === 1
-          ? jsonResponse({ detail: "revoke unavailable" }, 503)
-          : jsonResponse(token({ id: "target", name: "target", status: "revoked" }));
+          ? jsonResponse({ code: "unavailable", message: "revoke unavailable" }, 503)
+          : new Response(null, { status: 204 });
       }
-      return jsonResponse({ data: [target, sibling], next: "" });
+      return jsonResponse({ tokens: [target, sibling] });
     });
     const queryClient = testQueryClient();
     const { result } = renderHook(() => useAccessTokensController(false), {
@@ -72,7 +72,7 @@ describe("access tokens controller", () => {
     });
     await waitFor(() => expect(result.current.tokens).toHaveLength(2));
 
-    act(() => result.current.beginAction(target));
+    act(() => result.current.beginAction(result.current.tokens[0]));
     expect(result.current.actionMode).toBe("confirming");
     act(() => {
       result.current.confirmAction();
@@ -81,11 +81,11 @@ describe("access tokens controller", () => {
     await waitFor(() => expect(result.current.actionMode).toBe("error"));
     expect(revokeRequests).toBe(1);
     expect(result.current.actionError?.message).toBe("revoke unavailable");
-    expect(cachedTokens(queryClient)).toEqual([target, sibling]);
+    expect(ids(cachedTokens(queryClient))).toEqual(["target", "sibling"]);
 
     act(() => result.current.confirmAction());
     await waitFor(() => expect(result.current.actionMode).toBe("idle"));
-    expect(cachedTokens(queryClient)).toEqual([sibling]);
+    expect(ids(cachedTokens(queryClient))).toEqual(["sibling"]);
   });
 });
 
@@ -94,11 +94,15 @@ function wrapper(queryClient: QueryClient) {
     createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-function cachedTokens(queryClient: QueryClient): AuthToken[] {
-  const cache = queryClient.getQueryData<InfiniteData<TokenListResponse, string>>(
+function ids(tokens: readonly { id: string }[]): string[] {
+  return tokens.map((item) => item.id);
+}
+
+function cachedTokens(queryClient: QueryClient): { id: string }[] {
+  const cache = queryClient.getQueryData<InfiniteData<Schemas["TokenList"]>>(
     tokensQueryOptions(false).queryKey,
   );
-  return (cache?.pages ?? []).flatMap((page) => page.data);
+  return (cache?.pages ?? []).flatMap((page) => page.tokens);
 }
 
 function serializedQueryState(queryClient: QueryClient): string {
@@ -110,23 +114,15 @@ function serializedQueryState(queryClient: QueryClient): string {
   );
 }
 
-function token(overrides: Partial<AuthToken> = {}): AuthToken {
+/** A token as GET /v1/tokens returns it. */
+function token(overrides: Partial<Schemas["Token"]> = {}): Schemas["Token"] {
   return {
     id: "token-1",
     name: "dashboard",
-    prefix: "lc_1234",
-    kind: "user",
-    device_login: false,
-    user_id: "user-1",
-    workspace_id: "",
+    device: false,
+    prefix: "lc_tok1",
     status: "active",
-    scopes: ["*"],
-    reusable: true,
-    disabled_by_admin: false,
     created_at: "2026-07-21T12:00:00Z",
-    last_used_at: null,
-    expires_at: null,
-    revoked_at: null,
     ...overrides,
   };
 }

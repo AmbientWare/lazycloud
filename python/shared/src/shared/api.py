@@ -81,6 +81,9 @@ class TokenStatus(str, Enum):
 class Token(APIModel):
     id: UUID
     name: str
+    prefix: Annotated[
+        str, Field(description="The token's first characters; empty for older tokens.")
+    ]
     device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
     workspace_id: Annotated[
         UUID | None, Field(description="Set when the token reaches only this workspace.")
@@ -281,11 +284,6 @@ class Autoscaler(APIModel):
     tasks_per_container: Annotated[int, Field(ge=1, le=10000)] = 1
 
 
-class State(str, Enum):
-    active = "active"
-    stopped = "stopped"
-
-
 class Encoding(str, Enum):
     json = "json"
     cloudpickle = "cloudpickle"
@@ -385,18 +383,6 @@ class SecretValueUpdate(APIModel):
     value: Annotated[str, Field(max_length=65536)]
 
 
-class Secret(APIModel):
-    name: Annotated[
-        str,
-        Field(
-            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
-            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
-        ),
-    ]
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-
-
 class SecretValue(APIModel):
     name: Annotated[
         str,
@@ -408,13 +394,6 @@ class SecretValue(APIModel):
     value: str
     created_at: AwareDatetime
     updated_at: AwareDatetime
-
-
-class SecretPage(APIModel):
-    secrets: list[Secret]
-    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
-        None
-    )
 
 
 class Schedule(APIModel):
@@ -576,6 +555,9 @@ class PresignVolumeFileRequest(APIModel):
     part_number: Annotated[
         int | None, Field(description="Required for `upload_part`.", ge=1, le=10000)
     ] = None
+    download: Annotated[
+        bool, Field(description="For `get`, have a browser save the file instead of showing it.")
+    ] = False
 
 
 class PresignedUrl(APIModel):
@@ -665,6 +647,9 @@ class Disk(APIModel):
     holder_container_id: Annotated[
         UUID | None, Field(description="The container holding the disk while attached or saving.")
     ] = None
+    holder: Annotated[
+        WorkloadRef | None, Field(description="The workload whose container holds the disk.")
+    ] = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 
@@ -674,7 +659,7 @@ class DiskPage(APIModel):
     next_cursor: str | None = None
 
 
-class State1(str, Enum):
+class State(str, Enum):
     uploading = "uploading"
     stored = "stored"
 
@@ -686,7 +671,7 @@ class Artifact(APIModel):
     filename: str
     content_type: str
     size_bytes: int
-    state: State1
+    state: State
     created_at: AwareDatetime
     stored_at: AwareDatetime | None = None
     expires_at: AwareDatetime | None = None
@@ -893,7 +878,7 @@ class DeploymentPlanItem(APIModel):
     versions: Annotated[int, Field(description="Versions the workload has now.")]
 
 
-class StartDeploymentRequest(APIModel):
+class StartWorkloadRequest(APIModel):
     version: Annotated[
         int | None, Field(description="Make this deployed version active before starting.", ge=1)
     ] = None
@@ -1063,9 +1048,19 @@ class HttpMethod(str, Enum):
     TRACE = "TRACE"
 
 
-class State2(str, Enum):
-    active = "active"
-    stopped = "stopped"
+class HttpUrls(APIModel):
+    url: Annotated[str, Field(description="Follows the active release across deploys.")]
+    version_url: Annotated[str, Field(description="Pinned to the release's version.")]
+    release_url: Annotated[str, Field(description="Addresses the release by id.")]
+    invoke_path: Annotated[
+        str, Field(description="The workload on the API host; append the request's path.")
+    ]
+    version_invoke_path: Annotated[
+        str, Field(description="The API-host path pinned to the release's version.")
+    ]
+    domain_url: Annotated[
+        str | None, Field(description="The custom hostname, once its registration is ready.")
+    ] = None
 
 
 class InvocationBody(APIModel):
@@ -1390,8 +1385,8 @@ class PerformanceBucket(APIModel):
     status_counts: TaskStatusCounts
 
 
-class DeploymentPerformance(APIModel):
-    deployment_id: UUID
+class WorkloadPerformance(APIModel):
+    workload_id: UUID
     window_seconds: int
     start: AwareDatetime
     end: AwareDatetime
@@ -2817,6 +2812,9 @@ class App(APIModel):
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     state: AppState
     workloads: Annotated[int, Field(description="Deployed workloads that are not deleted.")]
+    running_containers: Annotated[
+        int, Field(description="Containers of the app that are ready or draining.", ge=0)
+    ]
     created_at: AwareDatetime
 
 
@@ -2889,6 +2887,28 @@ class LifecycleHooks(APIModel):
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
 
 
+class Secret(APIModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release receives the secret.")
+    ]
+
+
+class SecretPage(APIModel):
+    secrets: list[Secret]
+    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
+        None
+    )
+
+
 class VolumeMountSpec(APIModel):
     name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
     mount_path: Annotated[
@@ -2923,13 +2943,19 @@ class DeploymentPlan(APIModel):
     ]
 
 
-class DeployedWorkload(APIModel):
+class Workload(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     kind: WorkloadKind
     state: WorkloadState
     app_state: AppState | None = None
+    running_containers: Annotated[
+        int,
+        Field(
+            description="Containers of the workload's releases that are ready or draining.", ge=0
+        ),
+    ]
     version: Annotated[int | None, Field(description="The active version.")] = None
     release_id: Annotated[UUID | None, Field(description="The active release.")] = None
     created_at: AwareDatetime
@@ -2941,8 +2967,8 @@ class DeployedWorkload(APIModel):
     url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
 
 
-class DeploymentPage(APIModel):
-    deployments: list[DeployedWorkload]
+class WorkloadPage(APIModel):
+    workloads: list[Workload]
     next_cursor: str | None = None
 
 
@@ -2964,6 +2990,7 @@ class Container(APIModel):
     running_tasks: Annotated[int, Field(description="Attempts running now.")]
     cpu_millis: int
     memory_mib: int
+    image: Annotated[str | None, Field(description="The image reference the release runs.")] = None
     created_at: AwareDatetime
     ready_at: AwareDatetime | None = None
     stopped_at: AwareDatetime | None = None
@@ -3226,7 +3253,8 @@ class Me(APIModel):
     workspaces: list[Workspace]
 
 
-class FunctionSpec(APIModel):
+class WorkloadSpec(APIModel):
+    kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     handler: Annotated[
         str | None,
@@ -3302,7 +3330,7 @@ class FunctionSpec(APIModel):
 
 class Release(APIModel):
     id: UUID
-    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     version: Annotated[
         int | None,
         Field(
@@ -3310,23 +3338,15 @@ class Release(APIModel):
         ),
     ] = None
     created_at: AwareDatetime
-    spec: FunctionSpec
+    spec: WorkloadSpec
     url: Annotated[
         str | None,
-        Field(description="Where an HTTP workload answers, following the active release."),
+        Field(description="Where a pod or HTTP workload answers, following the active release."),
     ] = None
     invoke_path: Annotated[
         str | None,
         Field(description="The HTTP workload on the API host, following the active release."),
     ] = None
-
-
-class Function(APIModel):
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State
-    active_release: Release
-    schedule: Schedule | None = None
 
 
 class Task(APIModel):
@@ -3367,29 +3387,23 @@ class Task(APIModel):
     failure: TaskFailure | None = None
 
 
+class WorkloadDetail(APIModel):
+    workload: Workload
+    release: Annotated[
+        Release,
+        Field(
+            description="The definition the active version runs, or the version the request names."
+        ),
+    ]
+    http: HttpUrls | None = None
+    schedule: Annotated[Schedule | None, Field(description="When a scheduled function runs.")] = (
+        None
+    )
+
+
 class TaskPage(APIModel):
     tasks: list[Task]
     next_cursor: str | None = None
-
-
-class HttpWorkload(APIModel):
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    kind: HttpKind
-    state: State2
-    release: Release
-    url: Annotated[str, Field(description="Follows the active release across deploys.")]
-    version_url: Annotated[str, Field(description="Pinned to the release's version.")]
-    release_url: Annotated[str, Field(description="Addresses the release by id.")]
-    invoke_path: Annotated[
-        str, Field(description="The workload on the API host; append the request's path.")
-    ]
-    version_invoke_path: Annotated[
-        str, Field(description="The API-host path pinned to the release's version.")
-    ]
-    domain_url: Annotated[
-        str | None, Field(description="The custom hostname, once its registration is ready.")
-    ] = None
 
 
 class Invocation(APIModel):
@@ -3400,30 +3414,30 @@ class Invocation(APIModel):
 
 
 class PreviewRequest(APIModel):
-    spec: FunctionSpec
+    spec: WorkloadSpec
     timeout_seconds: Annotated[
         int, Field(description="Stop after this long; 0 runs until stopped.", ge=0, le=86400)
     ] = 0
 
 
 class DeploymentRequest(APIModel):
-    functions: Annotated[
-        list[FunctionSpec],
+    workloads: Annotated[
+        list[WorkloadSpec],
         Field(
-            description="At least one, unless prune deletes every deployed function.",
+            description="At least one, unless prune deletes every deployed workload.",
             max_length=200,
         ),
     ]
     prune: Annotated[
-        bool, Field(description="Delete every function of the app that is not listed.")
+        bool, Field(description="Delete every workload of the app that is not listed.")
     ] = False
 
 
 class Deployment(APIModel):
     app: App
     releases: list[Release]
-    pruned: Annotated[list[WorkloadName], Field(description="Functions the prune deleted.")]
-    removed_versions: Annotated[int, Field(description="Versions of the pruned functions.")]
+    pruned: Annotated[list[WorkloadName], Field(description="Workloads the prune deleted.")]
+    removed_versions: Annotated[int, Field(description="Versions of the pruned workloads.")]
 
 
 class SubmitTasksResponse(APIModel):

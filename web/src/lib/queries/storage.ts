@@ -1,225 +1,274 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { z } from "zod";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import { fileBase64 } from "@/lib/files";
-import {
-  diskListSchema,
-  secretMaskedListSchema,
-  secretMaskedSchema,
-  secretRevealResponseSchema,
-  volumePathListSchema,
-  volumeListSchema,
-  volumeSchema,
-  type Disk,
-  type SecretMasked,
-  type Volume,
-} from "@/lib/api/schemas";
-import {
-  nextListCursor,
-  selectInfiniteList,
-  type InfiniteListQueryData,
-} from "@/lib/queries/infinite-list";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-// --- Secrets (collection reads stay masked; cleartext is fetched only on demand) ---
+/** Every page of a collection; the storage tabs list all of it. */
+export async function allPages<T>(
+  read: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>,
+): Promise<T[]> {
+  const items: T[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await read(cursor);
+    items.push(...page.items);
+    cursor = page.next;
+  } while (cursor);
+  return items;
+}
 
-export function secretsQueryOptions(workspaceId: string) {
+// --- Secrets (collection reads carry no value; cleartext is fetched only on demand) ---
+
+export function secretsQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.secrets(workspaceId),
+    queryKey: workspaceQueryKeys.storage.secrets(workspace),
     queryFn: () =>
-      apiRequest(withWorkspace("/api/v1/secrets", workspaceId), secretMaskedListSchema),
+      allPages(async (cursor) => {
+        const page = await ok(
+          api.GET("/v1/workspaces/{workspace}/secrets", {
+            params: { path: { workspace }, query: { limit: 100, cursor } },
+          }),
+        );
+        return { items: page.secrets, next: page.next_cursor };
+      }),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-const createSecretResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
+const secretPath = (workspace: string, secret: string) => ({
+  params: { path: { workspace, secret } },
 });
 
-export function createSecret(
-  workspaceId: string,
-  name: string,
-  value: string,
-): Promise<{ id: string; name: string }> {
-  return postJson(withWorkspace("/api/v1/secrets", workspaceId), createSecretResponseSchema, {
-    name,
-    value,
-  });
-}
-
-export function updateSecretValue(
-  workspaceId: string,
-  name: string,
-  value: string,
-): Promise<SecretMasked> {
-  return postJson(
-    withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
-    secretMaskedSchema,
-    { value },
+export function createSecret(workspace: string, name: string, value: string) {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/secrets", {
+      params: { path: { workspace } },
+      body: { name, value },
+    }),
   );
 }
 
-export async function revealSecretValue(workspaceId: string, name: string): Promise<string> {
-  const response = await apiRequest(
-    withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
-    secretRevealResponseSchema,
+export function updateSecretValue(workspace: string, name: string, value: string) {
+  return ok(
+    api.PATCH("/v1/workspaces/{workspace}/secrets/{secret}", {
+      ...secretPath(workspace, name),
+      body: { value },
+    }),
   );
-  if (!response.secret) throw new Error("Secret not found");
-  return response.secret.value;
 }
 
-const emptyResponseSchema = z.object({}).passthrough();
-
-export function deleteSecret(workspaceId: string, name: string): Promise<unknown> {
-  return apiRequest(
-    withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
-    emptyResponseSchema,
-    { method: "DELETE" },
+export async function revealSecretValue(workspace: string, name: string): Promise<string> {
+  const revealed = await ok(
+    api.GET("/v1/workspaces/{workspace}/secrets/{secret}/value", secretPath(workspace, name)),
   );
+  return revealed.value;
+}
+
+export function deleteSecret(workspace: string, name: string) {
+  return ok(api.DELETE("/v1/workspaces/{workspace}/secrets/{secret}", secretPath(workspace, name)));
 }
 
 // --- Disks (created by the workloads that declare them) ---
 
 const DISK_PAGE_SIZE = 50;
 
-export function disksQueryOptions(workspaceId: string) {
+export function disksQueryOptions(workspace: string) {
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.storage.disks(workspaceId),
+    queryKey: workspaceQueryKeys.storage.disks(workspace),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({ limit: String(DISK_PAGE_SIZE) });
-      if (pageParam) params.set("cursor", pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/disks?${params.toString()}`, workspaceId),
-        diskListSchema,
-      );
-    },
-    getNextPageParam: nextListCursor,
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/disks", {
+          params: {
+            path: { workspace },
+            query: { limit: DISK_PAGE_SIZE, cursor: pageParam || undefined },
+          },
+        }),
+      ),
+    getNextPageParam: (page) => page.next_cursor,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function selectDiskList(
-  data: InfiniteListQueryData<Disk> | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectInfiniteList(data, hasNextPage, (disk) => disk.id);
-}
-
-export function deleteDisk(workspaceId: string, name: string): Promise<null> {
-  return apiRequest(
-    withWorkspace(`/api/v1/disks/${encodeURIComponent(name)}`, workspaceId),
-    z.null(),
-    { method: "DELETE" },
+export function deleteDisk(workspace: string, disk: string) {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/disks/{disk}", {
+      params: { path: { workspace, disk } },
+    }),
   );
 }
 
 // --- Volumes ---
 
-export function volumesQueryOptions(workspaceId: string) {
+const volumePath = (workspace: string, volume: string) => ({
+  params: { path: { workspace, volume } },
+});
+
+export function volumesQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
-    queryFn: () => apiRequest(withWorkspace("/api/v1/volumes", workspaceId), volumeListSchema),
+    queryKey: workspaceQueryKeys.storage.volumes(workspace),
+    queryFn: () =>
+      allPages(async (cursor) => {
+        const page = await ok(
+          api.GET("/v1/workspaces/{workspace}/volumes", {
+            params: { path: { workspace }, query: { limit: 100, cursor } },
+          }),
+        );
+        return { items: page.volumes, next: page.next_cursor };
+      }),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-const getOrCreateVolumeResponseSchema = z.object({
-  volume: volumeSchema.nullish(),
-});
-
-export function createVolume(workspaceId: string, name: string): Promise<Volume | null> {
-  return postJson(withWorkspace("/api/v1/volumes", workspaceId), getOrCreateVolumeResponseSchema, {
-    name,
-  }).then((response) => response.volume ?? null);
-}
-
-const deleteVolumeResponseSchema = z.object({ deleted: z.boolean() });
-
-export function deleteVolume(
-  workspaceId: string,
-  name: string,
-): Promise<z.infer<typeof deleteVolumeResponseSchema>> {
-  return postJson(
-    withWorkspace(`/api/v1/volumes/${encodeURIComponent(name)}/delete`, workspaceId),
-    deleteVolumeResponseSchema,
-    { name },
+/** Creates the volume, or returns the existing one of that name. */
+export function createVolume(workspace: string, name: string) {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/volumes", {
+      params: { path: { workspace } },
+      body: { name },
+    }),
   );
 }
 
-export function volumePathQueryOptions(workspaceId: string, volumeName: string, path: string) {
-  const target = joinVolumePath(volumeName, path);
+/** Refused with a conflict while a container that mounts the volume has not stopped. */
+export function deleteVolume(workspace: string, name: string) {
+  return ok(api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}", volumePath(workspace, name)));
+}
+
+export function volumeFilesQueryOptions(workspace: string, volume: string, path: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.volumePath(workspaceId, volumeName, path),
+    queryKey: workspaceQueryKeys.storage.volumePath(workspace, volume, path),
     queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/volumes/${encodePath(target)}`, workspaceId),
-        volumePathListSchema,
-      ),
-    enabled: Boolean(volumeName),
+      allPages(async (cursor) => {
+        const page = await ok(
+          api.GET("/v1/workspaces/{workspace}/volumes/{volume}/files", {
+            params: {
+              ...volumePath(workspace, volume).params,
+              query: { path: relativePath(path), limit: 1000, cursor },
+            },
+          }),
+        );
+        return { items: page.files, next: page.next_cursor };
+      }),
+    enabled: Boolean(volume),
     refetchInterval: 30_000,
   });
 }
 
-const copyPathResponseSchema = z.object({ object_id: z.string().default("") });
+/** Files up to this size go up in one presigned PUT, larger ones as a multipart upload. */
+const SINGLE_PUT_BYTES = 64 * 1024 * 1024;
+const MIN_PART_BYTES = 16 * 1024 * 1024;
+const MAX_PARTS = 10_000;
+const PART_CONCURRENCY = 4;
 
+/** Upload a file into `path`, straight to the object store through presigned URLs. */
 export async function uploadVolumeFile(
-  workspaceId: string,
-  volumeName: string,
+  workspace: string,
+  volume: string,
   path: string,
   file: File,
 ): Promise<void> {
-  const destination = joinVolumePath(volumeName, joinRelativePath(path, file.name));
-  await postJson(withWorkspace("/api/v1/volumes/copy-path", workspaceId), copyPathResponseSchema, {
-    path: destination,
-    value_base64: await fileBase64(file),
-  });
+  const target = volumePath(workspace, volume);
+  const destination = joinRelativePath(path, file.name);
+  if (file.size <= SINGLE_PUT_BYTES) {
+    const presigned = await ok(
+      api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
+        ...target,
+        body: { path: destination, method: "put", expires_seconds: 3600 },
+      }),
+    );
+    await putBytes(presigned.url, file);
+    return;
+  }
+
+  const mib = 1024 * 1024;
+  const partSize = Math.max(MIN_PART_BYTES, Math.ceil(file.size / MAX_PARTS / mib) * mib);
+  const upload = await ok(
+    api.POST("/v1/workspaces/{workspace}/volumes/{volume}/uploads", {
+      ...target,
+      body: { path: destination, size_bytes: file.size, part_size_bytes: partSize },
+    }),
+  );
+  try {
+    const parts: Schemas["CompletedPart"][] = [];
+    const pending = [...upload.parts];
+    const worker = async () => {
+      for (let part = pending.shift(); part; part = pending.shift()) {
+        const etag = await putBytes(
+          part.url,
+          file.slice(part.offset, part.offset + part.size_bytes),
+        );
+        if (!etag) throw new Error("The object store did not return the part's ETag.");
+        parts.push({ number: part.number, etag });
+      }
+    };
+    await Promise.all(Array.from({ length: PART_CONCURRENCY }, worker));
+    parts.sort((left, right) => left.number - right.number);
+    await ok(
+      api.POST("/v1/workspaces/{workspace}/volumes/{volume}/uploads/complete", {
+        ...target,
+        body: { path: upload.path, upload_id: upload.upload_id, parts },
+      }),
+    );
+  } catch (error) {
+    // Aborting makes the store drop the parts already sent.
+    await ok(
+      api.POST("/v1/workspaces/{workspace}/volumes/{volume}/uploads/abort", {
+        ...target,
+        body: { path: upload.path, upload_id: upload.upload_id },
+      }),
+    ).catch(() => undefined);
+    throw error;
+  }
 }
 
-const deletePathResponseSchema = z.object({
-  deleted: z.array(z.string()).default([]),
-});
+async function putBytes(url: string, body: Blob): Promise<string | null> {
+  const response = await fetch(url, { method: "PUT", body });
+  if (!response.ok) throw new Error(`Upload failed (${response.status} ${response.statusText})`);
+  return response.headers.get("ETag");
+}
 
-export function deleteVolumePath(
-  workspaceId: string,
-  volumeName: string,
-  path: string,
-): Promise<{ deleted: string[] }> {
-  const target = joinVolumePath(volumeName, path);
-  return postJson(
-    withWorkspace(`/api/v1/volumes/${encodePath(target)}/delete`, workspaceId),
-    deletePathResponseSchema,
+/** Removes a file, or a directory and everything under it. */
+export function deleteVolumePath(workspace: string, volume: string, path: string) {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}/files", {
+      params: { ...volumePath(workspace, volume).params, query: { path: relativePath(path) } },
+    }),
   );
 }
 
-const presignedUrlSchema = z.object({ url: z.string().url() });
-
-export function volumeDownloadUrl(
-  workspaceId: string,
-  volumeName: string,
+/** A short-lived presigned GET that browsers save as a file; it carries no session. */
+export async function volumeDownloadUrl(
+  workspace: string,
+  volume: string,
   path: string,
 ): Promise<string> {
-  return postJson(withWorkspace("/api/v1/volumes/presigned-url", workspaceId), presignedUrlSchema, {
-    volume_name: volumeName,
-    volume_path: path,
-    expires: 300,
-    method: "get-object",
-  }).then((response) => response.url);
+  const presigned = await ok(
+    api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
+      ...volumePath(workspace, volume),
+      body: { path: relativePath(path), method: "get", expires_seconds: 300, download: true },
+    }),
+  );
+  return presigned.url;
 }
 
-function joinVolumePath(volumeName: string, path: string): string {
-  const relative = path.replace(/^\/+|\/+$/g, "");
-  return relative ? `${volumeName}/${relative}` : volumeName;
+/** Have the browser save a presigned URL; the store's response names the file. */
+export function saveUrl(url: string, filename: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener noreferrer";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+function relativePath(path: string): string {
+  return path.replace(/^\/+|\/+$/g, "");
 }
 
 function joinRelativePath(path: string, name: string): string {
-  const relative = path.replace(/^\/+|\/+$/g, "");
+  const relative = relativePath(path);
   return relative ? `${relative}/${name}` : name;
-}
-
-function encodePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
 }

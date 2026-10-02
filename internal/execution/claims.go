@@ -122,7 +122,7 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		if limit <= 0 {
 			return nil
 		}
-		var spec apitypes.FunctionSpec
+		var spec apitypes.WorkloadSpec
 		if err := json.Unmarshal(c.Spec, &spec); err != nil {
 			return fmt.Errorf("decode release spec: %w", err)
 		}

@@ -1,122 +1,74 @@
 import type { QueryKey } from "@tanstack/react-query";
 
-import type { WorkspaceChangeEvent } from "@/lib/api/schemas";
-import { accountQueryKeys, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import type { Schemas } from "@/lib/api/client";
+import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export type WorkspaceInvalidationTarget = {
   queryKey: QueryKey;
   expensive?: boolean;
 };
 
+/**
+ * The cached reads one committed change can have moved. A grouped change
+ * (`count` without `resource_id`) names no resource, so it refreshes every
+ * detail of its topic.
+ */
 export function workspaceInvalidationTargets(
-  workspaceId: string,
-  event: WorkspaceChangeEvent,
+  workspace: string,
+  change: Schemas["ResourceChange"],
 ): WorkspaceInvalidationTarget[] {
-  const appId = event.app_id ?? (event.topic === "apps" ? event.resource_id : null);
-  const taskId = event.task_id ?? (event.topic === "tasks" ? event.resource_id : null);
-  const rootTaskId = event.root_task_id ?? taskId;
+  const keys = workspaceQueryKeys;
+  const grouped = change.resource_id === undefined;
+  const taskId = change.task_id ?? (change.topic === "tasks" ? change.resource_id : undefined);
+  const rootTaskId = change.root_task_id ?? taskId;
   const containerId =
-    event.container_id ?? (event.topic === "containers" ? event.resource_id : null);
+    change.container_id ?? (change.topic === "containers" ? change.resource_id : undefined);
+  const appSummaries = { queryKey: keys.apps.summaries(workspace), expensive: true };
 
-  switch (event.topic) {
+  switch (change.topic) {
+    // A change names its app by id and app reads are keyed by name, so an app
+    // or deployment change, which is rare, refreshes every app read.
     case "apps":
-      return compactTargets([
-        { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
-        appId ? { queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId) } : null,
-        { queryKey: workspaceQueryKeys.tasks.details(workspaceId) },
-        { queryKey: workspaceQueryKeys.containers.details(workspaceId) },
-      ]);
+      return [{ queryKey: keys.apps.root(workspace) }];
     case "deployments":
-      return compactTargets([
-        { queryKey: workspaceQueryKeys.deployments.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.workloads.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
-        appId ? { queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId) } : null,
-        { queryKey: workspaceQueryKeys.tasks.details(workspaceId) },
-        { queryKey: workspaceQueryKeys.containers.details(workspaceId) },
-      ]);
-    case "workloads":
-      return compactTargets([
-        { queryKey: workspaceQueryKeys.workloads.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.deployments.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.sandboxes.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
-        appId ? { queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId) } : null,
-        { queryKey: workspaceQueryKeys.tasks.details(workspaceId) },
-        { queryKey: workspaceQueryKeys.containers.details(workspaceId) },
-      ]);
+      return [
+        { queryKey: keys.workloads.root(workspace) },
+        { queryKey: keys.apps.root(workspace) },
+      ];
     case "tasks":
-      return compactTargets([
-        { queryKey: workspaceQueryKeys.tasks.lists(workspaceId) },
-        taskId ? { queryKey: workspaceQueryKeys.tasks.detail(workspaceId, taskId) } : null,
-        rootTaskId
-          ? { queryKey: workspaceQueryKeys.tasks.callGraph(workspaceId, rootTaskId) }
-          : null,
-        containerId
-          ? { queryKey: workspaceQueryKeys.containers.detail(workspaceId, containerId) }
-          : null,
-        containerId
-          ? { queryKey: workspaceQueryKeys.containers.eventSummary(workspaceId, containerId) }
-          : null,
-        { queryKey: workspaceQueryKeys.tasks.aggregates(workspaceId), expensive: true },
-        { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
+      return compact([
+        { queryKey: keys.tasks.lists(workspace) },
+        grouped
+          ? { queryKey: keys.tasks.details(workspace) }
+          : taskId && { queryKey: keys.tasks.detail(workspace, taskId) },
+        grouped
+          ? { queryKey: keys.tasks.callGraphs(workspace) }
+          : rootTaskId && { queryKey: keys.tasks.callGraph(workspace, rootTaskId) },
+        containerId && { queryKey: keys.containers.detail(workspace, containerId) },
+        containerId && { queryKey: keys.containers.lifecycle(workspace, containerId) },
+        { queryKey: keys.tasks.aggregates(workspace), expensive: true },
+        appSummaries,
+        { queryKey: keys.apps.activities(workspace), expensive: true },
       ]);
     case "containers":
-      return compactTargets([
-        { queryKey: workspaceQueryKeys.tasks.lists(workspaceId) },
-        { queryKey: workspaceQueryKeys.tasks.details(workspaceId) },
-        { queryKey: workspaceQueryKeys.containers.lists(workspaceId) },
-        containerId
-          ? { queryKey: workspaceQueryKeys.containers.detail(workspaceId, containerId) }
-          : null,
-        containerId
-          ? { queryKey: workspaceQueryKeys.containers.eventSummary(workspaceId, containerId) }
-          : null,
-        taskId ? { queryKey: workspaceQueryKeys.tasks.detail(workspaceId, taskId) } : null,
-        { queryKey: workspaceQueryKeys.sandboxes.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
+      return compact([
+        { queryKey: keys.containers.lists(workspace) },
+        grouped
+          ? { queryKey: keys.containers.details(workspace) }
+          : containerId && { queryKey: keys.containers.detail(workspace, containerId) },
+        containerId && { queryKey: keys.containers.lifecycle(workspace, containerId) },
+        taskId && { queryKey: keys.tasks.detail(workspace, taskId) },
+        // A container's start and stop move its tasks' timelines.
+        { queryKey: keys.tasks.callGraphs(workspace) },
+        appSummaries,
       ]);
-    // Capacity belongs to the account, so the change one workspace's stream
-    // reports is a change to what every workspace of that account reads.
-    case "compute.units":
-      return [
-        { queryKey: accountQueryKeys.compute.instances() },
-        { queryKey: workspaceQueryKeys.compute.summary(workspaceId) },
-      ];
-    case "compute.machines":
-    case "compute.workers":
-      return [
-        { queryKey: accountQueryKeys.compute.machines() },
-        { queryKey: accountQueryKeys.compute.instances() },
-        { queryKey: workspaceQueryKeys.compute.summary(workspaceId) },
-      ];
-    case "compute.agents":
-    case "compute.providers":
-      return [];
-    case "compute.connections":
-      return [
-        { queryKey: accountQueryKeys.compute.awsConnection() },
-        { queryKey: accountQueryKeys.compute.instances() },
-        { queryKey: workspaceQueryKeys.compute.summary(workspaceId) },
-      ];
     case "storage.secrets":
-      return [{ queryKey: workspaceQueryKeys.storage.secrets(workspaceId) }];
-    case "storage.volumes":
-      return compactTargets([
-        { queryKey: workspaceQueryKeys.storage.volumes(workspaceId) },
-        event.change === "deleted"
-          ? { queryKey: accountQueryKeys.usage.root(), expensive: true }
-          : null,
-      ]);
-    case "usage":
-      return [{ queryKey: accountQueryKeys.usage.root(), expensive: true }];
-    case "settings.concurrency":
-      return [];
+      return [{ queryKey: keys.storage.secrets(workspace) }];
   }
 }
 
-function compactTargets(
-  targets: Array<WorkspaceInvalidationTarget | null>,
+function compact(
+  targets: Array<WorkspaceInvalidationTarget | "" | undefined>,
 ): WorkspaceInvalidationTarget[] {
-  return targets.filter((target): target is WorkspaceInvalidationTarget => target !== null);
+  return targets.filter((target): target is WorkspaceInvalidationTarget => Boolean(target));
 }

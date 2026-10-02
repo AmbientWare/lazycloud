@@ -1,4 +1,7 @@
-import type { AwsConnection, AwsConnectionAction } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+
+type AwsConnection = Schemas["AwsConnection"];
+type AwsConnectionAction = Schemas["AwsConnectionAction"];
 
 export type AwsConnectionPresentation = {
   label:

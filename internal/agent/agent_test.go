@@ -225,7 +225,12 @@ func TestAgentAdoptsRunningContainersAfterRestart(t *testing.T) {
 	if containers := s.hello.GetContainers(); len(containers) != 1 || containers[0].GetContainerId() != id || containers[0].GetPhase() == exited {
 		t.Fatalf("hello after restart %v", containers)
 	}
-	report := s.phase(t, id, ready)
+	// The supervisor may reconnect before the session opens, so the Hello
+	// already says the container is ready.
+	report := s.hello.GetContainers()[0]
+	if report.GetPhase() != ready {
+		report = s.phase(t, id, ready)
+	}
 	if running := report.GetRunningAttempts(); len(running) != 1 || running[0] != attempt {
 		t.Fatalf("running attempts after restart %v", running)
 	}

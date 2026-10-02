@@ -64,8 +64,11 @@ func NewControl(pool *pgxpool.Pool) *Control {
 
 // Resolve fills every default of spec, so a release records the complete
 // configuration it runs with and equal configurations have equal digests.
-func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
+func Resolve(spec apitypes.WorkloadSpec) (apitypes.WorkloadSpec, error) {
 	out := spec
+	if err := checkKind(spec); err != nil {
+		return out, err
+	}
 	out.TimeoutSeconds = orDefault(spec.TimeoutSeconds, 3600)
 	out.Concurrency = orDefault(spec.Concurrency, 1)
 	out.MaxPendingTasks = orDefault(spec.MaxPendingTasks, 100)
@@ -129,7 +132,7 @@ func orDefault[T any](v *T, def T) *T {
 // Digest is the SHA-256 of a resolved spec's JSON. encoding/json writes
 // struct fields in declaration order and map keys sorted, so the encoding is
 // canonical for a given spec.
-func Digest(resolved apitypes.FunctionSpec) ([]byte, []byte, error) {
+func Digest(resolved apitypes.WorkloadSpec) ([]byte, []byte, error) {
 	encoded, err := json.Marshal(resolved)
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode spec: %w", err)
@@ -139,13 +142,13 @@ func Digest(resolved apitypes.FunctionSpec) ([]byte, []byte, error) {
 }
 
 type resolvedFunction struct {
-	spec    apitypes.FunctionSpec
+	spec    apitypes.WorkloadSpec
 	encoded []byte
 	digest  []byte
 	source  storage.Digest
 }
 
-func resolveFunction(spec apitypes.FunctionSpec) (resolvedFunction, error) {
+func resolveFunction(spec apitypes.WorkloadSpec) (resolvedFunction, error) {
 	resolved, err := Resolve(spec)
 	if err != nil {
 		return resolvedFunction{}, err
@@ -189,13 +192,13 @@ func requireSources(ctx context.Context, q *Queries, workspace identity.Workspac
 // version, which becomes active in the same commit; an identical spec keeps
 // the active release. With prune, unlisted deployed functions are deleted.
 func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, app string, req apitypes.DeploymentRequest) (apitypes.Deployment, error) {
-	if len(req.Functions) == 0 && (req.Prune == nil || !*req.Prune) {
+	if len(req.Workloads) == 0 && (req.Prune == nil || !*req.Prune) {
 		return apitypes.Deployment{}, ErrNothingToDeploy
 	}
-	functions := make([]resolvedFunction, len(req.Functions))
+	functions := make([]resolvedFunction, len(req.Workloads))
 	seen := map[string]bool{}
-	for n, spec := range req.Functions {
-		key := string(KindOf(spec)) + ":" + spec.Name
+	for n, spec := range req.Workloads {
+		key := string(spec.Kind) + ":" + spec.Name
 		if seen[key] {
 			return apitypes.Deployment{}, &InvalidSpecError{Function: spec.Name, Reason: "listed more than once"}
 		}
@@ -239,7 +242,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 		if req.Prune != nil && *req.Prune {
 			keep := make([]string, len(functions))
 			for n, f := range functions {
-				keep[n] = string(KindOf(f.spec)) + ":" + f.spec.Name
+				keep[n] = string(f.spec.Kind) + ":" + f.spec.Name
 			}
 			rows, err := q.PruneFunctions(ctx, PruneFunctionsParams{AppID: appRow.ID, Keep: keep})
 			if err != nil {
@@ -257,12 +260,12 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 				}
 			}
 		}
-		workloads, err := q.CountDeployedWorkloads(ctx, appRow.ID)
+		view, err := c.appView(ctx, q, workspace, appRow.ID)
 		if err != nil {
-			return fmt.Errorf("count workloads: %w", err)
+			return err
 		}
 		out = apitypes.Deployment{
-			App:             appOut(appRow.ID, appRow.Name, appRow.State, workloads, appRow.CreatedAt),
+			App:             view,
 			Releases:        releases,
 			Pruned:          pruned,
 			RemovedVersions: removed,
@@ -279,7 +282,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 // active release. Execution is woken for the new release and for the one it
 // replaces, which drains once its work finishes.
 func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, workspace, app uuid.UUID, appName string, f resolvedFunction) (apitypes.Release, error) {
-	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Kind: string(KindOf(f.spec)), Name: f.spec.Name})
+	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Kind: string(f.spec.Kind), Name: f.spec.Name})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)
 	}
@@ -300,7 +303,7 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 		}
 		if bytes.Equal(active.SpecDigest, f.digest) {
 			return apitypes.Release{
-				Id: active.ID, Function: f.spec.Name, Version: versionOf(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
+				Id: active.ID, Name: f.spec.Name, Version: versionOf(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
 			}, nil
 		}
 	}
@@ -318,7 +321,7 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 		return apitypes.Release{}, err
 	}
 	return apitypes.Release{
-		Id: inserted.ID, Function: f.spec.Name, Version: versionOf(inserted.Version), CreatedAt: inserted.CreatedAt, Spec: f.spec,
+		Id: inserted.ID, Name: f.spec.Name, Version: versionOf(inserted.Version), CreatedAt: inserted.CreatedAt, Spec: f.spec,
 	}, nil
 }
 
@@ -329,27 +332,4 @@ func versionOf(v *int32) *int {
 	}
 	n := int(*v)
 	return &n
-}
-
-// GetFunction returns a function and its active release.
-func (c *Control) GetFunction(ctx context.Context, workspace identity.WorkspaceID, app, name string) (apitypes.Function, error) {
-	row, err := c.queries.FunctionRelease(ctx, FunctionReleaseParams{WorkspaceID: uuid.UUID(workspace), AppName: app, Name: name})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return apitypes.Function{}, ErrNotFound
-	}
-	if err != nil {
-		return apitypes.Function{}, fmt.Errorf("read function: %w", err)
-	}
-	var spec apitypes.FunctionSpec
-	if err := json.Unmarshal(row.Spec, &spec); err != nil {
-		return apitypes.Function{}, fmt.Errorf("decode release spec: %w", err)
-	}
-	return apitypes.Function{
-		Name:  row.Name,
-		App:   row.AppName,
-		State: apitypes.FunctionState(row.DesiredState),
-		ActiveRelease: apitypes.Release{
-			Id: row.ID, Function: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec,
-		},
-	}, nil
 }

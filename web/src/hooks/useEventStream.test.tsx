@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { useEventStream } from "@/hooks/useEventStream";
+import { useEventStream, useReconnectingStream } from "@/hooks/useEventStream";
 import type { ServerSentEvent } from "@/lib/api/sse";
 
 function streamResponse(chunks: string[]): Response {
@@ -19,24 +19,42 @@ function streamResponse(chunks: string[]): Response {
 }
 
 describe("useEventStream", () => {
-  it("delivers parsed frames and closes when reconnect is disabled", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(streamResponse(['id: 1\nevent: status\ndata: {"ok":true}\n\n'])),
-    );
+  it("resumes after the last delivered event when the server ends the stream", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(streamResponse(['id: 7\nevent: change\ndata: {"seq":7}\n\n']))
+      .mockReturnValue(new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    const events: ServerSentEvent[] = [];
-    const { result } = renderHook(() =>
-      useEventStream("/api/v1/tasks/t-1/subscribe", {
-        reconnect: false,
-        onEvent: (event) => events.push(event),
-      }),
-    );
+    try {
+      const events: ServerSentEvent[] = [];
+      renderHook(() =>
+        useEventStream("/v1/workspaces/dev/changes/stream", {
+          onEvent: (event) => events.push(event),
+        }),
+      );
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(1_000);
 
-    await waitFor(() => {
-      expect(result.current).toBe("closed");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const headers = fetchMock.mock.calls[1]?.[1]?.headers as Headers;
+      expect(headers.get("Last-Event-ID")).toBe("7");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes a stream whose connection reports nothing more to come", async () => {
+    const connect = vi.fn(async ({ onOpen }: { onOpen: () => void }) => {
+      onOpen();
+      return "done" as const;
     });
-    expect(events).toEqual([{ id: "1", event: "status", data: '{"ok":true}' }]);
+    const { result } = renderHook(() => useReconnectingStream("logs", connect));
+
+    await waitFor(() => expect(result.current).toBe("closed"));
+    expect(connect).toHaveBeenCalledOnce();
   });
 
   it("stays idle when disabled", () => {
@@ -44,7 +62,7 @@ describe("useEventStream", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() =>
-      useEventStream("/api/v1/events/stream", {
+      useEventStream("/v1/workspaces/dev/changes/stream", {
         enabled: false,
         onEvent: () => undefined,
       }),
@@ -62,7 +80,7 @@ describe("useEventStream", () => {
 
     try {
       renderHook(() =>
-        useEventStream("/api/v1/events/stream", {
+        useEventStream("/v1/workspaces/dev/changes/stream", {
           onEvent: () => undefined,
         }),
       );
@@ -90,7 +108,7 @@ describe("useEventStream", () => {
     try {
       await act(async () => {
         renderHook(() =>
-          useEventStream("/api/v1/events/stream", {
+          useEventStream("/v1/workspaces/dev/changes/stream", {
             onEvent: () => undefined,
           }),
         );
@@ -125,12 +143,12 @@ describe("useEventStream", () => {
 
     const { rerender, unmount } = renderHook(
       ({ url }) => useEventStream(url, { onEvent: () => undefined }),
-      { initialProps: { url: "/api/v1/events/changes/stream?workspace=one" } },
+      { initialProps: { url: "/v1/workspaces/one/changes/stream" } },
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const firstSignal = fetchMock.mock.calls[0]?.[1]?.signal;
 
-    rerender({ url: "/api/v1/events/changes/stream?workspace=two" });
+    rerender({ url: "/v1/workspaces/two/changes/stream" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(firstSignal?.aborted).toBe(true);
 

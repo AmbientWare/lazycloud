@@ -1,11 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  accountActivitySchema,
-  accountContainerCountsSchema,
-  type AccountActivityMeasure,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
@@ -17,10 +12,10 @@ import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
  * plan belongs to a payer, so a figure covering one workspace would be compared
  * with a limit it is not counted for.
  */
-export function accountContainerCountsQueryOptions() {
+export function accountMetricsQueryOptions() {
   return queryOptions({
-    queryKey: accountQueryKeys.metrics.containerCounts(),
-    queryFn: () => apiRequest("/api/v1/metrics/account/containers", accountContainerCountsSchema),
+    queryKey: accountQueryKeys.metrics.summary(),
+    queryFn: () => ok(api.GET("/v1/me/metrics")),
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -55,7 +50,7 @@ export const accountActivityRanges = {
  * fresh cache entry on every render and never reuse one.
  */
 export function accountActivityQueryOptions(options: {
-  measure: AccountActivityMeasure;
+  measure: Schemas["ActivityMeasure"];
   range: AccountActivityRange;
   limit: number;
 }) {
@@ -63,18 +58,19 @@ export function accountActivityQueryOptions(options: {
   const { spanSeconds, windowSeconds } = accountActivityRanges[range];
   return queryOptions({
     queryKey: accountQueryKeys.metrics.activity({ measure, range, limit }),
-    queryFn: () => {
-      const params = new URLSearchParams({
-        measure,
-        window_seconds: String(windowSeconds),
-        start: new Date(Date.now() - spanSeconds * 1000).toISOString(),
-        limit: String(limit),
-      });
-      return apiRequest(
-        `/api/v1/metrics/account/activity?${params.toString()}`,
-        accountActivitySchema,
-      );
-    },
+    queryFn: () =>
+      ok(
+        api.GET("/v1/me/activity", {
+          params: {
+            query: {
+              measure,
+              window_seconds: windowSeconds,
+              start: new Date(Date.now() - spanSeconds * 1000).toISOString(),
+              limit,
+            },
+          },
+        }),
+      ),
     staleTime: 30_000,
     meta: workspaceLiveQueryMeta(true),
   });

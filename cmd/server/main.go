@@ -292,7 +292,13 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
+	cfg.objectStore.BrowserOrigin = cfg.identity.PublicURL
 	store := storage.NewStorage(pool, cfg.objectStore)
+	// The dashboard reads and writes artifacts with presigned URLs. A store
+	// that refuses the rule only costs those browser transfers.
+	if err := store.AllowBrowserAccess(ctx); err != nil {
+		logger.WarnContext(ctx, "dashboard transfers of artifacts will fail", "error", err)
+	}
 	exec := execution.NewExecution(pool)
 	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
 	if err != nil {

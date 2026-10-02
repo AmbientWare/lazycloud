@@ -53,7 +53,7 @@ from lazycloud.control import (
 from lazycloud.session.deployment import (
     AppFunctions,
     DeploymentClient,
-    Workload,
+    WorkloadDefinition,
     deploy_functions,
 )
 from lazycloud.terminal_shell import InteractiveShell
@@ -123,7 +123,7 @@ def deploy(
         if diff:
             if not isinstance(target, Function | Endpoint | ASGI | Pod):
                 raise typer.BadParameter("--diff requires an app or a decorated workload")
-            workload = cast("Workload", target)
+            workload = cast("WorkloadDefinition", target)
             plan = _plan(client, selected_workspace, AppFunctions(workload._app_slug, (workload,)))
             _emit_deployment_plans(ctx, [plan])
             return
@@ -135,7 +135,7 @@ def deploy(
             )
             return
         deployment = target.deploy(workspace=selected_workspace, source_root=source_root)
-    release = next(item for item in deployment.releases if item.function == target.resource_name)
+    release = next(item for item in deployment.releases if item.name == target.resource_name)
     emit(
         ctx,
         payload=deployment.model_dump(mode="json"),
@@ -217,7 +217,7 @@ def _emit_app_deployments(
         if urls:
             summary["urls"] = urls
         devboxes: list[JsonValue] = [
-            release.function
+            release.name
             for release in deployment.releases
             if release.spec.pod is not None and release.spec.pod.kind is PodKind.devbox
         ]

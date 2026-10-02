@@ -1,4 +1,5 @@
-import type { CallGraphNode } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+import type { CallGraphNode } from "@/lib/queries/tasks";
 
 export type TimelineRow = {
   node: CallGraphNode;
@@ -117,23 +118,17 @@ export function elapsedLabel(milliseconds: number): string {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-export function statusColor(status: string): string {
+export function statusColor(status: Schemas["TaskStatus"]): string {
   switch (status) {
-    case "complete":
-      return "var(--positive)";
+    case "succeeded":
     case "running":
       return "var(--positive)";
-    case "retry":
-    case "pending":
+    case "queued":
       return "var(--warning)";
     case "failed":
-    case "timeout":
-    case "expired":
       return "var(--destructive)";
     case "cancelled":
       return "var(--muted-foreground)";
-    default:
-      return "var(--chart-5)";
   }
 }
 

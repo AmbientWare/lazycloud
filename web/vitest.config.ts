@@ -3,11 +3,7 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-const domTests = [
-  "src/**/*.test.tsx",
-  "src/**/controller.test.ts",
-  "src/lib/queries/shells.test.ts",
-];
+const domTests = ["src/**/*.test.tsx", "src/**/controller.test.ts"];
 
 export default defineConfig({
   plugins: [react()],

@@ -55,9 +55,9 @@ def logs(
     client, selected_workspace = api_session(workspace=workspace)
     open_stream: Callable[..., Iterator[LogEntry]]
     if deployment is not None:
-        reference = resolve_deployment(client, selected_workspace, deployment)
+        found = resolve_deployment(client, selected_workspace, deployment).deployment
         open_stream = partial(
-            client.stream_deployment_logs, selected_workspace, reference.deployment.id
+            client.stream_workload_logs, selected_workspace, found.app, found.kind, found.name
         )
     elif task_id is not None:
         open_stream = partial(

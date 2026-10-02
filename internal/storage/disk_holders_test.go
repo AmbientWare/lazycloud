@@ -56,6 +56,11 @@ func TestHolderOnALostHostReleasesTheDisk(t *testing.T) {
 	if _, err := s.AcquireDisk(ctx, f.host, first, "root"); err != nil {
 		t.Fatal(err)
 	}
+	// An attached disk names the workload holding it.
+	if disk, err := s.GetDisk(ctx, f.ws, "root"); err != nil || disk.Holder == nil ||
+		*disk.Holder != (apitypes.WorkloadRef{App: "app", Kind: apitypes.WorkloadRefKindFunction, Name: "fn"}) {
+		t.Fatalf("disk holder: %+v err=%v", disk, err)
+	}
 	f.stop(first, "stopped")
 
 	// The stopped holder still needs its grant for the final publish.

@@ -10,7 +10,6 @@ import {
   CornerDownLeft,
   Search,
   Settings,
-  SquareTerminal,
 } from "lucide-react";
 
 import {
@@ -22,14 +21,17 @@ import {
 } from "@/components/ui/command";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { formatKind } from "@/lib/format";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
-import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
-import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
-import { tasksQueryOptions } from "@/lib/queries/tasks";
+import {
+  appSearchQueryOptions,
+  workloadSearchQueryOptions,
+  taskSearchQueryOptions,
+} from "@/lib/queries/search";
 import { useWorkspace } from "@/lib/workspace-context";
 
+const GROUPS = ["Navigate", "Apps", "Workloads", "Tasks"] as const;
+
 type SearchResult = {
-  group: "Navigate" | "Apps" | "Workloads" | "Tasks" | "Sandboxes";
+  group: (typeof GROUPS)[number];
   key: string;
   label: string;
   detail: string;
@@ -47,16 +49,20 @@ export function GlobalSearch({
   const { workspace } = useWorkspace();
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query.trim());
+  const deferredQuery = useDeferredValue(query.trim().slice(0, 100));
   const normalizedQuery = deferredQuery.toLowerCase();
 
-  const apps = useQuery({ ...appSummariesQueryOptions(workspace.id), enabled: open });
-  const workloads = useQuery({ ...deployedStubsQueryOptions(workspace.id), enabled: open });
+  // The server answers every resource match; only the fixed destinations below are
+  // matched here.
+  const apps = useQuery({ ...appSearchQueryOptions(workspace.name, deferredQuery), enabled: open });
+  const workloads = useQuery({
+    ...workloadSearchQueryOptions(workspace.name, deferredQuery),
+    enabled: open,
+  });
   const tasks = useQuery({
-    ...tasksQueryOptions(workspace.id, { limit: 10, search: deferredQuery }),
+    ...taskSearchQueryOptions(workspace.name, deferredQuery),
     enabled: open && deferredQuery.length >= 2,
   });
-  const sandboxes = useQuery({ ...sandboxesQueryOptions(workspace.id), enabled: open });
 
   const results = useMemo(() => {
     const base = `/w/${encodeURIComponent(workspace.name)}`;
@@ -108,63 +114,52 @@ export function GlobalSearch({
     ];
     next.push(...destinations.filter((item) => matches(`${item.label} ${item.detail}`)));
 
-    for (const item of apps.data?.items ?? []) {
-      if (!matches(`${item.app.name} ${item.app.id}`)) continue;
+    for (const app of apps.data ?? []) {
       next.push({
-        key: `app-${item.app.id}`,
+        key: `app-${app.id}`,
         group: "Apps",
-        label: item.app.name,
-        detail: `${item.workload_count} ${item.workload_count === 1 ? "workload" : "workloads"}`,
-        href: `${base}/apps/${encodeURIComponent(item.app.id)}`,
+        label: app.name,
+        detail: `${app.workloads} ${app.workloads === 1 ? "workload" : "workloads"}`,
+        href: `${base}/apps/${encodeURIComponent(app.name)}`,
         icon: AppWindow,
       });
     }
 
-    for (const workload of workloads.data?.stubs ?? []) {
-      if (
-        !workload.app_id ||
-        !matches(`${workload.name} ${workload.handler ?? ""} ${workload.id} ${workload.kind}`)
-      )
-        continue;
+    for (const workload of workloads.data ?? []) {
       next.push({
         key: `workload-${workload.id}`,
         group: "Workloads",
         label: workload.name,
         detail: formatKind(workload.kind),
-        href: `${base}/apps/${encodeURIComponent(workload.app_id)}/workloads/${encodeURIComponent(workload.kind)}/${encodeURIComponent(workload.name)}`,
+        href: `${base}/apps/${encodeURIComponent(workload.app)}/workloads/${encodeURIComponent(workload.kind)}/${encodeURIComponent(workload.name)}`,
         icon: Boxes,
       });
     }
 
-    for (const task of tasks.data?.data ?? []) {
+    for (const task of tasks.data ?? []) {
       next.push({
         key: `task-${task.id}`,
         group: "Tasks",
-        label: task.name || "Task",
+        label: task.function,
         detail: `${formatKind(task.status)} · ${task.id.slice(0, 8)}`,
         href: `${base}/tasks/${encodeURIComponent(task.id)}`,
         icon: Activity,
       });
     }
 
-    for (const sandbox of sandboxes.data?.data ?? []) {
-      if (
-        !sandbox.container_id ||
-        !matches(`${sandbox.name} ${sandbox.id} ${sandbox.container_id}`)
-      )
-        continue;
-      next.push({
-        key: `sandbox-${sandbox.id}-${sandbox.container_id}`,
-        group: "Sandboxes",
-        label: sandbox.name,
-        detail: formatKind(sandbox.status),
-        href: `${base}/sandboxes/${encodeURIComponent(sandbox.container_id)}`,
-        icon: SquareTerminal,
-      });
-    }
-
     return next.slice(0, 30);
-  }, [apps.data, normalizedQuery, tasks.data, sandboxes.data, workspace.name, workloads.data]);
+  }, [apps.data, normalizedQuery, tasks.data, workspace.name, workloads.data]);
+
+  // Results arrive in group order. When the highlighted result drops out of the
+  // list, highlight the first one so Enter always opens something.
+  const ordered = useMemo(
+    () => GROUPS.flatMap((group) => results.filter((result) => result.group === group)),
+    [results],
+  );
+  const [selected, setSelected] = useState("");
+  const highlighted = ordered.some((result) => result.key === selected)
+    ? selected
+    : (ordered[0]?.key ?? "");
 
   const openResult = (result: SearchResult) => {
     onOpenChange(false);
@@ -173,11 +168,8 @@ export function GlobalSearch({
   };
 
   const loading =
-    apps.isPending ||
-    workloads.isPending ||
-    sandboxes.isPending ||
-    (deferredQuery.length >= 2 && tasks.isPending);
-  const partialError = apps.isError || workloads.isError || sandboxes.isError || tasks.isError;
+    apps.isPending || workloads.isPending || (deferredQuery.length >= 2 && tasks.isPending);
+  const partialError = apps.isError || workloads.isError || tasks.isError;
 
   return (
     <CommandDialog
@@ -189,6 +181,8 @@ export function GlobalSearch({
       title="Search workspace"
       description="Search this workspace by name or ID."
       shouldFilter={false}
+      value={highlighted}
+      onValueChange={setSelected}
       className="top-[12svh] flex max-h-[76svh] w-[calc(100%-1.5rem)] translate-y-0 gap-0 border-border bg-popover shadow-2xl sm:max-w-xl"
     >
       <CommandInput
@@ -203,7 +197,7 @@ export function GlobalSearch({
         data-search-results-scroll=""
         className="h-[min(26rem,var(--cmdk-list-height))] max-h-[calc(76svh-5.5rem)] min-h-24 scroll-py-2 p-2 transition-[height] duration-150 motion-reduce:transition-none"
       >
-        {(["Navigate", "Apps", "Workloads", "Tasks", "Sandboxes"] as const).map((group) => {
+        {GROUPS.map((group) => {
           const items = results.filter((result) => result.group === group);
           if (!items.length) return null;
           return (

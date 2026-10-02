@@ -48,7 +48,14 @@ def _cli(*args: str) -> Result:
 
 
 def _app(state: str = "active") -> dict[str, object]:
-    return {"id": APP_ID, "name": "reports", "state": state, "workloads": 2, "created_at": NOW}
+    return {
+        "id": APP_ID,
+        "name": "reports",
+        "state": state,
+        "workloads": 2,
+        "running_containers": 0,
+        "created_at": NOW,
+    }
 
 
 def _deployment(name: str = "summarize_sales", **extra: object) -> dict[str, object]:
@@ -58,6 +65,7 @@ def _deployment(name: str = "summarize_sales", **extra: object) -> dict[str, obj
         "name": name,
         "kind": "function",
         "state": "active",
+        "running_containers": 0,
         "version": 3,
         "release_id": RELEASE_ID,
         "created_at": NOW,
@@ -131,22 +139,24 @@ def test_app_commands_accept_a_name_and_report_each_outcome(fake_api: FakeApi) -
 
 
 def test_deployment_references_resolve_names_and_versions(fake_api: FakeApi) -> None:
-    @fake_api.route("GET", f"{TEAM}/deployments")
-    def deployments(request: ApiRequest) -> Reply:
-        name = request.query.get("name", [""])[0]
+    @fake_api.route("GET", f"{TEAM}/workloads")
+    def workloads(request: ApiRequest) -> Reply:
+        key = request.query.get("name", request.query.get("id", [""]))[0]
         matches = {
             "summarize_sales": [_deployment()],
+            WORKLOAD_ID: [_deployment()],
             "shared": [_deployment("shared", app="reports"), _deployment("shared", app="billing")],
         }
-        return json_reply({"deployments": matches.get(name, [])})
+        return json_reply({"workloads": matches.get(key, [])})
 
-    started = f"{TEAM}/deployments/{WORKLOAD_ID}/start"
+    workload = f"{TEAM}/apps/reports/workloads/function/summarize_sales"
+    started = f"{workload}/start"
     fake_api.route("POST", started)(lambda _: json_reply(_deployment()))
-    fake_api.route("DELETE", f"{TEAM}/deployments/{WORKLOAD_ID}")(
-        lambda _: json_reply(_deployment(state="deleted"))
-    )
+    fake_api.route("POST", f"{workload}/stop")(lambda _: json_reply(_deployment(state="stopped")))
+    fake_api.route("DELETE", workload)(lambda _: json_reply(_deployment(state="deleted")))
 
     start = _cli("deployment", "start", "summarize_sales-v2")
+    by_id = _cli("deployment", "stop", WORKLOAD_ID)
     delete = _cli("--json", "deployment", "delete", "summarize_sales")
     ambiguous = _cli("deployment", "stop", "shared")
     missing = _cli("deployment", "stop", "absent")
@@ -155,11 +165,13 @@ def test_deployment_references_resolve_names_and_versions(fake_api: FakeApi) -> 
     assert start.exit_code == 0, start.output
     assert "Started summarize_sales." in start.stdout
     assert fake_api.calls("POST", started)[0].json() == {"version": 2}
+    assert by_id.exit_code == 0, by_id.output
+    assert len(fake_api.calls("POST", f"{workload}/stop")) == 1
     assert json.loads(delete.stdout) == {"deployment_id": "summarize_sales", "deleted": True}
     assert "billing, reports" in str(ambiguous.exception)
     assert "deployment not found: absent" in str(missing.exception)
     assert one_version.exit_code != 0
-    assert len(fake_api.calls("DELETE", f"{TEAM}/deployments/{WORKLOAD_ID}")) == 1
+    assert len(fake_api.calls("DELETE", workload)) == 1
 
 
 def test_deploy_diff_previews_the_plan_without_deploying(
@@ -290,10 +302,8 @@ def test_unknown_task_ids_are_not_found(fake_api: FakeApi) -> None:
 
 
 def test_deployment_handles_submit_to_the_active_version(fake_api: FakeApi) -> None:
-    fake_api.route("GET", f"{TEAM}/deployments")(
-        lambda _: json_reply({"deployments": [_deployment()]})
-    )
-    submitted = f"{TEAM}/apps/reports/functions/summarize_sales/tasks"
+    fake_api.route("GET", f"{TEAM}/workloads")(lambda _: json_reply({"workloads": [_deployment()]}))
+    submitted = f"{TEAM}/apps/reports/workloads/function/summarize_sales/tasks"
     fake_api.route("POST", submitted)(lambda _: json_reply({"tasks": [_task("queued")]}, 201))
     fake_api.route("GET", f"{TEAM}/tasks/{TASK_ID}")(lambda _: json_reply(_task("succeeded")))
     fake_api.route("GET", f"{TEAM}/tasks/{TASK_ID}/result")(

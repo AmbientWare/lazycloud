@@ -13,16 +13,13 @@ import (
 // as the reference platform's API did, so the dashboard reaches them
 // same-origin with its session:
 //
-//	/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}[/versions/{version}]/invoke[/{path...}]
-//	/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}[/versions/{version}]/invoke[/{path...}]
+//	/v1/workspaces/{workspace}/apps/{app}/workloads/{endpoint|asgi}/{name}[/versions/{version}]/invoke[/{path...}]
 //
 // The edge forwards them like its own hosts. They stream, so the API's body
 // limit and operation router do not apply.
 func (s *Server) workloadRoutes(mux *http.ServeMux) {
-	for collection, kind := range map[string]apitypes.WorkloadKind{
-		"endpoints": apitypes.WorkloadKindEndpoint, "asgi": apitypes.WorkloadKindAsgi,
-	} {
-		base := "/v1/workspaces/{workspace}/apps/{app}/" + collection + "/{endpoint}"
+	for _, kind := range []apitypes.WorkloadKind{apitypes.WorkloadKindEndpoint, apitypes.WorkloadKindAsgi} {
+		base := "/v1/workspaces/{workspace}/apps/{app}/workloads/" + string(kind) + "/{name}"
 		for _, prefix := range []string{base, base + "/versions/{version}"} {
 			handler := s.authenticate(s.serveWorkload(kind))
 			mux.Handle(prefix+"/invoke", handler)
@@ -47,7 +44,7 @@ func (s *Server) serveWorkload(kind apitypes.WorkloadKind) http.HandlerFunc {
 			}
 			version = &n
 		}
-		app, name := r.PathValue("app"), r.PathValue("endpoint")
+		app, name := r.PathValue("app"), r.PathValue("name")
 		stripCredentials(r)
 		// The app learns where it is mounted, to build its own links.
 		r.Header.Set("X-Forwarded-Prefix", edge.InvokePath(ws.Name, app, kind, name, version))

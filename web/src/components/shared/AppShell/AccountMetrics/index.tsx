@@ -8,9 +8,9 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { shareLabel } from "@/lib/format";
-import { billingSummaryQueryOptions } from "@/lib/queries/billing";
+import { billingAccountQueryOptions } from "@/lib/queries/billing";
 import { taskMetricsQueryOptions } from "@/lib/queries/tasks";
-import { accountContainerCountsQueryOptions } from "@/lib/queries/account-metrics";
+import { accountMetricsQueryOptions } from "@/lib/queries/account-metrics";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
@@ -70,10 +70,11 @@ export function AccountMetricsDrawer({ onClose }: { onClose: () => void }) {
  */
 function ReadingStrip() {
   const { workspace } = useWorkspace();
-  const held = useQuery(accountContainerCountsQueryOptions());
-  const billing = useQuery(billingSummaryQueryOptions());
-  const tasks = useQuery(taskMetricsQueryOptions(workspace.id, TASK_METRICS_HOURS));
+  const metrics = useQuery(accountMetricsQueryOptions());
+  const billing = useQuery(billingAccountQueryOptions());
+  const tasks = useQuery(taskMetricsQueryOptions(workspace.name, TASK_METRICS_HOURS));
 
+  const held = metrics.data?.containers;
   const entitlements = billing.data?.entitlements;
   const usage = billing.data?.usage;
 
@@ -85,11 +86,11 @@ function ReadingStrip() {
       <Reading
         label="Containers"
         className="border-b border-r border-border sm:border-b-0"
-        query={held}
-        value={held.data ? held.data.running + held.data.pending : undefined}
+        query={metrics}
+        value={held ? held.running + held.pending : undefined}
         detail={
-          held.data
-            ? `${held.data.running.toLocaleString()} running · ${held.data.pending.toLocaleString()} pending`
+          held
+            ? `${held.running.toLocaleString()} running · ${held.pending.toLocaleString()} pending`
             : undefined
         }
       />
@@ -116,15 +117,15 @@ function ReadingStrip() {
         value={tasks.data?.total}
         detail={
           tasks.data
-            ? `${tasks.data.completed.toLocaleString()} completed in ${workspace.name}`
+            ? `${tasks.data.status_counts.succeeded.toLocaleString()} completed in ${workspace.name}`
             : undefined
         }
       />
       <Reading
         label="Failures · 24h"
         query={tasks}
-        value={tasks.data?.failed}
-        tone={tasks.data && tasks.data.failed > 0 ? "danger" : "neutral"}
+        value={tasks.data?.status_counts.failed}
+        tone={tasks.data && tasks.data.status_counts.failed > 0 ? "danger" : "neutral"}
         detail={
           tasks.data
             ? `${shareLabel(tasks.data.failure_rate)} of tasks in ${workspace.name}`

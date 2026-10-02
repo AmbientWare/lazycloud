@@ -18,7 +18,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until
+       c.keep_warm_seconds, c.active_until,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -55,6 +56,7 @@ type ContainerViewRow struct {
 	HostName        *string
 	KeepWarmSeconds *int32
 	ActiveUntil     *time.Time
+	Image           string
 }
 
 func (q *Queries) ContainerView(ctx context.Context, arg ContainerViewParams) (ContainerViewRow, error) {
@@ -83,6 +85,7 @@ func (q *Queries) ContainerView(ctx context.Context, arg ContainerViewParams) (C
 		&i.HostName,
 		&i.KeepWarmSeconds,
 		&i.ActiveUntil,
+		&i.Image,
 	)
 	return i, err
 }
@@ -103,21 +106,24 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until
+       c.keep_warm_seconds, c.active_until,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 left join hosts h on h.id = c.host_id
 where c.workspace_id = $1
-  and c.id < $2
-  and ($3::uuid is null or r.workload_id = $3)
+  and ($2::text is null or a.name = $2::text)
+  and c.id < $3
+  and ($4::uuid is null or r.workload_id = $4)
 order by c.id desc
-limit $4
+limit $5
 `
 
 type ListContainersParams struct {
 	WorkspaceID uuid.UUID
+	App         *string
 	Before      uuid.UUID
 	WorkloadID  *uuid.UUID
 	MaxRows     int32
@@ -146,12 +152,14 @@ type ListContainersRow struct {
 	HostName        *string
 	KeepWarmSeconds *int32
 	ActiveUntil     *time.Time
+	Image           string
 }
 
 // Newest first below the cursor, from the workspace's recent index.
 func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) ([]ListContainersRow, error) {
 	rows, err := q.db.Query(ctx, listContainers,
 		arg.WorkspaceID,
+		arg.App,
 		arg.Before,
 		arg.WorkloadID,
 		arg.MaxRows,
@@ -186,6 +194,7 @@ func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) 
 			&i.HostName,
 			&i.KeepWarmSeconds,
 			&i.ActiveUntil,
+			&i.Image,
 		); err != nil {
 			return nil, err
 		}
@@ -203,7 +212,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until
+       c.keep_warm_seconds, c.active_until,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -211,14 +221,16 @@ join apps a on a.id = w.app_id
 left join hosts h on h.id = c.host_id
 where c.workspace_id = $1
   and c.state <> 'stopped'
-  and c.id < $2
-  and ($3::uuid is null or r.workload_id = $3)
+  and ($2::text is null or a.name = $2::text)
+  and c.id < $3
+  and ($4::uuid is null or r.workload_id = $4)
 order by c.id desc
-limit $4
+limit $5
 `
 
 type ListLiveContainersParams struct {
 	WorkspaceID uuid.UUID
+	App         *string
 	Before      uuid.UUID
 	WorkloadID  *uuid.UUID
 	MaxRows     int32
@@ -247,6 +259,7 @@ type ListLiveContainersRow struct {
 	HostName        *string
 	KeepWarmSeconds *int32
 	ActiveUntil     *time.Time
+	Image           string
 }
 
 // Like ListContainers for containers that have not stopped, from the
@@ -254,6 +267,7 @@ type ListLiveContainersRow struct {
 func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainersParams) ([]ListLiveContainersRow, error) {
 	rows, err := q.db.Query(ctx, listLiveContainers,
 		arg.WorkspaceID,
+		arg.App,
 		arg.Before,
 		arg.WorkloadID,
 		arg.MaxRows,
@@ -288,6 +302,7 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 			&i.HostName,
 			&i.KeepWarmSeconds,
 			&i.ActiveUntil,
+			&i.Image,
 		); err != nil {
 			return nil, err
 		}

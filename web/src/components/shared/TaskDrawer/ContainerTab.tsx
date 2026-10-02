@@ -8,130 +8,108 @@ import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StopCause } from "@/components/shared/StopCause";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Container, ContainerMetricsPoint, Task } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
-import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
+import {
+  containerLifecycleQueryOptions,
+  containerMetricsQueryOptions,
+  containerQueryOptions,
+} from "@/lib/queries/containers";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export function ContainerTab({
-  record,
-  workspaceId,
+  workspace,
+  containerId,
+  waiting,
   live,
 }: {
-  record: Task;
-  workspaceId: string;
+  workspace: string;
+  /** The container of the latest attempt, or the one that served the request. */
+  containerId: string | undefined;
+  /** Whether the task may still be given a container. */
+  waiting: boolean;
   live: boolean;
 }) {
-  if (!record.container_id || !record.container) {
-    const pending = ["pending", "retry", "running"].includes(record.status);
+  const container = useQuery({
+    ...containerQueryOptions(workspace, containerId ?? ""),
+    enabled: Boolean(containerId),
+  });
+  if (!containerId) {
     return (
       <PanelEmpty
         message={
-          pending ? "Waiting for a container" : "Container details are unavailable for this task"
+          waiting ? "Waiting for a container" : "Container details are unavailable for this task"
         }
         className="h-full min-h-48 p-6"
       />
     );
   }
-
-  return (
-    <ContainerDetails
-      container={record.container}
-      containerId={record.container_id}
-      workspaceId={workspaceId}
-      live={live}
-    />
-  );
+  if (container.isPending) return <RowsSkeleton rows={4} height="h-10" />;
+  if (container.isError) return <PanelError message={container.error.message} />;
+  return <ContainerDetails container={container.data} workspace={workspace} live={live} />;
 }
 
 function ContainerDetails({
   container,
-  containerId,
-  workspaceId,
+  workspace,
   live,
 }: {
-  container: Container;
-  containerId: string;
-  workspaceId: string;
+  container: Schemas["Container"];
+  workspace: string;
   live: boolean;
 }) {
   const queryClient = useQueryClient();
-  const metrics = useQuery(containerMetricsTimeseriesQueryOptions(workspaceId, containerId, live));
+  const metrics = useQuery(containerMetricsQueryOptions(workspace, container.id, live));
+  const lifecycle = useQuery(containerLifecycleQueryOptions(workspace, container.id));
 
   // Capture the last recorded sample after a live task terminates.
   const wasLive = useRef(live);
   useEffect(() => {
     if (wasLive.current && !live) {
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.containers.metrics(workspaceId, containerId),
+        queryKey: workspaceQueryKeys.containers.metrics(workspace, container.id),
       });
     }
     wasLive.current = live;
-  }, [live, queryClient, workspaceId, containerId]);
+  }, [live, queryClient, workspace, container.id]);
 
-  const running = container.status === "running";
-  const command = container.command.join(" ");
-  const ports = [...new Set(Object.values(container.ports))].sort((a, b) => a - b);
   const facts = [
-    { label: "Container ID", value: <CopyId value={containerId} className="-ml-1.5" /> },
+    { label: "Container ID", value: <CopyId value={container.id} className="-ml-1.5" /> },
     { label: "Image", value: container.image || "None", mono: true },
-    {
-      label: "Worker",
-      value: container.runtime_worker_id || container.worker_id || "None",
-      mono: true,
-    },
-    {
-      label: "Machine",
-      value: container.runtime_machine_id || container.machine_id || "None",
-      mono: true,
-    },
-    { label: "Command", value: command || "None", mono: true },
-    { label: "Working directory", value: container.cwd || "Default", mono: true },
-    { label: "Ports", value: ports.length ? ports.join(", ") : "None", mono: true },
-    {
-      label: "Exit code",
-      value:
-        container.exit_code === null || container.exit_code === undefined
-          ? "None"
-          : String(container.exit_code),
-      mono: true,
-    },
+    { label: "Machine", value: lifecycle.data?.host || "None", mono: true },
+    { label: "Exit code", value: "None", mono: true },
     {
       label: "Created",
       value: <LiveRelativeTime value={container.created_at} />,
     },
     {
       label: "Started",
-      value: container.started_at ? (
-        <LiveRelativeTime value={container.started_at} />
-      ) : (
-        "Not started"
-      ),
+      value: container.ready_at ? <LiveRelativeTime value={container.ready_at} /> : "Not started",
     },
     {
       label: "Uptime",
       value: (
         <LiveDuration
-          startedAt={container.started_at}
-          finishedAt={container.finished_at}
+          startedAt={container.ready_at}
+          finishedAt={container.stopped_at}
           fallback="Not started"
         />
       ),
     },
   ];
-  const latest = latestSample(metrics.data?.points);
 
   return (
     <div className="space-y-5 p-4">
       <section aria-labelledby="container-identity-heading">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 id="container-identity-heading" className="mono min-w-0 truncate text-sm font-medium">
-            {container.name || containerId}
+            {`${container.function}-${container.id.slice(0, 8)}`}
           </h3>
-          <StatusChip status={container.status} live={running} />
+          <StatusChip status={container.state} live={container.state === "ready"} />
         </div>
         <FactGrid columns={3} className="mt-4">
           {facts.map((fact) => (
@@ -139,8 +117,9 @@ function ContainerDetails({
           ))}
         </FactGrid>
         <StopCause
-          terminationReason={container.termination_reason}
-          status={container.status}
+          reason={container.stop_reason}
+          message={container.exit_message}
+          exitCode={container.exit_code}
           className="mt-4"
         />
       </section>
@@ -161,8 +140,8 @@ function ContainerDetails({
           <PanelError message={metrics.error.message} />
         ) : (
           <>
-            <ContainerCapacity sample={latest} />
-            <ContainerMetricsCharts points={metrics.data.points} className="mt-5 sm:grid-cols-2" />
+            <ContainerCapacity metrics={metrics.data} />
+            <ContainerMetricsCharts metrics={metrics.data} className="mt-5 sm:grid-cols-2" />
           </>
         )}
       </section>
@@ -170,15 +149,19 @@ function ContainerDetails({
   );
 }
 
-function ContainerCapacity({ sample }: { sample: ContainerMetricsPoint | undefined }) {
+function ContainerCapacity({ metrics }: { metrics: Schemas["ContainerMetrics"] }) {
+  const sample = latestSample(metrics.points);
   const capacity = [
     {
       label: "CPU allocation",
-      value: sample ? formatCpu(sample.cpu_total_millicores) : "Not reported",
+      value: sample ? formatCpu(metrics.cpu_total_millicores) : "Not reported",
     },
     {
       label: "Memory allocation",
-      value: sample?.memory_total_bytes ? formatBytes(sample.memory_total_bytes) : "Not reported",
+      value:
+        sample && metrics.memory_total_bytes
+          ? formatBytes(metrics.memory_total_bytes)
+          : "Not reported",
     },
     {
       label: "GPU",
@@ -210,9 +193,9 @@ function CapacitySkeleton() {
 }
 
 function latestSample(
-  points: ContainerMetricsPoint[] | undefined,
-): ContainerMetricsPoint | undefined {
-  return points?.reduce<ContainerMetricsPoint | undefined>((latest, point) => {
+  points: Schemas["ContainerMetricPoint"][],
+): Schemas["ContainerMetricPoint"] | undefined {
+  return points.reduce<Schemas["ContainerMetricPoint"] | undefined>((latest, point) => {
     if (!latest || point.timestamp > latest.timestamp) return point;
     return latest;
   }, undefined);

@@ -82,7 +82,7 @@ def talk(message: str):
     return {"heard": message}
 `
 
-func asgiSpec(source, name, handler string, kind apitypes.HttpKind, concurrency int) apitypes.FunctionSpec {
+func asgiSpec(source, name, handler string, kind apitypes.HttpKind, concurrency int) apitypes.WorkloadSpec {
 	s := spec(name, handler, source, &apitypes.HttpSpec{Kind: kind})
 	s.Concurrency = &concurrency
 	return s
@@ -170,9 +170,6 @@ func TestASGIStreamsUploadsUpgradesAndStripsTheToken(t *testing.T) {
 
 	// A realtime handler answers each message; an iterable sends several.
 	talk := p.describe("web", apitypes.WorkloadKindAsgi, "talk")
-	if talk.Kind != apitypes.HttpKindRealtime {
-		t.Fatalf("talk kind %s", talk.Kind)
-	}
 	rt := p.dialWebSocket(talk.Url, p.token)
 	rt.send("hello")
 	if got := rt.receive(); got != `{"heard": "hello"}` {

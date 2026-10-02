@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,6 +26,22 @@ const (
 	AppDeleted AppState = "deleted"
 )
 
+// AppFilter narrows an app listing.
+type AppFilter struct {
+	State *AppState
+	// Search matches part of the app name.
+	Search *string
+}
+
+// lowered is a search term in the lowercase the names are compared in.
+func lowered(term *string) *string {
+	if term == nil {
+		return nil
+	}
+	l := strings.ToLower(*term)
+	return &l
+}
+
 // AppPage is one page of apps by name.
 type AppPage struct {
 	Apps []apitypes.App
@@ -33,13 +49,13 @@ type AppPage struct {
 	Next string
 }
 
-// ListApps returns live apps with a deployed workload by name, optionally
-// only those in state, starting after the cursor.
-func (c *Control) ListApps(ctx context.Context, workspace identity.WorkspaceID, state *AppState, limit int, cursor string) (AppPage, error) {
+// ListApps returns live apps with a deployed workload by name, narrowed by
+// the filter, starting after the cursor.
+func (c *Control) ListApps(ctx context.Context, workspace identity.WorkspaceID, filter AppFilter, limit int, cursor string) (AppPage, error) {
 	size := pageSize(limit)
-	params := ListAppsParams{WorkspaceID: uuid.UUID(workspace), After: cursor, MaxRows: size + 1}
-	if state != nil {
-		s := string(*state)
+	params := ListAppsParams{WorkspaceID: uuid.UUID(workspace), Search: lowered(filter.Search), After: cursor, MaxRows: size + 1}
+	if filter.State != nil {
+		s := string(*filter.State)
 		params.State = &s
 	}
 	rows, err := c.queries.ListApps(ctx, params)
@@ -53,7 +69,7 @@ func (c *Control) ListApps(ctx context.Context, workspace identity.WorkspaceID, 
 	}
 	page.Apps = make([]apitypes.App, len(rows))
 	for n, row := range rows {
-		page.Apps[n] = appOut(row.ID, row.Name, row.State, row.Workloads, row.CreatedAt)
+		page.Apps[n] = appOut(AppViewRow(row))
 	}
 	return page, nil
 }
@@ -146,12 +162,13 @@ func (c *Control) appView(ctx context.Context, q *Queries, workspace identity.Wo
 	if err != nil {
 		return apitypes.App{}, fmt.Errorf("read app: %w", err)
 	}
-	return appOut(row.ID, row.Name, row.State, row.Workloads, row.CreatedAt), nil
+	return appOut(row), nil
 }
 
-func appOut(id uuid.UUID, name, state string, workloads int32, created time.Time) apitypes.App {
+func appOut(row AppViewRow) apitypes.App {
 	return apitypes.App{
-		Id: id, Name: name, State: apitypes.AppState(state), Workloads: int(workloads), CreatedAt: created,
+		Id: row.ID, Name: row.Name, State: apitypes.AppState(row.State), Workloads: int(row.Workloads),
+		RunningContainers: int(row.RunningContainers), CreatedAt: row.CreatedAt,
 	}
 }
 

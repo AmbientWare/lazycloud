@@ -18,24 +18,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Container, Deployment } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
 import { useLiveNow } from "@/hooks/use-live-now";
-import { scaleDeploymentMutationOptions } from "@/lib/queries/apps";
+import { scaleWorkloadMutationOptions, workloadRunning } from "@/lib/queries/deployments";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { podInstanceUptime } from "./pod-instance-format";
 
-export const ACTIVE_POD_CONTAINER_STATUSES = ["pending", "running"] as const;
-const ACTIVE_CONTAINER_STATUSES = new Set<string>(ACTIVE_POD_CONTAINER_STATUSES);
 export type PodInstanceStatusFilter = "active" | "all";
 
 export function PodInstances({
-  workspaceId,
-  workspaceName,
-  appId,
-  workloadName,
-  deployment,
+  workspace,
+  workload,
   statusFilter,
   onStatusFilterChange,
   containers,
@@ -46,14 +41,11 @@ export function PodInstances({
   loadMoreError,
   onLoadMore,
 }: {
-  workspaceId: string;
-  workspaceName: string;
-  appId: string;
-  workloadName: string;
-  deployment: Deployment;
+  workspace: string;
+  workload: Schemas["Workload"];
   statusFilter: PodInstanceStatusFilter;
   onStatusFilterChange: (filter: PodInstanceStatusFilter) => void;
-  containers: Container[];
+  containers: Schemas["Container"][];
   loading: boolean;
   error: Error | null;
   nextCursor: string | undefined;
@@ -62,10 +54,8 @@ export function PodInstances({
   onLoadMore: () => void;
 }) {
   const instances = useMemo(() => orderInstances(containers), [containers]);
-  const active = instances.filter((container) =>
-    ACTIVE_CONTAINER_STATUSES.has(container.status),
-  ).length;
-  const running = instances.filter((container) => container.status === "running").length;
+  const active = instances.filter((container) => container.state !== "stopped").length;
+  const running = instances.filter((container) => container.state === "ready").length;
   const now = useLiveNow(running > 0);
 
   return (
@@ -74,12 +64,11 @@ export function PodInstances({
         {/* The header already states how many are running; what it cannot say is
             how many the Pod was told to hold. */}
         <p className="text-[11px] text-muted-foreground">
-          {countLabel(active, "active", "active")} · {configuredReplicaLabel(deployment)} configured
+          {countLabel(active, "active", "active")} · {configuredReplicaLabel(workload)} configured
         </p>
         <InstanceControls
-          workspaceId={workspaceId}
-          appId={appId}
-          deployment={deployment}
+          workspace={workspace}
+          workload={workload}
           running={running}
           statusFilter={statusFilter}
           onStatusFilterChange={onStatusFilterChange}
@@ -102,9 +91,7 @@ export function PodInstances({
               {instances.map((container) => (
                 <InstanceRow
                   key={container.id}
-                  workspaceName={workspaceName}
-                  appId={appId}
-                  workloadName={workloadName}
+                  workspace={workspace}
                   container={container}
                   now={now}
                 />
@@ -136,16 +123,14 @@ export function PodInstances({
 }
 
 function InstanceControls({
-  workspaceId,
-  appId,
-  deployment,
+  workspace,
+  workload,
   running,
   statusFilter,
   onStatusFilterChange,
 }: {
-  workspaceId: string;
-  appId: string;
-  deployment: Deployment;
+  workspace: string;
+  workload: Schemas["Workload"];
   running: number;
   statusFilter: PodInstanceStatusFilter;
   onStatusFilterChange: (value: PodInstanceStatusFilter) => void;
@@ -155,45 +140,38 @@ function InstanceControls({
       className="flex w-full min-w-0 items-center justify-end gap-1 sm:w-auto"
       aria-label="Instance controls"
     >
-      <ReplicaControl
-        workspaceId={workspaceId}
-        appId={appId}
-        deployment={deployment}
-        running={running}
-      />
+      <ReplicaControl workspace={workspace} workload={workload} running={running} />
       <InstanceStatusFilter value={statusFilter} onChange={onStatusFilterChange} />
     </div>
   );
 }
 
 function ReplicaControl({
-  workspaceId,
-  appId,
-  deployment,
+  workspace,
+  workload,
   running,
 }: {
-  workspaceId: string;
-  appId: string;
-  deployment: Deployment;
+  workspace: string;
+  workload: Schemas["Workload"];
   running: number;
 }) {
-  const configured = deployment.scaling?.max_replicas ?? running;
+  const configured = workload.scaling?.max_containers ?? running;
   const [draft, setDraft] = useState<number | null>(null);
   const replicas = draft ?? configured;
   const queryClient = useQueryClient();
   const scale = useMutation({
-    ...scaleDeploymentMutationOptions(workspaceId, deployment.id, replicas),
+    ...scaleWorkloadMutationOptions(workspace, workload),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.deployments.root(workspaceId),
+          queryKey: workspaceQueryKeys.workloads.root(workspace),
         }),
         queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.containers.root(workspaceId),
+          queryKey: workspaceQueryKeys.containers.root(workspace),
           refetchType: "active",
         }),
         queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+          queryKey: workspaceQueryKeys.apps.detail(workspace, workload.app),
         }),
       ]);
       setDraft(null);
@@ -202,11 +180,11 @@ function ReplicaControl({
     onError: (error) => toast.error("Pod could not be scaled", { description: error.message }),
   });
 
-  if (!deployment.actions.can_scale) {
+  // Only an active pod of an active app scales.
+  if (!workloadRunning(workload)) {
     return (
       <div className="text-right text-xs text-muted-foreground">
-        <span className="mono text-foreground">{configuredReplicaLabel(deployment)}</span>{" "}
-        configured
+        <span className="mono text-foreground">{configuredReplicaLabel(workload)}</span> configured
       </div>
     );
   }
@@ -252,7 +230,7 @@ function ReplicaControl({
         className="w-16 gap-1 px-1"
         aria-label="Apply"
         disabled={!changed || scale.isPending}
-        onClick={() => scale.mutate()}
+        onClick={() => scale.mutate(replicas)}
       >
         {scale.isPending ? (
           <Loader2 className="animate-spin" />
@@ -306,28 +284,24 @@ function InstanceListHeader() {
 }
 
 function InstanceRow({
-  workspaceName,
-  appId,
-  workloadName,
+  workspace,
   container,
   now,
 }: {
-  workspaceName: string;
-  appId: string;
-  workloadName: string;
-  container: Container;
+  workspace: string;
+  container: Schemas["Container"];
   now: number;
 }) {
-  const running = container.status === "running";
+  const running = container.state === "ready";
   return (
     <div role="listitem" className="border-b border-border/70 last:border-b-0">
       <Link
-        to="/w/$workspace/apps/$appId/workloads/$kind/$name/instances/$containerId"
+        to="/w/$workspace/apps/$app/workloads/$kind/$name/instances/$containerId"
         params={{
-          workspace: workspaceName,
-          appId,
+          workspace,
+          app: container.app,
           kind: "pod",
-          name: workloadName,
+          name: container.function,
           containerId: container.id,
         }}
         aria-label={`Open instance ${container.id}`}
@@ -336,11 +310,11 @@ function InstanceRow({
         <span className="min-w-0">
           <span className="mono block truncate text-sm font-medium">{container.id}</span>
           <span className="mt-1 block lg:hidden">
-            <StatusChip status={container.status} live={running} />
+            <StatusChip status={container.state} live={running} />
           </span>
         </span>
         <span className="hidden lg:block">
-          <StatusChip status={container.status} live={running} />
+          <StatusChip status={container.state} live={running} />
         </span>
         <span className="mono hidden truncate text-xs tabular-nums text-muted-foreground lg:block">
           {podInstanceUptime(container, now)}
@@ -373,23 +347,26 @@ function InstanceListSkeleton() {
   );
 }
 
-function orderInstances(containers: Container[]): Container[] {
+/** Serving first, then starting, then draining and stopped; newest first within each. */
+function orderInstances(containers: Schemas["Container"][]): Schemas["Container"][] {
   return [...containers].sort((left, right) => {
-    const statusOrder = statusRank(left.status) - statusRank(right.status);
-    if (statusOrder !== 0) return statusOrder;
+    const stateOrder = STATE_RANK[left.state] - STATE_RANK[right.state];
+    if (stateOrder !== 0) return stateOrder;
     return right.created_at.localeCompare(left.created_at);
   });
 }
 
-function statusRank(status: string): number {
-  if (status === "running") return 0;
-  if (status === "pending") return 1;
-  return 2;
-}
+const STATE_RANK: Record<Schemas["ContainerState"], number> = {
+  ready: 0,
+  pending: 1,
+  starting: 1,
+  draining: 2,
+  stopped: 2,
+};
 
-function configuredReplicaLabel(deployment: Deployment): string {
-  const scaling = deployment.scaling;
+function configuredReplicaLabel(workload: Schemas["Workload"]): string {
+  const scaling = workload.scaling;
   if (!scaling) return "Not reported";
-  if (scaling.min_replicas === scaling.max_replicas) return String(scaling.max_replicas);
-  return `${scaling.min_replicas}–${scaling.max_replicas}`;
+  if (scaling.min_containers === scaling.max_containers) return String(scaling.max_containers);
+  return `${scaling.min_containers}–${scaling.max_containers}`;
 }

@@ -249,7 +249,7 @@ func SSHAlias(workspace, app, pod string) string {
 // SSHPod is a pod a tunnel connects to.
 type SSHPod struct {
 	Workload uuid.UUID
-	Spec     apitypes.FunctionSpec
+	Spec     apitypes.WorkloadSpec
 }
 
 // ErrPodStopped and ErrPodWithoutSSH refuse a tunnel to a pod that cannot
@@ -282,7 +282,7 @@ func (e *Execution) PodForSSH(ctx context.Context, workspace identity.WorkspaceI
 }
 
 // ServesSSH reports whether a release runs the SSH server.
-func ServesSSH(spec apitypes.FunctionSpec) bool {
+func ServesSSH(spec apitypes.WorkloadSpec) bool {
 	p := spec.Pod
 	return p != nil && (p.Kind == apitypes.PodKindDevbox || (p.Ssh != nil && *p.Ssh))
 }

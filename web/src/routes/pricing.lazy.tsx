@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
 import { ArrowDown, CornerDownRight } from "lucide-react";
 
-import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   diskAllowanceFigure,
   gpuModelsLabel,
@@ -30,6 +30,8 @@ import "./pricing.css";
 export const Route = createLazyFileRoute("/pricing")({
   component: MarketingPricing,
 });
+
+type PricingCatalog = Schemas["PricingCatalog"];
 
 const SECONDS_PER_HOUR = 3600;
 
@@ -60,19 +62,19 @@ function perLabel(meter: Meter): string {
   return meter === "second" ? "sec" : "hr";
 }
 
-function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonly RateGroup[] {
+function computeGroups(placement: Schemas["PlacementRate"], meter: Meter): readonly RateGroup[] {
   const rates = placement.compute_rates.filter((rate) => rate.billing_owner === "platform_fleet");
-  const shape = rates.find((rate) => rate.gpu_type === "");
+  const shape = rates.find((rate) => rate.gpu_type === undefined);
   if (!shape) throw new Error("the pricing catalog has no platform fleet rate");
   const fleetGpuRates = rates
-    .filter((rate) => rate.gpu_type !== "")
+    .flatMap(({ gpu_type: gpuType, ...rate }) => (gpuType ? [{ ...rate, gpuType }] : []))
     .sort((left, right) => right.nanos_per_gpu_card_hour - left.nanos_per_gpu_card_hour);
   const per = perLabel(meter);
   return [
     {
       heading: "GPU",
       lines: fleetGpuRates.map((rate) => ({
-        label: rate.gpu_type,
+        label: rate.gpuType,
         figure: metered(rate.nanos_per_gpu_card_hour, meter),
         unit: `/ ${per}`,
         fractionDigits: meter === "hour" ? 2 : 6,
@@ -139,7 +141,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
 
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `New accounts get ${formatCostNanos(catalog.trial.amount_nanos)} in one-time trial credit, valid for ${catalog.trial.duration_days} days. Without a saved card, the limit is ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} and ${countLabel(terms.max_concurrent_gpus, "GPU card")} at once, using ${gpuModelsLabel(terms.gpu_types)}. Add a card and credit to use all offered GPU models on any plan, subject to availability. Monthly plan credit expires at the end of the billing period. Purchased credit never expires.`;
+  return `New accounts get ${formatCostNanos(catalog.trial.amount_nanos)} in one-time trial credit, valid for ${catalog.trial.duration_days} days. Without a saved card, the limit is ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} and ${countLabel(terms.max_concurrent_gpus, "GPU card")} at once, using ${terms.gpu_types.join(", ")}. Add a card and credit to use all offered GPU models on any plan, subject to availability. Monthly plan credit expires at the end of the billing period. Purchased credit never expires.`;
 }
 
 const sectionTitle =
@@ -152,6 +154,7 @@ function MarketingPricing() {
   const catalog = pricing.data;
 
   const placement = catalog?.placement_rates.find((rate) => rate.rate_class === "auto");
+  const offeredGpuTypes = catalog?.gpu_rates.map((rate) => rate.gpu_type) ?? [];
   if (catalog && !placement) throw new Error("the pricing catalog has no base compute rates");
 
   return (
@@ -265,7 +268,7 @@ function MarketingPricing() {
                             />
                             <PlanLimit
                               label="GPU models"
-                              value={gpuModelsLabel(plan.entitlements.gpu_types)}
+                              value={gpuModelsLabel(plan.entitlements.gpu_types, offeredGpuTypes)}
                             />
                             <PlanLimit
                               label="Workspaces"

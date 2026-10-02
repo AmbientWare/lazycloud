@@ -49,6 +49,8 @@ jobs:
       - name: Validate web owner
         working-directory: web
         run: |
+          bun run apigen
+          git diff --exit-code -- src/lib/api/generated
           bun run format:check
           bun run lint
           bun run typecheck

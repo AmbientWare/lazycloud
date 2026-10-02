@@ -16,9 +16,7 @@ from shared.api import (
     AppPage,
     Container,
     ContainerPage,
-    DeployedWorkload,
     Deployment,
-    DeploymentPage,
     DeploymentPlan,
     DeploymentPlanRequest,
     DeploymentRequest,
@@ -28,8 +26,6 @@ from shared.api import (
     DeviceTokenResponse,
     Error,
     ErrorCode,
-    Function,
-    FunctionSpec,
     Image,
     ImageBuild,
     ImageBuildLogEntry,
@@ -49,7 +45,7 @@ from shared.api import (
     SecretValueUpdate,
     SourceUpload,
     SourceUploadRequest,
-    StartDeploymentRequest,
+    StartWorkloadRequest,
     StopTasksRequest,
     StopTasksResponse,
     SubmitTasksRequest,
@@ -58,7 +54,11 @@ from shared.api import (
     TaskPage,
     TaskStatus,
     UploadTarget,
-    VersionPage,
+    Workload,
+    WorkloadDetail,
+    WorkloadKind,
+    WorkloadPage,
+    WorkloadSpec,
     Workspace,
     WorkspaceList,
     WorkspaceRequest,
@@ -277,20 +277,13 @@ class ApiClient:
             body=request,
         )
 
-    def get_function(self, workspace: str, app: str, function: str) -> Function:
-        return self._send(
-            Function,
-            "GET",
-            _path("v1", "workspaces", workspace, "apps", app, "functions", function),
-        )
-
     def submit_tasks(
         self, workspace: str, app: str, function: str, request: SubmitTasksRequest
     ) -> SubmitTasksResponse:
         return self._send(
             SubmitTasksResponse,
             "POST",
-            _path("v1", "workspaces", workspace, "apps", app, "functions", function, "tasks"),
+            workload_path(workspace, app, WorkloadKind.function, function, "tasks"),
             body=request,
         )
 
@@ -389,105 +382,85 @@ class ApiClient:
             body=request,
         )
 
-    def prepare_function_release(
-        self, workspace: str, app: str, function: str, spec: FunctionSpec
-    ) -> Release:
+    def prepare_release(self, workspace: str, app: str, spec: WorkloadSpec) -> Release:
         return self._send(
             Release,
             "POST",
-            _path("v1", "workspaces", workspace, "apps", app, "functions", function, "releases"),
+            _path("v1", "workspaces", workspace, "apps", app, "releases"),
             body=spec,
         )
 
-    def list_deployments(
+    def list_workloads(
         self,
         workspace: str,
         *,
         app: str | None = None,
+        kind: WorkloadKind | None = None,
         name: str | None = None,
+        workload_id: UUID | None = None,
         limit: int = 100,
         cursor: str | None = None,
-    ) -> DeploymentPage:
-        params = _query(app=app, name=name, limit=limit, cursor=cursor)
+    ) -> WorkloadPage:
+        params = _query(
+            app=app,
+            kind=kind.value if kind is not None else None,
+            name=name,
+            id=str(workload_id) if workload_id is not None else None,
+            limit=limit,
+            cursor=cursor,
+        )
         return self._send(
-            DeploymentPage,
+            WorkloadPage, "GET", _path("v1", "workspaces", workspace, "workloads"), params=params
+        )
+
+    def get_workload(
+        self, workspace: str, app: str, kind: WorkloadKind, name: str, *, version: int | None = None
+    ) -> WorkloadDetail:
+        """The live workload and its active release, or the release of `version`."""
+        return self._send(
+            WorkloadDetail,
             "GET",
-            _path("v1", "workspaces", workspace, "deployments"),
-            params=params,
+            workload_path(workspace, app, kind, name),
+            params=_query(version=version),
         )
 
-    def get_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
-        return self._send(
-            DeployedWorkload,
-            "GET",
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id)),
-        )
+    def stop_workload(self, workspace: str, app: str, kind: WorkloadKind, name: str) -> Workload:
+        return self._send(Workload, "POST", workload_path(workspace, app, kind, name, "stop"))
 
-    def stop_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
+    def start_workload(
+        self, workspace: str, app: str, kind: WorkloadKind, name: str, *, version: int | None = None
+    ) -> Workload:
         return self._send(
-            DeployedWorkload,
+            Workload,
             "POST",
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "stop"),
+            workload_path(workspace, app, kind, name, "start"),
+            body=StartWorkloadRequest(version=version) if version is not None else None,
         )
 
-    def start_deployment(
-        self, workspace: str, deployment_id: UUID, *, version: int | None = None
-    ) -> DeployedWorkload:
-        return self._send(
-            DeployedWorkload,
-            "POST",
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "start"),
-            body=StartDeploymentRequest(version=version) if version is not None else None,
-        )
-
-    def scale_deployment(
-        self, workspace: str, deployment_id: UUID, containers: int
-    ) -> DeployedWorkload:
+    def scale_workload(
+        self, workspace: str, app: str, kind: WorkloadKind, name: str, containers: int
+    ) -> Workload:
         """Hold a pod at `containers` containers until the next scale."""
         return self._send(
-            DeployedWorkload,
+            Workload,
             "POST",
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "scale"),
+            workload_path(workspace, app, kind, name, "scale"),
             body=ScaleRequest(containers=containers),
         )
 
-    def delete_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
-        return self._send(
-            DeployedWorkload,
-            "DELETE",
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id)),
-        )
-
-    def list_deployment_versions(
-        self,
-        workspace: str,
-        deployment_id: UUID,
-        *,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> VersionPage:
-        return self._send(
-            VersionPage,
-            "GET",
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "versions"),
-            params=_query(limit=limit, cursor=cursor),
-        )
+    def delete_workload(self, workspace: str, app: str, kind: WorkloadKind, name: str) -> Workload:
+        return self._send(Workload, "DELETE", workload_path(workspace, app, kind, name))
 
     def list_containers(
         self,
         workspace: str,
         *,
         live: bool = False,
-        deployment: UUID | None = None,
+        app: str | None = None,
         limit: int = 100,
         cursor: str | None = None,
     ) -> ContainerPage:
-        params = _query(
-            live="true" if live else None,
-            deployment=str(deployment) if deployment is not None else None,
-            limit=limit,
-            cursor=cursor,
-        )
+        params = _query(live="true" if live else None, app=app, limit=limit, cursor=cursor)
         return self._send(
             ContainerPage, "GET", _path("v1", "workspaces", workspace, "containers"), params=params
         )
@@ -530,19 +503,21 @@ class ApiClient:
             follow=follow,
         )
 
-    def stream_deployment_logs(
+    def stream_workload_logs(
         self,
         workspace: str,
-        deployment_id: UUID,
+        app: str,
+        kind: WorkloadKind,
+        name: str,
         *,
         after: int = 0,
         tail: int | None = None,
         follow: bool = False,
     ) -> Iterator[LogEntry]:
-        """Yield log entries of every task of a deployment; a followed stream never ends."""
+        """Yield log entries of every task of a workload; a followed stream never ends."""
 
         return self._stream_logs(
-            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "logs"),
+            workload_path(workspace, app, kind, name, "logs"),
             after=after,
             tail=tail,
             follow=follow,
@@ -831,6 +806,13 @@ def _query(**values: str | int | None) -> dict[str, str | int]:
 
 def _path(*segments: str) -> str:
     return "/" + "/".join(quote(segment, safe="") for segment in segments)
+
+
+def workload_path(workspace: str, app: str, kind: WorkloadKind, name: str, *segments: str) -> str:
+    """The API path of one workload, or of `segments` beneath it."""
+    return _path(
+        "v1", "workspaces", workspace, "apps", app, "workloads", kind.value, name, *segments
+    )
 
 
 __all__ = ["ApiClient", "ApiConnectionError", "ApiError", "is_transient"]

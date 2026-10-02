@@ -10,7 +10,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
-func withConcurrency(spec apitypes.FunctionSpec, n int) apitypes.FunctionSpec {
+func withConcurrency(spec apitypes.WorkloadSpec, n int) apitypes.WorkloadSpec {
 	spec.Concurrency = &n
 	return spec
 }
@@ -19,19 +19,19 @@ func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	first := deploy(t, c, ws, false, function("summarize"))
-	if _, err := c.Deploy(t.Context(), ws, "billing", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{function("charge")}}); err != nil {
+	if _, err := c.Deploy(t.Context(), ws, "billing", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{function("charge")}}); err != nil {
 		t.Fatal(err)
 	}
 	// Preparing a working-tree release creates an app that is not listed.
-	if _, err := c.PrepareRelease(t.Context(), ws, "scratch", "probe", function("probe")); err != nil {
+	if _, err := c.PrepareRelease(t.Context(), ws, "scratch", function("probe")); err != nil {
 		t.Fatal(err)
 	}
 
-	page, err := c.ListApps(t.Context(), ws, nil, 1, "")
+	page, err := c.ListApps(t.Context(), ws, AppFilter{}, 1, "")
 	if err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "billing" || page.Next == "" {
 		t.Fatalf("first page %+v %v", page, err)
 	}
-	page, err = c.ListApps(t.Context(), ws, nil, 1, page.Next)
+	page, err = c.ListApps(t.Context(), ws, AppFilter{}, 1, page.Next)
 	if err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "reports" || page.Next != "" || page.Apps[0].Workloads != 1 {
 		t.Fatalf("second page %+v %v", page, err)
 	}
@@ -41,8 +41,14 @@ func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
 		t.Fatalf("pause %+v %v", paused, err)
 	}
 	state := AppPaused
-	if page, err := c.ListApps(t.Context(), ws, &state, 10, ""); err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "reports" {
+	if page, err := c.ListApps(t.Context(), ws, AppFilter{State: &state}, 10, ""); err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "reports" {
 		t.Fatalf("paused apps %+v %v", page, err)
+	}
+	// Search matches part of the name on the server.
+	for term, want := range map[string]int{"ILL": 1, "port": 1, "nope": 0} {
+		if page, err := c.ListApps(t.Context(), ws, AppFilter{Search: &term}, 10, ""); err != nil || len(page.Apps) != want {
+			t.Fatalf("apps matching %q: %+v %v, want %d", term, page.Apps, err, want)
+		}
 	}
 	if resumed, err := c.ResumeApp(t.Context(), ws, first.App.Id.String()); err != nil || resumed.State != apitypes.AppStateActive {
 		t.Fatalf("resume by id %+v %v", resumed, err)
@@ -65,7 +71,7 @@ func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
 	if again.App.Id == first.App.Id || *again.Releases[0].Version != 1 {
 		t.Fatalf("redeploy after delete reused app %v at v%d", again.App.Id, *again.Releases[0].Version)
 	}
-	if _, err := c.GetFunction(t.Context(), ws, "reports", "summarize"); err != nil {
+	if _, err := functionRelease(t, c, ws, "summarize"); err != nil {
 		t.Fatalf("function of the new app %v", err)
 	}
 }
@@ -76,23 +82,32 @@ func TestDeploymentStopStartVersionsAndDelete(t *testing.T) {
 	v1 := deploy(t, c, ws, false, function("summarize"))
 	deploy(t, c, ws, false, withConcurrency(function("summarize"), 2))
 	name := "summarize"
-	list, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{Name: &name}, 10, "")
-	if err != nil || len(list.Deployments) != 1 || *list.Deployments[0].Version != 2 {
+	list, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{Name: &name}, 10, "")
+	if err != nil || len(list.Workloads) != 1 || *list.Workloads[0].Version != 2 {
 		t.Fatalf("deployments %+v %v", list, err)
 	}
-	id := WorkloadID(list.Deployments[0].Id)
+	// Search matches part of the workload or the app name.
+	for _, term := range []string{"MARIZ", "report"} {
+		if found, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{Search: &term}, 10, ""); err != nil || len(found.Workloads) != 1 {
+			t.Fatalf("deployments matching %q: %+v %v", term, found, err)
+		}
+	}
+	if found, _ := c.ListWorkloads(t.Context(), ws, WorkloadFilter{Search: &name, App: &name}, 10, ""); len(found.Workloads) != 0 {
+		t.Fatalf("search within another app %+v", found)
+	}
+	id := WorkloadID(list.Workloads[0].Id)
 
-	stopped, err := c.StopDeployment(t.Context(), ws, id)
+	stopped, err := c.StopWorkload(t.Context(), ws, id)
 	if err != nil || stopped.State != apitypes.WorkloadStateStopped {
 		t.Fatalf("stop %+v %v", stopped, err)
 	}
 	one := 1
-	started, err := c.StartDeployment(t.Context(), ws, id, &one)
+	started, err := c.StartWorkload(t.Context(), ws, id, &one)
 	if err != nil || started.State != apitypes.WorkloadStateActive || *started.ReleaseId != v1.Releases[0].Id {
 		t.Fatalf("start on v1 %+v %v", started, err)
 	}
 	nine := 9
-	if _, err := c.StartDeployment(t.Context(), ws, id, &nine); !errors.Is(err, ErrVersionNotFound) {
+	if _, err := c.StartWorkload(t.Context(), ws, id, &nine); !errors.Is(err, ErrVersionNotFound) {
 		t.Fatalf("start on a missing version %v", err)
 	}
 
@@ -108,18 +123,61 @@ func TestDeploymentStopStartVersionsAndDelete(t *testing.T) {
 		t.Fatalf("bad version cursor %v", err)
 	}
 
-	deleted, err := c.DeleteDeployment(t.Context(), ws, id)
+	deleted, err := c.DeleteWorkload(t.Context(), ws, id)
 	if err != nil || deleted.State != apitypes.WorkloadStateDeleted {
 		t.Fatalf("delete %+v %v", deleted, err)
 	}
-	if list, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{}, 10, ""); err != nil || len(list.Deployments) != 0 {
+	if list, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{}, 10, ""); err != nil || len(list.Workloads) != 0 {
 		t.Fatalf("deployments after delete %+v %v", list, err)
 	}
-	if _, err := c.StopDeployment(t.Context(), ws, id); !errors.Is(err, ErrNotFound) {
+	if _, err := c.StopWorkload(t.Context(), ws, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stop of a deleted deployment %v", err)
 	}
-	if _, err := c.GetDeployment(t.Context(), ws, WorkloadID(uuid.New())); !errors.Is(err, ErrNotFound) {
+	if _, err := c.GetWorkload(t.Context(), ws, WorkloadID(uuid.New())); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown deployment %v", err)
+	}
+}
+
+func TestRunningContainersCountReadyAndDrainingAcrossReleases(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	v1 := deploy(t, c, ws, false, function("summarize"), function("digest"))
+	v2 := deploy(t, c, ws, false, withConcurrency(function("summarize"), 2), function("digest"))
+	old, current, digest := v1.Releases[0].Id, v2.Releases[0].Id, v2.Releases[1].Id
+	if old == current || digest != v1.Releases[1].Id {
+		t.Fatalf("releases %+v %+v", v1.Releases, v2.Releases)
+	}
+	_, err := pool.Exec(t.Context(), `
+with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
+              values ('h', sha256('h'), 'online', 64000, 1 << 36) returning id)
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
+select $1, c.release_id, c.state, case when c.state = 'pending' then null else host.id end, 1, 1000, 1 << 28
+from host, (values ($2::uuid, 'ready'), ($2, 'draining'), ($2, 'stopped'),
+                   ($3::uuid, 'ready'), ($3, 'pending'), ($3, 'starting'), ($3, 'stopped'),
+                   ($4::uuid, 'ready')) as c (release_id, state)`,
+		uuid.UUID(ws), old, current, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := c.ListApps(t.Context(), ws, AppFilter{}, 10, "")
+	if err != nil || len(apps.Apps) != 1 || apps.Apps[0].RunningContainers != 4 {
+		t.Fatalf("apps %+v %v", apps, err)
+	}
+	app, err := c.GetApp(t.Context(), ws, "reports")
+	if err != nil || app.RunningContainers != 4 {
+		t.Fatalf("app %+v %v", app, err)
+	}
+	list, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{}, 10, "")
+	if err != nil || len(list.Workloads) != 2 {
+		t.Fatalf("deployments %+v %v", list, err)
+	}
+	want := map[string]int{"digest": 1, "summarize": 3}
+	for _, d := range list.Workloads {
+		got, err := c.GetWorkload(t.Context(), ws, WorkloadID(d.Id))
+		if err != nil || d.RunningContainers != want[d.Name] || got.RunningContainers != want[d.Name] {
+			t.Fatalf("%s: listed %d, read %+v %v", d.Name, d.RunningContainers, got, err)
+		}
 	}
 }
 
@@ -163,20 +221,20 @@ func TestPrepareReleaseReusesMatchingDefinitions(t *testing.T) {
 	c := NewControl(pool)
 	deployed := deploy(t, c, ws, false, function("summarize"))
 
-	same, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", function("summarize"))
+	same, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize"))
 	if err != nil || same.Id != deployed.Releases[0].Id || *same.Version != 1 {
 		t.Fatalf("unchanged definition %+v %v, want the active release", same, err)
 	}
-	changed, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", withConcurrency(function("summarize"), 2))
+	changed, err := c.PrepareRelease(t.Context(), ws, "reports", withConcurrency(function("summarize"), 2))
 	if err != nil || changed.Id == same.Id || changed.Version != nil {
 		t.Fatalf("changed definition %+v %v, want a new unversioned release", changed, err)
 	}
-	again, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", withConcurrency(function("summarize"), 2))
+	again, err := c.PrepareRelease(t.Context(), ws, "reports", withConcurrency(function("summarize"), 2))
 	if err != nil || again.Id != changed.Id {
 		t.Fatalf("repeated definition %+v %v, want %v", again, err, changed.Id)
 	}
-	fn, err := c.GetFunction(t.Context(), ws, "reports", "summarize")
-	if err != nil || fn.ActiveRelease.Id != deployed.Releases[0].Id {
+	fn, err := functionRelease(t, c, ws, "summarize")
+	if err != nil || fn.Id != deployed.Releases[0].Id {
 		t.Fatalf("active release after prepare %+v %v", fn, err)
 	}
 	// A later deploy of the prepared definition gets the next version.
@@ -184,23 +242,20 @@ func TestPrepareReleaseReusesMatchingDefinitions(t *testing.T) {
 	if *next.Releases[0].Version != 2 {
 		t.Fatalf("deploy after prepare at v%d", *next.Releases[0].Version)
 	}
-	if _, err := c.PrepareRelease(t.Context(), ws, "reports", "other", function("summarize")); err == nil {
-		t.Fatal("prepare accepted a spec named for another function")
-	}
 }
 
 func TestStoppedWorkloadRunsUnchangedWorkingTreeCalls(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	deployed := deploy(t, c, ws, false, function("summarize"))
-	list, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{}, 10, "")
+	list, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{}, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.StopDeployment(t.Context(), ws, WorkloadID(list.Deployments[0].Id)); err != nil {
+	if _, err := c.StopWorkload(t.Context(), ws, WorkloadID(list.Workloads[0].Id)); err != nil {
 		t.Fatal(err)
 	}
-	release, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", function("summarize"))
+	release, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize"))
 	if err != nil || release.Id == deployed.Releases[0].Id || release.Version != nil {
 		t.Fatalf("prepare on a stopped workload %+v %v, want a new unversioned release", release, err)
 	}
@@ -211,7 +266,7 @@ func TestStoppedWorkloadRunsUnchangedWorkingTreeCalls(t *testing.T) {
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("submit to the prepared release %v %v", tasks, err)
 	}
-	if again, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", function("summarize")); err != nil || again.Id != release.Id {
+	if again, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize")); err != nil || again.Id != release.Id {
 		t.Fatalf("second prepare %+v %v, want %v", again, err, release.Id)
 	}
 }

@@ -1,11 +1,10 @@
-import { getStoredAuthToken } from "@/lib/auth";
-import { postJson, withWorkspace } from "@/lib/api/client";
-import { functionInvokeResponseSchema, type JsonValue } from "@/lib/api/schemas";
+import { api, type Schemas } from "@/lib/api/client";
+import type { JsonValue } from "@/lib/json";
 
 /**
- * Honest result of firing a deployed invoke URL: the real HTTP status and
- * body, plus the created task id when the backend returned one
- * (function invokes respond `{task_id: ...}`).
+ * Honest result of a playground call: the real HTTP status and body, plus the
+ * created task id when the call ran as a task. Non-2xx answers resolve so
+ * callers show the server's error.
  */
 export type InvokeResult = {
   status: number;
@@ -16,82 +15,109 @@ export type InvokeResult = {
   taskId: string | null;
 };
 
+type Answer = { response: Response; data?: { task: { id: string } }; error?: unknown };
+
+function invokeResult(startedAt: number, { response, data, error }: Answer): InvokeResult {
+  const json = (data ?? error ?? null) as JsonValue;
+  return {
+    status: response.status,
+    ok: response.ok,
+    durationMs: performance.now() - startedAt,
+    bodyText: JSON.stringify(json),
+    json,
+    taskId: data?.task.id ?? null,
+  };
+}
+
 /**
- * POST a JSON payload to a deployed invoke URL with the session bearer token.
- * Non-2xx responses resolve (not throw) so callers can surface the backend's
- * real error body; only network failures reject.
+ * Run a function's active release with JSON arguments. The server runs it as
+ * a task and answers once it finishes or its wait runs out.
  */
-export async function invokeDeployment(url: string, body: JsonValue): Promise<InvokeResult> {
-  const headers = new Headers({ "Content-Type": "application/json" });
-  const token = getStoredAuthToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-
+export async function invokeFunction(
+  workspace: string,
+  app: string,
+  name: string,
+  body: JsonValue,
+): Promise<InvokeResult> {
   const startedAt = performance.now();
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  const durationMs = performance.now() - startedAt;
-  const bodyText = await response.text();
+  return invokeResult(
+    startedAt,
+    await api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/invoke", {
+      params: { path: { workspace, app, name } },
+      body: body as Schemas["InvocationBody"],
+    }),
+  );
+}
 
+/**
+ * Submit a function call as a task, for a call whose return is a Python
+ * object: the task stores the result and the playground shows it from there.
+ */
+export async function invokeFunctionTask(
+  workspace: string,
+  app: string,
+  name: string,
+  body: JsonValue,
+): Promise<InvokeResult> {
+  const startedAt = performance.now();
+  const { response, data, error } = await api.POST(
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/tasks",
+    {
+      params: { path: { workspace, app, name } },
+      body: { inputs: [{ encoding: "json", value: invocationArguments(body) }] },
+    },
+  );
+  const task = data?.tasks[0];
+  return invokeResult(startedAt, { response, data: task ? { task } : undefined, error });
+}
+
+/**
+ * Call an endpoint at its path on this origin, which the session cookie
+ * authenticates. `path` is the endpoint's invoke path from its describe read
+ * with the request's route appended. A GET or HEAD carries no body, so an
+ * object payload becomes its query string, as the endpoint reads it.
+ */
+export async function invokeHttp(
+  path: string,
+  method: string,
+  body: JsonValue,
+): Promise<InvokeResult> {
+  const startedAt = performance.now();
+  const bodiless = method === "GET" || method === "HEAD";
+  const response = await fetch(bodiless ? withQuery(path, body) : path, {
+    method,
+    headers: bodiless ? undefined : { "Content-Type": "application/json" },
+    body: bodiless ? undefined : JSON.stringify(body),
+  });
+  const bodyText = await response.text();
   let json: JsonValue | undefined;
   try {
     json = bodyText ? (JSON.parse(bodyText) as JsonValue) : undefined;
   } catch {
     json = undefined;
   }
-  const invocation = functionInvokeResponseSchema.safeParse(json);
-  const taskId = invocation.success && invocation.data.task_id ? invocation.data.task_id : null;
-
   return {
     status: response.status,
     ok: response.ok,
-    durationMs,
+    durationMs: performance.now() - startedAt,
     bodyText,
     json,
-    taskId,
+    taskId: null,
   };
 }
 
-/**
- * Invoke a function whose return is a Python object. The deployed invoke URL
- * only answers with JSON, so the call goes through the function API and asks
- * for the result as a stored Python payload; the task then carries its
- * description for the dashboard to show.
- *
- * The body follows the invoke URL's shape: `args`/`kwargs` when present,
- * otherwise the object is the keyword arguments.
- */
-export async function invokeFunctionTask(
-  workspaceId: string,
-  stubId: string,
-  body: JsonValue,
-): Promise<InvokeResult> {
-  const startedAt = performance.now();
-  const response = await postJson(
-    withWorkspace("/api/v1/functions/invoke", workspaceId),
-    functionInvokeResponseSchema,
-    {
-      stub_id: stubId,
-      invocation: {
-        version: 1,
-        encoding: "json",
-        ...invocationArguments(body),
-        result_encoding: "cloudpickle",
-      },
-    },
-  );
-  return {
-    status: 200,
-    ok: true,
-    durationMs: performance.now() - startedAt,
-    bodyText: JSON.stringify(response),
-    json: response as JsonValue,
-    taskId: response.task_id || null,
-  };
+function withQuery(path: string, body: JsonValue): string {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return path;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(body)) {
+    if (value === null || value === undefined) continue;
+    query.set(key, typeof value === "string" ? value : JSON.stringify(value));
+  }
+  const text = query.toString();
+  return text ? `${path}${path.includes("?") ? "&" : "?"}${text}` : path;
 }
 
+/** The body's `args` and `kwargs` when it names them; otherwise the body is the keyword arguments. */
 function invocationArguments(body: JsonValue): {
   args: JsonValue[];
   kwargs: Record<string, JsonValue>;

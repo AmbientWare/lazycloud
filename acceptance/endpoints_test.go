@@ -41,7 +41,7 @@ def headers(name: str = ""):
     return {"ok": True}
 `
 
-func endpointSpec(source, name, handler, route string, methods ...apitypes.HttpMethod) apitypes.FunctionSpec {
+func endpointSpec(source, name, handler, route string, methods ...apitypes.HttpMethod) apitypes.WorkloadSpec {
 	h := &apitypes.HttpSpec{Kind: apitypes.HttpKindEndpoint, Route: &route}
 	if len(methods) > 0 {
 		h.Methods = &methods

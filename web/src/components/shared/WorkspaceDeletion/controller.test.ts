@@ -4,7 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+
+type Workspace = Schemas["Workspace"];
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
@@ -22,8 +24,8 @@ describe("workspace deletion controller", () => {
       user: sessionUser(),
       workspaces: [sibling, target],
     });
-    queryClient.setQueryData(workspaceQueryKeys.apps.root(target.id), ["target"]);
-    queryClient.setQueryData(workspaceQueryKeys.apps.root(sibling.id), ["sibling"]);
+    queryClient.setQueryData(workspaceQueryKeys.apps.root(target.name), ["target"]);
+    queryClient.setQueryData(workspaceQueryKeys.apps.root(sibling.name), ["sibling"]);
     queryClient.setQueryData(["global", "health"], "healthy");
     const { result } = renderController({
       canManage: true,
@@ -44,13 +46,15 @@ describe("workspace deletion controller", () => {
 
     await waitFor(() => expect(result.current.target).toBeNull());
     expect(deleteCommand).toHaveBeenCalledOnce();
-    expect(deleteCommand).toHaveBeenCalledWith(target.id);
+    expect(deleteCommand).toHaveBeenCalledWith(target.name);
     expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
       user: sessionUser(),
       workspaces: [sibling],
     });
-    expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(target.id))).toBeUndefined();
-    expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(sibling.id))).toEqual(["sibling"]);
+    expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(target.name))).toBeUndefined();
+    expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(sibling.name))).toEqual([
+      "sibling",
+    ]);
     expect(queryClient.getQueryData(["global", "health"])).toBe("healthy");
     expect(rememberWorkspaceName).toHaveBeenCalledWith(sibling.name);
     expect(replacePath).toHaveBeenCalledWith("/w/default/apps");
@@ -61,7 +65,7 @@ describe("workspace deletion controller", () => {
     const sibling = workspace("workspace-1", "default");
     const failure = new Error("cleanup acknowledgement timed out");
     const deleteCommand = vi
-      .fn<(workspaceId: string) => Promise<null>>()
+      .fn<(workspaceName: string) => Promise<null>>()
       .mockRejectedValueOnce(failure)
       .mockResolvedValueOnce(null);
     const { result } = renderController({
@@ -91,7 +95,7 @@ describe("workspace deletion controller", () => {
     const owner = workspace("workspace-1", "default");
     const deleting = {
       ...workspace("workspace-2", "research"),
-      status: "deleting" as const,
+      state: "deleting" as const,
     };
     const { result } = renderController({
       canManage: true,
@@ -127,18 +131,16 @@ function controllerWrapper(queryClient: QueryClient) {
     createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-function sessionUser(): CurrentSession["user"] {
+function sessionUser(): Schemas["User"] {
   return {
     id: "user-1",
     display_name: "owner",
     email: "",
     avatar_url: "",
-    github_user_id: "",
     github_login: "",
-    role: "administrator",
+    is_admin: true,
     status: "active",
     created_at: "2026-07-21T10:00:00Z",
-    updated_at: "2026-07-21T10:00:00Z",
   };
 }
 
@@ -146,15 +148,8 @@ function workspace(id: string, name: string): Workspace {
   return {
     id,
     name,
-    status: "active",
-    signing_key_prefix: null,
-    primary_token_id: null,
-    concurrency_limit_id: null,
-    connection_id: null,
-    storage: { backend: "local", bucket: null, prefix: "" },
-    labels: {},
-    metadata: {},
+    state: "active",
+    role: "owner",
     created_at: "2026-07-21T10:00:00Z",
-    updated_at: "2026-07-21T10:00:00Z",
   };
 }

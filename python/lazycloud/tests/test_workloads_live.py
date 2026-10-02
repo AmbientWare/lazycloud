@@ -178,7 +178,7 @@ def test_a_pod_deploys_answers_on_its_url_scales_and_starts_instances(
         assert scaled.scaling.min_containers == 2
 
         def two_ready() -> bool | None:
-            page = client.api.list_containers(client.workspace, live=True, deployment=scaled.id)
+            page = client.api.list_containers(client.workspace, live=True, app=app)
             ready = [c for c in page.containers if c.state is ContainerState.ready]
             return True if len(ready) >= 2 else None
 

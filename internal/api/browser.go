@@ -26,9 +26,25 @@ const (
 	signInDefaultPath = "/dashboard"
 )
 
-// startSignIn sets the sign-in cookie and sends the browser to GitHub.
+// startSignIn sets the sign-in cookie and sends the browser to GitHub. A
+// browser whose session cookie is still live goes straight to its return
+// path, so a sign-in link never makes a signed-in person sign in again.
 func (s *Server) startSignIn(w http.ResponseWriter, r *http.Request) {
-	start, err := s.owners.Identity.BeginSignIn(r.URL.Query().Get("return_to"))
+	returnTo := r.URL.Query().Get("return_to")
+	if cookie, err := r.Cookie(SessionCookie); err == nil && cookie.Value != "" {
+		if _, err := s.owners.Identity.AuthenticateSession(r.Context(), cookie.Value); err == nil {
+			if identity.CheckReturnPath(returnTo) != nil {
+				signInFailed(w, r, "invalid_return_to")
+				return
+			}
+			if returnTo == "" {
+				returnTo = signInDefaultPath
+			}
+			http.Redirect(w, r, returnTo, http.StatusSeeOther) //nolint:gosec // CheckReturnPath allows only a path on this origin.
+			return
+		}
+	}
+	start, err := s.owners.Identity.BeginSignIn(returnTo)
 	switch {
 	case errors.Is(err, identity.ErrReturnPath):
 		signInFailed(w, r, "invalid_return_to")

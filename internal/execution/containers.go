@@ -130,6 +130,6 @@ func int32Of(v *int) *int32 {
 	if v == nil {
 		return nil
 	}
-	n := int32(*v) //nolint:gosec // Exit codes fit.
+	n := int32(*v) //nolint:gosec // Exit codes and versions fit.
 	return &n
 }

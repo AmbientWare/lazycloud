@@ -46,7 +46,7 @@ from lazycloud.abstractions.http_calls import (
     EndpointResponse,
     InvocationOptions,
     InvocationTargetName,
-    http_function_spec,
+    http_workload_spec,
     resolve_url,
     send_request,
     unsupported_http_options,
@@ -74,8 +74,7 @@ from lazycloud.references import dotted_reference
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
-    from shared.api import Deployment, Preview
-    from shared.api import FunctionSpec as ApiFunctionSpec
+    from shared.api import Deployment, Preview, WorkloadSpec
 
     from lazycloud.abstractions.image import ImageBuildResult
     from lazycloud.abstractions.shell import ShellSession
@@ -332,15 +331,15 @@ class Endpoint(Generic[P, R]):
         """The `module:qualname` the runner imports."""
         return self._handler_reference()
 
-    def function_spec(
+    def workload_spec(
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
-    ) -> ApiFunctionSpec:
+    ) -> WorkloadSpec:
         """The API definition of this endpoint for an uploaded source and a ready image."""
         self.require_supported()
         policy = retry_policy_config(
             self.retry_policy, retries=self.retries, retry_delay_seconds=self.retry_delay_seconds
         )
-        return http_function_spec(
+        return http_workload_spec(
             self,
             kind="endpoint",
             handler=handler,
@@ -464,13 +463,13 @@ def _shell_http(
 ) -> ShellSession:
     from lazycloud.abstractions.shell import Shell
     from lazycloud.control import api_client, require_workspace, resolve_control_client_config
-    from lazycloud.session.deployment import prepare_function_release
+    from lazycloud.session.deployment import prepare_release
 
     config = resolve_control_client_config(workspace=workspace, timeout_seconds=60)
     shell = Shell(workspace=workspace)
     if container_id:
         return shell.create_existing(container_id, sync_dir=sync_dir)
-    release = prepare_function_release(
+    release = prepare_release(
         owner,  # type: ignore[arg-type]
         client=api_client(config),
         workspace=require_workspace(config),
@@ -765,12 +764,12 @@ class ASGI:
         """The `module:qualname` the runner imports."""
         return self._handler_reference()
 
-    def function_spec(
+    def workload_spec(
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
-    ) -> ApiFunctionSpec:
+    ) -> WorkloadSpec:
         """The API definition of this app for an uploaded source and a ready image."""
         self.require_supported()
-        return http_function_spec(
+        return http_workload_spec(
             self,
             kind=self._http_kind,
             handler=handler,

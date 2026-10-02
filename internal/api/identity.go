@@ -453,7 +453,7 @@ func tokenOut(t identity.Token, now time.Time) apitypes.Token {
 		status = apitypes.TokenStatusExpired
 	}
 	return apitypes.Token{
-		Id: uuid.UUID(t.ID), Name: t.Name, Device: t.Device, WorkspaceId: (*uuid.UUID)(t.Workspace),
+		Id: uuid.UUID(t.ID), Name: t.Name, Prefix: t.Prefix, Device: t.Device, WorkspaceId: (*uuid.UUID)(t.Workspace),
 		Status: status, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastUsedAt: t.LastUsedAt,
 	}
 }

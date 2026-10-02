@@ -80,10 +80,14 @@ delete from disk_generations where disk_id = @disk_id and generation < @generati
 -- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at
+       d.created_at, d.updated_at,
+       a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
 left join hosts h on h.id = c.host_id
+left join releases r on r.id = c.release_id
+left join workloads w on w.id = r.workload_id
+left join apps a on a.id = w.app_id
 where d.workspace_id = @workspace_id and d.state = 'active' and d.name > @after::text
 order by d.name
 limit @max_rows;
@@ -91,10 +95,14 @@ limit @max_rows;
 -- name: ActiveDisk :one
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at
+       d.created_at, d.updated_at,
+       a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
 left join hosts h on h.id = c.host_id
+left join releases r on r.id = c.release_id
+left join workloads w on w.id = r.workload_id
+left join apps a on a.id = w.app_id
 where d.workspace_id = @workspace_id and d.state = 'active' and d.name = @name;
 
 -- name: MarkDiskDeleting :exec

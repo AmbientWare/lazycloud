@@ -8,9 +8,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// Handlers for apps, deployments, task listing, containers and logs.
+// Handlers for apps, workloads, task listing, containers and logs.
 
 func limitOf(l *apitypes.Limit) int {
 	if l == nil {
@@ -44,7 +45,8 @@ func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListA
 		st := control.AppState(*req.Params.State)
 		state = &st
 	}
-	page, err := s.owners.Control.ListApps(ctx, ws.ID, state, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Control.ListApps(ctx, ws.ID, control.AppFilter{State: state, Search: req.Params.Search},
+		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +118,8 @@ func (s *Server) PlanDeployment(ctx context.Context, req PlanDeploymentRequestOb
 	return PlanDeployment200JSONResponse(plan), nil
 }
 
-// PrepareFunctionRelease returns a release for working-tree calls.
-func (s *Server) PrepareFunctionRelease(ctx context.Context, req PrepareFunctionReleaseRequestObject) (PrepareFunctionReleaseResponseObject, error) {
+// PrepareRelease returns a release for working-tree calls.
+func (s *Server) PrepareRelease(ctx context.Context, req PrepareReleaseRequestObject) (PrepareReleaseResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -127,64 +129,108 @@ func (s *Server) PrepareFunctionRelease(ctx context.Context, req PrepareFunction
 	if err := s.pinImage(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
 	}
-	release, err := s.owners.Control.PrepareRelease(ctx, ws.ID, req.App, req.Function, *req.Body)
+	release, err := s.owners.Control.PrepareRelease(ctx, ws.ID, req.App, *req.Body)
 	if err != nil {
 		return nil, err
 	}
-	return PrepareFunctionRelease200JSONResponse(release), nil
+	return PrepareRelease200JSONResponse(release), nil
 }
 
-// ListDeployments lists deployed workloads.
-func (s *Server) ListDeployments(ctx context.Context, req ListDeploymentsRequestObject) (ListDeploymentsResponseObject, error) {
+// ListWorkloads lists deployed workloads.
+func (s *Server) ListWorkloads(ctx context.Context, req ListWorkloadsRequestObject) (ListWorkloadsResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Control.ListDeployments(ctx, ws.ID, control.DeploymentFilter{App: req.Params.App, Name: req.Params.Name},
-		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	p := req.Params
+	page, err := s.owners.Control.ListWorkloads(ctx, ws.ID, control.WorkloadFilter{App: p.App, Kind: p.Kind, Name: p.Name, ID: p.Id, Search: p.Search},
+		limitOf(p.Limit), cursorOf(p.Cursor))
 	if err != nil {
 		return nil, err
 	}
-	for n := range page.Deployments {
-		if err := s.podDeployment(ctx, &page.Deployments[n]); err != nil {
+	for n := range page.Workloads {
+		if err := s.podWorkload(ctx, &page.Workloads[n]); err != nil {
 			return nil, err
 		}
 	}
-	return ListDeployments200JSONResponse{Deployments: page.Deployments, NextCursor: nextCursor(page.Next)}, nil
+	return ListWorkloads200JSONResponse{Workloads: page.Workloads, NextCursor: nextCursor(page.Next)}, nil
 }
 
-// GetDeployment reads a workload.
-func (s *Server) GetDeployment(ctx context.Context, req GetDeploymentRequestObject) (GetDeploymentResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+// findWorkload authorizes the workspace and resolves the workload a path
+// addresses by app, kind and name.
+func (s *Server) findWorkload(ctx context.Context, workspace, app string, kind apitypes.WorkloadKind, name string) (identity.Workspace, control.WorkloadID, error) {
+	ws, err := s.workspace(ctx, workspace)
 	if err != nil {
-		return nil, err
+		return identity.Workspace{}, control.WorkloadID{}, err
 	}
-	d, err := s.owners.Control.GetDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
-	if err != nil {
-		return nil, err
-	}
-	if err := s.podDeployment(ctx, &d); err != nil {
-		return nil, err
-	}
-	return GetDeployment200JSONResponse(d), nil
+	id, err := s.owners.Control.FindWorkload(ctx, ws.ID, control.WorkloadRef{App: app, Kind: kind, Name: name})
+	return ws, id, err
 }
 
-// StopDeployment stops a workload.
-func (s *Server) StopDeployment(ctx context.Context, req StopDeploymentRequestObject) (StopDeploymentResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+// workloadOut reads a workload with a pod's role, count and URL.
+func (s *Server) workloadOut(ctx context.Context, ws identity.Workspace, id control.WorkloadID) (apitypes.Workload, error) {
+	w, err := s.owners.Control.GetWorkload(ctx, ws.ID, id)
 	if err != nil {
-		return nil, err
+		return apitypes.Workload{}, err
 	}
-	d, err := s.owners.Control.StopDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
-	if err != nil {
-		return nil, err
-	}
-	return StopDeployment200JSONResponse(d), nil
+	return w, s.podWorkload(ctx, &w)
 }
 
-// StartDeployment starts a workload, optionally on another version.
-func (s *Server) StartDeployment(ctx context.Context, req StartDeploymentRequestObject) (StartDeploymentResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+// GetWorkload describes a workload: the release its active version, or the
+// named one, runs, where an HTTP workload answers and a function's schedule.
+func (s *Server) GetWorkload(ctx context.Context, req GetWorkloadRequestObject) (GetWorkloadResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	w, err := s.workloadOut(ctx, ws, id)
+	if err != nil {
+		return nil, err
+	}
+	release, err := s.owners.Control.Release(ctx, ws.ID, id, req.Params.Version)
+	if err != nil {
+		return nil, err
+	}
+	out := apitypes.WorkloadDetail{Workload: w, Release: release}
+	switch req.Kind {
+	case apitypes.WorkloadKindEndpoint, apitypes.WorkloadKindAsgi:
+		urls, err := s.owners.Edge.HTTPUrls(ctx, ws.Name, req.App, uuid.UUID(id), release)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the edge's typed errors map to responses
+		}
+		out.Http = &urls
+		out.Release.Url, out.Release.InvokePath = &urls.Url, &urls.InvokePath
+	case apitypes.WorkloadKindFunction:
+		schedule, err := s.owners.Schedules.ForFunction(ctx, ws.ID, req.App, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		if schedule != nil {
+			sched := scheduleOut(*schedule)
+			out.Schedule = &sched
+		}
+	case apitypes.WorkloadKindPod, apitypes.WorkloadKindSandbox:
+		out.Release.Url = w.Url
+	}
+	return GetWorkload200JSONResponse(out), nil
+}
+
+// StopWorkload stops a workload.
+func (s *Server) StopWorkload(ctx context.Context, req StopWorkloadRequestObject) (StopWorkloadResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	w, err := s.owners.Control.StopWorkload(ctx, ws.ID, id)
+	if err != nil {
+		return nil, err
+	}
+	return StopWorkload200JSONResponse(w), nil
+}
+
+// StartWorkload starts a workload, optionally on another version.
+func (s *Server) StartWorkload(ctx context.Context, req StartWorkloadRequestObject) (StartWorkloadResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -192,44 +238,61 @@ func (s *Server) StartDeployment(ctx context.Context, req StartDeploymentRequest
 	if req.Body != nil {
 		version = req.Body.Version
 	}
-	d, err := s.owners.Control.StartDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment), version)
+	w, err := s.owners.Control.StartWorkload(ctx, ws.ID, id, version)
 	if err != nil {
 		return nil, err
 	}
-	return StartDeployment200JSONResponse(d), nil
+	return StartWorkload200JSONResponse(w), nil
 }
 
-// DeleteDeployment deletes a workload.
-func (s *Server) DeleteDeployment(ctx context.Context, req DeleteDeploymentRequestObject) (DeleteDeploymentResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+// DeleteWorkload deletes a workload.
+func (s *Server) DeleteWorkload(ctx context.Context, req DeleteWorkloadRequestObject) (DeleteWorkloadResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	d, err := s.owners.Control.DeleteDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
+	w, err := s.owners.Control.DeleteWorkload(ctx, ws.ID, id)
 	if err != nil {
 		return nil, err
 	}
-	return DeleteDeployment200JSONResponse(d), nil
+	return DeleteWorkload200JSONResponse(w), nil
 }
 
-// ListDeploymentVersions lists a workload's deployed versions.
-func (s *Server) ListDeploymentVersions(ctx context.Context, req ListDeploymentVersionsRequestObject) (ListDeploymentVersionsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+// ListWorkloadVersions lists a workload's deployed versions.
+func (s *Server) ListWorkloadVersions(ctx context.Context, req ListWorkloadVersionsRequestObject) (ListWorkloadVersionsResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Control.ListVersions(ctx, ws.ID, control.WorkloadID(req.Deployment),
-		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Control.ListVersions(ctx, ws.ID, id, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
-	return ListDeploymentVersions200JSONResponse{Versions: page.Versions, NextCursor: nextCursor(page.Next)}, nil
+	return ListWorkloadVersions200JSONResponse{Versions: page.Versions, NextCursor: nextCursor(page.Next)}, nil
 }
 
-// StreamDeploymentLogs writes the workload's log entries as NDJSON.
-func (s *Server) StreamDeploymentLogs(ctx context.Context, req StreamDeploymentLogsRequestObject) (StreamDeploymentLogsResponseObject, error) {
-	return s.logStream(ctx, req.Workspace, execution.LogSource{Kind: execution.LogsOfWorkload, ID: req.Deployment},
+// StreamWorkloadLogs writes the workload's log entries as NDJSON.
+func (s *Server) StreamWorkloadLogs(ctx context.Context, req StreamWorkloadLogsRequestObject) (StreamWorkloadLogsResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfWorkload, ID: uuid.UUID(id)},
 		req.Params.After, req.Params.Tail, req.Params.Follow)
+}
+
+// ListWorkloadContainers lists the workload's containers newest first.
+func (s *Server) ListWorkloadContainers(ctx context.Context, req ListWorkloadContainersRequestObject) (ListWorkloadContainersResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, Workload: (*uuid.UUID)(&id)}
+	page, err := s.containerPage(ctx, ws, filter, req.Params.Limit, req.Params.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	return ListWorkloadContainers200JSONResponse(page), nil
 }
 
 // ListTasks lists tasks newest first.
@@ -238,7 +301,10 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 	if err != nil {
 		return nil, err
 	}
-	filter := execution.TaskFilter{App: req.Params.App, Function: req.Params.Function}
+	filter := execution.TaskFilter{
+		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search, Version: req.Params.Version,
+		RootOnly: req.Params.RootOnly != nil && *req.Params.RootOnly,
+	}
 	if req.Params.Status != nil {
 		st := execution.TaskStatus(*req.Params.Status)
 		filter.Status = &st
@@ -298,12 +364,20 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 	if err != nil {
 		return nil, err
 	}
-	live := req.Params.Live != nil && *req.Params.Live
-	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, req.Params.Deployment, live, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, App: req.Params.App}
+	page, err := s.containerPage(ctx, ws, filter, req.Params.Limit, req.Params.Cursor)
 	if err != nil {
 		return nil, err
 	}
-	out := ListContainers200JSONResponse{Containers: make([]apitypes.Container, len(page.Containers)), NextCursor: nextCursor(page.Next)}
+	return ListContainers200JSONResponse(page), nil
+}
+
+func (s *Server) containerPage(ctx context.Context, ws identity.Workspace, filter execution.ContainerFilter, limit *apitypes.PageLimit, cursor *apitypes.Cursor) (apitypes.ContainerPage, error) {
+	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(limit), cursorOf(cursor))
+	if err != nil {
+		return apitypes.ContainerPage{}, err
+	}
+	out := apitypes.ContainerPage{Containers: make([]apitypes.Container, len(page.Containers)), NextCursor: nextCursor(page.Next)}
 	for n, c := range page.Containers {
 		out.Containers[n] = containerOut(c)
 	}
@@ -341,7 +415,11 @@ func (s *Server) StopContainer(ctx context.Context, req StopContainerRequestObje
 
 // StreamContainerLogs writes the container's log entries as NDJSON.
 func (s *Server) StreamContainerLogs(ctx context.Context, req StreamContainerLogsRequestObject) (StreamContainerLogsResponseObject, error) {
-	return s.logStream(ctx, req.Workspace, execution.LogSource{Kind: execution.LogsOfContainer, ID: req.Container},
+	ws, err := s.workspace(ctx, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfContainer, ID: req.Container},
 		req.Params.After, req.Params.Tail, req.Params.Follow)
 }
 
@@ -358,6 +436,9 @@ func containerOut(c execution.Container) apitypes.Container {
 	if c.StopReason != nil {
 		r := apitypes.StopReason(*c.StopReason)
 		out.StopReason = &r
+	}
+	if c.Image != "" {
+		out.Image = &c.Image
 	}
 	return out
 }

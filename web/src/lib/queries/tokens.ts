@@ -1,22 +1,8 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  authTokenSchema,
-  tokenCreateRequestSchema,
-  tokenCreateResponseSchema,
-  tokenListSchema,
-  type AuthToken,
-  type TokenCreateResponse,
-} from "@/lib/api/schemas";
-import {
-  nextListCursor,
-  selectInfiniteList,
-  type InfiniteListQueryData,
-} from "@/lib/queries/infinite-list";
+import { api, ok, type Schemas } from "@/lib/api/client";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-const COLLECTION = "/api/v1/tokens";
 const PAGE_SIZE = 50;
 
 export type CreateTokenInput = {
@@ -24,10 +10,6 @@ export type CreateTokenInput = {
   /** Lifetime in seconds, or null for a token that never expires. */
   expiresInSeconds: number | null;
 };
-
-function tokenPath(tokenId: string): string {
-  return `${COLLECTION}/${encodeURIComponent(tokenId)}`;
-}
 
 /**
  * Every token the account holds, addressed without a workspace.
@@ -39,36 +21,34 @@ export function tokensQueryOptions(includeDevice: boolean) {
   return infiniteQueryOptions({
     queryKey: [...accountQueryKeys.tokens(), { includeDevice }],
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        include_device: String(includeDevice),
-      });
-      if (pageParam) params.set("cursor", pageParam);
-      return apiRequest(`${COLLECTION}?${params.toString()}`, tokenListSchema);
-    },
-    getNextPageParam: nextListCursor,
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/tokens", {
+          params: {
+            query: {
+              limit: PAGE_SIZE,
+              include_device: includeDevice,
+              cursor: pageParam || undefined,
+            },
+          },
+        }),
+      ),
+    getNextPageParam: (page) => page.next_cursor,
   });
 }
 
-export function selectTokenList(
-  data: InfiniteListQueryData<AuthToken> | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectInfiniteList(data, hasNextPage, (token) => token.id);
+export function createToken(input: CreateTokenInput): Promise<Schemas["CreatedToken"]> {
+  return ok(
+    api.POST("/v1/tokens", {
+      body: {
+        name: input.name.trim(),
+        ...(input.expiresInSeconds === null ? {} : { expires_in_seconds: input.expiresInSeconds }),
+      },
+    }),
+  );
 }
 
-export function createToken(input: CreateTokenInput): Promise<TokenCreateResponse> {
-  const request = tokenCreateRequestSchema.parse({
-    name: input.name.trim(),
-    expires_in_seconds: input.expiresInSeconds,
-  });
-  return apiRequest(COLLECTION, tokenCreateResponseSchema, {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-
-export function revokeToken(tokenId: string): Promise<AuthToken> {
-  return apiRequest(`${tokenPath(tokenId)}/revoke`, authTokenSchema, { method: "POST" });
+export async function revokeToken(tokenId: string): Promise<null> {
+  await ok(api.DELETE("/v1/tokens/{token}", { params: { path: { token: tokenId } } }));
+  return null;
 }

@@ -189,6 +189,12 @@ func NewIdentity(pool *pgxpool.Pool, cfg Config) *Identity {
 // keeps them from workloads, can recognize them.
 const TokenPrefix = "lc_"
 
+// DisplayPrefix is the part of a token kept to tell tokens apart: the marker
+// and three characters of its 43, as the dashboard shows it.
+func DisplayPrefix(token string) string {
+	return token[:len(TokenPrefix)+3]
+}
+
 // NewToken returns a fresh credential and the digest to store. Tokens carry
 // 32 random bytes, so a plain SHA-256 is a sufficient stored form.
 func NewToken() (token string, digest []byte, err error) {
@@ -374,11 +380,25 @@ func (i *Identity) CreateToken(ctx context.Context, email, workspace, name strin
 		return "", err
 	}
 	if _, err := i.queries.InsertToken(ctx, InsertTokenParams{
-		UserID: user.ID, WorkspaceID: restrict, Name: name, TokenHash: digest,
+		UserID: user.ID, WorkspaceID: restrict, Name: name, TokenHash: digest, Prefix: DisplayPrefix(token),
 	}); err != nil {
 		return "", fmt.Errorf("insert token: %w", err)
 	}
 	return token, nil
+}
+
+// CreateSession opens a browser session for the user with email, as a GitHub
+// sign-in would, and returns its cookie value. It is the admin command's way
+// into the dashboard where no GitHub App is configured, such as a local stack.
+func (i *Identity) CreateSession(ctx context.Context, email string) (Session, error) {
+	user, err := i.queries.UserByEmail(ctx, &email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, fmt.Errorf("user %s: %w", email, ErrNotFound)
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("read user: %w", err)
+	}
+	return openSession(ctx, i.queries, UserID(user.ID))
 }
 
 // Housekeeping removes expired sessions and device codes. It is bounded per

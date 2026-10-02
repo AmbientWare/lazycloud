@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { BillingSummary } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   diskAllowanceFigure,
   gpuModelsPhrase,
@@ -59,12 +59,8 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
             <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
               Your plan change is processing. You can make another change when it finishes.
             </p>
-          ) : controller.termsUnverified ? (
-            <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
-              Verifying your subscription. Plan changes are unavailable until verification finishes.
-            </p>
           ) : null}
-          {summary?.plan?.scheduled_change_at ? (
+          {summary?.plan.scheduled_change_at ? (
             <div className="mb-4 space-y-2 rounded-sm border border-border p-3 text-xs">
               <p>
                 Your scheduled plan change takes effect{" "}
@@ -74,12 +70,7 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
               <Button
                 size="sm"
                 variant="outline"
-                disabled={
-                  controller.busy ||
-                  controller.settling ||
-                  controller.termsUnverified ||
-                  controller.complimentary
-                }
+                disabled={controller.busy || controller.settling || controller.complimentary}
                 onClick={controller.cancelScheduledChange}
               >
                 Keep current plan
@@ -153,7 +144,9 @@ function PlanCard({
         <PlanPoint>
           {countLabel(offer.entitlements.max_concurrent_gpus, "GPU card")} allocated at once
         </PlanPoint>
-        <PlanPoint>{gpuModelsPhrase(offer.entitlements.gpu_types)}</PlanPoint>
+        <PlanPoint>
+          {gpuModelsPhrase(offer.entitlements.gpu_types, controller.offeredGpuTypes)}
+        </PlanPoint>
         <PlanPoint>{limitPhrase(offer.entitlements.max_workspaces, "workspace")}</PlanPoint>
         <PlanPoint>{memberLimitPhrase(offer.entitlements.max_members)}</PlanPoint>
         {offer.entitlements.connected_cloud ? (
@@ -177,12 +170,7 @@ function PlanCard({
             size="sm"
             variant={offer.action === "downgrade" ? "outline" : "default"}
             className="w-full"
-            disabled={
-              controller.busy ||
-              controller.settling ||
-              controller.complimentary ||
-              offer.action === "unverified"
-            }
+            disabled={controller.busy || controller.settling || controller.complimentary}
             onClick={() => controller.choose(offer)}
           >
             {pending || (offer.action === "card" && controller.leaving === "card") ? (
@@ -219,7 +207,7 @@ function ChangeConfirmation({
   onOpenChange,
 }: {
   offer: PlanOffer;
-  summary: BillingSummary | undefined;
+  summary: Schemas["BillingAccount"] | undefined;
   pending: boolean;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;

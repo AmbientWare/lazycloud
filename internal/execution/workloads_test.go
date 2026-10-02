@@ -297,7 +297,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if n := len(serve()); n != 0 {
 		t.Fatalf("a parked pod has %d", n)
 	}
-	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.FunctionSpec) (bool, error) { return false, nil })
+	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
 	if err != nil || view.Phase != apitypes.DevboxPhaseStopping {
 		t.Fatalf("stopping view = %+v, %v", view, err)
 	}
@@ -305,14 +305,14 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if _, err := pool.Exec(t.Context(), "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where state = 'draining'"); err != nil {
 		t.Fatal(err)
 	}
-	view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.FunctionSpec) (bool, error) { return false, nil })
+	view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
 	if err != nil || view.Phase != apitypes.DevboxPhaseStopped {
 		t.Fatalf("parked view = %+v, %v", view, err)
 	}
 	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
 		t.Fatal(err)
 	}
-	if view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.FunctionSpec) (bool, error) { return false, nil }); err != nil || view.Phase != apitypes.DevboxPhaseQueued {
+	if view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil }); err != nil || view.Phase != apitypes.DevboxPhaseQueued {
 		t.Fatalf("woken view = %+v, %v", view, err)
 	}
 	plan()

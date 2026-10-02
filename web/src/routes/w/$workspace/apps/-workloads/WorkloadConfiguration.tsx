@@ -1,56 +1,60 @@
 import type { ReactNode } from "react";
 
-import type { Deployment } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatDuration, resourceAllocation } from "@/lib/format";
 
-export function WorkloadConfiguration({
-  deployment,
-  kind,
-}: {
-  deployment: Deployment;
-  kind: string;
-}) {
-  const resources = deployment.spec.resources;
-  // A Pod holds connections rather than executing tasks, so per-task
-  // concurrency and timeout describe nothing it does.
-  const executesTasks = kind !== "pod";
+export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] }) {
+  const { resources, placement } = spec;
+  const gpu = resources.gpu ?? [];
+  const gpuCount = resources.gpu_count ?? 0;
 
   return (
     <div className="@container min-w-0 space-y-5 p-4">
       <div className="grid min-w-0 gap-x-8 gap-y-5 @xl:grid-cols-2">
         <ConfigurationGroup title="Runtime">
-          <ConfigurationFact label="CPU" value={resourceAllocation(resources.cpu, "vCPUs")} />
-          <ConfigurationFact label="Memory" value={resourceAllocation(resources.memory)} />
-          {resources.gpu.length > 0 ? (
+          <ConfigurationFact
+            label="CPU"
+            value={resourceAllocation(cpuRequest(resources), "vCPUs")}
+          />
+          <ConfigurationFact label="Memory" value={resourceAllocation(memoryRequest(resources))} />
+          {gpu.length > 0 ? (
             <ConfigurationFact
               label="GPU"
-              value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+              value={`${gpu.join(" → ")}${gpuCount > 1 ? ` x${gpuCount}` : ""}`}
             />
           ) : null}
-          {deployment.spec.machine ? (
-            <ConfigurationFact label="Machine" value={deployment.spec.machine} />
+          {placement?.machine ? (
+            <ConfigurationFact label="Machine" value={placement.machine} />
           ) : null}
-          <ConfigurationFact label="Region" value={resources.region || "Automatic"} />
-          {resources.availability_zone ? (
-            <ConfigurationFact label="Availability zone" value={resources.availability_zone} />
+          <ConfigurationFact label="Region" value={placement?.region || "Automatic"} />
+          {placement?.availability_zone ? (
+            <ConfigurationFact label="Availability zone" value={placement.availability_zone} />
           ) : null}
         </ConfigurationGroup>
 
         <ConfigurationGroup title="Execution">
-          {executesTasks ? (
-            <ConfigurationFact
-              label="Concurrency"
-              value={Intl.NumberFormat().format(resources.concurrency)}
-            />
-          ) : null}
-          {executesTasks ? (
-            <ConfigurationFact label="Timeout" value={timeoutLabel(resources.timeout_seconds)} />
-          ) : null}
-          <ConfigurationFact label="Keep warm" value={retentionLabel(resources.keep_warm)} />
+          <ConfigurationFact
+            label="Concurrency"
+            value={Intl.NumberFormat().format(spec.concurrency ?? 1)}
+          />
+          <ConfigurationFact label="Timeout" value={timeoutLabel(spec.timeout_seconds ?? 3600)} />
+          <ConfigurationFact label="Keep warm" value={retentionLabel(spec.keep_warm_seconds)} />
         </ConfigurationGroup>
       </div>
     </div>
   );
+}
+
+/** vCPUs requested, with the ceiling when one is set. */
+export function cpuRequest(resources: Schemas["Resources"]): number | [number, number] {
+  const cpu = resources.cpu_millis / 1000;
+  return resources.cpu_limit_millis ? [cpu, resources.cpu_limit_millis / 1000] : cpu;
+}
+
+/** MiB requested, with the ceiling when one is set. */
+export function memoryRequest(resources: Schemas["Resources"]): number | [number, number] {
+  const memory = resources.memory_mib;
+  return resources.memory_limit_mib ? [memory, resources.memory_limit_mib] : memory;
 }
 
 function ConfigurationGroup({ title, children }: { title: string; children: ReactNode }) {

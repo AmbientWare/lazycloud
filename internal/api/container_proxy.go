@@ -488,7 +488,7 @@ func (s *Server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObje
 	if err != nil {
 		return nil, err
 	}
-	return sshTunnel{ctx: ctx, server: s, workspace: ws.ID, app: req.App, pod: req.Pod}, nil
+	return sshTunnel{ctx: ctx, server: s, workspace: ws.ID, app: req.App, pod: req.Name}, nil
 }
 
 type sshTunnel struct {

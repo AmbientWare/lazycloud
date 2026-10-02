@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeploymentManifest } from "@/lib/api/schemas";
-import { deploymentManifestSchema } from "@/lib/api/schemas/client_manifests";
-
 import {
   buildBody,
+  clientContract,
   curlSnippet,
   playgroundFields,
   playgroundPythonOnlyReason,
@@ -12,70 +10,33 @@ import {
   returnsPythonValue,
 } from "./playground-form";
 
-it("keeps a Python result off HTTP but lets the playground invoke it", () => {
-  const resource = deploymentManifestSchema.parse({
-    ...manifest(),
-    client_contract: {
-      operation: { name: "remote", return_schema: null, return_python_type: "numpy.ndarray" },
-    },
+function contract(parameters: unknown[], operation: Record<string, unknown> = {}) {
+  return clientContract({
+    operation: { name: "remote", parameters, return_schema: {}, ...operation },
   });
-  expect(pythonOnlyReason(resource)).not.toBeNull();
-  expect(playgroundPythonOnlyReason(resource)).toBeNull();
-  expect(returnsPythonValue(resource)).toBe(true);
-  expect(pythonOnlyReason(manifest())).toBeNull();
-  expect(returnsPythonValue(manifest())).toBe(false);
+}
+
+it("keeps a Python result off HTTP but lets the playground invoke it", () => {
+  const python = contract([], { return_schema: null, return_python_type: "numpy.ndarray" });
+  expect(python).not.toBeNull();
+  expect(pythonOnlyReason(python)).not.toBeNull();
+  expect(playgroundPythonOnlyReason(python)).toBeNull();
+  expect(returnsPythonValue(python)).toBe(true);
+  expect(pythonOnlyReason(null)).toBeNull();
+  expect(returnsPythonValue(null)).toBe(false);
 });
 
-function manifest(overrides: Partial<DeploymentManifest> = {}): DeploymentManifest {
-  return {
-    app: "demo",
-    name: "square",
-    kind: "function",
-    stub_id: "stub-1",
-    deployment_id: "deployment-1",
-    deployment_version: 1,
-    timeout_seconds: null,
-    invoke_url: "https://square-a1b2c3d4.lazycloud.dev",
-    invoke_path: "/api/v1/functions/square/latest",
-    methods: [],
-    inputs: { fields: {} },
-    client_contract: null,
-    ...overrides,
-  };
-}
-
-function contractManifest(
-  parameters: NonNullable<DeploymentManifest["client_contract"]>["operation"]["parameters"],
-): DeploymentManifest {
-  return manifest({
-    client_contract: {
-      operation: { name: "remote", parameters, return_schema: {}, return_python_type: "" },
-    },
-  });
-}
+it("reads no contract from a release that records an unreadable one", () => {
+  expect(clientContract(undefined)).toBeNull();
+  expect(clientContract({ operation: { parameters: "none" } })).toBeNull();
+});
 
 describe("playgroundFields", () => {
   it("maps flat primitive contract parameters to typed fields", () => {
     const fields = playgroundFields(
-      contractManifest([
-        {
-          name: "value",
-          python_type: "",
-          python_default: false,
-          json_schema: { type: "integer" },
-          required: true,
-          default: null,
-          parameter_kind: "keyword",
-        },
-        {
-          name: "label",
-          python_type: "",
-          python_default: false,
-          json_schema: { type: "string" },
-          required: false,
-          default: "hi",
-          parameter_kind: "keyword",
-        },
+      contract([
+        { name: "value", json_schema: { type: "integer" } },
+        { name: "label", json_schema: { type: "string" }, required: false, default: "hi" },
       ]),
     );
     expect(fields).toEqual([
@@ -86,19 +47,14 @@ describe("playgroundFields", () => {
 
   it("refuses a typed form when any parameter is not a flat primitive", () => {
     const fields = playgroundFields(
-      contractManifest([
-        {
-          name: "values",
-          python_type: "",
-          python_default: false,
-          json_schema: { type: "array", items: { type: "integer" } },
-          required: true,
-          default: null,
-          parameter_kind: "keyword",
-        },
-      ]),
+      contract([{ name: "values", json_schema: { type: "array", items: { type: "integer" } } }]),
     );
     expect(fields).toBeNull();
+  });
+
+  it("offers an empty form for no parameters and the JSON editor for no contract", () => {
+    expect(playgroundFields(contract([]))).toEqual([]);
+    expect(playgroundFields(null)).toBeNull();
   });
 });
 
@@ -124,7 +80,7 @@ describe("buildBody", () => {
 });
 
 describe("snippets", () => {
-  const url = "http://127.0.0.1:9000/api/v1/functions/public/stub-1";
+  const url = "http://127.0.0.1:9000/v1/workspaces/dev/apps/demo/workloads/function/square/invoke";
 
   it("shell-escapes single quotes in the payload", () => {
     const snippet = curlSnippet(url, { label: "it's" });

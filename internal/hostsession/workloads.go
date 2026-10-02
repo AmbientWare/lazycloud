@@ -81,7 +81,7 @@ func (s *Server) restoreOut(ctx context.Context, container execution.ContainerID
 	}, nil
 }
 
-func disksOut(spec apitypes.FunctionSpec) []*hostproto.DiskAttachment {
+func disksOut(spec apitypes.WorkloadSpec) []*hostproto.DiskAttachment {
 	if spec.Disks == nil {
 		return nil
 	}

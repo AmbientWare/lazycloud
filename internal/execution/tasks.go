@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,6 +136,12 @@ type TaskFilter struct {
 	// Function requires App.
 	Function *string
 	Status   *TaskStatus
+	// RootOnly leaves out tasks spawned by other tasks.
+	RootOnly bool
+	// Search matches a task id prefix or part of the function name.
+	Search *string
+	// Version is a deployed version of Function, and requires it.
+	Version *int
 }
 
 // TaskPage is one page of tasks, newest first.
@@ -157,10 +164,19 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 	if filter.Function != nil && filter.App == nil {
 		return TaskPage{}, fmt.Errorf("%w: function needs app", ErrInvalidFilter)
 	}
+	if filter.Version != nil && filter.Function == nil {
+		return TaskPage{}, fmt.Errorf("%w: version needs function", ErrInvalidFilter)
+	}
 	var status *string
 	if filter.Status != nil {
 		s := string(*filter.Status)
 		status = &s
+	}
+	var search *string
+	if filter.Search != nil && *filter.Search != "" {
+		// LIKE wildcards in the search are literal characters.
+		lowered := strings.ToLower(*filter.Search)
+		search = &lowered
 	}
 	size := pageSize(limit)
 	var rows []TaskViewRow
@@ -174,7 +190,7 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		}
 		r, err := e.queries.ListAppTasks(ctx, ListAppTasksParams{
 			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
-			Before: before, MaxRows: size + 1,
+			RootOnly: filter.RootOnly, Search: search, Version: int32Of(filter.Version), Before: before, MaxRows: size + 1,
 		})
 		if err != nil {
 			return TaskPage{}, fmt.Errorf("list app tasks: %w", err)
@@ -184,7 +200,8 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		}
 	} else {
 		r, err := e.queries.ListTasks(ctx, ListTasksParams{
-			WorkspaceID: uuid.UUID(workspace), Status: status, Before: before, MaxRows: size + 1,
+			WorkspaceID: uuid.UUID(workspace), Status: status, RootOnly: filter.RootOnly, Search: search,
+			Before: before, MaxRows: size + 1,
 		})
 		if err != nil {
 			return TaskPage{}, fmt.Errorf("list tasks: %w", err)

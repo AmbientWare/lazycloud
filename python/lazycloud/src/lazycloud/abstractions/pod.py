@@ -14,16 +14,16 @@ from shared.api import (
     CommandItem,
     ContainerState,
     CreateInstanceRequest,
-    DeployedWorkload,
     DiskMountSpec,
     HealthCheck,
     PodKind,
     PodSpec,
     StopReason,
+    Workload,
     WorkloadKind,
+    WorkloadSpec,
 )
 from shared.api import Container as ApiContainer
-from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
@@ -367,9 +367,9 @@ class Pod:
             label = "devbox" if self.is_devbox else "pod"
             raise UnsupportedFeatureError(f"{label} {self.name}", unsupported)
 
-    def function_spec(
+    def workload_spec(
         self, *, handler: object = None, source_sha256: str, image: ImageBuildResult
-    ) -> ApiFunctionSpec:
+    ) -> WorkloadSpec:
         """The API definition of this pod for an uploaded source and a ready image."""
         del handler
         self.require_supported()
@@ -414,7 +414,7 @@ class Pod:
             if self.checkpoint_enabled
             else None
         )
-        return container_function_spec(
+        return container_workload_spec(
             self,
             label="devbox" if self.is_devbox else "pod",
             pod=pod,
@@ -432,11 +432,11 @@ class Pod:
         self, *, workspace: str | None = None, source_root: str | Path | None = None
     ) -> str:
         """Upload the working tree and return the id of the release that runs this pod."""
-        from lazycloud.session.deployment import prepare_function_release
+        from lazycloud.session.deployment import prepare_release
 
         client = self._client(workspace)
         try:
-            release = prepare_function_release(
+            release = prepare_release(
                 self,
                 client=client.api,
                 workspace=client.workspace,
@@ -526,25 +526,21 @@ class Pod:
             )[0]
         except SdkError as exc:
             raise PodOperationError(str(exc)) from exc
-        release = next(item for item in deployment.releases if item.function == self.name)
+        release = next(item for item in deployment.releases if item.name == self.name)
         self.stub_id = str(release.id)
         return deployment
 
-    def pause(
-        self, *, version: int | None = None, workspace: str | None = None
-    ) -> DeployedWorkload:
+    def pause(self, *, version: int | None = None, workspace: str | None = None) -> Workload:
         """Stop the deployed pod; `version` must be its active version."""
         return self._deployments("stop", version, workspace)
 
-    def resume(
-        self, *, version: int | None = None, workspace: str | None = None
-    ) -> DeployedWorkload:
+    def resume(self, *, version: int | None = None, workspace: str | None = None) -> Workload:
         """Start the deployed pod again, making `version` active first when given."""
         return self._deployments("start", version, workspace)
 
     def scale(
         self, containers: int, *, version: int | None = None, workspace: str | None = None
-    ) -> DeployedWorkload:
+    ) -> Workload:
         """Hold the deployed pod at `containers` containers until the next scale."""
         return self._deployments("scale", version, workspace, containers)
 
@@ -554,13 +550,13 @@ class Pod:
 
     def _deployments(
         self, action: str, version: int | None, workspace: str | None, *args: int
-    ) -> DeployedWorkload:
+    ) -> Workload:
         from lazycloud.session.deployment import DeploymentClient
 
         client = self._client(workspace)
         deployments = DeploymentClient(workspace=client.workspace, client=client.api)
         reference = f"{self.name}-v{version}" if version is not None else self.name
-        operation: Callable[..., DeployedWorkload] = getattr(deployments, action)
+        operation: Callable[..., Workload] = getattr(deployments, action)
         try:
             return operation(reference, *args, app=self._app_slug)
         except SdkError as exc:
@@ -588,7 +584,7 @@ def container_unsupported_options(
     return [name for name, present in declared.items() if present]
 
 
-def container_function_spec(
+def container_workload_spec(
     owner: Any,
     *,
     label: str,
@@ -601,7 +597,7 @@ def container_function_spec(
     allow_list: list[str] | None,
     disks: list[DiskMountSpec] | None = None,
     checkpoint: CheckpointSpec | None = None,
-) -> ApiFunctionSpec:
+) -> WorkloadSpec:
     """The API definition of a pod, devbox or sandbox: a command, not a handler."""
     from lazycloud.abstractions.function import _resources, _volume_spec
 
@@ -610,6 +606,7 @@ def container_function_spec(
     if allow_list is not None:
         pod.allow_list = [AllowListItem(item) for item in allow_list]
     spec: dict[str, Any] = {
+        "kind": WorkloadKind.sandbox if pod.kind is PodKind.sandbox else WorkloadKind.pod,
         "name": owner.resource_name,
         "source": {"sha256": source_sha256},
         "image": {
@@ -656,7 +653,7 @@ def container_function_spec(
     if placement:
         spec["placement"] = placement
     try:
-        return ApiFunctionSpec.model_validate(spec)
+        return WorkloadSpec.model_validate(spec)
     except ValidationError as exc:
         raise PodOperationError(
             f"{label} {owner.resource_name} has invalid options: {exc}"

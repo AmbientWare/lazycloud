@@ -49,7 +49,7 @@ const none = time.Duration(-1)
 // Durations are percentiles over finished tasks per submission bucket;
 // cold starts are the deployment's containers created in the bucket. Tasks
 // of other deployments or outside the range do not count.
-func TestDeploymentPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
+func TestWorkloadPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 	f := newFixture(t, `{}`)
 	_, _, otherWL, otherRel := f.addFunction("acme", "billing", "charge", `{}`)
 	hour := time.Now().Truncate(time.Hour)
@@ -66,7 +66,7 @@ func TestDeploymentPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 	f.container(f.release, "stopped", early, &early, &early, 1000)
 	f.container(otherRel, "ready", early, &early, nil, 1000)
 
-	perf, err := f.obs.DeploymentPerformance(t.Context(), f.workspace, f.workload, observability.RangeQuery{})
+	perf, err := f.obs.WorkloadPerformance(t.Context(), f.workspace, f.workload, observability.RangeQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +83,11 @@ func TestDeploymentPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 		t.Fatalf("second bucket %+v", b)
 	}
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
-	if _, err := f.obs.DeploymentPerformance(t.Context(), otherWS, f.workload, observability.RangeQuery{}); !errors.Is(err, observability.ErrNotFound) {
+	if _, err := f.obs.WorkloadPerformance(t.Context(), otherWS, f.workload, observability.RangeQuery{}); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("another workspace read the deployment: %v", err)
 	}
 	start, end := hour.Add(-48*time.Hour), hour
-	if _, err := f.obs.DeploymentPerformance(t.Context(), f.workspace, f.workload,
+	if _, err := f.obs.WorkloadPerformance(t.Context(), f.workspace, f.workload,
 		observability.RangeQuery{Start: &start, End: &end, Width: time.Minute}); err == nil {
 		t.Fatal("2,880 one-minute buckets were accepted")
 	}

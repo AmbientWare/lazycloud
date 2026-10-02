@@ -26,7 +26,7 @@ import (
 // once; only their digests are stored.
 func admin(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("admin needs a command: create-user, create-workspace, create-token, set-complimentary, create-join-token or publish-agent-release")
+		return errors.New("admin needs a command: create-user, create-workspace, create-token, create-session, set-complimentary, create-join-token or publish-agent-release")
 	}
 	command, args := args[0], args[1:]
 	fs := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
@@ -72,6 +72,18 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 				return err
 			}
 			return printLine(out, token)
+		}
+	case "create-session":
+		email := fs.String("email", "", "email of the session's user")
+		run = func(pool *pgxpool.Pool) error {
+			if *email == "" {
+				return errors.New("-email is required")
+			}
+			session, err := identity.NewIdentity(pool, identity.Config{}).CreateSession(ctx, *email)
+			if err != nil {
+				return err
+			}
+			return printLine(out, session.Token)
 		}
 	case "set-complimentary":
 		email := fs.String("email", "", "email of the account to waive usage charges for")

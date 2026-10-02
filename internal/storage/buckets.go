@@ -131,10 +131,42 @@ func (s *Storage) workspaceBucket(ctx context.Context, workspace identity.Worksp
 	}); err != nil {
 		return "", fmt.Errorf("set workspace bucket lifecycle: %w", err)
 	}
+	if err := s.allowBrowser(ctx, bucket); err != nil {
+		return "", err
+	}
 	if err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{WorkspaceID: uuid.UUID(workspace), Bucket: bucket}); err != nil {
 		return "", fmt.Errorf("record workspace bucket: %w", err)
 	}
 	return bucket, nil
+}
+
+// AllowBrowserAccess lets the dashboard's pages use presigned requests on
+// the platform bucket, which holds artifacts. Workspace buckets get the same
+// rule when they are created.
+func (s *Storage) AllowBrowserAccess(ctx context.Context) error {
+	return s.allowBrowser(ctx, s.bucket)
+}
+
+// allowBrowser sets the bucket's CORS rule for the dashboard origin: GET,
+// HEAD and PUT of presigned URLs, with ETag readable so multipart uploads
+// can name their parts.
+func (s *Storage) allowBrowser(ctx context.Context, bucket string) error {
+	if s.config.BrowserOrigin == "" {
+		return nil
+	}
+	if _, err := s.client.PutBucketCors(ctx, &s3.PutBucketCorsInput{
+		Bucket: aws.String(bucket),
+		CORSConfiguration: &s3types.CORSConfiguration{CORSRules: []s3types.CORSRule{{
+			AllowedOrigins: []string{strings.TrimRight(s.config.BrowserOrigin, "/")},
+			AllowedMethods: []string{http.MethodGet, http.MethodHead, http.MethodPut},
+			AllowedHeaders: []string{"*"},
+			ExposeHeaders:  []string{"ETag"},
+			MaxAgeSeconds:  aws.Int32(3600),
+		}}},
+	}); err != nil {
+		return fmt.Errorf("allow the dashboard on bucket %s: %w", bucket, err)
+	}
+	return nil
 }
 
 type garageBuckets struct {

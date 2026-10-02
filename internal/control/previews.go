@@ -26,7 +26,7 @@ type Preview struct {
 	Release   uuid.UUID
 	App, Name string
 	Kind      apitypes.PreviewKind
-	Spec      apitypes.FunctionSpec
+	Spec      apitypes.WorkloadSpec
 	// Live is false once the preview was stopped, its lease lapsed or its
 	// timeout passed.
 	Live           bool
@@ -36,7 +36,7 @@ type Preview struct {
 }
 
 // PreviewKind is what a definition previews as.
-func PreviewKind(spec apitypes.FunctionSpec) apitypes.PreviewKind {
+func PreviewKind(spec apitypes.WorkloadSpec) apitypes.PreviewKind {
 	if spec.Http == nil {
 		return apitypes.PreviewKindFunction
 	}
@@ -46,7 +46,7 @@ func PreviewKind(spec apitypes.FunctionSpec) apitypes.PreviewKind {
 // CreatePreview records a preview release of spec in app and its lease in
 // one transaction. A workload never deployed is created stopped, so its
 // preview serves without deploying it.
-func (c *Control) CreatePreview(ctx context.Context, workspace identity.WorkspaceID, user identity.UserID, app string, spec apitypes.FunctionSpec, timeoutSeconds int) (Preview, error) {
+func (c *Control) CreatePreview(ctx context.Context, workspace identity.WorkspaceID, user identity.UserID, app string, spec apitypes.WorkloadSpec, timeoutSeconds int) (Preview, error) {
 	if spec.Pod != nil {
 		return Preview{}, &InvalidSpecError{Function: spec.Name, Reason: "pods, devboxes and sandboxes are not served; deploy or create them"}
 	}
@@ -76,7 +76,7 @@ func (c *Control) CreatePreview(ctx context.Context, workspace identity.Workspac
 		if len(registered) == 0 {
 			return &SourceMissingError{Function: spec.Name, Sha256: source.String()}
 		}
-		workload, err := q.EnsurePreviewWorkload(ctx, EnsurePreviewWorkloadParams{AppID: appRow.ID, Kind: string(KindOf(resolved)), Name: spec.Name})
+		workload, err := q.EnsurePreviewWorkload(ctx, EnsurePreviewWorkloadParams{AppID: appRow.ID, Kind: string(resolved.Kind), Name: spec.Name})
 		if err != nil {
 			return fmt.Errorf("ensure workload: %w", err)
 		}

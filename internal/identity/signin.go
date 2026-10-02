@@ -97,7 +97,7 @@ func (i *Identity) BeginSignIn(returnTo string) (SignInStart, error) {
 	if !i.github.configured() {
 		return SignInStart{}, ErrSignInUnavailable
 	}
-	if err := checkReturnPath(returnTo); err != nil {
+	if err := CheckReturnPath(returnTo); err != nil {
 		return SignInStart{}, err
 	}
 	state, err := randomString()
@@ -122,9 +122,9 @@ func (i *Identity) BeginSignIn(returnTo string) (SignInStart, error) {
 	}, nil
 }
 
-// checkReturnPath accepts only a path on this origin: anything that could
+// CheckReturnPath accepts only a path on this origin: anything that could
 // name a host would make sign-in an open redirect.
-func checkReturnPath(path string) error {
+func CheckReturnPath(path string) error {
 	if path == "" {
 		return nil
 	}
@@ -171,7 +171,7 @@ func (i *Identity) CompleteSignIn(ctx context.Context, cookie, state, code strin
 		return Session{}, ErrSignInState
 	}
 	returnTo, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || checkReturnPath(string(returnTo)) != nil {
+	if err != nil || CheckReturnPath(string(returnTo)) != nil {
 		return Session{}, ErrSignInState
 	}
 	profile, err := i.github.identify(ctx, code, parts[1])

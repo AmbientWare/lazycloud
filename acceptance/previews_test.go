@@ -156,7 +156,7 @@ func TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower(t *testing.T) {
 	// targets it by id.
 	var submitted apitypes.SubmitTasksResponse
 	request := apitypes.SubmitTasksRequest{Inputs: []apitypes.TaskInput{input}, ReleaseId: &preview.Id}
-	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/demo/functions/add/tasks", request, &submitted); status != http.StatusCreated {
+	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/demo/workloads/function/add/tasks", request, &submitted); status != http.StatusCreated {
 		t.Fatalf("submit to the preview: %d", status)
 	}
 	var task apitypes.Task

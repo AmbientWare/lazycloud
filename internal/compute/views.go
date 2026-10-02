@@ -78,7 +78,7 @@ func (c *Compute) Workloads(ctx context.Context, workspace identity.WorkspaceID,
 	}
 	out := make([]Workload, 0, len(rows))
 	for _, row := range rows {
-		var spec apitypes.FunctionSpec
+		var spec apitypes.WorkloadSpec
 		if err := json.Unmarshal(row.Spec, &spec); err != nil {
 			return nil, fmt.Errorf("decode release spec: %w", err)
 		}

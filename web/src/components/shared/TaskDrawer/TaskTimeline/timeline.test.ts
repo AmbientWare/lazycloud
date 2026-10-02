@@ -1,21 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { CallGraphNode } from "@/lib/api/schemas";
+import type { CallGraphNode } from "@/lib/queries/tasks";
 
 import { flattenCallGraph, timelineDomain } from "./timeline";
 
 function node(overrides: Partial<CallGraphNode> & { task_id: string }): CallGraphNode {
   return {
-    container_id: null,
-    parent_task_id: "",
-    root_task_id: "",
-    status: "complete",
-    name: overrides.task_id,
-    function_name: "",
-    created_at: null,
-    started_at: null,
-    finished_at: null,
-    dependencies: [],
+    app: "demo",
+    function: overrides.task_id,
+    status: "succeeded",
+    created_at: "2026-07-01T00:00:00Z",
+    depends_on: [],
     children: [],
     ...overrides,
   };

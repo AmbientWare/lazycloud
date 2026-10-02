@@ -8,43 +8,42 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLiveNow } from "@/hooks/use-live-now";
+import type { Schemas } from "@/lib/api/client";
 import { countLabel, formatBytes, formatDuration } from "@/lib/format";
 import {
-  mapCountQueryOptions,
   mapKeysQueryOptions,
+  mapQueryOptions,
   mapValueQueryOptions,
-  queuePeekQueryOptions,
-  queueSizeQueryOptions,
+  queueHeadQueryOptions,
+  queueQueryOptions,
   deleteMapKey,
   popQueueMessage,
   refreshCollection,
 } from "@/lib/queries/collections";
 
 import { EncodedValuePreview } from "./EncodedValuePreview";
-import { CollectionValueForm, editableJson, type MapEdit } from "./CollectionValueForm";
+import { CollectionValueForm, editableJson } from "./CollectionValueForm";
 import { ConfirmCollectionAction, DeleteCollection } from "./CollectionActions";
 
-export function QueueInspector({
-  workspaceId,
-  name,
-  oldestMessageAgeSeconds,
-  putRatePerMinute,
-}: {
-  workspaceId: string;
-  name: string;
-  oldestMessageAgeSeconds: number | null;
-  putRatePerMinute: number;
-}) {
+/** How far `at` lies from now, ticking while it is shown; null when absent. */
+function useDistance(at: string | undefined): string | null {
+  const now = useLiveNow(at !== undefined);
+  return at === undefined ? null : formatDuration(Math.abs(Date.parse(at) - now));
+}
+
+export function QueueInspector({ workspace, name }: { workspace: string; name: string }) {
   const client = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [removed, setRemoved] = useState<string | null>(null);
-  const size = useQuery(queueSizeQueryOptions(workspaceId, name));
-  const peek = useQuery(queuePeekQueryOptions(workspaceId, name));
-  const error = size.error ?? peek.error;
-  const depth = size.data?.size ?? 0;
-  if (error && (!size.data || !peek.data)) return <PanelError message={error.message} />;
+  const queue = useQuery(queueQueryOptions(workspace, name));
+  const head = useQuery(queueHeadQueryOptions(workspace, name));
+  const oldest = useDistance(queue.data?.oldest_message_at);
+  const error = queue.error ?? head.error;
+  const depth = queue.data?.size ?? 0;
+  if (error && (!queue.data || !head.data)) return <PanelError message={error.message} />;
 
-  if (size.isPending || peek.isPending) {
+  if (queue.isPending || head.isPending) {
     return <InspectorSkeleton />;
   }
 
@@ -56,21 +55,10 @@ export function QueueInspector({
           {error.message}
         </p>
       ) : null}
-      <CollectionStats
-        items={[
-          {
-            label: "Oldest",
-            value:
-              oldestMessageAgeSeconds === null
-                ? "Empty"
-                : formatDuration(oldestMessageAgeSeconds * 1_000),
-          },
-          { label: "Writes", value: `${putRatePerMinute.toLocaleString()}/min` },
-        ]}
-      />
+      <CollectionStats items={[{ label: "Oldest", value: oldest ?? "Empty" }]} />
       <div className="mt-3 min-w-0 border-t border-border/60 pt-3">
         <EncodedValuePreview
-          valueBase64={peek.data?.value_base64}
+          valueBase64={head.data?.message}
           emptyLabel={depth === 0 ? "Queue is empty" : "Message is empty"}
           className="max-h-40"
         />
@@ -84,17 +72,17 @@ export function QueueInspector({
           disabled={depth === 0}
           description="This consumes the next message without running it. A consumer may take the previewed message before you confirm."
           action={async () => {
-            const result = await popQueueMessage(workspaceId, name);
-            setRemoved(result.value_base64);
-            await refreshCollection(client, workspaceId, "queues", name);
+            const result = await popQueueMessage(workspace, name);
+            setRemoved(result.message ?? "");
+            await refreshCollection(client, workspace, "queues", name);
           }}
         />
-        <DeleteCollection workspaceId={workspaceId} kind="queues" name={name} />
+        <DeleteCollection workspace={workspace} kind="queues" name={name} />
       </div>
       {adding ? (
         <div className="mt-3">
           <CollectionValueForm
-            workspaceId={workspaceId}
+            workspace={workspace}
             kind="queues"
             name={name}
             onDone={() => setAdding(false)}
@@ -114,34 +102,23 @@ export function QueueInspector({
   );
 }
 
-export function MapInspector({
-  workspaceId,
-  name,
-  sizeBytes,
-  expiringKeys,
-  nearestExpirySeconds,
-}: {
-  workspaceId: string;
-  name: string;
-  sizeBytes: number;
-  expiringKeys: number;
-  nearestExpirySeconds: number | null;
-}) {
+export function MapInspector({ workspace, name }: { workspace: string; name: string }) {
   const [prefix, setPrefix] = useState("");
   const [adding, setAdding] = useState(false);
-  const count = useQuery(mapCountQueryOptions(workspaceId, name));
-  const keys = useInfiniteQuery(mapKeysQueryOptions(workspaceId, name, prefix));
+  const map = useQuery(mapQueryOptions(workspace, name));
+  const keys = useInfiniteQuery(mapKeysQueryOptions(workspace, name, prefix));
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const allKeys = [...new Set(keys.data?.pages.flatMap((page) => page.data) ?? [])];
+  const nextExpiry = useDistance(map.data?.next_expiry_at);
+  const allKeys = [...new Set(keys.data?.pages.flatMap((page) => page.keys) ?? [])];
   const effectiveSelectedKey = selectedKey ?? allKeys[0] ?? null;
-  const error = count.error;
-  if (error && !count.data) return <PanelError message={error.message} />;
+  const error = map.error;
+  if (error && !map.data) return <PanelError message={error.message} />;
 
-  if (count.isPending) {
+  if (map.isPending) {
     return <InspectorSkeleton withControl />;
   }
 
-  const keyCount = count.data?.count ?? allKeys.length;
+  const keyCount = map.data.count;
   return (
     <div className="content-transition min-w-0 px-4 py-3">
       <InspectorHeader label="Value" count={keyCount} singular="key" />
@@ -152,27 +129,21 @@ export function MapInspector({
       ) : null}
       <CollectionStats
         items={[
-          { label: "Stored", value: formatBytes(sizeBytes) },
-          { label: "Expiring", value: expiringKeys.toLocaleString() },
-          {
-            label: "Next expiry",
-            value:
-              nearestExpirySeconds === null
-                ? "Persistent"
-                : formatDuration(nearestExpirySeconds * 1_000),
-          },
+          { label: "Stored", value: formatBytes(map.data.size_bytes) },
+          { label: "Expiring", value: map.data.expiring_count.toLocaleString() },
+          { label: "Next expiry", value: nextExpiry ?? "Persistent" },
         ]}
       />
       <div className="mt-4 flex flex-wrap gap-2">
         <Button size="sm" onClick={() => setAdding(true)} disabled={adding}>
           Add key
         </Button>
-        <DeleteCollection workspaceId={workspaceId} kind="maps" name={name} />
+        <DeleteCollection workspace={workspace} kind="maps" name={name} />
       </div>
       {adding ? (
         <div className="mt-3">
           <CollectionValueForm
-            workspaceId={workspaceId}
+            workspace={workspace}
             kind="maps"
             name={name}
             onDone={(_name, key) => {
@@ -204,7 +175,7 @@ export function MapInspector({
                 onClick={() => setSelectedKey(key)}
                 className={`mono block w-full truncate px-3 py-2 text-left text-xs hover:bg-muted ${key === effectiveSelectedKey ? "bg-muted font-medium" : ""}`}
               >
-                {key === "" ? '""' : key}
+                {key}
               </button>
             ))}
             {keys.isPending ? (
@@ -224,7 +195,7 @@ export function MapInspector({
             ) : null}
             <InfiniteScrollBoundary
               key={prefix}
-              nextCursor={keys.data?.pages.at(-1)?.next ?? undefined}
+              nextCursor={keys.data?.pages.at(-1)?.next_cursor}
               loading={keys.isFetchingNextPage}
               error={keys.isFetchNextPageError}
               onLoadMore={() => {
@@ -237,7 +208,7 @@ export function MapInspector({
         {effectiveSelectedKey !== null ? (
           <MapEntryInspector
             key={effectiveSelectedKey}
-            workspaceId={workspaceId}
+            workspace={workspace}
             name={name}
             entryKey={effectiveSelectedKey}
             onEdit={() => setSelectedKey(effectiveSelectedKey)}
@@ -250,21 +221,21 @@ export function MapInspector({
 }
 
 function MapEntryInspector({
-  workspaceId,
+  workspace,
   name,
   entryKey,
   onDeleted,
   onEdit,
 }: {
-  workspaceId: string;
+  workspace: string;
   name: string;
   entryKey: string;
   onDeleted: () => void;
   onEdit: () => void;
 }) {
   const client = useQueryClient();
-  const value = useQuery(mapValueQueryOptions(workspaceId, name, entryKey));
-  const [editing, setEditing] = useState<MapEdit | null>(null);
+  const value = useQuery(mapValueQueryOptions(workspace, name, entryKey));
+  const [editing, setEditing] = useState<Schemas["MapEntry"] | null>(null);
   if (editing)
     return (
       <Dialog
@@ -278,8 +249,8 @@ function MapEntryInspector({
             <DialogTitle>Edit value</DialogTitle>
           </DialogHeader>
           <CollectionValueForm
-            key={editing.value.revision}
-            workspaceId={workspaceId}
+            key={editing.revision}
+            workspace={workspace}
             kind="maps"
             name={name}
             entry={editing}
@@ -296,8 +267,8 @@ function MapEntryInspector({
   const editable = editableJson(current) !== null;
   return (
     <div className="content-transition min-w-0">
-      <p className="mono mb-2 break-all text-xs font-medium">{entryKey === "" ? '""' : entryKey}</p>
-      <EncodedValuePreview valueBase64={current.value_base64} />
+      <p className="mono mb-2 break-all text-xs font-medium">{entryKey}</p>
+      <EncodedValuePreview valueBase64={current.value} />
       <p className="mt-2 text-xs text-muted-foreground">
         {current.expires_at
           ? `Expires ${new Date(current.expires_at).toLocaleString()}`
@@ -315,7 +286,7 @@ function MapEntryInspector({
           disabled={!editable}
           onClick={() => {
             onEdit();
-            setEditing({ key: entryKey, value: current });
+            setEditing(current);
           }}
         >
           Edit value
@@ -324,8 +295,8 @@ function MapEntryInspector({
           label="Delete key"
           description={`Delete key "${entryKey}" from "${name}"? This cannot be undone.`}
           action={async () => {
-            await deleteMapKey(workspaceId, name, entryKey, current.revision);
-            await refreshCollection(client, workspaceId, "maps", name);
+            await deleteMapKey(workspace, name, entryKey, current.revision);
+            await refreshCollection(client, workspace, "maps", name);
             onDeleted();
           }}
         />

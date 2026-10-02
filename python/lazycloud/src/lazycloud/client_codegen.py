@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from pydantic import ValidationError
-from shared.api import WorkloadState
+from shared.api import WorkloadKind, WorkloadState
 from shared.app_slug import validate_app_slug
 from shared.http.client_manifests import ClientContract, ClientParameter
 
@@ -115,11 +115,13 @@ def _deployed_functions(client: ApiClient, workspace: str, app: str) -> list[Res
     stale: list[str] = []
     cursor: str | None = None
     while True:
-        page = client.list_deployments(workspace, app=app, limit=_PAGE_LIMIT, cursor=cursor)
-        for workload in page.deployments:
+        page = client.list_workloads(
+            workspace, app=app, kind=WorkloadKind.function, limit=_PAGE_LIMIT, cursor=cursor
+        )
+        for workload in page.workloads:
             if workload.state is WorkloadState.deleted or workload.release_id is None:
                 continue
-            release = client.get_function(workspace, app, workload.name).active_release
+            release = client.get_workload(workspace, app, workload.kind, workload.name).release
             if release.version is None:
                 msg = f"function {workload.name} has no deployed version"
                 raise ClientGenerationError(msg)

@@ -1,58 +1,13 @@
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { logQuerySchema, type LogRecord } from "@/lib/api/schemas";
+import { readLogHistory, type LogSource } from "@/lib/api/logs";
 
-import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
 import { workspaceQueryKeys } from "./workspace-keys";
 
-export type LogScope = {
-  appId?: string;
-  stubId?: string;
-  taskId?: string;
-  containerId?: string;
-};
-
-const LOG_PAGE_SIZE = 200;
-
-export function logScopeParams(scope: LogScope): URLSearchParams {
-  const params = new URLSearchParams();
-  if (scope.appId) params.set("app_id", scope.appId);
-  if (scope.stubId) params.set("stub_id", scope.stubId);
-  if (scope.taskId) params.set("task_id", scope.taskId);
-  if (scope.containerId) params.set("container_id", scope.containerId);
-  return params;
-}
-
-export function logHistoryQueryOptions(workspaceId: string, scope: LogScope) {
-  return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.logs.history(workspaceId, {
-      appId: scope.appId ?? null,
-      stubId: scope.stubId ?? null,
-      taskId: scope.taskId ?? null,
-      containerId: scope.containerId ?? null,
-    }),
-    queryFn: ({ pageParam }) => {
-      const params = logScopeParams(scope);
-      params.set("limit", String(LOG_PAGE_SIZE));
-      if (pageParam) params.set("cursor", pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/logs?${params.toString()}`, workspaceId),
-        logQuerySchema,
-      );
-    },
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => lastPage.next || undefined,
+/** The newest stored lines of a source. History reads forward only, so there is no older page. */
+export function logHistoryQueryOptions(workspace: string, source: LogSource) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.logs.history(workspace, source),
+    queryFn: ({ signal }) => readLogHistory(workspace, source, signal),
   });
-}
-
-export function selectLogHistory(
-  data: InfiniteListQueryData<LogRecord> | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectInfiniteList(data, hasNextPage, logRecordKey);
-}
-
-function logRecordKey(record: LogRecord): string {
-  return record.id || `${record.timestamp}-${record.seq_num}-${record.message}`;
 }

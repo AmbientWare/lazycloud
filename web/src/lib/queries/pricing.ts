@@ -1,12 +1,11 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import { pricingCatalogSchema } from "@/lib/api/schemas";
+import { api, ok } from "@/lib/api/client";
 
 export function pricingCatalogQueryOptions() {
   return queryOptions({
     queryKey: ["pricing-catalog"] as const,
-    queryFn: () => apiRequest("/api/v1/pricing", pricingCatalogSchema),
+    queryFn: () => ok(api.GET("/v1/pricing")),
     staleTime: 5 * 60_000,
   });
 }

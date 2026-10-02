@@ -93,7 +93,7 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 			return fmt.Errorf("%s attempt without a failure", outcome.State)
 		}
 		if outcome.Failure.Kind.Retryable() && int(task.AttemptCount) < int(task.MaxAttempts) {
-			var spec apitypes.FunctionSpec
+			var spec apitypes.WorkloadSpec
 			if err := json.Unmarshal(task.Spec, &spec); err != nil {
 				return fmt.Errorf("decode release spec: %w", err)
 			}

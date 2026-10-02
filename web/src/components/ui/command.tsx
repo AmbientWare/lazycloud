@@ -33,6 +33,8 @@ function CommandDialog({
   className,
   showCloseButton = true,
   shouldFilter = true,
+  value,
+  onValueChange,
   ...props
 }: React.ComponentProps<typeof Dialog> & {
   title?: string;
@@ -40,6 +42,8 @@ function CommandDialog({
   className?: string;
   showCloseButton?: boolean;
   shouldFilter?: boolean;
+  value?: string;
+  onValueChange?: (value: string) => void;
 }) {
   return (
     <Dialog {...props}>
@@ -51,7 +55,12 @@ function CommandDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <Command shouldFilter={shouldFilter} className="min-h-0">
+        <Command
+          shouldFilter={shouldFilter}
+          value={value}
+          onValueChange={onValueChange}
+          className="min-h-0"
+        >
           {children}
         </Command>
       </DialogContent>

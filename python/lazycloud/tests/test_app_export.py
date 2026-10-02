@@ -25,8 +25,8 @@ from tests.api_server import ApiRequest, FakeApi, Reply, json_reply
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 NOW = "2026-09-30T12:00:00Z"
-DEPLOYMENTS = "/v1/workspaces/team/deployments"
-FUNCTIONS = "/v1/workspaces/team/apps/reports/functions"
+WORKLOADS = "/v1/workspaces/team/workloads"
+FUNCTIONS = "/v1/workspaces/team/apps/reports/workloads/function"
 
 
 class Sale(BaseModel):
@@ -58,6 +58,7 @@ def _workload(index: int, name: str, state: str = "active") -> dict[str, object]
         "name": name,
         "kind": "function",
         "state": state,
+        "running_containers": 0,
         "version": 1,
         "release_id": _uuid(100 + index),
         "created_at": NOW,
@@ -66,6 +67,7 @@ def _workload(index: int, name: str, state: str = "active") -> dict[str, object]
 
 def _function(name: str, release_id: str, contract: dict[str, Any] | None) -> dict[str, object]:
     spec: dict[str, object] = {
+        "kind": "function",
         "name": name,
         "handler": f"reports:{name}",
         "source": {"sha256": "0" * 64},
@@ -76,12 +78,12 @@ def _function(name: str, release_id: str, contract: dict[str, Any] | None) -> di
         spec["client_contract"] = contract
     release: dict[str, object] = {
         "id": release_id,
-        "function": name,
+        "name": name,
         "version": 1,
         "created_at": NOW,
         "spec": spec,
     }
-    return {"name": name, "app": "reports", "state": "active", "active_release": release}
+    return {"workload": _workload(1, name), "release": release}
 
 
 def _contract(func: Callable[..., Any]) -> dict[str, Any]:
@@ -95,13 +97,13 @@ def _serve_app(api: FakeApi, *, contracts: Mapping[str, dict[str, Any] | None]) 
     releases = {name: _uuid(100 + index) for index, name in enumerate(contracts, start=1)}
     workloads = [_workload(index, name) for index, name in enumerate(contracts, start=1)]
     pages: dict[str | None, dict[str, object]] = {
-        None: {"deployments": workloads[:1], "next_cursor": "page-2"},
-        "page-2": {"deployments": [*workloads[1:], _workload(9, "retired", "deleted")]},
+        None: {"workloads": workloads[:1], "next_cursor": "page-2"},
+        "page-2": {"workloads": [*workloads[1:], _workload(9, "retired", "deleted")]},
     }
 
-    @api.route("GET", DEPLOYMENTS)
-    def deployments(request: ApiRequest) -> Reply:
-        assert request.query["app"] == ["reports"]
+    @api.route("GET", WORKLOADS)
+    def listed(request: ApiRequest) -> Reply:
+        assert (request.query["app"], request.query["kind"]) == (["reports"], ["function"])
         cursor = request.query.get("cursor", [None])[0]
         return json_reply(pages[cursor])
 

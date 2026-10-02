@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@/lib/api/client";
 import { streamServerSentEvents, type ServerSentEvent } from "@/lib/api/sse";
 
 function streamResponse(chunks: string[]): Response {
@@ -34,7 +33,7 @@ describe("streamServerSentEvents", () => {
 
     const events: ServerSentEvent[] = [];
     const onOpen = vi.fn();
-    await streamServerSentEvents("/api/v1/tasks/t-1/subscribe", {
+    await streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
       signal: new AbortController().signal,
       onOpen,
       onEvent: (event) => events.push(event),
@@ -56,7 +55,7 @@ describe("streamServerSentEvents", () => {
     );
 
     const events: ServerSentEvent[] = [];
-    await streamServerSentEvents("/api/v1/logs/stream", {
+    await streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
       signal: new AbortController().signal,
       onEvent: (event) => events.push(event),
     });
@@ -68,7 +67,7 @@ describe("streamServerSentEvents", () => {
     const fetchMock = vi.fn().mockResolvedValue(streamResponse([]));
     vi.stubGlobal("fetch", fetchMock);
 
-    await streamServerSentEvents("/api/v1/events/stream", {
+    await streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
       signal: new AbortController().signal,
       lastEventId: "42",
       onEvent: () => undefined,
@@ -86,36 +85,11 @@ describe("streamServerSentEvents", () => {
     );
 
     await expect(
-      streamServerSentEvents("/api/v1/events/stream", {
+      streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
         signal: new AbortController().signal,
         onEvent: () => undefined,
       }),
     ).rejects.toThrow("workspace not found");
-  });
-
-  it("preserves typed expired-cursor conflicts", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response('{"detail":"realtime cursor is older than retained history"}', {
-          status: 409,
-          statusText: "Conflict",
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-
-    const failure = streamServerSentEvents("/api/v1/events/stream?clamp=false", {
-      signal: new AbortController().signal,
-      lastEventId: "1-0",
-      onEvent: () => undefined,
-    });
-
-    await expect(failure).rejects.toMatchObject({
-      name: "ApiError",
-      status: 409,
-      message: "realtime cursor is older than retained history",
-    } satisfies Partial<ApiError>);
   });
 
   it("rejects successful responses that are not event streams", async () => {
@@ -131,7 +105,7 @@ describe("streamServerSentEvents", () => {
     );
 
     await expect(
-      streamServerSentEvents("/api/v1/events/stream", {
+      streamServerSentEvents("/v1/workspaces/dev/changes/stream", {
         signal: new AbortController().signal,
         onOpen,
         onEvent: () => undefined,

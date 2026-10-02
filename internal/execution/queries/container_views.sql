@@ -5,13 +5,15 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until
+       c.keep_warm_seconds, c.active_until,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id
+  and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
   and c.id < @before
   and (sqlc.narg('workload_id')::uuid is null or r.workload_id = sqlc.narg('workload_id'))
 order by c.id desc
@@ -25,7 +27,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until
+       c.keep_warm_seconds, c.active_until,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -33,6 +36,7 @@ join apps a on a.id = w.app_id
 left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id
   and c.state <> 'stopped'
+  and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
   and c.id < @before
   and (sqlc.narg('workload_id')::uuid is null or r.workload_id = sqlc.narg('workload_id'))
 order by c.id desc
@@ -44,7 +48,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until
+       c.keep_warm_seconds, c.active_until,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id

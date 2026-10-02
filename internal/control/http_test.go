@@ -32,9 +32,12 @@ func TestSubdomainMatchesReference(t *testing.T) {
 	}
 }
 
-func endpoint(name string, http apitypes.HttpSpec) apitypes.FunctionSpec {
+func endpoint(name string, http apitypes.HttpSpec) apitypes.WorkloadSpec {
 	spec := function(name)
-	spec.Http = &http
+	spec.Kind, spec.Http = apitypes.WorkloadKindAsgi, &http
+	if http.Kind == apitypes.HttpKindEndpoint {
+		spec.Kind = apitypes.WorkloadKindEndpoint
+	}
 	return spec
 }
 
@@ -97,7 +100,7 @@ func TestDeployRejectsRoutesAndMethodsOnASGI(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	route := "/api"
-	_, err := c.Deploy(t.Context(), ws, "web", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{
+	_, err := c.Deploy(t.Context(), ws, "web", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{
 		endpoint("service", apitypes.HttpSpec{Kind: apitypes.HttpKindAsgi, Route: &route}),
 	}})
 	var invalid *InvalidSpecError
@@ -112,7 +115,7 @@ func TestDeployCustomDomainNeedsAnOwnerRegistrationAndOneDeployment(t *testing.T
 	domain := "api.acme.com"
 	spec := endpoint("count", apitypes.HttpSpec{Kind: apitypes.HttpKindEndpoint, Domain: &domain})
 
-	_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}})
+	_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
 	var invalid *InvalidSpecError
 	if !errors.As(err, &invalid) {
 		t.Fatalf("deploy with an unregistered domain: %v; want InvalidSpecError", err)
@@ -127,7 +130,7 @@ select user_id, $2, 'awaiting_verification' from workspace_members where workspa
 	if _, err := pool.Exec(t.Context(), `update billing_accounts set complimentary_since = null`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}})
+	_, err = c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
 	var payment *billing.PaymentRequiredError
 	if !errors.As(err, &payment) {
 		t.Fatalf("deploy a custom domain on the Free plan: %v; want PaymentRequiredError", err)
@@ -140,7 +143,7 @@ where user_id = (select user_id from workspace_members where workspace_id = $1 a
 	deploy(t, c, ws, false, spec)
 
 	// Another app of the workspace cannot claim the same hostname.
-	_, err = c.Deploy(t.Context(), ws, "other", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}})
+	_, err = c.Deploy(t.Context(), ws, "other", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
 	var conflict *RouteConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("second deployment of %s: %v; want RouteConflictError", domain, err)

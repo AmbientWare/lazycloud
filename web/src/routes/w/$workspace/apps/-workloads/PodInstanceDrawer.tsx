@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CliHint } from "@/components/shared/CliHint";
@@ -13,56 +13,50 @@ import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHe
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { StopCause } from "@/components/shared/StopCause";
 import { resourceAllocation } from "@/lib/format";
-import {
-  containerMetricsTimeseriesQueryOptions,
-  containerQueryOptions,
-} from "@/lib/queries/containers";
-import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
+import { containerMetricsQueryOptions, containerQueryOptions } from "@/lib/queries/containers";
+import { workloadQueryOptions } from "@/lib/queries/deployments";
 
-import { currentDeployment, findWorkloadGroup } from "./grouping";
 import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
+import { cpuRequest, memoryRequest } from "./WorkloadConfiguration";
 
 export function PodInstanceDrawer({
-  workspaceId,
-  appId,
+  workspace,
+  app,
   workloadName,
   workloadKind,
   containerId,
   onClose,
 }: {
-  workspaceId: string;
-  appId: string;
+  workspace: string;
+  app: string;
   workloadName: string;
-  workloadKind: string;
+  workloadKind: Schemas["WorkloadKind"];
   containerId: string;
   onClose: () => void;
 }) {
-  const container = useQuery(containerQueryOptions(workspaceId, containerId));
-  const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspaceId, { appId, kind: workloadKind, name: workloadName }),
+  const container = useQuery(containerQueryOptions(workspace, containerId));
+  const detail = useQuery(
+    workloadQueryOptions(workspace, { app, kind: workloadKind, name: workloadName }),
   );
-  const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
-  const group = findWorkloadGroup(deploymentList.items, appId, workloadKind, workloadName);
-  const deployment = group?.kind === "pod" ? currentDeployment(group) : undefined;
+  const pod = detail.data?.workload.kind === "pod" ? detail.data : undefined;
   const member = Boolean(
-    container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,
+    container.data &&
+    pod &&
+    container.data.app === pod.workload.app &&
+    container.data.function === pod.workload.name,
   );
   const metrics = useQuery({
-    ...containerMetricsTimeseriesQueryOptions(
-      workspaceId,
-      containerId,
-      container.data?.status === "running",
-    ),
+    ...containerMetricsQueryOptions(workspace, containerId, container.data?.state === "ready"),
     enabled: member,
   });
 
-  const pending = container.isPending || deployments.isPending;
-  const error = container.error ?? deployments.error;
+  const pending = container.isPending || detail.isPending;
+  const error = container.error ?? detail.error;
   const membershipError =
-    !pending && !error && (!container.data || !deployment || !member)
+    !pending && !error && (!container.data || !pod || !member)
       ? new Error("This instance is not part of the current Pod deployment")
       : null;
 
@@ -74,7 +68,7 @@ export function PodInstanceDrawer({
       >
         {pending ? (
           <PodInstanceDrawerSkeleton />
-        ) : error || membershipError || !container.data || !deployment ? (
+        ) : error || membershipError || !container.data || !pod ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <SheetTitle className="sr-only">Pod instance</SheetTitle>
             <div className="flex min-h-0 flex-1 items-center justify-center p-4">
@@ -82,20 +76,15 @@ export function PodInstanceDrawer({
                 error={error ?? membershipError ?? new Error("Pod instance could not be loaded")}
                 title="Pod instance could not be loaded"
                 onRetry={() => {
-                  void Promise.all([container.refetch(), deployments.refetch()]);
+                  void Promise.all([container.refetch(), detail.refetch()]);
                 }}
-                retrying={container.isFetching || deployments.isFetching}
+                retrying={container.isFetching || detail.isFetching}
                 className="panel w-full max-w-lg rounded-md"
               />
             </div>
           </div>
         ) : (
-          <PodInstanceDrawerBody
-            record={container.data}
-            deployment={deployment}
-            workloadName={workloadName}
-            metrics={metrics}
-          />
+          <PodInstanceDrawerBody record={container.data} pod={pod} metrics={metrics} />
         )}
       </SheetContent>
     </Sheet>
@@ -104,17 +93,17 @@ export function PodInstanceDrawer({
 
 function PodInstanceDrawerBody({
   record,
-  deployment,
-  workloadName,
+  pod,
   metrics,
 }: {
-  record: ContainerDetail;
-  deployment: Deployment;
-  workloadName: string;
-  metrics: UseQueryResult<ContainerMetricsTimeseries, Error>;
+  record: Schemas["Container"];
+  pod: Schemas["WorkloadDetail"];
+  metrics: UseQueryResult<Schemas["ContainerMetrics"], Error>;
 }) {
-  const running = record.status === "running";
-  const resources = deployment.spec.resources;
+  const running = record.state === "ready";
+  const resources = pod.release.spec.resources;
+  const gpus = resources.gpu ?? [];
+  const gpuCount = resources.gpu_count ?? 0;
   const latestTimestamp = metrics.data?.points.at(-1)?.timestamp;
 
   return (
@@ -122,22 +111,20 @@ function PodInstanceDrawerBody({
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle>Pod instance</SheetTitle>
-          <StatusChip status={record.status} live={running} />
+          <StatusChip status={record.state} live={running} />
           <div className="ml-auto">
-            {record.actions.can_shell ? (
-              <ShellButton containerId={record.id} running={running} />
-            ) : null}
+            <ShellButton containerId={record.id} running={running} />
           </div>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          <span className="mono text-foreground">{workloadName}</span>
+          <span className="mono text-foreground">{record.function}</span>
           <span aria-hidden="true"> · </span>
-          <span>v{deployment.version}</span>
-          {record.started_at ? (
+          <span>v{record.version ?? pod.workload.version}</span>
+          {record.ready_at ? (
             <>
               <span aria-hidden="true"> · </span>
               <span>
-                Started <LiveRelativeTime value={record.started_at} />
+                Started <LiveRelativeTime value={record.ready_at} />
               </span>
             </>
           ) : null}
@@ -150,34 +137,33 @@ function PodInstanceDrawerBody({
           aria-label="Instance summary"
         >
           <FactGrid columns={4} className="gap-x-5 p-4">
-            <Fact
-              label="Placement"
-              value={podInstancePlacement(record)}
-              title={
-                record.runtime_machine_id ||
-                record.machine_id ||
-                record.runtime_worker_id ||
-                record.worker_id ||
-                undefined
-              }
-            />
+            <Fact label="Placement" value={podInstancePlacement(record)} title={record.host} />
             <Fact label="Uptime" value={podInstanceUptime(record)} mono />
-            <Fact label="CPU allocation" value={resourceAllocation(resources.cpu, "vCPU")} mono />
-            <Fact label="Memory allocation" value={resourceAllocation(resources.memory)} mono />
-            {resources.gpu.length > 0 ? (
+            <Fact
+              label="CPU allocation"
+              value={resourceAllocation(cpuRequest(resources), "vCPU")}
+              mono
+            />
+            <Fact
+              label="Memory allocation"
+              value={resourceAllocation(memoryRequest(resources), "MiB")}
+              mono
+            />
+            {gpus.length > 0 ? (
               <Fact
                 label="GPU allocation"
-                value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+                value={`${gpus.join(" → ")}${gpuCount > 1 ? ` x${gpuCount}` : ""}`}
                 mono
               />
             ) : null}
           </FactGrid>
           <StopCause
-            terminationReason={record.termination_reason}
-            status={record.status}
+            reason={record.stop_reason}
+            message={record.exit_message}
+            exitCode={record.exit_code}
             className="border-t border-border/80 px-4 py-3"
           />
-          {record.actions.can_shell && running ? (
+          {running ? (
             <section
               aria-label="Terminal access"
               className="flex flex-col gap-2 border-t border-border/80 bg-muted/10 p-3 sm:flex-row sm:items-center sm:px-4"
@@ -217,7 +203,7 @@ function PodInstanceDrawerBody({
               <PanelError message={metrics.error.message} layout="centered" />
             ) : (
               <PanelErrorBoundary title="Instance metrics could not be displayed">
-                <ContainerMetricsCharts points={metrics.data?.points} />
+                <ContainerMetricsCharts metrics={metrics.data} />
               </PanelErrorBoundary>
             )}
           </div>
