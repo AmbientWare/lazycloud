@@ -7,6 +7,9 @@ export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] 
   const { resources, placement } = spec;
   const gpu = resources.gpu ?? [];
   const gpuCount = resources.gpu_count ?? 0;
+  // A Pod holds connections rather than executing tasks, so per-task
+  // concurrency and timeout describe nothing it does.
+  const executesTasks = spec.kind !== "pod";
 
   return (
     <div className="@container min-w-0 space-y-5 p-4">
@@ -33,11 +36,15 @@ export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] 
         </ConfigurationGroup>
 
         <ConfigurationGroup title="Execution">
-          <ConfigurationFact
-            label="Concurrency"
-            value={Intl.NumberFormat().format(spec.concurrency ?? 1)}
-          />
-          <ConfigurationFact label="Timeout" value={timeoutLabel(spec.timeout_seconds ?? 3600)} />
+          {executesTasks ? (
+            <ConfigurationFact
+              label="Concurrency"
+              value={Intl.NumberFormat().format(spec.concurrency ?? 1)}
+            />
+          ) : null}
+          {executesTasks ? (
+            <ConfigurationFact label="Timeout" value={timeoutLabel(spec.timeout_seconds ?? 3600)} />
+          ) : null}
           <ConfigurationFact label="Keep warm" value={retentionLabel(spec.keep_warm_seconds)} />
         </ConfigurationGroup>
       </div>
