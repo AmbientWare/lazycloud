@@ -96,6 +96,9 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
   per input, 8 at a time; a failed later batch raises `MapSubmissionError`
   with the calls already admitted. Ctrl-C during `map` cancels the tasks not
   yet yielded.
+- `map` waits for each result without the reference's client-side deadline
+  of one task timeout, which reported a task still queued behind others as
+  failed; the server enforces each task's timeout.
 - A dropped connection during `.remote()` resumes following for up to 600 s
   before it cancels the task; the reference cancelled at once.
 - Redeploying an unchanged workload keeps its active version (the spec
