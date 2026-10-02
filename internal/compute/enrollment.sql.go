@@ -265,13 +265,9 @@ func (q *Queries) OpenHostSession(ctx context.Context, arg OpenHostSessionParams
 	return session_epoch, err
 }
 
-const touchHost = `-- name: TouchHost :one
-with touched as (
-    update hosts set last_seen_at = now()
-    where id = $1 and session_epoch = $2 and state = 'online'
-    returning 1
-)
-select count(*) from touched
+const touchHost = `-- name: TouchHost :execrows
+update hosts set last_seen_at = now()
+where id = $1 and session_epoch = $2 and state = 'online'
 `
 
 type TouchHostParams struct {
@@ -279,12 +275,13 @@ type TouchHostParams struct {
 	SessionEpoch int64
 }
 
-// Counts 0 once a newer session or host loss replaced this one.
+// Touches no row once a newer session or host loss replaced this one.
 func (q *Queries) TouchHost(ctx context.Context, arg TouchHostParams) (int64, error) {
-	row := q.db.QueryRow(ctx, touchHost, arg.ID, arg.SessionEpoch)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+	result, err := q.db.Exec(ctx, touchHost, arg.ID, arg.SessionEpoch)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const useJoinToken = `-- name: UseJoinToken :one

@@ -104,10 +104,11 @@ values (@connection_key, @region, @instance_type, @market, now() + make_interval
 on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason;
 
 -- name: MarkIdle :exec
--- A ready cloud host is idle from when its last container stopped.
+-- A ready cloud host is idle from when its last container stopped. The WHERE
+-- picks only hosts whose idle_since disagrees with their live containers, so
+-- each update flips it: set while unset, cleared while set.
 update hosts h
-set idle_since = case when exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
-                      then null else coalesce(h.idle_since, now()) end
+set idle_since = case when h.idle_since is null then now() end
 where h.provider = 'aws' and h.phase = 'ready'
   and (h.idle_since is null) = not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped');
 
