@@ -94,19 +94,10 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	return t, nil
 }
 
-// TracerProvider is the provider instrumentation takes as an option.
-func (t *Telemetry) TracerProvider() trace.TracerProvider { return t.provider }
-
-// Propagator carries W3C trace context across HTTP and gRPC calls.
-func (t *Telemetry) Propagator() propagation.TextMapPropagator { return t.propagator }
-
 // Tracer is the binary's tracer for its own spans.
 func (t *Telemetry) Tracer() trace.Tracer {
 	return t.provider.Tracer("github.com/AmbientWare/lazycloud")
 }
-
-// Enabled reports whether spans are exported.
-func (t *Telemetry) Enabled() bool { return t.cfg.OTLPEndpoint != "" }
 
 // Shutdown flushes buffered spans.
 func (t *Telemetry) Shutdown(ctx context.Context) error {

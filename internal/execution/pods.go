@@ -208,13 +208,6 @@ func billingModels(models []string) []billing.GPUType {
 	return out
 }
 
-// Pod is a pod deployment as a scale, wake or park sees it.
-type Pod struct {
-	Workload uuid.UUID
-	Name     string
-	Spec     apitypes.WorkloadSpec
-}
-
 func (e *Execution) lockPod(ctx context.Context, q *Queries, workspace identity.WorkspaceID, workload uuid.UUID) (LockPodWorkloadRow, apitypes.WorkloadSpec, error) {
 	row, err := q.LockPodWorkload(ctx, LockPodWorkloadParams{ID: workload, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {

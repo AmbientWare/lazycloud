@@ -1,94 +1,14 @@
 from __future__ import annotations
 
 NAME = "lazycloud"
-DISPLAY_NAME = NAME.replace("-", " ").title()
 ENV_PREFIX = NAME.upper().replace("-", "_")
 HOME_DIR = f".{NAME}"
-STATE_DIR = f"/var/lib/{NAME}"
-WORKER_BUNDLE_ROOT = f"/tmp/{NAME}-containers"
-WORKER_CHECKPOINT_ROOT = f"/tmp/{NAME}-checkpoints"
-CHECKPOINT_SIGNAL_ROOT = f"/tmp/{NAME}-checkpoint-signals"
-FUNCTION_IMAGE = f"{NAME}-function"
-ENDPOINT_IMAGE = f"{NAME}-endpoint"
-POD_IMAGE = f"{NAME}-pod"
-SHELL_IMAGE = f"{NAME}-shell"
-SHELL_LOG_PATH = f"/tmp/{NAME}-shell.log"
-AGENT_CONTAINER_TMP_PATH = f"/tmp/{NAME}"
-WORKER_ADMISSION_WAITING_FILE = "admission-waiting"
-"""Created in a held worker's temporary directory once the agent refuses its first call."""
-AGENT_CONTAINER_LOG_PATH = f"/var/log/{NAME}"
-AGENT_STATE_DIR = f"{STATE_DIR}/agent"
-AGENT_CONTAINER_DATA_PATH = f"{AGENT_STATE_DIR}/data"
-CLI_NAME = NAME
-ADMIN_CLI_NAME = f"{NAME}-admin"
-REDIS_KEY_PREFIX = NAME
-OBJECT_STORE_BUCKET = f"{NAME}-objects"
 
-WORKSPACE_BUCKET_PREFIX = "workspace"
-"""Default prefix of a workspace's own bucket.
-
-A deployment sharing an AWS account with another one overrides this, because the
-grant that reaches `workspace-*` cannot otherwise tell two deployments apart.
-"""
-WORKSPACE_OBJECT_BUCKET = "default"
-IMAGE_BUILD_CONTEXT_BUCKET = "build-contexts"
-DEFAULT_RESOURCE_TYPE = NAME
-EVENT_SOURCE = f"{NAME}-cluster"
-AGENT_NAME = f"{NAME}-agent"
-AGENT_SERVICE_DESCRIPTION = f"{DISPLAY_NAME} agent"
-AGENT_LAUNCHD_LABEL_PREFIX = f"com.{NAME}.agent"
-CONTROL_PLANE_SERVICE_NAME = f"{NAME}-api"
-SCHEDULER_PROCESS_NAME = f"{NAME}-scheduler"
-CONTAINER_WORKER_PROCESS_NAME = f"{NAME}-container-worker"
-CONTAINER_HELPER_PATH = f"/usr/local/bin/{NAME}-sandbox-supervisor"
-CACHE_SERVER_PROCESS_NAME = f"{NAME}-cache-server"
 SANDBOX_COMPOSE_OVERRIDE_PATH = f"/tmp/{NAME}-docker-compose.override.yml"
-METRICS_SOURCE = NAME
-SOURCE_CACHE_DIR = f"{NAME}-source-cache"
-SOURCE_PACKAGE_BUCKET = f"{NAME}-source-packages"
-WORKSPACE_UPLOAD_BUCKETS = frozenset(
-    {WORKSPACE_OBJECT_BUCKET, SOURCE_PACKAGE_BUCKET, IMAGE_BUILD_CONTEXT_BUCKET}
-)
 
 __all__ = [
-    "ADMIN_CLI_NAME",
-    "AGENT_CONTAINER_DATA_PATH",
-    "AGENT_CONTAINER_LOG_PATH",
-    "AGENT_CONTAINER_TMP_PATH",
-    "AGENT_LAUNCHD_LABEL_PREFIX",
-    "AGENT_NAME",
-    "AGENT_SERVICE_DESCRIPTION",
-    "AGENT_STATE_DIR",
-    "CACHE_SERVER_PROCESS_NAME",
-    "CHECKPOINT_SIGNAL_ROOT",
-    "CLI_NAME",
-    "CONTAINER_HELPER_PATH",
-    "CONTAINER_WORKER_PROCESS_NAME",
-    "CONTROL_PLANE_SERVICE_NAME",
-    "DEFAULT_RESOURCE_TYPE",
-    "DISPLAY_NAME",
-    "ENDPOINT_IMAGE",
     "ENV_PREFIX",
-    "EVENT_SOURCE",
-    "FUNCTION_IMAGE",
     "HOME_DIR",
-    "IMAGE_BUILD_CONTEXT_BUCKET",
-    "METRICS_SOURCE",
     "NAME",
-    "OBJECT_STORE_BUCKET",
-    "POD_IMAGE",
-    "REDIS_KEY_PREFIX",
     "SANDBOX_COMPOSE_OVERRIDE_PATH",
-    "SCHEDULER_PROCESS_NAME",
-    "SHELL_IMAGE",
-    "SHELL_LOG_PATH",
-    "SOURCE_CACHE_DIR",
-    "SOURCE_PACKAGE_BUCKET",
-    "STATE_DIR",
-    "WORKER_ADMISSION_WAITING_FILE",
-    "WORKER_BUNDLE_ROOT",
-    "WORKER_CHECKPOINT_ROOT",
-    "WORKSPACE_BUCKET_PREFIX",
-    "WORKSPACE_OBJECT_BUCKET",
-    "WORKSPACE_UPLOAD_BUCKETS",
 ]

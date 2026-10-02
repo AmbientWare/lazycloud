@@ -136,24 +136,6 @@ func (s *Server) GetSecretValue(ctx context.Context, req GetSecretValueRequestOb
 	}, nil
 }
 
-// ListSchedules returns one page of the workspace's scheduled functions.
-func (s *Server) ListSchedules(ctx context.Context, req ListSchedulesRequestObject) (ListSchedulesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	cursor, limit := pageArgs(req.Params.Cursor, req.Params.Limit)
-	page, next, err := s.owners.Schedules.List(ctx, ws.ID, cursor, limit)
-	if err != nil {
-		return nil, err
-	}
-	out := ListSchedules200JSONResponse{Schedules: make([]apitypes.ScheduledFunction, len(page)), NextCursor: optional(next)}
-	for n, item := range page {
-		out.Schedules[n] = apitypes.ScheduledFunction{App: item.App, Function: item.Function, Schedule: scheduleOut(item.Schedule)}
-	}
-	return out, nil
-}
-
 func scheduleOut(s schedules.Schedule) apitypes.Schedule {
 	return apitypes.Schedule{
 		Cron: s.Expression, Timezone: apitypes.UTC, NextRunAt: s.NextRunAt,

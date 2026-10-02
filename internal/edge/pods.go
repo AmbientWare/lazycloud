@@ -221,10 +221,6 @@ func (e *Edge) ConnectPod(ctx context.Context, workspace identity.WorkspaceID, w
 	return container, host, e.holds.hold(uuid.UUID(container)), nil
 }
 
-// HoldContainer keeps a container active while a connection the caller
-// opened lasts; the returned function ends the hold.
-func (e *Edge) HoldContainer(container uuid.UUID) func() { return e.holds.hold(container) }
-
 // servePod serves HTTP to a pod or sandbox port.
 func (e *Edge) servePod(w http.ResponseWriter, r *http.Request, id uuid.UUID, port int) {
 	ctx := r.Context()

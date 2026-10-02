@@ -426,19 +426,6 @@ class Schedule(APIModel):
     ] = None
 
 
-class ScheduledFunction(APIModel):
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    schedule: Schedule
-
-
-class SchedulePage(APIModel):
-    schedules: list[ScheduledFunction]
-    next_cursor: Annotated[str | None, Field(description="Present when more schedules follow.")] = (
-        None
-    )
-
-
 class MapKey(RootModel[str]):
     root: Annotated[str, Field(max_length=1024, min_length=1, pattern="^[^\\x00-\\x1f\\x7f]+$")]
 
@@ -1271,47 +1258,6 @@ class ContainerLifecyclesRequest(APIModel):
 
 class ContainerLifecycleList(APIModel):
     lifecycles: list[ContainerLifecycle]
-
-
-class AttemptOutcome(str, Enum):
-    running = "running"
-    succeeded = "succeeded"
-    failed = "failed"
-    timed_out = "timed_out"
-    cancelled = "cancelled"
-    lost = "lost"
-
-
-class TaskEventKind(str, Enum):
-    submitted = "submitted"
-    attempt_started = "attempt_started"
-    attempt_finished = "attempt_finished"
-    retry_scheduled = "retry_scheduled"
-    finished = "finished"
-
-
-class TaskEvent(APIModel):
-    kind: TaskEventKind
-    at: AwareDatetime
-    attempt: Annotated[
-        int | None, Field(description="The attempt number, for attempt and retry events.")
-    ] = None
-    attempt_id: UUID | None = None
-    container_id: UUID | None = None
-    outcome: AttemptOutcome | None = None
-    due_at: Annotated[
-        AwareDatetime | None,
-        Field(description="For retry_scheduled, when the next attempt may start."),
-    ] = None
-    status: Annotated[
-        TaskStatus | None, Field(description="For finished, the task's final status.")
-    ] = None
-
-
-class TaskTimeline(APIModel):
-    task_id: UUID
-    status: TaskStatus
-    events: list[TaskEvent]
 
 
 class CallGraphNode(APIModel):
@@ -2733,13 +2679,6 @@ class User(APIModel):
     is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
     status: UserStatus
     created_at: AwareDatetime
-
-
-class UserList(APIModel):
-    users: list[User]
-    next_cursor: Annotated[
-        UUID | None, Field(description="Pass as `cursor` for the next page; absent after the last.")
-    ] = None
 
 
 class Workspace(APIModel):

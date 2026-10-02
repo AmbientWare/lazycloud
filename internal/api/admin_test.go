@@ -21,26 +21,18 @@ func TestAccountAdministrationOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var outsiderMe apitypes.Me
+	if status := e.do("GET", "/v1/me", e.outsider, nil, &outsiderMe); status != 200 {
+		t.Fatalf("outsider me: %d", status)
+	}
+	outsider := outsiderMe.User.Id
 	var apiErr apitypes.Error
 	for name, token := range map[string]string{"member": e.owner, "restricted admin token": restricted} {
-		if status := e.do("GET", "/v1/users", token, nil, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
-			t.Fatalf("%s lists: %d %+v", name, status, apiErr)
+		if status := e.do("PUT", "/v1/users/"+outsider.String()+"/role", token, map[string]string{"role": "administrator"}, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
+			t.Fatalf("%s promotes: %d %+v", name, status, apiErr)
 		}
 	}
-
-	var list apitypes.UserList
-	if status := e.do("GET", "/v1/users?role=member&status=active&search=OUTSIDER&limit=1", admin, nil, &list); status != 200 ||
-		len(list.Users) != 1 || list.Users[0].Email != "outsider@example.com" || list.NextCursor != nil {
-		t.Fatalf("filtered list: %d %+v", status, list)
-	}
-	outsider := list.Users[0].Id
-	if status := e.do("GET", "/v1/users?limit=1", admin, nil, &list); status != 200 || len(list.Users) != 1 || list.NextCursor == nil {
-		t.Fatalf("first page: %d %+v", status, list)
-	}
-	if status := e.do("GET", "/v1/users?limit=50&cursor="+list.NextCursor.String(), admin, nil, &list); status != 200 || len(list.Users) != 2 {
-		t.Fatalf("second page: %d %+v", status, list)
-	}
-	if status := e.do("GET", "/v1/users?role=owner", admin, nil, &apiErr); status != 400 {
+	if status := e.do("PUT", "/v1/users/"+outsider.String()+"/role", admin, map[string]string{"role": "owner"}, &apiErr); status != 400 {
 		t.Fatalf("unknown role: %d %+v", status, apiErr)
 	}
 

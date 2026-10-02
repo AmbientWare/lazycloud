@@ -199,7 +199,7 @@ Measurements (one host, 24 CPUs, Docker 29, same stack):
   that reaches the workspace can reveal.
 - Dashboard (web packet): Storage → Secrets and the workload Schedule,
   Timezone, Last run and Next run use `listSecrets`, `setSecret`,
-  `deleteSecret`, `getSecretValue`, `listSchedules` and `Function.schedule`.
+  `deleteSecret`, `getSecretValue` and the workload's `schedule`.
 - `InvalidInputError` is retried here; the reference did not retry it.
 - Hook contexts leave `stub_id`, `app_id` and `workspace_id` empty.
 

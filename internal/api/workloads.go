@@ -307,7 +307,7 @@ func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObje
 	if err != nil {
 		return nil, err
 	}
-	return ListSandboxes200JSONResponse{Sandboxes: page.Sandboxes, NextCursor: nextCursor(page.Next)}, nil
+	return ListSandboxes200JSONResponse{Sandboxes: page.Sandboxes, NextCursor: optional(page.Next)}, nil
 }
 
 // GetSandboxStats counts sandboxes.
@@ -363,7 +363,7 @@ func (s *Server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject
 	if err != nil {
 		return nil, err
 	}
-	out := ListSshHosts200JSONResponse{Hosts: make([]apitypes.SshHost, len(hosts)), NextCursor: nextCursor(next)}
+	out := ListSshHosts200JSONResponse{Hosts: make([]apitypes.SshHost, len(hosts)), NextCursor: optional(next)}
 	for n, h := range hosts {
 		out.Hosts[n] = apitypes.SshHost{App: h.App, Pod: h.Pod, Role: h.Role, DeploymentId: h.Workload, Alias: h.Alias, HostPublicKey: h.PublicKey}
 	}

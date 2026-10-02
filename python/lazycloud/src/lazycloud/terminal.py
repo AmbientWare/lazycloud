@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from threading import RLock
 from types import TracebackType
-from typing import TypeAlias
 
 from rich.console import Group, RenderableType
 from rich.live import Live
@@ -25,7 +24,6 @@ from lazycloud._terminal.cards import notice_card
 from lazycloud._terminal.formatting import short_id
 from lazycloud._terminal.streams import error_console, json_output_active
 
-ProgressCallback: TypeAlias = Callable[[int], None]
 _output_enabled: ContextVar[bool | None] = ContextVar("lazycloud_output_enabled", default=None)
 
 

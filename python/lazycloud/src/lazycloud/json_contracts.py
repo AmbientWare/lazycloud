@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
-
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
-
-
-@runtime_checkable
-class _ModelDumpable(Protocol):
-    def model_dump(self, *, mode: str) -> object: ...
 
 
 def validate_json_object(value: object) -> dict[str, JsonValue]:

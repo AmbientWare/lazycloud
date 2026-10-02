@@ -7,7 +7,6 @@ package identity
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -30,77 +29,6 @@ where user_id = $1 and consumed_at is null and expires_at > now()
 func (q *Queries) ExpireUserDeviceCodes(ctx context.Context, userID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, expireUserDeviceCodes, userID)
 	return err
-}
-
-const listUsers = `-- name: ListUsers :many
-select id, email, display_name, avatar_url, github_login, is_admin, status, created_at
-from users
-where ($1::uuid is null or id > $1::uuid)
-  and ($2::text is null
-       or display_name ilike $2::text
-       or email ilike $2::text
-       or github_login ilike $2::text)
-  and ($3::bool is null or is_admin = $3::bool)
-  and ($4::text is null or status = $4::text)
-order by id
-limit $5
-`
-
-type ListUsersParams struct {
-	AfterID  *uuid.UUID
-	Pattern  *string
-	IsAdmin  *bool
-	Status   *string
-	RowLimit int32
-}
-
-type ListUsersRow struct {
-	ID          uuid.UUID
-	Email       *string
-	DisplayName string
-	AvatarUrl   string
-	GithubLogin string
-	IsAdmin     bool
-	Status      string
-	CreatedAt   time.Time
-}
-
-// Accounts by id after after_id, narrowed by a case-insensitive LIKE pattern
-// on the display name, email or GitHub login, the administrator flag and the
-// status. Ids are UUIDv7, so id order is creation order.
-func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
-	rows, err := q.db.Query(ctx, listUsers,
-		arg.AfterID,
-		arg.Pattern,
-		arg.IsAdmin,
-		arg.Status,
-		arg.RowLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListUsersRow
-	for rows.Next() {
-		var i ListUsersRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Email,
-			&i.DisplayName,
-			&i.AvatarUrl,
-			&i.GithubLogin,
-			&i.IsAdmin,
-			&i.Status,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const lockUsers = `-- name: LockUsers :many

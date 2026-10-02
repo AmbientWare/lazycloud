@@ -429,7 +429,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, billing.ErrPaymentsUnavailable):
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, billing.ErrPaymentsUnavailable.Error())
-	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
+	case errors.Is(err, secrets.ErrInvalidCursor):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
 	case endpointError(w, err):
 	case workloadError(w, err):

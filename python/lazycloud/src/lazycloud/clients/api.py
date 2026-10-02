@@ -37,7 +37,6 @@ from shared.api import (
     Payload,
     Release,
     ScaleRequest,
-    SchedulePage,
     Secret,
     SecretCreate,
     SecretPage,
@@ -670,18 +669,6 @@ class ApiClient:
     def get_secret_value(self, workspace: str, name: str) -> SecretValue:
         return self._send(
             SecretValue, "GET", _path("v1", "workspaces", workspace, "secrets", name, "value")
-        )
-
-    def list_schedules(
-        self, workspace: str, *, cursor: str | None = None, limit: int | None = None
-    ) -> SchedulePage:
-        params: dict[str, str | int] = {}
-        if cursor:
-            params["cursor"] = cursor
-        if limit is not None:
-            params["limit"] = limit
-        return self._send(
-            SchedulePage, "GET", _path("v1", "workspaces", workspace, "schedules"), params=params
         )
 
     def _client(self) -> httpx.Client:

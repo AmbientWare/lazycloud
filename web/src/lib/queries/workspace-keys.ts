@@ -177,14 +177,15 @@ export const workspaceQueryKeys = {
   },
 } as const;
 
-export type AdminAccountsKeyParts = {
+/** How the administrator's account list is narrowed on the server. */
+export type AccountScope = {
   search: string;
-  role: string | null;
-  status: string | null;
+  role: Schemas["PlatformRole"] | null;
+  status: Schemas["UserStatus"] | null;
 };
 
 /** The unnarrowed list, and the key every mutation patches. */
-export const EVERY_ACCOUNT: AdminAccountsKeyParts = { search: "", role: null, status: null };
+export const EVERY_ACCOUNT: AccountScope = { search: "", role: null, status: null };
 
 const accountRoot = ["account"] as const;
 
@@ -242,7 +243,7 @@ export const accountQueryKeys = {
     // Keyed on the narrowing, so each search and filter caches its own pages
     // and changing one starts a fresh walk rather than appending to the last.
     accounts: Object.assign(
-      (scope: AdminAccountsKeyParts = EVERY_ACCOUNT) =>
+      (scope: AccountScope = EVERY_ACCOUNT) =>
         [...accountRoot, "admin", "accounts", scope] as const,
       { root: () => [...accountRoot, "admin", "accounts"] as const },
     ),

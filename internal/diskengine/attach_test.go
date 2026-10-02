@@ -33,8 +33,8 @@ func TestPlanRestoreCountsBaseGrowthFromCommits(t *testing.T) {
 	if !errors.As(err, &space) || !errors.Is(err, ErrInsufficientSpace) {
 		t.Fatalf("a chain whose committed base outgrows the volume was admitted: %v", err)
 	}
-	if space.Shortfall() <= 0 {
-		t.Fatalf("a refused restore reports a shortfall of %d", space.Shortfall())
+	if space.Need+space.Reserve <= space.Have {
+		t.Fatalf("a refused restore reports no shortfall: %+v", space)
 	}
 
 	// Rewrites of the same data cannot grow the base past the disk's size.

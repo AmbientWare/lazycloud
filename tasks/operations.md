@@ -43,10 +43,6 @@ lives, if anywhere:
 `internal/identity/admin.go`, `internal/api/admin.go`, tag `admin` in
 contracts/openapi.yaml.
 
-- `GET /v1/users` (`listUsers`): `search` (display name, email or GitHub
-  login, case-insensitive, LIKE wildcards literal, at most 200 characters),
-  `role` (administrator|member), `status` (active|disabled), `limit` 1 to
-  200 (default 50), `cursor`. Returns `{users, next_cursor}`, oldest first.
 - `PUT /v1/users/{user}/role` (`setUserRole`) and `PUT /v1/users/{user}/status`
   (`setUserStatus`) return the `User`, which gains `status`.
 - Members get 403, and so does an administrator's workspace-restricted token.
@@ -57,15 +53,11 @@ contracts/openapi.yaml.
   the caller is still an active administrator. Disabling revokes API tokens,
   deletes browser sessions and expires approved device codes in one
   transaction; the reference revoked tokens only. Enabling restores none.
-- Billing reuse: `identity.ListUsers(ctx, p, UserQuery)` returns a
-  `UserPage`; `/v1/billing/accounts` can call it and load plan and cost for
-  the returned ids in one query.
-- Web packet operations: `listUsers`, `setUserRole`, `setUserStatus`. The
-  reference read `/api/v1/billing/accounts` with `data`/`next` and `role`;
-  this reads `users`/`next_cursor` and `is_admin`, plus billing's fields once
-  that packet lands.
+- The dashboard lists accounts through `/v1/billing/accounts`, as the
+  reference did. Nothing read the reference's user list after its admin CLI
+  went, so there is no `GET /v1/users`.
 
-Tests: TestListUsersFiltersAndPages, TestAccountAdministrationNeedsAnAdministratorAccount,
+Tests: TestAccountAdministrationNeedsAnAdministratorAccount,
 TestDisablingEndsCredentials, TestConcurrentMutualDemotionKeepsAnAdministrator
 (internal/identity), TestAccountAdministrationOverHTTP (internal/api).
 

@@ -34,33 +34,8 @@ def infer_mount_auth_mode(
     return MountAuthMode.Ambient
 
 
-def validate_mount_auth(
-    auth_mode: MountAuthMode,
-    access_key: str,
-    secret_key: str,
-    *,
-    allow_unhydrated_secret_references: bool = False,
-) -> None:
-    has_access_key = bool(access_key)
-    has_secret_key = bool(secret_key)
-    if has_access_key != has_secret_key:
-        msg = "mount access_key and secret_key must both be set or both be omitted"
-        raise ValueError(msg)
-    if auth_mode is MountAuthMode.Ambient and has_access_key:
-        msg = "ambient mount authentication cannot include credentials"
-        raise ValueError(msg)
-    if (
-        auth_mode is MountAuthMode.SecretReferences
-        and not has_access_key
-        and not allow_unhydrated_secret_references
-    ):
-        msg = "secret-reference mount authentication requires both secret names"
-        raise ValueError(msg)
-
-
 __all__ = [
     "MountAuthMode",
     "infer_mount_auth_mode",
     "normalize_mount_prefix",
-    "validate_mount_auth",
 ]

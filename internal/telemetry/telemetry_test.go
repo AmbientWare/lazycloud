@@ -65,18 +65,9 @@ func (r *receiver) Export(_ context.Context, req *collector.ExportTraceServiceRe
 	return &collector.ExportTraceServiceResponse{}, nil
 }
 
-// Without an endpoint nothing is traced; with one, request spans named by
-// their operation export over OTLP, linked to the caller's trace, and
-// /metrics reports the request.
+// Request spans named by their operation export over OTLP, linked to the
+// caller's trace, and /metrics reports the request.
 func TestRequestsExportSpansAndMetrics(t *testing.T) {
-	off, err := telemetry.New(t.Context(), telemetry.Config{Service: "server"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if off.Enabled() {
-		t.Fatal("tracing is on without an endpoint")
-	}
-
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

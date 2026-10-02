@@ -2,7 +2,6 @@ import pytest
 from shared.gpu import (
     SUPPORTED_GPU_TYPES,
     gpu_preference,
-    gpu_preference_rank,
     normalize_gpu_type,
 )
 
@@ -40,10 +39,6 @@ def test_a_model_with_two_sizes_is_refused_rather_than_guessed() -> None:
 def test_an_order_is_kept_and_a_wildcard_cannot_hide_what_follows_it() -> None:
     assert gpu_preference(["h100", "l4"]) == ("H100", "L4")
     assert gpu_preference(["h100", "H100", "l4"]) == ("H100", "L4")
-    assert gpu_preference_rank(("H100", "L4"), "L4") == 1
-    assert gpu_preference_rank(("H100", "L4"), "T4") is None
-    # A worker reports its hardware however its driver spells it.
-    assert gpu_preference_rank(("A100-40",), "NVIDIA A100-SXM4-40GB") == 0
 
     with pytest.raises(ValueError):
         gpu_preference(["h100", "any", "l4"])

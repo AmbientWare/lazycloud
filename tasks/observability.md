@@ -90,8 +90,7 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
 | Container metrics charts | `getContainerMetrics` GET `/v1/workspaces/{ws}/containers/{id}/metrics?start&end&step_seconds` |
 | Task drawer lifecycle strip, container tab, stop cause | `getContainerLifecycle` GET `/v1/workspaces/{ws}/containers/{id}/lifecycle`; `getContainer` (control) |
 | Trace tab row phases | `listContainerLifecycles` POST `/v1/workspaces/{ws}/containers/lifecycles` |
-| Lifecycle timeline | `getTaskTimeline` GET `/v1/workspaces/{ws}/tasks/{task}/timeline` |
-| Trace (call graph) | `getTaskCallGraph` GET `/v1/workspaces/{ws}/tasks/{task}/call-graph` |
+| Lifecycle timeline and trace (call graph) | `getTaskCallGraph` GET `/v1/workspaces/{ws}/tasks/{task}/call-graph` |
 | Pending notice | `getTask` `pending` (control) |
 | Workload performance | `getDeploymentPerformance` GET `/v1/workspaces/{ws}/deployments/{id}/performance?window_seconds&start&end` |
 | Tasks and failures over 24 h | `getTaskMetrics` GET `/v1/workspaces/{ws}/metrics/tasks?start&end&app&function` |
@@ -139,10 +138,9 @@ Owner tests against PostgreSQL 18 and Docker (runc), all with `-race`:
 `TestMetricSamplesComeOnlyFromTheAssignedHost`,
 `TestRollupFoldsMinutesAndKeepsWhatIsNotFolded`,
 `TestLifecycleCombinesTransitionsAndHostStages`,
-`TestTaskTimelineFollowsAttemptsAndRetries`,
 `TestCallGraphReadsTheWholeGraphFromAnyTask`,
 `TestClaimCarriesTheSubmittingTrace`,
-`TestDeploymentPerformanceBucketsLatencyAndColdStarts`,
+`TestWorkloadPerformanceBucketsLatencyAndColdStarts`,
 `TestTaskMetricsAndActivity`, `TestAccountMetricsAndActivity`
 (internal/observability); `TestChangeStreamOverHTTP`,
 `TestObservabilityRoutesAuthorizeAndValidate` (internal/api);

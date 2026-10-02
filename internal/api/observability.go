@@ -203,19 +203,6 @@ func (s *Server) ListContainerLifecycles(ctx context.Context, req ListContainerL
 	return ListContainerLifecycles200JSONResponse{Lifecycles: lifecycles}, nil
 }
 
-// GetTaskTimeline returns a task's submission, attempts and outcome.
-func (s *Server) GetTaskTimeline(ctx context.Context, req GetTaskTimelineRequestObject) (GetTaskTimelineResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := s.owners.Observability.TaskTimeline(ctx, ws.ID, execution.TaskID(req.Task))
-	if err != nil {
-		return nil, err
-	}
-	return GetTaskTimeline200JSONResponse(timeline), nil
-}
-
 // GetTaskCallGraph returns the tasks of a task's call graph.
 func (s *Server) GetTaskCallGraph(ctx context.Context, req GetTaskCallGraphRequestObject) (GetTaskCallGraphResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)

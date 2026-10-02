@@ -68,11 +68,6 @@ func (u URLs) Release(release uuid.UUID, route string) string {
 	return u.build(u.host(release.String()), route)
 }
 
-// Container addresses one container.
-func (u URLs) Container(container uuid.UUID, route string) string {
-	return u.build(u.host(container.String()), route)
-}
-
 // Domain is a custom hostname, served on the default port of the scheme.
 func (u URLs) Domain(hostname, route string) string {
 	return u.build(hostname, route)

@@ -62,15 +62,10 @@ func (i *Identity) ListWorkspaces(ctx context.Context, p Principal, page Workspa
 	return out, nil
 }
 
-// CreateOwnedWorkspace creates a workspace owned by the caller. Only
+// CreateOwnedWorkspace creates a workspace owned by the caller, in the
+// connected AWS account connection or on platform compute when nil. Only
 // platform administrators create workspaces, with an account credential.
-func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name string) (Workspace, error) {
-	return i.CreateOwnedWorkspaceIn(ctx, p, name, nil)
-}
-
-// CreateOwnedWorkspaceIn is CreateOwnedWorkspace for a workspace that lives
-// in the connected AWS account connection, or on platform compute when nil.
-func (i *Identity) CreateOwnedWorkspaceIn(ctx context.Context, p Principal, name string, connection *uuid.UUID) (Workspace, error) {
+func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name string, connection *uuid.UUID) (Workspace, error) {
 	if !p.IsAdmin {
 		return Workspace{}, ErrAdminRequired
 	}

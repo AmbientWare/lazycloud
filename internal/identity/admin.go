@@ -3,7 +3,6 @@ package identity
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,80 +45,6 @@ func (s UserStatus) check() error {
 		return nil
 	}
 	return &InvalidError{Message: fmt.Sprintf("unknown account status %q", s)}
-}
-
-// Account listing bounds.
-const (
-	MaxUserPage   = 200
-	MaxUserSearch = 200
-)
-
-// UserQuery asks for one page of accounts. Nil Role and Status match every
-// account; an empty Search matches every account.
-type UserQuery struct {
-	// Search matches the display name, email or GitHub login, ignoring case.
-	Search string
-	Role   *PlatformRole
-	Status *UserStatus
-	// After is the Next of the previous page.
-	After *UserID
-	Limit int
-}
-
-// UserPage is one page of accounts, oldest first. Next is the cursor of the
-// following page, nil after the last.
-type UserPage struct {
-	Users []User
-	Next  *UserID
-}
-
-// ListUsers pages through every account, including ones that never signed
-// in. Only a platform administrator with an account credential may list
-// them. Billing lists accounts through it and adds its own columns for the
-// returned ids.
-func (i *Identity) ListUsers(ctx context.Context, p Principal, q UserQuery) (UserPage, error) {
-	if err := requireAccountAdmin(p); err != nil {
-		return UserPage{}, err
-	}
-	if q.Limit < 1 || q.Limit > MaxUserPage {
-		return UserPage{}, &InvalidError{Message: fmt.Sprintf("limit must be between 1 and %d", MaxUserPage)}
-	}
-	params := ListUsersParams{AfterID: (*uuid.UUID)(q.After), RowLimit: int32(q.Limit + 1)} //nolint:gosec // Bounded above.
-	if term := strings.TrimSpace(q.Search); term != "" {
-		if len([]rune(term)) > MaxUserSearch {
-			return UserPage{}, &InvalidError{Message: fmt.Sprintf("search is at most %d characters", MaxUserSearch)}
-		}
-		pattern := "%" + escapeLike(term) + "%"
-		params.Pattern = &pattern
-	}
-	if q.Role != nil {
-		admin, err := q.Role.isAdmin()
-		if err != nil {
-			return UserPage{}, err
-		}
-		params.IsAdmin = &admin
-	}
-	if q.Status != nil {
-		if err := q.Status.check(); err != nil {
-			return UserPage{}, err
-		}
-		status := string(*q.Status)
-		params.Status = &status
-	}
-	rows, err := i.queries.ListUsers(ctx, params)
-	if err != nil {
-		return UserPage{}, fmt.Errorf("list users: %w", err)
-	}
-	var page UserPage
-	for n, row := range rows {
-		if n == q.Limit {
-			last := page.Users[n-1].ID
-			page.Next = &last
-			break
-		}
-		page.Users = append(page.Users, userFrom(UserProfileRow(row)))
-	}
-	return page, nil
 }
 
 // SetUserRole grants or withdraws platform administration.
@@ -222,18 +147,6 @@ func requireAccountAdmin(p Principal) error {
 		return ErrAdminRequired
 	}
 	return p.requireAccount("manage accounts")
-}
-
-// escapeLike quotes LIKE wildcards with the default escape character.
-func escapeLike(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if strings.ContainsRune(`\%_`, r) {
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 func userFrom(row UserProfileRow) User {

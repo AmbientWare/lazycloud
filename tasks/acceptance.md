@@ -222,31 +222,73 @@ three runs against the reference's single 722 ms measurement.
 
 ## Handwritten production code
 
-Lines from cloc without blanks, comments or docstrings; tests and generated
-files are excluded and listed separately. The rewrite has not reached parity
-yet (every area in update.md is unchecked), so these figures do not show a
-simplification.
+Reference 9e259ce75 against go-rewrite after the final sweep (branch
+final-sweep), each counted from `git archive` of its commit. Lines are cloc
+code lines, so blanks, comments and docstrings are out. Tests, generated files
+(sqlc, oapi-codegen, protobuf, datamodel-codegen, openapi-typescript, the
+TanStack route tree) and lockfiles are counted apart. SQL queries, the schema,
+YAML contracts, Helm, Terraform and shell count as handwritten.
 
-| Capability | Reference | Rewrite | Rewrite generated |
-| --- | --- | --- | --- |
-| API and transport | 19,706 | 4,815 | 18,446 |
-| Execution | 13,312 | 4,192 | 3,573 |
-| Scheduling | 17,402 | 975 | 170 |
-| Compute and fleet | 32,580 | 4,768 | 2,729 |
-| Host runtime | 42,188 | 9,284 | 7,006 |
-| Storage and cache | 12,348 | 5,654 | 1,850 |
-| Images | 5,858 | 1,876 | 608 |
-| Billing | 3,634 | 4,702 | 2,679 |
-| Identity and secrets | 3,495 | 2,725 | 1,636 |
-| Control and schedules | 4,069 | 1,831 | 1,141 |
-| Networking and gateway | 7,969 | 3,371 | 802 |
-| Observability and notifications | 3,923 | 2,674 | 1,433 |
-| Database access and schema | 30,149 | 1,454 | 0 |
-| Operations and deploy | 10,447 | 1,177 | 0 |
-| Backend total | 207,800 | 49,498 | 42,073 |
-| Contract sources (OpenAPI, Protobuf) | none | 7,202 | |
-| Python SDK and CLI / runner / shared | 26,914 / 2,320 / 14,737 | 22,981 / 957 / 6,762 | |
-| Backend tests | 76,460 | 20,954 | |
+| Capability | Reference | Rewrite | Rewrite generated | Why |
+| --- | --- | --- | --- | --- |
+| Functions and execution | 22,200 | 6,676 | 7,040 | Admission, attempts, retries, results, apps, deployments, schedules and callbacks are SQL in two owners. The reference spread them over execution, control, operations and scheduler autoscaling, plus 5,140 lines of repository classes. |
+| Scheduling | 7,413 | 235 | 170 | Placement is one SQL pass over capacity rows. The reference kept placement state and capacity reservations in Redis (`state.py` alone is 3,514). Part of the decision now sits in execution planning and compute capacity, which their rows count. |
+| Compute and fleet | 36,966 | 5,483 | 2,729 | One EC2 launcher and a capacity controller replace managed and retained pools, reserve planning, demand forecasts and a fleet simulator. The AWS provider alone was 8,715 and its repositories 4,999. |
+| Images | 6,548 | 2,603 | 645 | Dockerfile rendering, image identity and registry publication. Builds run on hosts with BuildKit and count under host runtime (`agent/build.go`, 683). |
+| Storage | 15,703 | 3,509 | 1,870 | The AWS SDK replaces a hand-written S3 client (1,093); there is no cache server (1,445) and no repository layer (3,675). |
+| Endpoints and edge | 6,340 | 4,760 | 806 | The smallest cut. The edge forwards HTTP and WebSocket streams over host data streams, relays between servers, and owns request logs and Cloudflare domains. The reference did part of that forwarding in its connection gateway, which counts under host runtime. |
+| Workloads (pods, devboxes, sandboxes, shells) | 6,034 | 3,073 | 0 | Pods reuse the container lifecycle, and SSH and shells end in the supervisor. Pod port and TCP proxying count here on both sides. |
+| Billing and usage | 9,455 | 5,197 | 2,819 | Ledger, rate cards, metering and Stripe flows stay detailed. SQL replaces 3,364 lines of repository code. |
+| Identity and secrets | 7,266 | 3,324 | 1,621 | Sign-in, tokens, device login, invitations and sealed secrets in two packages. The reference repositories alone were 1,870. |
+| Observability and notifications | 5,981 | 3,542 | 1,374 | Triggers and NOTIFY feed the change stream and SQL folds metrics. The reference kept stream state in Redis (1,004). |
+| Host runtime (agent, supervisor, disks, runner) | 60,614 | 18,159 | 8,710 | One Go agent, one supervisor and the disk engine replace the Python worker (28,684), the connection gateway (5,840), the worker repository API and three Go helpers. The host protocol is the gRPC session in `hostsession`. |
+| SDK and CLI | 25,090 | 21,274 | 0 | Same public API and commands. Clients build on generated models. Bundled examples are out on both sides. |
+| Contracts and shared Python models | 14,757 | 10,439 | 2,691 | OpenAPI and Protobuf (8,552) are the one source, and 1,867 lines of shared Python remain. The reference shared package served both the backend and the SDK. |
+| Web | 38,381 | 35,622 | 10,229 | Same pages and styling. Generated openapi-fetch types replace 2,009 lines of zod schemas. |
+| Platform core (API plumbing, database, processes) | 18,043 | 3,619 | 21,600 | Binaries, the schema (1,337 lines of SQL) and pool, listener and leader helpers. The reference had SQLAlchemy tables and mappers (8,219), FastAPI composition and services (4,849), Redis coordination (1,927) and a scheduler app. Most of the generated count is the oapi-codegen strict server. |
+| Deploy and infra | 10,422 | 4,159 | 0 | Rewrite `deploy/` and `.github` against the reference `deploy/`, `docker/` and `.github`. Helm, Terraform and Argo CD replace 6,334 lines of Python release, AMI and chart tooling. |
+| Backend and host (all rows but SDK, contracts, web and deploy) | 202,563 | 60,180 | 49,384 | |
 
-The reference also has 4,513 lines of unused admin CLI and 2,344 lines of
-Alembic history. The web app is unchanged at 35,097 lines.
+How the reference maps:
+
+- `apps/api` routers go to the capability they serve. The worker repository
+  service and gateway routers go to host runtime, and app, dependency and
+  service composition to platform core.
+- `packages/database/repositories` splits by file name: `billing_*` to
+  billing, `capacity_*`, `compute` and `worker_releases` to compute,
+  `container_scheduling` to scheduling, and so on. Tables, mappers and records
+  are platform core.
+- `packages/execution` sends `endpoints/` to the edge, `pods/`, `shells/` and
+  `ssh/` to workloads, `volumes/`, `artifacts/` and `collections/` to storage,
+  and `secrets/` to identity. `packages/control` sends sandboxes to workloads,
+  custom domains and TCP ingress to the edge, and workspaces to identity.
+  `packages/operations` (cross-owner management services) is execution.
+- `packages/scheduler` sends autoscaling, containers, orphan recovery and cron
+  to execution, pools, workers and fleet to compute, and the rest to scheduling.
+- `packages/compute` and `packages/providers/aws` go to compute, except bucket,
+  block volume and workspace storage files (storage), request placement
+  (scheduling), tunnel authority (edge) and supplier costs (billing).
+- Stripe goes to billing, Resend to notifications, GitHub to identity, and
+  Cloudflare and `packages/networking` to the edge. `packages/gateway`,
+  `worker`, `worker-repository`, `agent`, `runner` and the Go helpers in `apps/`
+  go to host runtime.
+- Left out: the unused admin CLI (`apps/cli`, 4,548), Alembic history (2,287),
+  bundled examples (1,976 here, 1,961 in the rewrite), benchmarks and the
+  Compose files on both sides.
+
+The rewrite maps by owner package, and `internal/api` splits by file the same
+way. Execution's pod, devbox, sandbox, snapshot and SSH files go to workloads,
+its image builds to images, endpoint serving to the edge and log storage to
+observability. `edge/pods.go` and `edge/tcp.go` go to workloads.
+
+Tests are 104,268 lines in the reference plus 3,761 in web, and 36,891 in the
+rewrite (with the acceptance harness) plus 4,526 in web. Generated code is
+52,075 lines in the rewrite plus 10,229 in web, against 525 in the reference
+web.
+
+The final sweep removed 6,775 handwritten lines, 1,036 test lines and 1,650
+generated lines net: shared Python modules and definitions only the reference
+backend read, the admin CLI extension hooks, unused SDK client methods,
+test-only Go accessors, duplicate helpers, and the `listUsers`,
+`listSchedules` and `getTaskTimeline` operations, which nothing called, with
+their handlers, queries and schemas.

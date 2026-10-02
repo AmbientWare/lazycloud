@@ -6,7 +6,7 @@ import time
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
@@ -209,23 +209,6 @@ def effective_ignore_patterns(
     return (*BASELINE_IGNORE_PATTERNS, *lines)
 
 
-@dataclass(frozen=True, slots=True)
-class SourceFileFilter:
-    root: Path
-    ignore_patterns: tuple[str, ...]
-    _spec: PathSpec = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_spec", _compile_patterns(self.ignore_patterns))
-
-    @classmethod
-    def for_root(cls, root: Path) -> SourceFileFilter:
-        return cls(root, effective_ignore_patterns(root))
-
-    def includes(self, relative: str, *, directory: bool = False) -> bool:
-        return not _matches(self._spec, relative, directory=directory)
-
-
 def _collect_source_files(
     root: Path,
     *,
@@ -329,7 +312,6 @@ __all__ = [
     "DEFAULT_IGNORE_PATTERNS",
     "SOURCE_IGNORE_FILE",
     "SOURCE_IGNORE_FILE_WRITTEN_NOTICE",
-    "SourceFileFilter",
     "SourcePackageArchive",
     "SourcePackageSyncError",
     "build_source_package_archive",

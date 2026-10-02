@@ -27,15 +27,11 @@ from shared.api import (
     CreateArtifactRequest,
     CreateVolumeRequest,
     CreateVolumeUploadRequest,
-    DeleteArtifactsRequest,
-    DeletedArtifacts,
-    Disk,
     DiskPage,
     MapEntry,
     MapEntryWrite,
     MapInfo,
     MapKeyPage,
-    MapPage,
     MoveVolumeFileRequest,
     MultipartUpload,
     PresignArtifactRequest,
@@ -44,7 +40,6 @@ from shared.api import (
     PutQueueMessagesRequest,
     QueueInfo,
     QueueMessageResult,
-    QueuePage,
     RemovedVolumeFiles,
     SetMapEntryRequest,
     UploadPart,
@@ -82,9 +77,6 @@ class StorageClient:
         return self.api._send(
             Volume, "POST", self._path("volumes"), body=CreateVolumeRequest(name=name)
         )
-
-    def get_volume(self, name: str) -> Volume:
-        return self.api._send(Volume, "GET", self._path("volumes", name))
 
     def delete_volume(self, name: str) -> None:
         self.api._send(None, "DELETE", self._path("volumes", name))
@@ -155,9 +147,6 @@ class StorageClient:
     def list_disks(self, *, cursor: str | None = None) -> DiskPage:
         return self.api._send(DiskPage, "GET", self._path("disks"), params=_query(cursor=cursor))
 
-    def get_disk(self, name: str) -> Disk:
-        return self.api._send(Disk, "GET", self._path("disks", name))
-
     def delete_disk(self, name: str) -> None:
         self.api._send(None, "DELETE", self._path("disks", name))
 
@@ -195,14 +184,6 @@ class StorageClient:
     def get_artifact_summary(self) -> ArtifactSummary:
         return self.api._send(ArtifactSummary, "GET", self._path("artifacts", "summary"))
 
-    def delete_artifacts(self, ids: Sequence[UUID]) -> DeletedArtifacts:
-        return self.api._send(
-            DeletedArtifacts,
-            "POST",
-            self._path("artifacts", "delete"),
-            body=DeleteArtifactsRequest(ids=list(ids)),
-        )
-
     def get_artifact(self, artifact_id: UUID) -> Artifact:
         return self.api._send(Artifact, "GET", self._path("artifacts", str(artifact_id)))
 
@@ -220,9 +201,6 @@ class StorageClient:
         )
 
     # Queues
-
-    def list_queues(self, *, cursor: str | None = None) -> QueuePage:
-        return self.api._send(QueuePage, "GET", self._path("queues"), params=_query(cursor=cursor))
 
     def get_queue(self, name: str) -> QueueInfo:
         return self.api._send(QueueInfo, "GET", self._path("queues", name))
@@ -247,9 +225,6 @@ class StorageClient:
         return self.api._send(QueueMessageResult, "GET", self._path("queues", name, "head"))
 
     # Maps
-
-    def list_maps(self, *, cursor: str | None = None) -> MapPage:
-        return self.api._send(MapPage, "GET", self._path("maps"), params=_query(cursor=cursor))
 
     def get_map(self, name: str) -> MapInfo:
         return self.api._send(MapInfo, "GET", self._path("maps", name))

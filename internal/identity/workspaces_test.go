@@ -18,14 +18,14 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	admin := f.account("admin@example.com", true)
 	member := f.account("member@example.com", false)
 
-	if _, err := f.id.CreateOwnedWorkspace(ctx, member, "mine"); !errors.Is(err, ErrAdminRequired) {
+	if _, err := f.id.CreateOwnedWorkspace(ctx, member, "mine", nil); !errors.Is(err, ErrAdminRequired) {
 		t.Fatalf("member create: %v", err)
 	}
-	alpha, err := f.id.CreateOwnedWorkspace(ctx, admin, "alpha")
+	alpha, err := f.id.CreateOwnedWorkspace(ctx, admin, "alpha", nil)
 	if err != nil || alpha.Role != RoleOwner || alpha.State != WorkspaceActive {
 		t.Fatalf("create %+v %v", alpha, err)
 	}
-	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "alpha"); !errors.Is(err, ErrExists) {
+	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "alpha", nil); !errors.Is(err, ErrExists) {
 		t.Fatalf("duplicate: %v", err)
 	}
 	// The last workspace stays.
@@ -33,7 +33,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	if _, err := f.id.DeleteWorkspace(ctx, admin, "alpha"); !errors.As(err, &conflict) {
 		t.Fatalf("delete last: %v", err)
 	}
-	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "beta"); err != nil {
+	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "beta", nil); err != nil {
 		t.Fatal(err)
 	}
 	f.exec(`insert into workspace_members (workspace_id, user_id, role) select w.id, u.id, 'member'
@@ -128,7 +128,7 @@ func TestConcurrentDeletionKeepsOneWorkspace(t *testing.T) {
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
 	for _, name := range []string{"one", "two"} {
-		if _, err := f.id.CreateOwnedWorkspace(ctx, admin, name); err != nil {
+		if _, err := f.id.CreateOwnedWorkspace(ctx, admin, name, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -389,12 +389,12 @@ func TestAnswerRacingDeletionDoesNotDeadlock(t *testing.T) {
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
 	guest := f.account("guest@example.com", false)
-	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "keep"); err != nil {
+	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "keep", nil); err != nil {
 		t.Fatal(err)
 	}
 	for n := range 20 {
 		name := "race-" + string(rune('a'+n))
-		if _, err := f.id.CreateOwnedWorkspace(ctx, admin, name); err != nil {
+		if _, err := f.id.CreateOwnedWorkspace(ctx, admin, name, nil); err != nil {
 			t.Fatal(err)
 		}
 		inv, err := f.id.Invite(ctx, admin, name, "guest@example.com", RoleMember)

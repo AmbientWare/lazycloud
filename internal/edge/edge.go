@@ -128,9 +128,6 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 	return e, nil
 }
 
-// URLs builds the addresses workloads answer on.
-func (e *Edge) URLs() URLs { return e.urls }
-
 // refreshQueue bounds workloads waiting for their container set to reload;
 // a full queue drops the wake and the next wait reloads instead.
 const refreshQueue = 1024

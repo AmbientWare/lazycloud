@@ -463,16 +463,6 @@ func (e *Engine) Evict(diskID string) error {
 	return nil
 }
 
-// Usage is the space the disk's local copy occupies, holes excluded. It
-// reads without the disk lock, so it answers while a publish runs.
-func (e *Engine) Usage(diskID string) (int64, error) {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return 0, err
-	}
-	return allocatedBytes(p.dir())
-}
-
 // List describes every disk kept under the root, for recovering them at
 // startup and choosing what to evict. A directory without state is a restore
 // that never finished and holds nothing unpublished.

@@ -185,15 +185,10 @@ def test_observability_end_to_end(
     resumed.wait(task_change(task_id, "succeeded"))
     resumed.close()
 
-    # Task drawer: timeline, container lifecycle and metrics.
-    timeline = get(api, f"{ws}/tasks/{task_id}/timeline")
-    assert [e["kind"] for e in timeline["events"]] == [
-        "submitted",
-        "attempt_started",
-        "attempt_finished",
-        "finished",
-    ]
-    container = timeline["events"][1]["container_id"]
+    # Task drawer: call graph, container lifecycle and metrics.
+    graph = get(api, f"{ws}/tasks/{task_id}/call-graph")
+    assert [n["status"] for n in graph["nodes"]] == ["succeeded"]
+    container = graph["nodes"][0]["container_id"]
     lifecycle = get(api, f"{ws}/containers/{container}/lifecycle")
     stages = [s["stage"] for s in lifecycle["stages"]]
     assert stages[:5] == ["placement", "image", "source", "create", "runtime"], stages

@@ -269,5 +269,3 @@ def test_workload_runtime_end_to_end(
     task = platform.get_task(WORKSPACE, schedule.last_task_id, wait_seconds=60)
     assert task.status.value == "succeeded"
     assert task.scheduled_for == schedule.last_run_at
-    listed = platform.list_schedules(WORKSPACE)
-    assert any(item.app == app and item.function == "tick" for item in listed.schedules)
