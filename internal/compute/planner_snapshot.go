@@ -352,7 +352,7 @@ func forecasts(p Policy, r fleetRead, hosts []FleetHost, groups []pendingGroup) 
 		shape := FleetCapacity{CPUMillis: s.CpuMillis, MemoryBytes: s.MemoryBytes, GPUs: cards}
 		w := ScheduledWorkload{
 			ID: s.WorkloadID, Shape: shape, Concurrency: int(s.Concurrency), MaxContainers: int(s.MaxContainers),
-			Existing: min(int(s.LiveContainers), int(s.MinContainers)), AlwaysWarm: s.MinContainers > 0,
+			Existing: min(int(s.WarmContainers), int(s.MinContainers)), AlwaysWarm: s.MinContainers > 0,
 			KeepWarm: time.Duration(s.KeepWarmSeconds) * time.Second, Duration: time.Duration(s.RunSeconds * float64(time.Second)),
 			Runs: []ScheduledRun{{At: s.NextFireAt, Count: 1}},
 		}

@@ -59,31 +59,32 @@ group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 order by 4, 5, 6, 2 desc, 3 desc;
 
 -- name: RecentArrivals :many
--- Platform containers created since @since_id, a uuidv7 bound on the
--- primary key, by 10-second bucket and shape: how many arrived, excluding
--- those still pending, and how long the stopped ones served. gpu_type is
--- the model placement gave them.
+-- Platform containers placed since @since_id, a uuidv7 bound on the
+-- arrivals index, by 10-second bucket and shape: how many arrived and how
+-- long the stopped ones served. gpu_type is the model placement gave them.
+-- Pending containers are the pending demand, read in its batch.
 select date_bin('10 seconds', c.created_at, timestamptz '2000-01-01 00:00:00+00')::timestamptz as at,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)::jsonb as gpus,
        c.gpu_type, c.cpu_millis, c.memory_bytes, c.gpu_count,
        coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       count(*) filter (where c.state <> 'pending')::int as arrived,
+       count(*)::int as arrived,
        coalesce(avg(extract(epoch from c.stopped_at - c.ready_at))
            filter (where c.stopped_at is not null and c.ready_at is not null), 0)::float8 as served_seconds
 from containers c
 join workspaces ws on ws.id = c.workspace_id
 left join releases r on r.id = c.release_id
-where c.id >= @since_id and ws.connection_id is null
+where c.id >= @since_id and c.state <> 'pending' and ws.connection_id is null
   and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
 group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 order by 1;
 
 -- name: ScheduledDemand :many
 -- Platform functions due to fire by @until, with their active release's
--- shape and scaling, their live containers and the 95th percentile run
--- time of tasks since @since_id.
+-- shape and scaling, the ready containers a warm minimum keeps (read only
+-- for a release that keeps one) and the 95th percentile run time of tasks
+-- since @since_id.
 select s.workload_id, s.next_fire_at, (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
        coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)::jsonb as gpus,
@@ -95,7 +96,7 @@ select s.workload_id, s.next_fire_at, (r.spec -> 'resources' ->> 'cpu_millis')::
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
-       coalesce(live.containers, 0)::int as live_containers,
+       coalesce(warm.containers, 0)::int as warm_containers,
        coalesce(run.p95, 0)::float8 as run_seconds
 from schedules s
 join workloads w on w.id = s.workload_id
@@ -103,8 +104,9 @@ join releases r on r.id = w.active_release_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join lateral (
-    select count(*) as containers from containers c where c.release_id = r.id and c.state <> 'stopped'
-) live on true
+    select count(*) as containers from containers c
+    where c.release_id = r.id and c.state = 'ready' and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
+) warm on true
 left join lateral (
     select percentile_cont(0.95) within group (order by extract(epoch from t.finished_at - t.started_at)) as p95
     from tasks t

@@ -23,3 +23,7 @@ create table fleet_markets (
 -- connected account's host is lightly used only when idle.
 alter table hosts add column light_since timestamptz;
 alter table hosts drop column idle_since;
+
+-- Containers that left pending, by id: the planner reads the last ten
+-- minutes' arrivals as a uuidv7 range without walking a pending backlog.
+create index containers_arrived on containers (id) where state <> 'pending';
