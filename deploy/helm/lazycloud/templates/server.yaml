@@ -242,17 +242,3 @@ spec:
       port: {{ .Values.server.tcpService.port }}
       targetPort: edge-tcp
 {{- end }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: server
-  labels:
-    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
-spec:
-  # maxUnavailable rather than minAvailable: at one replica a minAvailable
-  # budget blocks every node drain.
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: server

@@ -111,7 +111,7 @@ jobs:
           REGISTRY: ${{ vars.IMAGE_REGISTRY }}
         run: |
           if [ -z "$ROLE" ] || [ -z "$REGISTRY" ]; then
-            echo "::error::The images environment lacks AWS_IMAGE_RELEASE_ROLE_ARN or IMAGE_REGISTRY; apply deploy/terraform/images."
+            echo "::error::The images environment lacks AWS_IMAGE_RELEASE_ROLE_ARN or IMAGE_REGISTRY; apply deploy/terraform/github."
             exit 1
           fi
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -203,7 +203,5 @@ jobs:
     name: Record it for prod
     needs: [version, images, python-package]
     uses: ./.github/workflows/deploy.yml
-    secrets: inherit
     with:
-      deployment: prod
       version: ${{ needs.version.outputs.version }}

@@ -63,15 +63,3 @@ spec:
     - name: http
       port: 80
       targetPort: http
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: web
-  labels:
-    {{- include "lazycloud.labels" (list . "web") | nindent 4 }}
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: web

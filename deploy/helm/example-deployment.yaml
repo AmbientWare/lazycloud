@@ -1,5 +1,5 @@
 # The shape of values-deployment.yaml, which the Deploy workflow writes on a
-# deployment branch from platform-deployment's helm_values and the release,
+# deployment branch from platform-deployment's values.json and the release,
 # with placeholders instead of real identities. deploy/check.sh renders the
 # chart with it and environments/prod.yaml.
 domain: lazycloud.example.com

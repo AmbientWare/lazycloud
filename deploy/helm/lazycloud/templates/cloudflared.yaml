@@ -65,15 +65,3 @@ spec:
             {{- toYaml .Values.cloudflared.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: cloudflared
-  labels:
-    {{- include "lazycloud.labels" (list . "cloudflared") | nindent 4 }}
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: cloudflared

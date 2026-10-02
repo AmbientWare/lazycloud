@@ -3,9 +3,8 @@
 #   values.yaml                 these defaults
 #   environments/<name>.yaml    reviewed product settings of one deployment
 #   values-deployment.yaml      written by the Deploy workflow on the
-#                               deployment branch: the Terraform descriptor
-#                               (platform-deployment output helm_values) and
-#                               the release version
+#                               deployment branch: platform-deployment's
+#                               values.json and the release version
 
 # The apex the deployment answers on. The dashboard and API are
 # https://<domain>, workloads https://<label>.<domain>, TCP pods
@@ -38,7 +37,7 @@ secrets:
   tunnelCredentials: cloudflared.json
 
 # Projects the Secret from AWS Secrets Manager. `data` maps each Secret key
-# to a document (platform, written by Terraform, or operator) and property.
+# to a document (platform, which Terraform writes, or operator) and property.
 externalSecrets:
   enabled: false
   region: ""
@@ -49,13 +48,13 @@ externalSecrets:
     platform: ""
     operator: ""
   data:
-    LAZYCLOUD_DATABASE_URL: { document: platform, property: LAZYCLOUD_PLATFORM_DATABASE_URL }
+    LAZYCLOUD_DATABASE_URL: { document: platform, property: LAZYCLOUD_DATABASE_URL }
     secrets.key: { document: platform, property: LAZYCLOUD_SECRETS_MASTER_KEY, decodingStrategy: Base64 }
     cloudflared.json: { document: platform, property: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS }
     LAZYCLOUD_GITHUB_CLIENT_ID: { document: operator, property: LAZYCLOUD_GITHUB_CLIENT_ID }
     LAZYCLOUD_GITHUB_CLIENT_SECRET: { document: operator, property: LAZYCLOUD_GITHUB_CLIENT_SECRET }
     LAZYCLOUD_STRIPE_API_KEY: { document: operator, property: LAZYCLOUD_STRIPE_API_KEY }
-    LAZYCLOUD_STRIPE_WEBHOOK_SECRET: { document: operator, property: LAZYCLOUD_STRIPE_WEBHOOK_SECRET }
+    LAZYCLOUD_STRIPE_WEBHOOK_SECRET: { document: platform, property: LAZYCLOUD_STRIPE_WEBHOOK_SECRET }
     LAZYCLOUD_RESEND_API_KEY: { document: operator, property: LAZYCLOUD_RESEND_API_KEY }
     LAZYCLOUD_RESEND_WEBHOOK_SECRET: { document: operator, property: LAZYCLOUD_RESEND_WEBHOOK_SECRET }
     LAZYCLOUD_CLOUDFLARE_API_TOKEN: { document: operator, property: LAZYCLOUD_CLOUDFLARE_API_TOKEN }

@@ -62,12 +62,11 @@ if [[ "$ami" == None || -z "$ami" ]]; then
     --names /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
     --query 'Parameters[0].Value' --output text)"
   subnet="$(aws ec2 describe-subnets --region "$bake_region" --filters \
-    "Name=tag:lazycloud:deployment,Values=$deployment" "Name=tag:cloud-pool:managed-by,Values=control-plane" \
-    "Name=map-public-ip-on-launch,Values=true" --query 'Subnets[0].SubnetId' --output text)"
+    "Name=tag:lazycloud:fleet,Values=$deployment" "Name=map-public-ip-on-launch,Values=true" --query 'Subnets[0].SubnetId' --output text)"
   [[ "$subnet" == subnet-* ]] || { log "no public fleet subnet of $deployment in $bake_region"; exit 1; }
   vpc="$(aws ec2 describe-subnets --region "$bake_region" --subnet-ids "$subnet" --query 'Subnets[0].VpcId' --output text)"
   group="$(aws ec2 describe-security-groups --region "$bake_region" --filters "Name=vpc-id,Values=$vpc" \
-    "Name=tag:cloud-pool:managed-by,Values=control-plane" --query 'SecurityGroups[0].GroupId' --output text)"
+    "Name=tag:lazycloud:fleet,Values=$deployment" --query 'SecurityGroups[0].GroupId' --output text)"
   log "baking from $base in $subnet"
   tags="ResourceType=instance,Tags=[{Key=lazycloud:node-image-bake,Value=true},{Key=Name,Value=$name}]"
   instance="$(aws ec2 run-instances --region "$bake_region" --image-id "$base" --instance-type "$instance_type" \

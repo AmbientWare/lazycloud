@@ -69,15 +69,3 @@ spec:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: scheduler
-  labels:
-    {{- include "lazycloud.labels" (list . "scheduler") | nindent 4 }}
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: scheduler

@@ -1,28 +1,19 @@
 name: Deploy
 
-# Records a published version for a deployment: the deployment branch
-# becomes the version's tagged tree plus values-deployment.yaml, which merges
-# the deployment's Terraform values (platform-deployment helm_values) with the
-# version. Argo CD syncs the branch. Run it by hand to roll back to an
-# earlier version; Ship and Promote call it.
+# Records a published version for prod: the prod branch becomes the
+# version's tagged tree plus values-deployment.yaml, which merges
+# platform-deployment's values.json with the version. Argo CD syncs the
+# branch. Ship calls it; run it by hand to roll back to an earlier version.
 
 on:
   workflow_dispatch:
     inputs:
-      deployment:
-        type: choice
-        default: prod
-        options: [prod, staging]
-        required: true
       version:
         description: A version Ship published, such as 1.4.2; an earlier one rolls back.
         type: string
         required: true
   workflow_call:
     inputs:
-      deployment:
-        type: string
-        required: true
       version:
         type: string
         required: true
@@ -32,7 +23,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: deploy-${{ inputs.deployment }}
+  group: deploy-prod
   cancel-in-progress: false
 
 jobs:
@@ -40,15 +31,14 @@ jobs:
     name: Record the version
     runs-on: ubuntu-26.04
     # The deploy role trusts only this workflow on main in this environment.
-    environment: ${{ inputs.deployment }}
+    environment: prod
     env:
-      DEPLOYMENT: lazycloud-${{ inputs.deployment }}
-      BRANCH: ${{ inputs.deployment }}
+      DEPLOYMENT: lazycloud-prod
+      BRANCH: prod
       VERSION: ${{ inputs.version }}
     steps:
-      - name: Validate the inputs
+      - name: Validate the version
         run: |
-          case "$BRANCH" in prod|staging) ;; *) echo "::error::unknown deployment $BRANCH"; exit 1 ;; esac
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::version $VERSION is not major.minor.patch"
             exit 1
@@ -59,13 +49,13 @@ jobs:
           fetch-depth: 0
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Read the deployment's values
         run: |
           set -euo pipefail
           account="$(aws sts get-caller-identity --query Account --output text)"
-          aws s3 cp "s3://$DEPLOYMENT-deploy-$account/$DEPLOYMENT/values.json" "$RUNNER_TEMP/infrastructure.json"
+          aws s3 cp "s3://$DEPLOYMENT-deploy-$account/values.json" "$RUNNER_TEMP/infrastructure.json"
           jq --arg version "$VERSION" '. * {release: {version: $version}}' "$RUNNER_TEMP/infrastructure.json" \
             >"$RUNNER_TEMP/values-deployment.yaml"
       # Argo would otherwise sync a version whose pods cannot pull.
