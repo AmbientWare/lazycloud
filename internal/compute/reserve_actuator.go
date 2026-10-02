@@ -25,7 +25,7 @@ const (
 	hibernateAfterStart = 2 * time.Minute
 	// providerDeadline is how long hibernation refusals are retried before
 	// a plain stop, and how long a stop may stay pending before it is
-	// forced.
+	// forced. A g4dn on the GPU image takes 7.5-8 minutes to stop plainly.
 	providerDeadline = 10 * time.Minute
 	// stopSettle is how long EC2 may still list a stopped instance as
 	// running after it accepted the stop.
@@ -125,7 +125,7 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 	}
 	if instance.InstanceLifecycle == ec2types.InstanceLifecycleTypeSpot && h.SpotRequestID == nil {
 		// A one-time Spot instance cannot stop; it was bought to serve.
-		return c.retireReserve(ctx, logger, h, PhaseStopping, "A one-time Spot instance cannot stop into the reserve")
+		return c.retireReserve(ctx, logger, h, PhaseStopping, "A one-time Spot instance cannot stop into the reserve", nil)
 	}
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
@@ -193,27 +193,46 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 }
 
 // stopRefused retries a stop EC2 may take later and retires a host whose
-// stop it refused outright, so no host waits in stopping while it runs.
+// stop it refused outright, so no host waits in stopping while it runs. The
+// refusal cools the offer: a reserve bought there would be refused the same
+// way.
 func (c *Compute) stopRefused(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, err error) error {
 	if transientAWS(err) {
 		return err
 	}
-	return c.retireReserve(ctx, logger, h, PhaseStopping, truncate("Stop refused: "+describeAWSError(err)))
+	return c.retireReserve(ctx, logger, h, PhaseStopping, truncate("Stop refused: "+describeAWSError(err)), err)
 }
 
-// retireReserve sends a stopping or resuming host to terminating.
-func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, from Phase, message string) error {
+// retireReserve sends a stopping or resuming host to terminating. A
+// provider refusal, when given, cools the host's offer so the planner buys
+// its replacement elsewhere, and a quota refusal records the quota full.
+func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, from Phase, message string,
+	refusal error) error {
 	if err := transition(from, PhaseTerminating); err != nil {
 		return err
 	}
 	logger.WarnContext(ctx, "retiring reserve", "host_id", h.ID, "phase", from, "reason", message)
 	return inTx(ctx, c, func(tx pgx.Tx) error {
-		n, err := c.queries.WithTx(tx).RetireReserve(ctx, RetireReserveParams{ID: h.ID, FromPhase: string(from), Message: message})
+		q := c.queries.WithTx(tx)
+		n, err := q.RetireReserve(ctx, RetireReserveParams{ID: h.ID, FromPhase: string(from), Message: message})
 		if err != nil {
 			return fmt.Errorf("retire reserve: %w", err)
 		}
 		if n == 0 {
 			return nil
+		}
+		if refusal != nil && h.Market != nil {
+			if err := q.InsertCooldown(ctx, InsertCooldownParams{
+				ConnectionKey: string(KindPlatform), Region: h.Region, InstanceType: h.InstanceType, Market: *h.Market,
+				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(describeAWSError(refusal)),
+			}); err != nil {
+				return fmt.Errorf("insert cooldown: %w", err)
+			}
+			if quotaRefusal(awsCode(refusal)) {
+				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
+					return err
+				}
+			}
 		}
 		return notifyMachines(ctx, tx, h.ID)
 	})
@@ -269,8 +288,7 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
 	case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning:
-		// Started already: a lost answer, or a resume of a host whose
-		// stop had not begun.
+		// Started already, by a call whose answer was lost.
 		return c.recordStart(ctx, h.ID)
 	case ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameShuttingDown, ec2types.InstanceStateNameTerminated:
 		// A stop in progress finishes first; a terminated instance is
@@ -283,41 +301,10 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 		result.Started++
 		return c.recordStart(ctx, h.ID)
 	}
-	code := awsCode(err)
-	if !capacityRefusal(code) {
+	if !capacityRefusal(awsCode(err)) {
 		return fmt.Errorf("start instance: %w", err)
 	}
-	refusal := describeAWSError(err)
-	logger.WarnContext(ctx, "EC2 refused to start a reserve; retiring it", "host_id", h.ID, "error", refusal)
-	if err := transition(PhaseResuming, PhaseTerminating); err != nil {
-		return err
-	}
-	return inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		n, err := q.RetireReserve(ctx, RetireReserveParams{
-			ID: h.ID, FromPhase: string(PhaseResuming), Message: truncate("Start refused: " + refusal),
-		})
-		if err != nil {
-			return fmt.Errorf("retire reserve: %w", err)
-		}
-		if n == 0 {
-			return nil
-		}
-		if h.Market != nil {
-			if err := q.InsertCooldown(ctx, InsertCooldownParams{
-				ConnectionKey: string(KindPlatform), Region: h.Region, InstanceType: h.InstanceType, Market: *h.Market,
-				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(refusal),
-			}); err != nil {
-				return fmt.Errorf("insert cooldown: %w", err)
-			}
-			if quotaRefusal(code) {
-				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
-					return err
-				}
-			}
-		}
-		return notifyMachines(ctx, tx, h.ID)
-	})
+	return c.retireReserve(ctx, logger, h, PhaseResuming, truncate("Start refused: "+describeAWSError(err)), err)
 }
 
 func (c *Compute) recordStart(ctx context.Context, host uuid.UUID) error {

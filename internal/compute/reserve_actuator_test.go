@@ -477,6 +477,36 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 	}
 }
 
+// A stop EC2 refuses outright, as under a role without ec2:StopInstances,
+// retires the host and cools its offer, so the next reserve pass buys the
+// reserve elsewhere instead of a host that would be refused the same way.
+func TestARefusedStopCoolsItsOfferSoTheNextPassBuysElsewhere(t *testing.T) {
+	o, _, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c021")
+	run(t, o.pool, "update hosts set instance_type = 'c6a.2xlarge' where id = $1", uuid.UUID(host))
+	ec2.add(fakeInstance{ID: "i-0000000000000c021", State: "running", Type: "c6a.2xlarge"}, host.String())
+	ec2.refuse = func(call awsCall) (awsReply, bool) {
+		return ec2Error(http.StatusForbidden, "UnauthorizedOperation", "You are not authorized to perform this operation."),
+			call.Action == "StopInstances"
+	}
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("host whose stop was refused is %s, want terminating", phase)
+	}
+	cooled := scan[bool](t, o.pool, `select exists (select 1 from capacity_cooldowns where connection_key = 'platform'
+and region = 'us-east-2' and instance_type = 'c6a.2xlarge' and market = 'on_demand' and until > now())`)
+	if !cooled {
+		t.Fatal("the refused host's offer did not cool")
+	}
+	if r := plan(t, o); r.Requested == 0 {
+		t.Fatalf("reserve pass %+v, want the reserve bought", r)
+	}
+	if n := scan[int](t, o.pool, `select count(*) from hosts where phase = 'requested' and instance_type = 'c6a.2xlarge'
+and region = 'us-east-2' and market = 'on_demand'`); n != 0 {
+		t.Fatalf("bought %d more of the refused offer", n)
+	}
+}
+
 // Reconcile reads hosts, then EC2. A host the session or actuator moves in
 // between keeps its new phase and its instance.
 func TestReconcileLeavesAHostThatMovedSinceItsSnapshot(t *testing.T) {
