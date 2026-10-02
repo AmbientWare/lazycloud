@@ -1,8 +1,10 @@
 # Run from the repository root:
 #   docker buildx bake -f deploy/images/docker-bake.hcl
-# The release workflow sets REGISTRY, VERSION and SOURCE_DATE_EPOCH (the
-# commit time) and pushes; locally the images load into Docker as
-# lazycloud/<name>:dev.
+# Ship sets REGISTRY, VERSION and SOURCE_DATE_EPOCH (the commit time) and
+# pushes the server, scheduler and web images; locally the images load into
+# Docker as lazycloud/<name>:dev. The agent image is the release bundle for
+# hosts that run the agent in a container; the server image carries the
+# same bundle as an archive.
 
 variable "REGISTRY" {
   default = "lazycloud"
@@ -18,7 +20,12 @@ variable "SOURCE_DATE_EPOCH" {
 }
 
 group "default" {
-  targets = ["server", "scheduler", "agent"]
+  targets = ["server", "scheduler", "web", "agent"]
+}
+
+# What Ship pushes.
+group "release" {
+  targets = ["server", "scheduler", "web"]
 }
 
 target "_common" {
@@ -45,6 +52,12 @@ target "scheduler" {
   inherits = ["_common"]
   target   = "scheduler"
   tags     = ["${REGISTRY}/scheduler:${VERSION}"]
+}
+
+target "web" {
+  inherits = ["_common"]
+  target   = "web"
+  tags     = ["${REGISTRY}/web:${VERSION}"]
 }
 
 target "agent" {

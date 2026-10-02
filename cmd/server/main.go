@@ -11,6 +11,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -22,10 +23,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -79,10 +82,12 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	case "migrate":
 		fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 		dbURL := databaseFlag(fs)
+		sessionURL := sessionFlag(fs)
 		if err := fs.Parse(args); err != nil {
 			return fmt.Errorf("parse flags: %w", err)
 		}
-		return withPool(ctx, *dbURL, func(pool *pgxpool.Pool) error { return database.Migrate(ctx, pool) })
+		// The migration lock belongs to a session.
+		return withPool(ctx, cmp.Or(*sessionURL, *dbURL), func(pool *pgxpool.Pool) error { return database.Migrate(ctx, pool) })
 	case "admin":
 		return admin(ctx, args, out)
 	}
@@ -108,6 +113,11 @@ func databaseFlag(fs *flag.FlagSet) *string {
 	return fs.String("database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
 }
 
+func sessionFlag(fs *flag.FlagSet) *string {
+	return fs.String("database-session-url", env("LAZYCLOUD_DATABASE_SESSION_URL", ""),
+		"direct PostgreSQL URL of connections that hold session state; empty uses -database-url (LAZYCLOUD_DATABASE_SESSION_URL)")
+}
+
 func withPool(ctx context.Context, url string, fn func(*pgxpool.Pool) error) error {
 	if url == "" {
 		return errors.New("the database URL is required: set LAZYCLOUD_DATABASE_URL or -database-url")
@@ -125,6 +135,7 @@ type serveConfig struct {
 	httpAddr      string
 	grpcAddr      string
 	healthAddr    string
+	sessionURL    *string
 	objectStore   storage.Config
 	imageTemplate string
 	secretsKey    string
@@ -151,6 +162,7 @@ func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cfg serveConfig
 	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
+	cfg.sessionURL = sessionFlag(fs)
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
 	fs.StringVar(&cfg.healthAddr, "health-addr", env("LAZYCLOUD_HEALTH_ADDR", ""), "address of /healthz and /readyz, unset for none (LAZYCLOUD_HEALTH_ADDR)")
@@ -167,7 +179,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.identity.PublicURL, "public-url", env("LAZYCLOUD_PUBLIC_URL", "http://127.0.0.1:8080"), "dashboard origin for sign-in, device login and invitation links (LAZYCLOUD_PUBLIC_URL)")
 	fs.StringVar(&cfg.identity.GitHub.ClientID, "github-client-id", env("LAZYCLOUD_GITHUB_CLIENT_ID", ""), "GitHub App client id for dashboard sign-in (LAZYCLOUD_GITHUB_CLIENT_ID)")
 	fs.StringVar(&cfg.api.ClientReleaseVersion, "client-release-version", env("LAZYCLOUD_CLIENT_RELEASE_VERSION", ""), "CLI version older clients are told to update to (LAZYCLOUD_CLIENT_RELEASE_VERSION)")
-	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
+	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to; an ECR host without LAZYCLOUD_IMAGE_REGISTRY_USERNAME logs in with AWS credentials (LAZYCLOUD_IMAGE_REGISTRY)")
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
 	fs.StringVar(&cfg.edgeAddr, "edge-addr", env("LAZYCLOUD_EDGE_ADDR", "127.0.0.1:8082"), "workload traffic address (LAZYCLOUD_EDGE_ADDR)")
@@ -213,8 +225,23 @@ func serve(ctx context.Context, args []string) error {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
 	cfg.images.ManagedBase = cfg.imageTemplate
-	if user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); user != "" {
+	// An ECR registry without a static login takes tokens minted from the
+	// AWS default credential chain, such as the pod's identity.
+	switch user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); {
+	case user != "":
 		cfg.images.Auth = &images.Auth{Username: user, Password: os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_PASSWORD")}
+	case images.IsECR(cfg.images.Registry):
+		awsConfig, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("load AWS configuration for the image registry: %w", err)
+		}
+		cfg.images.ECR = &awsConfig
+		// Hosts get logins from sessions of this role, each scoped to one
+		// command's repositories.
+		cfg.images.HostRole = os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN")
+		if cfg.images.HostRole == "" {
+			return errors.New("an ECR image registry needs LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN, the role host logins are scoped from")
+		}
 	}
 	// Secrets stay out of the process arguments.
 	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")
@@ -245,14 +272,18 @@ func serve(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	return withPool(ctx, cfg.databaseURL, func(pool *pgxpool.Pool) error {
-		if err := database.Migrate(ctx, pool); err != nil {
+		session, closeSession, err := database.OpenSession(ctx, *cfg.sessionURL, pool)
+		if err != nil {
+			return err
+		}
+		defer closeSession()
+		if err := database.Migrate(ctx, session); err != nil {
 			return err
 		}
 		var ls listeners
 		// The servers close them too; this covers a failed setup.
 		defer func() { ls.close() }()
 		var lc net.ListenConfig
-		var err error
 		for _, l := range []struct {
 			addr string
 			into *net.Listener
@@ -264,7 +295,7 @@ func serve(ctx context.Context, args []string) error {
 				return fmt.Errorf("listen on %s: %w", l.addr, err)
 			}
 		}
-		return serveWith(ctx, pool, cfg, tel, logger, ls)
+		return serveWith(ctx, pool, session, cfg, tel, logger, ls)
 	})
 }
 
@@ -282,17 +313,25 @@ func (ls listeners) close() {
 	}
 }
 
-// serveWith serves on the listeners until ctx ends, then drains.
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
+// serveWith serves on the listeners until ctx ends, then drains. LISTEN
+// connections come from session (database.OpenSession).
+func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
 	// Billing supplies plan limits once it lands; until then account
 	// metrics leave them out.
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
-	changes := observability.NewChanges(pool, observability.DefaultChangesConfig(), tel.Registry, logger)
-	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
+	changes := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
+	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
+	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
+	if err != nil {
+		return err
+	}
 	cfg.objectStore.BrowserOrigin = cfg.identity.PublicURL
+	cfg.objectStore.Links = storage.Links{
+		URL: strings.TrimRight(cfg.identity.PublicURL, "/") + api.LinksPath, Key: masterKey.Derive("lazycloud download links"),
+	}
 	store := storage.NewStorage(pool, cfg.objectStore)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
 	// that refuses the rule only costs those browser transfers.
@@ -300,10 +339,6 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		logger.WarnContext(ctx, "dashboard transfers of artifacts will fail", "error", err)
 	}
 	exec := execution.NewExecution(pool)
-	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
-	if err != nil {
-		return err
-	}
 	vault := secrets.NewSecrets(pool, masterKey)
 	im := images.NewImages(pool, exec, vault, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
@@ -319,7 +354,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if relayURL == "" {
 		relayURL = cfg.relayAddr
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url}
+	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session}
 	var tcpConfig edge.TCPConfig
 	if ls.tcp != nil {
 		if cfg.tcp.url == "" || cfg.tcp.cert == "" || cfg.tcp.key == "" {

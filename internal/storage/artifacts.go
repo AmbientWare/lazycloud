@@ -73,20 +73,24 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 		return apitypes.ArtifactUpload{}, fmt.Errorf("artifact id: %w", err)
 	}
 	key := artifactKey(workspace, id)
-	upload := apitypes.Upload{ExpiresAt: time.Now().Add(uploadLifetime)}
+	lifetime, err := s.signedLifetime(ctx, uploadLifetime)
+	if err != nil {
+		return apitypes.ArtifactUpload{}, err
+	}
+	upload := apitypes.Upload{ExpiresAt: time.Now().Add(lifetime)}
 	if req.SizeBytes <= artifactPartBytes {
 		// The signed length makes the store refuse other bytes. The content
 		// type is applied when the artifact is read, so clients send no
 		// signed headers.
 		r, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
 			Bucket: aws.String(s.bucket), Key: aws.String(key), ContentLength: aws.Int64(req.SizeBytes),
-		}, s3.WithPresignExpires(uploadLifetime))
+		}, s3.WithPresignExpires(lifetime))
 		if err != nil {
 			return apitypes.ArtifactUpload{}, fmt.Errorf("presign artifact upload: %w", err)
 		}
 		upload.Parts = []apitypes.UploadPart{{Number: 1, Offset: 0, SizeBytes: req.SizeBytes, Url: r.URL}}
 	} else {
-		uploadID, parts, err := s.startMultipart(ctx, s.bucket, key, contentType, req.SizeBytes, artifactPartBytes, uploadLifetime)
+		uploadID, parts, err := s.startMultipart(ctx, s.bucket, key, contentType, req.SizeBytes, artifactPartBytes, lifetime)
 		if err != nil {
 			return apitypes.ArtifactUpload{}, err
 		}
@@ -242,7 +246,7 @@ func (s *Storage) ArtifactSummary(ctx context.Context, workspace identity.Worksp
 	}, nil
 }
 
-// PresignArtifact returns a GET for the artifact's bytes, lasting no longer
+// PresignArtifact returns a link to the artifact's bytes, lasting no longer
 // than the artifact. download asks browsers to save rather than display it.
 func (s *Storage) PresignArtifact(ctx context.Context, workspace identity.WorkspaceID, id uuid.UUID, expiresSeconds *int, download bool) (apitypes.PresignedUrl, error) {
 	row, err := s.queries.StoredArtifact(ctx, StoredArtifactParams{ID: id, WorkspaceID: uuid.UUID(workspace)})
@@ -260,15 +264,15 @@ func (s *Storage) PresignArtifact(ctx context.Context, workspace identity.Worksp
 	if download {
 		disposition = "attachment"
 	}
-	r, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket), Key: aws.String(artifactKey(workspace, id)),
-		ResponseContentType:        aws.String(row.ContentType),
-		ResponseContentDisposition: aws.String(mime.FormatMediaType(disposition, map[string]string{"filename": row.Filename})),
-	}, s3.WithPresignExpires(lifetime))
+	expires := time.Now().Add(lifetime)
+	url, err := s.linkURL(ctx, link{
+		Bucket: s.bucket, Key: artifactKey(workspace, id), ContentType: row.ContentType,
+		Disposition: mime.FormatMediaType(disposition, map[string]string{"filename": row.Filename}), Expires: expires.Unix(),
+	})
 	if err != nil {
-		return apitypes.PresignedUrl{}, fmt.Errorf("presign artifact: %w", err)
+		return apitypes.PresignedUrl{}, err
 	}
-	return apitypes.PresignedUrl{Url: r.URL, ExpiresAt: time.Now().Add(lifetime)}, nil
+	return apitypes.PresignedUrl{Url: url, ExpiresAt: expires}, nil
 }
 
 // DeleteArtifacts deletes the workspace's artifacts among ids and returns

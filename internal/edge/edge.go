@@ -1,6 +1,7 @@
 package edge
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ type Config struct {
 	// TCPURL is the tls://host:port TCP pods answer under; empty serves
 	// none.
 	TCPURL string
+	// SessionPool holds the route listener's LISTEN connection
+	// (database.OpenSession); nil uses the edge's pool.
+	SessionPool *pgxpool.Pool
 }
 
 // Edge routes workload traffic. One edge runs in each server process; each
@@ -39,6 +43,7 @@ type Config struct {
 type Edge struct {
 	id        uuid.UUID
 	pool      *pgxpool.Pool
+	session   *pgxpool.Pool
 	queries   *Queries
 	identity  *identity.Identity
 	execution *execution.Execution
@@ -92,7 +97,7 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		return nil, err
 	}
 	e := &Edge{
-		id: uuid.New(), pool: pool, queries: New(pool), identity: id, execution: exec, listener: listener,
+		id: uuid.New(), pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), identity: id, execution: exec, listener: listener,
 		urls: urls, domains: cfg.Domains, logger: logger,
 		releases:  map[uuid.UUID]*release{},
 		versions:  map[versionKey]uuid.UUID{},

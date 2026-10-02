@@ -103,7 +103,7 @@ type meteredContainer struct {
 // written as accrued cost per account. Batches commit separately, so a
 // failure keeps the batches before it.
 func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
-	conn, err := b.pool.Acquire(ctx)
+	conn, err := b.session.Acquire(ctx)
 	if err != nil {
 		return MeterResult{}, fmt.Errorf("acquire metering connection: %w", err)
 	}

@@ -368,6 +368,10 @@ test("an artifact a task saved is previewed from the task and listed in storage"
 
   await page.goto(`/w/${workspace}/storage?view=artifacts`);
   await expect(page.getByRole("button", { name: "Preview report.txt" }).first()).toBeVisible();
+  // The download link redirects to the store, which names the file.
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download report.txt" }).first().click();
+  expect((await download).suggestedFilename()).toBe("report.txt");
   expect(failures).toEqual([]);
 });
 

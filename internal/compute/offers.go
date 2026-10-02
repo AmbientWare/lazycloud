@@ -26,6 +26,9 @@ type Fleet struct {
 	InstanceProfile string
 	// Networks are the platform's launchable regions.
 	Networks map[string]Network
+	// Images are the node images platform hosts launch from. Nil launches
+	// the stock Amazon Linux images, which carry no gVisor.
+	Images *NodeImages
 	// MaxHosts bounds the live cloud hosts of the platform and of each
 	// connected account.
 	MaxHosts int
@@ -55,6 +58,13 @@ type Network struct {
 	VPCID           string   `json:"vpc_id"`
 	SecurityGroupID string   `json:"security_group_id"`
 	Subnets         []Subnet `json:"subnets"`
+}
+
+// NodeImages maps region to AMI id for CPU and GPU hosts, as the node image
+// bake publishes them.
+type NodeImages struct {
+	CPU map[string]string `json:"cpu"`
+	GPU map[string]string `json:"gpu"`
 }
 
 // Subnet is one launchable subnet and its zone.

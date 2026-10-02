@@ -162,9 +162,24 @@ The reference was not measured under the same conditions.
 
 `migrations/0005_images.sql` changed in place (forced builds, workspace
 references, log counters). Local databases that applied the earlier 0005
-need a reset. A compromised builder still holds the push login for the
-whole repository; per-build scoped push credentials need the production
-registry integration.
+need a reset.
+
+Host registry logins (deploy review, PR #443): on ECR every host command
+gets a login of its own, minted from a session of the registry host role
+whose policy names only the repositories it needs. A built image has a
+repository named by its digest, so equal definitions still share one image
+and one build, and a pull login reaches that image's repository alone.
+Caches and filesystem snapshots have a repository per workspace. A build
+may push only to its image and its workspace's cache, a snapshot only to
+its workspace's snapshots; nothing else pushes. Only a build on a platform
+host publishes the shared image: a forced rebuild, a build on a connected
+account's or joined machine's host, and every build of a workspace bound
+to a connected account push to `workspace-images/<workspace>/<digest>`
+and publish for their workspace alone
+(`TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces`). The server's own login
+reads only. Tests: `TestHostLoginsAreScopedToTheCommandsRepositories`,
+`TestRepositoryOfAReference`, `TestCompletedBuildPublishesOnlyAPushedDigest`,
+`TestForcedRebuildsAndCachesStayInTheirWorkspace`.
 
 ## Gaps
 
@@ -174,8 +189,6 @@ registry integration.
 - Build network: the agent runs builders on `-build-network` (`host`
   locally so they reach the loopback registry). Production needs an
   isolated network with registry-only egress, away from instance metadata.
-- Production registry logins: the server takes a static platform registry
-  login. Minting short-lived ECR tokens needs the provider integration.
 - ECR base images: the `GetAuthorizationToken` exchange is unverified
   without AWS credentials; GCR, ACR and NGC logins are covered by the name
   mapping test only.

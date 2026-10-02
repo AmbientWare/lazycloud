@@ -1,4 +1,7 @@
 #!/bin/sh
+# shellcheck shell=busybox
+# BUCKET, GARAGE_ADMIN_URL and GARAGE_ADMIN_TOKEN come from compose.yaml.
+# shellcheck disable=SC2153
 # Assigns the single node's layout, imports the development key and creates the
 # bucket. Every step is idempotent.
 set -eu -o pipefail

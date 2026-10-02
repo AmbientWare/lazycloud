@@ -34,8 +34,8 @@ type ActiveBuildRow struct {
 	FinishedAt  *time.Time
 }
 
-// The build a request joins: the global one, or the workspace's own forced
-// rebuild.
+// The build a request joins: the global one, or the workspace's own
+// workspace-scoped build (forced = true).
 func (q *Queries) ActiveBuild(ctx context.Context, arg ActiveBuildParams) (ActiveBuildRow, error) {
 	row := q.db.QueryRow(ctx, activeBuild, arg.ImageDigest, arg.Forced, arg.WorkspaceID)
 	var i ActiveBuildRow
@@ -126,7 +126,7 @@ func (q *Queries) BuildPhase(ctx context.Context, id *uuid.UUID) (BuildPhaseRow,
 }
 
 const buildToStart = `-- name: BuildToStart :one
-select b.id, b.state, b.workspace_id, b.context_sha256, b.registry_auth, b.deadline_at,
+select b.id, b.state, b.workspace_id, b.forced, b.context_sha256, b.registry_auth, b.deadline_at,
        i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu
 from image_builds b
 join images i on i.digest = b.image_digest
@@ -137,6 +137,7 @@ type BuildToStartRow struct {
 	ID            uuid.UUID
 	State         string
 	WorkspaceID   uuid.UUID
+	Forced        bool
 	ContextSha256 []byte
 	RegistryAuth  []byte
 	DeadlineAt    time.Time
@@ -154,6 +155,7 @@ func (q *Queries) BuildToStart(ctx context.Context, id uuid.UUID) (BuildToStartR
 		&i.ID,
 		&i.State,
 		&i.WorkspaceID,
+		&i.Forced,
 		&i.ContextSha256,
 		&i.RegistryAuth,
 		&i.DeadlineAt,
@@ -255,6 +257,17 @@ type GrantImageParams struct {
 func (q *Queries) GrantImage(ctx context.Context, arg GrantImageParams) error {
 	_, err := q.db.Exec(ctx, grantImage, arg.WorkspaceID, arg.ImageDigest)
 	return err
+}
+
+const hostKind = `-- name: HostKind :one
+select kind from hosts where id = $1
+`
+
+func (q *Queries) HostKind(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, hostKind, id)
+	var kind string
+	err := row.Scan(&kind)
+	return kind, err
 }
 
 const imageArchitecture = `-- name: ImageArchitecture :one
@@ -641,4 +654,16 @@ func (q *Queries) WorkspaceImage(ctx context.Context, arg WorkspaceImageParams) 
 		&i.ReadyAt,
 	)
 	return i, err
+}
+
+const workspaceOnCustomerHosts = `-- name: WorkspaceOnCustomerHosts :one
+select (connection_id is not null)::bool from workspaces where id = $1
+`
+
+// A workspace bound to a connected AWS account runs its builds there.
+func (q *Queries) WorkspaceOnCustomerHosts(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, workspaceOnCustomerHosts, id)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }

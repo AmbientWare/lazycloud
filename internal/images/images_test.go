@@ -146,6 +146,25 @@ values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint <
 	return compute.HostID(id)
 }
 
+// imageRepository is where builds of image id push: its own repository,
+// named by its digest.
+func (f fixture) imageRepository(t *testing.T, id string) string {
+	t.Helper()
+	var digest string
+	if err := f.pool.QueryRow(t.Context(), "select encode(digest, 'hex') from images where id = $1", id).Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	return f.registry + "/lazycloud/images/" + digest
+}
+
+// workspaceImageRepository is where workspace's own builds of image id
+// push: forced rebuilds and builds on customer hosts.
+func (f fixture) workspaceImageRepository(t *testing.T, workspace identity.WorkspaceID, id string) string {
+	t.Helper()
+	shared := f.imageRepository(t, id)
+	return f.registry + "/lazycloud/workspace-images/" + uuid.UUID(workspace).String() + "/" + shared[strings.LastIndex(shared, "/")+1:]
+}
+
 func numpy() apitypes.ImageDefinition {
 	return apitypes.ImageDefinition{PythonVersion: "3.12", PythonPackages: &[]string{"numpy"}}
 }
@@ -263,12 +282,17 @@ func TestCompletedBuildPublishesOnlyAPushedDigest(t *testing.T) {
 	if err := f.images.CompleteBuild(t.Context(), f.host(t), container, images.BuildOutcome{Digest: missing}); !errors.Is(err, execution.ErrNotAssigned) {
 		t.Fatalf("another host cannot complete the build: %v", err)
 	}
-	digest := pushRandom(t, f.registry+"/lazycloud/images:upload")
+	if err := f.images.CompleteBuild(t.Context(), host, container,
+		images.BuildOutcome{Digest: pushRandom(t, f.registry+"/lazycloud/images:upload")}); err == nil {
+		t.Fatal("a digest pushed outside the image's repository is rejected")
+	}
+	repository := f.imageRepository(t, r.Image.ID)
+	digest := pushRandom(t, repository+":upload")
 	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: digest}); err != nil {
 		t.Fatal(err)
 	}
 	image, err := f.images.Get(t.Context(), ws, r.Image.ID)
-	if err != nil || image.Reference == nil || *image.Reference != f.registry+"/lazycloud/images@"+digest {
+	if err != nil || image.Reference == nil || *image.Reference != repository+"@"+digest {
 		t.Fatalf("the image is published by digest: %+v %v", image, err)
 	}
 	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Failure: "late"}); !errors.Is(err, images.ErrStaleBuild) {
@@ -472,7 +496,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	if err != nil || len(starts) != 1 {
 		t.Fatalf("want one build start, got %v %v", starts, err)
 	}
-	command, err := f.images.BuildCommandOf(ctx, starts[0])
+	command, err := f.images.BuildCommandOf(ctx, host, starts[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +506,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	if err := f.secrets.Delete(ctx, a, "TOKEN"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.images.BuildCommandOf(ctx, starts[0]); !errors.Is(err, images.ErrStaleBuild) {
+	if _, err := f.images.BuildCommandOf(ctx, host, starts[0]); !errors.Is(err, images.ErrStaleBuild) {
 		t.Fatalf("a build whose secret is gone does not start: %v", err)
 	}
 	build, err := f.images.GetBuild(ctx, f.listener, a, rotated.Build.ID, 0)
@@ -542,7 +566,7 @@ values ('g', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint <
 	if err != nil || len(starts) != 1 {
 		t.Fatalf("the build is placed on the L4 host: %v %v", starts, err)
 	}
-	command, err := f.images.BuildCommandOf(ctx, starts[0])
+	command, err := f.images.BuildCommandOf(ctx, l4, starts[0])
 	if err != nil || command.GPUs != 1 {
 		t.Fatalf("the build holds one GPU: %+v %v", command, err)
 	}

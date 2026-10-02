@@ -69,7 +69,7 @@ export function deleteArtifacts(workspace: string, ids: string[]) {
   );
 }
 
-/** A short-lived presigned GET; with `download` browsers save the file rather than show it. */
+/** A short-lived download link; with `download` browsers save the file rather than show it. */
 export async function artifactUrl(
   workspace: string,
   artifact: string,

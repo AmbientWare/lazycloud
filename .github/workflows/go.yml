@@ -1,7 +1,7 @@
 name: Go backend and host runtime
 
 on:
-  # The release workflow runs it before publishing images.
+  # Ship runs it before publishing images.
   workflow_call:
   pull_request:
     paths:
@@ -44,6 +44,8 @@ jobs:
           - 12111:12111
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

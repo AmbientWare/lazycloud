@@ -106,7 +106,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	defer pool.Close()
-	if err := database.Migrate(ctx, pool); err != nil {
+	// LISTEN, the metering lock and the migration lock hold session state.
+	session, closeSession, err := database.OpenSession(ctx, os.Getenv("LAZYCLOUD_DATABASE_SESSION_URL"), pool)
+	if err != nil {
+		return err
+	}
+	defer closeSession()
+	if err := database.Migrate(ctx, session); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
@@ -161,7 +167,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, vault, images.Config{})
-	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
+	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelFleetWake()
@@ -205,7 +211,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 		p.setLeading(leading)
 	}
-	group.Go(func() error { return database.Lead(ctx, pool, leaderLock, leaderCheck, leading, logger) })
+	group.Go(func() error { return database.Lead(ctx, session, leaderLock, leaderCheck, leading, logger) })
 	group.Go(func() error { return p.watch(ctx, exec.HasLiveWork, liveWake, logger) })
 	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
 	group.Go(func() error {
@@ -359,7 +365,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	accounts.start(ctx, group, p, beats)
-	newBillingLoops(pool, exec, store, logger).start(ctx, group, p)
+	newBillingLoops(pool, session, exec, store, logger).start(ctx, group, p)
 	if healthListener != nil {
 		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
 		group.Go(func() error {

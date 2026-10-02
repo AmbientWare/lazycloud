@@ -1,0 +1,37 @@
+name: Deployment checks
+
+# Renders and validates the chart, Argo CD applications and Terraform, lints
+# workflows and scripts, and builds every image without pushing. It reaches
+# no cloud account or cluster.
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - ".github/**"
+      - "deploy/**"
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "python/**"
+      - "web/**"
+  push:
+    branches: [main, go-rewrite]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Chart, manifests, Terraform, workflows and scripts
+        run: deploy/check.sh
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build images
+        run: docker buildx bake -f deploy/images/docker-bake.hcl

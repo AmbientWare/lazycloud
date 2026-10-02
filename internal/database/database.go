@@ -28,6 +28,22 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
+// OpenSession returns the pool of connections that keep state in their
+// session: LISTEN, session advisory locks and the migration lock. A
+// transaction pooler runs a session's later statements on other backends,
+// where that state is gone, so these connect through url, a direct
+// connection; main serves everything else. An empty url uses main.
+// closePool releases the pool it opened.
+func OpenSession(ctx context.Context, url string, main *pgxpool.Pool) (pool *pgxpool.Pool, closePool func(), err error) {
+	if url == "" {
+		return main, func() {}, nil
+	}
+	if pool, err = Open(ctx, url); err != nil {
+		return nil, nil, fmt.Errorf("session pool: %w", err)
+	}
+	return pool, pool.Close, nil
+}
+
 // Notify queues a wake-up that PostgreSQL delivers when tx commits.
 func Notify(ctx context.Context, tx pgx.Tx, channel Channel, payload string) error {
 	if _, err := tx.Exec(ctx, "select pg_notify($1, $2)", string(channel), payload); err != nil {

@@ -1,0 +1,48 @@
+{{- if .Values.server.tcpService.enabled }}
+{{- $host := printf "*.tcp.%s" (include "lazycloud.domain" .) }}
+{{/*
+The certificate TCP pods answer with. cert-manager renews it 30 days before
+it expires; the server reads it at start (gap: a renewal reaches a server on
+its next restart, which every release causes).
+*/}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: tcp
+  labels:
+    {{- include "lazycloud.labels" (list . "tcp-certificate") | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  acme:
+    server: {{ .Values.tcpCertificate.acmeServer }}
+    privateKeySecretRef:
+      name: tcp-acme
+    solvers:
+      - selector:
+          dnsNames: [{{ $host | quote }}]
+        dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: {{ .Values.secrets.name }}
+              key: LAZYCLOUD_TCP_DNS_API_TOKEN
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: server-tcp
+  labels:
+    {{- include "lazycloud.labels" (list . "tcp-certificate") | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  secretName: server-tcp-tls
+  issuerRef:
+    name: tcp
+    kind: Issuer
+  dnsNames: [{{ $host | quote }}]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+{{- end }}

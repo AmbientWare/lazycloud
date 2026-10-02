@@ -133,122 +133,13 @@ which forks websockets (16.1.1 below 3.11) and numpy.
 
 Images are linux/amd64 only, like the reference.
 
-## Kubernetes chart
+## Deployment
 
-`deploy/helm/lazycloud`. Helm rather than kustomize. Migrations need an
-ordered pre-install/pre-upgrade hook that Helm and Argo CD both run before
-any pod changes, and per-deployment values are the reference's model. Argo
-already renders the reference chart through Helm.
-
-- Server Deployment (2 replicas, surge 1, unavailable 0) with Services
-  `server` (HTTP, port 80) and `server-hosts` (gRPC 8081). The schema holds
-  `server.hostService.type` to ClusterIP until the agent speaks TLS, and
-  check.sh proves a LoadBalancer value fails to render. Scheduler
-  Deployment (2 replicas, no surge). Both spread across nodes and zones, have
-  PodDisruptionBudgets with maxUnavailable 1, run nonroot with a read-only
-  root filesystem and no capabilities, and set requests with memory limits
-  and no CPU limit.
-- Migrations: Job `migrate` running `server migrate` as a
-  `pre-install,pre-upgrade` hook. A failure stops the release before pods
-  change. Argo maps it to PreSync.
-- Configuration: `config` (shared) and `<component>.config` become plain
-  `LAZYCLOUD_*` values. Each component lists the Secret keys it reads, so a
-  process gets only its own credentials. Rendering fails when config sets a
-  secret key or a chart-owned setting. The master key is mounted from the
-  Secret as a file at mode 0440 for the pod's fsGroup.
-- Secrets: one existing Secret, or `externalSecrets.enabled` projects it from
-  Secrets Manager as hooks weighted before the migration Job (secrets-reader
-  service account with an IRSA role, SecretStore, ExternalSecret with
-  `creationPolicy: Orphan` so recreating the hook never deletes the Secret).
-- S3 access uses the Pod Identity role through the AWS default credential
-  chain (#423), so no object store key is a default secret key.
-- Probes listen on 8090 and `/metrics` on 9090; no Service exposes either.
-- NetworkPolicy (on by default): ingress to every release pod is denied
-  except `networkPolicy.ingressFrom` peers to the API port, `hostCIDRs` to
-  the host port, `nodeCIDRs` to the health ports and `metricsFrom` peers to
-  the metrics ports. Rendering fails without
-  `nodeCIDRs`, because the kubelet could not probe the pods.
-- Isolation: the chart lives at `deploy/helm`, not `deploy/chart`, which the
-  production Argo Application reads from the `prod` branch. There is no Argo
-  Application for it and no environment values file; `deploy/helm/
-  example-values.yaml` holds placeholders only.
-
-`deploy/check.sh` runs helm 4.3.0 lint `--strict` and template (example and
-defaults), kubeconform 0.8.0 `-strict` against Kubernetes 1.36.0 and the
-External Secrets CRD schemas (both schema sources pinned to commits), and
-terraform 1.16.4 `fmt -check`, `init -backend=false -lockfile=readonly` and
-`validate`, all from pinned images. Result: 27 resources valid; Terraform
-valid.
-
-## Terraform
-
-`deploy/terraform/images` adds only what the reference roots lack, and
-creates it in an order that never leaves the role trusting an ungated job:
-
-1. The GitHub `images` environment with required reviewers
-   (`release_reviewer_user_ids`, at least one) and a deployment rule
-   admitting `platform-v*` tags only.
-2. A tag ruleset: only repository administrators create, move or delete
-   `platform-v*` tags.
-3. The repository OIDC subject template `repo, context, job_workflow_ref,
-   ref`, so a subject names the workflow file and the tag.
-4. ECR repositories `lazycloud/release/{server,scheduler,agent}` (immutable
-   tags, scan on push, untagged expiry after 14 days), apart from the
-   reference's `lazycloud/<image>` repositories.
-5. The `lazycloud-image-release` role, which depends on 1 to 3. It trusts
-   only `release.yml` at a `platform-v*` tag in the `images` environment and
-   may push only to the three repositories.
-6. The environment variables the workflow reads (role, registry, region).
-
-The subject template applies to every workflow in the repository, so the
-reference deploy and release roles, which match `repo:...:environment:<env>`,
-would stop matching and Ship to production would fail. The root refuses to
-plan until `accept_repository_subject_change = true`, which an operator sets
-only after updating those two trusts. Release tags use `platform-v*`
-because the reference Ship workflow cuts `v*`.
-
-Providers are pinned (aws 6.67.0, github 6.13.0) with a committed lock.
-
-Reused from the reference rather than duplicated:
-
-- platform-core: the EKS cluster, its OIDC provider and
-  `lazycloud/workload-images`.
-- platform-deployment, instantiated for a new non-production deployment name:
-  the database, buckets, Secrets Manager documents, the control-plane role
-  and its Pod Identity associations (pass `control_plane_service_accounts =
-  {server = "lazycloud-server", scheduler = "lazycloud-scheduler"}`), the
-  secrets-reader role and the account GitHub OIDC provider.
-- Cloudflare and the public ingress connector for the dashboard and API
-  hostname.
-
-## CI
-
-- `.github/workflows/deploy.yml`: on PRs touching deploy, cmd, Go or Python
-  sources, runs `deploy/check.sh` and builds all images without pushing.
-- `.github/workflows/release.yml`: on a `platform-v*` tag, calls go.yml,
-  python.yml, web.yml and deploy.yml (each gained `workflow_call`), then,
-  after a reviewer approves the `images` environment, assumes the release
-  role over OIDC, logs in to ECR, pushes with bake as version `v...` and
-  writes the digests to the job summary. It deploys nothing
-  and says so; there is no Ship equivalent, and the checks are owner tests,
-  not platform acceptance. Third-party actions are pinned by commit.
-- actionlint 1.7.12 reports only the repository's existing `ubuntu-26.04`
-  runner label as unknown.
-
-## Gaps before a deployment can serve users
-
-- Host connection: agents speak plaintext gRPC to the server, so
-  `server-hosts` must stay cluster-internal. Exposing it needs agent TLS
-  (compute packet) and an NLB.
-- Database: LISTEN/NOTIFY and session advisory locks need a direct
-  PostgreSQL URL, not the reference's PgBouncer transaction pool. pgxpool
-  sizes itself from the node's CPU count; bound it with `pool_max_conns` in
-  `LAZYCLOUD_DATABASE_URL`.
-- The secrets master key is a new property in the platform document (32
-  random bytes, base64, `decodingStrategy: Base64`).
-- Rotated secret values reach pods only on restart.
-- Not run: any cluster install, Argo sync, External Secrets projection,
-  Terraform plan or apply, ECR push, or the release workflow itself.
+The deploy packet (tasks/deploy.md) took the chart, Terraform and release
+workflows from here to production: one deployment root with Cloudflare and
+Stripe folded in, Neki for PostgreSQL, the host port behind a TLS NLB (the
+agent speaks TLS), the dashboard and cloudflared in the chart, Ship in place
+of the platform-v* release, and the bring-up runbook.
 
 ## Proposed shared changes
 
@@ -266,29 +157,3 @@ Separate `Propose:` commits for the integrator:
   is empty).
 - go.yml, python.yml and web.yml gained `workflow_call` so the release
   workflow can require them.
-
-## Deploying (needs user authorization)
-
-Each step changes AWS, GitHub or a cluster, and none has run.
-
-1. Update the reference deploy and release role trusts to the new subject
-   format (`repo:<repo>:environment:<env>:job_workflow_ref:...:ref:...`).
-2. Apply `deploy/terraform/images` with the `default` profile after checking
-   the STS identity, using the operator backend file, a repository-admin
-   `GITHUB_TOKEN`, the reviewer ids and `accept_repository_subject_change =
-   true`. It creates the environment, rules and variables before the role.
-3. Confirm the next reference Ship still assumes its deploy role, then push
-   a `platform-v*` tag and approve the release job.
-4. Instantiate the reference platform-deployment for a non-production name
-   with the service account map above, and add the master key and direct
-   database URL to its secret documents.
-5. Install the chart into that namespace with a private values file:
-   `helm upgrade --install lazycloud deploy/helm/lazycloud -n <namespace> -f
-   <values>`, or an Argo Application pointing at `deploy/helm/lazycloud`.
-6. Bootstrap the first administrator:
-   `kubectl exec deploy/server -- /usr/local/bin/server admin create-user
-   --email <email> --admin`. The first GitHub sign-in with that verified
-   email links it.
-7. Cutover of production is a separate decision. It needs the gaps above
-   closed and platform acceptance, and the reference scheduler stopped
-   before the new one runs.
