@@ -547,3 +547,22 @@ func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
 		t.Fatalf("%d buys, reason %q, short %+v", n, mp.Reason, mp.Shortfall)
 	}
 }
+
+func TestAnyGPUDemandGoesToTheModelTheFleetHoldsThenTheCheapestPerCard(t *testing.T) {
+	need := Requirement{GPUs: []string{GPUAny}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}
+	s := planSnapshot(t)
+	s.Offers.Catalog = FleetCatalog()
+	g, _ := pendingOne(need, nil)
+	s.Pending = []DemandGroup{g}
+	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
+	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Market != (ReserveMarket{GPU: "T4"}) || buys[0].Offer.Type.GPU != "T4" {
+		t.Fatalf("no stock: %+v", plan.Actions)
+	}
+	l4 := planHost(1, mustType(t, "g6.2xlarge"), FleetServing)
+	l4.GPU, l4.Load = "L4", l4.Usable
+	s.Hosts = []FleetHost{l4}
+	plan = PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
+	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Market != (ReserveMarket{GPU: "L4"}) || buys[0].Offer.Type.GPU != "L4" {
+		t.Fatalf("L4 in stock: %+v", plan.Actions)
+	}
+}
