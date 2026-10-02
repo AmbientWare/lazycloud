@@ -87,10 +87,11 @@ visual parity.
   every declared port.
 - The Tasks page's Workload filter lists an app's functions once an App is
   chosen: workload names are unique only within an app.
-- An app's row on the usage page opens into its runs, each with its share
-  of container cost and "View run", plus each workload's idle time. The
-  reference listed workloads there and runs only for usage without an
-  app, which the rewrite does not have: every run belongs to an app.
+- On the usage page a function's workload row, as the reference showed it,
+  also lists its runs when opened, each with its share of the container
+  cost and "View run"; idle container time stays on the workload. The
+  reference showed runs only for usage without an app, which the rewrite
+  does not have: every run belongs to an app.
 
 ## Gaps
 

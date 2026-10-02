@@ -15,6 +15,7 @@ with entries as (
     where e.user_id = @user_id and e.started_at >= @start_at and e.started_at < @end_at
       and (sqlc.narg(workspace_id)::uuid is null or e.workspace_id = sqlc.narg(workspace_id)::uuid)
       and (sqlc.narg(app_id)::uuid is null or e.app_id = sqlc.narg(app_id)::uuid)
+      and (sqlc.narg(workload_id)::uuid is null or e.workload_id = sqlc.narg(workload_id)::uuid)
       and (@category::text = ''
            or (@category::text = 'image-build' and e.category = 'image-build')
            or (@category::text = 'disk' and e.category = 'disk')
@@ -100,6 +101,7 @@ from ledger_entries e
 where e.user_id = @user_id and e.started_at >= @start_at and e.started_at < @end_at
   and (sqlc.narg(workspace_id)::uuid is null or e.workspace_id = sqlc.narg(workspace_id)::uuid)
   and (sqlc.narg(app_id)::uuid is null or e.app_id = sqlc.narg(app_id)::uuid)
+  and (sqlc.narg(workload_id)::uuid is null or e.workload_id = sqlc.narg(workload_id)::uuid)
   and (@category::text = ''
        or (@category::text = 'image-build' and e.category = 'image-build')
        or (@category::text = 'disk' and e.category = 'disk')

@@ -26,6 +26,7 @@ type CostQuery struct {
 	GroupBy    apitypes.UsageCostGroup
 	Workspace  *uuid.UUID
 	App        *uuid.UUID
+	Workload   *uuid.UUID
 	Category   *apitypes.UsageCostCategory
 	Cursor     string
 	Limit      int
@@ -65,7 +66,7 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 	params := CostRowsParams{
 		ByWorkload: q.GroupBy != apitypes.UsageCostGroupApp, ByTask: q.GroupBy == apitypes.UsageCostGroupTask,
 		UserID: user, StartAt: q.Start, EndAt: q.End,
-		WorkspaceID: q.Workspace, AppID: q.App, RowLimit: int32(q.Limit + 1), //nolint:gosec // The API bounds the limit to 200.
+		WorkspaceID: q.Workspace, AppID: q.App, WorkloadID: q.Workload, RowLimit: int32(q.Limit + 1), //nolint:gosec // The API bounds the limit to 200.
 	}
 	if q.Category != nil {
 		params.Category = string(*q.Category)
@@ -88,7 +89,8 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 		return apitypes.UsageCostPage{}, fmt.Errorf("read costs: %w", err)
 	}
 	total, err := b.queries.WindowCost(ctx, WindowCostParams{
-		UserID: user, StartAt: q.Start, EndAt: q.End, WorkspaceID: q.Workspace, AppID: q.App, Category: params.Category,
+		UserID: user, StartAt: q.Start, EndAt: q.End, WorkspaceID: q.Workspace, AppID: q.App, WorkloadID: q.Workload,
+		Category: params.Category,
 	})
 	if err != nil {
 		return apitypes.UsageCostPage{}, fmt.Errorf("read window cost: %w", err)

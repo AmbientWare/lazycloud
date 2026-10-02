@@ -37,8 +37,9 @@ select t.id, 1, $4, 'succeeded', $5, $3, $3 from t returning task_id`,
 	}
 	f.meter()
 
+	// The usage page asks for one workload's runs when its row opens.
 	page, err := f.billing.Costs(t.Context(), owner, CostQuery{
-		Start: base, End: base.Add(time.Hour), GroupBy: apitypes.UsageCostGroupTask, App: &rel.app, Limit: 50,
+		Start: base, End: base.Add(time.Hour), GroupBy: apitypes.UsageCostGroupTask, App: &rel.app, Workload: &rel.workload, Limit: 50,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,5 +64,12 @@ select t.id, 1, $4, 'succeeded', $5, $3, $3 from t returning task_id`,
 	}
 	if abs(sum-page.CostNanos) > 2 {
 		t.Fatalf("rows add to %d, the window costs %d", sum, page.CostNanos)
+	}
+	other := uuid.New()
+	none, err := f.billing.Costs(t.Context(), owner, CostQuery{
+		Start: base, End: base.Add(time.Hour), GroupBy: apitypes.UsageCostGroupTask, Workload: &other, Limit: 50,
+	})
+	if err != nil || len(none.Rows) != 0 || none.CostNanos != 0 {
+		t.Fatalf("another workload's runs %+v %v, want none", none, err)
 	}
 }

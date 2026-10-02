@@ -168,7 +168,7 @@ func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (Lis
 	}
 	q := billing.CostQuery{
 		Start: req.Params.Start, End: req.Params.End, GroupBy: apitypes.UsageCostGroupApp,
-		Workspace: req.Params.WorkspaceId, App: req.Params.AppId, Category: req.Params.Category, Limit: 50,
+		Workspace: req.Params.WorkspaceId, App: req.Params.AppId, Workload: req.Params.WorkloadId, Category: req.Params.Category, Limit: 50,
 	}
 	if req.Params.GroupBy != nil {
 		q.GroupBy = *req.Params.GroupBy

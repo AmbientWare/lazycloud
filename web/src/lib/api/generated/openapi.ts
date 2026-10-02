@@ -10149,6 +10149,8 @@ export interface operations {
                 workspace_id?: string;
                 /** @description Only this app's usage. */
                 app_id?: string;
+                /** @description Only this workload's usage, such as its runs by task. */
+                workload_id?: string;
                 category?: components["schemas"]["UsageCostCategory"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];

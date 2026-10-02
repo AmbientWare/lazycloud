@@ -5630,8 +5630,11 @@ type ListCostsParams struct {
 	WorkspaceId *openapi_types.UUID `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 
 	// AppId Only this app's usage.
-	AppId    *openapi_types.UUID `form:"app_id,omitempty" json:"app_id,omitempty"`
-	Category *UsageCostCategory  `form:"category,omitempty" json:"category,omitempty"`
+	AppId *openapi_types.UUID `form:"app_id,omitempty" json:"app_id,omitempty"`
+
+	// WorkloadId Only this workload's usage, such as its runs by task.
+	WorkloadId *openapi_types.UUID `form:"workload_id,omitempty" json:"workload_id,omitempty"`
+	Category   *UsageCostCategory  `form:"category,omitempty" json:"category,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`

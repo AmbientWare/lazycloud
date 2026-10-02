@@ -101,17 +101,18 @@ with entries as (
     where e.user_id = $11 and e.started_at >= $12 and e.started_at < $13
       and ($14::uuid is null or e.workspace_id = $14::uuid)
       and ($15::uuid is null or e.app_id = $15::uuid)
-      and ($16::text = ''
-           or ($16::text = 'image-build' and e.category = 'image-build')
-           or ($16::text = 'disk' and e.category = 'disk')
-           or ($16::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
+      and ($16::uuid is null or e.workload_id = $16::uuid)
+      and ($17::text = ''
+           or ($17::text = 'image-build' and e.category = 'image-build')
+           or ($17::text = 'disk' and e.category = 'disk')
+           or ($17::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
 ), attempt_spans as (
     select e.id, a.task_id,
            extract(epoch from least(coalesce(a.finished_at, e.ended_at), e.ended_at) - greatest(a.started_at, e.started_at))::float8 as seconds
     from entries e
     join attempts a on a.container_id = e.source_id
          and a.started_at < e.ended_at and (a.finished_at is null or a.finished_at > e.started_at)
-    where $17::bool and e.source_kind = 'container' and e.category is null
+    where $18::bool and e.source_kind = 'container' and e.category is null
 ), runs as (
     select o.id, o.task_id,
            sum(o.seconds) / greatest(max(extract(epoch from e.ended_at - e.started_at))::float8, max(t.seconds)) as share
@@ -197,6 +198,7 @@ type CostRowsParams struct {
 	EndAt          time.Time
 	WorkspaceID    *uuid.UUID
 	AppID          *uuid.UUID
+	WorkloadID     *uuid.UUID
 	Category       string
 	ByTask         bool
 }
@@ -251,6 +253,7 @@ func (q *Queries) CostRows(ctx context.Context, arg CostRowsParams) ([]CostRowsR
 		arg.EndAt,
 		arg.WorkspaceID,
 		arg.AppID,
+		arg.WorkloadID,
 		arg.Category,
 		arg.ByTask,
 	)
@@ -348,10 +351,11 @@ from ledger_entries e
 where e.user_id = $1 and e.started_at >= $2 and e.started_at < $3
   and ($4::uuid is null or e.workspace_id = $4::uuid)
   and ($5::uuid is null or e.app_id = $5::uuid)
-  and ($6::text = ''
-       or ($6::text = 'image-build' and e.category = 'image-build')
-       or ($6::text = 'disk' and e.category = 'disk')
-       or ($6::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
+  and ($6::uuid is null or e.workload_id = $6::uuid)
+  and ($7::text = ''
+       or ($7::text = 'image-build' and e.category = 'image-build')
+       or ($7::text = 'disk' and e.category = 'disk')
+       or ($7::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
 `
 
 type WindowCostParams struct {
@@ -360,6 +364,7 @@ type WindowCostParams struct {
 	EndAt       time.Time
 	WorkspaceID *uuid.UUID
 	AppID       *uuid.UUID
+	WorkloadID  *uuid.UUID
 	Category    string
 }
 
@@ -370,6 +375,7 @@ func (q *Queries) WindowCost(ctx context.Context, arg WindowCostParams) (int64, 
 		arg.EndAt,
 		arg.WorkspaceID,
 		arg.AppID,
+		arg.WorkloadID,
 		arg.Category,
 	)
 	var column_1 int64

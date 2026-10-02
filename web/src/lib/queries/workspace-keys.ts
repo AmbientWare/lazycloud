@@ -27,6 +27,7 @@ export type AccountCostKeyParts = {
   groupBy: string;
   appId: string | null;
   workspaceId: string | null;
+  workloadId: string | null;
   category: string | null;
 };
 

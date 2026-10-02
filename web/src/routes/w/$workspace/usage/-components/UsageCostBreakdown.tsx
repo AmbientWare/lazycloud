@@ -46,7 +46,7 @@ export function UsageCostBreakdown({
           title={row.app_name || "App removed"}
           window={window}
           currency={currency}
-          scope={{ groupBy: "task", appId: row.app_id, workspaceId: row.workspace_id }}
+          scope={{ groupBy: "workload", appId: row.app_id, workspaceId: row.workspace_id }}
         />
       ))}
       {(disks.length > 0 || builds.length > 0 || unattributed.length > 0) && (
