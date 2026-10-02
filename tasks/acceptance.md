@@ -161,8 +161,8 @@ statement scans `containers` whole, before or after. The 93-row scans in the
 first run were the planner reading a tiny table. Three real history reads
 are fixed:
 - Each host report read every attempt that host's live containers finished in
-  the last ten minutes. It now reads the `attempts_ended_unseen` partial index
-  (migration 0013).
+  the last ten minutes. It now reads the `attempts_ended_unseen` partial
+  index.
 - The live-work probe uses ordered partial-index lookups. EXISTS let the
   planner scan history for a match.
 - The planning skip scan above.

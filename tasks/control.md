@@ -5,7 +5,7 @@ export of endpoints and endpoint URLs; the remaining "Functions and tasks"
 items; `lazycloud logs` and `lazycloud container list/stop/attach` from "Logs,
 events and metrics"; `lazycloud app export` for functions.
 
-Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
+Schema: Control in `migrations/0001_schema.sql`. Protobuf fields 60-69.
 
 ## Decisions
 
@@ -130,7 +130,7 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
 ## Plan
 
 1. Contract: OpenAPI paths and schemas, runner `dependency` frame, proto
-   fields 60-61, migration 0003. Regenerate bindings.
+   fields 60-61, schema. Regenerate bindings.
 2. Go: control (apps, deployments, plan, prune, run releases), execution
    (task list, stop, rerun, dependencies, pending reasons, containers list and
    stop, logs by deployment and container, retirement of deleted releases),

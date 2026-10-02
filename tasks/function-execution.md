@@ -82,7 +82,7 @@ The reference trace (9e259ce75) shows what this slice removes:
 | Host connection | `contracts/host/v1/host.proto` | Go (`internal/hostproto`) |
 | Container link | `contracts/host/v1/container.proto` | Go (`internal/hostproto`) |
 | Local runner protocol | `contracts/runner.yaml` | Go (`internal/runnerproto`), Pydantic (`python/runner`) |
-| Schema | `migrations/0001_function_execution.sql` | sqlc per owner package |
+| Schema | `migrations/0001_schema.sql` (Execution) | sqlc per owner package |
 
 Run `go generate ./...` after changing a Go contract. Generated files are
 checked in.
