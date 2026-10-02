@@ -46,24 +46,10 @@ DEFAULT_FUNCTION_CPU = 0.125
 DEFAULT_FUNCTION_AUTHORIZED = True
 DEFAULT_FUNCTION_MEMORY = "128Mi"
 DEFAULT_FUNCTION_RETRIES = 3
-DEFAULT_FUNCTION_KEEP_WARM_SECONDS = 10
 DEFAULT_FUNCTION_TIMEOUT_SECONDS = 3600
 DEFAULT_HTTP_CPU = 1.0
-DEFAULT_HTTP_KEEP_WARM_SECONDS = 180
 DEFAULT_HTTP_MEMORY = "128Mi"
-DEFAULT_HTTP_TIMEOUT_SECONDS = 180
-DEFAULT_HTTP_UNBOUNDED_WAIT_TIMEOUT_SECONDS = 600
-DEFAULT_MAX_PENDING_TASKS = 100
-DEFAULT_POD_CPU = 1.0
-DEFAULT_POD_MEMORY = "128Mi"
-DEFAULT_POD_KEEP_WARM_SECONDS = 600
 DEFAULT_WORKLOAD_PREEMPTIBLE = True
-DEFAULT_DEVBOX_KEEP_WARM_SECONDS = 1800
-DEFAULT_DEVBOX_PREEMPTIBLE = False
-"""A reclaimed node would cut an SSH session off mid-command."""
-
-DEVBOX_COMMAND = ("sleep", "infinity")
-"""The command a devbox runs when it names none. It does nothing and keeps the container up."""
 
 
 class Resources(ContractModel):
@@ -145,32 +131,6 @@ class Resources(ContractModel):
         return value
 
 
-def default_keep_warm_seconds(kind: DeploymentKind | str, role: PodRole | None = None) -> int:
-    """Idle seconds a workload's container survives for, by kind and a pod's role.
-
-    A function's container outlives the invocation that started it, so a second
-    call arriving inside this window reaches an interpreter that has already
-    imported the handler and already run `on_start`. Short, because the window is
-    also what an idle caller pays for.
-
-    A devbox waits longer than a service pod: the person who left it is usually
-    coming back, and every return inside the window skips a restore of its disk.
-
-    A schedule is answered by `resolve_keep_warm_seconds` rather than here: it is
-    a property of one deployment, not of a kind, and the value it wants is zero.
-    """
-    deployment_kind = _deployment_kind(kind)
-    if deployment_kind is DeploymentKind.Pod and role is PodRole.Devbox:
-        return DEFAULT_DEVBOX_KEEP_WARM_SECONDS
-    if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
-        return DEFAULT_HTTP_KEEP_WARM_SECONDS
-    if deployment_kind is DeploymentKind.Pod:
-        return DEFAULT_POD_KEEP_WARM_SECONDS
-    if deployment_kind is DeploymentKind.Function:
-        return DEFAULT_FUNCTION_KEEP_WARM_SECONDS
-    return 0
-
-
 def declared_min_containers(metadata: Mapping[str, JsonValue]) -> int:
     """The warm floor a deployment asked for, before anything resolves it."""
 
@@ -178,57 +138,6 @@ def declared_min_containers(metadata: Mapping[str, JsonValue]) -> int:
     if raw is None:
         return 0
     return Autoscaler.model_validate(raw).min_containers
-
-
-def resolve_keep_warm_seconds(
-    kind: DeploymentKind | str,
-    value: int | float | None,
-    *,
-    min_containers: int = 0,
-    scheduled: bool = False,
-    role: PodRole | None = None,
-) -> int:
-    """The idle seconds a container survives for, given what else was asked for.
-
-    A function container retires itself when this window passes with no work, so
-    a warm floor and a finite window contradict each other: the floor would
-    start, idle out, and start again on the next tick — a count that is right
-    whenever it is read and warm at no point. A declared floor therefore means
-    the container does not retire itself, and the autoscaler is what removes one.
-
-    A schedule says the opposite. Its next run is minutes or hours away, so a
-    window held open after each one is paid for and reaches nothing; a scheduled
-    workload keeps zero unless its author asked for a window by name.
-
-    Answered here because two owners build a stub config — a deployment
-    registration and the gateway's get-or-create — and a rule about the window
-    that lived in one of them would hold on one deploy path and not the other.
-    """
-
-    if _deployment_kind(kind) is DeploymentKind.Function and min_containers > 0:
-        return -1
-    if value is not None:
-        return int(value)
-    if scheduled:
-        return 0
-    return default_keep_warm_seconds(kind, role)
-
-
-def resolve_pod_role(kind: DeploymentKind | str, role: PodRole | None) -> PodRole | None:
-    """A pod's role, `Service` when it names none; every other kind has none."""
-    if _deployment_kind(kind) is not DeploymentKind.Pod:
-        return None
-    return role or PodRole.Service
-
-
-def keeps_one_active_version(kind: DeploymentKind | str, role: PodRole | None) -> bool:
-    """Whether turning one version of this workload on turns its other versions off.
-
-    Every version of a devbox mounts the same root disk, and one container holds
-    a disk at a time, so a second active version could only wait for the disk
-    or fail to start.
-    """
-    return resolve_pod_role(kind, role) is PodRole.Devbox
 
 
 def validate_pod_role(
@@ -269,39 +178,6 @@ def validate_pod_role(
             raise ValueError(f"a devbox's root disk takes its name, so {exc}") from exc
 
 
-def resolve_pod_ssh(role: PodRole | None, ssh: bool | None) -> bool:
-    if ssh is not None:
-        return ssh
-    return role is PodRole.Devbox
-
-
-def resolve_pod_command(role: PodRole | None, command: list[str]) -> list[str]:
-    if command or role is not PodRole.Devbox:
-        return list(command)
-    return list(DEVBOX_COMMAND)
-
-
-def resolve_pod_disks(
-    role: PodRole | None,
-    *,
-    name: str,
-    disks: list[DiskMount],
-    root_disk_bytes: int | None,
-) -> list[DiskMount]:
-    """A pod's disks, with the root disk a devbox sized but did not declare."""
-    if role is not PodRole.Devbox or root_disk_bytes is None:
-        return list(disks)
-    return [DiskMount(name=name, size_bytes=root_disk_bytes), *disks]
-
-
-def resolve_preemptible(role: PodRole | None, value: bool | None) -> bool:
-    if value is not None:
-        return value
-    if role is PodRole.Devbox:
-        return DEFAULT_DEVBOX_PREEMPTIBLE
-    return DEFAULT_WORKLOAD_PREEMPTIBLE
-
-
 def request_and_limit(
     value: CpuRequest | MemoryRequest | None,
 ) -> tuple[str | int | float | None, str | int | float | None]:
@@ -316,95 +192,6 @@ def request_and_limit(
             raise ValueError("a resource pair states exactly a request and a limit")
         return value[0], value[1]
     return value, None
-
-
-def resolve_cpu(kind: DeploymentKind | str, value: CpuRequest | None) -> CpuRequest | None:
-    # A pair passes through whole. The default only answers an absent value, and
-    # a limit its author stated is not something to resolve away.
-    if isinstance(value, (tuple, list)):
-        return value
-    if value is not None:
-        return float(value)
-    deployment_kind = _deployment_kind(kind)
-    if deployment_kind is DeploymentKind.Function:
-        return DEFAULT_FUNCTION_CPU
-    if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
-        return DEFAULT_HTTP_CPU
-    if deployment_kind is DeploymentKind.Pod:
-        return DEFAULT_POD_CPU
-    return None
-
-
-def resolve_memory(kind: DeploymentKind | str, value: MemoryRequest | None) -> MemoryRequest | None:
-    if value is not None:
-        return value
-    deployment_kind = _deployment_kind(kind)
-    if deployment_kind is DeploymentKind.Function:
-        return DEFAULT_FUNCTION_MEMORY
-    if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
-        return DEFAULT_HTTP_MEMORY
-    if deployment_kind is DeploymentKind.Pod:
-        return DEFAULT_POD_MEMORY
-    return None
-
-
-def resolve_disk(value: str | int | None) -> str | int | None:
-    """Per-container disk ceiling.
-
-    Unlike cpu and memory this does not vary by workload kind: it is a runaway
-    guard, not a resource allocation, so the same ceiling applies everywhere.
-    """
-    if value is not None:
-        return value
-    return DEFAULT_DISK
-
-
-def resolve_timeout_seconds(kind: DeploymentKind | str, value: int | None) -> int | None:
-    if value is not None:
-        return value
-    deployment_kind = _deployment_kind(kind)
-    if deployment_kind is DeploymentKind.Function:
-        return DEFAULT_FUNCTION_TIMEOUT_SECONDS
-    if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
-        return DEFAULT_HTTP_TIMEOUT_SECONDS
-    return None
-
-
-def resolve_http_wait_timeout_seconds(value: int | float | None) -> float:
-    if value is None or value == 0:
-        return float(DEFAULT_HTTP_UNBOUNDED_WAIT_TIMEOUT_SECONDS)
-    return float(value)
-
-
-def resolve_retries(kind: DeploymentKind | str, value: int | None) -> int:
-    if value is not None:
-        return max(int(value), 0)
-    deployment_kind = _deployment_kind(kind)
-    if deployment_kind is DeploymentKind.Function:
-        return DEFAULT_FUNCTION_RETRIES
-    return 0
-
-
-def resolve_max_pending_tasks(kind: DeploymentKind | str, value: int | None) -> int | None:
-    if value is not None:
-        return max(int(value), 0)
-    if _deployment_kind(kind) in {
-        DeploymentKind.Function,
-        DeploymentKind.Endpoint,
-        DeploymentKind.Asgi,
-    }:
-        return DEFAULT_MAX_PENDING_TASKS
-    return None
-
-
-def resolve_authorized(kind: DeploymentKind | str, value: bool | None) -> bool:
-    if value is not None:
-        return value
-    return _deployment_kind(kind) in {
-        DeploymentKind.Function,
-        DeploymentKind.Endpoint,
-        DeploymentKind.Asgi,
-    }
 
 
 def _deployment_kind(value: DeploymentKind | str) -> DeploymentKind:
@@ -574,26 +361,15 @@ class Deployment(ContractModel):
 
 
 __all__ = [
-    "DEFAULT_DEVBOX_KEEP_WARM_SECONDS",
-    "DEFAULT_DEVBOX_PREEMPTIBLE",
     "DEFAULT_DISK",
     "DEFAULT_FUNCTION_AUTHORIZED",
     "DEFAULT_FUNCTION_CPU",
-    "DEFAULT_FUNCTION_KEEP_WARM_SECONDS",
     "DEFAULT_FUNCTION_MEMORY",
     "DEFAULT_FUNCTION_RETRIES",
     "DEFAULT_FUNCTION_TIMEOUT_SECONDS",
     "DEFAULT_HTTP_CPU",
-    "DEFAULT_HTTP_KEEP_WARM_SECONDS",
     "DEFAULT_HTTP_MEMORY",
-    "DEFAULT_HTTP_TIMEOUT_SECONDS",
-    "DEFAULT_HTTP_UNBOUNDED_WAIT_TIMEOUT_SECONDS",
-    "DEFAULT_MAX_PENDING_TASKS",
-    "DEFAULT_POD_CPU",
-    "DEFAULT_POD_KEEP_WARM_SECONDS",
-    "DEFAULT_POD_MEMORY",
     "DEFAULT_WORKLOAD_PREEMPTIBLE",
-    "DEVBOX_COMMAND",
     "CpuRequest",
     "Deployment",
     "DeploymentSpec",
@@ -601,22 +377,6 @@ __all__ = [
     "Resources",
     "VolumeMount",
     "declared_min_containers",
-    "default_keep_warm_seconds",
-    "keeps_one_active_version",
     "request_and_limit",
-    "resolve_authorized",
-    "resolve_cpu",
-    "resolve_disk",
-    "resolve_http_wait_timeout_seconds",
-    "resolve_keep_warm_seconds",
-    "resolve_max_pending_tasks",
-    "resolve_memory",
-    "resolve_pod_command",
-    "resolve_pod_disks",
-    "resolve_pod_role",
-    "resolve_pod_ssh",
-    "resolve_preemptible",
-    "resolve_retries",
-    "resolve_timeout_seconds",
     "validate_pod_role",
 ]

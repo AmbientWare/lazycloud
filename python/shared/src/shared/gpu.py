@@ -66,18 +66,6 @@ offering must preserve customer hardware and historical billing identities.
 
 SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in SUPPORTED_GPU_TYPES)
 
-PLATFORM_GPU_TYPES: tuple[GpuType, ...] = (
-    GpuType.T4,
-    GpuType.A10G,
-    GpuType.L4,
-    GpuType.L40S,
-    GpuType.A100_40,
-    GpuType.A100_80,
-    GpuType.H100,
-    GpuType.H200,
-)
-"""Products sold on managed capacity; other known models remain valid on customer hardware."""
-
 
 _GPU_ALIASES: tuple[tuple[str, str], ...] = (
     ("RTXPRO6000", "RTXPro6000"),
@@ -147,18 +135,6 @@ def normalize_gpu_type(value: str) -> str:
     return raw
 
 
-def concrete_gpu_type(value: str) -> str:
-    """The model a label names, or empty where it names no particular model.
-
-    `any` is a scheduling wildcard and not a card. It reaches worker and pool
-    configuration verbatim from what a caller asked for, so anything recording
-    which model actually ran has to reject it rather than pass it on as one.
-    """
-
-    normalized = normalize_gpu_type(value)
-    return NO_GPU if normalized == GPU_ANY else normalized
-
-
 def compact_gpu_name(value: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", value.upper())
 
@@ -202,34 +178,6 @@ def gpu_preference(value: GpuInput) -> tuple[str, ...]:
     return tuple(preference)
 
 
-def gpu_preference_rank(preference: Sequence[str], candidate: str) -> int | None:
-    """Where a card sits in a request's order, or None if it is not accepted.
-
-    The one place `any` is interpreted, so the path that matches an existing
-    pool and the path that buys a new one cannot disagree about it. They did:
-    one normalised and honoured the wildcard, the other compared raw strings, so
-    `gpu="any"` found a pool that existed and could not create the first one.
-    """
-
-    if not preference:
-        return 0
-    normalized = normalize_gpu_type(candidate)
-    if normalized == NO_GPU:
-        return None
-    # Both sides, not just the candidate. `gpu_preference` canonicalises what it
-    # returns, but this has to hold for any sequence it is handed: comparing a
-    # stored `l4` against a worker's `L4` is the spelling mismatch that let a
-    # request provision an instance and then refuse the worker it registered.
-    for index, entry in enumerate(preference):
-        if entry == GPU_ANY or normalize_gpu_type(entry) == normalized:
-            return index
-    return None
-
-
-def gpu_preference_accepts(preference: Sequence[str], candidate: str) -> bool:
-    return gpu_preference_rank(preference, candidate) is not None
-
-
 def _unschedulable_gpu_message(entry: object, normalized: str) -> str:
     # A model with sized variants is the common mistake and the one worth
     # answering directly, rather than making the reader scan the whole list for
@@ -248,15 +196,11 @@ def _unschedulable_gpu_message(entry: object, normalized: str) -> str:
 __all__ = [
     "GPU_ANY",
     "NO_GPU",
-    "PLATFORM_GPU_TYPES",
     "SUPPORTED_GPU_NAMES",
     "SUPPORTED_GPU_TYPES",
     "GpuInput",
     "GpuType",
     "compact_gpu_name",
-    "concrete_gpu_type",
     "gpu_preference",
-    "gpu_preference_accepts",
-    "gpu_preference_rank",
     "normalize_gpu_type",
 ]

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import urllib.parse
 
 from shared.http.base import HttpModel
 
@@ -36,22 +35,6 @@ class HttpApiError(RuntimeError):
         return self.error.code if self.error is not None else ""
 
 
-class HttpTransportError(RuntimeError):
-    """An HTTP request failed before a response was received."""
-
-    def __init__(self, method: str, url: str, reason: str) -> None:
-        parsed = urllib.parse.urlsplit(url)
-        display_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-        super().__init__(f"{method.upper()} {display_url}: {reason}")
-        self.method = method.upper()
-        self.url = url
-        self.reason = reason
-
-
-class HttpResponseDecodeError(RuntimeError):
-    """An HTTP response body does not match the channel's JSON protocol."""
-
-
 def http_api_error_from_body(
     status_code: int,
     raw: str,
@@ -71,7 +54,5 @@ def http_api_error_from_body(
 __all__ = [
     "ErrorResponse",
     "HttpApiError",
-    "HttpResponseDecodeError",
-    "HttpTransportError",
     "http_api_error_from_body",
 ]

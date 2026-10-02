@@ -18,19 +18,4 @@ def fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
-def fsync_tree(root: Path) -> None:
-    """Flush every file and directory under `root`, deepest first, skipping symlinks."""
-    for directory, _, names in os.walk(root, topdown=False):
-        for name in names:
-            path = os.path.join(directory, name)
-            if os.path.islink(path):
-                continue
-            descriptor = os.open(path, os.O_RDONLY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        fsync_directory(Path(directory))
-
-
-__all__ = ["fsync_directory", "fsync_tree"]
+__all__ = ["fsync_directory"]
