@@ -18,7 +18,6 @@ const (
 	KeyContainer = "container_id"
 	KeyHost      = "host_id"
 	KeyRequest   = "request_id"
-	KeyWorkspace = "workspace_id"
 )
 
 type fieldsKey struct{}

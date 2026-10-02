@@ -229,7 +229,11 @@ func TestPublishedChainRestoresElsewhere(t *testing.T) {
 	if err := e.Evict(diskID); err != nil {
 		t.Fatal(err)
 	}
-	if used, err := e.Usage(diskID); err != nil || used != 0 {
+	p, err = e.paths(diskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used, err := allocatedBytes(p.dir()); err != nil || used != 0 {
 		t.Fatalf("an evicted disk uses %d bytes: %v", used, err)
 	}
 }

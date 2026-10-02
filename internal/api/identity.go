@@ -234,7 +234,7 @@ func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest
 		}
 		connection = &id
 	}
-	ws, err := s.owners.Identity.CreateOwnedWorkspaceIn(ctx, p, req.Body.Name, connection)
+	ws, err := s.owners.Identity.CreateOwnedWorkspace(ctx, p, req.Body.Name, connection)
 	if err != nil {
 		return nil, err
 	}

@@ -55,9 +55,6 @@ func (e *InsufficientSpaceError) Error() string {
 // Is matches ErrInsufficientSpace.
 func (e *InsufficientSpaceError) Is(target error) bool { return target == ErrInsufficientSpace }
 
-// Shortfall is how many more free bytes the restore needs.
-func (e *InsufficientSpaceError) Shortfall() int64 { return max(e.Need+e.Reserve-e.Have, 0) }
-
 // Generation is one published generation in a disk's chain.
 type Generation struct {
 	Generation     int64
