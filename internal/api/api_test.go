@@ -27,6 +27,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/identity/identitytest"
@@ -98,12 +99,16 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	dist := t.TempDir()
 	logger := slog.New(slog.DiscardHandler)
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
+	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test"}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
-		Compute: comp, Schedules: schedules.NewSchedules(pool, e),
+		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +189,7 @@ func (e *env) do(method, path, token string, body any, out any) int {
 
 // deploy uploads a source archive through the returned presigned URL and
 // deploys a function using it.
-func (e *env) deploy() {
+func (e *env) deploy() apitypes.Deployment {
 	e.t.Helper()
 	archive := make([]byte, 512)
 	_, _ = rand.Read(archive)
@@ -220,6 +225,23 @@ func (e *env) deploy() {
 	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
 		apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}}, &d); status != 200 || len(d.Releases) != 1 {
 		e.t.Fatalf("deploy: %d %+v", status, d)
+	}
+	return d
+}
+
+// A deployed function answers on its own host, so deploy and workload
+// reads say where, as they do for endpoints.
+func TestDeployedFunctionsReportWhereTheyAnswer(t *testing.T) {
+	e := newEnv(t)
+	release := e.deploy().Releases[0]
+	if release.Url == nil || !strings.HasPrefix(*release.Url, "https://summarize-sales-") || release.InvokePath == nil ||
+		*release.InvokePath != "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/invoke" {
+		t.Fatalf("deploy names the function's URL: %v %v", release.Url, release.InvokePath)
+	}
+	var detail apitypes.WorkloadDetail
+	if status := e.do("GET", "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales", e.owner, nil, &detail); status != 200 ||
+		detail.Release.Url == nil || *detail.Release.Url != *release.Url {
+		t.Fatalf("the workload names the same URL: %d %+v", status, detail.Release)
 	}
 }
 

@@ -3806,9 +3806,9 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             spec: components["schemas"]["WorkloadSpec"];
-            /** @description Where a pod or HTTP workload answers, following the active release. */
+            /** @description Where a pod, function or HTTP workload answers, following the active release. */
             url?: string;
-            /** @description The HTTP workload on the API host, following the active release. */
+            /** @description The function or HTTP workload on the API host, following the active release. */
             invoke_path?: string;
         };
         /** @description A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`. */

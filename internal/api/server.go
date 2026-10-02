@@ -76,7 +76,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 		return nil, err
 	}
 	for n, release := range deployment.Releases {
-		if release.Spec.Http != nil {
+		if release.Spec.Http != nil || release.Spec.Kind == apitypes.WorkloadKindFunction {
 			url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
 			path := edge.InvokePath(ws.Name, req.App, release.Spec.Kind, release.Name, nil)
 			deployment.Releases[n].Url, deployment.Releases[n].InvokePath = &url, &path

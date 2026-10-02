@@ -3318,11 +3318,15 @@ class Release(BaseModel):
     spec: WorkloadSpec
     url: Annotated[
         str | None,
-        Field(description="Where a pod or HTTP workload answers, following the active release."),
+        Field(
+            description="Where a pod, function or HTTP workload answers, following the active release."
+        ),
     ] = None
     invoke_path: Annotated[
         str | None,
-        Field(description="The HTTP workload on the API host, following the active release."),
+        Field(
+            description="The function or HTTP workload on the API host, following the active release."
+        ),
     ] = None
 
 

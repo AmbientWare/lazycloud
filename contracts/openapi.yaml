@@ -4664,10 +4664,10 @@ components:
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/WorkloadSpec" }
         url:
-          description: Where a pod or HTTP workload answers, following the active release.
+          description: Where a pod, function or HTTP workload answers, following the active release.
           type: string
         invoke_path:
-          description: The HTTP workload on the API host, following the active release.
+          description: The function or HTTP workload on the API host, following the active release.
           type: string
 
     Payload:

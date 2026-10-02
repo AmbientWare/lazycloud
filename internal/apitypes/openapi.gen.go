@@ -4441,14 +4441,14 @@ type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// InvokePath The HTTP workload on the API host, following the active release.
+	// InvokePath The function or HTTP workload on the API host, following the active release.
 	InvokePath *string      `json:"invoke_path,omitempty"`
 	Name       WorkloadName `json:"name"`
 
 	// Spec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
 	Spec WorkloadSpec `json:"spec"`
 
-	// Url Where a pod or HTTP workload answers, following the active release.
+	// Url Where a pod, function or HTTP workload answers, following the active release.
 	Url *string `json:"url,omitempty"`
 
 	// Version The deployed version; absent for a release only working-tree calls use.
