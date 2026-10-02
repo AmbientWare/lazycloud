@@ -152,6 +152,13 @@ data "aws_iam_policy_document" "control_plane" {
     }
   }
 
+  # The fleet reads its EC2 vCPU quotas before buying.
+  statement {
+    sid       = "ReadEC2Quotas"
+    actions   = ["servicequotas:GetServiceQuota"]
+    resources = ["${local.arn_prefix}:servicequotas:*:${local.account_id}:ec2/*"]
+  }
+
   # A Spot reserve's persistent request is cancelled before its instance
   # terminates, or EC2 launches a replacement.
   statement {

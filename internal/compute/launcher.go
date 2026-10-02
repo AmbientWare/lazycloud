@@ -83,23 +83,23 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
 	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
 	if err != nil {
-		return false, c.failLaunch(ctx, h, err.Error(), false)
+		return false, c.failLaunch(ctx, h, err.Error(), false, false)
 	}
 	release, err := c.TargetRelease(ctx)
 	if err != nil {
-		return false, c.failLaunch(ctx, h, "no agent release is published", false)
+		return false, c.failLaunch(ctx, h, "no agent release is published", false, false)
 	}
 	subnet, ok := subnetFor(target.network, h.AvailabilityZone, h.ID)
 	if !ok {
-		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
+		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false, false)
 	}
 	image, ok := c.nodeImage(h.Region, h.GpuCount > 0)
 	if !ok {
-		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false)
+		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false, false)
 	}
 	if err := c.shareImage(ctx, target, h.Region, image); err != nil {
 		if accessDenied(err) || strings.HasPrefix(awsCode(err), "InvalidAMI") {
-			return false, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false)
+			return false, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false, false)
 		}
 		return false, fmt.Errorf("share node image: %w", err)
 	}
@@ -167,9 +167,9 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 		code := awsCode(err)
 		switch {
 		case capacityRefusal(code) || strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
-			return false, c.failLaunch(ctx, h, describeAWSError(err), true)
+			return false, c.failLaunch(ctx, h, describeAWSError(err), true, quotaRefusal(code))
 		case h.LaunchAttempts >= maxLaunchAttempts:
-			return false, c.failLaunch(ctx, h, describeAWSError(err), false)
+			return false, c.failLaunch(ctx, h, describeAWSError(err), false, false)
 		}
 		return false, fmt.Errorf("run instance: %w", err)
 	}
@@ -284,8 +284,9 @@ func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, i
 }
 
 // failLaunch fails a host that could not launch; cool also skips its offer
-// until the cooldown ends.
-func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool bool) error {
+// until the cooldown ends, and quota its class in the region for the
+// platform.
+func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool, quota bool) error {
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if cool && h.Market != nil {
@@ -298,6 +299,11 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(message),
 			}); err != nil {
 				return fmt.Errorf("insert cooldown: %w", err)
+			}
+			if quota && h.ConnectionID == nil {
+				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
+					return err
+				}
 			}
 		}
 		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message)}); err != nil {

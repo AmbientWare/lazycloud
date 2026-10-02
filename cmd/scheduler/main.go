@@ -358,6 +358,14 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
+		return p.loop(ctx, cadence{every: compute.QuotaInterval}, nil, nil, every("ec2_quotas", compute.QuotaInterval, func(ctx context.Context) bool {
+			if _, err := comp.RefreshQuotas(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "ec2 quota refresh incomplete", "error", err)
+			}
+			return false
+		}))
+	})
+	group.Go(func() error {
 		return p.loop(ctx, cadence{every: reconcileTick}, nil, nil, func(ctx context.Context) bool {
 			if err := comp.Reconcile(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "reconcile pass", "error", err)

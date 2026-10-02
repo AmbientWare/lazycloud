@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
 )
@@ -60,6 +61,14 @@ func (a awsClients) sts(scope awsScope, region string) *sts.Client {
 	})
 }
 
+func (a awsClients) serviceQuotas(scope awsScope, region string) *servicequotas.Client {
+	return servicequotas.NewFromConfig(a.config(scope, region), func(o *servicequotas.Options) {
+		if a.endpoints.ServiceQuotas != "" {
+			o.BaseEndpoint = aws.String(a.endpoints.ServiceQuotas)
+		}
+	})
+}
+
 func (a awsClients) cloudFormation(scope awsScope, region string) *cloudformation.Client {
 	return cloudformation.NewFromConfig(a.config(scope, region), func(o *cloudformation.Options) {
 		if a.endpoints.CloudFormation != "" {
@@ -99,6 +108,12 @@ func capacityRefusal(code string) bool {
 		return true
 	}
 	return false
+}
+
+// quotaRefusal reports whether a launch or start error means the account's
+// quota for the instance's class is used up.
+func quotaRefusal(code string) bool {
+	return code == "VcpuLimitExceeded" || code == "MaxSpotInstanceCountExceeded" || code == "InstanceLimitExceeded"
 }
 
 // accessDenied reports whether AWS refused the caller's authority.

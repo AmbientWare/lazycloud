@@ -57,6 +57,19 @@ create table spot_prices (
     primary key (region, availability_zone_id, instance_type)
 );
 
+-- The platform account's EC2 vCPU quotas per region, quota class and
+-- market, read hourly; vcpus is null until read. A quota refusal holds the
+-- class at no room until refused_until.
+create table fleet_quotas (
+    region text not null,
+    quota_class text not null check (quota_class in ('standard', 'g', 'p')),
+    market text not null check (market in ('spot', 'on_demand')),
+    vcpus integer check (vcpus >= 0),
+    observed_at timestamptz,
+    refused_until timestamptz,
+    primary key (region, quota_class, market)
+);
+
 -- When the offer was last refused, so refusals across a region's offers
 -- can be counted over a window longer than the cooldown.
 alter table capacity_cooldowns add column refused_at timestamptz;

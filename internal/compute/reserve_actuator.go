@@ -246,7 +246,8 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 		result.Started++
 		return c.recordStart(ctx, h.ID)
 	}
-	if !capacityRefusal(awsCode(err)) {
+	code := awsCode(err)
+	if !capacityRefusal(code) {
 		return fmt.Errorf("start instance: %w", err)
 	}
 	refusal := describeAWSError(err)
@@ -269,6 +270,11 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(refusal),
 			}); err != nil {
 				return fmt.Errorf("insert cooldown: %w", err)
+			}
+			if quotaRefusal(code) {
+				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
+					return err
+				}
 			}
 		}
 		return notifyMachines(ctx, tx, h.ID)
