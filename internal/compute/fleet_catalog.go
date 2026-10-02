@@ -51,12 +51,6 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 	return rootVolumeGiB
 }
 
-// quotaClassOf is the quota class of a catalog type, which always has one.
-func quotaClassOf(instanceType string) QuotaClass {
-	class, _ := QuotaClassOf(instanceType)
-	return class
-}
-
 // VCPUs is what a running host of the type counts against its quota.
 func (t CatalogType) VCPUs() int64 { return t.CPUMillis / 1000 }
 

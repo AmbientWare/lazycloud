@@ -25,10 +25,8 @@ const (
 	// rootVolumeGiB is each instance's encrypted root disk; a host launched
 	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
-	// maxRootVolumeGiB is the largest root a hibernating host grows to.
-	maxRootVolumeGiB = 2048
-	cpuImage         = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-	gpuImage         = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
+	cpuImage      = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+	gpuImage      = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
 )
 
 // Tags on every instance the fleet launches.
@@ -212,25 +210,18 @@ type launchOptions struct {
 }
 
 // launchOptionsFor sizes a launch. A platform host bought for the reserve
-// hibernates when it asks to and its type can: RAM under EC2's limit, and
-// room on the root for a RAM-size image. A Spot reserve keeps its request
-// across stops. Serving and connection hosts launch as before.
+// hibernates when it asks to and its catalog type can, with its root grown
+// for the image. A Spot reserve keeps its request across stops. Serving and
+// connection hosts launch with the plain root.
 func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
 	opts := launchOptions{rootGiB: rootVolumeGiB}
 	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
 		return opts
 	}
 	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot
-	memory, known := nominalMemory(h.InstanceType)
-	if ReserveMode(*h.ReserveMode) != ReserveHibernate || !known || memory >= hibernationMemoryLimit {
-		return opts
-	}
-	swap := int32((memory + gib - 1) / gib) //nolint:gosec // Under 150 by the check above.
-	if rootVolumeGiB+swap > maxRootVolumeGiB {
-		return opts
-	}
-	opts.rootGiB += swap
-	opts.hibernate = true
+	t, _ := CatalogTypeNamed(h.InstanceType)
+	opts.hibernate = ReserveMode(*h.ReserveMode) == ReserveHibernate && t.Hibernates
+	opts.rootGiB = int32(t.RootGiB(opts.hibernate)) //nolint:gosec // At most 250: only types under 150 GiB of RAM hibernate.
 	return opts
 }
 
@@ -242,12 +233,6 @@ func persistentRequest(opts launchOptions, instance ec2types.Instance) *string {
 		return nil
 	}
 	return nilIfEmpty(aws.ToString(instance.SpotInstanceRequestId))
-}
-
-// nominalMemory is the RAM of a catalog type.
-func nominalMemory(instanceType string) (int64, bool) {
-	t, ok := CatalogTypeNamed(instanceType)
-	return t.MemoryBytes, ok
 }
 
 // nodeImage is the AMI a host launches from: the baked image of its region

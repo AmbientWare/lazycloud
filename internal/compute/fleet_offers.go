@@ -45,7 +45,8 @@ func QuotaUse(hosts []FleetHost, catalog []CatalogType) map[QuotaKey]int64 {
 			continue
 		}
 		if i := slices.IndexFunc(catalog, func(t CatalogType) bool { return t.Name == h.InstanceType }); i >= 0 {
-			used[QuotaKey{Region: h.Region, Class: quotaClassOf(h.InstanceType), Market: h.Market}] += catalog[i].VCPUs()
+			class, _ := QuotaClassOf(h.InstanceType)
+			used[QuotaKey{Region: h.Region, Class: class, Market: h.Market}] += catalog[i].VCPUs()
 		}
 	}
 	return used
@@ -195,9 +196,13 @@ func coolingRegions(p Policy, cooldowns []OfferCooldown, now time.Time) map[stri
 
 // cooled reports whether a cooldown holds an offer back at now.
 func cooled(cooldowns []OfferCooldown, now time.Time, region, instanceType string, market Market) bool {
+	class, _ := QuotaClassOf(instanceType)
 	return slices.ContainsFunc(cooldowns, func(c OfferCooldown) bool {
-		return c.Region == region && c.Market == market && c.Until.After(now) &&
-			(c.InstanceType == instanceType || (c.Quota && quotaClassOf(c.InstanceType) == quotaClassOf(instanceType)))
+		if c.Region != region || c.Market != market || !c.Until.After(now) {
+			return false
+		}
+		cooledClass, ok := QuotaClassOf(c.InstanceType)
+		return c.InstanceType == instanceType || (c.Quota && ok && cooledClass == class)
 	})
 }
 
@@ -269,7 +274,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 							continue
 						}
 					}
-					quota := QuotaKey{Region: region, Class: quotaClassOf(t.Name), Market: market}
+					class, _ := QuotaClassOf(t.Name)
+					quota := QuotaKey{Region: region, Class: class, Market: market}
 					if left, known := room[quota]; cooled(in.Cooldowns, in.Now, region, t.Name, market) || (known && left < t.VCPUs()) {
 						continue
 					}

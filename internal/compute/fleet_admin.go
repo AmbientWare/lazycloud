@@ -26,9 +26,9 @@ const (
 
 // FleetCapacity is CPU, memory and GPUs.
 type FleetCapacity struct {
-	CPUMillis   int64
-	MemoryBytes int64
-	GPUs        int
+	CPUMillis   int64 `json:"cpu_millis"`
+	MemoryBytes int64 `json:"memory_bytes"`
+	GPUs        int   `json:"gpus"`
 }
 
 // FleetNode is one platform host with an instance.

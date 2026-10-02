@@ -26,10 +26,6 @@ func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
 	return apitypes.FleetCapacity{CpuMillicores: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
 }
 
-func planCapacityOut(c compute.PlanCapacity) apitypes.FleetCapacity {
-	return fleetCapacityOut(compute.FleetCapacity(c))
-}
-
 // GetFleet returns the platform fleet's published plan and agent rollout
 // for administrators. The plan is absent while none is current.
 func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFleetResponseObject, error) {
@@ -49,15 +45,15 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 		}{GeneratedAt: p.GeneratedAt, ExpiresAt: p.ExpiresAt, Markets: []apitypes.FleetMarket{}}
 		for _, m := range p.Markets {
 			market := apitypes.FleetMarket{
-				Preemptible: m.Preemptible, GpuType: m.GPUType, WarmFree: planCapacityOut(m.WarmFree),
-				WarmTarget: planCapacityOut(m.WarmTarget), ReserveReady: planCapacityOut(m.ReserveReady),
-				ReserveTarget: planCapacityOut(m.StoppedTarget), Allocated: planCapacityOut(m.Load),
+				Preemptible: m.Preemptible, GpuType: m.GPUType, WarmFree: fleetCapacityOut(m.WarmFree),
+				WarmTarget: fleetCapacityOut(m.WarmTarget), ReserveReady: fleetCapacityOut(m.ReserveReady),
+				ReserveTarget: fleetCapacityOut(m.StoppedTarget), Allocated: fleetCapacityOut(m.Load),
 				States: []apitypes.FleetStateCapacity{}, Reason: string(m.Reason),
 			}
 			for _, st := range m.States {
 				market.States = append(market.States, apitypes.FleetStateCapacity{
 					State: apitypes.FleetState(st.State), Machines: st.Machines,
-					Capacity: planCapacityOut(st.Capacity), Allocated: planCapacityOut(st.Allocated),
+					Capacity: fleetCapacityOut(st.Capacity), Allocated: fleetCapacityOut(st.Allocated),
 				})
 			}
 			plan.Markets = append(plan.Markets, market)

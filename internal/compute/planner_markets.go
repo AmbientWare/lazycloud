@@ -10,57 +10,38 @@ import (
 	"github.com/google/uuid"
 )
 
-// PlanCapacity is CPU, memory and GPUs in a published plan.
-type PlanCapacity struct {
-	CPUMillis   int64 `json:"cpu_millis"`
-	MemoryBytes int64 `json:"memory_bytes"`
-	GPUs        int   `json:"gpus"`
-}
-
-func planCapacity(c FleetCapacity) PlanCapacity {
-	return PlanCapacity(c)
-}
-
-func planCapacities(cs []FleetCapacity) []PlanCapacity {
-	out := make([]PlanCapacity, len(cs))
-	for i, c := range cs {
-		out[i] = planCapacity(c)
-	}
-	return out
-}
-
 // PlanState totals one state's hosts in a published market.
 type PlanState struct {
-	State     FleetState   `json:"state"`
-	Machines  int          `json:"machines"`
-	Capacity  PlanCapacity `json:"capacity"`
-	Allocated PlanCapacity `json:"allocated"`
+	State     FleetState    `json:"state"`
+	Machines  int           `json:"machines"`
+	Capacity  FleetCapacity `json:"capacity"`
+	Allocated FleetCapacity `json:"allocated"`
 }
 
 // PublishedMarket is one market's plan as the planner publishes it in
 // fleet_markets, for every replica and the admin page.
 type PublishedMarket struct {
-	Preemptible           bool           `json:"preemptible"`
-	GPUType               string         `json:"gpu_type"`
-	Quiet                 bool           `json:"quiet"`
-	Load                  PlanCapacity   `json:"load"`
-	WarmTarget            PlanCapacity   `json:"warm_target"`
-	WarmFree              PlanCapacity   `json:"warm_free"`
-	WarmPending           PlanCapacity   `json:"warm_pending"`
-	StoppedTarget         PlanCapacity   `json:"stopped_target"`
-	ReserveCapacity       PlanCapacity   `json:"reserve_capacity"`
-	ReserveReady          PlanCapacity   `json:"reserve_ready"`
-	ReservePending        PlanCapacity   `json:"reserve_pending"`
-	HibernationTarget     PlanCapacity   `json:"hibernation_target"`
-	Hibernated            PlanCapacity   `json:"hibernated"`
-	HibernationUnverified PlanCapacity   `json:"hibernation_unverified"`
-	Shortfall             PlanCapacity   `json:"shortfall"`
-	StoppedShortfall      PlanCapacity   `json:"stopped_shortfall"`
-	HibernationShortfall  PlanCapacity   `json:"hibernation_shortfall"`
-	UnmetShapes           []PlanCapacity `json:"unmet_shapes"`
-	UnmetStoppedShapes    []PlanCapacity `json:"unmet_stopped_shapes"`
-	Reason                MarketReason   `json:"reason"`
-	States                []PlanState    `json:"states"`
+	Preemptible           bool            `json:"preemptible"`
+	GPUType               string          `json:"gpu_type"`
+	Quiet                 bool            `json:"quiet"`
+	Load                  FleetCapacity   `json:"load"`
+	WarmTarget            FleetCapacity   `json:"warm_target"`
+	WarmFree              FleetCapacity   `json:"warm_free"`
+	WarmPending           FleetCapacity   `json:"warm_pending"`
+	StoppedTarget         FleetCapacity   `json:"stopped_target"`
+	ReserveCapacity       FleetCapacity   `json:"reserve_capacity"`
+	ReserveReady          FleetCapacity   `json:"reserve_ready"`
+	ReservePending        FleetCapacity   `json:"reserve_pending"`
+	HibernationTarget     FleetCapacity   `json:"hibernation_target"`
+	Hibernated            FleetCapacity   `json:"hibernated"`
+	HibernationUnverified FleetCapacity   `json:"hibernation_unverified"`
+	Shortfall             FleetCapacity   `json:"shortfall"`
+	StoppedShortfall      FleetCapacity   `json:"stopped_shortfall"`
+	HibernationShortfall  FleetCapacity   `json:"hibernation_shortfall"`
+	UnmetShapes           []FleetCapacity `json:"unmet_shapes"`
+	UnmetStoppedShapes    []FleetCapacity `json:"unmet_stopped_shapes"`
+	Reason                MarketReason    `json:"reason"`
+	States                []PlanState     `json:"states"`
 	// Consolidating is the host the market is draining onto the others.
 	Consolidating *uuid.UUID `json:"consolidating,omitempty"`
 	// Decision summarizes the market's plan; the planner logs it when it
@@ -75,18 +56,18 @@ type PublishedMarket struct {
 // publishedMarket is the published form of a market plan.
 func publishedMarket(mp MarketPlan, growth []FleetAction) PublishedMarket {
 	out := PublishedMarket{
-		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Quiet: mp.Quiet, Load: planCapacity(mp.Load),
-		WarmTarget: planCapacity(mp.WarmTarget), WarmFree: planCapacity(mp.WarmFree), WarmPending: planCapacity(mp.WarmPending),
-		StoppedTarget: planCapacity(mp.StoppedTarget), ReserveCapacity: planCapacity(mp.ReserveCapacity),
-		ReserveReady: planCapacity(mp.ReserveReady), ReservePending: planCapacity(mp.ReservePending),
-		HibernationTarget: planCapacity(mp.HibernationTarget), Hibernated: planCapacity(mp.Hibernated),
-		HibernationUnverified: planCapacity(mp.HibernationUnverified), Shortfall: planCapacity(mp.Shortfall),
-		StoppedShortfall: planCapacity(mp.StoppedShortfall), HibernationShortfall: planCapacity(mp.HibernationShortfall),
-		UnmetShapes: planCapacities(mp.UnmetShapes), UnmetStoppedShapes: planCapacities(mp.UnmetStoppedShapes),
+		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Quiet: mp.Quiet, Load: mp.Load,
+		WarmTarget: mp.WarmTarget, WarmFree: mp.WarmFree, WarmPending: mp.WarmPending,
+		StoppedTarget: mp.StoppedTarget, ReserveCapacity: mp.ReserveCapacity,
+		ReserveReady: mp.ReserveReady, ReservePending: mp.ReservePending,
+		HibernationTarget: mp.HibernationTarget, Hibernated: mp.Hibernated,
+		HibernationUnverified: mp.HibernationUnverified, Shortfall: mp.Shortfall,
+		StoppedShortfall: mp.StoppedShortfall, HibernationShortfall: mp.HibernationShortfall,
+		UnmetShapes: mp.UnmetShapes, UnmetStoppedShapes: mp.UnmetStoppedShapes,
 		Reason: mp.Reason,
 	}
 	for _, s := range mp.States {
-		out.States = append(out.States, PlanState{State: s.State, Machines: s.Machines, Capacity: planCapacity(s.Capacity), Allocated: planCapacity(s.Allocated)})
+		out.States = append(out.States, PlanState{State: s.State, Machines: s.Machines, Capacity: s.Capacity, Allocated: s.Allocated})
 	}
 	if mp.Consolidates != nil {
 		out.Consolidating = ptr(uuid.UUID(*mp.Consolidates))
@@ -95,8 +76,9 @@ func publishedMarket(mp MarketPlan, growth []FleetAction) PublishedMarket {
 	return out
 }
 
-// decision is the line logged when a market's plan changes, as the
-// reference logged it.
+// decision is the line logged when a market's plan changes: its load, its
+// running and stopped headroom against their targets, its actions and its
+// reason.
 func decision(mp MarketPlan, growth []FleetAction) string {
 	quiet := "loaded"
 	if mp.Quiet {

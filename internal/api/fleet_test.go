@@ -91,7 +91,7 @@ func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
 	if first, second := plan.Markets[0], plan.Markets[1]; !first.Preemptible || first.GpuType != "" || second.Preemptible || second.GpuType != "" {
 		t.Fatalf("markets start %+v, %+v; want Spot CPU, then on-demand CPU", first, second)
 	}
-	capacity := func(c compute.PlanCapacity) apitypes.FleetCapacity {
+	capacity := func(c compute.FleetCapacity) apitypes.FleetCapacity {
 		return apitypes.FleetCapacity{CpuMillicores: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
 	}
 	host := apitypes.FleetCapacity{CpuMillicores: 4000, MemoryMib: 16 << 10}
