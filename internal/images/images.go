@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 const (
@@ -157,16 +159,18 @@ type Images struct {
 	pool      *pgxpool.Pool
 	queries   *Queries
 	execution *execution.Execution
-	resolver  *resolver
-	config    Config
-	login     *platformLogin
-	ecr       ecrToken
+	// secrets holds the workspace secrets builds read.
+	secrets  *secrets.Secrets
+	resolver *resolver
+	config   Config
+	login    *platformLogin
+	ecr      ecrToken
 }
 
 // NewImages returns the images owner.
-func NewImages(pool *pgxpool.Pool, exec *execution.Execution, config Config) *Images {
+func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, config Config) *Images {
 	return &Images{
-		pool: pool, queries: New(pool), execution: exec, resolver: newResolver(config.Registry), config: config,
+		pool: pool, queries: New(pool), execution: exec, secrets: vault, resolver: newResolver(config.Registry), config: config,
 		login: newPlatformLogin(config), ecr: exchangeECR,
 	}
 }
@@ -233,6 +237,9 @@ type prepared struct {
 	reference *string
 	// auth holds base image logins by registry host.
 	auth map[string]Auth
+	// secretVersions are the versions of the secrets the build reads, by
+	// name.
+	secretVersions map[string]string
 }
 
 // prepare validates def for workspace, pins its base images and computes its
@@ -270,9 +277,28 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 	if err != nil {
 		return prepared{}, err
 	}
-	out := prepared{spec: s, auth: map[string]Auth{}}
+	out := prepared{spec: s, auth: map[string]Auth{}, secretVersions: map[string]string{}}
 	if baseAuth != nil {
 		out.auth[baseHost] = *baseAuth
+	}
+	for _, name := range s.secrets {
+		secret, err := i.secrets.Get(ctx, workspace, name)
+		var missing *secrets.NotFoundError
+		if errors.As(err, &missing) {
+			return prepared{}, invalid("secret %s does not exist in this workspace", name)
+		}
+		if err != nil {
+			return prepared{}, fmt.Errorf("read build secret: %w", err)
+		}
+		out.secretVersions[name] = secret.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if len(out.secretVersions) > 0 {
+		versions, err := json.Marshal(out.secretVersions)
+		if err != nil {
+			return prepared{}, fmt.Errorf("encode secret versions: %w", err)
+		}
+		sum := sha256.Sum256(versions)
+		s.secretVersionsKey = hex.EncodeToString(sum[:16])
 	}
 	// The managed base is the platform's choice; every other image is the
 	// user's and must come from a public registry other than the platform's.
@@ -313,7 +339,12 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 	if err != nil {
 		return prepared{}, err
 	}
-	out.digest = imageDigest(out.dockerfile, s.architecture, s.context)
+	inputs := buildInputs{Secrets: out.secretVersions, GPU: s.gpu}
+	if len(s.secrets) > 0 {
+		// Another workspace's secrets of the same names build another image.
+		inputs.Workspace = uuid.UUID(workspace).String()
+	}
+	out.digest = imageDigest(out.dockerfile, s.architecture, s.context, inputs)
 	out.id = "img_" + hex.EncodeToString(out.digest)[:24]
 	if !needsBuild(out.dockerfile) && baseAuth == nil {
 		ref := dockerfileBase(out.dockerfile)
@@ -408,7 +439,7 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
 		}
-		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes); err != nil {
+		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu); err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelImageBuild, row.ID.String()); err != nil {
@@ -426,9 +457,13 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 }
 
 func (i *Images) upsert(ctx context.Context, q *Queries, workspace identity.WorkspaceID, p prepared) (Image, error) {
+	versions, err := json.Marshal(p.secretVersions)
+	if err != nil {
+		return Image{}, fmt.Errorf("encode secret versions: %w", err)
+	}
 	row, err := q.UpsertImage(ctx, UpsertImageParams{
 		Digest: p.digest, ID: p.id, Dockerfile: p.dockerfile, PythonVersion: p.spec.python,
-		Architecture: p.spec.architecture, Reference: p.reference,
+		Architecture: p.spec.architecture, BuildSecrets: versions, BuildGpu: p.spec.gpu, Reference: p.reference,
 	})
 	if err != nil {
 		return Image{}, fmt.Errorf("upsert image: %w", err)
@@ -652,14 +687,43 @@ type BuildCommand struct {
 	// Auth holds logins by registry host, the platform registry included.
 	Auth     map[string]Auth
 	Deadline time.Time
+	// Secrets are the values of the build's secrets by name, current when
+	// the build starts.
+	Secrets map[string]string
+	// GPUs is how many GPUs the build container holds.
+	GPUs int
+}
+
+// buildGPUs is how many GPUs a build on gpu holds: one card of the model.
+func buildGPUs(gpu string) int {
+	if gpu == "" {
+		return 0
+	}
+	return 1
 }
 
 // BuildCommandOf returns the command for a build container starting on
-// host.
+// host. A build whose secret was deleted since it was requested fails, and
+// ErrStaleBuild says so.
 func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start execution.BuildStart) (BuildCommand, error) {
 	row, err := i.queries.BuildToStart(ctx, start.Build)
 	if err != nil {
 		return BuildCommand{}, fmt.Errorf("read build %s: %w", start.Build, err)
+	}
+	var versions map[string]string
+	if err := json.Unmarshal(row.BuildSecrets, &versions); err != nil {
+		return BuildCommand{}, fmt.Errorf("decode build secrets: %w", err)
+	}
+	values, err := i.secrets.Resolve(ctx, identity.WorkspaceID(row.WorkspaceID), slices.Sorted(maps.Keys(versions)))
+	var missing *secrets.NotFoundError
+	if errors.As(err, &missing) {
+		if err := i.failBuild(ctx, start.Build, row.Digest, fmt.Sprintf("secret %s was deleted before the build started", missing.Name)); err != nil {
+			return BuildCommand{}, err
+		}
+		return BuildCommand{}, ErrStaleBuild
+	}
+	if err != nil {
+		return BuildCommand{}, fmt.Errorf("read build secrets: %w", err)
 	}
 	auth := map[string]Auth{}
 	if len(row.RegistryAuth) > 0 {
@@ -692,7 +756,20 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 		PushRepository: i.config.Registry + "/" + image,
 		CacheRef:       i.config.Registry + "/" + cache + ":" + hex.EncodeToString(scope[:16]),
 		Insecure:       i.config.Insecure, Auth: auth, Deadline: row.DeadlineAt,
+		Secrets: values, GPUs: buildGPUs(row.BuildGpu),
 	}, nil
+}
+
+// failLocked fails build id, whose image and build rows tx locked, and stops
+// its containers.
+func (i *Images) failLocked(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason string) error {
+	if err := i.execution.StopBuildContainers(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := i.queries.WithTx(tx).FailBuild(ctx, FailBuildParams{ID: id, Failure: truncate(reason)}); err != nil {
+		return fmt.Errorf("fail build: %w", err)
+	}
+	return database.Notify(ctx, tx, database.ChannelImageBuild, id.String())
 }
 
 // BuildResources are the reservations and ceilings of a build container.
@@ -900,13 +977,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		fail := func(reason string) error {
 			changed = true
-			if err := i.execution.StopBuildContainers(ctx, tx, id); err != nil {
-				return err
-			}
-			if err := q.FailBuild(ctx, FailBuildParams{ID: id, Failure: truncate(reason)}); err != nil {
-				return fmt.Errorf("fail build: %w", err)
-			}
-			return database.Notify(ctx, tx, database.ChannelImageBuild, id.String())
+			return i.failLocked(ctx, tx, id, reason)
 		}
 		if time.Now().After(build.DeadlineAt) {
 			return fail(fmt.Sprintf("the build did not finish within %s", BuildTimeout))
@@ -932,7 +1003,11 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		if err := q.ResetBuildLogCount(ctx, id); err != nil {
 			return fmt.Errorf("reset build log count: %w", err)
 		}
-		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
+		gpu, err := q.ImageBuildGPU(ctx, digest)
+		if err != nil {
+			return fmt.Errorf("read build GPU: %w", err)
+		}
+		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes, gpu)
 		var unpaid *billing.PaymentRequiredError
 		var limit *billing.LimitError
 		if errors.As(err, &unpaid) || errors.As(err, &limit) {

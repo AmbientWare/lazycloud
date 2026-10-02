@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -461,9 +462,13 @@ func attemptOutcome(attempt string, frame runnerproto.Frame) (*hostproto.Attempt
 		if err != nil {
 			return nil, err
 		}
-		return &hostproto.AttemptFinished{AttemptId: attempt, Outcome: &hostproto.AttemptFinished_Success{
-			Success: &hostproto.TaskSuccess{Encoding: encoding, Result: frame.Payload},
-		}}, nil
+		success := &hostproto.TaskSuccess{Encoding: encoding, Result: frame.Payload}
+		if succeeded.Display != nil {
+			if success.Display, err = json.Marshal(succeeded.Display); err != nil {
+				return nil, fmt.Errorf("encode result display: %w", err)
+			}
+		}
+		return &hostproto.AttemptFinished{AttemptId: attempt, Outcome: &hostproto.AttemptFinished_Success{Success: success}}, nil
 	case runnerproto.FrameFailed:
 		var failed runnerproto.Failed
 		if err := frame.Decode(&failed); err != nil {

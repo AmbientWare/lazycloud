@@ -127,7 +127,7 @@ func (q *Queries) BuildPhase(ctx context.Context, id *uuid.UUID) (BuildPhaseRow,
 
 const buildToStart = `-- name: BuildToStart :one
 select b.id, b.state, b.workspace_id, b.forced, b.context_sha256, b.registry_auth, b.deadline_at,
-       i.digest, i.dockerfile, i.architecture
+       i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu
 from image_builds b
 join images i on i.digest = b.image_digest
 where b.id = $1
@@ -144,6 +144,8 @@ type BuildToStartRow struct {
 	Digest        []byte
 	Dockerfile    string
 	Architecture  string
+	BuildSecrets  []byte
+	BuildGpu      string
 }
 
 func (q *Queries) BuildToStart(ctx context.Context, id uuid.UUID) (BuildToStartRow, error) {
@@ -160,6 +162,8 @@ func (q *Queries) BuildToStart(ctx context.Context, id uuid.UUID) (BuildToStartR
 		&i.Digest,
 		&i.Dockerfile,
 		&i.Architecture,
+		&i.BuildSecrets,
+		&i.BuildGpu,
 	)
 	return i, err
 }
@@ -275,6 +279,17 @@ func (q *Queries) ImageArchitecture(ctx context.Context, id string) (string, err
 	var architecture string
 	err := row.Scan(&architecture)
 	return architecture, err
+}
+
+const imageBuildGPU = `-- name: ImageBuildGPU :one
+select build_gpu from images where digest = $1
+`
+
+func (q *Queries) ImageBuildGPU(ctx context.Context, digest []byte) (string, error) {
+	row := q.db.QueryRow(ctx, imageBuildGPU, digest)
+	var build_gpu string
+	err := row.Scan(&build_gpu)
+	return build_gpu, err
 }
 
 const insertBuild = `-- name: InsertBuild :one
@@ -503,9 +518,9 @@ func (q *Queries) SucceedBuild(ctx context.Context, id uuid.UUID) error {
 }
 
 const upsertImage = `-- name: UpsertImage :one
-insert into images (digest, id, dockerfile, python_version, architecture, reference, ready_at)
-values ($1, $2, $3, $4, $5,
-        $6, case when $6::text is null then null else now() end)
+insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu, reference, ready_at)
+values ($1, $2, $3, $4, $5, $6, $7,
+        $8, case when $8::text is null then null else now() end)
 on conflict (digest) do update
 set reference = coalesce(images.reference, excluded.reference),
     ready_at = coalesce(images.ready_at, excluded.ready_at)
@@ -518,6 +533,8 @@ type UpsertImageParams struct {
 	Dockerfile    string
 	PythonVersion string
 	Architecture  string
+	BuildSecrets  []byte
+	BuildGpu      string
 	Reference     *string
 }
 
@@ -541,6 +558,8 @@ func (q *Queries) UpsertImage(ctx context.Context, arg UpsertImageParams) (Upser
 		arg.Dockerfile,
 		arg.PythonVersion,
 		arg.Architecture,
+		arg.BuildSecrets,
+		arg.BuildGpu,
 		arg.Reference,
 	)
 	var i UpsertImageRow

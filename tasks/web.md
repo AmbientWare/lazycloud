@@ -87,6 +87,19 @@ visual parity.
   every declared port.
 - The Tasks page's Workload filter lists an app's functions once an App is
   chosen: workload names are unique only within an app.
+- A pickled result's Rendered and Text views show the `Payload.display`
+  the runner made of the value where it ran, as in the reference; nothing
+  unpickles it. The host session keeps a display only when it is a PNG or
+  an HTML fragment within the limits, and the rendered HTML's sandboxed
+  frame also carries a Content-Security-Policy that loads nothing from the
+  network, so result HTML cannot reveal who viewed it
+  (`TestPickledResultsKeepOnlyAValidDisplay`, ResultBody.test.tsx). The
+  host session and the page both strip from the HTML what could navigate
+  the frame, load a document or run code: `<meta>`, `<base>`, `<link>`,
+  scripts, frames, plugins, forms, SVG animation, `href`/`src`/`action`
+  and similar attributes (an image's `src` stays only as a `data:image`)
+  and `on*` handlers (`TestResultHTMLCannotNavigateOrLoad`). The runner's
+  frame header limit is 4 MiB so a 1 MiB PNG fits as base64.
 - On the usage page a function's workload row, as the reference showed it,
   also lists its runs when opened, each with its share of the container
   cost and "View run"; idle container time stays on the workload. The

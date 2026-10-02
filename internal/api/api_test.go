@@ -35,6 +35,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -98,6 +99,10 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	comp := compute.NewCompute(pool, e, compute.Config{InstallURL: "https://install.test", ServerAddress: "hosts.test:443"})
 	dist := t.TempDir()
 	logger := slog.New(slog.DiscardHandler)
+	masterKey, err := secrets.NewFileKey(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
 	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test"}, logger)
 	if err != nil {
@@ -106,7 +111,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
-		Images:        images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
+		Images:        images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
 		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)

@@ -163,12 +163,12 @@ func startPlatform(t *testing.T) *platform {
 		},
 		MaxIdleConnsPerHost: 1024,
 	}}
-	im := images.NewImages(pool, p.execution, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"})
 	masterKey, err := secrets.NewFileKey(make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
+	im := images.NewImages(pool, p.execution, vault, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"})
 	p.secrets = vault
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,

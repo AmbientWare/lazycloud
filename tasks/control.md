@@ -64,8 +64,11 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
 - `deployment stop NAME-vN` is refused unless N is the active version, and
   `delete NAME-vN` is always refused: stop and delete act on the workload.
 - `task result` shows the decoded value, as slice 1 did.
-- `app export --json` lists each function's `release_id` instead of an
-  invoke URL, and an app without deployed functions is an error.
+- `app export --json` lists each workload's `release_id` instead of an
+  invoke URL, and an app without deployed functions, endpoints or ASGI apps
+  is an error. Endpoints and ASGI apps call the URL that follows the active
+  release, so a redeploy without contract changes keeps working; the export
+  version still changes with the release ids, as for functions.
 - A deploy may list no function only with prune, which deletes every
   deployed function, as the reference's prune of an empty app did.
 - Upstream tasks must be in the submitting workspace.

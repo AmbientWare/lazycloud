@@ -90,8 +90,8 @@ Scope notes:
   Delivered: references.py identical to the reference; test_sdk_handler_references.py, `test_file_deploy_requires_a_selection_when_several_apps_are_present`.
 - [x] `lazycloud app list [--active|--inactive|--all]`, `app show APP`, `app pause APP`, `app resume APP`, `app delete APP`, by name or ID (CLI/apps.py:79-195)
   Intentional: cli/apps.py; `test_app_commands_accept_a_name_and_report_each_outcome`, `TestAppPauseResumeAndDeleteFreeTheName`. Columns: tasks/control.md.
-- [ ] `lazycloud app export APP [-o/--output DIR] [--openapi res=file.json]... [--openapi-path res=/path]...`: typed package in `lazycloud_clients/<app>` (CLI/apps.py:24, SDK/client_codegen.py)
-  Gap: functions export (test_app_export.py), but endpoints and ASGI apps are never exported and every `--openapi`/`--openapi-path` is refused, while docs/concepts/apps.mdx promises both. About 1-1.5 days.
+- [x] `lazycloud app export APP [-o/--output DIR] [--openapi res=file.json]... [--openapi-path res=/path]...`: typed package in `lazycloud_clients/<app>` (CLI/apps.py:24, SDK/client_codegen.py)
+  Intentional: client_codegen.py, client_handles.py; `test_export_gives_endpoints_request_and_asgi_routes_typed_methods`, `test_export_reads_a_given_openapi_file_and_fails_a_missing_explicit_path`. `--json` release ids: tasks/control.md.
 - [x] `lazycloud deployment list [--app] [--limit 100]` (CLI/execution.py:352)
   Intentional: `test_deployment_references_resolve_names_and_versions`. Lists workloads, not versions: tasks/control.md.
 - [x] `lazycloud deployment stop IDS_OR_NAMES...`, `start ID`, `scale ID --containers N` (pods only), `delete ID` (CLI/execution.py:377-450)
@@ -184,8 +184,8 @@ Scope notes:
   Delivered: WorkloadOperation.tsx `ScheduleFacts` over `WorkloadDetail.schedule`; code reading only.
 
 ## Endpoints, ASGI and realtime
-- [ ] `@app.endpoint(...)`: route "/", methods GET+POST, domain, workers, concurrency, keep_warm 180, max_pending_tasks 100, timeout 180, retries 0, checkpoint_enabled, authorized True, plus function options (SDK/abstractions/app.py:454)
-  Gap: signature, defaults and `metadata=` map (`test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`), but `callback_url=` fails the deploy as unsupported: requests are not tasks. Per-request callbacks: about 1 day, or record as intentional.
+- [x] `@app.endpoint(...)`: route "/", methods GET+POST, domain, workers, concurrency, keep_warm 180, max_pending_tasks 100, timeout 180, retries 0, checkpoint_enabled, authorized True, plus function options (SDK/abstractions/app.py:454)
+  Intentional: signature, defaults, `metadata=` and `callback_url=` map (`test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`); each request is called back (`TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce`, request callback body: tasks/endpoints.md).
 - [x] JSON body maps to function args; a returned Pydantic model is sent as JSON and becomes the response schema (DOCS/concepts/endpoints.mdx)
   Delivered: runner/http.py; `test_endpoint_maps_body_and_query_to_arguments_and_models_to_json`, `test_endpoint_results_map_to_responses`.
 - [x] `Endpoint.request(*args)` returns EndpointResponse(status_code, text, json()); `.target("auto"|"deployed"|"served", deployment_name=, deployment_version=)` (SDK/abstractions/endpoint.py:407,419,187)
@@ -193,7 +193,7 @@ Scope notes:
 - [x] `Endpoint.deploy()`, `.serve()`, `.shell()`, `.local()` (SDK/abstractions/endpoint.py:384-460)
   Intentional: `TestServePreviewSyncsSourceAndStops`, `test_standalone_shells_start_a_shell_instance_of_the_release`. Return types: tasks/control.md (`Deployment`), tasks/endpoints.md (`Preview`).
 - [x] `app.asgi(name=, route=, domain=, workers=, concurrent_requests=, keep_warm_seconds=, max_pending_tasks=, authorized=, checkpoint_enabled=, …)(fastapi_app)` (SDK/abstractions/app.py:568)
-  Delivered: app.py `asgi`; `test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestASGIStreamsUploadsUpgradesAndStripsTheToken`. `callback_url=` shares the endpoint gap.
+  Delivered: app.py `asgi`; `test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestASGIStreamsUploadsUpgradesAndStripsTheToken`. `callback_url=` calls back each request, as for endpoints.
 - [x] `ASGI.request(method=, path=, json=, data=, headers=, params=, target=, deployment_name=, deployment_version=)` (SDK/abstractions/endpoint.py:780)
   Delivered: endpoint.py `ASGI.request`, same `resolve_url`/`send_request` as Endpoint; `TestWorkloadsAnswerOnTheAPIHostWithTheSession`.
 - [x] `@app.realtime(name=, …)`: WebSocket handler, one call per message, an iterable return sends several messages (SDK/abstractions/app.py:663, SDK/abstractions/endpoint.py:841)
@@ -288,8 +288,8 @@ Scope notes:
   Intentional: e2e private `from_registry`, `test_from_id_reads_the_image_and_fails_for_an_unknown_id`, `TestDockerfilesCannotNameUncheckedImages`. Dockerfile and base-registry rules: tasks/images.md.
 - [x] Project factories `from_uv(dir, extras, groups)`, `from_poetry`, `from_pyproject`, `from_micromamba(environment.yml)`, all with base_image, creds and architecture (SDK/abstractions/image.py:220-340)
   Delivered: e2e `from_uv`; parity sweep built from_poetry, from_pyproject and from_micromamba live (tasks/images.md); `test_micromamba_images_send_the_python_release_and_their_steps`.
-- [ ] Builders `add_commands`, `add_python_packages` (list or requirements path), `add_micromamba_packages`, `with_envs(clear=)`, `add_local_path(pattern)`, `with_secrets`, `build_with_gpu(hint)`, `with_docker` (SDK/abstractions/image.py:344-426)
-  Gap: every builder maps (`test_definition_maps_every_authoring_option`), but `with_secrets` and `build_with_gpu` fail as unsupported (tasks/images.md Gaps). `with_secrets`: about 1 day; GPU builds need GPU build capacity (days).
+- [x] Builders `add_commands`, `add_python_packages` (list or requirements path), `add_micromamba_packages`, `with_envs(clear=)`, `add_local_path(pattern)`, `with_secrets`, `build_with_gpu(hint)`, `with_docker` (SDK/abstractions/image.py:344-426)
+  Intentional: every builder maps (`test_definition_maps_every_authoring_option`); `TestBuildSecretsAreMountedAndKeyTheImage`, `TestAgentBuildSecretsReachOnlyTheStepThatMountsThem`, `TestGPUBuildsArePlacedOnlyOnTheirModel`. Secret mounts instead of ARGs, one GPU model: tasks/images.md. A GPU build ran live on a local RTX 3090; only the cloud model names are accepted (tasks/images.md Gaps).
 - [x] `Image.verify()`, `.exists()`, `.build()`, `.spec()`, `.get_credentials_from_env()` (SDK/abstractions/image.py:428-540)
   Intentional: `test_verify_reports_rejected_definitions_instead_of_raising`, `test_a_ready_image_is_cached_without_a_build_or_upload`, `test_named_credentials_come_from_the_environment`. `ImageVerification`: tasks/images.md; `build(machine=)` stays a gap there.
 - [x] Private registry credential names per registry: GHCR, ECR, GCR/pkg.dev, ACR, NGC, Docker Hub (DOCS/concepts/images.mdx)
@@ -416,8 +416,8 @@ Scope notes:
   Delivered: cli/components/errors.py; `test_public_entrypoint_formats_usage_errors_as_json`, `test_volume_delete_without_tty_reports_clean_json_error`.
 - [x] Task callbacks via `callback_url`: POST JSON on retry or terminal state, headers X-Task-ID/Status/Attempt/Signature/Timestamp and Idempotency-Key, 3 attempts (R/packages/execution/src/execution/callbacks.py:130)
   Intentional: internal/callbacks; `TestCallbackIsSignedAndRetriedUntilDelivered`, `TestCallbackGivesUpOnRejectionAndAfterThreeAttempts`, `TestCallbacksNeverReachPrivateAddresses`. Durable callbacks, API bodies: tasks/workload-runtime.md.
-- [ ] Dashboard task drawer tabs: Result (rendered/text, download Python object, error), Logs (filter, latest 1,000 lines, download), Trace (call graph), Lifecycle timeline, Container, Artifacts; Rerun; pending notice; stop cause (WEB/components/shared/TaskDrawer/*)
-  Gap: TaskDrawer/* has every tab, Rerun, pending notice and stop cause (ContainerTab.test.tsx, LogViewer tests). A pickled result offers only "Download Python object": the runner sends no text or rendered display. About 1 day (runner, protocol, storage, `Payload.display`).
+- [x] Dashboard task drawer tabs: Result (rendered/text, download Python object, error), Logs (filter, latest 1,000 lines, download), Trace (call graph), Lifecycle timeline, Container, Artifacts; Rerun; pending notice; stop cause (WEB/components/shared/TaskDrawer/*)
+  Intentional: TaskDrawer/* has every tab, Rerun, pending notice and stop cause (ContainerTab.test.tsx, LogViewer tests); pickled results show the runner's text and rendered view (ResultBody.test.tsx, `test_pickled_results_carry_the_text_and_rendering_the_value_defines`, `TestPickledResultsKeepOnlyAValidDisplay`). Display checks and the frame's CSP: tasks/web.md.
 - [x] Workload performance: p50/p95 latency, cold starts (WEB/routes/w/$workspace/apps/-workloads/LatencyPanel.tsx, Q/stubs.ts `taskLatencyQueryOptions`)
   Delivered: LatencyPanel.tsx over performance.sql, which counts tasks and HTTP requests; `TestWorkloadPerformanceBucketsLatencyAndColdStarts`, `TestWorkloadPerformanceCountsEndpointRequests`.
 - [x] Container metrics charts (CPU/memory/GPU timeseries) (WEB/components/shared/ContainerMetricsCharts/index.tsx, Q/containers.ts)
@@ -472,8 +472,8 @@ Scope notes:
   Delivered: cli/examples.py identical, 8 examples; tests/examples (26 tests).
 - [x] `lazycloud update [--check]`: self-upgrade that detects uv tool, project or pip, then verifies the new version (CLI/update.py:22, SDK/self_update.py)
   Delivered: cli/update.py, self_update.py identical; code reading only.
-- [ ] `lazycloud app export` typed client codegen with `remote()` for functions and `request()` for endpoints/ASGI via OpenAPI (CLI/apps.py:24, SDK/client_codegen.py)
-  Gap: functions only (test_app_export.py); no endpoint `request()` or ASGI OpenAPI methods. About 1-1.5 days.
+- [x] `lazycloud app export` typed client codegen with `remote()` for functions and `request()` for endpoints/ASGI via OpenAPI (CLI/apps.py:24, SDK/client_codegen.py)
+  Delivered: test_app_export.py (functions, endpoint `request()` with typed returns, ASGI OpenAPI path/query/body methods, public apps without the token).
 - [x] `lazycloud.env` helpers `is_local`, `is_remote`, `local_entrypoint`, `env_value`, and `SdkEnvVar` (SDK/env.py)
   Intentional: env.py identical; `is_local`/`is_remote` work in containers and `WORKSPACE_NAME` is set (`TestContainersNameTheirWorkspace`). No workspace id or gateway token in containers: tasks/workload-runtime.md.
 - [x] `lazycloud.schema` fields (String, Integer, Number, Boolean, JSON, File, Image, Object, Schema) for `inputs=`/`outputs=` (SDK/schema.py)

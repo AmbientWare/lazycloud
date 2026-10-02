@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -226,5 +227,48 @@ func TestNonPublicAddresses(t *testing.T) {
 		if got := isPublic(netip.MustParseAddr(addr).Unmap()); got != public {
 			t.Errorf("isPublic(%s) = %v", addr, got)
 		}
+	}
+}
+
+// A workspace with a flood of due callbacks does not hold back another
+// workspace's: claims take each workspace's oldest in turn, so the other's
+// callback goes out in the first wave although every flooded one is older.
+func TestAFloodFromOneWorkspaceDoesNotDelayAnother(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	vault := newSecrets(t, pool)
+	var mu sync.Mutex
+	var order []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		order = append(order, r.Header.Get("X-Task-ID"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	_, flooded := callback(t, pool, server.URL)
+	const flood = 300
+	if _, err := pool.Exec(t.Context(), `
+insert into task_callbacks (task_id, workspace_id, url, event, attempt, max_attempts, next_attempt_at)
+select c.task_id, c.workspace_id, c.url, 'retry', n, 400, now() - interval '1 hour'
+from task_callbacks c, generate_series(2, $1::int + 1) n;
+`, flood); err != nil {
+		t.Fatal(err)
+	}
+	// Workspace names are unique; the helper names each one ws.
+	if _, err := pool.Exec(t.Context(), `update workspaces set name = 'flooded'`); err != nil {
+		t.Fatal(err)
+	}
+	_, other := callback(t, pool, server.URL)
+	c := NewCallbacks(pool, vault, CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+
+	sent, err := c.Deliver(t.Context())
+	if err != nil || sent != flood+2 {
+		t.Fatalf("delivered %d (%v); want %d", sent, err, flood+2)
+	}
+	position := slices.Index(order, other.String())
+	if position < 0 || position >= deliveryConcurrency {
+		t.Fatalf("the other workspace's callback went out %dth of %d, behind the flood of %s", position+1, len(order), flooded)
 	}
 }

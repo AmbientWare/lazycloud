@@ -54,8 +54,8 @@ func (q *Queries) BuildContainers(ctx context.Context, imageBuildID *uuid.UUID) 
 }
 
 const createBuildContainer = `-- name: CreateBuildContainer :one
-insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes)
-values ($1, $2, 'pending', 1, $3, $4)
+insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, gpu_count)
+values ($1, $2, 'pending', 1, $3, $4, $5)
 returning id
 `
 
@@ -64,6 +64,7 @@ type CreateBuildContainerParams struct {
 	ImageBuildID *uuid.UUID
 	CpuMillis    int64
 	MemoryBytes  int64
+	GpuCount     int32
 }
 
 func (q *Queries) CreateBuildContainer(ctx context.Context, arg CreateBuildContainerParams) (uuid.UUID, error) {
@@ -72,6 +73,7 @@ func (q *Queries) CreateBuildContainer(ctx context.Context, arg CreateBuildConta
 		arg.ImageBuildID,
 		arg.CpuMillis,
 		arg.MemoryBytes,
+		arg.GpuCount,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)

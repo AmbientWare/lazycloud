@@ -3824,6 +3824,21 @@ export interface components {
             value?: unknown;
             /** Format: byte */
             data?: string;
+            display?: components["schemas"]["ResultDisplay"];
+        };
+        /** @description How a cloudpickle result shows without loading it, as the runner rendered the value where it ran: its text and, when the value defines `_repr_png_` or `_repr_html_`, that rendering. Absent for JSON results and arguments. */
+        ResultDisplay: {
+            text: string;
+            rich?: components["schemas"]["RichDisplay"];
+        };
+        /** @description `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters, which the dashboard shows in a sandboxed frame without scripts or network access. */
+        RichDisplay: {
+            /** @enum {string} */
+            kind: "image" | "html";
+            /** @enum {string} */
+            media_type?: "image/png";
+            value_base64?: string;
+            html?: string;
         };
         SubmitTasksRequest: {
             inputs: components["schemas"]["TaskInput"][];
@@ -4570,9 +4585,9 @@ export interface components {
             /** @description A Dockerfile that replaces the base image and Python setup. */
             dockerfile?: string;
             context?: components["schemas"]["SourceRef"];
-            /** @description Workspace secrets the build reads as build arguments. */
+            /** @description Workspace secrets the build steps read as environment variables. */
             secrets?: string[];
-            /** @description The GPU model the build runs on. */
+            /** @description The GPU model the build runs on and its steps use; one model, not any. */
             gpu?: string;
         };
         /** @enum {string} */
@@ -11538,6 +11553,8 @@ export const imageSpecPython_versionValues: ReadonlyArray<FlattenedDeepRequired<
 export const retryPolicyBackoffValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["backoff"]> = ["fixed", "exponential"];
 export const retryPolicyRetry_onValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["retry_on"]> = ["user_error", "timeout", "lost"];
 export const payloadEncodingValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Payload"]["encoding"]> = ["json", "cloudpickle"];
+export const richDisplayKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["kind"]> = ["image", "html"];
+export const richDisplayMedia_typeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["media_type"]> = ["image/png"];
 export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
 export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "start_failed", "system", "dependency_failed"];

@@ -77,10 +77,16 @@ class Invoke(BaseModel):
     ] = 1
 
 
-class Succeeded(BaseModel):
-    type: Literal["succeeded"]
-    attempt_id: str
-    result_encoding: Encoding
+class Kind(str, Enum):
+    image = "image"
+    html = "html"
+
+
+class RichDisplay(BaseModel):
+    kind: Kind
+    media_type: Literal["image/png"] | None = None
+    value_base64: Annotated[str | None, Field(max_length=1398104)] = None
+    html: Annotated[str | None, Field(max_length=262144)] = None
 
 
 class Failed(BaseModel):
@@ -113,6 +119,11 @@ class LifecycleHooks(BaseModel):
     on_finish: list[str] | None = None
 
 
+class ResultDisplay(BaseModel):
+    text: Annotated[str, Field(max_length=65536)]
+    rich: RichDisplay | None = None
+
+
 class Load(BaseModel):
     type: Literal["load"]
     protocol_version: Literal[1]
@@ -127,3 +138,10 @@ class Load(BaseModel):
     ] = 1
     hooks: LifecycleHooks | None = None
     http: HttpServing | None = None
+
+
+class Succeeded(BaseModel):
+    type: Literal["succeeded"]
+    attempt_id: str
+    result_encoding: Encoding
+    display: ResultDisplay | None = None

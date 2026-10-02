@@ -3,12 +3,15 @@ package edge
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,12 +21,14 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 func newTestEdge(t *testing.T, pool *pgxpool.Pool) *Edge {
@@ -392,6 +397,144 @@ func TestQueuedRecordsAreWrittenAtShutdown(t *testing.T) {
 	}
 	if n != 3 || egress != 3000 {
 		t.Fatalf("%d records and %d egress bytes written at shutdown; want 3 and 3000", n, egress)
+	}
+}
+
+// A release with a callback_url has each request called back once, signed,
+// with its outcome and the response's status and size, even when the batch
+// is written twice.
+func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	var mu sync.Mutex
+	got := map[string]http.Header{}
+	bodies := map[string][]byte{}
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		got[r.Header.Get("X-Request-ID")], bodies[r.Header.Get("X-Request-ID")] = r.Header.Clone(), body
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(receiver.Close)
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	if _, err := pool.Exec(ctx, `update releases set spec = jsonb_build_object('callback_url', $2::text) where id = $1`, rel, receiver.URL+"/hook"); err != nil {
+		t.Fatal(err)
+	}
+	var app uuid.UUID
+	if err := pool.QueryRow(ctx, `select app_id from workloads where id = $1`, wl).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	outcomes := map[int]string{200: "succeeded", 404: "succeeded", 503: "failed", 499: "cancelled"}
+	var batch []requestRecord
+	ids := map[string]int{}
+	for status := range outcomes {
+		rec := requestRecord{
+			id: uuid.New(), workspace: ws, app: app, workload: wl, release: rel, method: "POST", path: "/", status: status,
+			started: time.Now(), duration: 1500 * time.Millisecond, responseBytes: int64(status),
+		}
+		ids[rec.id.String()] = status
+		batch = append(batch, rec)
+	}
+	for range 2 {
+		if err := e.insertRequests(ctx, batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secrets.NewFileKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := secrets.NewSecrets(pool, key)
+	deliverer := callbacks.NewCallbacks(pool, s, callbacks.CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+	if n, err := deliverer.Deliver(ctx); err != nil || n != len(batch) {
+		t.Fatalf("delivered %d callbacks (%v); want %d", n, err, len(batch))
+	}
+	if n, err := deliverer.Deliver(ctx); err != nil || n != 0 {
+		t.Fatalf("a second pass delivered %d (%v); want none", n, err)
+	}
+	signing, err := s.SigningKey(ctx, identity.WorkspaceID(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, status := range ids {
+		header, body := got[id], bodies[id]
+		if header == nil {
+			t.Fatalf("request %s (status %d) was not called back", id, status)
+		}
+		if header.Get("X-Task-Signature") != callbacks.Sign(signing, body, header.Get("X-Task-Timestamp")) {
+			t.Fatalf("callback of %s is not signed with the workspace key", id)
+		}
+		var sent struct {
+			TaskID    string `json:"task_id"`
+			RequestID string `json:"request_id"`
+			Status    string `json:"status"`
+			Data      struct {
+				StatusCode    int   `json:"status_code"`
+				BodySizeBytes int64 `json:"body_size_bytes"`
+			} `json:"data"`
+			Error      *struct{ Kind string } `json:"error"`
+			FinishedAt *time.Time             `json:"finished_at"`
+		}
+		if err := json.Unmarshal(body, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if sent.TaskID != id || sent.RequestID != id || sent.Status != outcomes[status] || header.Get("X-Task-Status") != outcomes[status] {
+			t.Fatalf("callback of a %d request reports %+v; want %s for %s", status, sent, outcomes[status], id)
+		}
+		if sent.Data.StatusCode != status || sent.Data.BodySizeBytes != int64(status) || sent.FinishedAt == nil {
+			t.Fatalf("callback of a %d request carries %+v", status, sent)
+		}
+		if (sent.Error != nil) != (status == 503) {
+			t.Fatalf("callback of a %d request has error %+v", status, sent.Error)
+		}
+	}
+}
+
+// Past maxPendingCallbacks waiting callbacks of one release, the edge
+// records further request callbacks as failed with the reason instead of
+// queueing them, so one endpoint's flood cannot fill the shared queue.
+func TestAReleasesCallbacksPastTheCapAreDroppedWithTheReason(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	if _, err := pool.Exec(ctx, `update releases set spec = '{"callback_url": "https://hooks.example.com/r"}' where id = $1`, rel); err != nil {
+		t.Fatal(err)
+	}
+	var app uuid.UUID
+	if err := pool.QueryRow(ctx, `select app_id from workloads where id = $1`, wl).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	records := func(n int) []requestRecord {
+		out := make([]requestRecord, n)
+		for i := range out {
+			out[i] = requestRecord{id: uuid.New(), workspace: ws, app: app, workload: wl, release: rel, method: "POST", path: "/", status: 200, started: time.Now()}
+		}
+		return out
+	}
+	if err := e.insertRequests(ctx, records(maxPendingCallbacks-2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.insertRequests(ctx, records(5)); err != nil {
+		t.Fatal(err)
+	}
+	var pending, dropped int
+	var reason string
+	if err := pool.QueryRow(ctx, `
+select count(*) filter (where state = 'pending'), count(*) filter (where state = 'failed'),
+       coalesce(max(last_error) filter (where state = 'failed'), '')
+from task_callbacks where release_id = $1`, rel).Scan(&pending, &dropped, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if pending != maxPendingCallbacks || dropped != 3 || !strings.Contains(reason, "were already waiting") {
+		t.Fatalf("%d pending and %d dropped (%q); want %d and 3 with the reason", pending, dropped, reason, maxPendingCallbacks)
 	}
 }
 

@@ -1828,6 +1828,39 @@ func (e RetryPolicyRetryOn) Valid() bool {
 	}
 }
 
+// Defines values for RichDisplayKind.
+const (
+	RichDisplayKindHtml  RichDisplayKind = "html"
+	RichDisplayKindImage RichDisplayKind = "image"
+)
+
+// Valid indicates whether the value is a known member of the RichDisplayKind enum.
+func (e RichDisplayKind) Valid() bool {
+	switch e {
+	case RichDisplayKindHtml:
+		return true
+	case RichDisplayKindImage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RichDisplayMediaType.
+const (
+	Imagepng RichDisplayMediaType = "image/png"
+)
+
+// Valid indicates whether the value is a known member of the RichDisplayMediaType enum.
+func (e RichDisplayMediaType) Valid() bool {
+	switch e {
+	case Imagepng:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxStatus.
 const (
 	SandboxStatusFailed   SandboxStatus = "failed"
@@ -3752,7 +3785,7 @@ type ImageDefinition struct {
 	Dockerfile *string            `json:"dockerfile,omitempty"`
 	Env        *map[string]string `json:"env,omitempty"`
 
-	// Gpu The GPU model the build runs on.
+	// Gpu The GPU model the build runs on and its steps use; one model, not any.
 	Gpu *string `json:"gpu,omitempty"`
 
 	// Micromamba Micromamba provides Python and the base environment.
@@ -3762,7 +3795,7 @@ type ImageDefinition struct {
 	// PythonVersion A supported minor release or an exact patch release.
 	PythonVersion string `json:"python_version"`
 
-	// Secrets Workspace secrets the build reads as build arguments.
+	// Secrets Workspace secrets the build steps read as environment variables.
 	Secrets *[]string    `json:"secrets,omitempty"`
 	Steps   *[]ImageStep `json:"steps,omitempty"`
 }
@@ -4147,7 +4180,10 @@ type NoPaymentMethodTerms struct {
 
 // Payload A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
 type Payload struct {
-	Data     *[]byte          `json:"data,omitempty"`
+	Data *[]byte `json:"data,omitempty"`
+
+	// Display How a cloudpickle result shows without loading it, as the runner rendered the value where it ran: its text and, when the value defines `_repr_png_` or `_repr_html_`, that rendering. Absent for JSON results and arguments.
+	Display  *ResultDisplay   `json:"display,omitempty"`
 	Encoding PayloadEncoding  `json:"encoding"`
 	Value    *json.RawMessage `json:"value,omitempty"`
 }
@@ -4546,6 +4582,13 @@ type Resources struct {
 	MemoryMib      int  `json:"memory_mib"`
 }
 
+// ResultDisplay How a cloudpickle result shows without loading it, as the runner rendered the value where it ran: its text and, when the value defines `_repr_png_` or `_repr_html_`, that rendering. Absent for JSON results and arguments.
+type ResultDisplay struct {
+	// Rich `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters, which the dashboard shows in a sandboxed frame without scripts or network access.
+	Rich *RichDisplay `json:"rich,omitempty"`
+	Text string       `json:"text"`
+}
+
 // RetryPolicy defines model for RetryPolicy.
 type RetryPolicy struct {
 	Backoff      *RetryPolicyBackoff `json:"backoff,omitempty"`
@@ -4564,6 +4607,20 @@ type RetryPolicyBackoff string
 
 // RetryPolicyRetryOn defines model for RetryPolicy.RetryOn.
 type RetryPolicyRetryOn string
+
+// RichDisplay `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters, which the dashboard shows in a sandboxed frame without scripts or network access.
+type RichDisplay struct {
+	Html        *string               `json:"html,omitempty"`
+	Kind        RichDisplayKind       `json:"kind"`
+	MediaType   *RichDisplayMediaType `json:"media_type,omitempty"`
+	ValueBase64 *string               `json:"value_base64,omitempty"`
+}
+
+// RichDisplayKind defines model for RichDisplay.Kind.
+type RichDisplayKind string
+
+// RichDisplayMediaType defines model for RichDisplay.MediaType.
+type RichDisplayMediaType string
 
 // Sandbox defines model for Sandbox.
 type Sandbox struct {
@@ -4925,8 +4982,11 @@ type TaskFailure struct {
 type TaskInput struct {
 	Data      *[]byte               `json:"data,omitempty"`
 	DependsOn *[]openapi_types.UUID `json:"depends_on,omitempty"`
-	Encoding  TaskInputEncoding     `json:"encoding"`
-	Value     *json.RawMessage      `json:"value,omitempty"`
+
+	// Display How a cloudpickle result shows without loading it, as the runner rendered the value where it ran: its text and, when the value defines `_repr_png_` or `_repr_html_`, that rendering. Absent for JSON results and arguments.
+	Display  *ResultDisplay    `json:"display,omitempty"`
+	Encoding TaskInputEncoding `json:"encoding"`
+	Value    *json.RawMessage  `json:"value,omitempty"`
 }
 
 // TaskInputEncoding defines model for TaskInput.Encoding.

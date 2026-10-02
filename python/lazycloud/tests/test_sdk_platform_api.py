@@ -590,7 +590,8 @@ def test_deploy_maps_endpoint_and_asgi_options_to_http_specs(
     source = (
         REPORTS
         + "\n@app.endpoint(name='api', route='/count', methods=['post'], workers=2, concurrency=8,"
-        + " authorized=False)\ndef api(text: str) -> dict: return {}\n"
+        + " authorized=False, callback_url=' https://hooks.example.com/requests ')"
+        + "\ndef api(text: str) -> dict: return {}\n"
         + "\nasync def web(scope, receive, send): ...\n"
         + "service = app.asgi(name='service', concurrent_requests=4, keep_warm_seconds=60)(web)\n"
     )
@@ -611,6 +612,7 @@ def test_deploy_maps_endpoint_and_asgi_options_to_http_specs(
         "workers": 2,
     }
     assert api["authorized"] is False
+    assert api["callback_url"] == "https://hooks.example.com/requests"
     assert (api["concurrency"], api["timeout_seconds"], api["keep_warm_seconds"]) == (8, 180, 180)
     assert api["max_pending_tasks"] == 100
     assert api["retry_policy"]["max_attempts"] == 1

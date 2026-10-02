@@ -1,9 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -141,6 +147,124 @@ func TestAgentReportsAFailedBuildWithItsOutputTail(t *testing.T) {
 		t.Fatal("the build reported no outcome")
 	}
 	session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+}
+
+// A build secret reaches the step that mounts it and nothing else: not the
+// image's files, history or config, and not the host once the build ends.
+func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
+	e := newEnv(t)
+	registry := startTestRegistry(t)
+	e.startAgent()
+	session := e.session()
+
+	const secret = "s3cr3t-0f-the-build-7d1e"
+	start := buildCommand(registry, "FROM "+testBuildBase+
+		"\nRUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<'LAZYCLOUD_STEP'\n"+
+		"printf %s \"$TOKEN\" | sha256sum | cut -d' ' -f1 > /proof\nLAZYCLOUD_STEP\n"+
+		"RUN test -z \"$TOKEN\" && ! test -e /run/secrets/TOKEN\n")
+	start.GetStart().GetBuild().Secrets = map[string]string{"TOKEN": secret}
+	container := start.GetStart().GetContainerId()
+	session.send(t, start)
+	var outcome *hostproto.CompleteImageBuildRequest
+	select {
+	case outcome = <-e.server.builds:
+	case <-time.After(5 * time.Minute):
+		t.Fatal("the build reported no outcome")
+	}
+	if !strings.HasPrefix(outcome.GetDigest(), "sha256:") {
+		t.Fatalf("want a pushed digest, got %v\noutput:\n%s", outcome, e.server.buildOutput())
+	}
+	session.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+	if strings.Contains(e.server.buildOutput(), secret) {
+		t.Fatal("the build output holds the secret")
+	}
+
+	reference := registry + "/lazycloud/images@" + outcome.GetDigest()
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
+	if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
+	sum := sha256.Sum256([]byte(secret))
+	if err != nil || strings.TrimSpace(string(proof)) != hex.EncodeToString(sum[:]) {
+		t.Fatalf("the step read the secret: %q %v", proof, err)
+	}
+	history, err := exec.CommandContext(t.Context(), "docker", "history", "--no-trunc", reference).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := exec.CommandContext(t.Context(), "docker", "image", "inspect", reference).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := exec.CommandContext(t.Context(), "docker", "create", reference).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(created))
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
+	files, err := exec.CommandContext(t.Context(), "docker", "export", id).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, data := range map[string][]byte{"history": history, "config": config, "files": files} {
+		if bytes.Contains(data, []byte(secret)) {
+			t.Fatalf("the image's %s hold the secret", what)
+		}
+	}
+	err = filepath.WalkDir(e.stateDir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.Name() == "TOKEN" {
+			return fmt.Errorf("the host still holds %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// BuildKit keeps a secret's value out of the cache key, so a step reading a
+// rotated secret reuses the cached layer unless the secret versions argument
+// the images owner renders changes with it.
+func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
+	e := newEnv(t)
+	registry := startTestRegistry(t)
+	e.startAgent()
+	session := e.session()
+	build := func(versions, secret string) string {
+		t.Helper()
+		start := buildCommand(registry, "FROM "+testBuildBase+"\nARG LAZYCLOUD_BUILD_SECRET_VERSIONS="+versions+
+			"\nRUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<'LAZYCLOUD_STEP'\n"+
+			"printf %s \"$TOKEN\" > /proof\nLAZYCLOUD_STEP\n")
+		start.GetStart().GetBuild().Secrets = map[string]string{"TOKEN": secret}
+		session.send(t, start)
+		var outcome *hostproto.CompleteImageBuildRequest
+		select {
+		case outcome = <-e.server.builds:
+		case <-time.After(5 * time.Minute):
+			t.Fatal("the build reported no outcome")
+		}
+		session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+		reference := registry + "/lazycloud/images@" + outcome.GetDigest()
+		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
+		if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
+			t.Fatalf("%v\noutput:\n%s", err, e.server.buildOutput())
+		}
+		proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(proof)
+	}
+	if got := build("v1", "first"); got != "first" {
+		t.Fatalf("the first build read %q", got)
+	}
+	if got := build("v1", "second"); got != "first" {
+		t.Fatalf("with the same versions the cached step stands: %q", got)
+	}
+	if got := build("v2", "second"); got != "second" {
+		t.Fatalf("new versions run the step again: %q", got)
+	}
 }
 
 func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {

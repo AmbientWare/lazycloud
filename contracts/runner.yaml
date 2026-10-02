@@ -10,7 +10,7 @@ info:
 
     Each frame is a 4-byte big-endian header length, a UTF-8 JSON header, a
     4-byte big-endian payload length and the raw payload bytes. Headers are at
-    most 1 MiB and payloads at most 64 MiB. The header's `type` selects the
+    most 4 MiB and payloads at most 64 MiB. The header's `type` selects the
     schema below; frames without a payload carry a zero payload length.
 
     1. The supervisor sends `load`. The runner imports the handler, runs the
@@ -187,6 +187,30 @@ components:
         type: { type: string, enum: [succeeded] }
         attempt_id: { type: string }
         result_encoding: { $ref: "#/components/schemas/Encoding" }
+        display: { $ref: "#/components/schemas/ResultDisplay" }
+
+    ResultDisplay:
+      description: >-
+        How a cloudpickle result shows where it is never loaded: its text
+        (the pretty-printed repr, at most 65536 characters) and, when the
+        value defines `_repr_png_` or `_repr_html_`, that rendering.
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, maxLength: 65536 }
+        rich: { $ref: "#/components/schemas/RichDisplay" }
+
+    RichDisplay:
+      description: >-
+        `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an
+        HTML fragment of at most 262144 characters.
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [image, html] }
+        media_type: { type: string, enum: [image/png] }
+        value_base64: { type: string, maxLength: 1398104 }
+        html: { type: string, maxLength: 262144 }
 
     Failed:
       description: The payload is the cloudpickled exception, or empty.

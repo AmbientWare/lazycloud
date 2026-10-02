@@ -1,6 +1,6 @@
 -- name: CreateBuildContainer :one
-insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes)
-values (@workspace_id, @image_build_id, 'pending', 1, @cpu_millis, @memory_bytes)
+insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, gpu_count)
+values (@workspace_id, @image_build_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count)
 returning id;
 
 -- name: BuildContainers :many

@@ -11,6 +11,7 @@ import httpx
 from pydantic import JsonValue, ValidationError
 from shared.api import WorkloadKind, WorkloadSpec
 from shared.autoscaling import Autoscaler
+from shared.callbacks import normalize_callback_url
 from shared.deployments import DeploymentKind
 from shared.gpu import gpu_preference
 from shared.image_building.python import python_minor_version
@@ -139,11 +140,15 @@ def http_workload_spec(
         on_start = lifecycle_hook_references(owner.on_start)
         gpu = gpu_preference(owner.gpu)
         placement = placement_fields(owner)
+        callback_url = normalize_callback_url(owner.callback_url)
     except (TypeError, ValueError) as exc:
         from lazycloud.abstractions.function import FunctionOperationError
 
         msg = f"{kind} {owner.resource_name} has invalid options: {exc}"
         raise FunctionOperationError(msg) from exc
+    if callback_url is not None:
+        # Each request is called back once it ends.
+        spec["callback_url"] = callback_url
     if on_start:
         # Workers run on_start once each, before they take requests.
         spec["lifecycle_hooks"] = {"on_start": list(on_start)}
@@ -171,7 +176,6 @@ def unsupported_http_options(owner: Any) -> list[str]:
             volume.config is not None and volume.config.get("auth_mode") != "secret_references"
             for volume in owner.volumes
         ),
-        "callback_url": bool(owner.callback_url),
     }
     found.extend(name for name, present in declared.items() if present)
     return found
@@ -198,7 +202,7 @@ def resolve_url(
     config = resolve_control_client_config(timeout_seconds=30)
     client = api_client(config)
     workspace = require_workspace(config)
-    timeout = (owner.effective_timeout_seconds() or 180) + _REQUEST_MARGIN_SECONDS
+    timeout = request_timeout(owner.effective_timeout_seconds())
     name = owner.resource_name
     if target in {"auto", "served"} and options.deployment_version is None and is_local():
         record = read_serve_preview(
@@ -228,6 +232,11 @@ def resolve_url(
     url = http.version_url if options.deployment_version is not None else http.url
     token = config.token if workload.release.spec.authorized is not False else None
     return url, token, timeout
+
+
+def request_timeout(timeout_seconds: int | None) -> float:
+    """The read timeout of a request to a workload with this timeout."""
+    return (timeout_seconds or 180) + _REQUEST_MARGIN_SECONDS
 
 
 def send_request(
@@ -284,6 +293,7 @@ __all__ = [
     "InvocationTargetError",
     "InvocationTargetName",
     "http_workload_spec",
+    "request_timeout",
     "resolve_url",
     "send_request",
     "unsupported_http_options",

@@ -102,6 +102,23 @@ SaaS, and the edge routes only verified ones.
   showed requests as tasks with `X-Task-Id`; functions invoked over HTTP are
   still tasks and still return `X-Task-Id`. Calls an endpoint makes are not
   children of its request, as they were of the reference's request task.
+- `callback_url=` on an endpoint, ASGI or realtime app calls the webhook
+  once per request after it ends, as the reference called back each
+  request's task: the edge writes the callback with the request's record
+  (migrations/0016_request_callbacks.sql) and callbacks delivers it signed
+  like a task's, with `task_id`, `root_task_id` and `request_id` set to the
+  `X-Request-Id`, `X-Request-ID` added, and `data` holding `status_code` and
+  `body_size_bytes`. A 5xx is `failed`, a client that left (499)
+  `cancelled`, any other status `succeeded`
+  (`TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce`). The
+  reference posted when the request's task finished; this posts within a
+  second of the request ending, when its record is written. At most 1,000
+  callbacks of one release wait at once; the edge records later ones as
+  failed with the reason (`TestAReleasesCallbacksPastTheCapAreDroppedWithTheReason`).
+  Deliveries claim each workspace's oldest due callback in turn and keep
+  16 in flight as slots free, so one workspace's flood does not delay
+  another's (`TestAFloodFromOneWorkspaceDoesNotDelayAnother`); purging runs
+  on its own scheduler loop.
 - The reference SDK's `/api/v1/functions/invoke/stream` NDJSON call was its
   internal transport for `.remote()`, not a public HTTP route: no doc or
   other consumer used it. Task submit plus the task log stream replace it,

@@ -18,7 +18,7 @@ from (
            coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
            coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
            coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-           array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)))::text[] as gpus,
+           array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)))::text[] as gpus,
            coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
            row_number() over (partition by c.workspace_id order by c.created_at, c.id) as turn
     from containers c
