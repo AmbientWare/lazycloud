@@ -18,7 +18,7 @@ type PlanCapacity struct {
 }
 
 func planCapacity(c FleetCapacity) PlanCapacity {
-	return PlanCapacity{CPUMillis: c.CPUMillis, MemoryBytes: c.MemoryBytes, GPUs: c.GPUs}
+	return PlanCapacity(c)
 }
 
 func planCapacities(cs []FleetCapacity) []PlanCapacity {

@@ -269,7 +269,6 @@ func forecastMarket(p Policy, gpus []string, placed string, preemptible bool, st
 	return ReserveMarket{}, false
 }
 
-
 // placementKey is demand pinned to a region or zone, in one market and
 // shape.
 type placementKey struct {
@@ -280,10 +279,10 @@ type placementKey struct {
 
 // demandInputs are one market's forecast inputs.
 type demandInputs struct {
-	arrivals, scheduled []Arrival
-	workloads           []ScheduledWorkload
-	pending             FleetCapacity
-	shapes              []FleetCapacity
+	arrivals  []Arrival
+	workloads []ScheduledWorkload
+	pending   FleetCapacity
+	shapes    []FleetCapacity
 }
 
 func (d *demandInputs) addPending(shape FleetCapacity, n int) {
