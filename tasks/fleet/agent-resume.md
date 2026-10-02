@@ -74,16 +74,122 @@ provider packet merges.
 
 ## Progress
 
+- Branched from origin/fleet-capacity-plan, rebased onto the provider
+  packet's schema commit `325b25cd86d077e50b34aacd7c49d9894c41ef7f` on
+  origin/fleet-provider; after the review, rebased onto
+  origin/fleet-capacity-plan at `37911167`, with the provider merged.
+- Agent: suspend.go (timerfd clock jumps, sleep gap, resume reconnect),
+  reserve.go (PrepareReserve), Hello fields 72-73, proto fields 71.
+- Compute and host session: migration 0004, reserve_session.go and .sql,
+  the OpenSession hook, PrepareReserve sync and ReserveReady routing.
+
 ## Intentional differences
 
 - There is no worker process: a hibernated reserve keeps the agent, Docker
   and pulled images, which is what makes its resume fast.
 - The reference's update cancellation before a stop becomes a refusal while
   an update is in flight, because agents update in place.
+- Sleep attempts are columns on the host (`sleep_attempt_id`,
+  `sleep_boot_id`), not a table. The PrepareReserve awaiting an answer
+  lives in its session: a reconnect or a 2-minute silence sends a fresh
+  attempt, and only the newest answer counts. ReserveReady is the agent's
+  marker acknowledgment, so the reference's separate observation ack is
+  gone; settling clears the attempt, so a repeated Hello records nothing.
+- The slept time comes from the gap growth since the attempt was prepared,
+  stored with the attempt, so an agent restart in the same boot still
+  reports it, and no sleep is ever counted twice.
+- A resume closes the sockets under the three server connections, resets
+  their backoff and cancels the session, so nothing waits for TCP to notice
+  dead peers. The agent has no interruption shutdown timer to rearm (the
+  server acts on the notice); after a resume it drops a Spot notice whose
+  reclaim time passed and reads IMDS at once.
+- A reserve's release proof is the release the host should run: the target
+  once the rollout reaches the host, any release outside it.
+- The planner writes `resuming` with `resume_requested_at`, so a lagging
+  resume cannot occur; a stopping or stopped host that comes back with a
+  sleep or a new boot was not asked to, and goes through resuming and
+  joining to preparing, never ready. The session clears
+  `resume_requested_at` when a resume joins.
+- Activation samples are measured on the database clock: provision from
+  the host row's creation to its first session, resume and boot from
+  `resume_requested_at` to the Hello. Rows older than a day are pruned on
+  insert.
+- An agent update never sends a reserve into service. The session sends no
+  PrepareReserve while an update is offered or `updating_until` is set,
+  and a refusal marked `ReserveReady.updating` (a trial not yet committed)
+  keeps the host preparing and is asked again on a later sync. plan.md's
+  "preparing -> ready (agent refused: work arrived, update in flight)"
+  becomes "work arrived"; an update in flight keeps the host preparing.
+- A host the planner resumes while it is still stopping never slept and
+  sends no new Hello, so its session ends with Aborted when it finds the
+  host resuming; the agent's next Hello settles the resume.
+- A resume that joins also ends the last stop's facts
+  (`stop_requested_at`, `force_stop_at`, `hibernate_refused_at`,
+  `stopped_at`), even when the actuator never recorded the start.
+- P1 (approved), in its own commit: the agent writes no kmsg marker, and
+  the resume report proves the hibernation. Settling a resume writes
+  `image_evidence`: memory restored makes it `saved`, a cold boot after a
+  `saved` hibernation makes it `failed`. The day-long unreliability mark for
+  that type and region is the `fleet_activations` row with kind `resume`
+  and outcome `cold_boot`; the planner's activation query reads it.
 
 ## Evidence
 
+Parity lines, with the tests that prove them (agent: internal/agent,
+session: internal/hostsession against real PostgreSQL):
+
+- Sleep detection from the CLOCK_BOOTTIME and CLOCK_MONOTONIC gap, woken by
+  a timerfd clock jump, start fails without it: agent
+  TestKernelClockWaitsForAJumpUntilCancelled,
+  TestSleptSinceCountsOnlyTheAttemptsBoot,
+  TestAgentReconnectsAndReportsTheSleepAfterAResume.
+- Rearm after a sleep from the wall clock: agent
+  TestResumeRearmsTheSpotNoticeFromTheWallClock.
+- Sleep report with attempt and boot on the next session: agent
+  TestAgentReconnectsAndReportsTheSleepAfterAResume,
+  TestAgentRemembersTheSleepAttemptAcrossRestarts.
+- Current agent release, GPU driver proof, no live containers for that exact
+  request, no update in flight: session TestReserveStopsOnlyOnTheAgentsProof,
+  TestReserveRefusesUnprovenHosts, TestGPUReserveRecordsItsProof; agent
+  TestAgentRefusesTheReserveWhileWorkRemains,
+  TestReserveBlockerRefusesDuringAnUpdate.
+- Attempts fenced by boot, superseded attempts stale: session
+  TestReserveStopsOnlyOnTheAgentsProof, TestReserveSupersededAttemptIsStale.
+- A resume serves only when requested; an unrequested wake stays out of
+  placement and stops again: session TestUnrequestedWakeGoesBackToTheReserve.
+- Resume outcome, activation samples, refresh prepares again, joins before
+  ready: session TestResumeSettlesTheSleepAttempt,
+  TestFirstSessionOfALaunchedHost.
+
+Resume to reconnect: 1.8 ms from the clock jump to the server's next
+session in the agent harness (fake clock, local server). Not measured on
+EC2; see gaps.
+
+Checks: `go test -race ./internal/agent ./internal/hostsession
+./internal/compute` pass; `go generate ./...` leaves the tree clean;
+golangci-lint over ./... has 0 issues once the provider's
+`Propose:` fleet_admin.go switch commit (9b2fbc49) is applied, and 1
+(that switch) on the schema commit alone; go vet, buf format and buf lint
+pass. acceptance/neki/check.sh: 0 router failures with 0003 and 0004
+applied through the router. check-neki.sh against prod's schema lists only
+the columns 0003 and 0004 add.
+
 ## Gaps and unverified boundaries
+
+- The real EC2 hibernation run did not happen. `default-test` assumes
+  `lazycloud-default-test-operator` in account 534742592531, the same
+  account `default` (root) and the prod fleet use (it can see terminated
+  `lazycloud:fleet = lazycloud-prod` instances), so it is not a separate
+  disposable account. The role is also denied ec2:DescribeSubnets,
+  DescribeImages, DescribeVpcs, ssm:GetParameters and s3:CreateBucket, so
+  no AMI, subnet or presigned binary is reachable from it. Nothing was
+  created. The timerfd wake on a real resume, and the delay from EC2 start
+  to agent reconnect, remain unmeasured.
+- The 2-minute supersede timer itself is untested (the reconnect path that
+  also sends a fresh attempt is).
+- The planner's return to the reserve should notify the host channel so the
+  session sends PrepareReserve at once; otherwise it waits for the next
+  touch (10 s).
 
 ## Verification
 

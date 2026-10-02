@@ -126,6 +126,8 @@ type Config struct {
 	Telemetry *telemetry.Telemetry
 	// MetricsInterval paces container metric samples; zero means 5 s.
 	MetricsInterval time.Duration
+	// clock reports sleeps; nil uses the kernel's.
+	clock sleepClock
 }
 
 // Agent owns one host's connection and containers.
@@ -157,7 +159,11 @@ type Agent struct {
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
 	control hostproto.HostServiceClient
-	http    *http.Client
+	// serverConns are the connections to the server, and conns their
+	// sockets, which a resume closes.
+	serverConns []*grpc.ClientConn
+	conns       *connTracker
+	http        *http.Client
 	// gpus are the offered devices; containers take free ones.
 	gpus []gpuDevice
 	// metadata is the cloud instance metadata service, nil off the cloud.
@@ -165,6 +171,14 @@ type Agent struct {
 	updatable bool
 	// committed is closed once the release on trial is committed.
 	committed chan struct{}
+	// clock notices sleeps; only watchSleep waits on it.
+	clock sleepClock
+	// reconnectNow ends the session backoff and interruptionNow the Spot
+	// notice poll interval, after a resume.
+	reconnectNow    chan struct{}
+	interruptionNow chan struct{}
+	// reserveSlot runs one reserve preparation at a time.
+	reserveSlot chan struct{}
 
 	// work tracks every goroutine the agent starts; Run waits for them.
 	work sync.WaitGroup
@@ -184,6 +198,10 @@ type Agent struct {
 	// trial is the version on trial until a session commits it.
 	trial    string
 	updating bool
+	// sleep is the reserve attempt this host last answered ready, and
+	// reserveRequest the newest one asked for.
+	sleep          sleepAttempt
+	reserveRequest string
 }
 
 // Run enrolls if needed, adopts containers left by a previous agent and
@@ -213,6 +231,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("create docker client: %w", err)
 	}
 	defer func() { _ = docker.Close() }()
+	clock := cfg.clock
+	if clock == nil {
+		if clock, err = openKernelClock(); err != nil {
+			return err
+		}
+	}
+	defer func() { _ = clock.close() }()
 
 	machine, err := detect(ctx)
 	if err != nil {
@@ -234,20 +259,25 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("preflight: %s", describeChecks(failed))
 	}
 	cfg.Logger = cfg.Logger.With("host_id", id.HostID)
+	attempt, err := loadSleepAttempt(cfg.StateDir)
+	if err != nil {
+		return err
+	}
 
-	control, err := dialServer(cfg, id.HostToken)
+	conns := newConnTracker()
+	control, err := dialServer(cfg, id.HostToken, grpc.WithContextDialer(conns.dial))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = control.Close() }()
-	payload, err := dialServer(cfg, id.HostToken)
+	payload, err := dialServer(cfg, id.HostToken, grpc.WithContextDialer(conns.dial))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = payload.Close() }()
 	// Workload traffic has its own connection, so it shares flow control
 	// with neither commands nor task payloads.
-	traffic, err := dialServer(cfg, id.HostToken)
+	traffic, err := dialServer(cfg, id.HostToken, grpc.WithContextDialer(conns.dial))
 	if err != nil {
 		return err
 	}
@@ -257,29 +287,36 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancel(nil)
 	httpClient := &http.Client{}
 	a := &Agent{
-		cfg:        cfg,
-		log:        cfg.Logger,
-		docker:     docker,
-		identity:   id,
-		capacity:   offered.capacity,
-		gpus:       offered.gpus,
-		bootID:     bootID(),
-		sources:    &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: httpClient},
-		images:     &imageCache{docker: docker},
-		host:       hostproto.NewHostServiceClient(payload),
-		control:    hostproto.NewHostServiceClient(control),
-		http:       httpClient,
-		metadata:   metadata,
-		updatable:  updatable(cfg.AgentRoot, cfg.Executable),
-		committed:  make(chan struct{}),
-		ctx:        ctx,
-		restart:    cancel,
-		containers: make(map[string]*container),
-		releaseNow: make(chan struct{}, 1),
-		netfilters: make(chan struct{}, maxNetfilterRuns),
-		snapshots:  make(chan struct{}, maxSnapshots),
-		publishes:  make(chan struct{}, maxPublishes),
-		operations: make(map[string]struct{}),
+		cfg:             cfg,
+		log:             cfg.Logger,
+		docker:          docker,
+		identity:        id,
+		capacity:        offered.capacity,
+		gpus:            offered.gpus,
+		bootID:          bootID(),
+		sources:         &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: httpClient},
+		images:          &imageCache{docker: docker},
+		host:            hostproto.NewHostServiceClient(payload),
+		control:         hostproto.NewHostServiceClient(control),
+		serverConns:     []*grpc.ClientConn{control, payload, traffic},
+		conns:           conns,
+		http:            httpClient,
+		metadata:        metadata,
+		updatable:       updatable(cfg.AgentRoot, cfg.Executable),
+		committed:       make(chan struct{}),
+		clock:           clock,
+		reconnectNow:    make(chan struct{}, 1),
+		interruptionNow: make(chan struct{}, 1),
+		reserveSlot:     make(chan struct{}, 1),
+		sleep:           attempt,
+		ctx:             ctx,
+		restart:         cancel,
+		containers:      make(map[string]*container),
+		releaseNow:      make(chan struct{}, 1),
+		netfilters:      make(chan struct{}, maxNetfilterRuns),
+		snapshots:       make(chan struct{}, maxSnapshots),
+		publishes:       make(chan struct{}, maxPublishes),
+		operations:      make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
 	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
@@ -315,6 +352,7 @@ func Run(ctx context.Context, cfg Config) error {
 		a.trial = cfg.Version
 		a.goOwned(a.watchTrial)
 	}
+	a.goOwned(a.watchSleep)
 	if metadata != nil {
 		a.goOwned(a.watchInterruptions)
 	}
@@ -461,7 +499,7 @@ func serverTransport(cfg Config) (credentials.TransportCredentials, error) {
 
 // dialServer connects to the control plane. Every agent connection to the
 // server goes through it, so all of them share one transport policy.
-func dialServer(cfg Config, token string) (*grpc.ClientConn, error) {
+func dialServer(cfg Config, token string, extra ...grpc.DialOption) (*grpc.ClientConn, error) {
 	transport, err := serverTransport(cfg)
 	if err != nil {
 		return nil, err
@@ -477,6 +515,7 @@ func dialServer(cfg Config, token string) (*grpc.ClientConn, error) {
 	if token != "" {
 		options = append(options, grpc.WithPerRPCCredentials(hostToken(token)))
 	}
+	options = append(options, extra...)
 	conn, err := grpc.NewClient(address, options...)
 	if err != nil {
 		return nil, fmt.Errorf("dial server %s: %w", address, err)

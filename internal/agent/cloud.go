@@ -133,6 +133,7 @@ func (a *Agent) watchInterruptions(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-a.interruptionNow:
 		}
 	}
 }
