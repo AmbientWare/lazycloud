@@ -48,8 +48,17 @@ func (a *Agent) sessions(ctx context.Context) error {
 			delay = minSessionBackoff
 		}
 		a.log.Warn("session ended", "error", err, "retry_in", delay)
-		if !sleep(ctx, delay/2+rand.N(delay/2+1)) { //nolint:gosec // jitter needs no cryptographic randomness
+		backoff := time.NewTimer(delay/2 + rand.N(delay/2+1)) //nolint:gosec // jitter needs no cryptographic randomness
+		select {
+		case <-ctx.Done():
+			backoff.Stop()
 			return nil
+		case <-a.reconnectNow:
+			// A resume: the server has been away, not refusing.
+			backoff.Stop()
+			delay = minSessionBackoff
+			continue
+		case <-backoff.C:
 		}
 		delay = min(2*delay, maxSessionBackoff)
 	}
@@ -164,6 +173,8 @@ func (a *Agent) hello() (*hostproto.HostMessage, []*container) {
 		AgentVersion:    a.cfg.Version,
 		Updatable:       a.updatable,
 		RejectedVersion: readMarker(a.cfg.StateDir, RejectedFile),
+		SleptSeconds:    sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
+		SleepAttemptId:  a.sleep.ID,
 	}}}, exited
 }
 
@@ -213,6 +224,8 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		}
 	case *hostproto.ServerMessage_Update:
 		a.update(body.Update)
+	case *hostproto.ServerMessage_PrepareReserve:
+		a.prepareReserve(body.PrepareReserve)
 	case *hostproto.ServerMessage_Network:
 		if c := a.lookup(body.Network.GetContainerId()); c != nil {
 			c.updateNetwork(body.Network.GetPolicy(), body.Network.GetVersion())

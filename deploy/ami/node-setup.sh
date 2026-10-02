@@ -116,6 +116,18 @@ mkdir -p /etc/systemd/system/lazycloud-agent.service.d
 printf '[Service]\nEnvironment=LAZYCLOUD_OCI_RUNTIME=runsc\n' \
   >/etc/systemd/system/lazycloud-agent.service.d/node-image.conf
 
+# A reserve launched able to hibernate writes its memory to a swap file on
+# the root volume. hibinit-agent creates the file at each cold boot and puts
+# resume=PARTUUID=... resume_offset=... on the boot entry, so the initrd
+# finds the root partition whatever order the disks probe in; a release that
+# named it by device would resume from whichever disk came first, so the
+# bake refuses one. acpid hands EC2's hibernate request to it. The kernel
+# writes the smallest image it can, freeing its page cache first.
+dnf install -y ec2-hibinit-agent acpid
+grep -q PARTUUID /usr/bin/hibinit-agent
+systemctl enable hibinit-agent.service acpid.service
+printf 'w /sys/power/image_size - - - - 0\n' >/etc/tmpfiles.d/lazycloud-hibernate.conf
+
 # Every boot pays for every boot service.
 systemctl mask update-motd.service update-motd.timer systemd-boot-update.service
 

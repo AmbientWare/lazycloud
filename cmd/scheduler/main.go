@@ -322,9 +322,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
-			result, err := comp.PlanCapacity(ctx, logger)
+			result, err := comp.Plan(ctx, logger)
 			if err != nil {
-				logger.ErrorContext(ctx, "capacity pass", "error", err)
+				logger.ErrorContext(ctx, "fleet planning pass", "error", err)
 			}
 			return result.Skipped
 		})
@@ -333,6 +333,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, func(ctx context.Context) bool {
 			if _, err := comp.Launch(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "launch pass", "error", err)
+			}
+			if _, err := comp.Actuate(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "reserve actuator pass", "error", err)
 			}
 			if _, err := comp.Retire(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "retire pass", "error", err)
@@ -345,6 +348,25 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			}
 			return false
 		})
+	})
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: compute.SpotPriceInterval}, nil, nil, every("spot_prices", compute.SpotPriceInterval, func(ctx context.Context) bool {
+			if _, err := comp.RefreshSpotPrices(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "spot price refresh incomplete", "error", err)
+			}
+			return false
+		}))
+	})
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: compute.QuotaInterval}, nil, nil, every("ec2_quotas", compute.QuotaInterval, func(ctx context.Context) bool {
+			if _, err := comp.RefreshQuotas(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "ec2 quota refresh incomplete", "error", err)
+			}
+			if _, err := comp.RefreshZoneOfferings(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "zone offering refresh incomplete", "error", err)
+			}
+			return false
+		}))
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: reconcileTick}, nil, nil, func(ctx context.Context) bool {

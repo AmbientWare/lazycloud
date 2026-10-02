@@ -12,42 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const activeCooldowns = `-- name: ActiveCooldowns :many
-select connection_key, region, instance_type, market from capacity_cooldowns where until > now()
-`
-
-type ActiveCooldownsRow struct {
-	ConnectionKey string
-	Region        string
-	InstanceType  string
-	Market        string
-}
-
-func (q *Queries) ActiveCooldowns(ctx context.Context) ([]ActiveCooldownsRow, error) {
-	rows, err := q.db.Query(ctx, activeCooldowns)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ActiveCooldownsRow
-	for rows.Next() {
-		var i ActiveCooldownsRow
-		if err := rows.Scan(
-			&i.ConnectionKey,
-			&i.Region,
-			&i.InstanceType,
-			&i.Market,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const cancelConnectionLaunches = `-- name: CancelConnectionLaunches :exec
 update hosts h
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', updated_at = now()
@@ -75,7 +39,7 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_count,
-          h.launch_attempts
+          h.launch_attempts, h.reserve_mode
 `
 
 type ClaimLaunchesParams struct {
@@ -93,6 +57,7 @@ type ClaimLaunchesRow struct {
 	Market           *string
 	GpuCount         int32
 	LaunchAttempts   int32
+	ReserveMode      *string
 }
 
 // Requested hosts whose launch is not held by another launcher. The lease
@@ -116,6 +81,7 @@ func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([
 			&i.Market,
 			&i.GpuCount,
 			&i.LaunchAttempts,
+			&i.ReserveMode,
 		); err != nil {
 			return nil, err
 		}
@@ -232,62 +198,36 @@ func (q *Queries) DrainConnectionHosts(ctx context.Context) ([]uuid.UUID, error)
 	return items, nil
 }
 
-const drainHosts = `-- name: DrainHosts :many
-update hosts h
-set phase = 'draining', capacity_state = 'draining', capacity_reason = $1,
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-where h.id = any($2::uuid[]) and h.phase = 'ready'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
-returning h.id
-`
-
-type DrainHostsParams struct {
-	Reason string
-	Ids    []uuid.UUID
-}
-
-// Moves idle hosts to draining; a host that took a container since the
-// scan stays.
-func (q *Queries) DrainHosts(ctx context.Context, arg DrainHostsParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, drainHosts, arg.Reason, arg.Ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const failHost = `-- name: FailHost :exec
+const failHost = `-- name: FailHost :execrows
 update hosts
 set phase = 'failed', failure = $1, phase_message = $2, phase_at = now(), state = 'retired',
     token_hash = null, launch_lease_until = null, updated_at = now()
-where id = $3
+where id = $3 and phase = $4
 `
 
 type FailHostParams struct {
-	Failure *string
-	Message string
-	ID      uuid.UUID
+	Failure   *string
+	Message   string
+	ID        uuid.UUID
+	FromPhase string
 }
 
-func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) error {
-	_, err := q.db.Exec(ctx, failHost, arg.Failure, arg.Message, arg.ID)
-	return err
+// Fails a host still in the phase its caller read.
+func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failHost,
+		arg.Failure,
+		arg.Message,
+		arg.ID,
+		arg.FromPhase,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until
+select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at
 from hosts
 where provider = 'aws' and region = $1
   and connection_id is not distinct from $2::uuid
@@ -301,14 +241,15 @@ type FleetHostsInRegionParams struct {
 }
 
 type FleetHostsInRegionRow struct {
-	ID            uuid.UUID
-	Phase         string
-	State         string
-	InstanceID    *string
-	LaunchedAt    *time.Time
-	LastSeenAt    *time.Time
-	PhaseAt       time.Time
-	UpdatingUntil *time.Time
+	ID              uuid.UUID
+	Phase           string
+	State           string
+	InstanceID      *string
+	LaunchedAt      *time.Time
+	LastSeenAt      *time.Time
+	PhaseAt         time.Time
+	UpdatingUntil   *time.Time
+	StopRequestedAt *time.Time
 }
 
 // Cloud hosts of one owner and region the provider should know about.
@@ -330,6 +271,7 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 			&i.LastSeenAt,
 			&i.PhaseAt,
 			&i.UpdatingUntil,
+			&i.StopRequestedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -372,143 +314,11 @@ func (q *Queries) FleetRegions(ctx context.Context) ([]FleetRegionsRow, error) {
 	return items, nil
 }
 
-const hostingConnections = `-- name: HostingConnections :many
-select cc.id, a.networks
-from cloud_connections cc
-join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase in ('ready', 'reconnect_pending', 'retiring_authorization')
-`
-
-type HostingConnectionsRow struct {
-	ID       uuid.UUID
-	Networks []byte
-}
-
-// Connections that take new workloads, with the networks of their active
-// authorization.
-func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsRow, error) {
-	rows, err := q.db.Query(ctx, hostingConnections)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []HostingConnectionsRow
-	for rows.Next() {
-		var i HostingConnectionsRow
-		if err := rows.Scan(&i.ID, &i.Networks); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const idleHosts = `-- name: IdleHosts :many
-select h.id, coalesce(h.connection_id::text, 'platform')::text as owner, h.region, coalesce(h.market, '')::text as market,
-       h.idle_since
-from hosts h
-where h.provider = 'aws' and h.phase = 'ready' and h.capacity_state = 'available'
-  and h.idle_since is not null
-order by h.idle_since, h.id
-`
-
-type IdleHostsRow struct {
-	ID        uuid.UUID
-	Owner     string
-	Region    string
-	Market    string
-	IdleSince *time.Time
-}
-
-// Ready cloud hosts idle past the window, oldest first within each market.
-func (q *Queries) IdleHosts(ctx context.Context) ([]IdleHostsRow, error) {
-	rows, err := q.db.Query(ctx, idleHosts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []IdleHostsRow
-	for rows.Next() {
-		var i IdleHostsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Owner,
-			&i.Region,
-			&i.Market,
-			&i.IdleSince,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const inFlightHosts = `-- name: InFlightHosts :many
-select id, kind, connection_id, region, availability_zone, availability_zone_id, market, gpu_type, gpu_count,
-       cpu_millis, memory_bytes
-from hosts
-where provider = 'aws' and phase in ('requested', 'provisioning', 'booting', 'joining')
-order by id
-`
-
-type InFlightHostsRow struct {
-	ID                 uuid.UUID
-	Kind               string
-	ConnectionID       *uuid.UUID
-	Region             string
-	AvailabilityZone   string
-	AvailabilityZoneID string
-	Market             *string
-	GpuType            string
-	GpuCount           int32
-	CpuMillis          int64
-	MemoryBytes        int64
-}
-
-// Cloud hosts bought and not ready yet: their capacity is on the way.
-func (q *Queries) InFlightHosts(ctx context.Context) ([]InFlightHostsRow, error) {
-	rows, err := q.db.Query(ctx, inFlightHosts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []InFlightHostsRow
-	for rows.Next() {
-		var i InFlightHostsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Kind,
-			&i.ConnectionID,
-			&i.Region,
-			&i.AvailabilityZone,
-			&i.AvailabilityZoneID,
-			&i.Market,
-			&i.GpuType,
-			&i.GpuCount,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
-values ($1, $2, $3, $4, now() + make_interval(secs => $5::float8), $6)
-on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason
+insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
+values ($1, $2, $3, $4, now() + make_interval(secs => $5::float8), $6, now())
+on conflict (connection_key, region, instance_type, market)
+do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at
 `
 
 type InsertCooldownParams struct {
@@ -532,53 +342,6 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 	return err
 }
 
-const insertRequestedHost = `-- name: InsertRequestedHost :one
-insert into hosts (name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
-                   gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
-                   hourly_micros)
-values ($1, 'offline', $2, 'aws', $3, 'requested', 'Waiting for the machine to be launched',
-        $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13)
-returning id
-`
-
-type InsertRequestedHostParams struct {
-	Name               string
-	Kind               string
-	ConnectionID       *uuid.UUID
-	CpuMillis          int64
-	MemoryBytes        int64
-	GpuType            string
-	GpuCount           int32
-	Region             string
-	AvailabilityZone   string
-	AvailabilityZoneID string
-	InstanceType       string
-	Market             *string
-	HourlyMicros       *int64
-}
-
-func (q *Queries) InsertRequestedHost(ctx context.Context, arg InsertRequestedHostParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertRequestedHost,
-		arg.Name,
-		arg.Kind,
-		arg.ConnectionID,
-		arg.CpuMillis,
-		arg.MemoryBytes,
-		arg.GpuType,
-		arg.GpuCount,
-		arg.Region,
-		arg.AvailabilityZone,
-		arg.AvailabilityZoneID,
-		arg.InstanceType,
-		arg.Market,
-		arg.HourlyMicros,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const knownHostIDs = `-- name: KnownHostIDs :many
 select id from hosts where id = any($1::uuid[]) and phase not in ('deleted', 'failed')
 `
@@ -597,39 +360,6 @@ func (q *Queries) KnownHostIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUI
 			return nil, err
 		}
 		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const liveCloudHostCounts = `-- name: LiveCloudHostCounts :many
-select coalesce(connection_id::text, 'platform')::text as owner, count(*)::int as hosts
-from hosts
-where provider = 'aws' and phase not in ('deleted', 'failed')
-group by 1
-`
-
-type LiveCloudHostCountsRow struct {
-	Owner string
-	Hosts int32
-}
-
-// Live cloud hosts per owner: a connection id, or platform.
-func (q *Queries) LiveCloudHostCounts(ctx context.Context) ([]LiveCloudHostCountsRow, error) {
-	rows, err := q.db.Query(ctx, liveCloudHostCounts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []LiveCloudHostCountsRow
-	for rows.Next() {
-		var i LiveCloudHostCountsRow
-		if err := rows.Scan(&i.Owner, &i.Hosts); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -671,108 +401,24 @@ func (q *Queries) ManagedConnectionNetworks(ctx context.Context) ([]ManagedConne
 	return items, nil
 }
 
-const markHostDeleted = `-- name: MarkHostDeleted :exec
+const markHostDeleted = `-- name: MarkHostDeleted :execrows
 update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
-where id = $1
+where id = $1 and phase = $2
 `
 
-func (q *Queries) MarkHostDeleted(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, markHostDeleted, id)
-	return err
+type MarkHostDeletedParams struct {
+	ID        uuid.UUID
+	FromPhase string
 }
 
-const markIdle = `-- name: MarkIdle :exec
-update hosts h
-set idle_since = case when h.idle_since is null then now() end
-where h.provider = 'aws' and h.phase = 'ready'
-  and (h.idle_since is null) = not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
-`
-
-// A ready cloud host is idle from when its last container stopped. The WHERE
-// picks only hosts whose idle_since disagrees with their live containers, so
-// each update flips it: set while unset, cleared while set.
-func (q *Queries) MarkIdle(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, markIdle)
-	return err
-}
-
-const pendingDemand = `-- name: PendingDemand :many
-select c.id, c.workspace_id, c.cpu_millis, c.memory_bytes, c.capacity_wait, ws.connection_id,
-       c.capacity_host_id, coalesce(bh.phase, '')::text as bought_phase, coalesce(bh.region, '')::text as bought_region,
-       coalesce(bh.instance_type, '')::text as bought_type, coalesce(bh.market, '')::text as bought_market,
-       coalesce(r.spec -> 'placement' ->> 'machine', '')::text as machine,
-       coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
-       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)))::text[] as gpus,
-       coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count
-from containers c
-join workspaces ws on ws.id = c.workspace_id
-left join releases r on r.id = c.release_id
-left join hosts bh on bh.id = c.capacity_host_id
-where c.state = 'pending'
-order by c.created_at, c.id
-limit $1
-`
-
-type PendingDemandRow struct {
-	ID             uuid.UUID
-	WorkspaceID    uuid.UUID
-	CpuMillis      int64
-	MemoryBytes    int64
-	CapacityWait   *string
-	ConnectionID   *uuid.UUID
-	CapacityHostID *uuid.UUID
-	BoughtPhase    string
-	BoughtRegion   string
-	BoughtType     string
-	BoughtMarket   string
-	Machine        string
-	Region         string
-	Zone           string
-	Preemptible    bool
-	Gpus           []string
-	GpuCount       int32
-}
-
-// Pending containers with what they need from a host, oldest first.
-func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]PendingDemandRow, error) {
-	rows, err := q.db.Query(ctx, pendingDemand, batchSize)
+// Deletes a host still in the phase its caller read.
+func (q *Queries) MarkHostDeleted(ctx context.Context, arg MarkHostDeletedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markHostDeleted, arg.ID, arg.FromPhase)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	var items []PendingDemandRow
-	for rows.Next() {
-		var i PendingDemandRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.CapacityWait,
-			&i.ConnectionID,
-			&i.CapacityHostID,
-			&i.BoughtPhase,
-			&i.BoughtRegion,
-			&i.BoughtType,
-			&i.BoughtMarket,
-			&i.Machine,
-			&i.Region,
-			&i.Zone,
-			&i.Preemptible,
-			&i.Gpus,
-			&i.GpuCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
 const recordLaunch = `-- name: RecordLaunch :execrows
@@ -780,17 +426,22 @@ update hosts
 set instance_id = $1, availability_zone = $2, availability_zone_id = $3,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
     launched_at = now(), launch_lease_until = null, updated_at = now(),
-    authorization_id = $4, node_role_arn = $5
-where id = $6 and phase = 'requested'
+    authorization_id = $4, node_role_arn = $5,
+    spot_request_id = $6, node_image = $7,
+    hibernation_configured = $8
+where id = $9 and phase = 'requested'
 `
 
 type RecordLaunchParams struct {
-	InstanceID         *string
-	AvailabilityZone   string
-	AvailabilityZoneID string
-	AuthorizationID    *uuid.UUID
-	NodeRoleArn        *string
-	ID                 uuid.UUID
+	InstanceID            *string
+	AvailabilityZone      string
+	AvailabilityZoneID    string
+	AuthorizationID       *uuid.UUID
+	NodeRoleArn           *string
+	SpotRequestID         *string
+	NodeImage             *string
+	HibernationConfigured bool
+	ID                    uuid.UUID
 }
 
 func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int64, error) {
@@ -800,33 +451,11 @@ func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int
 		arg.AvailabilityZoneID,
 		arg.AuthorizationID,
 		arg.NodeRoleArn,
+		arg.SpotRequestID,
+		arg.NodeImage,
+		arg.HibernationConfigured,
 		arg.ID,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const setCapacityWaits = `-- name: SetCapacityWaits :execrows
-update containers c
-set capacity_wait = nullif(w.wait, ''), capacity_host_id = nullif(w.host, '00000000-0000-0000-0000-000000000000'::uuid)
-from (select unnest($1::uuid[]) as id, unnest($2::text[]) as wait, unnest($3::uuid[]) as host) w
-where c.id = w.id and c.state = 'pending'
-  and (c.capacity_wait is distinct from nullif(w.wait, '')
-       or c.capacity_host_id is distinct from nullif(w.host, '00000000-0000-0000-0000-000000000000'::uuid))
-`
-
-type SetCapacityWaitsParams struct {
-	Ids   []uuid.UUID
-	Waits []string
-	Hosts []uuid.UUID
-}
-
-// Records why each pending container waits; unchanged rows are not
-// written.
-func (q *Queries) SetCapacityWaits(ctx context.Context, arg SetCapacityWaitsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setCapacityWaits, arg.Ids, arg.Waits, arg.Hosts)
 	if err != nil {
 		return 0, err
 	}
@@ -857,17 +486,4 @@ func (q *Queries) SetHostPhase(ctx context.Context, arg SetHostPhaseParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const tryCapacityLock = `-- name: TryCapacityLock :one
-select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool
-`
-
-// One capacity controller decides at a time, so two passes never buy for
-// the same shortfall.
-func (q *Queries) TryCapacityLock(ctx context.Context) (bool, error) {
-	row := q.db.QueryRow(ctx, tryCapacityLock)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
 }

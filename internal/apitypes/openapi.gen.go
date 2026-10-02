@@ -3476,17 +3476,17 @@ type FleetMarket struct {
 	// Reason Why the market cannot grow, when it cannot.
 	Reason string `json:"reason"`
 
-	// ReserveReady Always zero; the fleet keeps no stopped reserves.
+	// ReserveReady Stopped reserves prepared for the agent release they should run.
 	ReserveReady FleetCapacity `json:"reserve_ready"`
 
-	// ReserveTarget Always zero; the fleet keeps no stopped reserves.
+	// ReserveTarget The stopped reserve capacity the plan keeps.
 	ReserveTarget FleetCapacity        `json:"reserve_target"`
 	States        []FleetStateCapacity `json:"states"`
 
 	// WarmFree Unreserved capacity on serving hosts.
 	WarmFree FleetCapacity `json:"warm_free"`
 
-	// WarmTarget The idle capacity the headroom floor keeps.
+	// WarmTarget The free capacity on serving hosts the plan keeps.
 	WarmTarget FleetCapacity `json:"warm_target"`
 }
 
@@ -3505,11 +3505,11 @@ type FleetNode struct {
 	Preemptible bool              `json:"preemptible"`
 	Provider    FleetNodeProvider `json:"provider"`
 
-	// Ready Serving and on the target agent release.
+	// Ready Serving on its agent release, or a stopped reserve prepared for it.
 	Ready  bool   `json:"ready"`
 	Region string `json:"region"`
 
-	// State A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+	// State A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 	State FleetState `json:"state"`
 }
 
@@ -3523,7 +3523,7 @@ type FleetNodePage struct {
 	ObservedAt time.Time   `json:"observed_at"`
 }
 
-// FleetState A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+// FleetState A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 type FleetState string
 
 // FleetStateCapacity defines model for FleetStateCapacity.
@@ -3532,14 +3532,16 @@ type FleetStateCapacity struct {
 	Capacity  FleetCapacity `json:"capacity"`
 	Machines  int           `json:"machines"`
 
-	// State A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+	// State A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 	State FleetState `json:"state"`
 }
 
 // FleetSummary defines model for FleetSummary.
 type FleetSummary struct {
 	ObservedAt time.Time `json:"observed_at"`
-	Plan       *struct {
+
+	// Plan The planner's last published plan; absent once it expires.
+	Plan *struct {
 		ExpiresAt   time.Time     `json:"expires_at"`
 		GeneratedAt time.Time     `json:"generated_at"`
 		Markets     []FleetMarket `json:"markets"`

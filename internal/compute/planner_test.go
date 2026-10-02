@@ -39,13 +39,52 @@ func fleetConfig(f compute.Fleet) compute.Config {
 	return compute.Config{InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: f}
 }
 
-func planCapacity(t *testing.T, o owners) compute.CapacityResult {
+// plan runs one fleet planning pass.
+func plan(t *testing.T, o owners) compute.PlanResult {
 	t.Helper()
-	result, err := o.compute.PlanCapacity(t.Context(), discard())
+	result, err := o.compute.Plan(t.Context(), discard())
 	if err != nil {
-		t.Fatalf("plan capacity: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 	return result
+}
+
+// planCapacity runs a pass that acts on pending demand only, as passes
+// between reserve passes do: a plan published just now makes no reserve
+// pass due. The fleet regions have Spot prices at 40% of on-demand.
+func planCapacity(t *testing.T, o owners) compute.PlanResult {
+	t.Helper()
+	spotPrices(t, o)
+	run(t, o.pool, `
+insert into fleet_markets (market, plan, generated_at, expires_at) values ('on_demand:cpu', '{}', now(), now() + interval '5 minutes')
+on conflict (market) do update set generated_at = now(), expires_at = now() + interval '5 minutes'`)
+	result := plan(t, o)
+	if result.Published {
+		t.Fatal("a pass right after a published plan planned reserves")
+	}
+	return result
+}
+
+// spotPrices quotes every catalog type in every zone of the test fleet
+// networks at 40% of its on-demand price, observed now.
+func spotPrices(t *testing.T, o owners) {
+	t.Helper()
+	var regions, zones, types []string
+	var prices []int64
+	for region, network := range fleetNetworks() {
+		for _, s := range network.Subnets {
+			for _, typ := range compute.FleetCatalog() {
+				if price, sold := typ.OnDemandMicros(region); sold {
+					regions, zones, types, prices = append(regions, region), append(zones, s.ZoneID), append(types, typ.Name), append(prices, price*4/10)
+				}
+			}
+		}
+	}
+	run(t, o.pool, `
+insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+select unnest($1::text[]), unnest($2::text[]), unnest($3::text[]), unnest($4::bigint[]), now(), now()
+on conflict (region, availability_zone_id, instance_type) do update set hourly_micros = excluded.hourly_micros, observed_at = now()`,
+		regions, zones, types, prices)
 }
 
 // requested lists the hosts waiting for launch as
@@ -98,11 +137,13 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 		t.Fatalf("result %+v, want 5 hosts requested", result)
 	}
 	want := []string{
-		"g4dn.xlarge spot us-east-2  T4",
-		"m7i.large on_demand us-east-2  ",
-		"m7i.large spot us-east-2  ",
+		"g4dn.xlarge spot us-east-2 us-east-2a T4",
+		"m7i.large on_demand us-east-2 us-east-2a ",
+		"m7i.large spot us-east-2 us-east-2a ",
 		"m7i.large spot us-east-2 us-east-2b ",
-		"m7i.large spot us-west-1  ",
+		// An m7i.large's complete cost in us-west-1 is past the purchase
+		// margin for Spot-tolerant work.
+		"m7i.xlarge spot us-west-1 us-west-1b ",
 	}
 	if got := requested(t, o); len(got) != len(want) || !equal(got, want) {
 		t.Fatalf("requested hosts\n%q\nwant\n%q", got, want)
@@ -180,7 +221,7 @@ func TestConcurrentCapacityPassesBuyEachHostOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
-			if _, err := o.compute.PlanCapacity(t.Context(), discard()); err != nil {
+			if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 				t.Error(err)
 			}
 		})

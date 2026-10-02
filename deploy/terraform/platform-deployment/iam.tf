@@ -81,13 +81,17 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   # Fleet hosts: RunInstances with the host id as client token. The
-  # launcher tags the instance and its volumes at launch and may tag nothing
-  # else, and only tagged instances can be terminated. RunInstances also
-  # creates the network interface and, on Spot, the request, which carry no
-  # tag.
+  # launcher tags the instance, its volumes and a reserve's persistent Spot
+  # request at launch and may tag nothing else; only tagged instances can be
+  # started, stopped or terminated, and only tagged requests cancelled.
+  # RunInstances also creates the network interface and a serving host's
+  # one-time Spot request, which carry no tag.
   statement {
-    sid       = "DescribeFleet"
-    actions   = ["ec2:DescribeInstances", "ec2:DescribeSubnets"]
+    sid = "DescribeFleet"
+    actions = [
+      "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSpotInstanceRequests", "ec2:DescribeSpotPriceHistory",
+      "ec2:DescribeInstanceTypeOfferings",
+    ]
     resources = ["*"]
   }
 
@@ -105,7 +109,7 @@ data "aws_iam_policy_document" "control_plane" {
   statement {
     sid       = "TagAtLaunch"
     actions   = ["ec2:CreateTags"]
-    resources = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*"]
+    resources = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*", "${local.ec2_arn}:spot-instances-request/*"]
     condition {
       test     = "StringEquals"
       variable = "ec2:CreateAction"
@@ -137,10 +141,31 @@ data "aws_iam_policy_document" "control_plane" {
     ]
   }
 
+  # Reserves stop, hibernate and start in place.
   statement {
-    sid       = "TerminateTagged"
-    actions   = ["ec2:TerminateInstances"]
+    sid       = "ActOnTagged"
+    actions   = ["ec2:TerminateInstances", "ec2:StartInstances", "ec2:StopInstances"]
     resources = ["${local.ec2_arn}:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/lazycloud:fleet"
+      values   = [local.fleet_name]
+    }
+  }
+
+  # The fleet reads its EC2 vCPU quotas before buying.
+  statement {
+    sid       = "ReadEC2Quotas"
+    actions   = ["servicequotas:GetServiceQuota"]
+    resources = ["${local.arn_prefix}:servicequotas:*:${local.account_id}:ec2/*"]
+  }
+
+  # A Spot reserve's persistent request is cancelled before its instance
+  # terminates, or EC2 launches a replacement.
+  statement {
+    sid       = "CancelTaggedSpotRequests"
+    actions   = ["ec2:CancelSpotInstanceRequests"]
+    resources = ["${local.ec2_arn}:spot-instances-request/*"]
     condition {
       test     = "StringEquals"
       variable = "aws:ResourceTag/lazycloud:fleet"

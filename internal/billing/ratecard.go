@@ -3,6 +3,7 @@ package billing
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -540,4 +541,26 @@ func (c RateCard) computeRate(owner BillingOwner, class RateClass, gpu GPUType) 
 		return ComputeRate{}, fmt.Errorf("no published %s rate for %s capacity with GPU %q", class, owner, gpu)
 	}
 	return rate, nil
+}
+
+// FleetComputeRates are the platform fleet's compute rates in force at t,
+// which price the capacity a fleet purchase adds.
+func FleetComputeRates(t time.Time) ([]ComputeRate, error) {
+	card, err := newRates().cardAt(t)
+	if err != nil {
+		return nil, err
+	}
+	var out []ComputeRate
+	for _, rate := range card.compute {
+		if rate.Owner == OwnerPlatformFleet {
+			out = append(out, rate)
+		}
+	}
+	slices.SortFunc(out, func(a, b ComputeRate) int {
+		if a.Class != b.Class {
+			return strings.Compare(string(a.Class), string(b.Class))
+		}
+		return strings.Compare(string(a.GPU), string(b.GPU))
+	})
+	return out, nil
 }

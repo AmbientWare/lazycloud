@@ -1,8 +1,9 @@
 // Command neki executes every sqlc query through PlanetScale Neki's query
 // router and lists the ones the router fails. It creates a scratch database
-// on the router's branch, migrates it with `server migrate`, then prepares,
+// of its own on the router's branch (lc_neki_check_ and a random suffix, so
+// runs never share one), migrates it with `server migrate`, then prepares,
 // binds and executes each query with typed dummy values inside a
-// transaction it rolls back, and drops the database before it exits.
+// transaction it rolls back, and drops that database before it exits.
 //
 // Only router failures count: SQLSTATE NK*, 22023 BindParameters errors,
 // "not implemented", and syntax, undefined-name (class 42) and internal (XX)
@@ -18,7 +19,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,9 +52,10 @@ import (
 var seed string
 
 const (
-	scratchDatabase = "lc_neki_check"
-	workers         = 8
-	queryTimeout    = 30 * time.Second
+	// scratchPrefix starts every run's scratch database name.
+	scratchPrefix = "lc_neki_check_"
+	workers       = 8
+	queryTimeout  = 30 * time.Second
 )
 
 func main() {
@@ -70,7 +74,12 @@ func run(ctx context.Context) int {
 		fmt.Fprintln(os.Stderr, "neki: NEKI_DATABASE_URL is empty")
 		return 2
 	}
-	red, scratch, err := scratchURL(base)
+	name, err := scratchName()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "neki:", err)
+		return 2
+	}
+	red, scratch, err := scratchURL(base, name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "neki:", err)
 		return 2
@@ -80,7 +89,7 @@ func run(ctx context.Context) int {
 		fmt.Fprintln(os.Stderr, "neki:", red.clean(err.Error()))
 		return 2
 	}
-	if err := withScratch(ctx, base, func() error {
+	if err := withScratch(ctx, base, name, func() error {
 		if err := migrate(ctx, *repo, scratch, red); err != nil {
 			return err
 		}
@@ -108,8 +117,18 @@ func (r redactor) clean(s string) string {
 	return r.address.ReplaceAllString(s, "<address>")
 }
 
+// scratchName is this run's scratch database: the prefix and 12 random hex
+// digits.
+func scratchName() (string, error) {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("name the scratch database: %w", err)
+	}
+	return scratchPrefix + hex.EncodeToString(b[:]), nil
+}
+
 // scratchURL swaps the database in base's path for the scratch database.
-func scratchURL(base string) (redactor, string, error) {
+func scratchURL(base, name string) (redactor, string, error) {
 	u, err := url.Parse(base)
 	if err != nil {
 		return redactor{}, "", errors.New("parse database url failed") // the parse error quotes the URL
@@ -119,15 +138,16 @@ func scratchURL(base string) (redactor, string, error) {
 		secrets: []string{base, pass, u.User.Username(), u.Hostname()},
 		address: regexp.MustCompile(`\d+\.\d+\.\d+\.\d+|\[?[0-9a-fA-F]*:[0-9a-fA-F:]+:[0-9a-fA-F]+\]?`),
 	}
-	u.Path = "/" + scratchDatabase
+	u.Path = "/" + name
 	scratch := u.String()
 	red.secrets = append([]string{scratch}, red.secrets...)
 	return red, scratch, nil
 }
 
-// withScratch creates the scratch database through base, runs fn and drops
-// the database again, also when fn fails or the run is interrupted.
-func withScratch(ctx context.Context, base string, fn func() error) (err error) {
+// withScratch creates the scratch database name through base, runs fn and
+// drops that database again, also when fn fails or the run is interrupted.
+// It touches no other database, so concurrent runs do not collide.
+func withScratch(ctx context.Context, base, name string, fn func() error) (err error) {
 	admin, err := pgx.Connect(ctx, base)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -139,21 +159,17 @@ func withScratch(ctx context.Context, base string, fn func() error) (err error) 
 			err = fmt.Errorf("close: %w", cerr)
 		}
 	}()
-	// A run that died before its drop leaves the database behind.
-	if _, err := admin.Exec(ctx, "drop database if exists "+scratchDatabase); err != nil {
-		return fmt.Errorf("drop leftover scratch database: %w", err)
-	}
-	if _, err := admin.Exec(ctx, "create database "+scratchDatabase); err != nil {
+	if _, err := admin.Exec(ctx, "create database "+name); err != nil {
 		return fmt.Errorf("create scratch database: %w", err)
 	}
 	defer func() {
 		dropCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		if _, derr := admin.Exec(dropCtx, "drop database "+scratchDatabase); derr != nil {
+		if _, derr := admin.Exec(dropCtx, "drop database "+name); derr != nil {
 			err = errors.Join(err, fmt.Errorf("drop scratch database: %w", derr))
 			return
 		}
-		fmt.Println("dropped", scratchDatabase)
+		fmt.Println("dropped", name)
 	}()
 	return fn()
 }
