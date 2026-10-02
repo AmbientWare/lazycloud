@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Money is an integer count of nanodollars, as the reference rate card
-// publishes it.
+// Money is an integer count of nanodollars, as the rate card publishes it.
 const (
 	NanosPerUSD  = int64(1_000_000_000)
 	nanosPerCent = NanosPerUSD / 100
@@ -49,8 +48,7 @@ const (
 	PlanBusiness PlanID = "business"
 )
 
-// TermsVersion names the published terms of a plan. A fresh schema holds no
-// subscriber on the reference's earlier terms, so only the current ones
+// TermsVersion names the published terms of a plan. Only the current terms
 // exist.
 type TermsVersion string
 
@@ -167,8 +165,8 @@ type Plan struct {
 	Notes []string
 }
 
-// Plans are every plan an account can be on, cheapest first, with the
-// reference's current terms.
+// Plans are every plan an account can be on, cheapest first, on their
+// current terms.
 func Plans() []Plan {
 	paidDiskGiB := 1_024
 	return []Plan{
@@ -422,7 +420,7 @@ func placementRates(auto []ComputeRate, keep func(RateClass) bool) []ComputeRate
 	return out
 }
 
-// rateHistory is the reviewed price history of the reference rate card.
+// rateHistory is the reviewed price history of the rate card.
 // Publications keep their original figures and dates; later ones override
 // earlier ones key by key.
 func rateHistory() []rateChange {

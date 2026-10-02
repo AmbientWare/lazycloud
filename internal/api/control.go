@@ -118,8 +118,8 @@ func (s *Server) PrepareRelease(ctx context.Context, req PrepareReleaseRequestOb
 	if err != nil {
 		return nil, err
 	}
-	// A working-tree release runs its image by the same pinned reference
-	// as a deployed one.
+	// A working-tree release runs its image by the same pinned digest
+	// reference as a deployed one.
 	if err := s.pinImage(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
 	}

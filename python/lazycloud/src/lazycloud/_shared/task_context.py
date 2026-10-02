@@ -1,20 +1,14 @@
 """Which invocation the code running right now belongs to.
 
-A container used to serve one call, so the environment could say which: the
-runner wrote `TASK_ID` before handing control to the handler and every reader —
-the SDK deciding a spawned call's parent, an artifact deciding what it belongs
-to — read it back. A container that serves several calls at once cannot answer
-from a process global, because there is no single answer: two handlers running
-together would each read whichever wrote last, and the wrong one wins silently.
+The SDK reads it to choose a spawned call's parent, and an artifact reads it to
+choose what it belongs to. A container can serve several calls at once, so a
+process global cannot answer: two handlers running together would each read
+whichever wrote last. Each invocation carries its identity in a context
+variable, which threads and coroutines both propagate.
 
-The identity is carried per context instead, so each concurrent invocation
-answers for itself. `contextvars` is what threads and coroutines both propagate,
-which is what makes one holder serve both.
-
-The environment stays as the outer default rather than being dropped. A worker
-started for exactly one task still names it there, and a process that inherits
-`TASK_ID` from its parent is still that task's — the context is a narrower
-statement layered over it, not a replacement.
+`TASK_ID` in the environment is the outer default. A process started for one
+task names it there, and a child process inherits it; the context variable
+narrows it for each concurrent invocation.
 """
 
 from __future__ import annotations

@@ -266,8 +266,8 @@ func ParseCPU(value string) (int64, error) {
 	return int64(math.Floor(cores*1000 + 0.5)), nil
 }
 
-// memoryUnits are suffixes and their size in MB (MiB), longest first, as in
-// the reference: decimal suffixes count 1000 MB per GB. A bare number is MB.
+// memoryUnits are suffixes and their size in MB (MiB), longest first.
+// Decimal suffixes count 1000 MB per GB. A bare number is MB.
 var memoryUnits = [...]struct { //nolint:gochecknoglobals // constant table
 	suffix string
 	mb     float64

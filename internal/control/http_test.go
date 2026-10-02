@@ -10,9 +10,9 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
-// The reference minted these labels (shared/deployment_subdomains.py) for
-// the same identities.
-func TestSubdomainMatchesReference(t *testing.T) {
+// Deployed URLs carry these labels, so the same identities must keep
+// minting them.
+func TestSubdomainLabelsAreStable(t *testing.T) {
 	ws := uuid.MustParse("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")
 	cases := []struct {
 		app, name string

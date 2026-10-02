@@ -338,8 +338,7 @@ func TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped(t *testing.T) {
 	if err != nil || result.Created != 1 || result.Cancelled != 0 {
 		t.Fatalf("plan %+v %v, want one container for the working-tree release", result, err)
 	}
-	// Pausing the app stops what was deployed, not the caller's own code,
-	// as the reference ran working-tree calls outside the app.
+	// Pausing the app stops what was deployed, not the caller's own code.
 	exec(t, pool, `update apps set state = 'paused'`)
 	if _, err := e.Submit(t.Context(), SubmitRequest{Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: jsonInputs(1)}); !errors.Is(err, ErrNotAccepting) {
 		t.Fatalf("deployed submit to a paused app %v", err)

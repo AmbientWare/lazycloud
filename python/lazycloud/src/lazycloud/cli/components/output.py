@@ -1,4 +1,4 @@
-"""Single output owner for the ``lazycloud`` and ``lazycloud-admin`` commands.
+"""Single output owner for the ``lazycloud`` command.
 
 Decorative output uses the shared terminal consoles.
 Machine-readable payloads go through ``print_payload``,

@@ -72,7 +72,7 @@ func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) erro
 	return nil
 }
 
-// callbackURL checks a callback target as the reference did: http or https,
+// callbackURL checks a callback target: http or https,
 // a host, no credentials and no fragment. A blank value means none.
 func callbackURL(value string) (*string, error) {
 	trimmed := strings.TrimSpace(value)

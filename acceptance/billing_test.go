@@ -10,8 +10,8 @@ import (
 )
 
 // An endpoint whose account billing refuses answers 402 with billing's
-// reason at once, as the reference did, rather than wait out the cold
-// start for a container planning will never start.
+// reason at once rather than wait out the cold start for a container
+// planning will never start.
 func TestRefusedAccountGetsPaymentRequiredAtOnce(t *testing.T) {
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": endpointApp})

@@ -62,7 +62,7 @@ func (u URLs) Pod(id uuid.UUID, port string) string {
 }
 
 // PodURL is where a pod release answers: its one port, or <PORT> to fill
-// in when it has several, as the reference printed it. Empty without ports.
+// in when it has several. Empty without ports.
 func (e *Edge) PodURL(release uuid.UUID, spec apitypes.WorkloadSpec) string {
 	ports := execution.PodPorts(spec)
 	switch len(ports) {

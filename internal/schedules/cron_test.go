@@ -19,9 +19,8 @@ var croniterStarts = []time.Time{ //nolint:gochecknoglobals // test table
 	time.Date(2027, 2, 28, 0, 0, 0, 0, time.UTC),
 }
 
-// croniterCases record what croniter 6.2.4 computed behind the reference's
-// shared/cron.py normalization at 9e259ce75. "0 0 30 2 *" passed the
-// reference's deploy check and then failed every tick; deploy rejects it.
+// croniterCases record what croniter 6.2.4 computes for the same
+// normalization. "0 0 30 2 *" would never fire, so deploy rejects it.
 //
 //nolint:gochecknoglobals // test table
 var croniterCases = []cronCase{

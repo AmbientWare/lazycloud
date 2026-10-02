@@ -272,8 +272,7 @@ func TestStoppedWorkloadRunsUnchangedWorkingTreeCalls(t *testing.T) {
 }
 
 // A paused app's unchanged code runs from the laptop on its own
-// working-tree release, which execution admits while the app is paused,
-// as the reference ran laptop calls outside the app.
+// working-tree release, which execution admits while the app is paused.
 func TestPausedAppRunsUnchangedWorkingTreeCalls(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)

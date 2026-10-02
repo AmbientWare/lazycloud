@@ -119,9 +119,8 @@ func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject
 	return DeleteSecret204Response{}, nil
 }
 
-// GetSecretValue reveals a secret's value. Workspace tokens carry no scope
-// yet, so every principal that reaches the workspace may call it; the
-// identity packet's read-only scope must deny it.
+// GetSecretValue reveals a secret's value to every principal that reaches
+// the workspace; tokens carry no narrower scope.
 func (s *Server) GetSecretValue(ctx context.Context, req GetSecretValueRequestObject) (GetSecretValueResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
-// Pod defaults, as the reference resolved them: pods and sandboxes stay up
+// Pod defaults: pods and sandboxes stay up
 // ten idle minutes and are public, devboxes stay half an hour, keep their
 // machine and always serve SSH.
 const (
