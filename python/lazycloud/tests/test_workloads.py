@@ -248,7 +248,7 @@ def test_single_pod_deploy_card_shows_role_keep_warm_and_preemptible(
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["releases"][0]["spec"]["pod"]["kind"] == "pod"
     assert card.exit_code == 0, card.output
-    for text in ("Deployment created", "pod", "always", "https://web.example.test"):
+    for text in ("Deployment created", "service", "always", "https://web.example.test"):
         assert text in card.output
 
 

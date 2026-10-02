@@ -127,11 +127,12 @@ def deploy(
             _emit_deployment_plans(ctx, [plan])
             return
         if not isinstance(target, Function | Endpoint | ASGI | Pod):
-            invoke_handler_method(
+            response = invoke_handler_method(
                 target,
                 "deploy",
                 kwargs={"workspace": selected_workspace, "source_root": source_root},
             )
+            print_payload(ctx, response)
             return
         deployment = target.deploy(workspace=selected_workspace, source_root=source_root)
     release = next(item for item in deployment.releases if item.name == target.resource_name)
