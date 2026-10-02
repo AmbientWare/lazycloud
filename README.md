@@ -1,33 +1,36 @@
 # LazyCloud
 
-This branch is the starting point for the Go backend and host runtime.
-The replacement backend is not implemented yet.
+LazyCloud runs Python functions, endpoints, cron jobs, pods and sandboxes on
+cloud CPUs and GPUs. A decorator names what the code needs; LazyCloud builds
+the image, places containers on capacity and stops them when the work is
+done. User documentation lives in [docs/](docs/index.mdx).
 
-Read [update.md](update.md) for the architecture, reference implementation,
-agent instructions and capability checklist. [AGENTS.md](AGENTS.md) contains
-development rules.
+## Layout
 
-The Python SDK, public CLI and their wire contracts live in python/lazycloud,
-the Python runner in python/runner. The frontend lives in web and
-language-neutral contract examples in contracts. Published product
-documentation describes the reference platform.
+- `cmd/` and `internal/`: the Go server, scheduler, host agent and
+  in-container supervisor, one package per owner.
+- `contracts/`: the public OpenAPI document, the host protocol and the local
+  runner protocol. Go, Python and TypeScript bindings are generated from them.
+- `migrations/`: the PostgreSQL schema.
+- `python/lazycloud`: the SDK and `lazycloud` CLI. `python/runner`: the runner
+  that executes user code inside containers.
+- `web/`: the dashboard.
+- `deploy/`: images, the Helm chart, Terraform and the local stack.
+- `acceptance/`: cross-owner Go tests against real services.
 
-The old backend, internal admin CLI, deployment automation and backend-specific
-tests remain available in the pinned reference. The public lazycloud CLI remains;
-lazycloud-admin must be rebuilt against explicit administration contracts.
+[AGENTS.md](AGENTS.md) describes the architecture and development rules.
 
-Python development:
+## Develop
 
 ```sh
-uv sync --group dev
-uv run --group dev pytest -x
-uv run --group dev lazycloud --help
+deploy/local/run.sh start      # local stack; prints the SDK environment
+./check.sh                     # every formatter and linter, as CI runs them
+docker compose -f compose.test.yaml up -d --wait
+go test -race ./...
+uv sync --group dev && uv run --group dev pytest -x
+(cd web && bun install && bun run dev)   # dashboard against 127.0.0.1:8080
+(cd web && bun run test)
 ```
 
-Use Bun from web for frontend development. Backend-dependent UI workflows
-need an API implementing their contracts. The new backend may use fresh contracts
-and a fresh schema; update these consumers together. Old migration history remains
-in the pinned reference, without requiring a data migration or compatibility layer.
-
-Add the Go module with the first implemented workflow. Do not add empty packages
-or placeholder services to represent unchecked capabilities.
+[deploy/local/README.md](deploy/local/README.md) covers the local stack and
+[deploy/README.md](deploy/README.md) the production deployment.

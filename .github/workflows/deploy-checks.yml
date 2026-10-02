@@ -18,7 +18,7 @@ on:
       - "python/**"
       - "web/**"
   push:
-    branches: [main, go-rewrite]
+    branches: [main]
 
 permissions:
   contents: read
