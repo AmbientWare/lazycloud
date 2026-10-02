@@ -93,6 +93,32 @@ func TestWorkloadPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 	}
 }
 
+// An endpoint's calls are its request records: a 5xx answer failed and a
+// caller that left first (499) cancelled.
+func TestWorkloadPerformanceCountsEndpointRequests(t *testing.T) {
+	f := newFixture(t, `{}`)
+	hour := time.Now().Truncate(time.Hour)
+	early := hour.Add(-2 * time.Hour).Add(10 * time.Minute)
+	for _, r := range []struct{ status, ms int }{{200, 100}, {200, 300}, {503, 50}, {499, 20}} {
+		f.exec1(`insert into http_requests (id, workspace_id, workload_id, release_id, method, path, status, started_at, duration_ms, request_bytes, response_bytes)
+values (uuidv7($5::timestamptz - now()), $1, $2, $3, 'POST', '/', $4, $5, $6, 0, 0)`,
+			uuid.UUID(f.workspace), f.workload, f.release, r.status, early, r.ms)
+	}
+
+	perf, err := f.obs.WorkloadPerformance(t.Context(), f.workspace, f.workload, observability.RangeQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(perf.Buckets) != 1 {
+		t.Fatalf("buckets %+v", perf)
+	}
+	a := perf.Buckets[0]
+	if a.Count != 4 || a.P50Ms == nil || math.Abs(*a.P50Ms-75) > 0.01 ||
+		a.StatusCounts.Succeeded != 2 || a.StatusCounts.Failed != 1 || a.StatusCounts.Cancelled != 1 {
+		t.Fatalf("request bucket %+v", a)
+	}
+}
+
 // Workspace task metrics and activity cover the tasks submitted in the
 // range; activity buckets are dense and split per app, or per function of
 // one app.

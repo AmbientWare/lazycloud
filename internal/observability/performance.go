@@ -28,7 +28,7 @@ func (q RangeQuery) width() time.Duration {
 	return q.Width
 }
 
-// WorkloadPerformance buckets a workload's tasks by submission time:
+// WorkloadPerformance buckets a workload's tasks or HTTP requests by start:
 // run time percentiles of finished tasks, outcomes and the containers
 // started for it. Buckets without either are left out. The default range is
 // the last 24 hours.

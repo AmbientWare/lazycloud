@@ -3,16 +3,28 @@ select w.id from workloads w join apps a on a.id = w.app_id
 where w.id = @id and a.workspace_id = @workspace_id;
 
 -- name: DeploymentPerformance :many
+-- A function's calls are its tasks; an endpoint's or ASGI app's are its
+-- request records, failed for a 5xx answer and cancelled when the caller
+-- left first (499).
 with t as (
     select date_bin(@bucket_width::interval, tk.created_at, to_timestamp(0)) as bucket,
-           tk.status,
-           case when tk.started_at is not null and tk.finished_at is not null
-                then extract(epoch from tk.finished_at - tk.started_at) * 1000 end as run_ms
+           tk.status::text as status,
+           (case when tk.started_at is not null and tk.finished_at is not null
+                 then extract(epoch from tk.finished_at - tk.started_at) * 1000 end)::float8 as run_ms
     from tasks tk
     where tk.workload_id = @workload_id
       and tk.id >= @from_id
       and tk.id < @to_id
       and tk.created_at >= @start_at and tk.created_at < @end_at
+    union all
+    select date_bin(@bucket_width::interval, h.started_at, to_timestamp(0)) as bucket,
+           (case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end)::text as status,
+           h.duration_ms::float8 as run_ms
+    from http_requests h
+    where h.workload_id = @workload_id
+      and h.id >= @from_id
+      and h.id < @to_id
+      and h.started_at >= @start_at and h.started_at < @end_at
 ), task_buckets as (
     select bucket, count(run_ms)::int as finished,
            percentile_cont(0.5) within group (order by run_ms) as p50_ms,
