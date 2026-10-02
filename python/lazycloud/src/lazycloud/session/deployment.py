@@ -337,6 +337,15 @@ def deploy_functions(
     specs = _workload_specs(
         functions, client=client, workspace=workspace, source_root=source_root, terminal=terminal
     )
+    # With several apps, every app takes its new workloads before any app
+    # loses an omitted one, so a refused later app leaves nothing pruned.
+    staged = len(targets) > 1 and any(target.prune for target in targets)
+
+    def request(target: AppFunctions, *, prune: bool) -> DeploymentRequest:
+        return DeploymentRequest(
+            workloads=[specs[id(function)] for function in target.functions], prune=prune
+        )
+
     deployments: list[AppDeployment] = []
     for target in targets:
         with ExitStack() as stack:
@@ -345,20 +354,22 @@ def deploy_functions(
                 for function in target.functions
             ]
             deployment = client.deploy_app(
-                workspace,
-                target.app,
-                DeploymentRequest(
-                    workloads=[specs[id(function)] for function in target.functions],
-                    prune=target.prune,
-                ),
+                workspace, target.app, request(target, prune=target.prune and not staged)
             )
             releases = {release.name: release for release in deployment.releases}
             for function, step in zip(target.functions, steps, strict=True):
                 _runtime_done(step, function.resource_name, releases[function.resource_name])
-        if target.prune:
-            with terminal.step("Prune", target.app) as step:
-                step.done(f"{deployment.removed_versions} deployment versions removed")
         deployments.append(deployment)
+    for n, target in enumerate(targets):
+        if not target.prune:
+            continue
+        with terminal.step("Prune", target.app) as step:
+            if staged:
+                # The specs are unchanged, so this reuses the releases just made.
+                deployments[n] = client.deploy_app(
+                    workspace, target.app, request(target, prune=True)
+                )
+            step.done(f"{deployments[n].removed_versions} deployment versions removed")
     return deployments
 
 
