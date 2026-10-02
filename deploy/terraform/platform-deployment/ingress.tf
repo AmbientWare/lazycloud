@@ -59,11 +59,13 @@ resource "aws_acm_certificate" "hosts" {
 resource "cloudflare_dns_record" "hosts_validation" {
   for_each = { for option in aws_acm_certificate.hosts.domain_validation_options : option.domain_name => option }
   zone_id  = var.cloudflare_zone_id
-  name     = each.value.resource_record_name
-  type     = each.value.resource_record_type
-  content  = each.value.resource_record_value
-  ttl      = 300
-  proxied  = false
+  # ACM ends names with a dot that Cloudflare drops, which would show as a
+  # change on every plan.
+  name    = trimsuffix(each.value.resource_record_name, ".")
+  type    = each.value.resource_record_type
+  content = trimsuffix(each.value.resource_record_value, ".")
+  ttl     = 300
+  proxied = false
 }
 
 resource "aws_acm_certificate_validation" "hosts" {
