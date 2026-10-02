@@ -69,6 +69,8 @@ document in us-east-1 and the account's GitHub OIDC provider.
 - LISTEN, the migration, metering and leader locks need a connection that
   keeps its session: `LAZYCLOUD_DATABASE_SESSION_URL`. Neki's router does;
   behind any other pooler, point it at a direct endpoint.
+- A release that changes SQL runs `acceptance/neki/check.sh` before Ship, so
+  every query executes through Neki's router first.
 - Node capacity installs before Argo CD, whose pre-install hooks need a node.
 - Argo CD reads `deploy/argocd/apps` from main, and the deployment from `prod`.
 - Only the prod environment's deploy key pushes `prod`; Deploy refuses a tag

@@ -91,7 +91,8 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 
 // The leader's check finds its own session's lock and nothing else: not
 // another session's hold, not another name, not a lock it released. Names
-// cover both signs of the 64-bit key, whose high half pg_locks keeps apart.
+// and markers cover both signs of the 64-bit key, whose high half pg_locks
+// keeps apart.
 func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
@@ -104,15 +105,21 @@ func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
 		t.Cleanup(conn.Release)
 		return conn
 	}
-	holds := func(conn *pgxpool.Conn, name string) bool {
+	holds := func(conn *pgxpool.Conn, name string, marker int64) bool {
 		t.Helper()
-		held, err := database.HoldsLead(ctx, conn.Conn(), name)
+		held, err := database.HoldsLead(ctx, conn.Conn(), name, marker)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return held
 	}
 	leader, other := acquire(), acquire()
+	const leaderMarker, otherMarker = int64(-7_000_000_000_000_000_001), int64(42)
+	for conn, marker := range map[*pgxpool.Conn]int64{leader: leaderMarker, other: otherMarker} {
+		if _, err := conn.Exec(ctx, "select pg_advisory_lock($1)", marker); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, name := range []string{"scheduler_leader", "test_leader"} {
 		var key int64
 		if err := leader.QueryRow(ctx, "select hashtextextended($1, 0)", name).Scan(&key); err != nil {
@@ -121,13 +128,13 @@ func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
 		if _, err := leader.Exec(ctx, "select pg_advisory_lock(hashtextextended($1, 0))", name); err != nil {
 			t.Fatal(err)
 		}
-		if !holds(leader, name) || holds(other, name) || holds(leader, name+"_other") {
+		if !holds(leader, name, leaderMarker) || holds(other, name, otherMarker) || holds(leader, name+"_other", leaderMarker) {
 			t.Fatalf("%s (key %d): the check must see the lock in the holding session only", name, key)
 		}
 		if _, err := leader.Exec(ctx, "select pg_advisory_unlock(hashtextextended($1, 0))", name); err != nil {
 			t.Fatal(err)
 		}
-		if holds(leader, name) {
+		if holds(leader, name, leaderMarker) {
 			t.Fatalf("%s: the check sees a released lock", name)
 		}
 	}
