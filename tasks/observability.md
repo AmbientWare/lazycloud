@@ -124,7 +124,7 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   draining, from durable timestamps and host reports, instead of the
   reference worker's twenty internal phases.
 - Account activity derives allocations from container lifetimes, not the
-  billing ledger. GPU allocation is still zero although containers now carry GPUs (gap).
+  billing ledger. GPU allocation counts the GPUs each container's release names.
 - Account concurrency counts every live container in owned workspaces as a
   CPU container: containers have no GPUs yet.
 

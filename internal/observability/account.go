@@ -94,13 +94,13 @@ func (o *Observability) AccountActivity(ctx context.Context, member []identity.W
 		rows, err = o.starts(ctx, measure, ids, s)
 	case apitypes.ActivityMeasureCpu:
 		unit = apitypes.Cores
-		rows, err = o.allocations(ctx, ids, s, 1.0/1000, 0)
+		rows, err = o.allocations(ctx, ids, s, 1.0/1000, 0, 0)
 	case apitypes.ActivityMeasureMemory:
 		unit = apitypes.Gibibytes
-		rows, err = o.allocations(ctx, ids, s, 0, 1.0/(1<<30))
+		rows, err = o.allocations(ctx, ids, s, 0, 1.0/(1<<30), 0)
 	case apitypes.ActivityMeasureGpu:
-		// Containers reserve no GPUs yet; every bucket is zero.
 		unit = apitypes.Gpus
+		rows, err = o.allocations(ctx, ids, s, 0, 0, 1)
 	default:
 		return apitypes.AccountActivity{}, fmt.Errorf("%w: unknown measure %q", ErrInvalidRange, measure)
 	}
@@ -150,13 +150,13 @@ func (o *Observability) starts(ctx context.Context, measure apitypes.ActivityMea
 	return out, nil
 }
 
-func (o *Observability) allocations(ctx context.Context, ids []uuid.UUID, s span, perCPUMilli, perMemoryByte float64) ([]activityRow, error) {
+func (o *Observability) allocations(ctx context.Context, ids []uuid.UUID, s span, perCPUMilli, perMemoryByte, perGPU float64) ([]activityRow, error) {
 	var out []activityRow
 	if len(ids) == 0 {
 		return out, nil
 	}
 	rows, err := o.queries.Allocations(ctx, AllocationsParams{
-		BucketWidth: s.interval(), PerCpuMilli: perCPUMilli, PerMemoryByte: perMemoryByte,
+		BucketWidth: s.interval(), PerCpuMilli: perCPUMilli, PerMemoryByte: perMemoryByte, PerGpu: perGPU,
 		WorkspaceIds: ids, StartAt: s.start, EndAt: s.end,
 	})
 	if err != nil {

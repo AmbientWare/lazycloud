@@ -156,7 +156,7 @@ func TestTaskMetricsAndActivity(t *testing.T) {
 func TestAccountMetricsAndActivity(t *testing.T) {
 	f := newFixture(t, `{}`)
 	sharedWS, _, _, sharedRel := f.addFunction("shared", "etl", "load", `{}`)
-	_, _, _, chargeRel := f.addFunction("acme", "billing", "charge", `{}`)
+	_, _, _, chargeRel := f.addFunction("acme", "billing", "charge", `{"resources":{"gpu_count":2}}`)
 	hour := time.Now().Truncate(time.Hour)
 	assigned, stopped := hour.Add(-3*time.Hour+30*time.Minute), hour.Add(-time.Hour)
 	f.container(f.release, "stopped", assigned, &assigned, &stopped, 1000)
@@ -194,6 +194,18 @@ func TestAccountMetricsAndActivity(t *testing.T) {
 	}
 	if b := reports.Buckets; math.Abs(b[0].Value-0.5) > 1e-6 || math.Abs(b[1].Value-1) > 1e-6 || b[2].Value != 0 {
 		t.Fatalf("reports cpu buckets %+v", b)
+	}
+
+	// Only the release that names GPUs reserves them, two per container.
+	gpus, err := f.obs.AccountActivity(t.Context(), member, observability.ActivityQuery{
+		RangeQuery: observability.RangeQuery{Start: &start}, Measure: apitypes.ActivityMeasureGpu, Limit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gpus.Unit != apitypes.Gpus || *gpus.Series[0].App != "billing" || gpus.Total != gpus.Series[0].Total ||
+		math.Abs(gpus.Series[0].Buckets[len(gpus.Series[0].Buckets)-1].Value-2) > 1e-3 {
+		t.Fatalf("gpu activity %+v", gpus)
 	}
 
 	starts, err := f.obs.AccountActivity(t.Context(), member, observability.ActivityQuery{
