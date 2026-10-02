@@ -36,6 +36,13 @@ type CoverNode struct {
 	Placed []int
 }
 
+// CoverLimits bound a cover: at most Nodes nodes, within the vCPUs each
+// known quota in VCPUs has left.
+type CoverLimits struct {
+	Nodes int
+	VCPUs map[QuotaKey]int64
+}
+
 // CoverResult is the chosen nodes and what they leave unmet.
 type CoverResult struct {
 	Nodes       []CoverNode
@@ -57,22 +64,30 @@ type coverState struct {
 	nodes     []int
 	placed    [][]int
 	progress  float64
+	// quota is the vCPUs chosen per limited quota, by quotas index.
+	quota []int64
 }
 
-// Cover picks at most maxNodes nodes from offers that meet need at the
+// Cover picks nodes from offers within limits that meet need at the
 // lowest total cost. It is a bounded beam search: after each added node it
 // keeps the coverWidth partial covers with the lowest cost per unit of
 // progress. A complete cover minimizes cost among those explored; without
 // one, the cover that places the most returns with what is unmet.
-func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, maxNodes int) CoverResult {
+func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, limits CoverLimits) CoverResult {
 	need.Shapes = mergeShapes(need.Shapes, coverShapes)
-	candidates := coverCandidates(offers, need, cost)
+	candidates := coverCandidates(offers, need, cost, limits)
+	var quotas []QuotaKey
+	for key := range limits.VCPUs {
+		if slices.ContainsFunc(candidates, func(o FleetOffer) bool { return o.Quota == key }) {
+			quotas = append(quotas, key)
+		}
+	}
 	order := make([]int, len(need.Items))
 	for i := range order {
 		order[i] = i
 	}
 	slices.SortStableFunc(order, func(a, b int) int { return shapeOrder(need.Items[b].Shape, need.Items[a].Shape) })
-	start := coverState{remaining: make([]int, len(need.Items)), unmet: uint64(1)<<len(need.Shapes) - 1}
+	start := coverState{remaining: make([]int, len(need.Items)), unmet: uint64(1)<<len(need.Shapes) - 1, quota: make([]int64, len(quotas))}
 	if len(need.Shapes) == coverShapes {
 		start.unmet = ^uint64(0)
 	}
@@ -86,11 +101,18 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, max
 	states := []coverState{start}
 	partial := start
 	var best *coverState
-	for depth := 0; depth < maxNodes && len(states) > 0; depth++ {
+	for depth := 0; depth < limits.Nodes && len(states) > 0; depth++ {
 		expanded := map[string]coverState{}
 		for _, s := range states {
 			for c, o := range candidates {
+				q := slices.Index(quotas, o.Quota)
+				if q >= 0 && s.quota[q]+o.Type.VCPUs() > limits.VCPUs[o.Quota] {
+					continue
+				}
 				next, moved := s.add(c, o, cost(o), need, order, total)
+				if q >= 0 {
+					next.quota[q] += o.Type.VCPUs()
+				}
 				if !moved || (best != nil && next.cost >= best.cost) {
 					continue
 				}
@@ -126,8 +148,8 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, max
 }
 
 // coverCandidates are the offers that can contribute, the cheapest of each
-// usable shape, ties to the earlier offer.
-func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64) []FleetOffer {
+// usable shape and limited quota, ties to the earlier offer.
+func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, limits CoverLimits) []FleetOffer {
 	var out []FleetOffer
 	for _, o := range offers {
 		useful := !need.Aggregate.Empty() ||
@@ -136,7 +158,11 @@ func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) 
 		if !useful {
 			continue
 		}
-		n := slices.IndexFunc(out, func(c FleetOffer) bool { return c.Usable == o.Usable })
+		_, limited := limits.VCPUs[o.Quota]
+		n := slices.IndexFunc(out, func(c FleetOffer) bool {
+			_, cLimited := limits.VCPUs[c.Quota]
+			return c.Usable == o.Usable && (!limited && !cLimited || c.Quota == o.Quota)
+		})
 		switch {
 		case n < 0:
 			out = append(out, o)
@@ -170,7 +196,7 @@ func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order 
 	moved = moved || supplied != s.supplied || unmet != s.unmet
 	next := coverState{
 		cost: s.cost + price, remaining: remaining, supplied: supplied, unmet: unmet,
-		nodes: append(slices.Clone(s.nodes), c), placed: append(slices.Clone(s.placed), placed),
+		nodes: append(slices.Clone(s.nodes), c), placed: append(slices.Clone(s.placed), placed), quota: slices.Clone(s.quota),
 	}
 	next.progress = next.coverage(need, total)
 	return next, moved
@@ -212,6 +238,9 @@ func (s coverState) key() string {
 	b = strconv.AppendInt(append(b, ','), s.supplied.MemoryBytes, 10)
 	b = strconv.AppendInt(append(b, ','), int64(s.supplied.GPUs), 10)
 	b = strconv.AppendUint(append(b, '|'), s.unmet, 16)
+	for _, v := range s.quota {
+		b = strconv.AppendInt(append(b, ','), v, 10)
+	}
 	return string(b)
 }
 

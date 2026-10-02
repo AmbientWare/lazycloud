@@ -35,7 +35,7 @@ func TestCoverChoosesTheLowerTotalCostForRequiredCapacity(t *testing.T) {
 		{coverSmall.Usable.Times(4), []string{"large"}},
 	} {
 		need := CoverNeed{Aggregate: c.need}
-		r := Cover([]FleetOffer{coverSmall, coverLarge}, need, hourlyCost, 16)
+		r := Cover([]FleetOffer{coverSmall, coverLarge}, need, hourlyCost, CoverLimits{Nodes: 16})
 		if !slices.Equal(boughtNames(r), c.want) || !r.Complete(need) {
 			t.Errorf("aggregate %+v bought %v", c.need, boughtNames(r))
 		}
@@ -44,12 +44,12 @@ func TestCoverChoosesTheLowerTotalCostForRequiredCapacity(t *testing.T) {
 
 func TestCoverFitsALargeRequestOnOneHostDespiteAggregateRoom(t *testing.T) {
 	need := CoverNeed{Shapes: []FleetCapacity{cpuGiB(16_000, 32)}}
-	r := Cover([]FleetOffer{coverSmall, coverLarge}, need, hourlyCost, 16)
+	r := Cover([]FleetOffer{coverSmall, coverLarge}, need, hourlyCost, CoverLimits{Nodes: 16})
 	if !slices.Equal(boughtNames(r), []string{"large"}) {
 		t.Fatalf("bought %v", boughtNames(r))
 	}
 	items := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(16_000, 32), Count: 1}}}
-	if r := Cover([]FleetOffer{coverSmall, coverLarge}, items, hourlyCost, 16); !slices.Equal(boughtNames(r), []string{"large"}) {
+	if r := Cover([]FleetOffer{coverSmall, coverLarge}, items, hourlyCost, CoverLimits{Nodes: 16}); !slices.Equal(boughtNames(r), []string{"large"}) {
 		t.Fatalf("items bought %v", boughtNames(r))
 	}
 }
@@ -57,7 +57,7 @@ func TestCoverFitsALargeRequestOnOneHostDespiteAggregateRoom(t *testing.T) {
 func TestCoverCountsEachContainerFittingANode(t *testing.T) {
 	medium := coverOffer("medium", cpuGiB(16_000, 32), 250_000)
 	need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(5000, 10), Count: 3}}}
-	r := Cover([]FleetOffer{coverSmall, medium}, need, hourlyCost, 16)
+	r := Cover([]FleetOffer{coverSmall, medium}, need, hourlyCost, CoverLimits{Nodes: 16})
 	if len(r.Nodes) != 1 || r.Nodes[0].Offer.Type.Name != "medium" || r.Nodes[0].Placed[0] != 3 || len(r.UnmetItems) != 0 {
 		t.Fatalf("cover %+v", r)
 	}
@@ -66,7 +66,7 @@ func TestCoverCountsEachContainerFittingANode(t *testing.T) {
 func TestCoverReportsWhatNoOfferCanPlace(t *testing.T) {
 	request := cpuGiB(5000, 10)
 	need := CoverNeed{Items: []CoverItem{{Shape: request, Count: 2}, {Shape: coverLarge.Usable, Count: 1}}}
-	r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, 16)
+	r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, CoverLimits{Nodes: 16})
 	if len(r.Nodes) != 2 || len(r.UnmetItems) != 1 || r.UnmetItems[0] != (CoverItem{Shape: coverLarge.Usable, Count: 1}) {
 		t.Fatalf("cover %+v", r)
 	}
@@ -81,11 +81,11 @@ func TestCoverReportsWhatNoOfferCanPlace(t *testing.T) {
 
 func TestCoverStopsAtItsNodeBoundAndReturnsTheBestPartial(t *testing.T) {
 	need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(7000, 14), Count: 5}}}
-	r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, 3)
+	r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, CoverLimits{Nodes: 3})
 	if len(r.Nodes) != 3 || r.UnmetItems[0].Count != 2 {
 		t.Fatalf("cover %+v", r)
 	}
-	if r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, 0); len(r.Nodes) != 0 || r.UnmetItems[0].Count != 5 {
+	if r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, CoverLimits{Nodes: 0}); len(r.Nodes) != 0 || r.UnmetItems[0].Count != 5 {
 		t.Fatalf("no room still reports the need: %+v", r)
 	}
 }
@@ -107,7 +107,7 @@ func TestCoverPacksTwoSixCPURequestsOntoOneLargerHost(t *testing.T) {
 		{2, []string{"c6a.4xlarge"}},
 	} {
 		need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(6000, 4), Count: c.count}}}
-		if r := Cover(offers, need, hourlyCost, 16); !slices.Equal(boughtNames(r), c.want) {
+		if r := Cover(offers, need, hourlyCost, CoverLimits{Nodes: 16}); !slices.Equal(boughtNames(r), c.want) {
 			t.Errorf("%d requests bought %v", c.count, boughtNames(r))
 		}
 	}

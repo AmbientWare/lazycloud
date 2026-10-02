@@ -2,6 +2,7 @@ package compute
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -260,8 +261,9 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{},
 		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, targets: map[ReserveMarket]MarketTargets{},
-		plan: FleetPlan{LightSince: map[HostID]time.Time{}},
+		plan: FleetPlan{LightSince: map[HostID]time.Time{}}, quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog),
 	}
+	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
 	views := ps.views()
 	ps.demand()
 	ps.light()
@@ -291,6 +293,9 @@ type pass struct {
 	hostRoom, reserveRoom int
 	offers                map[string][]FleetOffer
 	targets               map[ReserveMarket]MarketTargets
+	// quotaUsed is what running hosts and this pass's starts count
+	// against each vCPU quota.
+	quotaUsed map[QuotaKey]int64
 }
 
 type plannedHost struct {
@@ -447,6 +452,29 @@ func (ps *pass) cooled(h FleetHost) bool {
 
 func (ps *pass) room(m ReserveMarket) int { return ps.p.MaxGrowthActions - ps.used[m] }
 
+// limits bounds a cover to nodes and the quota room left.
+func (ps *pass) limits(nodes int) CoverLimits {
+	return CoverLimits{Nodes: nodes, VCPUs: quotaRoom(ps.s.Offers.Quotas, ps.quotaUsed)}
+}
+
+// quotaOf is the quota a host of type counts against, and its vCPUs.
+func (ps *pass) quotaOf(region, instanceType string, market Market) (QuotaKey, int64) {
+	t, _ := ps.typeNamed(instanceType)
+	return QuotaKey{Region: region, Class: quotaClassOf(instanceType), Market: market}, t.VCPUs()
+}
+
+// startable reports whether a stopped host's quota has room to start it.
+func (ps *pass) startable(h FleetHost) bool {
+	key, vcpus := ps.quotaOf(h.Region, h.InstanceType, h.Market)
+	left, known := quotaRoom(ps.s.Offers.Quotas, ps.quotaUsed)[key]
+	return !known || left >= vcpus
+}
+
+func (ps *pass) start(region, instanceType string, market Market) {
+	key, vcpus := ps.quotaOf(region, instanceType, market)
+	ps.quotaUsed[key] += vcpus
+}
+
 func (ps *pass) act(a FleetAction) int {
 	switch a.Kind {
 	case ActionResume, ActionBuy, ActionBuyReserve, ActionRightsize, ActionRefresh:
@@ -471,11 +499,13 @@ func (ps *pass) buy(m ReserveMarket, o FleetOffer, reserve bool, containers []uu
 		ps.hostRoom--
 	}
 	ps.planned = append(ps.planned, plannedHost{market: m, offer: o, reserve: reserve})
+	ps.start(o.Region, o.Type.Name, o.Market)
 	return ps.act(FleetAction{Kind: kind, Market: m, Offer: &o, Mode: mode, Containers: containers})
 }
 
 func (ps *pass) resume(m ReserveMarket, h *FleetHost, kind FleetActionKind, containers []uuid.UUID) int {
 	h.State = FleetStarting
+	ps.start(h.Region, h.InstanceType, h.Market)
 	ps.hostRoom--
 	ps.reserveRoom++
 	return ps.act(FleetAction{Kind: kind, Market: m, Host: ptr(h.ID), Containers: containers})
@@ -627,7 +657,7 @@ func (ps *pass) reserveFor(need Requirement, m ReserveMarket) *FleetHost {
 	var candidates []*FleetHost
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
-		if !h.resumable() || !h.Current || h.Protected || ps.cooled(*h) || !h.capacity().Fits(need) {
+		if !h.resumable() || !h.Current || h.Protected || ps.cooled(*h) || !ps.startable(*h) || !h.capacity().Fits(need) {
 			continue
 		}
 		if need.Preemptible && h.Market == MarketOnDemand && !ps.lendable(*h) {
@@ -695,7 +725,7 @@ func (ps *pass) buyFor(items []pendingItem) {
 		for i, shape := range c.shapes {
 			need.Items[i] = CoverItem{Shape: shape, Count: len(c.containers[i])}
 		}
-		result := Cover(offers, need, servingCost(ps.p), min(ps.room(c.market), ps.hostRoom))
+		result := Cover(offers, need, servingCost(ps.p), ps.limits(min(ps.room(c.market), ps.hostRoom)))
 		for _, node := range result.Nodes {
 			var ids []uuid.UUID
 			var taken []pendingItem
@@ -830,6 +860,7 @@ func (ps *pass) grow(v *marketView) {
 	short := v.t.Warm.Minus(ps.warmFree(v)).Clamp().Minus(ps.warmPending(v)).Clamp()
 	shapes := ps.uncoveredShapes(v)
 	reserves := ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && h.Current && !h.Protected && !ps.cooled(h) })
+	reserves = slices.DeleteFunc(reserves, func(h *FleetHost) bool { return !ps.startable(*h) })
 	locations, _ := ps.uncoveredLocations(v)
 	serves := func(h *FleetHost, demands []LocationDemand) bool {
 		return slices.ContainsFunc(demands, func(d LocationDemand) bool { return d.accepts(h.Region, h.Zone, h.ZoneID) && h.Usable.Covers(d.Shape) })
@@ -856,7 +887,7 @@ func (ps *pass) grow(v *marketView) {
 	locations, _ = ps.uncoveredLocations(v)
 	for _, d := range locations {
 		offers := slices.DeleteFunc(slices.Clone(ps.marketOffers(v.m, false)), func(o FleetOffer) bool { return !d.accepts(o.Region, o.Zone, o.ZoneID) })
-		result := Cover(offers, CoverNeed{Items: []CoverItem{{Shape: d.Shape, Count: d.Count}}}, servingCost(ps.p), min(ps.room(v.m), ps.hostRoom))
+		result := Cover(offers, CoverNeed{Items: []CoverItem{{Shape: d.Shape, Count: d.Count}}}, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom)))
 		for _, node := range result.Nodes {
 			ps.buy(v.m, node.Offer, false, nil)
 			short = short.Minus(node.Offer.Usable).Clamp()
@@ -864,7 +895,7 @@ func (ps *pass) grow(v *marketView) {
 		}
 	}
 	if !short.Empty() || len(shapes) > 0 {
-		result := Cover(ps.marketOffers(v.m, false), CoverNeed{Aggregate: short, Shapes: shapes}, servingCost(ps.p), min(ps.room(v.m), ps.hostRoom))
+		result := Cover(ps.marketOffers(v.m, false), CoverNeed{Aggregate: short, Shapes: shapes}, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom)))
 		for _, node := range result.Nodes {
 			ps.buy(v.m, node.Offer, false, nil)
 		}
@@ -1041,7 +1072,7 @@ func (ps *pass) reserves(v *marketView) {
 	limit := func() int { return min(ps.room(v.m), ps.reserveRoom) }
 	if v.mayGrow && !v.hibernate.Empty() {
 		offers := slices.DeleteFunc(slices.Clone(ps.marketOffers(v.m, true)), func(o FleetOffer) bool { return !o.Hibernate })
-		result := Cover(offers, CoverNeed{Aggregate: v.hibernate}, reserveCost(ps.p), limit())
+		result := Cover(offers, CoverNeed{Aggregate: v.hibernate}, reserveCost(ps.p), ps.limits(limit()))
 		for _, node := range result.Nodes {
 			ps.buy(v.m, node.Offer, true, nil)
 		}
@@ -1061,7 +1092,7 @@ func (ps *pass) reserves(v *marketView) {
 	if !v.mayGrow {
 		return
 	}
-	result := Cover(ps.marketOffers(v.m, true), CoverNeed{Aggregate: v.stopped, Shapes: v.stoppedOut}, reserveCost(ps.p), limit())
+	result := Cover(ps.marketOffers(v.m, true), CoverNeed{Aggregate: v.stopped, Shapes: v.stoppedOut}, reserveCost(ps.p), ps.limits(limit()))
 	for _, node := range result.Nodes {
 		ps.buy(v.m, node.Offer, true, nil)
 	}
@@ -1179,6 +1210,7 @@ func (ps *pass) rightsize(v *marketView) {
 		return
 	}
 	ps.hostRoom--
+	ps.start(best.offer.Region, best.offer.Type.Name, best.offer.Market)
 	ps.planned = append(ps.planned, plannedHost{market: v.m, offer: best.offer})
 	ps.act(FleetAction{Kind: ActionRightsize, Market: v.m, Host: ptr(best.host.ID), Offer: &best.offer})
 }
@@ -1187,10 +1219,11 @@ func (ps *pass) rightsize(v *marketView) {
 // update in place and stop again.
 func (ps *pass) refresh(v *marketView) {
 	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && !h.Current && !h.Protected && !ps.cooled(h) }) {
-		if v.retired[h.ID] || ps.room(v.m) <= 0 || ps.hostRoom <= 0 {
+		if v.retired[h.ID] || ps.room(v.m) <= 0 || ps.hostRoom <= 0 || !ps.startable(*h) {
 			continue
 		}
 		ps.hostRoom--
+		ps.start(h.Region, h.InstanceType, h.Market)
 		ps.act(FleetAction{Kind: ActionRefresh, Market: v.m, Host: ptr(h.ID)})
 	}
 }

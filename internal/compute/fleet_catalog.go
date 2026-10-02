@@ -1,6 +1,9 @@
 package compute
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // CatalogReviewed is when the catalog's prices and regions were last checked
 // against the AWS price list (published 2026-09-25); the reference reviewed
@@ -55,6 +58,32 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 	}
 	return rootVolumeGiB
 }
+
+// QuotaClass is the EC2 vCPU quota a type counts against.
+type QuotaClass string
+
+const (
+	// QuotaStandard covers the A, C, D, H, I, M, R, T and Z families.
+	QuotaStandard QuotaClass = "standard"
+	// QuotaG covers the G and VT families.
+	QuotaG QuotaClass = "g"
+	// QuotaP covers the P family.
+	QuotaP QuotaClass = "p"
+)
+
+// quotaClassOf is the quota class of an instance type name.
+func quotaClassOf(instanceType string) QuotaClass {
+	switch {
+	case strings.HasPrefix(instanceType, "g"), strings.HasPrefix(instanceType, "vt"):
+		return QuotaG
+	case strings.HasPrefix(instanceType, "p"):
+		return QuotaP
+	}
+	return QuotaStandard
+}
+
+// VCPUs is what a running host of the type counts against its quota.
+func (t CatalogType) VCPUs() int64 { return t.CPUMillis / 1000 }
 
 // CatalogTypeNamed finds a catalog type by name.
 func CatalogTypeNamed(name string) (CatalogType, bool) {

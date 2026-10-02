@@ -18,13 +18,55 @@ type SpotQuote struct {
 	ObservedAt   time.Time
 }
 
-// OfferCooldown is a refusal that cools one offer until Until.
+// OfferCooldown is a refusal that cools one offer until Until. A quota
+// refusal cools every type of the offer's quota class in its region and
+// market.
 type OfferCooldown struct {
 	Region       string
 	InstanceType string
 	Market       Market
 	RefusedAt    time.Time
 	Until        time.Time
+	Quota        bool
+}
+
+// QuotaKey names one EC2 vCPU quota: a class of types in a region and
+// market.
+type QuotaKey struct {
+	Region string
+	Class  QuotaClass
+	Market Market
+}
+
+// VCPUQuota is an EC2 vCPU quota's value as Service Quotas last reported
+// it. A quota never read is no limit.
+type VCPUQuota struct {
+	Key   QuotaKey
+	VCPUs int64
+}
+
+// QuotaUse counts the vCPUs hosts count against each quota: every instance
+// EC2 may run, which excludes stopped reserves.
+func QuotaUse(hosts []FleetHost, catalog []CatalogType) map[QuotaKey]int64 {
+	used := map[QuotaKey]int64{}
+	for _, h := range hosts {
+		if h.resumable() || h.State == FleetFailed {
+			continue
+		}
+		if i := slices.IndexFunc(catalog, func(t CatalogType) bool { return t.Name == h.InstanceType }); i >= 0 {
+			used[QuotaKey{Region: h.Region, Class: quotaClassOf(h.InstanceType), Market: h.Market}] += catalog[i].VCPUs()
+		}
+	}
+	return used
+}
+
+// quotaRoom is what each known quota leaves after used.
+func quotaRoom(quotas []VCPUQuota, used map[QuotaKey]int64) map[QuotaKey]int64 {
+	room := map[QuotaKey]int64{}
+	for _, q := range quotas {
+		room[q.Key] = q.VCPUs - used[q.Key]
+	}
+	return room
 }
 
 // OfferInputs are what offers are ranked from.
@@ -42,6 +84,10 @@ type OfferInputs struct {
 	ReportedMemory map[string]int64
 	// ZoneHosts counts live hosts per availability zone id.
 	ZoneHosts map[string]int
+	// Quotas are the EC2 vCPU quotas and QuotaUsed what live hosts count
+	// against them.
+	Quotas    []VCPUQuota
+	QuotaUsed map[QuotaKey]int64
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
@@ -61,6 +107,8 @@ type FleetOffer struct {
 	// CoolingRegion marks an offer kept only because no other region
 	// serves the need.
 	CoolingRegion bool
+	// Quota is the vCPU quota a host bought from the offer counts against.
+	Quota QuotaKey
 }
 
 // Key names the offer.
@@ -150,7 +198,8 @@ func coolingRegions(p Policy, cooldowns []OfferCooldown, now time.Time) map[stri
 // cooled reports whether a cooldown holds an offer back at now.
 func cooled(cooldowns []OfferCooldown, now time.Time, region, instanceType string, market Market) bool {
 	return slices.ContainsFunc(cooldowns, func(c OfferCooldown) bool {
-		return c.Region == region && c.InstanceType == instanceType && c.Market == market && c.Until.After(now)
+		return c.Region == region && c.Market == market && c.Until.After(now) &&
+			(c.InstanceType == instanceType || (c.Quota && quotaClassOf(c.InstanceType) == quotaClassOf(instanceType)))
 	})
 }
 
@@ -179,9 +228,11 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // accepts (GPU hosts only for GPU work), and that keep the purchase margin.
 // Order: the need's GPU preference, cooling regions last, complete hourly
 // cost, region preference, fewest hosts in the zone, key. Offers in a
-// cooling region are dropped while another region serves the need.
+// cooling region are dropped while another region serves the need, and an
+// offer whose host would exceed a known vCPU quota is skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
+	room := quotaRoom(in.Quotas, in.QuotaUsed)
 	cooling := coolingRegions(p, in.Cooldowns, in.Now)
 	gpus := need.GPUsNeeded()
 	markets := []Market{MarketOnDemand}
@@ -216,13 +267,14 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 							continue
 						}
 					}
-					if cooled(in.Cooldowns, in.Now, region, t.Name, market) {
+					quota := QuotaKey{Region: region, Class: quotaClassOf(t.Name), Market: market}
+					if left, known := room[quota]; cooled(in.Cooldowns, in.Now, region, t.Name, market) || (known && left < t.VCPUs()) {
 						continue
 					}
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
-						CoolingRegion: cooling[region],
+						CoolingRegion: cooling[region], Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need.Preemptible); rejected {
 						continue

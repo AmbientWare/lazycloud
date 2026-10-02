@@ -58,6 +58,7 @@ type simResult struct {
 	hours                      float64
 	waits                      []time.Duration
 	launches, stops, resumes   int
+	refusals                   int
 	finalHourly                int64
 	violations                 []string
 }
@@ -77,6 +78,10 @@ type sim struct {
 	planned time.Time
 	// demandOnly plans without forecasts, as the rewrite does today.
 	demandOnly bool
+	// quotas are EC2's vCPU quotas; the planner reads them only with
+	// knowQuota (P2).
+	quotas    map[QuotaKey]int64
+	knowQuota bool
 }
 
 func spotSnapshot(t *testing.T, now time.Time, networks map[string]Network) []SpotQuote {
@@ -212,6 +217,11 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 func (s *sim) plan(arrivals []simArrival) {
 	snapshot := FleetSnapshot{Now: s.now, Offers: s.in, Markets: s.markets, Forecasts: map[ReserveMarket]MarketForecast{}}
 	snapshot.Offers.Now = s.now
+	if s.knowQuota {
+		for key, vcpus := range s.quotas {
+			snapshot.Offers.Quotas = append(snapshot.Offers.Quotas, VCPUQuota{Key: key, VCPUs: vcpus})
+		}
+	}
 	live, reserves := 0, 0
 	for _, h := range s.hosts {
 		snapshot.Hosts = append(snapshot.Hosts, s.fleetHost(h))
@@ -299,9 +309,19 @@ func (s *sim) host(id HostID) *simHost {
 	return s.hosts[i]
 }
 
-func (s *sim) launch(a FleetAction, reserve bool) HostID {
-	s.next++
+// launch starts a host for a purchase, or refuses it as EC2 would when the
+// purchase exceeds its vCPU quota; a refusal cools the offer, or with
+// quotas known its whole class.
+func (s *sim) launch(a FleetAction, reserve bool) (HostID, bool) {
 	o := *a.Offer
+	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
+		s.r.refusals++
+		s.in.Cooldowns = append(s.in.Cooldowns, OfferCooldown{
+			Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, RefusedAt: s.now, Until: s.now.Add(10 * time.Minute), Quota: s.knowQuota,
+		})
+		return HostID{}, false
+	}
+	s.next++
 	h := &simHost{offer: o, FleetHost: FleetHost{
 		ID: HostID{s.next, 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
@@ -314,17 +334,25 @@ func (s *sim) launch(a FleetAction, reserve bool) HostID {
 	}
 	s.hosts = append(s.hosts, h)
 	s.r.launches++
-	return h.ID
+	return h.ID, true
+}
+
+func (s *sim) quotaUse() map[QuotaKey]int64 {
+	var hosts []FleetHost
+	for _, h := range s.hosts {
+		hosts = append(hosts, h.FleetHost)
+	}
+	return QuotaUse(hosts, s.in.Catalog)
 }
 
 func (s *sim) apply(plan FleetPlan) {
 	bought := map[int]HostID{}
 	for i, a := range plan.Actions {
 		switch a.Kind {
-		case ActionBuy, ActionRightsize:
-			bought[i] = s.launch(a, false)
-		case ActionBuyReserve:
-			bought[i] = s.launch(a, true)
+		case ActionBuy, ActionRightsize, ActionBuyReserve:
+			if id, ok := s.launch(a, a.Kind == ActionBuyReserve); ok {
+				bought[i] = id
+			}
 		case ActionResume, ActionRefresh:
 			h := s.host(*a.Host)
 			h.until = s.now.Add(simBoot)
@@ -353,7 +381,9 @@ func (s *sim) apply(plan FleetPlan) {
 		case w.Host != nil:
 			s.pending[i].host = w.Host
 		case w.Action != nil:
-			s.pending[i].host = ptr(bought[*w.Action])
+			if id, ok := bought[*w.Action]; ok {
+				s.pending[i].host = ptr(id)
+			}
 		}
 	}
 	for _, h := range s.hosts {
@@ -389,9 +419,9 @@ func (r simResult) row(name string) string {
 	if len(waits) > 0 {
 		p95 = waits[(len(waits)*95+99)/100-1]
 	}
-	return fmt.Sprintf("%-34s $%7.3f/h  reserve $%6.3f/h  idle-end $%6.3f/h  waits>30s %3d/%-3d  p95 %5s  launches %3d stops %3d resumes %3d",
+	return fmt.Sprintf("%-34s $%7.3f/h  reserve $%6.3f/h  idle-end $%6.3f/h  waits>30s %3d/%-3d  p95 %5s  launches %3d refused %3d stops %3d resumes %3d",
 		name, float64(r.spendMicros)/3600/1e6/r.hours, float64(r.reserveMicros)/3600/1e6/r.hours, float64(r.finalHourly)/1e6,
-		long, len(waits), p95, r.launches, r.stops, r.resumes)
+		long, len(waits), p95, r.launches, r.refusals, r.stops, r.resumes)
 }
 
 // demandOnly is the rewrite today: no headroom and no reserves.
@@ -469,5 +499,33 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 	t.Logf("floors cost $%.4f/h ($%.0f/month): %d hosts", float64(want)/1e6, float64(want)*730/1e6, len(first.Actions))
 	for _, a := range first.Actions {
 		t.Logf("  %s %s %s", a.Kind, a.Market, a.Offer.Key())
+	}
+}
+
+// TestFleetQuotaScenario is Oregon with a G Spot quota of 0, as on
+// 2026-09-18: Spot-tolerant T4 work can only use Spot there. Without the
+// quota every pass tries another G type and is refused; with it nothing is
+// tried.
+func TestFleetQuotaScenario(t *testing.T) {
+	need := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}
+	arrivals := []simArrival{{at: 10 * time.Minute, need: need, count: 2, runs: 10 * time.Minute}}
+	for _, known := range []bool{false, true} {
+		s := newSim(t, DefaultPolicy())
+		s.in.Networks = map[string]Network{"us-west-2": oneZone("us-west-2a", "usw2-az1")}
+		s.in.Spot = spotSnapshot(t, offerNow, s.in.Networks)
+		s.quotas = map[QuotaKey]int64{{Region: "us-west-2", Class: QuotaG, Market: MarketSpot}: 0}
+		s.knowQuota = known
+		r := s.run(time.Hour, arrivals)
+		name := "Oregon G Spot quota 0, quota unknown (today)"
+		if known {
+			name = "Oregon G Spot quota 0, quota read (P2)"
+		}
+		t.Log(r.row(name))
+		if known && r.refusals > 0 {
+			t.Errorf("%s: %d refused launches", name, r.refusals)
+		}
+		if !known && r.refusals == 0 {
+			t.Errorf("%s: the scenario did not reach the quota", name)
+		}
 	}
 }
