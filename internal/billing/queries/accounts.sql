@@ -33,15 +33,10 @@ update billing_accounts set reload_paused_purchase_id = null, reload_pause_reaso
 where user_id = @user_id;
 
 -- name: SetComplimentary :execrows
--- Waiving marks the balance due, so the rollup covers usage from then on.
-with account as (
-    update billing_accounts a
-    set complimentary_since = case when @complimentary::bool then coalesce(a.complimentary_since, now()) end,
-        updated_at = now()
-    where a.user_id = @user_id
-    returning a.user_id
-)
-update billing_balances b set due = true where b.user_id in (select account.user_id from account);
+update billing_accounts a
+set complimentary_since = case when @complimentary::bool then coalesce(a.complimentary_since, now()) end,
+    updated_at = now()
+where a.user_id = @user_id;
 
 -- name: AccountUser :one
 select id, email from users where id = @id;
