@@ -78,6 +78,9 @@ fleet-capacity-plan.
 
 ## Progress
 
+Branch `fleet-planner` from `fleet-capacity-plan` at
+`7f33b8bc59af460edc8e5a2276c2588c8aa9d7ce`.
+
 ## Intentional differences
 
 - One pass covers demand and reserves; the reference ran acquisition and
