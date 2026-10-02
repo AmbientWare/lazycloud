@@ -65,8 +65,11 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 
 	// Ending the leader's session releases the lock; the leader notices
 	// within its check.
-	if _, err := pool.Exec(t.Context(), `select pg_terminate_backend(pid) from pg_locks
-		where locktype = 'advisory' and granted and pid <> pg_backend_pid()`); err != nil {
+	// Only this test's database: other packages' tests share the server.
+	if _, err := pool.Exec(t.Context(), `select pg_terminate_backend(l.pid) from pg_locks l
+		join pg_database d on d.oid = l.database
+		where l.locktype = 'advisory' and l.granted and l.pid <> pg_backend_pid()
+		  and d.datname = current_database()`); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); candidates[first].leading.Load() && time.Now().Before(deadline); {
