@@ -17,6 +17,12 @@ from shared.serialization import to_json_value
 from lazycloud._terminal import theme
 
 
+def short_id(value: object, length: int = 8) -> str:
+    """The end of an ID. Platform IDs are UUIDv7, whose first digits are a
+    timestamp that IDs made close together share."""
+    return str(value)[-length:]
+
+
 def label(value: str) -> str:
     return value.replace("_", " ").strip().capitalize()
 

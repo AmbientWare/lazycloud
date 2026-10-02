@@ -18,6 +18,7 @@ from shared.api import (
 
 from lazycloud._invocation import prepare_arguments
 from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.formatting import short_id
 from lazycloud._terminal.streams import console
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
@@ -417,7 +418,7 @@ def open_existing_shell(
     workspace: str | None = None,
 ) -> None:
     _require_interactive_output(ctx)
-    indicator = ConnectingIndicator(container_id[:12]).start()
+    indicator = ConnectingIndicator(short_id(container_id, 12)).start()
     try:
         shell_client = Shell(
             workspace=current_workspace(workspace),
@@ -438,7 +439,7 @@ def open_shell_session(
     indicator: ConnectingIndicator | None = None,
 ) -> None:
     _require_interactive_output(ctx)
-    waiting = indicator or ConnectingIndicator(session.container_id[:12]).start()
+    waiting = indicator or ConnectingIndicator(short_id(session.container_id, 12)).start()
     try:
         shell_client = Shell(
             workspace=current_workspace(workspace),

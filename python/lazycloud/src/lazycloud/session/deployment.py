@@ -23,6 +23,7 @@ from shared.api import (
     WorkloadSpec,
 )
 
+from lazycloud._terminal.formatting import short_id
 from lazycloud.clients.api import ApiClient
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import (
@@ -447,7 +448,7 @@ def _prepare_images(
 
 
 def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:
-    step.done(f"{name} · {str(release.id)[:8]}")
+    step.done(f"{name} · {short_id(release.id)}")
 
 
 def _source_placement(

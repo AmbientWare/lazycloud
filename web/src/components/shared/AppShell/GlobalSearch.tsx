@@ -20,7 +20,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { ContentTransition } from "@/components/shared/ContentTransition";
-import { formatKind } from "@/lib/format";
+import { formatKind, shortId } from "@/lib/format";
 import {
   appSearchQueryOptions,
   workloadSearchQueryOptions,
@@ -141,7 +141,7 @@ export function GlobalSearch({
         key: `task-${task.id}`,
         group: "Tasks",
         label: task.function,
-        detail: `${formatKind(task.status)} · ${task.id.slice(0, 8)}`,
+        detail: `${formatKind(task.status)} · ${shortId(task.id)}`,
         href: `${base}/tasks/${encodeURIComponent(task.id)}`,
         icon: Activity,
       });

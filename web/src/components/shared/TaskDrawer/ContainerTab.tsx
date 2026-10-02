@@ -13,7 +13,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { StopCause } from "@/components/shared/StopCause";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, shortId } from "@/lib/format";
 import {
   containerLifecycleQueryOptions,
   containerMetricsQueryOptions,
@@ -107,7 +107,7 @@ function ContainerDetails({
       <section aria-labelledby="container-identity-heading">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 id="container-identity-heading" className="mono min-w-0 truncate text-sm font-medium">
-            {`${container.function}-${container.id.slice(0, 8)}`}
+            {`${container.function}-${shortId(container.id)}`}
           </h3>
           <StatusChip status={container.state} live={container.state === "ready"} />
         </div>

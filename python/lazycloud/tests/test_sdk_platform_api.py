@@ -988,9 +988,9 @@ def test_remote_reports_why_a_queued_task_waits(
 
     assert updates == [(task_id, TaskPendingReason.CapacityBusy), (task_id, None)]
     stderr = capsys.readouterr().err
-    assert f"Task {task_id[:8]} · pending" in stderr
+    assert f"Task {task_id[-8:]} · pending" in stderr
     assert "Waiting for an available function container." in stderr
-    assert f"{task_id[:8]} succeeded" in stderr
+    assert f"{task_id[-8:]} succeeded" in stderr
 
 
 def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:

@@ -25,6 +25,11 @@ export function exactTime(value: string): string {
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }
 
+/** The end of an ID. IDs are UUIDv7, whose first digits are a timestamp that IDs made close together share. */
+export function shortId(id: string): string {
+  return id.slice(-8);
+}
+
 /** `12 apps`, `1 app` — the count first, because that is what is being scanned. */
 export function countLabel(value: number, singular: string, plural = `${singular}s`): string {
   return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;

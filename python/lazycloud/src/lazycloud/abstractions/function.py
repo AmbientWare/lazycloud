@@ -58,6 +58,7 @@ from shared.serialization import to_json_value
 from shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
 
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
+from lazycloud._terminal.formatting import short_id
 from lazycloud.abstractions.image import Image, ImageBuildResult
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -546,7 +547,7 @@ class Function(Generic[P, R]):
     def run_task(self, task: Task) -> Any:
         """Follow a submitted task's output until it finishes, then return its outcome."""
         with self._task_step() as step:
-            step.update(f"{task.task_id[:8]} submitted")
+            step.update(f"{short_id(task.task_id)} submitted")
             return self._follow(task, step)
 
     def _remote_call(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> R:
@@ -554,7 +555,7 @@ class Function(Generic[P, R]):
         payload = self._input(args, kwargs, workspace)
         with self._task_step() as step:
             task = self._submit(client, workspace, [payload])[0]
-            step.update(f"{task.task_id[:8]} submitted")
+            step.update(f"{short_id(task.task_id)} submitted")
             return cast(R, self._follow(task, step))
 
     def _follow(self, task: Task, step: TerminalStep) -> Any:
@@ -580,7 +581,7 @@ class Function(Generic[P, R]):
                 raise FunctionOperationError(msg) from exc
             raise
         reporter.update(task.task_id, None)
-        step.update(f"{task.task_id[:8]} {view.status.value}")
+        step.update(f"{short_id(task.task_id)} {view.status.value}")
         return task.outcome(view)
 
     def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str) -> TaskInput:
@@ -762,7 +763,7 @@ class _QueuedTaskWatcher:
             else:
                 if view.status is not status:
                     status = view.status
-                    self.step.update(f"{self.task.task_id[:8]} {status.value}")
+                    self.step.update(f"{short_id(self.task.task_id)} {status.value}")
                 self.reporter.update(self.task.task_id, view.pending)
                 if view.status is not TaskStatus.queued:
                     return

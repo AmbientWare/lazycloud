@@ -6,7 +6,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import type { Schemas } from "@/lib/api/client";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, shortId } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
 import {
   accountCostsQueryOptions,
@@ -58,15 +58,13 @@ export function UsageRows({
               <span className="truncate">
                 {row.workload_name ||
                   (row.task_id
-                    ? `Run ${row.task_id.slice(0, 8)}`
+                    ? `Run ${shortId(row.task_id)}`
                     : row.workload_id
                       ? "Workload removed"
                       : "Compute")}
               </span>
               {row.task_id && row.workload_name ? (
-                <span className="mono shrink-0 text-muted-foreground">
-                  {row.task_id.slice(0, 8)}
-                </span>
+                <span className="mono shrink-0 text-muted-foreground">{shortId(row.task_id)}</span>
               ) : null}
             </span>
             <span className="mono text-right tabular-nums text-muted-foreground">
