@@ -14,7 +14,7 @@ resource "aws_s3_object" "values" {
       enabled       = true
       region        = var.region
       readerRoleArn = aws_iam_role.secrets_reader.arn
-      documents     = { platform = aws_secretsmanager_secret.platform.name, operator = aws_secretsmanager_secret.operator.name }
+      documents     = { platform = aws_secretsmanager_secret.platform.name, operator = data.aws_secretsmanager_secret.operator.name }
     }
     # Kubelet probes, NLB health checks and the TLS-terminating host NLB
     # all come from the cluster VPC.

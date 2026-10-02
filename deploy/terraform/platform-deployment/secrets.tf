@@ -1,7 +1,8 @@
 # Two Secrets Manager documents. Terraform writes <deployment>/platform
-# whole; operators own <deployment>/operator (GitHub App, Stripe and Resend
-# keys, Cloudflare tokens), whose values never enter Terraform state. The
-# chart maps each property to the processes that read it.
+# whole. <deployment>/operator holds what operators provide (GitHub App,
+# Stripe and Resend keys, Cloudflare tokens); it exists before this root and
+# outlives it, so Terraform only looks it up and its values never enter
+# state. The chart maps each property to the processes that read it.
 
 # Wraps every workspace secret's data key; losing it loses them all.
 resource "random_bytes" "secrets_master_key" {
@@ -31,6 +32,6 @@ resource "aws_secretsmanager_secret_version" "platform" {
   })
 }
 
-resource "aws_secretsmanager_secret" "operator" {
+data "aws_secretsmanager_secret" "operator" {
   name = "${var.deployment}/operator"
 }

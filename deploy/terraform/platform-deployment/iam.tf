@@ -201,7 +201,7 @@ resource "aws_iam_role_policy" "secrets_reader" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-      Resource = [aws_secretsmanager_secret.platform.arn, aws_secretsmanager_secret.operator.arn]
+      Resource = [aws_secretsmanager_secret.platform.arn, data.aws_secretsmanager_secret.operator.arn]
     }]
   })
 }

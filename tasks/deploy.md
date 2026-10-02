@@ -59,7 +59,8 @@ it and refuses it in config.
 | `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` (from the Terraform-made endpoint) | the same | server |
 | `LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS` | file `credentials.json` | cloudflared |
 
-`lazycloud-prod/operator`, values the operator writes after the first apply:
+`lazycloud-prod/operator`, which the operator owns and Terraform only looks
+up. It already holds these from main, unchanged:
 
 | Property | Read by |
 | --- | --- |
@@ -69,6 +70,11 @@ it and refuses it in config.
 | `LAZYCLOUD_RESEND_API_KEY` | scheduler |
 | `LAZYCLOUD_CLOUDFLARE_API_TOKEN` (SSL and Certificates edit, custom domains) | server |
 | `LAZYCLOUD_TCP_DNS_API_TOKEN` (DNS edit on the zone) | cert-manager's DNS-01 solver |
+
+The document also keeps main's `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` (its
+endpoint is gone; the platform document's replaces it),
+`LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID` and three `LAZYCLOUD_TUNNEL_*`
+properties of main's connection gateway. The chart maps none of them.
 
 Server, beyond those:
 
@@ -145,8 +151,9 @@ the PlanetScale database. Everything below is a fresh build. Kept:
    address).
 5. [GO] `platform-deployment` apply (`deployment`, `github_environment`,
    `domain`, `cloudflare_account_id`, `cloudflare_zone_id`,
-   `planetscale_organization`). Then write the exported operator values into
-   `lazycloud-prod/operator`. Check the Neki profile size in the dashboard.
+   `planetscale_organization`). It reads `lazycloud-prod/operator` and
+   fails if the document is missing. Check the Neki profile size in the
+   dashboard.
 6. Verify Neki before shipping: in two `pscale shell lazycloud-prod main`
    sessions run `LISTEN lc_test` and `NOTIFY lc_test`, and `SELECT
    pg_advisory_lock(1)` in one while the other's `pg_try_advisory_lock(1)`
