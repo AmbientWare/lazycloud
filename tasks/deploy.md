@@ -38,7 +38,9 @@ Connections that keep state in their session open from
 `LAZYCLOUD_DATABASE_SESSION_URL` (`database.OpenSession`), the direct
 connection: every LISTEN (the server's and scheduler's listeners, the
 dashboard's change hub, the edge's route watch), the migration lock, the
-metering lock and, once #442 lands, the scheduler's leader lock. Everything
+metering lock and the scheduler's leader lock. The leader checks
+`pg_locks` for its own lock every check, so a session a proxy moved to
+another backend cannot pass for the leader. Everything
 else is a transaction or a single statement: the other advisory locks are
 `pg_advisory_xact_lock`, nothing runs `SET`, and pgx's cached prepared
 statements use the extended protocol, whose statement lifecycle the router
@@ -226,8 +228,8 @@ the PlanetScale database. Everything below is a fresh build. Kept:
     endpoint on its generated host; a TCP pod; an image build pushing to
     ECR; `machine join`; a connected AWS account's function on a baked host
     in that account; a custom domain; a Stripe delivery; an invitation
-    email; Argo CD at `argocd.<domain>`; with #442, exactly one scheduler
-    logs `leading timed passes`; `kubectl -n lazycloud-prod get
+    email; Argo CD at `argocd.<domain>`; exactly one scheduler logs
+    `leading timed passes`; `kubectl -n lazycloud-prod get
     policyendpoints` lists one per NetworkPolicy, which shows enforcement
     is on.
 
@@ -259,12 +261,9 @@ Rollback after bring-up is Deploy with an earlier version.
   database URL` (database, server, scheduler, billing, edge):
   `LAZYCLOUD_DATABASE_SESSION_URL` and `-database-session-url`, empty for
   the main URL. Listeners, the change hub, the edge's route watch, both
-  binaries' migrations and the metering lock use it.
-- For #442 (perf-fixes), at merge: the scheduler's
-  `database.Lead(ctx, pool, ...)` becomes `database.Lead(ctx, session,
-  ...)`. Git will not flag it. `holdLead` would also do better to check
-  `pg_locks` for its own advisory lock instead of `conn.Ping`, so a session
-  a proxy re-homed cannot pass for the leader.
+  binaries' migrations, the metering lock and the scheduler's leader
+  election use it. `holdLead` checks `pg_locks` for its own lock instead of
+  pinging. Test: `TestLeaderCheckSeesOnlyItsOwnSessionsLock`.
 - shellcheck fixes in `deploy/local/build-runtime.sh` and
   `garage-bootstrap.sh`; `host-setup.sh` reads the shared gVisor pin.
 
