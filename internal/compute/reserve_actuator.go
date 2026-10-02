@@ -117,17 +117,23 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 	now := time.Now()
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate && h.HibernationConfigured &&
 		instance.HibernationOptions != nil && aws.ToBool(instance.HibernationOptions.Configured)
+	// A stop whose answer was lost, which EC2 took: what this stop saves is
+	// not known yet, whatever the last one saved.
+	lostEvidence := EvidenceUnavailable
+	if hibernate {
+		lostEvidence = EvidenceUnknown
+	}
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
+		if h.StopRequestedAt == nil {
+			if err := c.recordStop(ctx, h.ID, lostEvidence, false); err != nil {
+				return err
+			}
+		}
 		return c.reserveStopped(ctx, h.ID, stopReason(instance.StateReason))
 	case ec2types.InstanceStateNameStopping:
 		if h.StopRequestedAt == nil {
-			// The stop's answer was lost; EC2 took it.
-			evidence := EvidenceUnavailable
-			if hibernate {
-				evidence = EvidenceUnknown
-			}
-			return c.recordStop(ctx, h.ID, evidence, false)
+			return c.recordStop(ctx, h.ID, lostEvidence, false)
 		}
 		requested := *h.StopRequestedAt
 		if h.ForceStopAt != nil {

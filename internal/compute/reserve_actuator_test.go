@@ -257,10 +257,18 @@ func TestAStopPendingTenMinutesIsForcedAndALostStopAnswerIsNotRepeated(t *testin
 	if f := stopOf(t, o, lost); !f.Requested || f.Evidence != string(compute.EvidenceUnknown) {
 		t.Fatalf("host with a lost answer %+v, want its hibernation recorded", f)
 	}
+	// Both answers lost: EC2 stopped it plainly before the actuator saw
+	// the stop. The last stop's saved image says nothing about this one.
+	unseen := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c009")
+	ec2.add(fakeInstance{ID: "i-0000000000000c009", State: "stopped", Hibernation: true, StateReason: "Client.InstanceInitiatedShutdown"}, unseen.String())
+	run(t, o.pool, "update hosts set image_evidence = 'saved' where id = $1", uuid.UUID(unseen))
 	expireLeases(t, o)
 	actuate(t, o)
 	if n := len(emulator.calls("StopInstances")); n != 1 {
 		t.Fatalf("%d StopInstances calls, want no repeat inside the forced stop's window", n)
+	}
+	if f := stopOf(t, o, unseen); f.Phase != "stopped" || f.Evidence != string(compute.EvidenceFailed) {
+		t.Fatalf("host stopped unseen %+v, want stopped with this stop's evidence", f)
 	}
 }
 

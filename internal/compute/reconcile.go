@@ -260,18 +260,23 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, failure Failure,
 // host is gone, with every instance they launched. A request whose launch
 // answer was lost still has a live host and is spared.
 func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Logger, client *ec2.Client) error {
-	out, err := client.DescribeSpotInstanceRequests(ctx, &ec2.DescribeSpotInstanceRequestsInput{
+	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
 		Filters: []ec2types.Filter{
 			{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}},
 			{Name: aws.String("state"), Values: []string{"open", "active", "disabled"}},
 		},
 	})
-	if err != nil {
-		return fmt.Errorf("describe spot requests: %w", err)
+	var requests []ec2types.SpotInstanceRequest
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("describe spot requests: %w", err)
+		}
+		requests = append(requests, page.SpotInstanceRequests...)
 	}
 	hosts := map[string]uuid.UUID{}
 	var tagged []uuid.UUID
-	for _, r := range out.SpotInstanceRequests {
+	for _, r := range requests {
 		for _, t := range r.Tags {
 			if id, err := uuid.Parse(aws.ToString(t.Value)); err == nil && aws.ToString(t.Key) == tagHost {
 				hosts[aws.ToString(r.SpotInstanceRequestId)] = id
@@ -279,7 +284,7 @@ func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Log
 			}
 		}
 	}
-	if len(out.SpotInstanceRequests) == 0 {
+	if len(requests) == 0 {
 		return nil
 	}
 	known, err := c.queries.KnownHostIDs(ctx, tagged)
@@ -290,7 +295,7 @@ func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Log
 	for _, id := range known {
 		live[id] = true
 	}
-	for _, r := range out.SpotInstanceRequests {
+	for _, r := range requests {
 		request := aws.ToString(r.SpotInstanceRequestId)
 		if host, ok := hosts[request]; ok && live[host] {
 			continue
