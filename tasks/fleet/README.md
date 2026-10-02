@@ -4,6 +4,16 @@ The design is tasks/fleet/plan.md; the rules are tasks/fleet/parity.md. These
 files live on `fleet-capacity-plan`, which is also the integration branch.
 They are removed before the final merge to main.
 
+## Decisions
+
+The user decided on 2026-10-02:
+
+- Reserve floors: keep the reference's numbers. They can change later.
+- Proposals P1 (prove hibernation from the agent's resume report) and P2
+  (read EC2 quotas before buying) are approved; the packets that own them
+  deliver them, each in its own commit. P3 and P4 are not approved.
+- The end-to-end resume check runs on prod after the Ship.
+
 ## Packets
 
 | Packet | Branch | Migration | Shared-file range | Depends on |
