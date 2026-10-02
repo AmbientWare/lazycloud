@@ -57,7 +57,7 @@ steps run after the user's go-ahead for the Ship.
 ## Progress
 
 Branch `fleet-acceptance` from `fleet-capacity-plan` at
-`4a8ff51f6fd3d86dba7d5ad6dbc050c3e79dcea3`, every packet merged.
+`4a8ff51f22b29c889875af733360157c26b3a992`, every packet merged.
 
 The user narrowed this packet on 2026-10-02, overriding the plan above:
 real EC2 runs in `default` (534742592531, the platform account; `default-test`
