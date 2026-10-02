@@ -79,6 +79,8 @@ visual parity.
   ASGI app answers on its same-origin path but has no playground.
 - Endpoint and ASGI requests appear on their workload page; the Tasks
   page, an app's recent tasks and activity charts count function tasks.
+- Call snippets use the workload's latest URL, which keeps answering
+  after a redeploy or prune, instead of the version URL.
 
 ## Gaps
 
