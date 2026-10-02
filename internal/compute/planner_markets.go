@@ -10,38 +10,30 @@ import (
 	"github.com/google/uuid"
 )
 
-// PlanState totals one state's hosts in a published market.
-type PlanState struct {
-	State     FleetState    `json:"state"`
-	Machines  int           `json:"machines"`
-	Capacity  FleetCapacity `json:"capacity"`
-	Allocated FleetCapacity `json:"allocated"`
-}
-
 // PublishedMarket is one market's plan as the planner publishes it in
 // fleet_markets, for every replica and the admin page.
 type PublishedMarket struct {
-	Preemptible           bool            `json:"preemptible"`
-	GPUType               string          `json:"gpu_type"`
-	Quiet                 bool            `json:"quiet"`
-	Load                  FleetCapacity   `json:"load"`
-	WarmTarget            FleetCapacity   `json:"warm_target"`
-	WarmFree              FleetCapacity   `json:"warm_free"`
-	WarmPending           FleetCapacity   `json:"warm_pending"`
-	StoppedTarget         FleetCapacity   `json:"stopped_target"`
-	ReserveCapacity       FleetCapacity   `json:"reserve_capacity"`
-	ReserveReady          FleetCapacity   `json:"reserve_ready"`
-	ReservePending        FleetCapacity   `json:"reserve_pending"`
-	HibernationTarget     FleetCapacity   `json:"hibernation_target"`
-	Hibernated            FleetCapacity   `json:"hibernated"`
-	HibernationUnverified FleetCapacity   `json:"hibernation_unverified"`
-	Shortfall             FleetCapacity   `json:"shortfall"`
-	StoppedShortfall      FleetCapacity   `json:"stopped_shortfall"`
-	HibernationShortfall  FleetCapacity   `json:"hibernation_shortfall"`
-	UnmetShapes           []FleetCapacity `json:"unmet_shapes"`
-	UnmetStoppedShapes    []FleetCapacity `json:"unmet_stopped_shapes"`
-	Reason                MarketReason    `json:"reason"`
-	States                []PlanState     `json:"states"`
+	Preemptible           bool                 `json:"preemptible"`
+	GPUType               string               `json:"gpu_type"`
+	Quiet                 bool                 `json:"quiet"`
+	Load                  FleetCapacity        `json:"load"`
+	WarmTarget            FleetCapacity        `json:"warm_target"`
+	WarmFree              FleetCapacity        `json:"warm_free"`
+	WarmPending           FleetCapacity        `json:"warm_pending"`
+	StoppedTarget         FleetCapacity        `json:"stopped_target"`
+	ReserveCapacity       FleetCapacity        `json:"reserve_capacity"`
+	ReserveReady          FleetCapacity        `json:"reserve_ready"`
+	ReservePending        FleetCapacity        `json:"reserve_pending"`
+	HibernationTarget     FleetCapacity        `json:"hibernation_target"`
+	Hibernated            FleetCapacity        `json:"hibernated"`
+	HibernationUnverified FleetCapacity        `json:"hibernation_unverified"`
+	Shortfall             FleetCapacity        `json:"shortfall"`
+	StoppedShortfall      FleetCapacity        `json:"stopped_shortfall"`
+	HibernationShortfall  FleetCapacity        `json:"hibernation_shortfall"`
+	UnmetShapes           []FleetCapacity      `json:"unmet_shapes"`
+	UnmetStoppedShapes    []FleetCapacity      `json:"unmet_stopped_shapes"`
+	Reason                MarketReason         `json:"reason"`
+	States                []FleetStateCapacity `json:"states"`
 	// Consolidating is the host the market is draining onto the others.
 	Consolidating *uuid.UUID `json:"consolidating,omitempty"`
 	// Decision summarizes the market's plan; the planner logs it when it
@@ -64,10 +56,7 @@ func publishedMarket(mp MarketPlan, growth []FleetAction) PublishedMarket {
 		HibernationUnverified: mp.HibernationUnverified, Shortfall: mp.Shortfall,
 		StoppedShortfall: mp.StoppedShortfall, HibernationShortfall: mp.HibernationShortfall,
 		UnmetShapes: mp.UnmetShapes, UnmetStoppedShapes: mp.UnmetStoppedShapes,
-		Reason: mp.Reason,
-	}
-	for _, s := range mp.States {
-		out.States = append(out.States, PlanState{State: s.State, Machines: s.Machines, Capacity: s.Capacity, Allocated: s.Allocated})
+		Reason: mp.Reason, States: mp.States,
 	}
 	if mp.Consolidates != nil {
 		out.Consolidating = ptr(uuid.UUID(*mp.Consolidates))

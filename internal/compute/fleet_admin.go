@@ -52,10 +52,10 @@ type FleetNode struct {
 
 // FleetStateCapacity totals one state's hosts in a market.
 type FleetStateCapacity struct {
-	State     FleetState
-	Machines  int
-	Capacity  FleetCapacity
-	Allocated FleetCapacity
+	State     FleetState    `json:"state"`
+	Machines  int           `json:"machines"`
+	Capacity  FleetCapacity `json:"capacity"`
+	Allocated FleetCapacity `json:"allocated"`
 }
 
 // FleetRelease is the agent rollout over platform hosts.
