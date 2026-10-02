@@ -84,8 +84,8 @@ Scope notes:
   Delivered: cli/execution.py `deploy`, cli/handler_workflows.py; `test_file_deploy_selects_the_whole_app_and_deduplicates_aliases`, `test_cli_deploy_of_a_file_deploys_its_app`; two apps live in /tmp/parity/live/twoapps.
 - [x] `deploy --prune/-p` (complete apps only), `--diff/-d` (table App/Kind/Workload/Action/Existing versions with add/redeploy/retain/remove), `--workspace`, `--source-root` (CLI/execution.py:65-220)
   Intentional: `test_deploy_diff_previews_the_plan_without_deploying`, `TestPlanDeploymentActions`, `TestPruneWithoutFunctionsDeletesTheDeployedOnes`. `--diff --json` shape: tasks/control.md.
-- [ ] Deploy result card: "App deployed" (app, workloads, urls, devboxes, removed_versions) or "Deployment created" (name, version, url, role, keep_warm, preemptible) (CLI/execution.py:454)
-  Gap: execution.py `_emit_app_deployments`; `test_cli_deploy_of_a_file_deploys_its_app`. Functions answer on their subdomain, but deploy returns no URL for them, so the card's `urls` and a function's `url` are missing.
+- [x] Deploy result card: "App deployed" (app, workloads, urls, devboxes, removed_versions) or "Deployment created" (name, version, url, role, keep_warm, preemptible) (CLI/execution.py:454)
+  Delivered: execution.py `_emit_app_deployments`; `test_cli_deploy_of_a_file_deploys_its_app`, `TestDeployedFunctionsReportWhereTheyAnswer`. Live: the card lists the function and endpoint URLs.
 - [x] Handler references: `module:object`, dotted package paths, `file.py:object`, bare module when it has exactly one app (DOCS/cli/overview.mdx)
   Delivered: references.py identical to the reference; test_sdk_handler_references.py, `test_file_deploy_requires_a_selection_when_several_apps_are_present`.
 - [x] `lazycloud app list [--active|--inactive|--all]`, `app show APP`, `app pause APP`, `app resume APP`, `app delete APP`, by name or ID (CLI/apps.py:79-195)
@@ -96,8 +96,8 @@ Scope notes:
   Intentional: `test_deployment_references_resolve_names_and_versions`. Lists workloads, not versions: tasks/control.md.
 - [x] `lazycloud deployment stop IDS_OR_NAMES...`, `start ID`, `scale ID --containers N` (pods only), `delete ID` (CLI/execution.py:377-450)
   Intentional: `test_deployment_references_resolve_names_and_versions`, `TestDeploymentStopStartVersionsAndDelete`, `TestPodsFollowConnectionsScalesAndParks`. Version-scoped stop/delete: tasks/control.md.
-- [ ] `Deployment` handle: `id`, `name`, `stub_id`, `invoke_url(port=, url_type=)`, `submit()`, `subscribe()` (SDK/session/deployment.py:181)
-  Gap: session/deployment.py `Deployment`; `test_deployment_handles_submit_to_the_active_version`. `invoke_url()` raises for functions, endpoints and ASGI because workload reads carry no URL; `port=` and `url_type=` are refused.
+- [x] `Deployment` handle: `id`, `name`, `stub_id`, `invoke_url(port=, url_type=)`, `submit()`, `subscribe()` (SDK/session/deployment.py:181)
+  Delivered: session/deployment.py `Deployment`; `test_deployment_handles_submit_to_the_active_version` (submit, `invoke_url()`, `url_type="stub"`, `port=` on pods only). Live on the parity stack for a function and an endpoint.
 - [x] Each deploy records a new version; source is uploaded, not baked into the image; first upload writes `.lazycloudignore` (always excluded: .git .venv __pycache__ *.pyc .env .lazycloud/) (DOCS/concepts/workflow.mdx, SDK/source_sync.py:69)
   Intentional: `test_ignore_file_never_removes_the_baseline`, `test_ignore_file_uses_gitignore_semantics`, `test_deploy_uploads_the_source_once_and_maps_function_options`. Unchanged redeploys keep their version: tasks/control.md.
 - [x] Where a call goes: a local preview first, then a fresh working-tree run from a laptop, then the deployed function when inside a container (DOCS/concepts/workflow.mdx)
@@ -107,7 +107,7 @@ Scope notes:
 
 ## Functions and tasks
 - [ ] `@app.function(...)` options: image, name, cpu, memory, disk, gpu, gpu_count, timeout_seconds, concurrency, in_process, cron, keep_warm, max_pending_tasks, autoscaler, retries(3), retry_policy, retry_delay_seconds, callback_url, authorized, env, secrets, volumes, on_start/on_running/on_success/on_error/on_retry/on_failure/on_finish, task_policy, inputs, outputs, docker_enabled, preemptible, region, availability_zone, machine, metadata (SDK/abstractions/app.py:245)
-  Gap: every option maps (`test_deploy_uploads_the_source_once_and_maps_function_options`, `test_deploy_maps_workload_runtime_options`, `test_deploy_maps_storage_options`, `test_deploy_maps_gpu_and_placement_options`) except `metadata=` (refused; shared metadata gap) and a non-default `retry_policy.retry_on_statuses` (refused; about half a day for a `retry_on` list of failure kinds).
+  Gap: every option maps (`test_deploy_uploads_the_source_once_and_maps_function_options`, `test_deploy_maps_workload_runtime_options` incl. `metadata`, `test_deploy_maps_storage_options`, `test_deploy_maps_gpu_and_placement_options`; live metadata read back) except a non-default `retry_policy.retry_on_statuses`, which is refused: about half a day for a `retry_on` list of failure kinds.
 - [ ] `Function.local()`, plain call, `.remote()`, `.async_remote()` (SDK/abstractions/function.py:243,488,564)
   Gap: `test_remote_streams_output_resumes_dropped_logs_and_returns_the_value`, `test_remote_failure_reraises_the_remote_exception` (original exception re-raised: tasks/function-execution.md). On a paused app the reference refused deployed calls (409 "app is not active") but ran laptop working-tree calls, whose stubs had no app; the rewrite refuses both (`accepting` in internal/execution/admission.go, `TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped`). Admitting them also needs planning.sql to start their containers: about 2 h after #442 merges.
 - [x] `.spawn()`, `.async_spawn()` return `FunctionCall`; `.spawn_map(inputs)` submits up to 8 at a time (SDK/abstractions/function.py:517,525,574)
@@ -185,7 +185,7 @@ Scope notes:
 
 ## Endpoints, ASGI and realtime
 - [ ] `@app.endpoint(...)`: route "/", methods GET+POST, domain, workers, concurrency, keep_warm 180, max_pending_tasks 100, timeout 180, retries 0, checkpoint_enabled, authorized True, plus function options (SDK/abstractions/app.py:454)
-  Gap: signature and defaults match (`test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`), but `callback_url=` and `metadata=` fail the deploy as unsupported. Metadata: about 3 h (WorkloadSpec field). Per-request callbacks: about 1 day, or record as intentional.
+  Gap: signature, defaults and `metadata=` map (`test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`), but `callback_url=` fails the deploy as unsupported: requests are not tasks. Per-request callbacks: about 1 day, or record as intentional.
 - [x] JSON body maps to function args; a returned Pydantic model is sent as JSON and becomes the response schema (DOCS/concepts/endpoints.mdx)
   Delivered: runner/http.py; `test_endpoint_maps_body_and_query_to_arguments_and_models_to_json`, `test_endpoint_results_map_to_responses`.
 - [x] `Endpoint.request(*args)` returns EndpointResponse(status_code, text, json()); `.target("auto"|"deployed"|"served", deployment_name=, deployment_version=)` (SDK/abstractions/endpoint.py:407,419,187)
@@ -212,8 +212,8 @@ Scope notes:
   Intentional: edge upgrades on every host form; `TestASGIStreamsUploadsUpgradesAndStripsTheToken`, `TestRelayCarriesUpgradesAndBrokenResponses`. Path routes: tasks/endpoints.md.
 
 ## Pods and devboxes
-- [ ] `app.pod(name, image, command, ports={"http":8080}, env, cpu 1.0, memory 128Mi, disk, gpu, keep_warm 600 (-1 = always on), secrets, volumes, disks, authorized False, checkpoint_*, health_check_path/port, tcp, ssh, block_network, allow_list, docker_enabled, preemptible, region, availability_zone, machine, metadata)` (SDK/abstractions/app.py:755)
-  Gap: signature matches; `TestPodDefinitionsResolveTheirDefaults`, `TestPodDefinitionsRejectWhatTheyCannotRun`, live `test_a_pod_deploys_answers_on_its_url_scales_and_starts_instances`. `metadata=` fails as unsupported (shared metadata gap, about 3 h).
+- [x] `app.pod(name, image, command, ports={"http":8080}, env, cpu 1.0, memory 128Mi, disk, gpu, keep_warm 600 (-1 = always on), secrets, volumes, disks, authorized False, checkpoint_*, health_check_path/port, tcp, ssh, block_network, allow_list, docker_enabled, preemptible, region, availability_zone, machine, metadata)` (SDK/abstractions/app.py:755)
+  Delivered: signature matches; `TestPodDefinitionsResolveTheirDefaults`, `TestPodDefinitionsRejectWhatTheyCannotRun`, live `test_a_pod_deploys_answers_on_its_url_scales_and_starts_instances`; `metadata=` is stored with the release.
 - [x] `Pod.create(command=, timeout_seconds=)` returns PodInstance(url, terminate()); `Pod.run(*cmd)` (SDK/abstractions/pod.py:375,395,113)
   Delivered: pod.py `create`/`run`, `PodInstance.terminate`; `test_pod_instances_start_from_the_prepared_release_and_terminate`, live pod test.
 - [x] `Pod.deploy()`, `.pause()`, `.resume()`, `.scale(containers)`, `.delete()` (optional version), `.shell()` (SDK/abstractions/pod.py:407-520)
@@ -244,8 +244,8 @@ Scope notes:
   Delivered: DevboxDetail.tsx; `-workload-route.test.tsx`; no stack journey (devbox root disk needs nbd-client: tasks/web.md).
 
 ## Sandboxes
-- [ ] `app.sandbox(cpu 1.0, memory 128 (MiB), disk, gpu, gpu_count, image, keep_warm_seconds 600, authorized, name, volumes, secrets, env, sync_local_dir, block_network, allow_list, docker_enabled, preemptible, ports, region, availability_zone, machine, metadata, command)` (SDK/abstractions/app.py:949)
-  Gap: signature matches; `test_sandbox_create_prepares_an_empty_workspace_waits_and_exposes_its_ports`, live `test_a_sandbox_runs_processes_and_files_and_controls_its_network`. `metadata=` fails as unsupported (shared metadata gap).
+- [x] `app.sandbox(cpu 1.0, memory 128 (MiB), disk, gpu, gpu_count, image, keep_warm_seconds 600, authorized, name, volumes, secrets, env, sync_local_dir, block_network, allow_list, docker_enabled, preemptible, ports, region, availability_zone, machine, metadata, command)` (SDK/abstractions/app.py:949)
+  Delivered: signature matches; `test_sandbox_create_prepares_an_empty_workspace_waits_and_exposes_its_ports`, live `test_a_sandbox_runs_processes_and_files_and_controls_its_network`; `metadata=` is stored with the release.
 - [x] `Sandbox.create()`, `.create_from_memory_snapshot(id)`, `.connect(sandbox_id)`, `.list(app_id=, limit=50)`, `.stats()`, `.timeline(stub_id, container_id=)` (SDK/abstractions/sandbox.py:1756-1840)
   Intentional: `test_sandbox_listing_stats_and_timeline`, `TestInstancesStopOnceIdleAndConnectionsKeepThemUp`, `TestSnapshotsAreReportedOnceByTheirHost`. One row per sandbox container: tasks/workloads.md.
 - [x] `SandboxInstance`: `id`/`sandbox_id()`, `run(cmd, timeout_seconds=, cwd="/workspace", env=)`, `expose_port`, `list_urls`, `network_permissions`, `update_network_permissions(block_network=, allow_list=)`, `update_ttl`, `snapshot_memory`, `create_image_from_filesystem`, `list_processes`, `terminate` (SDK/abstractions/sandbox.py:1374)
@@ -323,7 +323,7 @@ Scope notes:
 - [x] `lazycloud disk list`, `disk delete NAME [-y]` (CLI/disks.py:19,52)
   Delivered: cli/disks.py; live `test_disks_list_and_refuse_deleting_a_missing_disk`.
 - [x] Dashboard Storage → Volumes: create, browse, upload, download, delete path, delete volume, "Used by" links (WEB/routes/w/$workspace/storage/-components/VolumesTab.tsx)
-  Intentional: VolumesTab.tsx; e2e "a volume is created, a file uploaded, listed, downloaded and removed". No directory times: tasks/web.md.
+  Intentional: VolumesTab.tsx; e2e "a volume is created, a file uploaded, listed, downloaded and removed". Directories show no time: tasks/web.md.
 - [x] Dashboard Storage → Disks: size, stored, status, used by, delete (WEB/routes/w/$workspace/storage/-components/DisksTab.tsx)
   Intentional: DisksTab.tsx; code reading only. No Deleting status; a devbox's disk reads "pod in APP": tasks/storage.md.
 
@@ -388,8 +388,8 @@ Scope notes:
   Gap: internal/billing/ratecard.go, same terms; `TestTrialCoversUsageAndNewCreditPaysDebtFirst`, `TestSubscriptionCreditIsSpentBeforePurchasedCredit`, `TestStripeTestMode`. CPU and memory bill at the reservation only, while docs/platform/plans.mdx says the greater of reservation and measured use (tasks/billing.md Gaps): about 1 day.
 - [x] Placement multipliers: preemptible=False 3× CPU/memory; pinned region 1.5× (DOCS/platform/plans.mdx)
   Delivered: ratecard.go `placements()`; `TestContainersPriceTheirGPUPlacementAndMachine`.
-- [ ] Limits: concurrency, zero balance stops work, monthly usage limit resets on the 1st, 30-day unfunded retention (DOCS/platform/plans.mdx)
-  Gap: `TestAdmitRefusesWorkTheAccountCannotPayFor`, `TestAdmitCapsContainersAtTheAccountsConcurrency`, `TestUnfundedAccountsStopTheirContainers`, `TestUnfundedAccountsKeepTheirDataThirtyDaysAndAreWarned`. At a zero balance volume creation, volume uploads and artifact uploads still proceed; the reference refused them with 402. About 2-3 h.
+- [x] Limits: concurrency, zero balance stops work, monthly usage limit resets on the 1st, 30-day unfunded retention (DOCS/platform/plans.mdx)
+  Delivered: `TestAdmitRefusesWorkTheAccountCannotPayFor`, `TestAdmitCapsContainersAtTheAccountsConcurrency`, `TestUnfundedAccountsStopTheirContainers`, `TestUnfundedAccountsKeepTheirDataThirtyDaysAndAreWarned`, `TestUnfundedWorkspacesStoreNothingNewButReadWhatTheyHave`.
 - [x] Email: "Add credit within 30 days to keep your stored data" (R/packages/storage/src/storage/unfunded_retention.py:104)
   Delivered: billing/retention.go `warnUnfunded`, same words; `TestUnfundedAccountsKeepTheirDataThirtyDaysAndAreWarned`.
 - [x] Settings → Billing, Plan and payment: current plan, Change plan dialog (proration, scheduled downgrade, cancel scheduled change), add/update payment method, Invoices portal, past-due state (WEB/components/shared/SettingsDialog/BillingSettings/index.tsx, PlanDialog.tsx)
@@ -418,12 +418,12 @@ Scope notes:
   Intentional: internal/callbacks; `TestCallbackIsSignedAndRetriedUntilDelivered`, `TestCallbackGivesUpOnRejectionAndAfterThreeAttempts`, `TestCallbacksNeverReachPrivateAddresses`. Durable callbacks, API bodies: tasks/workload-runtime.md.
 - [ ] Dashboard task drawer tabs: Result (rendered/text, download Python object, error), Logs (filter, latest 1,000 lines, download), Trace (call graph), Lifecycle timeline, Container, Artifacts; Rerun; pending notice; stop cause (WEB/components/shared/TaskDrawer/*)
   Gap: TaskDrawer/* has every tab, Rerun, pending notice and stop cause (ContainerTab.test.tsx, LogViewer tests). A pickled result offers only "Download Python object": the runner sends no text or rendered display. About 1 day (runner, protocol, storage, `Payload.display`).
-- [ ] Workload performance: p50/p95 latency, cold starts (WEB/routes/w/$workspace/apps/-workloads/LatencyPanel.tsx, Q/stubs.ts `taskLatencyQueryOptions`)
-  Gap: LatencyPanel.tsx; `TestDeploymentPerformanceBucketsLatencyAndColdStarts`. Endpoint and ASGI requests are not counted, so their pages show no p50/p95. About 2-3 h.
+- [x] Workload performance: p50/p95 latency, cold starts (WEB/routes/w/$workspace/apps/-workloads/LatencyPanel.tsx, Q/stubs.ts `taskLatencyQueryOptions`)
+  Delivered: LatencyPanel.tsx over performance.sql, which counts tasks and HTTP requests; `TestWorkloadPerformanceBucketsLatencyAndColdStarts`, `TestWorkloadPerformanceCountsEndpointRequests`.
 - [x] Container metrics charts (CPU/memory/GPU timeseries) (WEB/components/shared/ContainerMetricsCharts/index.tsx, Q/containers.ts)
   Intentional: ContainerMetricsCharts/*; `TestMetricSamplesComeOnlyFromTheAssignedHost`, test_observability.py. Downsampling and no disk chart: tasks/observability.md. GPU sampling unverified.
-- [ ] Account metrics drawer: containers, concurrency vs plan limits, tasks and failures over 24h, activity by app/resource/time range (WEB/components/shared/AppShell/AccountMetrics/*)
-  Gap: AccountMetrics/*; `TestAccountMetricsAndActivity`. GPU activity is always zero (internal/observability/account.go) though containers now carry GPUs. About 1-2 h.
+- [x] Account metrics drawer: containers, concurrency vs plan limits, tasks and failures over 24h, activity by app/resource/time range (WEB/components/shared/AppShell/AccountMetrics/*)
+  Delivered: AccountMetrics/*; `TestAccountMetricsAndActivity` (CPU, GPU and container activity).
 - [ ] Live updates over the SSE change stream `/api/v1/events/changes/stream`, plus container event summaries (WEB/components/shared/WorkspaceLiveUpdates/index.tsx, Q/events.ts)
   Gap: change hub, WorkspaceLiveUpdates; `TestChangeStreamDeliversCommittedChangesOfItsWorkspace`, `TestChangeStreamOverHTTP`. Volumes and usage have no topic, so those lists do not refresh live. About 1-2 h (a trigger migration).
 
@@ -463,9 +463,9 @@ Scope notes:
 
 ## CLI misc (serve, scaffolding, export, etc.)
 - [x] `lazycloud serve HANDLER [--timeout 0] [--sync-dir/--sync DIR]` for App/Function/Endpoint/ASGI; rejects `--json` (CLI/serve.py:15)
-  Delivered: cli/serve.py identical; `TestServePreviewSyncsSourceAndStops`, live serve (tasks/endpoints.md). A preview stays leased while the CLI waits for it to start.
-- [ ] Serve output: "Preview URL" header, a curl snippet (Bearer header when authorized), "Container output" header, then container logs, "Synced N files" and "Synced X changed, Y removed" on edits, "Stopping serve container" on Ctrl-C, reconnect warnings (SDK/abstractions/serve.py:180-280,395,505,722)
-  Gap: abstractions/serve.py prints the header, curl, sync and stop lines (live run in tasks/endpoints.md). A preview that fails to load or exits shows no reason or exit code. About 2 h (Preview `error`/`exit_code`).
+  Delivered: cli/serve.py identical; `TestServePreviewSyncsSourceAndStops`, live serve. The lease is renewed while serve waits, so a 75 s start became ready (live).
+- [x] Serve output: "Preview URL" header, a curl snippet (Bearer header when authorized), "Container output" header, then container logs, "Synced N files" and "Synced X changed, Y removed" on edits, "Stopping serve container" on Ctrl-C, reconnect warnings (SDK/abstractions/serve.py:180-280,395,505,722)
+  Delivered: abstractions/serve.py prints the header, curl, sync and stop lines (live run in tasks/endpoints.md). A handler that fails to import stops the preview and serve prints why (live: `load_error` in 1.1 s).
 - [x] Serve records a local preview that later `.remote()`, `run` and `.request()` calls from the same machine use (SDK/abstractions/serve.py:633-720)
   Delivered: `write_serve_preview`/`read_serve_preview`; `TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower`, live run on the preview release.
 - [x] `lazycloud example list` and `example download NAME|all [-o/--output] [--force]`: quickstart, yolo-training, openai-compatible-llm, document-processing, sandboxed-coding-agent, parallel-parquet, artifacts, all-workloads (CLI/examples.py, SDK/_examples/)

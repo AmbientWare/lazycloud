@@ -157,6 +157,9 @@ SaaS, and the edge routes only verified ones.
   required; docs/platform/domains.mdx now says so instead of allowing names
   under it.
 - Only verified (`ready`) domains route.
+- A paused app's or stopped workload's host answers 404 "the deployment
+  is stopped"; the reference answered 503 "app is not active". An invoke
+  through the API answers 409 with the paused-or-stopped reason.
 
 ## Handed off
 

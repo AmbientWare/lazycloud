@@ -109,8 +109,9 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
 - `container list` names each container by its workload and shows the
   container states `pending`, `starting`, `ready`, `draining`, `stopped`.
 - `app show` shows name, state, workloads and created, as `app list` does.
-- `Deployment.invoke_url()` returns the workload's URL; `port=` and
-  `url_type=` are refused (see tasks/parity.md for the gap).
+- `Deployment.invoke_url()` returns the workload's URL, `url_type="stub"`
+  the active release's own host and `port=` a pod's port; `url_type` is a
+  string, `"deployment"` or `"stub"`, instead of `GatewayUrlKind`.
 - An app deploys in one request, so it lands whole or not at all; up to 4
   distinct images build at once and the source uploads once. The reference
   ran 4 per-resource deploys at a time and could leave some finished after
