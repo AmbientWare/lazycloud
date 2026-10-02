@@ -40,6 +40,7 @@ from lazycloud.references import (
     source_root_handler_reference,
 )
 from lazycloud.session.task import (
+    TERMINAL_STATUSES,
     Task,
     TaskSubscription,
     decode_payload,
@@ -139,6 +140,20 @@ class DeploymentSubmission:
     @property
     def task_id(self) -> str:
         return self.task.task_id
+
+    @property
+    def output(self) -> str:
+        """What the task printed so far."""
+        return self.task.output()
+
+    @property
+    def done(self) -> bool:
+        return self.task.get().status in TERMINAL_STATUSES
+
+    @property
+    def exit_code(self) -> int | None:
+        """Always None: tasks fail with a typed failure rather than an exit code."""
+        return None
 
     def result(self, *, wait: bool = False) -> object:
         """The task's value; a task that did not succeed raises."""
