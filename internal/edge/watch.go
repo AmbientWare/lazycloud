@@ -43,7 +43,7 @@ func (e *Edge) watch(ctx context.Context) error {
 }
 
 func (e *Edge) listenChanges(ctx context.Context) error {
-	pooled, err := e.pool.Acquire(ctx)
+	pooled, err := e.listen.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire listener connection: %w", err)
 	}

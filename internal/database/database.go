@@ -28,6 +28,20 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
+// OpenListen returns the pool LISTEN connections come from: its own pool
+// at url, which a pooling proxy can route to a connection that keeps its
+// session, or main when url is empty. Each listener holds one connection
+// for its lifetime. close releases the pool it opened.
+func OpenListen(ctx context.Context, url string, main *pgxpool.Pool) (pool *pgxpool.Pool, closePool func(), err error) {
+	if url == "" {
+		return main, func() {}, nil
+	}
+	if pool, err = Open(ctx, url); err != nil {
+		return nil, nil, fmt.Errorf("listen pool: %w", err)
+	}
+	return pool, pool.Close, nil
+}
+
 // Notify queues a wake-up that PostgreSQL delivers when tx commits.
 func Notify(ctx context.Context, tx pgx.Tx, channel Channel, payload string) error {
 	if _, err := tx.Exec(ctx, "select pg_notify($1, $2)", string(channel), payload); err != nil {

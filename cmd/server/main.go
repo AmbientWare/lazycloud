@@ -126,6 +126,7 @@ type serveConfig struct {
 	httpAddr      string
 	grpcAddr      string
 	healthAddr    string
+	listenURL     string
 	objectStore   storage.Config
 	imageTemplate string
 	secretsKey    string
@@ -152,6 +153,8 @@ func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cfg serveConfig
 	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
+	fs.StringVar(&cfg.listenURL, "database-listen-url", env("LAZYCLOUD_DATABASE_LISTEN_URL", ""),
+		"PostgreSQL URL of LISTEN connections, which hold their session; empty uses -database-url (LAZYCLOUD_DATABASE_LISTEN_URL)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
 	fs.StringVar(&cfg.healthAddr, "health-addr", env("LAZYCLOUD_HEALTH_ADDR", ""), "address of /healthz and /readyz, unset for none (LAZYCLOUD_HEALTH_ADDR)")
@@ -295,11 +298,16 @@ func (ls listeners) close() {
 // serveWith serves on the listeners until ctx ends, then drains.
 func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
+	listenPool, closeListen, err := database.OpenListen(ctx, cfg.listenURL, pool)
+	if err != nil {
+		return err
+	}
+	defer closeListen()
 	// Billing supplies plan limits once it lands; until then account
 	// metrics leave them out.
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
-	changes := observability.NewChanges(pool, observability.DefaultChangesConfig(), tel.Registry, logger)
-	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
+	changes := observability.NewChanges(listenPool, observability.DefaultChangesConfig(), tel.Registry, logger)
+	listener := database.NewListener(listenPool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
 	cfg.objectStore.BrowserOrigin = cfg.identity.PublicURL
@@ -329,7 +337,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if relayURL == "" {
 		relayURL = cfg.relayAddr
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url}
+	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, ListenPool: listenPool}
 	var tcpConfig edge.TCPConfig
 	if ls.tcp != nil {
 		if cfg.tcp.url == "" || cfg.tcp.cert == "" || cfg.tcp.key == "" {

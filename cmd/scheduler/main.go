@@ -154,7 +154,14 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}, logger)
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, images.Config{})
-	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
+	// LISTEN connections hold their session, so a pooling proxy may need
+	// them on their own URL.
+	listenPool, closeListen, err := database.OpenListen(ctx, os.Getenv("LAZYCLOUD_DATABASE_LISTEN_URL"), pool)
+	if err != nil {
+		return err
+	}
+	defer closeListen()
+	listener := database.NewListener(listenPool, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelFleetWake()
