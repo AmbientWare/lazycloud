@@ -9,6 +9,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -156,7 +157,8 @@ func newJoinFlags(name string) *joinFlags {
 	f.BoolVar(&cfg.ServerPlaintext, "server-plaintext", os.Getenv("LAZYCLOUD_SERVER_PLAINTEXT") == "true", "dial a loopback server without TLS")
 	f.StringVar(&cfg.StateDir, "state-dir", envOr("LAZYCLOUD_AGENT_STATE_DIR", "/var/lib/lazycloud/agent"), "host identity, source cache and container state")
 	f.StringVar(&cfg.SocketDir, "socket-dir", envOr("LAZYCLOUD_AGENT_SOCKET_DIR", defaultSocketDir()), "short directory for per-container link sockets")
-	f.StringVar(&cfg.JoinToken, "join-token", os.Getenv("LAZYCLOUD_JOIN_TOKEN"), "single-use token that enrolls the host on first start")
+	// -help prints defaults, so parse reads the token's from the environment.
+	f.StringVar(&cfg.JoinToken, "join-token", "", "single-use token that enrolls the host on first start (LAZYCLOUD_JOIN_TOKEN)")
 	f.StringVar(&cfg.JoinTokenFile, "join-token-file", os.Getenv("LAZYCLOUD_JOIN_TOKEN_FILE"), "file holding the join token; deleted once the host is enrolled")
 	f.StringVar(&cfg.CloudHostID, "cloud-host-id", os.Getenv("LAZYCLOUD_CLOUD_HOST_ID"), "enroll this EC2 instance as the given host with its instance profile")
 	f.StringVar(&cfg.IMDSEndpoint, "imds-endpoint", os.Getenv("LAZYCLOUD_IMDS_ENDPOINT"), "instance metadata endpoint; set, the agent reports Spot interruptions")
@@ -201,6 +203,7 @@ func (j *joinFlags) parse(args []string) error {
 		return fmt.Errorf("unexpected argument %q", j.set.Arg(0))
 	}
 	cfg := &j.cfg
+	cfg.JoinToken = cmp.Or(cfg.JoinToken, os.Getenv("LAZYCLOUD_JOIN_TOKEN"))
 	if cfg.Server == "" {
 		return errors.New("--server or LAZYCLOUD_SERVER is required")
 	}
