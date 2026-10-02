@@ -138,6 +138,19 @@ managed-runtime wheel locks.
 | Checks | none local | 101 (`deploy/check.sh`) | Lint, render, schema, env, Terraform, actionlint and shellcheck in one script CI also runs. |
 | Total | 17,519 | 4,765 | |
 
+## Defaults
+
+Recommended settings, applied:
+
+- NetworkPolicy is enforced. platform-core sets
+  `enable-network-policy-controller` in kube-system's `amazon-vpc-cni`
+  ConfigMap, which Auto Mode reads; the NodeClass keeps its default,
+  `DefaultAllow`, so only pods a policy selects are restricted. The chart's
+  policies deny ingress to every release pod except from named peers.
+- Telemetry is off (`telemetry.enabled: false`) until a backend is chosen;
+  main had none either. Turning it on takes the backend's endpoint, two
+  operator keys for its basic auth and `telemetry.enabled`.
+
 ## Bring-up runbook
 
 Main's infrastructure was destroyed on 2026-10-01: the EKS cluster, VPCs,
@@ -205,7 +218,9 @@ the PlanetScale database. Everything below is a fresh build. Kept:
     compute (a baked host in us-east-2 enrolls over `hosts.<domain>`); an
     endpoint on its generated host; a TCP pod; an image build pushing to
     ECR; `machine join`; a custom domain; a Stripe delivery; an invitation
-    email; Argo CD at `argocd.<domain>`.
+    email; Argo CD at `argocd.<domain>`; `kubectl -n lazycloud-prod get
+    policyendpoints` lists one per NetworkPolicy, which shows enforcement
+    is on.
 
 Rollback after bring-up is Deploy with an earlier version.
 
@@ -282,10 +297,6 @@ launch or Neki connection.
   real IAM may refuse those launches.
 - Builds use the `bridge` network; the images packet wanted a registry-only
   network in production.
-- NetworkPolicies render but Auto Mode enforces them only when the node
-  class enables network policy, which platform-core does not do yet.
-- Telemetry has no backend (main had none either); choose one, add its
-  endpoint and two operator keys, set `telemetry.enabled`.
 - The TCP certificate renews 30 days before expiry, but the server reads it
   at start, so a renewal waits for the next release or restart.
 - Billing defect: `charge.refund.updated` delivers a Refund that

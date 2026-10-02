@@ -115,3 +115,14 @@ resource "kubernetes_storage_class_v1" "ebs" {
   allow_volume_expansion = true
   parameters             = { type = "gp3", encrypted = "true" }
 }
+
+# Auto Mode enforces NetworkPolicy only once this switch is on. Pods no
+# policy selects stay open (the NodeClass default, DefaultAllow); each
+# deployment's chart denies ingress to its own pods except from named peers.
+resource "kubernetes_config_map_v1" "network_policy" {
+  metadata {
+    name      = "amazon-vpc-cni"
+    namespace = "kube-system"
+  }
+  data = { "enable-network-policy-controller" = "true" }
+}
