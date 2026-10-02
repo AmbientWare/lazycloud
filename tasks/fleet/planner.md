@@ -230,9 +230,9 @@ Parity lines marked "Packet: planner", with tests (internal/compute):
   buffers) and the arrivals read walking the pending backlog; both now read
   only placed containers. It later caught the pending batch sorting a whole
   backlog created in one statement (ties on created_at broken by id: 5,001
-  rows); the batch now follows the pending index alone. Each measurement
-  runs on vacuumed, analyzed tables, so autovacuum timing under load does
-  not move it.
+  rows); the batch now follows the pending index alone. The guard runs
+  ANALYZE before each measurement and asserts only the fixed statement count
+  and the row bound; buffers are logged, since they follow page layout.
 - `BenchmarkPlan` (2,000 pending, Spot quotes): 43 ms p50, 67 ms p95, 18
   hosts. Before, `BenchmarkPlanCapacity` on 7f33b8bc: 144 ms p50, 191 ms
   p95, 288 one-container hosts in one pass and about 300 statements (one
