@@ -56,6 +56,19 @@ steps run after the user's go-ahead for the Ship.
 
 ## Progress
 
+Branch `fleet-acceptance` from `fleet-capacity-plan` at
+`4a8ff51f6fd3d86dba7d5ad6dbc050c3e79dcea3`, every packet merged.
+
+The user narrowed this packet on 2026-10-02, overriding the plan above:
+real EC2 runs in `default` (534742592531, the platform account; `default-test`
+is the connected-account second account, not a sandbox), at most 3
+acceptance instances at once, under an hour; the four gated EC2 tests fold
+into `internal/compute/fleet_ec2_acceptance_test.go`; no benchmark files,
+screenshots or local cross-owner suite (the planner's pass-cost guard and
+emulator end-to-end test cover them); the scheduler role is checked with
+`iam simulate-principal-policy`; the Spot snapshot is re-recorded from
+DescribeSpotPriceHistory.
+
 ## Intentional differences
 
 ## Evidence
