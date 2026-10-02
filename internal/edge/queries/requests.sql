@@ -11,6 +11,19 @@ from generate_subscripts(@ids::uuid[], 1) as i
 join releases r on r.id = (@release_ids::uuid[])[i]
 on conflict (id) do nothing;
 
+-- name: InsertRequestCallbacks :exec
+-- A callback per written request whose release names a callback_url: a
+-- client that left (499) cancelled it, a 5xx failed it. A batch written
+-- again adds none.
+insert into task_callbacks (request_id, workspace_id, url, event, attempt, max_attempts)
+select h.id, h.workspace_id, r.spec ->> 'callback_url',
+       case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end,
+       1, 1
+from http_requests h
+join releases r on r.id = h.release_id
+where h.id = any(@ids::uuid[]) and r.spec ->> 'callback_url' is not null
+on conflict (request_id) do nothing;
+
 -- name: PruneRequests :execrows
 -- The oldest requests past the retention, a bounded batch at a time.
 delete from http_requests where id in (

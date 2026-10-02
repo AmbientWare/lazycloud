@@ -184,8 +184,8 @@ Scope notes:
   Delivered: WorkloadOperation.tsx `ScheduleFacts` over `WorkloadDetail.schedule`; code reading only.
 
 ## Endpoints, ASGI and realtime
-- [ ] `@app.endpoint(...)`: route "/", methods GET+POST, domain, workers, concurrency, keep_warm 180, max_pending_tasks 100, timeout 180, retries 0, checkpoint_enabled, authorized True, plus function options (SDK/abstractions/app.py:454)
-  Gap: signature, defaults and `metadata=` map (`test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`), but `callback_url=` fails the deploy as unsupported: requests are not tasks. Per-request callbacks: about 1 day, or record as intentional.
+- [x] `@app.endpoint(...)`: route "/", methods GET+POST, domain, workers, concurrency, keep_warm 180, max_pending_tasks 100, timeout 180, retries 0, checkpoint_enabled, authorized True, plus function options (SDK/abstractions/app.py:454)
+  Intentional: signature, defaults, `metadata=` and `callback_url=` map (`test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`); each request is called back (`TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce`, request callback body: tasks/endpoints.md).
 - [x] JSON body maps to function args; a returned Pydantic model is sent as JSON and becomes the response schema (DOCS/concepts/endpoints.mdx)
   Delivered: runner/http.py; `test_endpoint_maps_body_and_query_to_arguments_and_models_to_json`, `test_endpoint_results_map_to_responses`.
 - [x] `Endpoint.request(*args)` returns EndpointResponse(status_code, text, json()); `.target("auto"|"deployed"|"served", deployment_name=, deployment_version=)` (SDK/abstractions/endpoint.py:407,419,187)
@@ -193,7 +193,7 @@ Scope notes:
 - [x] `Endpoint.deploy()`, `.serve()`, `.shell()`, `.local()` (SDK/abstractions/endpoint.py:384-460)
   Intentional: `TestServePreviewSyncsSourceAndStops`, `test_standalone_shells_start_a_shell_instance_of_the_release`. Return types: tasks/control.md (`Deployment`), tasks/endpoints.md (`Preview`).
 - [x] `app.asgi(name=, route=, domain=, workers=, concurrent_requests=, keep_warm_seconds=, max_pending_tasks=, authorized=, checkpoint_enabled=, …)(fastapi_app)` (SDK/abstractions/app.py:568)
-  Delivered: app.py `asgi`; `test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestASGIStreamsUploadsUpgradesAndStripsTheToken`. `callback_url=` shares the endpoint gap.
+  Delivered: app.py `asgi`; `test_deploy_maps_endpoint_and_asgi_options_to_http_specs`, `TestASGIStreamsUploadsUpgradesAndStripsTheToken`. `callback_url=` calls back each request, as for endpoints.
 - [x] `ASGI.request(method=, path=, json=, data=, headers=, params=, target=, deployment_name=, deployment_version=)` (SDK/abstractions/endpoint.py:780)
   Delivered: endpoint.py `ASGI.request`, same `resolve_url`/`send_request` as Endpoint; `TestWorkloadsAnswerOnTheAPIHostWithTheSession`.
 - [x] `@app.realtime(name=, …)`: WebSocket handler, one call per message, an iterable return sends several messages (SDK/abstractions/app.py:663, SDK/abstractions/endpoint.py:841)

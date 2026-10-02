@@ -66,6 +66,25 @@ func (q *Queries) GetRequest(ctx context.Context, arg GetRequestParams) (GetRequ
 	return i, err
 }
 
+const insertRequestCallbacks = `-- name: InsertRequestCallbacks :exec
+insert into task_callbacks (request_id, workspace_id, url, event, attempt, max_attempts)
+select h.id, h.workspace_id, r.spec ->> 'callback_url',
+       case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end,
+       1, 1
+from http_requests h
+join releases r on r.id = h.release_id
+where h.id = any($1::uuid[]) and r.spec ->> 'callback_url' is not null
+on conflict (request_id) do nothing
+`
+
+// A callback per written request whose release names a callback_url: a
+// client that left (499) cancelled it, a 5xx failed it. A batch written
+// again adds none.
+func (q *Queries) InsertRequestCallbacks(ctx context.Context, ids []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, insertRequestCallbacks, ids)
+	return err
+}
+
 const insertRequests = `-- name: InsertRequests :exec
 insert into http_requests (id, workspace_id, workload_id, release_id, container_id, method, path, status,
                            started_at, duration_ms, request_bytes, response_bytes)

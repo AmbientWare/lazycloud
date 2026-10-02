@@ -13,28 +13,36 @@ import (
 )
 
 const callbackDeliveries = `-- name: CallbackDeliveries :many
-select c.id, c.task_id, c.workspace_id, c.url, c.event, c.attempt, c.max_attempts, c.failure,
-       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.failure as task_failure, t.finished_at
+select c.id, c.task_id, c.request_id, c.workspace_id, c.url, c.event, c.attempt, c.max_attempts, c.failure,
+       t.root_task_id, t.failure as task_failure,
+       coalesce(t.finished_at, h.started_at + make_interval(secs => h.duration_ms / 1000.0)) as finished_at,
+       h.status as request_status, h.response_bytes
 from task_callbacks c
-join tasks t on t.id = c.task_id
+left join tasks t on t.id = c.task_id
+left join http_requests h on h.id = c.request_id
 where c.id = any($1::bigint[])
 order by c.id
 `
 
 type CallbackDeliveriesRow struct {
-	ID          int64
-	TaskID      uuid.UUID
-	WorkspaceID uuid.UUID
-	Url         string
-	Event       string
-	Attempt     int32
-	MaxAttempts int32
-	Failure     []byte
-	RootTaskID  uuid.UUID
-	TaskFailure []byte
-	FinishedAt  *time.Time
+	ID            int64
+	TaskID        *uuid.UUID
+	RequestID     *uuid.UUID
+	WorkspaceID   uuid.UUID
+	Url           string
+	Event         string
+	Attempt       int32
+	MaxAttempts   int32
+	Failure       []byte
+	RootTaskID    *uuid.UUID
+	TaskFailure   []byte
+	FinishedAt    *time.Time
+	RequestStatus *int32
+	ResponseBytes *int64
 }
 
+// Each callback with what its body reports: the task's root, failure and
+// end, or the request's status, response size and end.
 func (q *Queries) CallbackDeliveries(ctx context.Context, ids []int64) ([]CallbackDeliveriesRow, error) {
 	rows, err := q.db.Query(ctx, callbackDeliveries, ids)
 	if err != nil {
@@ -47,6 +55,7 @@ func (q *Queries) CallbackDeliveries(ctx context.Context, ids []int64) ([]Callba
 		if err := rows.Scan(
 			&i.ID,
 			&i.TaskID,
+			&i.RequestID,
 			&i.WorkspaceID,
 			&i.Url,
 			&i.Event,
@@ -56,6 +65,8 @@ func (q *Queries) CallbackDeliveries(ctx context.Context, ids []int64) ([]Callba
 			&i.RootTaskID,
 			&i.TaskFailure,
 			&i.FinishedAt,
+			&i.RequestStatus,
+			&i.ResponseBytes,
 		); err != nil {
 			return nil, err
 		}

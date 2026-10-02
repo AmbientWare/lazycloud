@@ -254,11 +254,16 @@ func (e *Edge) insertRequests(ctx context.Context, batch []requestRecord) error 
 		p.RequestBytes = append(p.RequestBytes, rec.requestBytes)
 		p.ResponseBytes = append(p.ResponseBytes, rec.responseBytes)
 	}
-	// The records and the egress they carry commit together, so a batch
-	// written again after a failure never counts its bytes twice.
+	// The records, their callbacks and the egress they carry commit
+	// together, so a batch written again after a failure never counts its
+	// bytes twice or calls back twice.
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		if err := e.queries.WithTx(tx).InsertRequests(ctx, p); err != nil {
+		q := e.queries.WithTx(tx)
+		if err := q.InsertRequests(ctx, p); err != nil {
 			return fmt.Errorf("insert request records: %w", err)
+		}
+		if err := q.InsertRequestCallbacks(ctx, p.Ids); err != nil {
+			return fmt.Errorf("insert request callbacks: %w", err)
 		}
 		for _, egress := range egressOf(batch) {
 			if err := billing.RecordEgress(ctx, tx, egress); err != nil {

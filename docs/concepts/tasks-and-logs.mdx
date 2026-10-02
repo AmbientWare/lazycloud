@@ -99,4 +99,6 @@ command, and the dashboard's Tasks page shows the same history.
 
 Functions, endpoints, ASGI apps, and realtime handlers accept `callback_url`.
 LazyCloud calls that webhook with execution events as the task changes state,
-so another system can react without polling.
+so another system can react without polling. Endpoints and ASGI apps call it
+once per request after the response ends, with the request's status code and
+response size; `task_id` is the request's `X-Request-Id`.

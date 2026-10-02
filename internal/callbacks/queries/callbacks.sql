@@ -15,10 +15,15 @@ where c.id in (
 returning c.id, c.deliveries;
 
 -- name: CallbackDeliveries :many
-select c.id, c.task_id, c.workspace_id, c.url, c.event, c.attempt, c.max_attempts, c.failure,
-       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.failure as task_failure, t.finished_at
+-- Each callback with what its body reports: the task's root, failure and
+-- end, or the request's status, response size and end.
+select c.id, c.task_id, c.request_id, c.workspace_id, c.url, c.event, c.attempt, c.max_attempts, c.failure,
+       t.root_task_id, t.failure as task_failure,
+       coalesce(t.finished_at, h.started_at + make_interval(secs => h.duration_ms / 1000.0)) as finished_at,
+       h.status as request_status, h.response_bytes
 from task_callbacks c
-join tasks t on t.id = c.task_id
+left join tasks t on t.id = c.task_id
+left join http_requests h on h.id = c.request_id
 where c.id = any(@ids::bigint[])
 order by c.id;
 
