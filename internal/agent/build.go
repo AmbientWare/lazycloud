@@ -2,7 +2,9 @@ package agent
 
 import (
 	"bufio"
+	"cmp"
 	"context"
+	"debug/elf"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -127,17 +129,17 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	if err := c.prepareBuildFiles(ctx, build); err != nil {
 		return startFailed(err)
 	}
-	var gpus []string
+	var gpu *buildGPU
 	if n := int(spec.GetResources().GetGpuCount()); n > 0 {
-		var err error
-		if gpus, err = c.a.allocateGPUs(c, n); err != nil {
+		gpus, err := c.a.allocateGPUs(c, n)
+		if err != nil {
 			return startFailed(err)
 		}
-		if err := writeBuildCDI(ctx, filepath.Join(c.dir, "cdi"), gpus); err != nil {
+		if gpu, err = writeBuildCDI(ctx, filepath.Join(c.dir, "cdi"), gpus); err != nil {
 			return startFailed(err)
 		}
 	}
-	if err := c.a.createBuilder(ctx, c, spec, gpus); err != nil {
+	if err := c.a.createBuilder(ctx, c, spec, gpu); err != nil {
 		return startFailed(err)
 	}
 	c.mu.Lock()
@@ -261,13 +263,112 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // device entitlement.
 const buildCDIAnnotation = "org.mobyproject.buildkit.device.autoallow"
 
+// buildGPU is what the builder container needs for its steps to use the
+// GPUs it holds: the host files and device nodes their CDI spec names, at
+// the same paths.
+type buildGPU struct {
+	mounts  []mount.Mount
+	devices []containertypes.DeviceMapping
+}
+
+// cdiEdits are the parts of CDI container edits that name host paths.
+type cdiEdits struct {
+	DeviceNodes []struct {
+		Path     string `json:"path"`
+		HostPath string `json:"hostPath"`
+	} `json:"deviceNodes"`
+	Mounts []cdiMount `json:"mounts"`
+}
+
+// cdiMount is one CDI mount.
+type cdiMount struct {
+	HostPath      string   `json:"hostPath"`
+	ContainerPath string   `json:"containerPath"`
+	Type          string   `json:"type,omitempty"`
+	Options       []string `json:"options,omitempty"`
+}
+
+// sharedObjectName is the soname of the ELF library at path, or "" for any
+// other file.
+func sharedObjectName(path string) string {
+	if !strings.Contains(filepath.Base(path), ".so") {
+		return ""
+	}
+	f, err := elf.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	names, err := f.DynString(elf.DT_SONAME)
+	if err != nil || len(names) == 0 || strings.Contains(names[0], "/") {
+		return ""
+	}
+	return names[0]
+}
+
+// add gives the builder the paths edits name and returns the edits a
+// rootless builder can apply. BuildKit applies the spec inside the builder,
+// so each path must exist there as on the host. Its hooks are dropped: the
+// toolkit's hook binary needs glibc, which the builder lacks. What they do
+// that steps need, giving the driver libraries their sonames, is done with
+// a second mount of each library under its soname.
+func (g *buildGPU) add(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("decode CDI container edits: %w", err)
+	}
+	delete(fields, "hooks")
+	var edits cdiEdits
+	if err := json.Unmarshal(raw, &edits); err != nil {
+		return nil, fmt.Errorf("decode CDI container edits: %w", err)
+	}
+	mounts := slices.Clone(edits.Mounts)
+	for _, m := range edits.Mounts {
+		soname := sharedObjectName(m.HostPath)
+		if soname != "" && soname != filepath.Base(m.ContainerPath) {
+			mounts = append(mounts, cdiMount{HostPath: m.HostPath, ContainerPath: filepath.Join(filepath.Dir(m.ContainerPath), soname), Options: m.Options})
+		}
+	}
+	if len(mounts) > 0 {
+		encoded, err := json.Marshal(mounts)
+		if err != nil {
+			return nil, fmt.Errorf("encode CDI mounts: %w", err)
+		}
+		fields["mounts"] = encoded
+	}
+	bind := func(path string) {
+		if path == "" || slices.ContainsFunc(g.mounts, func(m mount.Mount) bool { return m.Source == path }) {
+			return
+		}
+		if _, err := os.Stat(path); err == nil {
+			g.mounts = append(g.mounts, mount.Mount{Type: mount.TypeBind, Source: path, Target: path, ReadOnly: true})
+		}
+	}
+	for _, m := range mounts {
+		bind(m.HostPath)
+	}
+	for _, d := range edits.DeviceNodes {
+		host := cmp.Or(d.HostPath, d.Path)
+		g.devices = append(g.devices, containertypes.DeviceMapping{PathOnHost: host, PathInContainer: d.Path, CgroupPermissions: "rwm"})
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("encode CDI container edits: %w", err)
+	}
+	return out, nil
+}
+
 // writeBuildCDI writes a CDI spec into dir naming only the GPUs the build
-// holds, from the host's NVIDIA Container Toolkit. BuildKit gives them to
-// each RUN step that asks for nvidia.com/gpu=*.
-func writeBuildCDI(ctx context.Context, dir string, gpus []string) error {
+// holds, from the host's NVIDIA Container Toolkit, and returns what the
+// builder needs to apply it. BuildKit gives the GPUs to each RUN step that
+// asks for nvidia.com/gpu=*.
+func writeBuildCDI(ctx context.Context, dir string, gpus []string) (*buildGPU, error) {
 	out, err := exec.CommandContext(ctx, "nvidia-ctk", "cdi", "generate", "--format=json", "--device-name-strategy=uuid").Output()
 	if err != nil {
-		return fmt.Errorf("generate the GPU CDI spec: %w", err)
+		return nil, fmt.Errorf("generate the GPU CDI spec: %w", err)
 	}
 	type device struct {
 		Name           string            `json:"name"`
@@ -281,17 +382,24 @@ func writeBuildCDI(ctx context.Context, dir string, gpus []string) error {
 		ContainerEdits json.RawMessage `json:"containerEdits,omitempty"`
 	}
 	if err := json.Unmarshal(out, &spec); err != nil {
-		return fmt.Errorf("decode the GPU CDI spec: %w", err)
+		return nil, fmt.Errorf("decode the GPU CDI spec: %w", err)
+	}
+	gpu := &buildGPU{mounts: []mount.Mount{{Type: mount.TypeBind, Source: dir, Target: buildCDIDir, ReadOnly: true}}}
+	if spec.ContainerEdits, err = gpu.add(spec.ContainerEdits); err != nil {
+		return nil, err
 	}
 	held := spec.Devices[:0]
 	for _, d := range spec.Devices {
 		if slices.Contains(gpus, d.Name) {
 			d.Annotations = map[string]string{buildCDIAnnotation: "true"}
+			if d.ContainerEdits, err = gpu.add(d.ContainerEdits); err != nil {
+				return nil, err
+			}
 			held = append(held, d)
 		}
 	}
 	if len(held) != len(gpus) {
-		return fmt.Errorf("the GPU CDI spec names %d of the build's %d GPUs", len(held), len(gpus))
+		return nil, fmt.Errorf("the GPU CDI spec names %d of the build's %d GPUs", len(held), len(gpus))
 	}
 	spec.Devices = held
 	// Device annotations need CDI 0.6.0; the versions are 0.x.0.
@@ -300,15 +408,15 @@ func writeBuildCDI(ctx context.Context, dir string, gpus []string) error {
 	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {
-		return fmt.Errorf("encode the GPU CDI spec: %w", err)
+		return nil, fmt.Errorf("encode the GPU CDI spec: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // The builder reads it as another user.
-		return fmt.Errorf("create CDI directory: %w", err)
+		return nil, fmt.Errorf("create CDI directory: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "nvidia.json"), encoded, 0o644); err != nil { //nolint:gosec // As above.
-		return fmt.Errorf("write the GPU CDI spec: %w", err)
+		return nil, fmt.Errorf("write the GPU CDI spec: %w", err)
 	}
-	return nil
+	return gpu, nil
 }
 
 // dockerConfig is a Docker config with a login per registry host.
@@ -336,7 +444,7 @@ func dockerConfig(auths map[string]*hostproto.RegistryAuth) ([]byte, error) {
 	return encoded, nil
 }
 
-func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto.StartContainer, gpus []string) error {
+func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto.StartContainer, gpu *buildGPU) error {
 	build := spec.GetBuild()
 	insecure := ""
 	if build.GetInsecureRegistry() {
@@ -371,8 +479,12 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 		}
 	}
 	env := []string{"DOCKER_CONFIG=" + buildDockerConfig}
-	if len(gpus) > 0 {
-		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: filepath.Join(c.dir, "cdi"), Target: buildCDIDir, ReadOnly: true})
+	resources := containerResources(spec.GetResources(), a.capacity, int64(pidsLimit), nil)
+	if gpu != nil {
+		// The held GPUs reach the builder as the devices and files of their
+		// CDI spec, which BuildKit then applies to the steps.
+		mounts = append(mounts, gpu.mounts...)
+		resources.Devices = gpu.devices
 		env = append(env, "BUILDKITD_FLAGS=--cdi-spec-dir="+buildCDIDir)
 	}
 	labels := maps.Clone(a.cfg.Labels)
@@ -381,7 +493,6 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 	}
 	labels[labelBuildHost] = a.identity.HostID
 	labels[labelBuildContainer] = c.id
-	limit := int64(pidsLimit)
 	options := client.ContainerCreateOptions{
 		Name: c.dockerName(),
 		Config: &containertypes.Config{
@@ -401,7 +512,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 			ReadonlyPaths: []string{},
 			NetworkMode:   containertypes.NetworkMode(a.cfg.BuildNetwork),
 			Mounts:        mounts,
-			Resources:     containerResources(spec.GetResources(), a.capacity, limit, gpus),
+			Resources:     resources,
 		},
 	}
 	_, err := a.docker.ContainerCreate(ctx, options)

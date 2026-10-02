@@ -179,13 +179,17 @@ registry integration.
 - ECR base images: the `GetAuthorizationToken` exchange is unverified
   without AWS credentials; GCR, ACR and NGC logins are covered by the name
   mapping test only.
-- GPU builds are unverified on a GPU host: none exists locally. Placement,
-  the held GPU, billing's GPU type and the refusal of `any` and unknown
-  models are tested; that BuildKit's rootless steps reach the device
-  through the agent's CDI spec (`nvidia-ctk cdi generate`, filtered to the
-  held GPUs, `--cdi-spec-dir`, `RUN --device=nvidia.com/gpu=*`) is not.
-  `machine=` on `build()` is unsupported: builds do not use machine
-  pinning.
+- GPU builds ran once live on this machine's RTX 3090 (private stack,
+  2026-10-01): a `build_with_gpu` step ran `nvidia-smi -L` and listed the
+  card. The agent filters `nvidia-ctk cdi generate` to the held GPU, binds
+  its device nodes and driver files into the rootless builder, drops the
+  glibc hooks (the builder is Alpine) and mounts each driver library under
+  its soname instead. The host had to be relabeled `L4`, because GPU models
+  are the cloud enum (T4 ... H200) and a consumer card is not one, and
+  there is no automated test of the step's device: CI has no GPU. A
+  platform GPU host and Debian-based bases other than python slim are
+  unverified. `machine=` on `build()` is unsupported: builds do not use
+  machine pinning.
 - Architecture: arm64 is part of the identity and the build platform, but
   hosts do not report an architecture, so placement cannot match it.
 - Base registry logins are stored in plaintext on the build row until it
