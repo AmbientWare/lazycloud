@@ -2,10 +2,12 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,11 +18,14 @@ const leadRetry = time.Second
 // name, until ctx ends. It holds a session advisory lock on a connection
 // taken out of the pool: a process waiting for the lock blocks inside
 // PostgreSQL and sends nothing, and the lock is released when the leader's
-// session ends. leading is called with true once the lock is held and with
-// false when the session is lost; a leader pings its session every check, so
-// it learns of a lost session within that long. Another process may lead
-// before a lost leader notices, so leadership only paces work whose passes
-// are already safe to overlap.
+// session ends. pool must keep a session on one backend
+// (database.OpenSession). leading is called with true once the lock is held
+// and with false when it is lost; every check the leader asks PostgreSQL
+// whether its session still holds the lock, so it learns within that long
+// of a session that ended or that a proxy moved to another backend, where a
+// ping would still succeed. Another process may lead before a lost leader
+// notices, so leadership only paces work whose passes are already safe to
+// overlap.
 func Lead(ctx context.Context, pool *pgxpool.Pool, name string, check time.Duration, leading func(bool), logger *slog.Logger) error {
 	for {
 		err := holdLead(ctx, pool, name, check, leading)
@@ -57,9 +62,27 @@ func holdLead(ctx context.Context, pool *pgxpool.Pool, name string, check time.D
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := conn.Ping(ctx); err != nil {
+			held, err := holdsLead(ctx, conn, name)
+			if err != nil {
 				return fmt.Errorf("leader session: %w", err)
+			}
+			if !held {
+				return errors.New("leader session no longer holds the lock")
 			}
 		}
 	}
+}
+
+// holdsLead reports whether conn's session holds the advisory lock of name.
+// pg_locks splits the 64-bit key into classid (high half) and objid (low
+// half), with objsubid 1.
+func holdsLead(ctx context.Context, conn *pgx.Conn, name string) (bool, error) {
+	var held bool
+	err := conn.QueryRow(ctx, `select exists (select 1 from pg_locks
+		where locktype = 'advisory' and granted and pid = pg_backend_pid() and objsubid = 1
+		  and (classid::bigint << 32 | objid::bigint) = hashtextextended($1, 0))`, name).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("check leader lock: %w", err)
+	}
+	return held, nil
 }
