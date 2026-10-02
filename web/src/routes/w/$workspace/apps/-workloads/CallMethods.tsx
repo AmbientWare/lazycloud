@@ -32,7 +32,7 @@ export function CallMethods({
   const method = asgi && methods.includes("GET") ? "GET" : "POST";
   const source = release.spec.handler ? sourceImport(release.spec.handler) : null;
   const pythonRequired = pythonOnlyReason(contract);
-  const url = invokeUrl(workspace, detail);
+  const url = detail.http?.version_url ?? invokeUrl(workspace, detail);
 
   return (
     <div className="content-transition min-w-0 divide-y divide-border/70 px-4 py-1">
