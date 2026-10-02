@@ -1,11 +1,18 @@
 -- name: LockQueuedDependents :many
 -- Queued tasks that depend directly on any upstream, locked in id order so
--- concurrent upstream outcomes never deadlock on shared dependents.
-select t.id from tasks t
-where t.status = 'queued'
-  and t.id in (select d.task_id from task_dependencies d where d.depends_on = any(@upstream::uuid[]))
-order by t.id
-for update;
+-- concurrent upstream outcomes never deadlock on shared dependents. Tasks
+-- are read by key: OFFSET 0 keeps the status test out of the locking scan,
+-- because with it the planner may walk the queued index when statistics
+-- taken at an empty queue call it empty. Terminal dependents are locked too
+-- and dropped by the outer test.
+select l.id from (
+    select t.id, t.status from tasks t
+    where t.id = any(array(select d.task_id from task_dependencies d where d.depends_on = any(@upstream::uuid[])))
+    order by t.id
+    offset 0
+    for update
+) l
+where l.status = 'queued';
 
 -- name: SatisfyDependencies :many
 -- Each upstream succeeds once, so each dependency row counts once.
@@ -27,16 +34,20 @@ returning t.id, t.release_id, t.unmet_dependencies,
 
 -- name: LockDependentClosure :many
 -- Queued tasks that depend on any upstream directly or through other tasks,
--- locked in id order.
+-- locked in id order and read by key, as LockQueuedDependents.
 with recursive closure (id) as (
     select d.task_id from task_dependencies d where d.depends_on = any(@upstream::uuid[])
     union
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
-select t.id, t.release_id from tasks t
-where t.id in (select id from closure) and t.status = 'queued'
-order by t.id
-for update;
+select l.id, l.release_id from (
+    select t.id, t.release_id, t.status from tasks t
+    where t.id = any(array(select id from closure))
+    order by t.id
+    offset 0
+    for update
+) l
+where l.status = 'queued';
 
 -- name: FailTasks :exec
 update tasks
@@ -55,19 +66,24 @@ order by d.task_id, d.depends_on;
 -- Up to batch_size queued tasks of the release, and every queued task that
 -- depends on them directly or transitively, locked together in id order, so
 -- failing or cancelling the batch and then its dependents never takes a
--- second round of locks.
+-- second round of locks. Callers repeat until no batch is left, so the batch
+-- is the first queued tasks an index yields, not the lowest ids: unordered,
+-- the scan stops after batch_size rows.
 with recursive base as (
     select q.id from tasks q
     where q.release_id = @release_id::uuid and q.status = 'queued'
-    order by q.id
     limit @batch_size
 ), closure (id) as (
     select id from base
     union
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
-select t.id, (t.id in (select id from base))::bool as in_release
-from tasks t
-where t.id in (select id from closure) and t.status = 'queued'
-order by t.id
-for update of t;
+select l.id, l.in_release from (
+    select t.id, t.status, (t.id = any(array(select id from base)))::bool as in_release
+    from tasks t
+    where t.id = any(array(select id from closure))
+    order by t.id
+    offset 0
+    for update of t
+) l
+where l.status = 'queued';
