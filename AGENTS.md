@@ -4,8 +4,9 @@ Read [update.md](update.md) before planning or changing an owner. Follow its tar
 architecture, product baseline and completion requirements. Resolve
 conflicts before implementation. Keep task plans and progress with the task.
 
-Edit AGENTS.md, never its CLAUDE.md symlink. Add that symlink beside every new
-guidance file. These files contain development standards and constraints.
+Guidance lives in AGENTS.md files, which Claude Code also loads; add no
+CLAUDE.md beside them. These files contain development standards and
+constraints.
 
 ## Ownership and implementation
 
