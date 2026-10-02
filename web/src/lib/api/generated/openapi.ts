@@ -11380,6 +11380,8 @@ export interface operations {
         parameters: {
             query?: {
                 app?: components["schemas"]["AppName"];
+                /** @description Part of the sandbox's name, its app's name or its container id. */
+                search?: string;
                 limit?: components["parameters"]["Limit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];

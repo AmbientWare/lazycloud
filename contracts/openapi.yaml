@@ -3680,6 +3680,10 @@ paths:
         - name: app
           in: query
           schema: { $ref: "#/components/schemas/AppName" }
+        - name: search
+          in: query
+          description: Part of the sandbox's name, its app's name or its container id.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:

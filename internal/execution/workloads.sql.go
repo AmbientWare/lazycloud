@@ -558,14 +558,19 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = $1 and w.kind = 'sandbox' and c.id < $2
   and ($3::text is null or a.name = $3)
+  and ($4::text is null
+       or strpos(lower(w.name), $4::text) > 0
+       or strpos(a.name, $4::text) > 0
+       or strpos(c.id::text, $4::text) > 0)
 order by c.id desc
-limit $4
+limit $5
 `
 
 type ListSandboxesParams struct {
 	WorkspaceID uuid.UUID
 	Before      uuid.UUID
 	App         *string
+	Search      *string
 	MaxRows     int32
 }
 
@@ -588,6 +593,7 @@ func (q *Queries) ListSandboxes(ctx context.Context, arg ListSandboxesParams) ([
 		arg.WorkspaceID,
 		arg.Before,
 		arg.App,
+		arg.Search,
 		arg.MaxRows,
 	)
 	if err != nil {

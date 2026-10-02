@@ -440,8 +440,8 @@ Scope notes:
 ## Dashboard
 - [x] `/dashboard` opens the last-used or first workspace; `/w/$workspace` goes to Apps (WEB/routes/dashboard.tsx, WEB/routes/w/$workspace/index.tsx)
   Delivered: dashboard.tsx identical; smoke e2e "dashboard entry lands on Apps and the responsive shell switches workspaces".
-- [ ] App shell: nav Apps/Tasks/Storage/Usage, global search (⌘/Ctrl-K or "/"), account menu (Settings, Sign out), Settings addressed as `?settings=billing|tokens|compute|domains|admin` (WEB/components/shared/AppShell/index.tsx, GlobalSearch.tsx, WEB/components/shared/SettingsDialog/view.ts)
-  Gap: AppShell identical, GlobalSearch.test.tsx; global search no longer finds sandboxes (`listSandboxes` has no search). About 2 h.
+- [x] App shell: nav Apps/Tasks/Storage/Usage, global search (⌘/Ctrl-K or "/"), account menu (Settings, Sign out), Settings addressed as `?settings=billing|tokens|compute|domains|admin` (WEB/components/shared/AppShell/index.tsx, GlobalSearch.tsx, WEB/components/shared/SettingsDialog/view.ts)
+  Delivered: AppShell identical; global search asks the server for apps, workloads, tasks and sandboxes (`GlobalSearch.test.tsx`, `TestSandboxSearchMatchesNameAppAndContainerID`).
 - [x] Apps list: cards with 24h activity sparkline and latest workload, actions (pause/resume/delete), quickstart empty state (WEB/routes/w/$workspace/apps/index.tsx, -components/QuickstartEmptyState.tsx)
   Delivered: apps/index.tsx; apps.test.ts, onboarding e2e, stack e2e "a deployed app is listed".
 - [x] App detail: header Pause/Resume/Delete, activity chart, workloads table (type filter, status/version/containers/deployed, delete workload), recent tasks, sandboxes (WEB/routes/w/$workspace/apps/$appId.tsx, -components/*)

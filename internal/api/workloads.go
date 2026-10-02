@@ -302,7 +302,8 @@ func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObje
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Execution.ListSandboxes(ctx, ws.ID, req.Params.App, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Execution.ListSandboxes(ctx, ws.ID, execution.SandboxFilter{App: req.Params.App, Search: req.Params.Search},
+		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}

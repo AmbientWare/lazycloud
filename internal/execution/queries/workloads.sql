@@ -315,6 +315,10 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id and w.kind = 'sandbox' and c.id < @before
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'))
+  and (sqlc.narg('search')::text is null
+       or strpos(lower(w.name), sqlc.narg('search')::text) > 0
+       or strpos(a.name, sqlc.narg('search')::text) > 0
+       or strpos(c.id::text, sqlc.narg('search')::text) > 0)
 order by c.id desc
 limit @max_rows;
 

@@ -6054,8 +6054,11 @@ type ListHttpRequestLogsParams struct {
 
 // ListSandboxesParams defines parameters for ListSandboxes.
 type ListSandboxesParams struct {
-	App   *AppName `form:"app,omitempty" json:"app,omitempty"`
-	Limit *Limit   `form:"limit,omitempty" json:"limit,omitempty"`
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// Search Part of the sandbox's name, its app's name or its container id.
+	Search *string `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`

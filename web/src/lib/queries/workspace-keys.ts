@@ -53,8 +53,11 @@ export const workspaceQueryKeys = {
     activity: (workspace: string, app: string) =>
       [...workspaceRoot(workspace), "apps", "activity", app] as const,
   },
-  search: (workspaceName: string, group: "apps" | "workloads" | "tasks", term: string) =>
-    [...workspaceRoot(workspaceName), "search", group, term] as const,
+  search: (
+    workspaceName: string,
+    group: "apps" | "workloads" | "tasks" | "sandboxes",
+    term: string,
+  ) => [...workspaceRoot(workspaceName), "search", group, term] as const,
   members: (workspaceId: string) => [...workspaceRoot(workspaceId), "members"] as const,
   invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
   workloads: {

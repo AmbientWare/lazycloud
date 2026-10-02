@@ -10,6 +10,7 @@ import {
   CornerDownLeft,
   Search,
   Settings,
+  SquareTerminal,
 } from "lucide-react";
 
 import {
@@ -25,10 +26,11 @@ import {
   appSearchQueryOptions,
   workloadSearchQueryOptions,
   taskSearchQueryOptions,
+  sandboxSearchQueryOptions,
 } from "@/lib/queries/search";
 import { useWorkspace } from "@/lib/workspace-context";
 
-const GROUPS = ["Navigate", "Apps", "Workloads", "Tasks"] as const;
+const GROUPS = ["Navigate", "Apps", "Workloads", "Tasks", "Sandboxes"] as const;
 
 type SearchResult = {
   group: (typeof GROUPS)[number];
@@ -62,6 +64,10 @@ export function GlobalSearch({
   const tasks = useQuery({
     ...taskSearchQueryOptions(workspace.name, deferredQuery),
     enabled: open && deferredQuery.length >= 2,
+  });
+  const sandboxes = useQuery({
+    ...sandboxSearchQueryOptions(workspace.name, deferredQuery),
+    enabled: open,
   });
 
   const results = useMemo(() => {
@@ -147,8 +153,19 @@ export function GlobalSearch({
       });
     }
 
+    for (const sandbox of sandboxes.data ?? []) {
+      next.push({
+        key: `sandbox-${sandbox.id}`,
+        group: "Sandboxes",
+        label: sandbox.name,
+        detail: `${formatKind(sandbox.status)} · ${shortId(sandbox.id)}`,
+        href: `${base}/sandboxes/${encodeURIComponent(sandbox.id)}`,
+        icon: SquareTerminal,
+      });
+    }
+
     return next.slice(0, 30);
-  }, [apps.data, normalizedQuery, tasks.data, workspace.name, workloads.data]);
+  }, [apps.data, normalizedQuery, sandboxes.data, tasks.data, workspace.name, workloads.data]);
 
   // Results arrive in group order. When the highlighted result drops out of the
   // list, highlight the first one so Enter always opens something.
@@ -168,8 +185,11 @@ export function GlobalSearch({
   };
 
   const loading =
-    apps.isPending || workloads.isPending || (deferredQuery.length >= 2 && tasks.isPending);
-  const partialError = apps.isError || workloads.isError || tasks.isError;
+    apps.isPending ||
+    workloads.isPending ||
+    sandboxes.isPending ||
+    (deferredQuery.length >= 2 && tasks.isPending);
+  const partialError = apps.isError || workloads.isError || tasks.isError || sandboxes.isError;
 
   return (
     <CommandDialog
