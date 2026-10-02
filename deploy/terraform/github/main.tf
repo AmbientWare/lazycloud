@@ -229,7 +229,7 @@ resource "aws_iam_role_policy" "ship" {
 # stopped and copies the image to the other fleet regions.
 data "aws_iam_policy_document" "node_images" {
   statement {
-    actions   = ["ec2:DescribeImages", "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups", "ssm:GetParameters"]
+    actions   = ["ec2:DescribeImages", "ec2:DescribeInstances", "ec2:DescribeInstanceTypeOfferings", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups", "ssm:GetParameters"]
     resources = ["*"]
   }
 

@@ -267,6 +267,19 @@ Rollback after bring-up is Deploy with an earlier version.
 - shellcheck fixes in `deploy/local/build-runtime.sh` and
   `garage-bootstrap.sh`; `host-setup.sh` reads the shared gVisor pin.
 
+## Review fixes (PR #443)
+
+| Finding | Fix | Evidence |
+| --- | --- | --- |
+| A host's registry login could read and write every workspace's images, caches and snapshots | Each host command gets an ECR login from a session of the `registry-hosts` role whose policy names only its repositories: an image to pull; a build's own image repository (named by the image digest, so equal definitions still share one build) and its workspace's cache; a workspace's snapshot repository. Only builds and snapshot publishes push. The server's own login reads only. Details in tasks/images.md. | `TestHostLoginsAreScopedToTheCommandsRepositories`, `TestRepositoryOfAReference`, `TestCompletedBuildPublishesOnlyAPushedDigest`, `TestForcedRebuildsAndCachesStayInTheirWorkspace` |
+| Workflow tokens could deploy to prod | Ship's top-level permissions are empty; only the tag job writes contents; the other jobs check out without persisted credentials. prod accepts pushes only from the prod environment's deploy key (and administrators), so no workflow token can move it. Workflow tokens may create `v*` tags but not move or delete them, and Deploy refuses a tag whose commit is not on main. | actionlint; `github` root validates |
+| Presigned downloads died with the server's ~6 h Pod Identity session | Downloads (artifact links, volume GET and HEAD) are links at `<public URL>/v1/links/<token>`, signed with a key derived from the secrets master key. The server presigns each use for 5 minutes and redirects, so a link lasts as long as asked, up to 7 days, and stops working once its object is deleted. Uploads and host transfers stay presigned for at most an hour, capped at what the signing credentials have left, and report that expiry. The SDK follows the redirect; browsers do on their own. A redirect endpoint beat capping, which would have cut `public_url(expires=86400)` to a few hours. | `TestDownloadLinksLastTheirLifetimeAndOnlyTheirs`, server test of a forged link |
+| The bake could pick a subnet whose zone lacks its instance type | The bake picks a public fleet subnet in a zone that `describe-instance-type-offerings` lists for the type | read-only query against us-east-2 |
+
+A presigned multipart upload still dies if the server's credentials expire
+mid-upload; its `expires_at` says when. The Pod Identity agent's refresh
+timing decides how often that is shorter than an hour.
+
 ## Verification run
 
 - `deploy/check.sh` and `./check.sh` pass: helm 4.3.0 lint `--strict` and

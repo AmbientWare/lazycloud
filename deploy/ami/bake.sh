@@ -61,9 +61,14 @@ if [[ "$ami" == None || -z "$ami" ]]; then
   base="$(aws ssm get-parameters --region "$bake_region" \
     --names /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
     --query 'Parameters[0].Value' --output text)"
+  # A public fleet subnet in a zone that offers the bake's instance type.
+  zones="$(aws ec2 describe-instance-type-offerings --region "$bake_region" --location-type availability-zone \
+    --filters "Name=instance-type,Values=$instance_type" --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' ,)"
+  [[ -n "$zones" ]] || { log "no zone of $bake_region offers $instance_type"; exit 1; }
   subnet="$(aws ec2 describe-subnets --region "$bake_region" --filters \
-    "Name=tag:lazycloud:fleet,Values=$deployment" "Name=map-public-ip-on-launch,Values=true" --query 'Subnets[0].SubnetId' --output text)"
-  [[ "$subnet" == subnet-* ]] || { log "no public fleet subnet of $deployment in $bake_region"; exit 1; }
+    "Name=tag:lazycloud:fleet,Values=$deployment" "Name=map-public-ip-on-launch,Values=true" \
+    "Name=availability-zone,Values=$zones" --query 'Subnets[0].SubnetId' --output text)"
+  [[ "$subnet" == subnet-* ]] || { log "no public fleet subnet of $deployment in $bake_region offers $instance_type"; exit 1; }
   vpc="$(aws ec2 describe-subnets --region "$bake_region" --subnet-ids "$subnet" --query 'Subnets[0].VpcId' --output text)"
   group="$(aws ec2 describe-security-groups --region "$bake_region" --filters "Name=vpc-id,Values=$vpc" \
     "Name=tag:lazycloud:fleet,Values=$deployment" --query 'SecurityGroups[0].GroupId' --output text)"
