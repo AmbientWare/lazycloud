@@ -125,6 +125,9 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 			default:
 				n.State = FleetUnavailable
 			}
+		case PhasePreparing, PhaseStopping, PhaseStopped, PhaseResuming:
+			// The api-web packet maps reserve states.
+			n.State = FleetUnavailable
 		default:
 			n.State = FleetUnavailable
 		}
