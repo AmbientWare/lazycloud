@@ -4,8 +4,8 @@ from typing import Annotated
 
 from pydantic import Field, StringConstraints, model_serializer, model_validator
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.enums import StringEnum
+from lazycloud.contracts import ContractModel
 
 
 class PlacementKind(StringEnum):

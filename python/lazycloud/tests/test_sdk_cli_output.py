@@ -9,12 +9,12 @@ from collections.abc import Iterator
 
 import pytest
 import typer
+from lazycloud._shared.http.errors import HttpApiError
 from lazycloud._terminal.streams import console, error_console, set_json_output
 from lazycloud.cli.components.errors import (
     normalize_exception,
 )
 from lazycloud.cli.components.output import CliContextState, print_payload
-from shared.http.errors import HttpApiError
 from typer.core import TyperCommand
 
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from lazycloud._shared.deployment_records import DeploymentSpec
 from pydantic import ValidationError
-from shared.deployment_records import DeploymentSpec
 
 
 @pytest.mark.parametrize("port", [0, 65536, 8080.5, "8080", True])

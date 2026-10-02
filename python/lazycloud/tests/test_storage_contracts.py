@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from shared.secrets import SecretRecord
+from lazycloud._shared.secrets import SecretRecord
 
 
 def test_secret_record_masks_values_and_excludes_them_from_representations() -> None:

@@ -6,8 +6,8 @@ import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from shared.enums import StringEnum
-from shared.image_building.authoring import LinuxArchitecture
+from lazycloud._shared.enums import StringEnum
+from lazycloud._shared.image_building.authoring import LinuxArchitecture
 
 
 class AgentHarness(StringEnum):

@@ -19,7 +19,7 @@ import dataclasses
 import sys
 
 from pydantic import BaseModel
-from shared.task_context import current_root_task_id, current_task_id
+from lazycloud._shared.task_context import current_root_task_id, current_task_id
 
 
 class Point(BaseModel):
@@ -207,10 +207,10 @@ def test_failures_report_the_error_and_keep_serving(
     assert exception.args == ("exploded",)
 
     header, _ = runner.invoke(_json(["unexpected"]))
-    assert header["error"]["type"] == "shared.errors.InvalidInputError"
+    assert header["error"]["type"] == "lazycloud._shared.errors.InvalidInputError"
 
     header, _ = runner.invoke(b"not json")
-    assert header["error"]["type"] == "shared.errors.InvalidInputError"
+    assert header["error"]["type"] == "lazycloud._shared.errors.InvalidInputError"
     assert "invalid json arguments" in header["error"]["message"]
 
     assert runner.close()[0] == 0

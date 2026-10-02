@@ -17,9 +17,9 @@ from PIL import Image as PILImage
 from PIL.PngImagePlugin import PngInfo
 from pydantic import ConfigDict, TypeAdapter, with_config
 from pydantic import ValidationError as PydanticValidationError
-from shared.errors import InvalidInputError
 from typing_extensions import Self, TypedDict
 
+from lazycloud._shared.errors import InvalidInputError
 from lazycloud.json_contracts import JsonValue
 
 

@@ -8,13 +8,12 @@ from typing import TYPE_CHECKING
 from lazycloud.progress import progress
 
 if TYPE_CHECKING:
-    from shared.autoscaling import Autoscaler
-    from shared.gpu import GpuType
-    from shared.image_building.authoring import LinuxArchitecture, PythonVersion
-    from shared.task_context import current_root_task_id, current_task_id
-    from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
-
     from lazycloud import env, schema
+    from lazycloud._shared.autoscaling import Autoscaler
+    from lazycloud._shared.gpu import GpuType
+    from lazycloud._shared.image_building.authoring import LinuxArchitecture, PythonVersion
+    from lazycloud._shared.task_context import current_root_task_id, current_task_id
+    from lazycloud._shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
     from lazycloud.abstractions.app import App
     from lazycloud.abstractions.artifact import Artifact
     from lazycloud.abstractions.disk import Disk
@@ -61,29 +60,29 @@ def __getattr__(name: str):
 
             return FunctionCall
         case "Autoscaler":
-            from shared.autoscaling import Autoscaler
+            from lazycloud._shared.autoscaling import Autoscaler
 
             return Autoscaler
         case "GpuType":
-            from shared.gpu import GpuType
+            from lazycloud._shared.gpu import GpuType
 
             return GpuType
         case "LinuxArchitecture" | "PythonVersion":
-            from shared.image_building.authoring import LinuxArchitecture, PythonVersion
+            from lazycloud._shared.image_building.authoring import LinuxArchitecture, PythonVersion
 
             if name == "LinuxArchitecture":
                 return LinuxArchitecture
             if name == "PythonVersion":
                 return PythonVersion
         case "current_root_task_id" | "current_task_id":
-            from shared.task_context import current_root_task_id, current_task_id
+            from lazycloud._shared.task_context import current_root_task_id, current_task_id
 
             if name == "current_root_task_id":
                 return current_root_task_id
             if name == "current_task_id":
                 return current_task_id
         case "RetryBackoff" | "RetryPolicy" | "TaskPolicy":
-            from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
+            from lazycloud._shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
 
             if name == "RetryBackoff":
                 return RetryBackoff

@@ -15,14 +15,14 @@ from rich.spinner import Spinner
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
-from shared.api import TaskPendingProgress, TaskPendingReason
-from shared.timestamps import utc_now
 from typing_extensions import Self
 
+from lazycloud._shared.timestamps import utc_now
 from lazycloud._terminal import theme
 from lazycloud._terminal.cards import notice_card
 from lazycloud._terminal.formatting import short_id
 from lazycloud._terminal.streams import error_console, json_output_active
+from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
 
 _output_enabled: ContextVar[bool | None] = ContextVar("lazycloud_output_enabled", default=None)
 

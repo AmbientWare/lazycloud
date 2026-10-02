@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lazycloud._shared.image_building.credentials import ImageCredentialLookupError
 from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.terminal import Terminal, TerminalStep
-from shared.image_building.credentials import ImageCredentialLookupError
 
 from lazycloud import Image, LinuxArchitecture, output
 from tests.api_server import ApiRequest, FakeApi, Reply, StreamAborted, error_reply, json_reply

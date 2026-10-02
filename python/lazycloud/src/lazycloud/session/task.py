@@ -11,7 +11,11 @@ from uuid import UUID
 
 import cloudpickle
 from pydantic import JsonValue
-from shared.api import (
+
+from lazycloud._shared.task_context import current_task_id
+from lazycloud.aio import to_thread
+from lazycloud.clients.api import ApiClient, ApiError, is_transient
+from lazycloud.contracts.api import (
     ContainerLogEntry,
     Encoding,
     LogEntry,
@@ -20,11 +24,7 @@ from shared.api import (
     TaskPendingProgress,
     TaskStatus,
 )
-from shared.api import Task as TaskView
-from shared.task_context import current_task_id
-
-from lazycloud.aio import to_thread
-from lazycloud.clients.api import ApiClient, ApiError, is_transient
+from lazycloud.contracts.api import Task as TaskView
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import RemoteTaskError, TaskCancelledError, TaskNotFoundError
 from lazycloud.progress import PendingProgressReporter, progress_observed

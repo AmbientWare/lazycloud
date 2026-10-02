@@ -5,8 +5,8 @@ import sys
 from typing import Annotated
 
 import typer
-from shared.client_version import release_is_newer
 
+from lazycloud._shared.client_version import release_is_newer
 from lazycloud._terminal.cards import notice_card
 from lazycloud._terminal.streams import json_output_active
 from lazycloud.cli.components.errors import ClientError

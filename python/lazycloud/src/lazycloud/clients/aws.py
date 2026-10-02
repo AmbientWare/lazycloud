@@ -8,7 +8,8 @@ import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from shared.api import AwsStackAction, AwsStackParameter
+
+from lazycloud.contracts.api import AwsStackAction, AwsStackParameter
 
 # The connection template's zone parameters, filled in order with the region's
 # standard zones.

@@ -21,7 +21,7 @@ log = logging.getLogger("hooked")
 log.addHandler(logging.StreamHandler(sys.stderr))
 log.setLevel(logging.INFO)
 
-from shared.task_context import current_root_task_id, current_task_id
+from lazycloud._shared.task_context import current_root_task_id, current_task_id
 
 events = []
 

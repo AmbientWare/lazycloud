@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from shared.api import TaskPendingProgress, TaskPendingReason
-from shared.timestamps import utc_now
+from lazycloud._shared.timestamps import utc_now
+from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
 
 if TYPE_CHECKING:
     from lazycloud.terminal import Terminal, TerminalStep

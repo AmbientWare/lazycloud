@@ -2,7 +2,7 @@
 
 - Own Python consumer contracts, precise types and deterministic helpers. No
   backend policy, database/Redis clients, server state or SDK session behavior.
-- JSON contracts live by domain under `shared.http` and extend `HttpModel`.
+- JSON contracts live by domain under `_shared.http` and extend `HttpModel`.
   Use typed payloads and deliberate exports; remove unused models and duplicate
   request/body shapes. Errors have their existing domain/transport owners.
 - Missing deployment coordinates raise `MissingDeploymentSettingError` naming the

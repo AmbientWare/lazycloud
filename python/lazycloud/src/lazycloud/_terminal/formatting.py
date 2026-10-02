@@ -11,10 +11,10 @@ from rich.console import Group, RenderableType
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
-from shared.api import DeploymentPlanAction
-from shared.serialization import to_json_value
 
+from lazycloud._shared.serialization import to_json_value
 from lazycloud._terminal import theme
+from lazycloud.contracts.api import DeploymentPlanAction
 
 
 def short_id(value: object, length: int = 8) -> str:

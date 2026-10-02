@@ -27,7 +27,7 @@ from types import ModuleType
 import lazycloud.config
 import pytest
 from lazycloud.clients.api import ApiClient
-from shared.api import WorkloadKind
+from lazycloud.contracts.api import WorkloadKind
 
 from lazycloud import Secret
 

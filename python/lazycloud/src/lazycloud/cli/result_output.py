@@ -7,14 +7,14 @@ from pathlib import Path
 
 from pydantic import JsonValue
 from rich.text import Text
-from shared.function_display import build_function_result_display
-from shared.function_payloads import (
+
+from lazycloud._shared.function_display import build_function_result_display
+from lazycloud._shared.function_payloads import (
     FunctionResultDisplay,
     FunctionResultDisplayKind,
     FunctionResultRichDisplay,
 )
-from shared.serialization import to_json_value
-
+from lazycloud._shared.serialization import to_json_value
 from lazycloud._terminal import theme
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.values import cloudpickle_bytes

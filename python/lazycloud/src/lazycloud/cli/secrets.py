@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.api import Secret, SecretValue
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
@@ -16,6 +15,7 @@ from lazycloud.cli.components.output import (
     table,
 )
 from lazycloud.clients.api import ApiClient
+from lazycloud.contracts.api import Secret, SecretValue
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 
 MASKED_SECRET_VALUE = "********"

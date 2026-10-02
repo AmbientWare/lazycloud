@@ -7,7 +7,6 @@ from typing import Annotated
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from lazycloud._shared.autoscaling import Autoscaler
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.custom_domains import normalize_assignable_hostname
 from lazycloud._shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind, PodRole
 from lazycloud._shared.disks import (
@@ -29,6 +28,7 @@ from lazycloud._shared.placement import (
 from lazycloud._shared.resources import parse_memory_mib
 from lazycloud._shared.tasks import RetryPolicy
 from lazycloud._shared.timestamps import utc_now
+from lazycloud.contracts import ContractModel
 
 # A per-container ceiling rather than an allocation, so one value serves every
 # workload kind; workloads that genuinely need more raise it explicitly.

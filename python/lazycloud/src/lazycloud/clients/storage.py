@@ -15,7 +15,9 @@ from pathlib import Path
 from uuid import UUID
 
 import httpx
-from shared.api import (
+
+from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError, _path
+from lazycloud.contracts.api import (
     AbortVolumeUploadRequest,
     Artifact,
     ArtifactPage,
@@ -48,8 +50,6 @@ from shared.api import (
     VolumeFilePage,
     VolumePage,
 )
-
-from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError, _path
 
 _TRANSFER_TIMEOUT = httpx.Timeout(30.0, read=600.0, write=600.0)
 _TRANSFER_CHUNK_BYTES = 1024 * 1024

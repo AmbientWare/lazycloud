@@ -4,9 +4,9 @@ from datetime import datetime
 
 from pydantic import Field, JsonValue
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.timestamps import utc_now
+from lazycloud.contracts import ContractModel
 
 
 class EventLevel(StringEnum):

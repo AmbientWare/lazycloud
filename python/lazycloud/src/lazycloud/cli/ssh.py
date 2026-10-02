@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import typer
-from shared.api import DevboxPhase, PodRole, WorkloadKind, WorkloadState
 
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
 from lazycloud.cli.components.progress import ConnectingIndicator
 from lazycloud.cli.control import control_config, workloads
 from lazycloud.clients.workloads import WorkloadsClient
+from lazycloud.contracts.api import DevboxPhase, PodRole, WorkloadKind, WorkloadState
 from lazycloud.session.ssh import (
     SshAccess,
     SshPaths,

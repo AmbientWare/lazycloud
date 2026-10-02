@@ -78,7 +78,7 @@ The reference trace (9e259ce75) shows what this slice removes:
 
 | Contract | Source | Bindings |
 | --- | --- | --- |
-| Public API | `contracts/openapi.yaml` | Go server (`internal/api`), Pydantic (`python/shared`) |
+| Public API | `contracts/openapi.yaml` | Go server (`internal/api`), Pydantic (`lazycloud.contracts.api`) |
 | Host connection | `contracts/host/v1/host.proto` | Go (`internal/hostproto`) |
 | Container link | `contracts/host/v1/container.proto` | Go (`internal/hostproto`) |
 | Local runner protocol | `contracts/runner.yaml` | Go (`internal/runnerproto`), Pydantic (`python/runner`) |

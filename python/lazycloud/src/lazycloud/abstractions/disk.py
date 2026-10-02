@@ -4,12 +4,11 @@ import builtins
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount, parse_disk_size_bytes
-
+from lazycloud._shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount, parse_disk_size_bytes
 from lazycloud.clients.api import ApiConnectionError, ApiError
 from lazycloud.clients.storage import StorageClient
+from lazycloud.contracts import api
 from lazycloud.control import resolve_control_client_config, storage_client
-from shared import api
 
 
 class DiskOperationError(RuntimeError):

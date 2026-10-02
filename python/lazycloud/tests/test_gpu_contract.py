@@ -1,5 +1,5 @@
 import pytest
-from shared.gpu import (
+from lazycloud._shared.gpu import (
     SUPPORTED_GPU_TYPES,
     gpu_preference,
     normalize_gpu_type,

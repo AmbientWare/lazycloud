@@ -12,11 +12,11 @@ import typer
 from pydantic import JsonValue
 from rich.console import Console
 from rich.text import Text
-from shared.app_identity import ENV_PREFIX
-from shared.errors import InvalidInputError
-from shared.http.errors import HttpApiError
 from typer import _click as click
 
+from lazycloud._shared.app_identity import ENV_PREFIX
+from lazycloud._shared.errors import InvalidInputError
+from lazycloud._shared.http.errors import HttpApiError
 from lazycloud._terminal import theme
 from lazycloud._terminal.cards import card
 from lazycloud._terminal.streams import error_console

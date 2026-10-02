@@ -6,7 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TypeVar
 
-from shared.api import (
+from lazycloud.clients.api import ApiClient, _path
+from lazycloud.contracts.api import (
     AwsConnection,
     AwsConnectionAuthorization,
     AwsConnectionEnvelope,
@@ -23,8 +24,6 @@ from shared.api import (
     MachinePage,
     MachineUpdate,
 )
-
-from lazycloud.clients.api import ApiClient, _path
 
 ItemT = TypeVar("ItemT")
 

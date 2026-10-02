@@ -20,17 +20,16 @@ from pathlib import Path
 from typing import TypedDict
 
 from pydantic import ValidationError
-from shared.api import WorkloadDetail, WorkloadKind, WorkloadState
-from shared.app_slug import validate_app_slug
-from shared.http.client_manifests import (
+from typing_extensions import assert_never
+
+from lazycloud._shared.app_slug import validate_app_slug
+from lazycloud._shared.http.client_manifests import (
     ClientContract,
     ClientOperation,
     ClientOperationName,
     ClientParameter,
 )
-from shared.http.errors import HttpApiError, http_api_error_from_body
-from typing_extensions import assert_never
-
+from lazycloud._shared.http.errors import HttpApiError, http_api_error_from_body
 from lazycloud.client_contracts import asgi_client_contract
 from lazycloud.client_handles import (
     ASGIHandle,
@@ -39,6 +38,7 @@ from lazycloud.client_handles import (
     handle_from_manifest,
 )
 from lazycloud.clients.api import ApiClient
+from lazycloud.contracts.api import WorkloadDetail, WorkloadKind, WorkloadState
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import SdkError
 from lazycloud.json_contracts import JsonValue, parse_json_object, validate_json_object
@@ -296,7 +296,9 @@ def _write_version_package(
         "from pydantic import Field as _Field",
         "from pydantic import JsonValue as _JsonValue",
         "from pydantic import TypeAdapter as _TypeAdapter",
-        "from shared.http.errors import http_api_error_from_body as _http_api_error_from_body",
+        "from lazycloud._shared.http.errors import (",
+        "    http_api_error_from_body as _http_api_error_from_body,",
+        ")",
         "from lazycloud.abstractions.http_calls import EndpointResponse as _EndpointResponse",
         "from lazycloud.client_handles import (",
         "    ASGIHandle as _ASGIHandle,",

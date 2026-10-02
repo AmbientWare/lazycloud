@@ -4,8 +4,8 @@ from datetime import datetime
 
 from pydantic import Field
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.timestamps import utc_now
+from lazycloud.contracts import ContractModel
 
 
 class SecretRecord(ContractModel):

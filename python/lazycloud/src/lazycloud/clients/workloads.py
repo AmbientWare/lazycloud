@@ -11,7 +11,16 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
-from shared.api import (
+
+from lazycloud.clients.api import (
+    ApiClient,
+    ApiConnectionError,
+    _api_error,
+    _path,
+    _query,
+    workload_path,
+)
+from lazycloud.contracts.api import (
     ContainerFile,
     ContainerFileList,
     ContainerLifecycle,
@@ -43,15 +52,6 @@ from shared.api import (
     Ttl,
     TtlRequest,
     WorkloadKind,
-)
-
-from lazycloud.clients.api import (
-    ApiClient,
-    ApiConnectionError,
-    _api_error,
-    _path,
-    _query,
-    workload_path,
 )
 
 # Added to a long poll's hold so the read does not time out first.

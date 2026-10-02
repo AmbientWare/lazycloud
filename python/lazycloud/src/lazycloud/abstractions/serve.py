@@ -22,11 +22,10 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import httpx
-from shared.api import Preview, PreviewRequest, PreviewState
-from shared.paths import state_home
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from lazycloud._shared.paths import state_home
 from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError
 from lazycloud.clients.endpoints import (
     PREVIEW_WAIT_SECONDS,
@@ -36,6 +35,7 @@ from lazycloud.clients.endpoints import (
     stream_preview_output,
     sync_preview_files,
 )
+from lazycloud.contracts.api import Preview, PreviewRequest, PreviewState
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import SdkError
 from lazycloud.source_sync import (

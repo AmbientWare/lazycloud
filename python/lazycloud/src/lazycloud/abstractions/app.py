@@ -6,9 +6,9 @@ from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, cast, overload
 
-from shared.app_slug import validate_app_slug
-from shared.autoscaling import Autoscaler
-from shared.deployment_records import (
+from lazycloud._shared.app_slug import validate_app_slug
+from lazycloud._shared.autoscaling import Autoscaler
+from lazycloud._shared.deployment_records import (
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
     DEFAULT_FUNCTION_MEMORY,
@@ -22,11 +22,10 @@ from shared.deployment_records import (
     MemoryRequest,
     VolumeMount,
 )
-from shared.deployments import DeploymentKind, PodRole
-from shared.disks import DiskMount, parse_disk_size_bytes
-from shared.gpu import GpuInput
-from shared.tasks import TaskPolicy
-
+from lazycloud._shared.deployments import DeploymentKind, PodRole
+from lazycloud._shared.disks import DiskMount, parse_disk_size_bytes
+from lazycloud._shared.gpu import GpuInput
+from lazycloud._shared.tasks import TaskPolicy
 from lazycloud.abstractions.disk import Disk, disk_mounts
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -40,8 +39,6 @@ from lazycloud.control import resolve_control_client_config
 from lazycloud.exceptions import SdkError
 
 if TYPE_CHECKING:
-    from shared.api import Deployment, DeploymentPlan, DeploymentPlanRequest
-
     from lazycloud.abstractions.endpoint import (
         ASGI,
         Endpoint,
@@ -51,6 +48,7 @@ if TYPE_CHECKING:
     from lazycloud.abstractions.image import Image
     from lazycloud.abstractions.pod import Pod
     from lazycloud.abstractions.sandbox import Sandbox
+    from lazycloud.contracts.api import Deployment, DeploymentPlan, DeploymentPlanRequest
     from lazycloud.session.deployment import AppFunctions
 
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pydantic import Field, JsonValue, field_validator
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.deployments import DeploymentKind
 from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.tasks import TaskStatus
+from lazycloud.contracts import ContractModel
 
 
 class LifecycleHookName(StringEnum):

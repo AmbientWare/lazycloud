@@ -11,14 +11,14 @@ from typing import Any
 
 import pytest
 import typer
+from lazycloud._shared.deployments import DeploymentKind
+from lazycloud._shared.http.errors import HttpApiError
 from lazycloud.cli.app_export import app_export
 from lazycloud.cli.components.output import CliContextState
 from lazycloud.client_codegen import ClientGenerationError, write_client_package
 from lazycloud.client_contracts import build_client_contract
 from lazycloud.values import cloudpickle_bytes
 from pydantic import BaseModel, Field
-from shared.deployments import DeploymentKind
-from shared.http.errors import HttpApiError
 from typer.testing import CliRunner, Result
 
 from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply

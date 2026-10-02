@@ -5,8 +5,8 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import Field, model_validator
 
 from lazycloud._shared.bytes_transport import EncodedBytesBody, encode_bytes
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.enums import StringEnum
+from lazycloud.contracts import ContractModel
 
 FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS = 64 * 1024
 FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS = 256 * 1024

@@ -7,7 +7,7 @@ import { jsonValueSchema } from "@/lib/json";
 export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);
 
 // The callable contract a deploy records. The API leaves `client_contract`
-// open; the SDK writes it as python/shared/src/shared/http/client_manifests.py
+// open; the SDK writes it as python/lazycloud/src/lazycloud/_shared/http/client_manifests.py
 // describes, and the playground and call examples read it.
 const clientParameterSchema = z
   .object({

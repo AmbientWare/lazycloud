@@ -11,10 +11,10 @@ from secrets import token_hex
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX
-from shared.durable_files import fsync_directory
-from shared.paths import state_home
 
+from lazycloud._shared.app_identity import ENV_PREFIX
+from lazycloud._shared.durable_files import fsync_directory
+from lazycloud._shared.paths import state_home
 from lazycloud.json_contracts import validate_json_object
 
 DEFAULT_PROFILE = "default"

@@ -8,7 +8,27 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from pydantic import ValidationError
-from shared.api import (
+
+from lazycloud._shared.deployment_records import (
+    DEFAULT_DISK,
+    DEFAULT_WORKLOAD_PREEMPTIBLE,
+    CpuRequest,
+    DeploymentSpec,
+    MemoryRequest,
+    Resources,
+    VolumeMount,
+)
+from lazycloud._shared.deployments import DeploymentKind, PodRole
+from lazycloud._shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount
+from lazycloud._shared.gpu import GpuInput, gpu_preference
+from lazycloud._shared.image_building.python import python_minor_version
+from lazycloud._shared.placement import ProductRegion
+from lazycloud.abstractions.disk import disk_mounts
+from lazycloud.abstractions.image import Image
+from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
+from lazycloud.abstractions.volume import volume_mounts
+from lazycloud.clients.workloads import WorkloadsClient
+from lazycloud.contracts.api import (
     AllowListItem,
     CheckpointSpec,
     CommandItem,
@@ -23,37 +43,16 @@ from shared.api import (
     WorkloadKind,
     WorkloadSpec,
 )
-from shared.api import Container as ApiContainer
-from shared.deployment_records import (
-    DEFAULT_DISK,
-    DEFAULT_WORKLOAD_PREEMPTIBLE,
-    CpuRequest,
-    DeploymentSpec,
-    MemoryRequest,
-    Resources,
-    VolumeMount,
-)
-from shared.deployments import DeploymentKind, PodRole
-from shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount
-from shared.gpu import GpuInput, gpu_preference
-from shared.image_building.python import python_minor_version
-from shared.placement import ProductRegion
-
-from lazycloud.abstractions.disk import disk_mounts
-from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
-from lazycloud.abstractions.volume import volume_mounts
-from lazycloud.clients.workloads import WorkloadsClient
+from lazycloud.contracts.api import Container as ApiContainer
 from lazycloud.control import resolve_control_client_config, workloads_client
 from lazycloud.exceptions import SdkError
 from lazycloud.session.task import follow_log_stream
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
-    from shared.api import Deployment
-
     from lazycloud.abstractions.image import ImageBuildResult
     from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.contracts.api import Deployment
 
 # Idle seconds before a devbox stops when its keep_warm is unset.
 DEVBOX_KEEP_WARM_SECONDS = 1800

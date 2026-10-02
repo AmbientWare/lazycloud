@@ -4,8 +4,8 @@ from collections.abc import Iterable, Mapping
 
 from pydantic import Field, JsonValue, model_validator
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.enums import StringEnum
+from lazycloud.contracts import ContractModel
 
 
 class TaskStatus(StringEnum):

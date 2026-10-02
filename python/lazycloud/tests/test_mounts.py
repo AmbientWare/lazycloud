@@ -1,5 +1,5 @@
 import pytest
-from shared.mounts import normalize_mount_prefix
+from lazycloud._shared.mounts import normalize_mount_prefix
 
 
 def test_mount_prefix_normalization_is_deterministic() -> None:

@@ -9,8 +9,8 @@ from types import ModuleType
 from typing import Any, Protocol, runtime_checkable
 
 import typer
-from shared.env import importing_user_code
 
+from lazycloud._shared.env import importing_user_code
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function

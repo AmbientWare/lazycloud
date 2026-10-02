@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.enums import StringEnum
+from lazycloud.contracts import ContractModel
 
 
 class ImageBuildStepKind(StringEnum):

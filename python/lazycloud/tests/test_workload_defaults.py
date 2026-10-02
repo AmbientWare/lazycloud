@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-from shared.deployment_records import (
+from lazycloud._shared.deployment_records import (
     DeploymentSpec,
 )
-from shared.deployments import DeploymentKind, PodRole
-from shared.disks import DiskMount
+from lazycloud._shared.deployments import DeploymentKind, PodRole
+from lazycloud._shared.disks import DiskMount
+from pydantic import ValidationError
 
 _ROOT = DiskMount(name="home", size_bytes=1024**3)
 

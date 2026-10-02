@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from shared.client_version import release_is_newer
+from lazycloud._shared.client_version import release_is_newer
 
 
 def test_release_is_newer_only_for_a_higher_release() -> None:

@@ -11,16 +11,16 @@ from pydantic import (
     PydanticSchemaGenerationError,
     TypeAdapter,
 )
-from shared.deployments import DeploymentKind
-from shared.http.client_manifests import (
+from typing_inspection.typing_objects import is_newtype, is_typealiastype, is_typevar
+
+from lazycloud._shared.deployments import DeploymentKind
+from lazycloud._shared.http.client_manifests import (
     ClientContract,
     ClientOperation,
     ClientOperationName,
     ClientParameter,
 )
-from shared.serialization import to_json_value
-from typing_inspection.typing_objects import is_newtype, is_typealiastype, is_typevar
-
+from lazycloud._shared.serialization import to_json_value
 from lazycloud.abstractions.metadata import SchemaInput, schema_metadata
 from lazycloud.json_contracts import validate_json_object
 

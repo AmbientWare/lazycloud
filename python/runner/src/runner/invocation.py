@@ -8,8 +8,8 @@ from collections.abc import Callable
 from typing import Any
 
 import cloudpickle
-from shared.callables import InvocationHandler, prepare_callable_arguments
-from shared.function_payloads import FunctionPayloadEncoding
+from lazycloud._shared.callables import InvocationHandler, prepare_callable_arguments
+from lazycloud._shared.function_payloads import FunctionPayloadEncoding
 
 from runner.protocol_models import Encoding
 

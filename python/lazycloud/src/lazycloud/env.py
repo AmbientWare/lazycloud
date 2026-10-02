@@ -5,8 +5,8 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import TypeVar, overload
 
-from shared.enums import StringEnum
-from shared.env import (
+from lazycloud._shared.enums import StringEnum
+from lazycloud._shared.env import (
     CONTAINER_ID_ENV,
     GATEWAY_HTTP_URL_ENV,
     GATEWAY_TOKEN_ENV,

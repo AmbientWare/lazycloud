@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import NewType, TypeVar
 
 import pytest
+from lazycloud._shared.deployments import DeploymentKind
 from lazycloud.client_contracts import ClientContractError, build_client_contract
-from shared.deployments import DeploymentKind
 from typing_extensions import TypeAliasType
 
 from lazycloud import App

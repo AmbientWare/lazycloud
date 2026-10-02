@@ -25,8 +25,8 @@ from lazycloud.abstractions.artifact import ArtifactNotFoundError, Stat
 from lazycloud.abstractions.disk import DiskOperationError
 from lazycloud.cli.main import build_public_cli
 from lazycloud.clients.api import ApiError
+from lazycloud.contracts.api import ErrorCode, WorkloadKind
 from lazycloud.control import api_client, resolve_control_client_config
-from shared.api import ErrorCode, WorkloadKind
 from typer.testing import CliRunner, Result
 
 from lazycloud import Artifact, Disk, Map, Queue, Volume

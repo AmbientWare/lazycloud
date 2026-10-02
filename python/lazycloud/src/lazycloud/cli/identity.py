@@ -8,13 +8,6 @@ from time import monotonic
 from typing import Annotated
 
 import typer
-from shared.api import (
-    DeviceLogin,
-    DeviceTokenStatus,
-    Me,
-    WorkspaceRole,
-    WorkspaceState,
-)
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.streams import console, error_console
@@ -32,6 +25,13 @@ from lazycloud.config import (
     list_profiles,
     set_profile,
     settings,
+)
+from lazycloud.contracts.api import (
+    DeviceLogin,
+    DeviceTokenStatus,
+    Me,
+    WorkspaceRole,
+    WorkspaceState,
 )
 from lazycloud.control import endpoint_url
 

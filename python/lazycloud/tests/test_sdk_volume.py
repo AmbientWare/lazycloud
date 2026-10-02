@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 import pytest
+from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud.abstractions.disk import Disk
 from lazycloud.abstractions.map import Map
 from lazycloud.abstractions.volume import CloudBucketConfig, Volume, volume_mounts
-from shared.deployment_records import VolumeMount
 
 ReturnT = TypeVar("ReturnT")
 

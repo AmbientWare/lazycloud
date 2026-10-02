@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from shared.secrets import SecretRecord
-
+from lazycloud._shared.secrets import SecretRecord
 from lazycloud.clients.api import ApiClient
 from lazycloud.control import (
     ResourceControlBinding,

@@ -17,8 +17,8 @@ import re
 
 from pydantic import Field, field_validator
 
-from lazycloud.contracts import ContractModel
 from lazycloud._shared.resources import parse_memory_mib
+from lazycloud.contracts import ContractModel
 
 DISK_ROOT_MOUNT_PATH = "/"
 """A disk mounted here holds the container's writable root layer.

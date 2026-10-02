@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import typer
-from shared.api import WorkspaceState
 
 from lazycloud._terminal.cards import notice_card
 from lazycloud._terminal.streams import console
@@ -12,6 +11,7 @@ from lazycloud.cli.components.output import emit, json_output_enabled, print_pay
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError
 from lazycloud.config import ClientProfile, ConfigError, get_profile, set_profile, settings
+from lazycloud.contracts.api import WorkspaceState
 from lazycloud.control import api_client, resolve_control_client_config
 
 workspace_app = typer.Typer(help="Manage workspaces.")

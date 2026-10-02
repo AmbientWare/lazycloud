@@ -3,8 +3,8 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from lazycloud._shared.serialization import to_json_value
 from pydantic import BaseModel, JsonValue, SecretBytes, SecretStr, TypeAdapter, field_serializer
-from shared.serialization import to_json_value
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
 
