@@ -28,13 +28,6 @@ func cursorOf(c *apitypes.Cursor) string {
 	return *c
 }
 
-func nextCursor(next string) *string {
-	if next == "" {
-		return nil
-	}
-	return &next
-}
-
 // ListApps lists apps with a deployed workload.
 func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListAppsResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
@@ -51,7 +44,7 @@ func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListA
 	if err != nil {
 		return nil, err
 	}
-	return ListApps200JSONResponse{Apps: page.Apps, NextCursor: nextCursor(page.Next)}, nil
+	return ListApps200JSONResponse{Apps: page.Apps, NextCursor: optional(page.Next)}, nil
 }
 
 // GetApp reads an app by name or id.
@@ -154,7 +147,7 @@ func (s *Server) ListWorkloads(ctx context.Context, req ListWorkloadsRequestObje
 			return nil, err
 		}
 	}
-	return ListWorkloads200JSONResponse{Workloads: page.Workloads, NextCursor: nextCursor(page.Next)}, nil
+	return ListWorkloads200JSONResponse{Workloads: page.Workloads, NextCursor: optional(page.Next)}, nil
 }
 
 // findWorkload authorizes the workspace and resolves the workload a path
@@ -272,7 +265,7 @@ func (s *Server) ListWorkloadVersions(ctx context.Context, req ListWorkloadVersi
 	if err != nil {
 		return nil, err
 	}
-	return ListWorkloadVersions200JSONResponse{Versions: page.Versions, NextCursor: nextCursor(page.Next)}, nil
+	return ListWorkloadVersions200JSONResponse{Versions: page.Versions, NextCursor: optional(page.Next)}, nil
 }
 
 // StreamWorkloadLogs writes the workload's log entries as NDJSON.
@@ -317,7 +310,7 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 	if err != nil {
 		return nil, err
 	}
-	out := ListTasks200JSONResponse{Tasks: make([]apitypes.Task, len(page.Tasks)), NextCursor: nextCursor(page.Next)}
+	out := ListTasks200JSONResponse{Tasks: make([]apitypes.Task, len(page.Tasks)), NextCursor: optional(page.Next)}
 	for n, task := range page.Tasks {
 		out.Tasks[n] = taskOut(task)
 	}
@@ -381,7 +374,7 @@ func (s *Server) containerPage(ctx context.Context, ws identity.Workspace, filte
 	if err != nil {
 		return apitypes.ContainerPage{}, err
 	}
-	out := apitypes.ContainerPage{Containers: make([]apitypes.Container, len(page.Containers)), NextCursor: nextCursor(page.Next)}
+	out := apitypes.ContainerPage{Containers: make([]apitypes.Container, len(page.Containers)), NextCursor: optional(page.Next)}
 	for n, c := range page.Containers {
 		out.Containers[n] = containerOut(c)
 	}

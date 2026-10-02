@@ -108,7 +108,7 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 		var samples []*hostproto.ContainerSample
 		for _, c := range containers {
 			source := c.usage.Load()
-			if source == nil || c.exitedPhase() {
+			if source == nil || c.hasExited() {
 				continue
 			}
 			if len(source.gpus) > 0 && gpus == nil {
@@ -124,12 +124,6 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 			a.reportMetrics(&hostproto.HostMessage{Body: &hostproto.HostMessage_Metrics{Metrics: &hostproto.ContainerMetrics{Samples: samples}}})
 		}
 	}
-}
-
-func (c *container) exitedPhase() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED
 }
 
 // sample reads the counters and returns their change since the previous
