@@ -140,7 +140,7 @@ Owner tests against PostgreSQL 18 and Docker (runc), all with `-race`:
 `TestLifecycleCombinesTransitionsAndHostStages`,
 `TestCallGraphReadsTheWholeGraphFromAnyTask`,
 `TestClaimCarriesTheSubmittingTrace`,
-`TestDeploymentPerformanceBucketsLatencyAndColdStarts`,
+`TestWorkloadPerformanceBucketsLatencyAndColdStarts`,
 `TestTaskMetricsAndActivity`, `TestAccountMetricsAndActivity`
 (internal/observability); `TestChangeStreamOverHTTP`,
 `TestObservabilityRoutesAuthorizeAndValidate` (internal/api);

@@ -221,7 +221,7 @@ Scope notes:
 - [x] `Container.attach(container_id=, sync_dir=, hide_logs=)` (SDK/abstractions/pod.py:133)
   Intentional: pod.py `attach`; `test_container_attach_follows_a_pod_command_to_its_exit_code`, `TestPodCommandExitReportsItsCode`. `ContainerAttachment` and `workspace=`: tasks/workloads.md.
 - [x] Pod URL `https://<stub_id>-<port>.<base>` or `<container_id>-<port>.<base>` (SH/urls.py `build_pod_url`, `pod_proxy_url`)
-  Delivered: internal/edge; `test_pod_and_sandbox_ports_are_addressed_by_hostname`, live pod test.
+  Delivered: internal/edge/urls.go builds them and the server returns them; `test_sandbox_create_prepares_an_empty_workspace_waits_and_exposes_its_ports`, live pod test.
 - [x] TCP pod `tls://<stub>-<port>.<tcp host>` with SNI; always public (SH/urls.py:12, DOCS/concepts/pods.mdx)
   Delivered: internal/edge/tcp.go; `TestPodDefinitionsRejectWhatTheyCannotRun`, `TestTCPConnectionsAreBoundedPerTarget`, live TLS client got 200 (tasks/workloads.md).
 - [x] `app.devbox(name, image, disk, cpu, memory, agent_harnesses=all, gpu, keep_warm (30min default), preemptible False, command, ports, env, secrets, volumes, disks, docker_enabled, region, machine)` (SDK/abstractions/app.py:860)
