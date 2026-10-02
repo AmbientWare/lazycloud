@@ -38,6 +38,9 @@ COPY pyproject.toml uv.lock ./
 COPY python python
 COPY deploy/local/build-runtime.sh deploy/local/build-runtime.sh
 ARG SOURCE_DATE_EPOCH
+# Each runtime's bytecode is compiled by its own interpreter. The pinned uv
+# release pins the managed builds it installs.
+RUN /usr/local/bin/uv python install 3.10 3.11 3.13 3.14
 ENV UV=/usr/local/bin/uv UV_PYTHON_DOWNLOADS=never
 RUN --mount=type=cache,target=/root/.cache/uv deploy/local/build-runtime.sh /out/runtimes
 
