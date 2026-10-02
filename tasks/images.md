@@ -163,9 +163,11 @@ registry integration.
 - ECR base images: the `GetAuthorizationToken` exchange is unverified
   without AWS credentials; GCR, ACR and NGC logins are covered by the name
   mapping test only.
-- `build_with_gpu` and `with_secrets` reject as `unsupported` until GPU
-  capacity and workspace secrets exist. `machine=` on `build()` is
-  unsupported until joined machines exist.
+- `build_with_gpu` and `with_secrets` reject as `unsupported`. Workspace
+  secrets exist now, so `with_secrets` needs the images owner to resolve
+  them at build time and key the image identity on their versions (about a
+  day); GPU builds need GPU build capacity. `machine=` on `build()` is
+  unsupported: builds do not use machine pinning.
 - Architecture: arm64 is part of the identity and the build platform, but
   hosts do not report an architecture, so placement cannot match it.
 - Base registry logins are stored in plaintext on the build row until it

@@ -151,8 +151,8 @@ Measurements (one host, 24 CPUs, Docker 29, same stack):
 - Secret names are environment variable names (`[A-Za-z_][A-Za-z0-9_]*`,
   at most 240), because workloads receive them as variables; the
   `LAZYCLOUD_` prefix is reserved. Values are at most 64 KiB. The reference
-  validated neither. Secret records drop `id` (it was the name),
-  `last_updated_by` and `workloads`.
+  validated neither. Secret records drop `id` (it was the name)
+  and `last_updated_by`; `used_by` names the workloads that receive them.
 - Revealing a value is its own operation, `getSecretValue`; `secret show`
   without `--reveal` never transfers the value.
 - Callbacks are durable: an outbox row commits with the transition. The

@@ -111,6 +111,17 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
 - `app show` shows name, state, workloads and created, as `app list` does.
 - `Deployment.invoke_url()` returns the workload's URL; `port=` and
   `url_type=` are refused (see tasks/parity.md for the gap).
+- An app deploys in one request, so it lands whole or not at all; up to 4
+  distinct images build at once and the source uploads once. The reference
+  ran 4 per-resource deploys at a time and could leave some finished after
+  a failure.
+- `App.plan()` and `deploy --diff --json` return the API `DeploymentPlan`
+  (`app`, `prune`, `items`) without a snapshot, since deploy and prune are
+  one request.
+- `Function.prepare()` returns the working-tree release id instead of a stub
+  id and `Function.serve()` returns a `Preview`. `Function` has no `stub_id`,
+  `endpoint`, `token`, `timeout`, `control_client` or `deployment_client`:
+  releases replace stubs and the client comes from the profile.
 
 ## Plan
 

@@ -230,6 +230,9 @@ supervisor Docker tests under it; all pass but the GPU test.
   `<python> -m lazycloud.cli.main ssh-proxy|ssh-cert` with the running
   interpreter, so an older `lazycloud` first on PATH cannot answer them.
 - `container checkpoint --checkpoint-id` takes a snapshot id.
+- `docker_enabled` cannot be combined with `block_network` or `allow_list`,
+  because nested containers would bypass the policy. The reference accepted
+  both.
 
 ## Gaps
 

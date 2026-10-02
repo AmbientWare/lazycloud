@@ -144,6 +144,13 @@ PostgreSQL holds metadata and authority; the object store holds bytes.
   `stored_at`. docs/cli/storage.mdx says `next_cursor`.
 - Artifact deletes finish in the request, so the dashboard has no
   "Deleting", "Deletion failed" or "Retry deletion" row states.
+- Volume write and part-upload URLs last at most an hour, whatever
+  `expires_seconds` asks; read URLs keep the 7-day cap. A write URL that
+  outlived a delete would recreate files. The reference allowed 7 days for
+  both.
+- A deleted disk leaves the list at once, so disks have no "Deleting"
+  status. A devbox's disk is used by "pod in APP", since devboxes are pods
+  in the API.
 
 ## Measurements
 

@@ -81,6 +81,12 @@ visual parity.
   page, an app's recent tasks and activity charts count function tasks.
 - Call snippets use the workload's latest URL, which keeps answering
   after a redeploy or prune, instead of the version URL.
+- The sandbox page offers Save image and Snapshot memory whenever the
+  sandbox is ready; a host that cannot snapshot answers with the error. The
+  Network tab lists published ports only, since `Sandbox.create` publishes
+  every declared port.
+- The Tasks page's Workload filter lists an app's functions once an App is
+  chosen: workload names are unique only within an app.
 
 ## Gaps
 
