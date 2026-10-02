@@ -164,22 +164,23 @@ func (q *Queries) RecordStopRequested(ctx context.Context, arg RecordStopRequest
 	return result.RowsAffected(), nil
 }
 
-const refuseResume = `-- name: RefuseResume :execrows
+const retireReserve = `-- name: RetireReserve :execrows
 update hosts
 set phase = 'terminating', phase_message = $1, phase_at = now(), state = 'retired', token_hash = null,
     launch_lease_until = null, updated_at = now()
-where id = $2 and phase = 'resuming'
+where id = $2 and phase = $3 and phase in ('stopping', 'resuming')
 `
 
-type RefuseResumeParams struct {
-	Message string
-	ID      uuid.UUID
+type RetireReserveParams struct {
+	Message   string
+	ID        uuid.UUID
+	FromPhase string
 }
 
-// EC2 has no capacity to start a resuming host: it retires, and a purchase
-// replaces it.
-func (q *Queries) RefuseResume(ctx context.Context, arg RefuseResumeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, refuseResume, arg.Message, arg.ID)
+// EC2 refused to start a resuming host or to stop a stopping one: it
+// retires, and a purchase replaces it.
+func (q *Queries) RetireReserve(ctx context.Context, arg RetireReserveParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retireReserve, arg.Message, arg.ID, arg.FromPhase)
 	if err != nil {
 		return 0, err
 	}

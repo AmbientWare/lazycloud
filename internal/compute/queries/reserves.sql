@@ -49,13 +49,13 @@ set stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
     updated_at = now()
 where id = @id and phase = 'resuming';
 
--- name: RefuseResume :execrows
--- EC2 has no capacity to start a resuming host: it retires, and a purchase
--- replaces it.
+-- name: RetireReserve :execrows
+-- EC2 refused to start a resuming host or to stop a stopping one: it
+-- retires, and a purchase replaces it.
 update hosts
 set phase = 'terminating', phase_message = @message, phase_at = now(), state = 'retired', token_hash = null,
     launch_lease_until = null, updated_at = now()
-where id = @id and phase = 'resuming';
+where id = @id and phase = @from_phase and phase in ('stopping', 'resuming');
 
 -- name: SpotRequestOfInstance :one
 -- The persistent Spot request that launched an instance, if any.

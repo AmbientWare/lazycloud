@@ -404,3 +404,111 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 		t.Errorf("live reserve's request %s, want kept", s)
 	}
 }
+
+// A serving Spot host's one-time request ends with its instance; the
+// platform may not cancel it, so termination must not try.
+func TestServingSpotHostsTerminateWithoutTheirOneTimeRequest(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, instance_type, market)
+values ('s', 'offline', 'platform', 'aws', 'requested', 1500, 6::bigint << 30, 'us-east-2', 'm7i.large', 'spot') returning id`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want 1", n)
+	}
+	instance := scan[string](t, o.pool, "select instance_id from hosts where id = $1", host)
+	if ec2.get(instance).SpotRequest == "" {
+		t.Fatal("the fake launched a Spot instance without a request")
+	}
+	if request := scan[*string](t, o.pool, "select spot_request_id from hosts where id = $1", host); request != nil {
+		t.Fatalf("serving host recorded one-time request %s", *request)
+	}
+	run(t, o.pool, "update hosts set phase = 'terminating' where id = $1", host)
+	if r := actuate(t, o); r.Terminated != 1 {
+		t.Fatalf("actuate %+v, want the host terminated", r)
+	}
+	if s := ec2.get(instance).State; s != "shutting-down" || len(emulator.calls("CancelSpotInstanceRequests")) != 0 {
+		t.Fatalf("instance %s after %d cancels, want shutting down with no cancel", s, len(emulator.calls("CancelSpotInstanceRequests")))
+	}
+}
+
+func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	// A serving one-time Spot host sent to the reserve cannot stop.
+	oneTime := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c010")
+	ec2.add(fakeInstance{ID: "i-0000000000000c010", State: "running", SpotRequest: "sir-0000c010"}, oneTime.String())
+	refused := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c011")
+	ec2.add(fakeInstance{ID: "i-0000000000000c011", State: "running"}, refused.String())
+	throttled := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c012")
+	ec2.add(fakeInstance{ID: "i-0000000000000c012", State: "running"}, throttled.String())
+	ec2.refuse = func(call awsCall) (awsReply, bool) {
+		switch {
+		case call.Action != "StopInstances":
+			return awsReply{}, false
+		case call.Form.Get("InstanceId.1") == "i-0000000000000c011":
+			return ec2Error(http.StatusBadRequest, "UnsupportedOperation", "The instance does not support stopping"), true
+		default:
+			return ec2Error(http.StatusServiceUnavailable, "RequestLimitExceeded", "Request limit exceeded."), true
+		}
+	}
+	actuate(t, o)
+	for host, want := range map[compute.HostID]compute.Phase{
+		oneTime: compute.PhaseTerminating, refused: compute.PhaseTerminating, throttled: compute.PhaseStopping,
+	} {
+		if phase, _ := hostPhase(t, o.pool, host); phase != string(want) {
+			t.Errorf("host %s is %s, want %s", host, phase, want)
+		}
+	}
+	for _, c := range emulator.calls("StopInstances") {
+		if c.Form.Get("InstanceId.1") == "i-0000000000000c010" {
+			t.Error("asked EC2 to stop a one-time Spot instance")
+		}
+	}
+
+	// A stop that never completes fails once its window passes.
+	ago(t, o, throttled, "phase_at", 25*time.Minute)
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	if phase, _ := hostPhase(t, o.pool, throttled); phase != string(compute.PhaseFailed) {
+		t.Fatalf("host stopping for 25 minutes is %s, want failed", phase)
+	}
+	if s := ec2.get("i-0000000000000c012").State; s != "shutting-down" {
+		t.Fatalf("its instance is %s, want shutting down", s)
+	}
+}
+
+// Reconcile reads hosts, then EC2. A host the session or actuator moves in
+// between keeps its new phase and its instance.
+func TestReconcileLeavesAHostThatMovedSinceItsSnapshot(t *testing.T) {
+	o, _, ec2 := reserveFleet(t)
+	stopping := reserve(t, o, compute.PhasePreparing, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000e010")
+	ec2.add(fakeInstance{ID: "i-0000000000000e010", State: "running"}, stopping.String())
+	joined := reserve(t, o, compute.PhaseResuming, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000e011")
+	ec2.add(fakeInstance{ID: "i-0000000000000e011", State: "running"}, joined.String())
+	ago(t, o, joined, "phase_at", 25*time.Minute)
+	moved := false
+	ec2.refuse = func(call awsCall) (awsReply, bool) {
+		if call.Action == "DescribeInstances" && !moved {
+			moved = true
+			// The session proved one and the actuator stopped it; the
+			// other's agent said Hello.
+			run(t, o.pool, "update hosts set phase = 'stopping', phase_at = now(), stop_requested_at = now() where id = $1", uuid.UUID(stopping))
+			run(t, o.pool, "update hosts set phase = 'joining', phase_at = now() where id = $1", uuid.UUID(joined))
+			ec2.instances["i-0000000000000e010"].State = "stopping"
+		}
+		return awsReply{}, false
+	}
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[compute.HostID]compute.Phase{stopping: compute.PhaseStopping, joined: compute.PhaseJoining} {
+		if phase, _ := hostPhase(t, o.pool, host); phase != string(want) {
+			t.Errorf("host %s is %s, want %s", host, phase, want)
+		}
+	}
+	for id, want := range map[string]string{"i-0000000000000e010": "stopping", "i-0000000000000e011": "running"} {
+		if s := ec2.get(id).State; s != want {
+			t.Errorf("instance %s is %s, want %s", id, s, want)
+		}
+	}
+}

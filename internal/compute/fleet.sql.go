@@ -270,22 +270,32 @@ func (q *Queries) DrainHosts(ctx context.Context, arg DrainHostsParams) ([]uuid.
 	return items, nil
 }
 
-const failHost = `-- name: FailHost :exec
+const failHost = `-- name: FailHost :execrows
 update hosts
 set phase = 'failed', failure = $1, phase_message = $2, phase_at = now(), state = 'retired',
     token_hash = null, launch_lease_until = null, updated_at = now()
-where id = $3
+where id = $3 and phase = $4
 `
 
 type FailHostParams struct {
-	Failure *string
-	Message string
-	ID      uuid.UUID
+	Failure   *string
+	Message   string
+	ID        uuid.UUID
+	FromPhase string
 }
 
-func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) error {
-	_, err := q.db.Exec(ctx, failHost, arg.Failure, arg.Message, arg.ID)
-	return err
+// Fails a host still in the phase its caller read.
+func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failHost,
+		arg.Failure,
+		arg.Message,
+		arg.ID,
+		arg.FromPhase,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
@@ -676,15 +686,24 @@ func (q *Queries) ManagedConnectionNetworks(ctx context.Context) ([]ManagedConne
 	return items, nil
 }
 
-const markHostDeleted = `-- name: MarkHostDeleted :exec
+const markHostDeleted = `-- name: MarkHostDeleted :execrows
 update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
-where id = $1
+where id = $1 and phase = $2
 `
 
-func (q *Queries) MarkHostDeleted(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, markHostDeleted, id)
-	return err
+type MarkHostDeletedParams struct {
+	ID        uuid.UUID
+	FromPhase string
+}
+
+// Deletes a host still in the phase its caller read.
+func (q *Queries) MarkHostDeleted(ctx context.Context, arg MarkHostDeletedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markHostDeleted, arg.ID, arg.FromPhase)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markIdle = `-- name: MarkIdle :exec

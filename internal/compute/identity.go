@@ -93,7 +93,9 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 		// The instance cannot serve; reconciliation terminates it as an
 		// orphan of a failed host.
 		message := strings.Join(failed, "; ")
-		if err := c.queries.FailHost(ctx, FailHostParams{ID: uuid.UUID(host), Failure: ptr(string(FailurePreflight)), Message: truncate(message)}); err != nil {
+		if _, err := c.queries.FailHost(ctx, FailHostParams{
+			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: ptr(string(FailurePreflight)), Message: truncate(message),
+		}); err != nil {
 			return HostID{}, "", fmt.Errorf("fail host: %w", err)
 		}
 		return HostID{}, "", &IdentityError{Message: "the host failed its preflight checks: " + message}

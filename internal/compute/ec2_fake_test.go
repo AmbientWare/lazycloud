@@ -282,7 +282,12 @@ func (f *fakeEC2) cancel(call awsCall) awsReply {
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <CancelSpotInstanceRequestsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotInstanceRequestSet>`)
 	for _, id := range list(call.Form, "SpotInstanceRequestId") {
-		if r, ok := f.requests[id]; ok {
+		r, ok := f.requests[id]
+		if ok && r.Tags["lazycloud:fleet"] == "" {
+			// The platform role cancels only tagged requests.
+			return ec2Error(http.StatusForbidden, "UnauthorizedOperation", "You are not authorized to perform this operation.")
+		}
+		if ok {
 			r.State = "cancelled"
 		}
 		fmt.Fprintf(&b, `<item><spotInstanceRequestId>%s</spotInstanceRequestId><state>cancelled</state></item>`, esc(id))
@@ -299,12 +304,15 @@ func (f *fakeEC2) run(call awsCall) awsReply {
 		ID: id, State: "pending", Type: call.Form.Get("InstanceType"), Launched: time.Now(),
 		Hibernation: call.Form.Get("HibernationOptions.Configured") == "true", Tags: instanceTags(call.Form),
 	}
+	// Every Spot launch has a request; only a persistent one is tagged.
 	request := ""
-	if call.Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") == "persistent" {
+	if call.Form.Get("InstanceMarketOptions.MarketType") == "spot" {
 		request = fmt.Sprintf("sir-%08d", f.launched)
-		f.requests[request] = &fakeSpotRequest{ID: request, State: "active", Instance: id, Tags: map[string]string{
-			"lazycloud:fleet": i.Tags["lazycloud:fleet"], "lazycloud:host-id": i.Tags["lazycloud:host-id"],
-		}}
+		r := &fakeSpotRequest{ID: request, State: "active", Instance: id, Tags: map[string]string{}}
+		if call.Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") == "persistent" {
+			r.Tags = map[string]string{"lazycloud:fleet": i.Tags["lazycloud:fleet"], "lazycloud:host-id": i.Tags["lazycloud:host-id"]}
+		}
+		f.requests[request] = r
 		i.SpotRequest = request
 	}
 	f.instances[id] = i

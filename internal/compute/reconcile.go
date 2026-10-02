@@ -146,48 +146,45 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		// stopped are expected, and a stop EC2 accepted completes here when
 		// the actuator has not seen it yet.
 		reserve := phase == PhaseStopping || phase == PhaseStopped || phase == PhaseResuming
+		// Every end is written from the phase read above: a host the session
+		// or actuator moved since keeps its new phase and its instance.
+		end := func(failure Failure, message string) error {
+			ended, err := c.hostGone(ctx, h.ID, phase, failure, message)
+			if err != nil || !ended {
+				return err
+			}
+			return c.terminate(ctx, scope, region, instance)
+		}
 		switch {
-		case phase == PhaseTerminating && terminated:
-			err = c.hostGone(ctx, h.ID, "", "")
-		case phase == PhaseTerminating && o.state == ec2types.InstanceStateNameShuttingDown:
-			// Terminating; EC2 confirms it on a later pass.
-			err = c.hostGone(ctx, h.ID, "", "")
+		case phase == PhaseTerminating && (terminated || o.state == ec2types.InstanceStateNameShuttingDown):
+			// Shutting down: EC2 confirms the termination on a later pass.
+			_, err = c.hostGone(ctx, h.ID, phase, "", "")
 		case phase == PhaseTerminating:
 			err = c.terminate(ctx, scope, region, instance)
 		case gone:
-			err = c.hostGone(ctx, h.ID, FailureProviderGone, "The provider terminated the instance")
+			_, err = c.hostGone(ctx, h.ID, phase, FailureProviderGone, "The provider terminated the instance")
 		case phase == PhaseStopping && o.state == ec2types.InstanceStateNameStopped && h.StopRequestedAt != nil:
 			err = c.reserveStopped(ctx, h.ID, o.reason)
+		case phase == PhaseStopping && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
+			err = end(FailureUnknown, "The reserve did not stop in time")
 		case phase == PhaseResuming && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
-			if err = c.hostGone(ctx, h.ID, FailureBootstrapTimedOut, "The reserve did not resume in time"); err == nil {
-				err = c.terminate(ctx, scope, region, instance)
-			}
+			err = end(FailureBootstrapTimedOut, "The reserve did not resume in time")
 		case phase == PhaseStopped && !stopped && time.Since(o.started) > c.fleet.BootTimeout:
 			// Started without a resume and never put back.
-			if err = c.hostGone(ctx, h.ID, FailureUnknown, "The reserve started without a resume"); err == nil {
-				err = c.terminate(ctx, scope, region, instance)
-			}
+			err = end(FailureUnknown, "The reserve started without a resume")
 		case reserve:
 		case stopped:
-			if err = c.hostGone(ctx, h.ID, FailureProviderStopped, "The provider stopped the instance"); err == nil {
-				err = c.terminate(ctx, scope, region, instance)
-			}
+			err = end(FailureProviderStopped, "The provider stopped the instance")
 		case (phase == PhaseProvisioning || phase == PhaseBooting) && h.LaunchedAt != nil &&
 			time.Since(*h.LaunchedAt) > c.fleet.BootTimeout:
-			if err = c.hostGone(ctx, h.ID, FailureBootstrapTimedOut, "The instance did not enroll in time"); err == nil {
-				err = c.terminate(ctx, scope, region, instance)
-			}
+			err = end(FailureBootstrapTimedOut, "The instance did not enroll in time")
 		case phase == PhaseJoining && time.Since(h.PhaseAt) > c.fleet.BootTimeout:
-			if err = c.hostGone(ctx, h.ID, FailureEnrollment, "The agent enrolled but never opened a session"); err == nil {
-				err = c.terminate(ctx, scope, region, instance)
-			}
+			err = end(FailureEnrollment, "The agent enrolled but never opened a session")
 		case phase == PhaseProvisioning && o.state == ec2types.InstanceStateNameRunning:
 			_, err = changePhase(ctx, c.queries, h.ID, PhaseProvisioning, PhaseBooting)
 		case phase == PhaseReady && HostState(h.State) == HostLost && !updating && h.LastSeenAt != nil &&
 			time.Since(*h.LastSeenAt) > serviceLostAfter:
-			if err = c.hostGone(ctx, h.ID, FailureServiceLost, "The agent stopped reporting"); err == nil {
-				err = c.terminate(ctx, scope, region, instance)
-			}
+			err = end(FailureServiceLost, "The agent stopped reporting")
 		}
 		if err != nil {
 			logger.ErrorContext(ctx, "reconcile host", "host_id", h.ID, "instance_id", instance, "error", err)
@@ -236,24 +233,40 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 	return nil
 }
 
-// hostGone ends a cloud host whose instance is gone or must go. Its
-// containers stop through execution in the same transaction. An empty
-// failure marks a termination the fleet asked for.
-func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, failure Failure, message string) error {
-	return inTx(ctx, c, func(tx pgx.Tx) error {
+// hostGone ends a cloud host in phase from whose instance is gone or must
+// go, and reports whether it did: a host that left from since it was read
+// is left alone. Its containers stop through execution in the same
+// transaction. An empty failure marks a termination the fleet asked for.
+func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, failure Failure, message string) (bool, error) {
+	to := PhaseFailed
+	if failure == "" {
+		to = PhaseDeleted
+	}
+	if err := transition(from, to); err != nil {
+		return false, err
+	}
+	ended := false
+	err := inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
+		var n int64
+		var err error
 		if failure == "" {
-			if err := q.MarkHostDeleted(ctx, host); err != nil {
-				return fmt.Errorf("mark host deleted: %w", err)
-			}
-		} else if err := q.FailHost(ctx, FailHostParams{ID: host, Failure: ptr(string(failure)), Message: message}); err != nil {
-			return fmt.Errorf("fail host: %w", err)
+			n, err = q.MarkHostDeleted(ctx, MarkHostDeletedParams{ID: host, FromPhase: string(from)})
+		} else {
+			n, err = q.FailHost(ctx, FailHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
+		}
+		if err != nil {
+			return fmt.Errorf("end host: %w", err)
+		}
+		if ended = n == 1; !ended {
+			return nil
 		}
 		if _, err := c.containers.StopHostContainers(ctx, tx, HostID(host), "the host's instance is gone"); err != nil {
 			return err
 		}
 		return notifyMachines(ctx, tx, host)
 	})
+	return ended, err
 }
 
 // cancelOrphanSpotRequests ends the fleet's persistent Spot requests whose

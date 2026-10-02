@@ -20,6 +20,7 @@ var ErrPhaseTransition = errors.New("host phase transition not allowed")
 //	joining -> preparing     a host bought for, or refreshing, the reserve
 //	preparing -> ready       the agent refused to stop
 //	stopping -> resuming     a pass resumes a reserve still stopping
+//	stopping -> terminating  EC2 refused the stop
 //	stopped -> terminating   a reserve retires
 //	resuming -> terminating  EC2 refused the start for capacity
 //	any -> failed
@@ -50,7 +51,7 @@ func (p Phase) CanBecome(next Phase) bool {
 	case PhasePreparing:
 		return next == PhaseStopping || next == PhaseReady
 	case PhaseStopping:
-		return next == PhaseStopped || next == PhaseResuming
+		return next == PhaseStopped || next == PhaseResuming || next == PhaseTerminating
 	case PhaseStopped:
 		return next == PhaseResuming || next == PhaseTerminating
 	case PhaseResuming:

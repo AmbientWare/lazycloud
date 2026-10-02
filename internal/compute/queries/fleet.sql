@@ -94,11 +94,12 @@ set instance_id = @instance_id, availability_zone = @availability_zone, availabi
     hibernation_configured = @hibernation_configured
 where id = @id and phase = 'requested';
 
--- name: FailHost :exec
+-- name: FailHost :execrows
+-- Fails a host still in the phase its caller read.
 update hosts
 set phase = 'failed', failure = @failure, phase_message = @message, phase_at = now(), state = 'retired',
     token_hash = null, launch_lease_until = null, updated_at = now()
-where id = @id;
+where id = @id and phase = @from_phase;
 
 -- name: InsertCooldown :exec
 insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
@@ -191,10 +192,11 @@ update hosts
 set phase = @phase, phase_message = @message, phase_at = now(), updated_at = now()
 where id = @id and phase = @from_phase;
 
--- name: MarkHostDeleted :exec
+-- name: MarkHostDeleted :execrows
+-- Deletes a host still in the phase its caller read.
 update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
-where id = @id;
+where id = @id and phase = @from_phase;
 
 -- name: ConnectionScope :one
 select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,

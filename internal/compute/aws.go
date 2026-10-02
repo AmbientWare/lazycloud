@@ -116,6 +116,20 @@ func quotaRefusal(code string) bool {
 	return code == "VcpuLimitExceeded" || code == "MaxSpotInstanceCountExceeded" || code == "InstanceLimitExceeded"
 }
 
+// transientAWS reports whether a failed call may succeed when repeated:
+// throttling, a server fault, a state EC2 is still leaving, or no answer.
+func transientAWS(err error) bool {
+	var api smithy.APIError
+	if !errors.As(err, &api) {
+		return true
+	}
+	switch api.ErrorCode() {
+	case "RequestLimitExceeded", "Throttling", "ThrottlingException", "IncorrectInstanceState", "InternalError", "Unavailable":
+		return true
+	}
+	return api.ErrorFault() == smithy.FaultServer
+}
+
 // accessDenied reports whether AWS refused the caller's authority.
 func accessDenied(err error) bool {
 	code := awsCode(err)

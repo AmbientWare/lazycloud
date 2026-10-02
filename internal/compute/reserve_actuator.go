@@ -123,6 +123,10 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 	if hibernate {
 		lostEvidence = EvidenceUnknown
 	}
+	if instance.InstanceLifecycle == ec2types.InstanceLifecycleTypeSpot && h.SpotRequestID == nil {
+		// A one-time Spot instance cannot stop; it was bought to serve.
+		return c.retireReserve(ctx, logger, h, PhaseStopping, "A one-time Spot instance cannot stop into the reserve")
+	}
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
 		if h.StopRequestedAt == nil {
@@ -144,7 +148,7 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 		}
 		logger.WarnContext(ctx, "reserve still stopping; forcing the stop", "host_id", h.ID, "instance_id", deref(h.InstanceID))
 		if _, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{deref(h.InstanceID)}, Force: aws.Bool(true)}); err != nil {
-			return fmt.Errorf("force stop: %w", err)
+			return c.stopRefused(ctx, logger, h, fmt.Errorf("force stop: %w", err))
 		}
 		result.Stopped++
 		return c.recordStop(ctx, h.ID, EvidenceUnavailable, true)
@@ -181,11 +185,38 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 		logger.WarnContext(ctx, "EC2 did not hibernate; stopping plainly", "host_id", h.ID, "error", describeAWSError(err))
 	}
 	if _, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{deref(h.InstanceID)}}); err != nil {
-		return fmt.Errorf("stop instance: %w", err)
+		return c.stopRefused(ctx, logger, h, fmt.Errorf("stop instance: %w", err))
 	}
 	logger.InfoContext(ctx, "reserve stopping", "host_id", h.ID, "instance_id", deref(h.InstanceID))
 	result.Stopped++
 	return c.recordStop(ctx, h.ID, EvidenceUnavailable, false)
+}
+
+// stopRefused retries a stop EC2 may take later and retires a host whose
+// stop it refused outright, so no host waits in stopping while it runs.
+func (c *Compute) stopRefused(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, err error) error {
+	if transientAWS(err) {
+		return err
+	}
+	return c.retireReserve(ctx, logger, h, PhaseStopping, truncate("Stop refused: "+describeAWSError(err)))
+}
+
+// retireReserve sends a stopping or resuming host to terminating.
+func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, from Phase, message string) error {
+	if err := transition(from, PhaseTerminating); err != nil {
+		return err
+	}
+	logger.WarnContext(ctx, "retiring reserve", "host_id", h.ID, "phase", from, "reason", message)
+	return inTx(ctx, c, func(tx pgx.Tx) error {
+		n, err := c.queries.WithTx(tx).RetireReserve(ctx, RetireReserveParams{ID: h.ID, FromPhase: string(from), Message: message})
+		if err != nil {
+			return fmt.Errorf("retire reserve: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		return notifyMachines(ctx, tx, h.ID)
+	})
 }
 
 func (c *Compute) recordStop(ctx context.Context, host uuid.UUID, evidence ImageEvidence, forced bool) error {
@@ -263,9 +294,11 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 	}
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
-		n, err := q.RefuseResume(ctx, RefuseResumeParams{ID: h.ID, Message: truncate("Start refused: " + refusal)})
+		n, err := q.RetireReserve(ctx, RetireReserveParams{
+			ID: h.ID, FromPhase: string(PhaseResuming), Message: truncate("Start refused: " + refusal),
+		})
 		if err != nil {
-			return fmt.Errorf("refuse resume: %w", err)
+			return fmt.Errorf("retire reserve: %w", err)
 		}
 		if n == 0 {
 			return nil

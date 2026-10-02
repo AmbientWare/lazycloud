@@ -185,7 +185,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	n, err := c.queries.RecordLaunch(ctx, RecordLaunchParams{
 		ID: h.ID, InstanceID: instance.InstanceId, AvailabilityZone: zone, AvailabilityZoneID: zoneID,
 		AuthorizationID: target.authorization, NodeRoleArn: nilIfEmpty(target.nodeRole),
-		SpotRequestID: nilIfEmpty(aws.ToString(instance.SpotInstanceRequestId)), NodeImage: instance.ImageId, HibernationConfigured: opts.hibernate,
+		SpotRequestID: persistentRequest(opts, instance), NodeImage: instance.ImageId, HibernationConfigured: opts.hibernate,
 	})
 	if err != nil {
 		return false, fmt.Errorf("record launch: %w", err)
@@ -230,6 +230,16 @@ func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
 	opts.rootGiB += swap
 	opts.hibernate = true
 	return opts
+}
+
+// persistentRequest is the Spot request a host must cancel before it
+// terminates: a reserve's persistent one. A one-time request ends with its
+// instance, and cancelling it is neither needed nor allowed.
+func persistentRequest(opts launchOptions, instance ec2types.Instance) *string {
+	if !opts.persistent {
+		return nil
+	}
+	return nilIfEmpty(aws.ToString(instance.SpotInstanceRequestId))
 }
 
 // nominalMemory is the RAM of a catalog type.
@@ -306,7 +316,9 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 				}
 			}
 		}
-		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message)}); err != nil {
+		if _, err := q.FailHost(ctx, FailHostParams{
+			ID: h.ID, FromPhase: string(PhaseRequested), Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
+		}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}
 		return notifyChannel(ctx, tx, h.ID)
