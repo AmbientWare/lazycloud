@@ -219,10 +219,16 @@ adds one live-container count and one account read to its transaction.
 Each closed metering period of a container bills CPU and memory at the
 greater of its reservation and what observability's metrics measured in
 it: CPU core-seconds from the usage counters, memory byte-seconds from the
-resident set (a folded minute counts at its peak). The ledger row records
-the shape it billed. Container time and GPUs bill as reserved; the open,
-accrued remainder of a live container is estimated at its reservation.
-`TestMeteringBillsTheGreaterOfReservationAndMeasuredUse`.
+resident set, read from the samples while they are kept (an hour) and from
+the folded minutes after, where a minute counts at its peak. The ledger row
+records the shape it billed. Container time and GPUs bill as reserved.
+
+A period closes only once observability's rollup watermark passes its end,
+because ingest refuses samples older than the watermark; until then it is
+accrued at its reservation, including a stopped container's last period,
+which the stopped look-back keeps reading until the watermark passes it.
+`TestMeteringBillsTheGreaterOfReservationAndMeasuredUse`,
+`TestMeteringWaitsForMeasuredUseBeforeClosingAPeriod`.
 
 Grouping costs by task splits each container ledger entry among the
 attempts that ran in it by the time they overlapped it, at read time;
