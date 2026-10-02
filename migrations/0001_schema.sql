@@ -1501,8 +1501,6 @@ create table container_metric_rollup (
     rolled_through timestamptz not null
 );
 
-insert into container_metric_rollup (rolled_through) values (date_trunc('minute', now() - interval '1 hour'));
-
 -- How long each stage of a container's start took on its host. The host
 -- restates the stages in its reports; the first report of a stage wins.
 -- disk: the agent leased and restored the container's disks.
