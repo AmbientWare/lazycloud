@@ -1,0 +1,796 @@
+{
+ "source": "AWS public Spot price page data (website.spot.ec2.aws.a2z.com/spot.js), Linux, one regional price per type; DescribeSpotPriceHistory is denied to the default-test role",
+ "fetched": "2026-10-02T12:26:00Z",
+ "quotes": [
+  {
+   "region": "us-east-1",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 147400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 303900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 602100
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 676500
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 163000
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1727100
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 1564000
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 306300
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 526400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 872900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 3523200
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 220400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 2468500
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 1750300
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 3955200
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 595400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 6498900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 714700
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 1275900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 500600
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 604500
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 440400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 859700
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 125900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 1759600
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 172300
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 262300
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 105000
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 168500
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 331700
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 659200
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 1015800
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 1389400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 177400
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 393900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 704200
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.large",
+   "hourly_micros": 44900
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 89700
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 13066700
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 57761800
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 218200
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 379300
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 722300
+  },
+  {
+   "region": "us-east-1",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 243500
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 136100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 233300
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 420500
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 438900
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 159700
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 2038900
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 1250300
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 271400
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 567100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 816100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 3690400
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 197100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 1087700
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 1385300
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 1425900
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 463800
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 2852700
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 535000
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 904300
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 418300
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 584000
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 430700
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 860900
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 126100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 1698400
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 175000
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 259000
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 103900
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 139800
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 287000
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 459800
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 748900
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 1075600
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 196100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 275100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 545200
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.large",
+   "hourly_micros": 35400
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 66500
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 5733700
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 35718700
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 168100
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 341000
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 734200
+  },
+  {
+   "region": "us-east-2",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 219900
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 160100
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 357300
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 779800
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 718600
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 169000
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1296600
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 809100
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 318800
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 535600
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 831300
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 1557900
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 246800
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 178100
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 322100
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 618400
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 960400
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 1115900
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 179500
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 394200
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 858600
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.large",
+   "hourly_micros": 47700
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 84500
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 172100
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 401500
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 991600
+  },
+  {
+   "region": "us-west-1",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 212000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "c6a.2xlarge",
+   "hourly_micros": 133700
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "c6a.4xlarge",
+   "hourly_micros": 214900
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "c6a.8xlarge",
+   "hourly_micros": 577300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "c6i.8xlarge",
+   "hourly_micros": 543100
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "c7i.2xlarge",
+   "hourly_micros": 140200
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.12xlarge",
+   "hourly_micros": 1463300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.16xlarge",
+   "hourly_micros": 695200
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.2xlarge",
+   "hourly_micros": 253900
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.4xlarge",
+   "hourly_micros": 324200
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.8xlarge",
+   "hourly_micros": 662300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.metal",
+   "hourly_micros": 3272000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g4dn.xlarge",
+   "hourly_micros": 229000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.12xlarge",
+   "hourly_micros": 2377100
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.16xlarge",
+   "hourly_micros": 854900
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.24xlarge",
+   "hourly_micros": 1562400
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.2xlarge",
+   "hourly_micros": 459300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.48xlarge",
+   "hourly_micros": 3791000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.4xlarge",
+   "hourly_micros": 486000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.8xlarge",
+   "hourly_micros": 640300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g5.xlarge",
+   "hourly_micros": 446100
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.12xlarge",
+   "hourly_micros": 596100
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.16xlarge",
+   "hourly_micros": 450700
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.24xlarge",
+   "hourly_micros": 789300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.2xlarge",
+   "hourly_micros": 128600
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.48xlarge",
+   "hourly_micros": 1710600
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.4xlarge",
+   "hourly_micros": 169400
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.8xlarge",
+   "hourly_micros": 259700
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "g6.xlarge",
+   "hourly_micros": 104600
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m6a.2xlarge",
+   "hourly_micros": 141000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m6a.4xlarge",
+   "hourly_micros": 261700
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m6a.8xlarge",
+   "hourly_micros": 578000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.12xlarge",
+   "hourly_micros": 572600
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.16xlarge",
+   "hourly_micros": 992100
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.2xlarge",
+   "hourly_micros": 159300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.4xlarge",
+   "hourly_micros": 329500
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.8xlarge",
+   "hourly_micros": 621400
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.large",
+   "hourly_micros": 36400
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "m7i.xlarge",
+   "hourly_micros": 74300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "p4d.24xlarge",
+   "hourly_micros": 6205000
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "p5.48xlarge",
+   "hourly_micros": 31298500
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "r6a.2xlarge",
+   "hourly_micros": 177500
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "r6a.4xlarge",
+   "hourly_micros": 345300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "r6a.8xlarge",
+   "hourly_micros": 892300
+  },
+  {
+   "region": "us-west-2",
+   "instance_type": "r7i.2xlarge",
+   "hourly_micros": 69900
+  }
+ ]
+}
