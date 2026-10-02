@@ -479,12 +479,14 @@ func (q *Queries) QueueStats(ctx context.Context, queueID uuid.UUID) (QueueStats
 
 const sweepExpiredMapEntries = `-- name: SweepExpiredMapEntries :execrows
 delete from map_entries
-where ctid = any(array(
-    select ctid from map_entries
-    where expires_at is not null and expires_at <= now()
-    limit $1
-    for update skip locked
-))
+where ctid = any((
+    select array_agg(e.ctid) from (
+        select ctid from map_entries
+        where expires_at is not null and expires_at <= now()
+        limit $1
+        for update skip locked
+    ) e
+)::tid[])
 `
 
 func (q *Queries) SweepExpiredMapEntries(ctx context.Context, maxRows int32) (int64, error) {

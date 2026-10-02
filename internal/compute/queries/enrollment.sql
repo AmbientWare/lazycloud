@@ -88,11 +88,7 @@ set session_epoch = session_epoch + 1,
 where id = @id and state <> 'retired'
 returning session_epoch;
 
--- name: TouchHost :one
--- Counts 0 once a newer session or host loss replaced this one.
-with touched as (
-    update hosts set last_seen_at = now()
-    where id = @id and session_epoch = @session_epoch and state = 'online'
-    returning 1
-)
-select count(*) from touched;
+-- name: TouchHost :execrows
+-- Touches no row once a newer session or host loss replaced this one.
+update hosts set last_seen_at = now()
+where id = @id and session_epoch = @session_epoch and state = 'online';
