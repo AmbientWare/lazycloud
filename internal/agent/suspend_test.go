@@ -152,7 +152,7 @@ func TestAgentRefusesTheReserveWhileWorkRemains(t *testing.T) {
 
 	prepare := prepareCommand()
 	s.send(t, prepare)
-	if ready := s.reserveReady(t, prepare.GetPrepareReserve().GetAttemptId()); !strings.Contains(ready.GetRefused(), "containers run here") {
+	if ready := s.reserveReady(t, prepare.GetPrepareReserve().GetAttemptId()); !strings.Contains(ready.GetRefused(), "containers still run here") {
 		t.Fatalf("a host running a container answered %v", ready)
 	}
 

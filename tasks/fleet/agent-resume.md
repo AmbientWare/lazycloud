@@ -74,12 +74,45 @@ provider packet merges.
 
 ## Progress
 
+- Branched from origin/fleet-capacity-plan, rebased onto the provider
+  packet's schema commit `325b25cd86d077e50b34aacd7c49d9894c41ef7f` on
+  origin/fleet-provider.
+- Agent: suspend.go (timerfd clock jumps, sleep gap, resume reconnect),
+  reserve.go (PrepareReserve), Hello fields 72-73, proto fields 71.
+- Compute and host session: migration 0004, reserve_session.go and .sql,
+  the OpenSession hook, PrepareReserve sync and ReserveReady routing.
+
 ## Intentional differences
 
 - There is no worker process: a hibernated reserve keeps the agent, Docker
   and pulled images, which is what makes its resume fast.
 - The reference's update cancellation before a stop becomes a refusal while
   an update is in flight, because agents update in place.
+- Sleep attempts are columns on the host (`sleep_attempt_id`,
+  `sleep_boot_id`), not a table. The PrepareReserve awaiting an answer
+  lives in its session: a reconnect or a 2-minute silence sends a fresh
+  attempt, and only the newest answer counts. ReserveReady is the agent's
+  marker acknowledgment, so the reference's separate observation ack is
+  gone; settling clears the attempt, so a repeated Hello records nothing.
+- The slept time comes from the gap growth since the attempt was prepared,
+  stored with the attempt, so an agent restart in the same boot still
+  reports it, and no sleep is ever counted twice.
+- A resume closes the sockets under the three server connections, resets
+  their backoff and cancels the session, so nothing waits for TCP to notice
+  dead peers. The agent has no interruption shutdown timer to rearm (the
+  server acts on the notice); after a resume it drops a Spot notice whose
+  reclaim time passed and reads IMDS at once.
+- A reserve's release proof is the release the host should run: the target
+  once the rollout reaches the host, any release outside it.
+- The planner writes `resuming` with `resume_requested_at`, so a lagging
+  resume cannot occur; a stopping or stopped host that comes back with a
+  sleep or a new boot was not asked to, and goes through resuming and
+  joining to preparing, never ready. The session clears
+  `resume_requested_at` when a resume joins.
+- Activation samples are measured on the database clock: provision from
+  the host row's creation to its first session, resume and boot from
+  `resume_requested_at` to the Hello. Rows older than a day are pruned on
+  insert.
 
 ## Evidence
 

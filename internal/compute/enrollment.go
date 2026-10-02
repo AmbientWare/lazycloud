@@ -153,14 +153,21 @@ type SessionOpen struct {
 	BootID       string
 	Capacity     Capacity
 	AgentVersion string
+	// SleepAttempt is the reserve stop the host last proved, nil when none;
+	// SleptSeconds how long it slept since, in this boot.
+	SleepAttempt *uuid.UUID
+	SleptSeconds float64
 }
 
 // OpenSession brings host online with the capacity it reported and returns
 // the epoch that supersedes every earlier session. A joining host becomes
-// ready.
+// ready; a reserve's moves are settleSession's.
 func (c *Compute) OpenSession(ctx context.Context, host HostID, open SessionOpen) (SessionEpoch, error) {
 	var epoch int64
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+		if err := settleSession(ctx, c.queries.WithTx(tx), uuid.UUID(host), open); err != nil {
+			return err
+		}
 		var err error
 		epoch, err = c.queries.WithTx(tx).OpenHostSession(ctx, OpenHostSessionParams{
 			ID: uuid.UUID(host), BootID: open.BootID, AgentVersion: open.AgentVersion,
