@@ -421,7 +421,9 @@ class ServePreviewSession:
             # timeout, or a lapsed lease.
             state = get_preview(self.client, self.workspace, self.preview.id)
             if state.state is PreviewState.stopped:
-                self.terminal.warn("serve container stopped; its exit code is not reported")
+                if state.error:
+                    self.terminal.error(state.error)
+                self.terminal.warn("serve container stopped")
                 return
             self.terminal.warn("serve attach stream ended; retrying")
             time.sleep(self.reconnect_seconds)
@@ -463,8 +465,12 @@ def serve_workload(
             stop_preview(client, selected, preview.id)
             raise
         if preview.state is PreviewState.stopped:
-            step.fail("stopped before it was ready")
-            raise ServeError(f"the preview of {spec.name} stopped before its container was ready")
+            reason = preview.stop_reason.value if preview.stop_reason else "stopped"
+            step.fail(f"{reason} before it was ready")
+            detail = f": {preview.error}" if preview.error else ""
+            raise ServeError(
+                f"the preview of {spec.name} stopped before its container was ready{detail}"
+            )
         step.done("ready")
     record = write_serve_preview(
         kind=kind,

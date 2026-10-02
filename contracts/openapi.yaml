@@ -4669,10 +4669,10 @@ components:
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/WorkloadSpec" }
         url:
-          description: Where a pod, function or HTTP workload answers, following the active release.
+          description: Where the workload answers, following the active release.
           type: string
         invoke_path:
-          description: The function or HTTP workload on the API host, following the active release.
+          description: The workload on the API host, following the active release.
           type: string
 
     Payload:
@@ -6145,6 +6145,10 @@ components:
         url:
           description: Where the preview answers; a function preview takes tasks through the API.
           type: string
+        stop_reason:
+          description: Why the preview stopped on its own, such as load_error.
+          allOf: [{ $ref: "#/components/schemas/StopReason" }]
+        error: { type: string }
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
 

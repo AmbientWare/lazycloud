@@ -1099,6 +1099,11 @@ class Preview(BaseModel):
             description="Where the preview answers; a function preview takes tasks through the API."
         ),
     ]
+    stop_reason: Annotated[
+        StopReason | None,
+        Field(description="Why the preview stopped on its own, such as load_error."),
+    ] = None
+    error: str | None = None
     expires_at: AwareDatetime | None = None
     created_at: AwareDatetime
 
@@ -3321,16 +3326,10 @@ class Release(BaseModel):
     created_at: AwareDatetime
     spec: WorkloadSpec
     url: Annotated[
-        str | None,
-        Field(
-            description="Where a pod, function or HTTP workload answers, following the active release."
-        ),
+        str | None, Field(description="Where the workload answers, following the active release.")
     ] = None
     invoke_path: Annotated[
-        str | None,
-        Field(
-            description="The function or HTTP workload on the API host, following the active release."
-        ),
+        str | None, Field(description="The workload on the API host, following the active release.")
     ] = None
 
 

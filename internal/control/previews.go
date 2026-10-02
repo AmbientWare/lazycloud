@@ -33,6 +33,9 @@ type Preview struct {
 	LeaseExpiresAt time.Time
 	DeadlineAt     *time.Time
 	CreatedAt      time.Time
+	// LoadError is why the handler failed to import in the preview's
+	// container; no container of the preview starts after it.
+	LoadError *string
 }
 
 // PreviewKind is what a definition previews as.
@@ -113,7 +116,7 @@ func (c *Control) GetPreview(ctx context.Context, workspace identity.WorkspaceID
 	}
 	out := Preview{
 		Release: row.ReleaseID, App: row.AppName, Name: row.Name, Kind: apitypes.PreviewKind(row.Kind), Live: row.Live,
-		LeaseExpiresAt: row.LeaseExpiresAt, DeadlineAt: row.DeadlineAt, CreatedAt: row.CreatedAt,
+		LeaseExpiresAt: row.LeaseExpiresAt, DeadlineAt: row.DeadlineAt, CreatedAt: row.CreatedAt, LoadError: row.LoadError,
 	}
 	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
 		return Preview{}, fmt.Errorf("decode preview spec: %w", err)

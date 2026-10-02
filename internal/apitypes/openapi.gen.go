@@ -4298,11 +4298,15 @@ type Preview struct {
 	App         AppName             `json:"app"`
 	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
 	CreatedAt   time.Time           `json:"created_at"`
+	Error       *string             `json:"error,omitempty"`
 	ExpiresAt   *time.Time          `json:"expires_at,omitempty"`
 	Id          openapi_types.UUID  `json:"id"`
 	Kind        PreviewKind         `json:"kind"`
 	Name        WorkloadName        `json:"name"`
 	State       PreviewState        `json:"state"`
+
+	// StopReason Why the preview stopped on its own, such as load_error.
+	StopReason *StopReason `json:"stop_reason,omitempty"`
 
 	// Url Where the preview answers; a function preview takes tasks through the API.
 	Url string `json:"url"`
@@ -4441,14 +4445,14 @@ type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// InvokePath The function or HTTP workload on the API host, following the active release.
+	// InvokePath The workload on the API host, following the active release.
 	InvokePath *string      `json:"invoke_path,omitempty"`
 	Name       WorkloadName `json:"name"`
 
 	// Spec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
 	Spec WorkloadSpec `json:"spec"`
 
-	// Url Where a pod, function or HTTP workload answers, following the active release.
+	// Url Where the workload answers, following the active release.
 	Url *string `json:"url,omitempty"`
 
 	// Version The deployed version; absent for a release only working-tree calls use.

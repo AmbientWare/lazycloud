@@ -3810,9 +3810,9 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             spec: components["schemas"]["WorkloadSpec"];
-            /** @description Where a pod, function or HTTP workload answers, following the active release. */
+            /** @description Where the workload answers, following the active release. */
             url?: string;
-            /** @description The function or HTTP workload on the API host, following the active release. */
+            /** @description The workload on the API host, following the active release. */
             invoke_path?: string;
         };
         /** @description A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`. */
@@ -4734,6 +4734,9 @@ export interface components {
             container_id?: string;
             /** @description Where the preview answers; a function preview takes tasks through the API. */
             url: string;
+            /** @description Why the preview stopped on its own, such as load_error. */
+            stop_reason?: components["schemas"]["StopReason"];
+            error?: string;
             /** Format: date-time */
             expires_at?: string;
             /** Format: date-time */

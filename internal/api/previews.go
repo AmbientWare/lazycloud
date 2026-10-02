@@ -46,7 +46,13 @@ func (s *Server) previewOut(ctx context.Context, p control.Preview) (apitypes.Pr
 			out.State = apitypes.PreviewStateReady
 		}
 	}
-	if !p.Live {
+	// A handler that cannot import ends the preview: no container of it
+	// starts again, so serve shows why instead of waiting.
+	if p.LoadError != nil {
+		reason := apitypes.StopReasonLoadError
+		out.StopReason, out.Error = &reason, p.LoadError
+	}
+	if !p.Live || p.LoadError != nil {
 		out.State = apitypes.PreviewStateStopped
 	}
 	return out, nil
