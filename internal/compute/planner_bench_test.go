@@ -10,19 +10,27 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// BenchmarkPlan measures one fleet planning pass over 2,000 pending
-// containers from 20 workspaces that fit no host, packed onto new platform
-// hosts in two regions. Each iteration starts with nothing bought. Run with
-// -bench Plan -benchtime 20x.
+// BenchmarkPlan measures one reserve pass over 2,000 pending Spot-tolerant
+// containers from 20 workspaces that fit no host, covered by new platform
+// hosts in two regions priced from Spot quotes at 40% of on-demand. Each
+// iteration starts with nothing bought or published. Run with -bench Plan
+// -benchtime 20x.
 func BenchmarkPlan(b *testing.B) {
 	pool := dbtest.New(b)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	network := func(zone string) Network {
-		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone}}}
+	network := func(zone, id string) Network {
+		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone, ZoneID: id}}}
 	}
-	c := NewCompute(pool, nil, Config{Fleet: Fleet{
-		MaxHosts: 1000, Networks: map[string]Network{"us-east-2": network("us-east-2a"), "us-west-1": network("us-west-1a")},
-	}})
+	networks := map[string]Network{"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1a", "usw1-az1")}
+	c := NewCompute(pool, nil, Config{Fleet: Fleet{MaxHosts: 1000, Networks: networks}})
+	for region, n := range networks {
+		for _, typ := range FleetCatalog() {
+			if price, sold := typ.OnDemandMicros(region); sold {
+				exec(b, pool, `insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+values ($1, $2, $3, $4, now(), now())`, region, n.Subnets[0].ZoneID, typ.Name, price*4/10)
+			}
+		}
+	}
 	exec(b, pool, `
 with ws as (insert into workspaces (name) select 'ws-' || n from generate_series(1, 20) n returning id),
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id, workspace_id),
