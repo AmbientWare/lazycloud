@@ -283,8 +283,17 @@ func (r liveReserve) cycle(launched time.Time) {
 
 	// The planner retires it.
 	r.move(compute.PhaseTerminating)
+	retired := time.Now()
 	r.act()
-	r.until(ec2types.InstanceStateNameTerminated, 5*time.Minute, r.reconcile)
+	// A g4dn.xlarge stays shutting-down for minutes; EC2 stops billing it
+	// there, so the run moves on.
+	for s := r.instance().State.Name; s != ec2types.InstanceStateNameShuttingDown && s != ec2types.InstanceStateNameTerminated; s = r.instance().State.Name {
+		if time.Since(retired) > 5*time.Minute {
+			t.Fatalf("%s still %s after the terminate", r.c.name(), s)
+		}
+		time.Sleep(2 * time.Second)
+		r.reconcile()
+	}
 	for r.phase() != string(compute.PhaseDeleted) {
 		if time.Since(started) > 10*time.Minute {
 			t.Fatalf("reconcile left a terminated host %s", r.phase())
