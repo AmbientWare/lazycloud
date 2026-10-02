@@ -165,6 +165,29 @@ func TestAgentRefusesTheReserveWhileWorkRemains(t *testing.T) {
 	})
 }
 
+// After a resume a Spot notice whose reclaim time passed in the sleep no
+// longer stands, a later one does, and the watcher reads IMDS at once.
+func TestResumeRearmsTheSpotNoticeFromTheWallClock(t *testing.T) {
+	for _, c := range []struct {
+		reclaim time.Duration
+		stands  bool
+	}{{-time.Minute, false}, {time.Minute, true}} {
+		a := &Agent{
+			conns: newConnTracker(), reconnectNow: make(chan struct{}, 1), interruptionNow: make(chan struct{}, 1),
+			interruption: &interruption{reason: "aws-ec2-spot-hibernate", reclaimAt: time.Now().Add(c.reclaim)},
+		}
+		a.resumed()
+		if (a.interruption != nil) != c.stands {
+			t.Errorf("reclaim in %s: notice stands %v", c.reclaim, a.interruption != nil)
+		}
+		select {
+		case <-a.interruptionNow:
+		default:
+			t.Error("the Spot notice watcher was not woken")
+		}
+	}
+}
+
 func TestReserveBlockerRefusesDuringAnUpdate(t *testing.T) {
 	for _, a := range []*Agent{{updating: true}, {trial: "v2"}} {
 		if got := a.reserveBlocker(t.Context()); got != "an agent update is in flight" {

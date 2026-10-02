@@ -122,7 +122,61 @@ provider packet merges.
 
 ## Evidence
 
+Parity lines, with the tests that prove them (agent: internal/agent,
+session: internal/hostsession against real PostgreSQL):
+
+- Sleep detection from the CLOCK_BOOTTIME and CLOCK_MONOTONIC gap, woken by
+  a timerfd clock jump, start fails without it: agent
+  TestKernelClockWaitsForAJumpUntilCancelled,
+  TestSleptSinceCountsOnlyTheAttemptsBoot,
+  TestAgentReconnectsAndReportsTheSleepAfterAResume.
+- Rearm after a sleep from the wall clock: agent
+  TestResumeRearmsTheSpotNoticeFromTheWallClock.
+- Sleep report with attempt and boot on the next session: agent
+  TestAgentReconnectsAndReportsTheSleepAfterAResume,
+  TestAgentRemembersTheSleepAttemptAcrossRestarts.
+- Current agent release, GPU driver proof, no live containers for that exact
+  request, no update in flight: session TestReserveStopsOnlyOnTheAgentsProof,
+  TestReserveRefusesUnprovenHosts, TestGPUReserveRecordsItsProof; agent
+  TestAgentRefusesTheReserveWhileWorkRemains,
+  TestReserveBlockerRefusesDuringAnUpdate.
+- Attempts fenced by boot, superseded attempts stale: session
+  TestReserveStopsOnlyOnTheAgentsProof, TestReserveSupersededAttemptIsStale.
+- A resume serves only when requested; an unrequested wake stays out of
+  placement and stops again: session TestUnrequestedWakeGoesBackToTheReserve.
+- Resume outcome, activation samples, refresh prepares again, joins before
+  ready: session TestResumeSettlesTheSleepAttempt,
+  TestFirstSessionOfALaunchedHost.
+
+Resume to reconnect: 1.8 ms from the clock jump to the server's next
+session in the agent harness (fake clock, local server). Not measured on
+EC2; see gaps.
+
+Checks: `go test -race ./internal/agent ./internal/hostsession
+./internal/compute` pass; `go generate ./...` leaves the tree clean;
+golangci-lint over ./... has 0 issues once the provider's
+`Propose:` fleet_admin.go switch commit (9b2fbc49) is applied, and 1
+(that switch) on the schema commit alone; go vet, buf format and buf lint
+pass. acceptance/neki/check.sh: 0 router failures with 0003 and 0004
+applied through the router. check-neki.sh against prod's schema lists only
+the columns 0003 and 0004 add.
+
 ## Gaps and unverified boundaries
+
+- The real EC2 hibernation run did not happen. `default-test` assumes
+  `lazycloud-default-test-operator` in account 534742592531, the same
+  account `default` (root) and the prod fleet use (it can see terminated
+  `lazycloud:fleet = lazycloud-prod` instances), so it is not a separate
+  disposable account. The role is also denied ec2:DescribeSubnets,
+  DescribeImages, DescribeVpcs, ssm:GetParameters and s3:CreateBucket, so
+  no AMI, subnet or presigned binary is reachable from it. Nothing was
+  created. The timerfd wake on a real resume, and the delay from EC2 start
+  to agent reconnect, remain unmeasured.
+- The 2-minute supersede timer itself is untested (the reconnect path that
+  also sends a fresh attempt is).
+- The planner's return to the reserve should notify the host channel so the
+  session sends PrepareReserve at once; otherwise it waits for the next
+  touch (10 s).
 
 ## Verification
 
