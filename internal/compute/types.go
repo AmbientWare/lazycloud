@@ -118,12 +118,13 @@ const (
 type ImageEvidence string
 
 const (
-	// EvidenceUnknown is a hibernation not yet proven or disproven.
+	// EvidenceUnknown is a hibernation still stopping.
 	EvidenceUnknown ImageEvidence = "unknown"
-	// EvidenceSaved is a hibernation whose image was saved.
+	// EvidenceSaved is a hibernation EC2 stopped the instance for; the
+	// agent's resume report proves the image.
 	EvidenceSaved ImageEvidence = "saved"
-	// EvidenceFailed is a hibernation whose image was not saved; the host
-	// boots cold on start.
+	// EvidenceFailed is a hibernation EC2 stopped the instance for some
+	// other reason; the host boots cold on start.
 	EvidenceFailed ImageEvidence = "failed"
 	// EvidenceUnavailable is a plain or forced stop, which saves nothing.
 	EvidenceUnavailable ImageEvidence = "unavailable"

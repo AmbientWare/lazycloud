@@ -33,9 +33,11 @@ set hibernate_refused_at = coalesce(hibernate_refused_at, now()), updated_at = n
 where id = @id and phase = 'stopping';
 
 -- name: MarkReserveStopped :execrows
--- EC2 reports a stopping host's instance stopped.
+-- EC2 reports a stopping host's instance stopped. A hibernation still
+-- unproven takes the evidence EC2's stop reason gives.
 update hosts
 set phase = 'stopped', phase_message = 'Stopped in the reserve', phase_at = now(), stopped_at = now(),
+    image_evidence = case when image_evidence = 'unknown' then @hibernation_evidence::text else image_evidence end,
     launch_lease_until = null, updated_at = now()
 where id = @id and phase = 'stopping';
 

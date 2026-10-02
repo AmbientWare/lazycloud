@@ -33,11 +33,12 @@ alter table hosts
     -- When the planner asked a stopped reserve to start; only a requested
     -- resume serves.
     add column resume_requested_at timestamptz,
-    -- Whether the last stop saved a hibernation image.
+    -- Whether the last stop saved a hibernation image: unknown while a
+    -- hibernation stops, saved once EC2 stopped it for the hibernation
+    -- (the agent's resume report proves it), failed when EC2 stopped it
+    -- otherwise, unavailable after a plain or forced stop.
     add column image_evidence text not null default 'unknown'
-        check (image_evidence in ('unknown', 'saved', 'failed', 'unavailable')),
-    add column evidence_checks integer not null default 0 check (evidence_checks >= 0),
-    add column evidence_next_at timestamptz;
+        check (image_evidence in ('unknown', 'saved', 'failed', 'unavailable'));
 
 -- Hosts waiting on a start, stop or terminate call.
 create index hosts_provider_actions on hosts (phase, phase_at)

@@ -119,7 +119,7 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 		instance.HibernationOptions != nil && aws.ToBool(instance.HibernationOptions.Configured)
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
-		return c.reserveStopped(ctx, h.ID)
+		return c.reserveStopped(ctx, h.ID, stopReason(instance.StateReason))
 	case ec2types.InstanceStateNameStopping:
 		if h.StopRequestedAt == nil {
 			// The stop's answer was lost; EC2 took it.
@@ -189,14 +189,31 @@ func (c *Compute) recordStop(ctx context.Context, host uuid.UUID, evidence Image
 	return nil
 }
 
+// hibernatedReason is EC2's stop reason for an instance it stopped by
+// hibernating. EC2 gives it whether or not the guest saved its image, so it
+// claims the image; the agent's resume report proves it.
+const hibernatedReason = "Client.UserInitiatedHibernate"
+
+func stopReason(r *ec2types.StateReason) string {
+	if r == nil {
+		return ""
+	}
+	return aws.ToString(r.Code)
+}
+
 // reserveStopped moves a stopping host whose instance EC2 reports stopped
-// into the reserve.
-func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID) error {
+// for reason into the reserve. An unproven hibernation is saved when EC2
+// stopped it for the hibernation, and failed otherwise.
+func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason string) error {
 	if err := transition(PhaseStopping, PhaseStopped); err != nil {
 		return err
 	}
+	evidence := EvidenceFailed
+	if reason == hibernatedReason {
+		evidence = EvidenceSaved
+	}
 	return inTx(ctx, c, func(tx pgx.Tx) error {
-		n, err := c.queries.WithTx(tx).MarkReserveStopped(ctx, host)
+		n, err := c.queries.WithTx(tx).MarkReserveStopped(ctx, MarkReserveStoppedParams{ID: host, HibernationEvidence: string(evidence)})
 		if err != nil {
 			return fmt.Errorf("mark reserve stopped: %w", err)
 		}

@@ -153,8 +153,29 @@ func TestStoppingReserveHibernatesOnceEC2AllowsAndSettlesIntoTheReserve(t *testi
 	ec2.set("i-0000000000000c001", func(i *fakeInstance) { i.State = "stopped" })
 	expireLeases(t, o)
 	actuate(t, o)
-	if f := stopOf(t, o, host); f.Phase != "stopped" || !f.Stopped {
-		t.Fatalf("after EC2 stopped it %+v, want stopped with stopped_at", f)
+	if f := stopOf(t, o, host); f.Phase != "stopped" || !f.Stopped || f.Evidence != string(compute.EvidenceSaved) {
+		t.Fatalf("after EC2 stopped it %+v, want stopped with stopped_at and the image saved", f)
+	}
+}
+
+// EC2 names a hibernation in the stop reason; a hibernation that stopped
+// for another reason saved no image.
+func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {
+	o, _, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c007")
+	ec2.add(fakeInstance{ID: "i-0000000000000c007", State: "stopped", Hibernation: true, StateReason: "Client.InstanceInitiatedShutdown"}, host.String())
+	run(t, o.pool, "update hosts set stop_requested_at = now(), image_evidence = 'unknown' where id = $1", uuid.UUID(host))
+	plain := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c008")
+	ec2.add(fakeInstance{ID: "i-0000000000000c008", State: "stopped", StateReason: "Client.UserInitiatedShutdown"}, plain.String())
+	run(t, o.pool, "update hosts set stop_requested_at = now(), image_evidence = 'unavailable' where id = $1", uuid.UUID(plain))
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	if f := stopOf(t, o, host); f.Phase != "stopped" || f.Evidence != string(compute.EvidenceFailed) {
+		t.Fatalf("hibernation stopped otherwise %+v, want stopped with the image failed", f)
+	}
+	if f := stopOf(t, o, plain); f.Phase != "stopped" || f.Evidence != string(compute.EvidenceUnavailable) {
+		t.Fatalf("plain stop %+v, want stopped with no image", f)
 	}
 }
 
