@@ -26,9 +26,12 @@ limit @max_rows;
 -- name: FleetRollout :many
 -- Platform hosts by where they stand on the agent release: connected
 -- serving or draining hosts on it (current) or on another (updating),
--- reserves, and other enrolled hosts (offline).
+-- reserves, and other enrolled hosts (offline). Draining and serving are
+-- fleetStateOf's: an emptied consolidating host is not draining.
 select (case
-    when h.phase = 'draining' or (h.phase = 'ready' and (h.capacity_state <> 'available'
+    when h.phase = 'draining' or (h.phase = 'ready' and ((h.capacity_state <> 'available'
+            and (h.capacity_reason <> @consolidating::text
+                or exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')))
         or (h.state = 'online' and coalesce(h.last_seen_at > @live_after::timestamptz, false))))
         then case when h.agent_version = @version::text then 'current' else 'updating' end
     when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'

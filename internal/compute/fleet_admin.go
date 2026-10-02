@@ -165,7 +165,9 @@ func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
 	if err != nil {
 		return FleetSummary{}, err
 	}
-	rows, err := c.queries.FleetRollout(ctx, FleetRolloutParams{LiveAfter: summary.ObservedAt.Add(-LivenessTimeout), Version: release.Version})
+	rows, err := c.queries.FleetRollout(ctx, FleetRolloutParams{
+		LiveAfter: summary.ObservedAt.Add(-LivenessTimeout), Consolidating: reasonConsolidating, Version: release.Version,
+	})
 	if err != nil {
 		return FleetSummary{}, fmt.Errorf("count the agent rollout: %w", err)
 	}

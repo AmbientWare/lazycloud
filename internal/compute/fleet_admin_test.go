@@ -24,7 +24,7 @@ from generate_series(1, $2)`, phase, n)
 		costExec(t, pool, "analyze hosts")
 		out := map[string]int{}
 		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
-			out["rollout"] = max(out["rollout"], planBuffers(explainPlan(t, pool, mode, fleetRollout, time.Now(), "1.0.0")))
+			out["rollout"] = max(out["rollout"], planBuffers(explainPlan(t, pool, mode, fleetRollout, reasonConsolidating, time.Now(), "1.0.0")))
 			out["nodes"] = max(out["nodes"], planBuffers(explainPlan(t, pool, mode, platformHosts, uuid.Nil, 51)))
 		}
 		return out

@@ -216,6 +216,31 @@ func TestFleetNodesListReserveStatesAndNeverARefusedLaunch(t *testing.T) {
 	}
 }
 
+// An emptied consolidating host that lost its connection is unavailable on
+// Nodes, and the rollout counts it offline rather than on the release.
+func TestFleetRolloutAndNodesAgreeOnAnEmptiedConsolidatingHost(t *testing.T) {
+	ctx := t.Context()
+	e := newEnv(t)
+	admin := e.administrator()
+	if err := e.compute.PublishAgentRelease(ctx, compute.AgentRelease{
+		Version: "2.0.0", SHA256: map[string]string{"amd64": strings.Repeat("a", 64)}, RolloutPercent: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	host := e.fleetHost(fleetHost{instance: "i-0consolidated", phase: "ready", agent: "2.0.0"})
+	if _, err := e.pool.Exec(ctx, `update hosts set capacity_state = 'draining', capacity_reason = 'consolidating' where id = $1`, host); err != nil {
+		t.Fatal(err)
+	}
+	var page apitypes.FleetNodePage
+	if status := e.do("GET", "/v1/fleet/nodes", admin, nil, &page); status != 200 || len(page.Nodes) != 1 ||
+		page.Nodes[0].State != apitypes.FleetUnavailable {
+		t.Fatalf("fleet nodes: %d %+v, want the host unavailable", status, page.Nodes)
+	}
+	if r := e.fleet(admin).Release; r == nil || r.Phases["current"] != 0 || r.Phases["offline"] != 1 {
+		t.Fatalf("rollout %+v, want the host offline", r)
+	}
+}
+
 func deref(s *string) string {
 	if s == nil {
 		return ""

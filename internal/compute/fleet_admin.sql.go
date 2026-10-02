@@ -14,9 +14,11 @@ import (
 
 const fleetRollout = `-- name: FleetRollout :many
 select (case
-    when h.phase = 'draining' or (h.phase = 'ready' and (h.capacity_state <> 'available'
-        or (h.state = 'online' and coalesce(h.last_seen_at > $1::timestamptz, false))))
-        then case when h.agent_version = $2::text then 'current' else 'updating' end
+    when h.phase = 'draining' or (h.phase = 'ready' and ((h.capacity_state <> 'available'
+            and (h.capacity_reason <> $1::text
+                or exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')))
+        or (h.state = 'online' and coalesce(h.last_seen_at > $2::timestamptz, false))))
+        then case when h.agent_version = $3::text then 'current' else 'updating' end
     when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'
     when h.token_hash is not null then 'offline'
     else ''
@@ -29,8 +31,9 @@ order by 1
 `
 
 type FleetRolloutParams struct {
-	LiveAfter time.Time
-	Version   string
+	Consolidating string
+	LiveAfter     time.Time
+	Version       string
 }
 
 type FleetRolloutRow struct {
@@ -40,9 +43,10 @@ type FleetRolloutRow struct {
 
 // Platform hosts by where they stand on the agent release: connected
 // serving or draining hosts on it (current) or on another (updating),
-// reserves, and other enrolled hosts (offline).
+// reserves, and other enrolled hosts (offline). Draining and serving are
+// fleetStateOf's: an emptied consolidating host is not draining.
 func (q *Queries) FleetRollout(ctx context.Context, arg FleetRolloutParams) ([]FleetRolloutRow, error) {
-	rows, err := q.db.Query(ctx, fleetRollout, arg.LiveAfter, arg.Version)
+	rows, err := q.db.Query(ctx, fleetRollout, arg.Consolidating, arg.LiveAfter, arg.Version)
 	if err != nil {
 		return nil, err
 	}
