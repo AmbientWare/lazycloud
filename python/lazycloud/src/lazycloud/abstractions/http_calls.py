@@ -11,9 +11,12 @@ import httpx
 from pydantic import JsonValue, ValidationError
 from shared.api import WorkloadKind, WorkloadSpec
 from shared.autoscaling import Autoscaler
+from shared.deployments import DeploymentKind
+from shared.gpu import gpu_preference
 from shared.image_building.python import python_minor_version
 
 from lazycloud.abstractions.metadata import lifecycle_hook_references
+from lazycloud.client_contracts import build_client_contract
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.exceptions import SdkError
@@ -70,7 +73,7 @@ def http_workload_spec(
     methods: list[str] | None = None,
 ) -> WorkloadSpec:
     """The API definition of an HTTP workload for an uploaded source and a ready image."""
-    from lazycloud.abstractions.function import _resources, _volume_spec
+    from lazycloud.abstractions.function import _resources, _volume_spec, placement_fields
 
     http: dict[str, Any] = {
         "kind": kind,
@@ -124,8 +127,16 @@ def http_workload_spec(
     if owner.checkpoint_enabled:
         # The runner reports readiness, so the snapshot needs no probe.
         spec["checkpoint"] = {}
+    if kind == "endpoint":
+        contract = build_client_contract(
+            owner.func, kind=DeploymentKind.Endpoint, inputs=owner.inputs, outputs=owner.outputs
+        )
+        if contract is not None:
+            spec["client_contract"] = contract.model_dump(mode="json")
     try:
         on_start = lifecycle_hook_references(owner.on_start)
+        gpu = gpu_preference(owner.gpu)
+        placement = placement_fields(owner)
     except (TypeError, ValueError) as exc:
         from lazycloud.abstractions.function import FunctionOperationError
 
@@ -134,6 +145,12 @@ def http_workload_spec(
     if on_start:
         # Workers run on_start once each, before they take requests.
         spec["lifecycle_hooks"] = {"on_start": list(on_start)}
+    if gpu:
+        spec["resources"]["gpu"] = list(gpu)
+    if owner.gpu_count:
+        spec["resources"]["gpu_count"] = owner.gpu_count
+    if placement:
+        spec["placement"] = placement
     try:
         return WorkloadSpec.model_validate(spec)
     except ValidationError as exc:
@@ -146,8 +163,6 @@ def http_workload_spec(
 def unsupported_http_options(owner: Any) -> list[str]:
     """Declared options HTTP workloads cannot run yet, by name."""
     found: list[str] = []
-    if owner.gpu is not None or owner.gpu_count:
-        found.append("gpu")
     declared: dict[str, bool] = {
         # Hosts have no credentials of their own for a user's bucket.
         "cloud bucket without key secrets": any(
@@ -155,9 +170,6 @@ def unsupported_http_options(owner: Any) -> list[str]:
             for volume in owner.volumes
         ),
         "callback_url": bool(owner.callback_url),
-        "region": owner.region is not None,
-        "availability_zone": bool(owner.availability_zone),
-        "machine": owner.machine is not None,
         "metadata": bool(getattr(owner, "metadata", None)),
     }
     found.extend(name for name, present in declared.items() if present)

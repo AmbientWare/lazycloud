@@ -696,16 +696,7 @@ class Function(Generic[P, R]):
 
         `spec()` validates the combination when the function is declared.
         """
-        placement: dict[str, Any] = {}
-        if self.machine:
-            placement["machine"] = self.machine
-        if self.region is not None:
-            placement["region"] = self.region
-        if self.availability_zone:
-            placement["availability_zone"] = self.availability_zone
-        if not self.preemptible:
-            placement["preemptible"] = False
-        return placement
+        return placement_fields(self)
 
     def _retry_policy(self) -> RetryPolicy:
         policy = retry_policy_config(
@@ -868,6 +859,20 @@ def _memory_mib(value: str | int) -> int:
         msg = "memory needs a size such as 512Mi"
         raise FunctionOperationError(msg)
     return mib
+
+
+def placement_fields(owner: Any) -> dict[str, Any]:
+    """The machine, region, zone and market a workload sets; empty runs anywhere."""
+    placement: dict[str, Any] = {}
+    if owner.machine:
+        placement["machine"] = owner.machine
+    if owner.region is not None:
+        placement["region"] = owner.region
+    if owner.availability_zone:
+        placement["availability_zone"] = owner.availability_zone
+    if not owner.preemptible:
+        placement["preemptible"] = False
+    return placement
 
 
 def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
