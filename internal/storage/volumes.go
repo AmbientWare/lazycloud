@@ -89,7 +89,7 @@ func (s *Storage) addVolumeUsers(ctx context.Context, workspace identity.Workspa
 	}
 	for _, u := range users {
 		v := &volumes[index[u.Volume]]
-		v.UsedBy = append(v.UsedBy, apitypes.WorkloadRef{App: u.App, Kind: apitypes.WorkloadRefKind(u.Kind), Name: u.Workload})
+		v.UsedBy = append(v.UsedBy, apitypes.WorkloadRef{App: u.App, Kind: apitypes.WorkloadKind(u.Kind), Name: u.Workload})
 	}
 	return nil
 }

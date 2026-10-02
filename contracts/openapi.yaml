@@ -5007,9 +5007,7 @@ components:
       required: [app, kind, name]
       properties:
         app: { $ref: "#/components/schemas/AppName" }
-        kind:
-          type: string
-          enum: [function]
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
         name: { $ref: "#/components/schemas/WorkloadName" }
 
     VolumeMountSpec:

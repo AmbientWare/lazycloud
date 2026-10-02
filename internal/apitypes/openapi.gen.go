@@ -2191,21 +2191,6 @@ func (e WorkloadKind) Valid() bool {
 	}
 }
 
-// Defines values for WorkloadRefKind.
-const (
-	WorkloadRefKindFunction WorkloadRefKind = "function"
-)
-
-// Valid indicates whether the value is a known member of the WorkloadRefKind enum.
-func (e WorkloadRefKind) Valid() bool {
-	switch e {
-	case WorkloadRefKindFunction:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for WorkloadState.
 const (
 	WorkloadStateActive  WorkloadState = "active"
@@ -5370,13 +5355,12 @@ type WorkloadPerformance struct {
 
 // WorkloadRef defines model for WorkloadRef.
 type WorkloadRef struct {
-	App  AppName         `json:"app"`
-	Kind WorkloadRefKind `json:"kind"`
-	Name WorkloadName    `json:"name"`
-}
+	App AppName `json:"app"`
 
-// WorkloadRefKind defines model for WorkloadRef.Kind.
-type WorkloadRefKind string
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
+}
 
 // WorkloadSpec One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function.
 type WorkloadSpec struct {

@@ -4018,8 +4018,7 @@ export interface components {
         VolumeFilePath: string;
         WorkloadRef: {
             app: components["schemas"]["AppName"];
-            /** @enum {string} */
-            kind: "function";
+            kind: components["schemas"]["WorkloadKind"];
             name: components["schemas"]["WorkloadName"];
         };
         /** @description A volume, or with `cloud_bucket` an S3 bucket, mounted into every container of the workload. A platform volume is created on first use. */
@@ -11531,7 +11530,6 @@ export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<compon
 export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "start_failed", "system", "dependency_failed"];
 export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogEntry"]["stream"]> = ["stdout", "stderr", "system"];
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
-export const workloadRefKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadRef"]["kind"]> = ["function"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
 export const diskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskStatus"]> = ["detached", "attached", "saving"];
 export const artifactStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Artifact"]["state"]> = ["uploading", "stored"];

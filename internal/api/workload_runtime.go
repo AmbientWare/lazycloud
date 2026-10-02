@@ -25,7 +25,7 @@ func pageArgs(cursor *string, limit *int) (string, int) {
 func secretOut(s secrets.Secret) apitypes.Secret {
 	used := make([]apitypes.WorkloadRef, len(s.UsedBy))
 	for n, u := range s.UsedBy {
-		used[n] = apitypes.WorkloadRef{App: u.App, Kind: apitypes.WorkloadRefKind(u.Kind), Name: u.Workload}
+		used[n] = apitypes.WorkloadRef{App: u.App, Kind: apitypes.WorkloadKind(u.Kind), Name: u.Workload}
 	}
 	return apitypes.Secret{Name: s.Name, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, UsedBy: used}
 }

@@ -437,12 +437,6 @@ class VolumeRelativePath(RootModel[str]):
     ]
 
 
-class WorkloadRef(BaseModel):
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    kind: Literal["function"]
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-
-
 class CloudBucketSpec(BaseModel):
     bucket: Annotated[str, Field(max_length=63, min_length=3)]
     prefix: Annotated[
@@ -472,22 +466,6 @@ class CloudBucketSpec(BaseModel):
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
     ] = None
-
-
-class Volume(BaseModel):
-    id: UUID
-    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
-    size_bytes: Annotated[int, Field(description="Bytes stored at the last measurement.")]
-    size_measured_at: AwareDatetime | None = None
-    created_at: AwareDatetime
-    used_by: Annotated[
-        list[WorkloadRef], Field(description="Workloads whose active release mounts the volume.")
-    ]
-
-
-class VolumePage(BaseModel):
-    volumes: list[Volume]
-    next_cursor: str | None = None
 
 
 class CreateVolumeRequest(BaseModel):
@@ -630,32 +608,6 @@ class DiskStatus(str, Enum):
     detached = "detached"
     attached = "attached"
     saving = "saving"
-
-
-class Disk(BaseModel):
-    id: UUID
-    name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
-    size_bytes: int
-    stored_bytes: Annotated[
-        int, Field(description="Bytes the disk's published generations occupy in the object store.")
-    ]
-    generation: Annotated[
-        int, Field(description="The newest published generation; 0 before the first.")
-    ]
-    status: DiskStatus
-    holder_container_id: Annotated[
-        UUID | None, Field(description="The container holding the disk while attached or saving.")
-    ] = None
-    holder: Annotated[
-        WorkloadRef | None, Field(description="The workload whose container holds the disk.")
-    ] = None
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-
-
-class DiskPage(BaseModel):
-    disks: list[Disk]
-    next_cursor: str | None = None
 
 
 class State(str, Enum):
@@ -2886,26 +2838,10 @@ class LifecycleHooks(BaseModel):
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
 
 
-class Secret(BaseModel):
-    name: Annotated[
-        str,
-        Field(
-            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
-            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
-        ),
-    ]
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-    used_by: Annotated[
-        list[WorkloadRef], Field(description="Workloads whose active release receives the secret.")
-    ]
-
-
-class SecretPage(BaseModel):
-    secrets: list[Secret]
-    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
-        None
-    )
+class WorkloadRef(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    kind: WorkloadKind
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
 
 class VolumeMountSpec(BaseModel):
@@ -2919,6 +2855,48 @@ class VolumeMountSpec(BaseModel):
     ] = None
     read_only: bool = False
     cloud_bucket: CloudBucketSpec | None = None
+
+
+class Volume(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+    size_bytes: Annotated[int, Field(description="Bytes stored at the last measurement.")]
+    size_measured_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release mounts the volume.")
+    ]
+
+
+class VolumePage(BaseModel):
+    volumes: list[Volume]
+    next_cursor: str | None = None
+
+
+class Disk(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
+    size_bytes: int
+    stored_bytes: Annotated[
+        int, Field(description="Bytes the disk's published generations occupy in the object store.")
+    ]
+    generation: Annotated[
+        int, Field(description="The newest published generation; 0 before the first.")
+    ]
+    status: DiskStatus
+    holder_container_id: Annotated[
+        UUID | None, Field(description="The container holding the disk while attached or saving.")
+    ] = None
+    holder: Annotated[
+        WorkloadRef | None, Field(description="The workload whose container holds the disk.")
+    ] = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class DiskPage(BaseModel):
+    disks: list[Disk]
+    next_cursor: str | None = None
 
 
 class AppPage(BaseModel):
@@ -3384,6 +3362,28 @@ class Task(BaseModel):
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     failure: TaskFailure | None = None
+
+
+class Secret(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release receives the secret.")
+    ]
+
+
+class SecretPage(BaseModel):
+    secrets: list[Secret]
+    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
+        None
+    )
 
 
 class WorkloadDetail(BaseModel):
