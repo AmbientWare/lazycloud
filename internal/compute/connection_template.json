@@ -72,20 +72,30 @@
               {
                 "Sid": "LaunchTagged",
                 "Effect": "Allow",
-                "Action": ["ec2:RunInstances", "ec2:CreateTags"],
+                "Action": "ec2:RunInstances",
                 "Resource": [
                   {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:network-interface/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:spot-instances-request/*"}
+                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*"}
                 ],
                 "Condition": {"StringEquals": {"aws:RequestTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+              },
+              {
+                "Sid": "TagAtLaunch",
+                "Effect": "Allow",
+                "Action": "ec2:CreateTags",
+                "Resource": [
+                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
+                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*"}
+                ],
+                "Condition": {"StringEquals": {"ec2:CreateAction": "RunInstances", "aws:RequestTag/lazycloud:fleet": {"Ref": "FleetName"}}}
               },
               {
                 "Sid": "LaunchInNetwork",
                 "Effect": "Allow",
                 "Action": "ec2:RunInstances",
                 "Resource": [
+                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:network-interface/*"},
+                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:spot-instances-request/*"},
                   {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:subnet/*"},
                   {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"},
                   {"Fn::Sub": "arn:${AWS::Partition}:ec2:*::image/*"},

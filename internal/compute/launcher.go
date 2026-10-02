@@ -43,6 +43,9 @@ type launchTarget struct {
 	// under; its identity proof must name nodeRole.
 	authorization *uuid.UUID
 	nodeRole      string
+	// account is a connection host's AWS account, which the node image
+	// is shared with; empty for platform hosts.
+	account string
 }
 
 // Launch starts instances for requested hosts. Each launch is claimed with
@@ -85,9 +88,15 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	if !ok {
 		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
 	}
-	image, ok := c.nodeImage(h.ConnectionID == nil, h.Region, h.GpuCount > 0)
+	image, ok := c.nodeImage(h.Region, h.GpuCount > 0)
 	if !ok {
 		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false)
+	}
+	if err := c.shareImage(ctx, target, h.Region, image); err != nil {
+		if accessDenied(err) || strings.HasPrefix(awsCode(err), "InvalidAMI") {
+			return false, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false)
+		}
+		return false, fmt.Errorf("share node image: %w", err)
 	}
 	tags := []ec2types.Tag{
 		{Key: aws.String(tagFleet), Value: aws.String(c.fleet.Name)},
@@ -170,12 +179,13 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	return true, nil
 }
 
-// nodeImage is the AMI a host launches from. Platform hosts use the baked
-// images when the fleet names them; a region the bake did not reach has
-// none. Connection hosts launch from the stock images.
-func (c *Compute) nodeImage(platform bool, region string, gpu bool) (string, bool) {
+// nodeImage is the AMI a host launches from: the baked image of its region
+// when the fleet names them, for platform and connection hosts alike; a
+// region the bake did not reach has none. A fleet without images (local
+// development) launches the stock ones, which carry no gVisor.
+func (c *Compute) nodeImage(region string, gpu bool) (string, bool) {
 	images := c.fleet.Images
-	if !platform || images == nil {
+	if images == nil {
 		if gpu {
 			return gpuImage, true
 		}
@@ -187,6 +197,27 @@ func (c *Compute) nodeImage(platform bool, region string, gpu bool) (string, boo
 	}
 	image, ok := byRegion[region]
 	return image, ok && image != ""
+}
+
+// shareImage grants a connection's account launch permission on a baked
+// image, with the platform's credentials, before the account launches it.
+// Adding a permission the account holds already changes nothing, so every
+// launch shares again and no record is kept. The images hold public
+// software only; the agent and its credentials arrive at boot.
+func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, image string) error {
+	if target.account == "" || strings.HasPrefix(image, "resolve:ssm:") {
+		return nil
+	}
+	_, err := c.aws().ec2(awsScope{key: string(KindPlatform)}, region).ModifyImageAttribute(ctx, &ec2.ModifyImageAttributeInput{
+		ImageId: aws.String(image),
+		LaunchPermission: &ec2types.LaunchPermissionModifications{
+			Add: []ec2types.LaunchPermission{{UserId: aws.String(target.account)}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("modify image attribute: %w", err)
+	}
+	return nil
 }
 
 // failLaunch fails a host that could not launch; cool also skips its offer
@@ -247,7 +278,7 @@ func (c *Compute) launchTarget(ctx context.Context, connection *uuid.UUID, regio
 	}
 	return launchTarget{
 		scope: scope, network: network, instanceProfile: deref(row.NodeInstanceProfile),
-		authorization: &row.AuthorizationID, nodeRole: deref(row.NodeRoleArn),
+		authorization: &row.AuthorizationID, nodeRole: deref(row.NodeRoleArn), account: accountOfRole(row.RoleArn),
 	}, nil
 }
 

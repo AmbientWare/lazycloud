@@ -325,3 +325,7 @@ func describeStacksReply(s cfnStack) awsReply {
 func deleteStackReply() awsReply {
 	return ok(`<DeleteStackResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"><ResponseMetadata><RequestId>req-0000</RequestId></ResponseMetadata></DeleteStackResponse>`)
 }
+
+func modifyImageAttributeReply() awsReply {
+	return ok(`<ModifyImageAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><return>true</return></ModifyImageAttributeResponse>`)
+}
