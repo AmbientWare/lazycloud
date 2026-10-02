@@ -64,7 +64,7 @@ All four plan steps are done.
   OpenAPI descriptions of `warm_target`, `FleetNode.ready` and
   `FleetSummary.plan`; migration 0006, index `hosts_platform` on platform
   hosts that still exist, so Nodes and the rollout skip deleted history
-  (`TestFleetAdminReadsStayFlatAsDeletedHostsGrow`: 2 and 42 buffers with
+  (`TestFleetAdminReadsStayFlatAsDeletedHostsGrow`: 42 buffers each with
   1,000 or 20,000 deleted hosts; 646 and 686 without the index).
 - The rollout's connected rule matches `fleetStateOf`, including an emptied
   consolidating host

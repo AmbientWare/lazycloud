@@ -15,8 +15,7 @@ import (
 const fleetRollout = `-- name: FleetRollout :many
 select (case
     when h.phase = 'draining' or (h.phase = 'ready' and ((h.capacity_state <> 'available'
-            and (h.capacity_reason <> $1::text
-                or exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')))
+            and (h.capacity_reason <> $1::text or live.containers > 0))
         or (h.state = 'online' and coalesce(h.last_seen_at > $2::timestamptz, false))))
         then case when h.agent_version = $3::text then 'current' else 'updating' end
     when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'
@@ -24,6 +23,9 @@ select (case
     else ''
 end)::text as phase, count(*)::int as hosts
 from hosts h
+left join lateral (
+    select count(*) as containers from containers c where c.host_id = h.id and c.state <> 'stopped'
+) live on true
 where h.kind = 'platform' and h.phase <> 'deleted'
   and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
 group by 1
