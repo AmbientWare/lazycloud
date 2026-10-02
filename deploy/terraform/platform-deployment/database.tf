@@ -1,47 +1,32 @@
-# The platform's PostgreSQL: its own database, so the platform starts from a
-# fresh schema (migrations/) and the reference platform's database stays
-# intact for a rollback (reference.tf).
-#
-# Processes connect directly on port 5432. LISTEN/NOTIFY wake-ups and
-# session advisory locks need a session that stays on one backend, which a
-# transaction pooler does not give, so the branch's PgBouncer is not used.
-# pool_max_conns in the URL bounds each process's pgx pool instead.
-locals {
-  platform_database = coalesce(var.platform_database, "${var.deployment}-platform")
+# PlanetScale Neki. The branch creates the database with its default
+# configuration profile (one shard, a primary and two replicas), router
+# group and admin; size them in the dashboard or with
+# `pscale size cluster list --engine neki`. Processes connect to the router
+# on 5432 over TLS; the router pools backends itself, so there is no
+# PgBouncer. The org must have joined the Neki Platform Preview.
+resource "planetscale_neki_branch" "main" {
+  organization       = var.planetscale_organization
+  database           = var.deployment
+  name               = "main"
+  region             = var.planetscale_region
+  deletion_protected = true
 }
 
-resource "planetscale_postgres_branch" "platform" {
-  organization  = var.planetscale_organization
-  database      = local.platform_database
-  name          = "main"
-  major_version = var.planetscale_major_version
-  cluster_size  = var.planetscale_cluster_size
-  region        = var.planetscale_region
-
-  parameters = {
-    pgconf = {
-      max_connections = tostring(var.database_max_connections)
-    }
-  }
-}
-
-# The role the server, scheduler and migrations connect as. A branch role
-# inherits nothing by default; `postgres` lets the migrations create the
-# schema.
-resource "planetscale_postgres_branch_role" "platform" {
+# The server migrates at start, so its role needs DDL: `postgres`.
+resource "planetscale_neki_role" "platform" {
   organization    = var.planetscale_organization
-  database        = planetscale_postgres_branch.platform.database
-  branch          = planetscale_postgres_branch.platform.name
+  database        = planetscale_neki_branch.main.database
+  branch          = planetscale_neki_branch.main.name
+  name            = "platform"
   inherited_roles = ["postgres"]
 }
 
 locals {
   database_url = format(
-    "postgres://%s:%s@%s:5432/%s?sslmode=verify-full&pool_max_conns=%d",
-    urlencode(planetscale_postgres_branch_role.platform.username),
-    urlencode(planetscale_postgres_branch_role.platform.password),
-    planetscale_postgres_branch_role.platform.access_host_url,
-    planetscale_postgres_branch_role.platform.database_name,
+    "postgres://%s:%s@%s:5432/postgres?sslmode=verify-full&pool_max_conns=%d",
+    urlencode(planetscale_neki_role.platform.username),
+    urlencode(planetscale_neki_role.platform.password),
+    planetscale_neki_role.platform.access_host_url,
     var.database_pool_max_connections,
   )
 }

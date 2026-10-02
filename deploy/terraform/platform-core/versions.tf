@@ -1,21 +1,21 @@
 terraform {
-  required_version = ">= 1.10.0, < 2.0.0"
+  required_version = ">= 1.16.0, < 2.0.0"
 
-  # Coordinates come from the shared operator backend JSON.
+  # Coordinates come from the operator's backend file (deploy/terraform/README.md).
   backend "s3" {}
 
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.0"
+      version = "= 6.67.0"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.17"
+      version = "= 3.3.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.35"
+      version = "= 3.3.0"
     }
   }
 }
@@ -31,36 +31,34 @@ provider "aws" {
   }
 }
 
-# Both authenticate from the cluster this module creates, so nothing reads a
-# kubeconfig from the machine running the apply. An apply from a laptop and an
-# apply from CI then reach the same cluster the same way.
-provider "kubernetes" {
-  host                   = aws_eks_cluster.control_plane.endpoint
-  cluster_ca_certificate = base64decode(aws_eks_cluster.control_plane.certificate_authority[0].data)
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", var.name, "--region", var.region]
-  }
-}
-
-provider "helm" {
-  # Its own repository list and cache, not the one belonging to whoever is
-  # running the apply. The provider requires a cached index for every repository
-  # in the file it reads, so a developer with an unreachable repo configured for
-  # some other project fails this apply on a chart it never asked for -- which is
-  # what happened, on `sealed-secrets`. Kept inside the module so an apply from a
-  # laptop and an apply from CI resolve the same chart the same way.
-  repository_config_path = "${path.module}/.helm/repositories.yaml"
-  repository_cache       = "${path.module}/.helm/cache"
-
-  kubernetes {
+# Both reach the cluster this root creates with a token from the operator's
+# AWS identity, never a local kubeconfig.
+locals {
+  cluster_auth = {
     host                   = aws_eks_cluster.control_plane.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.control_plane.certificate_authority[0].data)
-    exec {
+    exec = {
       api_version = "client.authentication.k8s.io/v1beta1"
       command     = "aws"
       args        = ["eks", "get-token", "--cluster-name", var.name, "--region", var.region]
     }
   }
+}
+
+provider "kubernetes" {
+  host                   = local.cluster_auth.host
+  cluster_ca_certificate = local.cluster_auth.cluster_ca_certificate
+  exec {
+    api_version = local.cluster_auth.exec.api_version
+    command     = local.cluster_auth.exec.command
+    args        = local.cluster_auth.exec.args
+  }
+}
+
+provider "helm" {
+  # Its own repository list and cache, so an operator's unrelated Helm
+  # repositories cannot fail this apply.
+  repository_config_path = "${path.module}/.helm/repositories.yaml"
+  repository_cache       = "${path.module}/.helm/cache"
+  kubernetes             = local.cluster_auth
 }

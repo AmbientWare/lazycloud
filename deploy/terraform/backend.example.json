@@ -1,7 +1,0 @@
-{
-  "bucket": "lazycloud-terraform-state-000000000000",
-  "region": "us-east-1",
-  "profile": "default",
-  "encrypt": true,
-  "use_lockfile": true
-}

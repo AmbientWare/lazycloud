@@ -1,116 +1,101 @@
-data "aws_caller_identity" "current" {}
-
-data "aws_partition" "current" {}
-
-locals {
-  arn_prefix = "arn:${data.aws_partition.current.partition}"
-  account_id = data.aws_caller_identity.current.account_id
-  # Every instance the fleet launches carries lazycloud:fleet=<this>, in this
-  # account and in connected ones; launch and terminate rights hang on it.
-  fleet_name = var.deployment
-}
-
-# The identity the server and scheduler pods run as, through Pod Identity
-# (identity.tf). It is the principal customer connection roles trust
-# (LAZYCLOUD_AWS_PRINCIPAL_ARN), so its name is an external contract once a
-# customer connects.
+# The server and scheduler pods' identity, through Pod Identity. It is the
+# principal customer connection roles trust (LAZYCLOUD_AWS_PRINCIPAL_ARN),
+# so its name is an external contract once a customer connects. It holds
+# what the binaries call: S3 for objects and workspace buckets, STS for
+# host storage grants and customer connections, ECR for workload images,
+# EC2 for the fleet.
 resource "aws_iam_role" "control_plane" {
-  name        = "${var.deployment}-control-plane"
-  description = "Identity of the LazyCloud server and scheduler workloads."
-
+  name = "${var.deployment}-control-plane"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "pods.eks.amazonaws.com" }
-      Action    = ["sts:AssumeRole", "sts:TagSession"]
-    }]
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "pods.eks.amazonaws.com" }, Action = ["sts:AssumeRole", "sts:TagSession"] }]
   })
 }
 
-data "aws_iam_policy_document" "control_plane" {
-  source_policy_documents = [data.aws_iam_policy_document.reference_control_plane.json]
+# Session tags off: tags on a Pod Identity session are transitive, so every
+# role assumed onward would have to allow sts:TagSession, and customer
+# connection roles allow sts:AssumeRole alone.
+resource "aws_eks_pod_identity_association" "control_plane" {
+  for_each             = toset(["lazycloud-server", "lazycloud-scheduler"])
+  cluster_name         = local.core.cluster_name
+  namespace            = var.deployment
+  service_account      = each.value
+  role_arn             = aws_iam_role.control_plane.arn
+  disable_session_tags = true
+}
 
+locals {
+  objects_arn  = aws_s3_bucket.storage["objects"].arn
+  workload_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/*"
+  ec2_arn      = "${local.arn_prefix}:ec2:*:${local.account_id}"
+}
+
+data "aws_iam_policy_document" "control_plane" {
   statement {
-    sid       = "IssueWorkspaceStorageCredentials"
-    actions   = ["sts:AssumeRole", "sts:TagSession"]
-    resources = [aws_iam_role.workspace_storage.arn]
+    sid       = "Objects"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+    resources = ["${local.objects_arn}/*", "${local.workspace_bucket_arn}/*"]
+  }
+
+  # The server sets the dashboard's CORS rule on every bucket it presigns
+  # for, and creates each workspace bucket with its lifecycle rule.
+  statement {
+    sid       = "Buckets"
+    actions   = ["s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:PutBucketCORS"]
+    resources = [local.objects_arn, local.workspace_bucket_arn]
   }
 
   statement {
-    sid = "ManageWorkspaceBuckets"
-    actions = [
-      "s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation", "s3:ListBucket",
-      "s3:ListBucketMultipartUploads", "s3:GetBucketPolicy", "s3:PutBucketPolicy",
-      "s3:PutBucketCORS", "s3:PutLifecycleConfiguration",
-      "s3:GetBucketLogging", "s3:PutBucketLogging",
-    ]
+    sid       = "CreateWorkspaceBuckets"
+    actions   = ["s3:CreateBucket", "s3:PutLifecycleConfiguration"]
     resources = [local.workspace_bucket_arn]
   }
 
-  # The server sets the dashboard's CORS rule on the objects bucket at start.
   statement {
-    sid       = "ReadApplicationBucket"
-    actions   = ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:PutBucketCORS"]
-    resources = [aws_s3_bucket.storage["objects"].arn]
+    sid       = "HostStorageGrants"
+    actions   = ["sts:AssumeRole"]
+    resources = [aws_iam_role.workspace_storage.arn]
   }
 
+  # Customer connection roles, with their external id. Not narrowed by name:
+  # an existing-role connection names any role, and validation proves the
+  # customer's side enforces the external id.
   statement {
-    sid = "ManageApplicationAndWorkspaceObjects"
-    actions = [
-      "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
-      "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
-    ]
-    resources = ["${aws_s3_bucket.storage["objects"].arn}/*", "${local.workspace_bucket_arn}/*"]
+    sid       = "CustomerConnections"
+    actions   = ["sts:AssumeRole"]
+    resources = ["${local.arn_prefix}:iam::*:role/*"]
   }
 
+  # Builds push images, caches and snapshots, and hosts pull them, with the
+  # tokens the server mints; ECR creates each repository on first push.
   statement {
-    sid       = "AuthenticateToRegistry"
+    sid       = "RegistryLogin"
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
   }
 
-  # Builds push images, caches and filesystem images under the workload
-  # image repository's path; platform-core's creation template makes each
-  # repository on first push.
   statement {
-    sid = "PublishAndReadWorkloadImages"
+    sid = "WorkloadImages"
     actions = [
-      "ecr:BatchCheckLayerAvailability",
-      "ecr:BatchDeleteImage",
-      "ecr:BatchGetImage",
-      "ecr:CompleteLayerUpload",
-      "ecr:CreateRepository",
-      "ecr:DescribeImages",
-      "ecr:GetDownloadUrlForLayer",
-      "ecr:InitiateLayerUpload",
-      "ecr:PutImage",
-      "ecr:UploadLayerPart",
+      "ecr:CreateRepository", "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
+      "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
     ]
-    resources = [local.workload_image_repository_arn, "${local.workload_image_repository_arn}/*"]
+    resources = [local.workload_arn]
   }
 
-  # Fleet instances in this account, by RunInstances with the host id as
-  # client token. Launches must carry the fleet tag; terminations reach only
-  # tagged instances.
+  # Fleet hosts: RunInstances with the host id as client token. The
+  # launcher tags the instance and its volumes, and only tagged instances
+  # can be terminated.
   statement {
-    sid = "DescribeFleet"
-    actions = [
-      "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
-      "ec2:DescribeAvailabilityZones", "ec2:DescribeImages", "ec2:DescribeSpotPriceHistory",
-      "ssm:GetParameters",
-    ]
+    sid       = "DescribeFleet"
+    actions   = ["ec2:DescribeInstances", "ec2:DescribeSubnets"]
     resources = ["*"]
   }
 
   statement {
-    sid     = "LaunchTaggedFleetHosts"
-    actions = ["ec2:RunInstances", "ec2:CreateTags"]
-    # The launcher tags the instance and its volumes.
-    resources = [
-      "${local.arn_prefix}:ec2:*:${local.account_id}:instance/*",
-      "${local.arn_prefix}:ec2:*:${local.account_id}:volume/*",
-    ]
+    sid       = "LaunchTagged"
+    actions   = ["ec2:RunInstances", "ec2:CreateTags"]
+    resources = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*"]
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/lazycloud:fleet"
@@ -122,18 +107,15 @@ data "aws_iam_policy_document" "control_plane" {
     sid     = "LaunchInFleetNetworks"
     actions = ["ec2:RunInstances"]
     resources = [
-      "${local.arn_prefix}:ec2:*:${local.account_id}:subnet/*",
-      "${local.arn_prefix}:ec2:*:${local.account_id}:security-group/*",
-      "${local.arn_prefix}:ec2:*:${local.account_id}:network-interface/*",
-      "${local.arn_prefix}:ec2:*:${local.account_id}:spot-instances-request/*",
-      "${local.arn_prefix}:ec2:*::image/*",
+      "${local.ec2_arn}:subnet/*", "${local.ec2_arn}:security-group/*", "${local.ec2_arn}:network-interface/*",
+      "${local.ec2_arn}:spot-instances-request/*", "${local.arn_prefix}:ec2:*::image/*",
     ]
   }
 
   statement {
-    sid       = "TerminateFleetHosts"
+    sid       = "TerminateTagged"
     actions   = ["ec2:TerminateInstances"]
-    resources = ["${local.arn_prefix}:ec2:*:${local.account_id}:instance/*"]
+    resources = ["${local.ec2_arn}:instance/*"]
     condition {
       test     = "StringEquals"
       variable = "aws:ResourceTag/lazycloud:fleet"
@@ -142,7 +124,7 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   statement {
-    sid       = "PassFleetNodeRole"
+    sid       = "PassNodeRole"
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.fleet_node.arn]
     condition {
@@ -152,6 +134,7 @@ data "aws_iam_policy_document" "control_plane" {
     }
   }
 
+  # The first Spot launch in an account creates Spot's service-linked role.
   statement {
     sid       = "SpotServiceRole"
     actions   = ["iam:CreateServiceLinkedRole"]
@@ -162,19 +145,99 @@ data "aws_iam_policy_document" "control_plane" {
       values   = ["spot.amazonaws.com"]
     }
   }
-
-  # Customer connection roles, with their external id. Not narrowed to a
-  # role name: existing-role connections name any role, and the validation
-  # probe proves the customer's side enforces the external id.
-  statement {
-    sid       = "AssumeCustomerConnectionRoles"
-    actions   = ["sts:AssumeRole"]
-    resources = ["${local.arn_prefix}:iam::*:role/*"]
-  }
 }
 
 resource "aws_iam_role_policy" "control_plane" {
   name   = "control-plane"
   role   = aws_iam_role.control_plane.name
   policy = data.aws_iam_policy_document.control_plane.json
+}
+
+# Fleet instances run as this role. They prove their identity to the server
+# with a presigned GetCallerIdentity, which needs no permission; SSM lets an
+# operator open a session on a host.
+resource "aws_iam_role" "fleet_node" {
+  name = "${var.deployment}-fleet-node"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "fleet_node_ssm" {
+  role       = aws_iam_role.fleet_node.name
+  policy_arn = "${local.arn_prefix}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "fleet_node" {
+  name = aws_iam_role.fleet_node.name
+  role = aws_iam_role.fleet_node.name
+}
+
+# External Secrets' store for this namespace exchanges the secrets-reader
+# service account's token (IRSA) for this role, which reads only this
+# deployment's documents.
+resource "aws_iam_role" "secrets_reader" {
+  name = "${var.deployment}-secrets-reader"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = local.core.oidc_provider_arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = { StringEquals = {
+        "${local.core.oidc_issuer_host}:aud" = "sts.amazonaws.com"
+        "${local.core.oidc_issuer_host}:sub" = "system:serviceaccount:${var.deployment}:secrets-reader"
+      } }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "secrets_reader" {
+  name = "read-deployment-secrets"
+  role = aws_iam_role.secrets_reader.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      Resource = [aws_secretsmanager_secret.platform.arn, aws_secretsmanager_secret.operator.arn]
+    }]
+  })
+}
+
+# The Deploy workflow on main, in this deployment's GitHub environment. The
+# github root sets the repository's subject template to name the workflow
+# file. The account's GitHub OIDC provider exists outside these roots.
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+resource "aws_iam_role" "deploy" {
+  name = "${var.deployment}-deploy"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = { StringEquals = {
+        "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.github_environment}:job_workflow_ref:${var.github_repository}/.github/workflows/deploy.yml@refs/heads/main"
+      } }
+    }]
+  })
+}
+
+# Deploy reads the chart values and checks the version's images exist.
+resource "aws_iam_role_policy" "deploy" {
+  name = "deploy"
+  role = aws_iam_role.deploy.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "s3:GetObject", Resource = "${aws_s3_bucket.storage["deploy"].arn}/${aws_s3_object.values.key}" },
+      { Effect = "Allow", Action = "ecr:DescribeImages", Resource = values(local.core.release_repositories) },
+    ]
+  })
 }

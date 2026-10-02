@@ -1,43 +1,29 @@
 # Terraform roots
 
-| Root | State key | Owns |
-| --- | --- | --- |
-| platform-core | `platform-core/lazycloud.tfstate` | VPC, EKS Auto Mode cluster, node capacity, Argo CD and its root Application, OIDC provider, reference image repositories, workload image creation template |
-| platform-deployment | `platform-deployment/<deployment>.tfstate` | One deployment: database, buckets, secret documents, fleet networks and node identity, workload roles, host connection certificate, chart values |
-| cloudflare | `cloudflare/production.tfstate` | Tunnel and its credentials, platform DNS records |
-| stripe | one per Stripe account | Webhook endpoint and events |
-| images | `images/lazycloud.tfstate` | Release image repositories and role, GitHub release environment, tag rule and OIDC subject template |
+| Root | State | Owns | Credentials |
+| --- | --- | --- | --- |
+| state | local | The state bucket | AWS |
+| platform-core | `platform-core/lazycloud.tfstate` | VPC, EKS Auto Mode cluster, node capacity, Argo CD and its root Application, cluster OIDC provider, release image repositories, workload image creation template | AWS, `TF_VAR_github_app_private_key` |
+| platform-deployment | `platform-deployment/<deployment>.tfstate` | Neki database and role, buckets, secret documents, fleet networks, workload identities, deploy role, tunnel and DNS, host certificate, Stripe webhook, chart values | AWS, `CLOUDFLARE_API_TOKEN`, `PLANETSCALE_SERVICE_TOKEN_ID` and `_TOKEN`, `STRIPE_API_KEY` |
+| github | `github/lazycloud.tfstate` | Environments, tag rule, OIDC subject template, Ship and Node images roles | AWS, a repository administrator's `GITHUB_TOKEN` |
 
-Apply order for a new installation: platform-core, cloudflare,
-platform-deployment, images, stripe; then cloudflare again with the load
-balancer hostnames. Plans run from an operator machine with the `default`
-profile after `aws sts get-caller-identity` names the platform account.
-GitHub Actions never applies.
-
-## State
-
-Every root uses one private S3 bucket, its own key and a `.tflock` object.
-State contains credentials and must never be printed, committed or readable
-by application and deployment roles. Before the first init, create an
-account-qualified bucket in the platform region with public access blocked,
-bucket-owner ownership enforced, encryption and versioning on; it is not part
-of any teardown.
-
-Copy [backend.example.json](backend.example.json) to a private operator
-directory and set the bucket and region. Keep `profile` at `default` and
-`encrypt` and `use_lockfile` on; never put credentials in it, because
-Terraform copies it into local metadata and saved plans.
+Apply them in that order from an operator machine with `AWS_PROFILE=default`
+after `aws sts get-caller-identity` names the platform account, and review
+every saved plan first. GitHub Actions never applies. The state root's
+`backend` output is the backend file the others init with:
 
 ```sh
-export AWS_PROFILE=default
+terraform -chdir=deploy/terraform/state output -json backend >"$HOME/.lazycloud/operator/terraform-backend.json"
 export TF_VAR_terraform_backend_config="$HOME/.lazycloud/operator/terraform-backend.json"
-terraform -chdir=deploy/terraform/<root> init \
-  -backend-config="$TF_VAR_terraform_backend_config" -backend-config="key=<state key>"
+terraform -chdir=deploy/terraform/<root> init -backend-config="$TF_VAR_terraform_backend_config" -backend-config="key=<state>"
 ```
 
-The roots moved from `deploy/<root>` on main to `deploy/terraform/<root>`
-with their state keys unchanged; an initialized working directory carries
-over with `init` in the new path.
+State holds credentials (the database password, tunnel secret, master key
+and webhook secret); never print or share it. platform-deployment needs a
+second apply once the chart has created its load balancers: set
+`host_load_balancer` and `tcp_load_balancer` to the hostnames of the
+`server-hosts` and `server-tcp` Services.
 
 `deploy/check.sh` runs `fmt -check`, `init -backend=false` with the
-committed lock files and `validate` on every root. Nothing there reaches AWS.
+committed lock files and `validate` on every root; nothing there reaches a
+provider.

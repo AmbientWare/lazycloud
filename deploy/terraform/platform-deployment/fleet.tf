@@ -1,53 +1,43 @@
-# The fleet's regional networks in this account. The scheduler launches
-# platform hosts into them (LAZYCLOUD_FLEET_NETWORKS); the node image bake
-# finds its subnet by their tags. A new region is a provider alias in
-# versions.tf, a module call here and an entry in fleet_networks.
+# The fleet's networks, one per US region the compute owner buys in. A new
+# region is a provider alias in versions.tf, a module call here and an entry
+# in fleet_networks.
 locals {
-  fleet_launch_tag = { "cloud-pool:managed-by" = "control-plane" }
-
+  fleet_tags = { "lazycloud:fleet" = local.fleet_name }
   fleet_networks = {
-    (var.region) = module.fleet
-    "us-east-2"  = module.fleet_ohio
-    "us-west-1"  = module.fleet_california
-    "us-west-2"  = module.fleet_west
+    (var.region) = module.fleet_us_east_1.network
+    "us-east-2"  = module.fleet_us_east_2.network
+    "us-west-1"  = module.fleet_us_west_1.network
+    "us-west-2"  = module.fleet_us_west_2.network
   }
 }
 
-module "fleet" {
+module "fleet_us_east_1" {
   source = "./fleet-network"
-
-  deployment = var.deployment
-  name       = "${var.deployment}-fleet"
-  cidr       = var.fleet_cidr
-  launch_tag = local.fleet_launch_tag
+  name   = "${var.deployment}-fleet"
+  cidr   = var.fleet_cidr
+  tags   = local.fleet_tags
 }
 
-module "fleet_west" {
+module "fleet_us_east_2" {
   source    = "./fleet-network"
-  providers = { aws = aws.west }
-
-  deployment = var.deployment
-  name       = "${var.deployment}-fleet-west"
-  cidr       = var.fleet_cidr
-  launch_tag = local.fleet_launch_tag
+  providers = { aws = aws.us_east_2 }
+  name      = "${var.deployment}-fleet"
+  cidr      = var.fleet_cidr
+  tags      = local.fleet_tags
 }
 
-module "fleet_ohio" {
+module "fleet_us_west_1" {
   source    = "./fleet-network"
-  providers = { aws = aws.ohio }
-
-  deployment = var.deployment
-  name       = "${var.deployment}-fleet-ohio"
-  cidr       = var.fleet_cidr
-  launch_tag = local.fleet_launch_tag
+  providers = { aws = aws.us_west_1 }
+  name      = "${var.deployment}-fleet"
+  cidr      = var.fleet_cidr
+  tags      = local.fleet_tags
 }
 
-module "fleet_california" {
+module "fleet_us_west_2" {
   source    = "./fleet-network"
-  providers = { aws = aws.california }
-
-  deployment = var.deployment
-  name       = "${var.deployment}-fleet-california"
-  cidr       = var.fleet_cidr
-  launch_tag = local.fleet_launch_tag
+  providers = { aws = aws.us_west_2 }
+  name      = "${var.deployment}-fleet"
+  cidr      = var.fleet_cidr
+  tags      = local.fleet_tags
 }

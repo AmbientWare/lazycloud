@@ -1,67 +1,34 @@
-# Read by `deploy/platform-deployment` through `terraform_remote_state`. Each is
-# a fact one deployment needs to attach itself to this cluster; nothing here is
-# a secret.
+# Read by platform-deployment and github through terraform_remote_state.
 
 output "cluster_name" {
-  description = "Cluster `kubectl` targets and Pod Identity associations name."
-  value       = aws_eks_cluster.control_plane.name
-}
-
-output "cluster_arn" {
-  value = aws_eks_cluster.control_plane.arn
-}
-
-output "cluster_endpoint" {
-  description = "Kubernetes API endpoint."
-  value       = aws_eks_cluster.control_plane.endpoint
+  value = aws_eks_cluster.control_plane.name
 }
 
 output "region" {
-  description = "Checked against a deployment's own region before it attaches."
-  value       = var.region
-}
-
-output "vpc_id" {
-  value = aws_vpc.cluster.id
+  value = var.region
 }
 
 output "vpc_cidr_block" {
-  description = "CIDR of the cluster VPC."
-  value       = aws_vpc.cluster.cidr_block
-}
-
-output "subnet_ids" {
-  value = aws_subnet.cluster[*].id
+  value = aws_vpc.cluster.cidr_block
 }
 
 output "ecr_registry" {
-  description = "Registry every deployment pulls control-plane images from."
-  value       = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+  value = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
 }
 
-output "ecr_repository_prefix" {
-  description = "Path under the registry every image repository shares."
-  value       = var.name
+output "release_registry" {
+  description = "Registry path of the release images, <registry>/<name>/release."
+  value       = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${var.name}/release"
 }
 
-output "ecr_repositories" {
-  description = "Repository URL per image name."
-  value       = { for name, repository in aws_ecr_repository.image : name => repository.repository_url }
-}
-
-output "ecr_repository_arns" {
-  description = "Repositories of the reference platform's images, which its deploy role may push."
-  value       = [for repository in aws_ecr_repository.image : repository.arn]
+output "release_repositories" {
+  description = "Repository ARN per release image."
+  value       = { for name, repository in aws_ecr_repository.release : name => repository.arn }
 }
 
 output "workload_image_repository" {
-  description = "Immutable OCI repository holding user image layers."
-  value       = aws_ecr_repository.workload_images.repository_url
-}
-
-output "workload_image_repository_arn" {
-  description = "Repository the control plane may vend scoped push and pull credentials for."
-  value       = aws_ecr_repository.workload_images.arn
+  description = "Path under the registry of every workload image repository."
+  value       = aws_ecr_repository_creation_template.workload_images.prefix
 }
 
 output "oidc_provider_arn" {
@@ -69,14 +36,5 @@ output "oidc_provider_arn" {
 }
 
 output "oidc_issuer_host" {
-  description = "Issuer without the scheme, which is how IAM condition keys name it."
-  value       = trimprefix(aws_eks_cluster.control_plane.identity[0].oidc[0].issuer, "https://")
-}
-
-output "storage_class_name" {
-  value = kubernetes_storage_class_v1.ebs.metadata[0].name
-}
-
-output "argocd_namespace" {
-  value = var.argocd_namespace
+  value = trimprefix(aws_eks_cluster.control_plane.identity[0].oidc[0].issuer, "https://")
 }
