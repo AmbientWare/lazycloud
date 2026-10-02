@@ -81,17 +81,219 @@ keep each behind a separate commit so it can be dropped.
 
 ## Progress
 
+Branch `fleet-policy` from `fleet-capacity-plan` at
+08acf1dbcf9d4483d075f62d40b9739fcdc5109b. All seven plan steps are done,
+plus P2 in its own commit (f35324ec) and one `Propose:` commit in billing
+(4bcce9b4).
+
+Parity lines marked "Packet: policy", with the tests that deliver them:
+
+- Markets, headroom in capacity, warm and stopped floors, GPU shares:
+  `TestFleetMarketsAreSpotOnDemandAndTheReservedCards`,
+  `TestFleetTargetsKeepTheFloorOrAShareOfLoad`.
+- Forecast raises targets: `TestFleetForecastRaisesTargetsAndTheReserveIsTheRest`.
+- Spot reserve fits the largest running Spot host:
+  `TestSpotReserveTakesTheLargestRunningSpotHostsWork`.
+- Hibernation target: `TestHibernationTargetIsTheReserveWhenEveryRecentShapeFits`.
+- A refused hibernation keeps its slot: `TestPlanBuysOneHibernatingReserveAndWaitsForIt`.
+- Quiet market releases the largest idle host, loaded the smallest:
+  `TestPlanQuietMarketsReleaseTheLargestIdleHostFirstAndLoadedOnesTheSmallest`.
+- Demand forecast, 32 shapes, scheduled invocations:
+  `TestForecastUsesOnlyRecentArrivalsAndKeepsPending`,
+  `TestForecastHorizonsCountPendingAndTheBurstOnce`,
+  `TestForecastBoundsShapesWithoutHidingOneAndRoundsUp`,
+  `TestScheduledDemandUsesItsHorizonWithoutBecomingAnArrivalRate`,
+  `TestShortJobsAndSeparateSchedulesUseOccupancy`,
+  `TestScheduledRunsShareConcurrencyAndWarmContainers`.
+- Activation horizons: `TestFragmentedReservesCannotShortenALargeRequestsForecast`,
+  `TestResumeEstimatesTakeColdBootsFromMatchingHardware`,
+  `TestHeldPreparationsDoNotSetServingTiming`,
+  `TestActivationFailuresFallBackToProvisionAndPlainStopsBoot`.
+- Location demand: `TestPlanBuysCapacityForLocationDemandAndProtectsItsHosts`,
+  `TestPlanDoesNotResumeAReserveTheLocationCannotUse`.
+- GPU model choice: `TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard`,
+  `TestGPUWorkFallsThroughToTheModelItListsNext`.
+- Resume before buying, current release only, borrowing:
+  `TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases`,
+  `TestPlanResumesOnlyAReserveReadyForTheCurrentAgent`,
+  `TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget`.
+- Bounded packing and deficit cover: `TestCoverChoosesTheLowerTotalCostForRequiredCapacity`,
+  `TestCoverFitsALargeRequestOnOneHostDespiteAggregateRoom`,
+  `TestCoverCountsEachContainerFittingANode`, `TestCoverReportsWhatNoOfferCanPlace`,
+  `TestCoverStopsAtItsNodeBoundAndReturnsTheBestPartial`,
+  `TestCoverPacksTwoSixCPURequestsOntoOneLargerHost`,
+  `TestPlanCoversABatchOfContainersTogether`,
+  `TestPlanBuysTheLowerTotalCostForTheWarmTarget`,
+  `TestPlanFitsALargeRecentShapeOnOneHostDespiteAggregateRoom`.
+- 16 actions per market and pass: `TestPlanCapsGrowthPerMarketAndPass`.
+- Demand and recovery hold elective growth:
+  `TestPlanKeepsElectiveGrowthOutOfDemandAndRecovery`.
+- Pending launches: `TestPlanPendingCapacityNeverJustifiesRetiringReadyCapacity`.
+- Purchase margin: `TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue`.
+- Shortfall, unmet shapes, reason: `TestPlanReportsARecentShapeNoOfferFits`.
+- Catalog, regions, on-demand table, hibernation flags, usable capacity:
+  `TestFleetCatalogPricesMatchTheAWSPriceList`,
+  `TestFleetCatalogHibernatesOnlyCPUTypesUnderTheRAMLimit`,
+  `TestFleetCatalogUsableMemoryIsWhatHostsReport`.
+- Offers, ranking, exact fill, Spot use, interruption and zone, complete
+  cost, region cooling, zone spreading:
+  `TestOffersNeverIncludeANodeTheRequestWouldExactlyFill`,
+  `TestOffersRespectInterruptionToleranceAndZone`,
+  `TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard`,
+  `TestOfferCostIsComputeRootDiskAndPublicIPv4`,
+  `TestRefusalsCoolTheOfferAndTwoInARegionMoveBuyingToTheNext`,
+  `TestOffersPreferTheRegionOrderThenTheEmptierZone`.
+- Return to reserve, refresh, reserve retirement, bought reserves:
+  `TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort`,
+  `TestPlanRefreshesAStaleReserveTheTargetNeedsAndRetiresOneItDoesNot`,
+  `TestPlanRetiresAPendingReserveBeforeTheReadyOneItWouldReplace`,
+  `TestPlanAResumedReserveCannotCoverRetiringTheLastReadyOne`,
+  `TestPlanKeepsVerifiedHibernationOverAPlainStop`,
+  `TestPlanCountsAnUnverifiedHibernationAsReadyButNotSaved`,
+  `TestPlanCountsEachHostOnceAndWarmRoomOnlyFromServingHosts`,
+  `TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt`,
+  `TestPlanDrainsAHostThatCannotHibernateWhenTheReserveShouldHibernate`.
+- Region cooling with location demand:
+  `TestLocationDemandStillBuysInACoolingRegionNothingElseServes`.
+- Retention, consolidation, rightsizing, pinned work:
+  `TestPlanKeepsTheOnlyHostThatFitsRecentRequests`,
+  `TestPlanKeepsIdleHostsUntilBilledAndLightLongEnough`,
+  `TestPlanConsolidatesOnlyMovableWorkAndKeepsTheWarmTarget`,
+  `TestPlanConsolidationKeepsItsDestination`,
+  `TestPlanConsolidatesOneHostAtATimeAndWaitsOutTheCooldown`,
+  `TestPlanRightsizesAnIdleHostAndKeepsItUntilTheReplacementServes`.
+- Scenarios: `TestFleetScenarios`, `TestFleetSpendAtZeroLoadIsTheFloorsCost`,
+  `TestFleetQuotaScenario`.
+- P2: `TestOffersSkipTypesAKnownVCPUQuotaCannotHold`,
+  `TestAQuotaRefusalCoolsTheWholeClassInItsRegionAndMarket`,
+  `TestCoverStaysWithinTheQuotaRoomAcrossNodes`,
+  `TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves`.
+
+Contract notes for the planner and provider packets:
+
+- `FleetHost.State` uses `FleetState`; fleet_plan.go adds `preparing`,
+  `stopping`, `stopped`, `hibernate_unverified` and `image_saved`, so the
+  api-web packet must not declare them again. A host bought for reserve, or
+  refreshing, counts as `preparing` from `requested` until it stops; a
+  serving purchase in `requested` to `joining`, or a `resuming` host, is
+  `starting`.
+- `FleetHost.Stoppable` is set for on-demand hosts and persistent-request
+  Spot reserves; a one-time Spot host only drains.
+- `ReserveMode` (`stop`, `hibernate`) is declared in fleet_plan.go for the
+  provider's `reserve_mode` column.
+- `OfferCooldown.Quota` marks a quota refusal; the provider's refusal
+  mapping sets it. `OfferInputs.Quotas` holds what Service Quotas last
+  reported; a quota never read is no limit.
+- `CatalogTypeNamed`, `CatalogType.RootGiB` and `Hibernates` are what the
+  launcher needs for hibernation options and root size.
+- `ReportedMemory` is keyed by instance type and holds the memory hosts of
+  that type advertise (hosts.memory_bytes), not MemTotal.
+- PlanFleet does not cool the offer of a bought host that joined and still
+  cannot take its container; capacity_controller.go does that today and
+  the planner keeps it.
+
 ## Intentional differences
 
 - Plans are actions naming hosts and offers, not per-pool counts: there are
   no pools.
 - One covering search serves demand packing and reserve deficits; the
-  reference had two (capacity_acquisition.py, fleet_policy.py:948-1051).
+  reference had two (capacity_acquisition.py, fleet_policy.py:948-1051). It
+  keeps 128 states per depth for both, the reference's deficit width; the
+  reference packed demand with 64. Demand items are grouped by shape, so a
+  2,000-container batch costs what a handful of shapes cost.
 - Backlog demand is not forecast here; it arrives as pending containers.
+- Usable capacity follows the rewrite's agent (the larger of 500m or 10% of
+  CPU, 512 MiB or 10% of memory, memory at 94% of nominal until reported)
+  instead of the reference's divide by 1.10 and 125% memory reservation.
+  Margin revenue uses the same usable numbers, so it is a little higher than
+  the reference for the same host.
+- Spot work borrows an on-demand reserve against the stopped target this
+  pass computes, not the last published one. Demand and targets are planned
+  in one pass, so there is no "without a plan" case.
+- Pending request shapes join the forecast's shapes before the 32-shape
+  bound, so the bound always holds; the reference added them after.
+- A leaving host returns to the reserve only if it can stop the way the
+  market wants: a market with a hibernation target drains a host launched
+  without hibernation and buys a hibernating reserve, rather than holding
+  both and retiring the plain one a pass later.
+- Region cooling counts distinct type and market pairs refused in the
+  window, from cooldown rows; the reference counted pool units.
+- Two covers of equal cost keep the one with fewer hosts.
+- Location demand matches region and zone only. The rewrite has one
+  architecture (amd64) and one runtime, so architecture and runtime need no
+  matching.
+- "A provider that may not purchase holds no reserves" has no case: the
+  platform fleet without networks gets no offers, and connection hosts
+  never enter the plan.
+- The 1-second billing quantum is a billing fact; the planner uses only the
+  60-second minimum.
+- Market reasons are more specific: waiting for demand or recovery, growth
+  continues next pass (action cap), fleet host limit, no approved offer.
+- Catalog regions follow AWS's price list: us-west-1 sells no g5, g6, g6e,
+  p4d, p4de or p5.4xlarge, and us-east-2 no p4de. The reference listed every
+  type in every region and relied on the price table to drop them.
 
 ## Evidence
 
+- `go test -race -count=1 -run 'Fleet|Cover|Forecast|Rank|Offer|Plan|Purchase|Refusal|Spot|Hibernat|Scheduled|Activation|Resume|Fragmented|HeldPrep|ShortJobs|Quota|AnyGPU' ./internal/compute`
+  passes; `./check.sh` passes; golangci-lint reports 0 issues.
+- On-demand prices: every catalog price matches AWS's public EC2 price list
+  published 2026-09-25 (testdata/fleet/on_demand_prices.json), including the
+  reference's 2026-09-18 table. us-west-1 prices for m7i.large (117,600),
+  m7i.xlarge (235,200), c7i.2xlarge (445,200) and r7i.2xlarge (588,000) µ$/h
+  replace the rewrite's flat 15%.
+- Spot snapshot: testdata/fleet/spot_prices.json, 158 regional Linux quotes
+  from AWS's public Spot price page data, fetched 2026-10-02. It has no g6e,
+  p4de, p5.4xlarge or p5en prices and no per-zone prices; the scenarios
+  apply each regional price to every zone.
+- At the 2026-09-10 rate card the 30% margin refuses on-demand g5.xlarge,
+  g6.xlarge, g6e.xlarge, g6e.2xlarge, p5.4xlarge, p5.48xlarge and
+  p5en.48xlarge, and every on-demand CPU host for Spot-tolerant work (its
+  lower rate). A 1-GPU A10G or L4 request therefore buys a 2xlarge, and
+  Spot-tolerant CPU work buys only Spot. The reference refused the same.
+- Floors at zero load: m7i.xlarge Spot and on-demand warm spares plus
+  c6a.2xlarge Spot and on-demand stopped reserves, $0.326/h ($238/month).
+- Scenarios (`go test -v -run 'FleetScenarios|FleetQuotaScenario'`), one
+  zone set in us-east-2, provision 300 s, resume 30 s, boot 120 s:
+
+  | Scenario | Policy | $/h | waits > 30 s | p95 wait | launches |
+  | --- | --- | --- | --- | --- | --- |
+  | quiet day (24 h) | reference | 0.328 | 0/0 | 0 | 4 |
+  | quiet day | demand only (today) | 0.000 | 0/0 | 0 | 0 |
+  | burst, 40 x 1 vCPU | reference | 0.926 | 31/40 | 5m | 14 |
+  | burst | today | 0.446 | 40/40 | 5m | 6 |
+  | scheduled burst | reference | 2.174 | 0/40 | 0 | 15 |
+  | scheduled burst | today | 0.446 | 40/40 | 5m | 6 |
+  | reserve depletion, 3 x 12 x 2 vCPU | reference | 1.325 | 8/36 | 5m | 19 |
+  | reserve depletion | today | 0.456 | 12/36 | 5m | 6 |
+  | GPU burst, 4 x T4 | reference | 1.138 | 4/4 | 5m | 14 |
+  | GPU burst | today | 0.461 | 4/4 | 5m | 4 |
+  | 5 x 8 and 3 x 16 vCPU | reference | 1.739 | 8/8 | 5m | 16 |
+  | 5 x 8 and 3 x 16 vCPU | today | 1.058 | 8/8 | 5m | 5 |
+  | Oregon G Spot quota 0 (1 h) | quota unknown | 0.374 | n/a | n/a | 60 refused |
+  | Oregon G Spot quota 0 | P2 | 0.374 | n/a | n/a | 0 refused |
+
+  The reference floors absorb about ten small containers at once; a GPU or
+  8 vCPU burst still waits a full provision because no floor holds those
+  shapes. After a burst the forecast keeps buying for the observed rate for
+  up to 10 minutes, which is most of the extra spend. No pass bought for a
+  container that a ready reserve fit.
+
 ## Gaps and unverified boundaries
+
+- The `default-test` role (lazycloud-default-test-operator in 534742592531)
+  is denied ec2:DescribeInstanceTypeOfferings, ec2:DescribeInstanceTypes,
+  ec2:DescribeSpotPriceHistory, servicequotas:GetServiceQuota and
+  pricing:GetProducts. `TestRealEC2SellsTheCatalogWhereItIsPriced` is
+  written and fails on the first call. Unverified until the role allows
+  them: per-zone offerings, the hibernation flags (taken from the reference
+  and, for m7i.large, m7i.xlarge, c7i.2xlarge and r7i.2xlarge, from AWS's
+  documentation), and per-zone Spot prices.
+- The Spot snapshot is regional public page data, not
+  DescribeSpotPriceHistory. Rerun the acceptance test with
+  `LAZYCLOUD_FLEET_SPOT_SNAPSHOT=testdata/fleet/spot_prices.json` once the
+  role allows it.
+- No AWS resources were created.
 
 ## Verification
 
