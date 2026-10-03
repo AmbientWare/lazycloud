@@ -55,6 +55,17 @@ type launchTarget struct {
 // instance. A refusal for capacity or quota cools the offer down and fails
 // the host, so the controller buys another offer on its next pass.
 func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) {
+	if c.config.ServedRelease != "" {
+		release, err := c.TargetRelease(ctx)
+		switch {
+		case errors.Is(err, ErrNotFound):
+		case err != nil:
+			return 0, err
+		case release.Version != c.config.ServedRelease:
+			logger.InfoContext(ctx, "launches wait for the served agent release", "target", release.Version, "served", c.config.ServedRelease)
+			return 0, nil
+		}
+	}
 	claimed, err := c.queries.ClaimLaunches(ctx, ClaimLaunchesParams{LeaseSeconds: launchLease.Seconds(), BatchSize: 10})
 	if err != nil {
 		return 0, fmt.Errorf("claim launches: %w", err)
