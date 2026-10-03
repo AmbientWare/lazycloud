@@ -397,3 +397,92 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 		t.Fatalf("result: %d %+v", status, result)
 	}
 }
+
+// runEvents posts a RunTask request and returns the response with a reader
+// of its events.
+func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (*http.Response, func() (apitypes.TaskRunEvent, bool)) {
+	e.t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(e.t.Context(), "POST", e.url+path, bytes.NewReader(encoded))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+e.owner)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Cleanup(func() { _ = resp.Body.Close() })
+	scanner := bufio.NewScanner(resp.Body)
+	return resp, func() (apitypes.TaskRunEvent, bool) {
+		for scanner.Scan() {
+			if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+				continue
+			}
+			var event apitypes.TaskRunEvent
+			if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+				e.t.Fatalf("event %q: %v", scanner.Text(), err)
+			}
+			return event, true
+		}
+		return apitypes.TaskRunEvent{}, false
+	}
+}
+
+func TestRunTaskStreamsTheTaskItsLogsAndResult(t *testing.T) {
+	e := newEnv(t)
+	e.deploy()
+	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
+	raw := json.RawMessage(`{"args": [[1200, 3500, 800]], "kwargs": {}}`)
+	input := apitypes.TaskInput{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}
+
+	resp, next := e.runEvents(fnPath+"/run", apitypes.RunTaskRequest{Input: input})
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("run: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	admitted, ok := next()
+	if !ok || admitted.Task == nil || admitted.Task.Status != apitypes.TaskStatusQueued || admitted.Log != nil {
+		t.Fatalf("admitted event %+v", admitted)
+	}
+	go e.runOnHost("5500")
+	logged, ok := next()
+	if !ok || logged.Log == nil || logged.Log.Data != "summing\n" || logged.Log.TaskId != admitted.Task.Id {
+		t.Fatalf("log event %+v", logged)
+	}
+	final, ok := next()
+	if !ok || final.Task == nil || final.Task.Status != apitypes.TaskStatusSucceeded ||
+		final.Result == nil || final.Result.Value == nil || string(*final.Result.Value) != "5500" {
+		t.Fatalf("final event %+v", final)
+	}
+	if extra, ok := next(); ok {
+		t.Fatalf("event after the final one: %+v", extra)
+	}
+
+	// A task still queued when the wait passes ends the stream with its state.
+	started := time.Now()
+	_, next = e.runEvents(fnPath+"/run?wait_seconds=1", apitypes.RunTaskRequest{Input: input})
+	if first, ok := next(); !ok || first.Task == nil {
+		t.Fatalf("admitted event %+v", first)
+	}
+	last, ok := next()
+	if !ok || last.Task == nil || last.Task.Status != apitypes.TaskStatusQueued || last.Result != nil {
+		t.Fatalf("event after the wait %+v", last)
+	}
+	if _, ok := next(); ok || time.Since(started) > 10*time.Second {
+		t.Fatalf("the stream did not end after the wait: %s", time.Since(started))
+	}
+
+	// Admission failures are error responses, not streams.
+	var apiErr apitypes.Error
+	missing := "/v1/workspaces/acme/apps/reports/workloads/function/missing/run"
+	if status := e.do("POST", missing, e.owner, apitypes.RunTaskRequest{Input: input}, &apiErr); status != 404 || apiErr.Code != apitypes.NotFound {
+		t.Fatalf("missing function: %d %+v", status, apiErr)
+	}
+	if status := e.do("POST", fnPath+"/run", e.outsider, apitypes.RunTaskRequest{Input: input}, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
+		t.Fatalf("outsider: %d %+v", status, apiErr)
+	}
+}

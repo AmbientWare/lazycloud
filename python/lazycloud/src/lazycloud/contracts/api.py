@@ -3310,6 +3310,19 @@ class TaskInput(Payload):
     depends_on: Annotated[list[UUID] | None, Field(max_length=100)] = None
 
 
+class RunTaskRequest(APIModel):
+    input: TaskInput
+    release_id: Annotated[
+        UUID | None,
+        Field(
+            description="Run on this release, such as a prepared one, instead of the active one."
+        ),
+    ] = None
+    parent_task_id: Annotated[
+        UUID | None, Field(description="The task that submits this one, which becomes its parent.")
+    ] = None
+
+
 class Task(APIModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -3434,6 +3447,12 @@ class SubmitTasksRequest(APIModel):
     parent_task_id: Annotated[
         UUID | None, Field(description="The task that submits these, which becomes their parent.")
     ] = None
+
+
+class TaskRunEvent(APIModel):
+    task: Task | None = None
+    log: LogEntry | None = None
+    result: Payload | None = None
 
 
 class SubmitTasksResponse(APIModel):

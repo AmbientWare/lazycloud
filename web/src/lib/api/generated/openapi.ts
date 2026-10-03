@@ -484,6 +484,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admit one task and stream it until it finishes or the wait passes
+         * @description One request for a call that waits on its task: submitTasks for one input, followed log entries and the finished task with its result. A task still running when the wait passes ends the stream with its current state; the caller waits on it with getTask. A blank line follows 15 seconds without entries.
+         */
+        post: operations["runTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/tasks/{task}": {
         parameters: {
             query?: never;
@@ -3790,6 +3814,25 @@ export interface components {
         TaskInput: components["schemas"]["Payload"] & {
             depends_on?: string[];
         };
+        RunTaskRequest: {
+            input: components["schemas"]["TaskInput"];
+            /**
+             * Format: uuid
+             * @description Run on this release, such as a prepared one, instead of the active one.
+             */
+            release_id?: string;
+            /**
+             * Format: uuid
+             * @description The task that submits this one, which becomes its parent.
+             */
+            parent_task_id?: string;
+        };
+        /** @description One line of a runTask stream. The first carries the admitted task, each following one a log entry, and the last the task when it finished or the wait passed, with `result` once it succeeded. */
+        TaskRunEvent: {
+            task?: components["schemas"]["Task"];
+            log?: components["schemas"]["LogEntry"];
+            result?: components["schemas"]["Payload"];
+        };
         SubmitTasksResponse: {
             tasks: components["schemas"]["Task"][];
         };
@@ -6998,6 +7041,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitTasksResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    runTask: {
+        parameters: {
+            query?: {
+                /** @description Hold the request until the task finishes or this many seconds pass. */
+                wait_seconds?: components["parameters"]["InvokeWait"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                name: components["parameters"]["WorkloadPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunTaskRequest"];
+            };
+        };
+        responses: {
+            /** @description Newline-delimited TaskRunEvent objects */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
                 };
             };
             default: components["responses"]["Error"];

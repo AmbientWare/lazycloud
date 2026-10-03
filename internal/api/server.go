@@ -94,32 +94,9 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 	if err != nil {
 		return nil, err
 	}
-	inputs := make([]execution.TaskInput, len(req.Body.Inputs))
-	for n, input := range req.Body.Inputs {
-		payload, err := payloadFrom(apitypes.Payload{
-			Encoding: apitypes.PayloadEncoding(input.Encoding), Value: input.Value, Data: input.Data,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("input %d: %w", n, err)
-		}
-		inputs[n] = execution.TaskInput{Payload: payload}
-		if input.DependsOn != nil {
-			for _, dep := range *input.DependsOn {
-				inputs[n].DependsOn = append(inputs[n].DependsOn, execution.TaskID(dep))
-			}
-		}
-	}
-	submit := execution.SubmitRequest{
-		Workspace: ws.ID, App: req.App, Function: req.Name, Inputs: inputs, Release: req.Body.ReleaseId,
-	}
-	switch c, ok := containerFrom(ctx); {
-	case ok && c.Task != nil:
-		// A task spawned from inside a running task records it as parent,
-		// whatever the body names.
-		submit.Parent = (*execution.TaskID)(c.Task)
-	case req.Body.ParentTaskId != nil:
-		parent := execution.TaskID(*req.Body.ParentTaskId)
-		submit.Parent = &parent
+	submit, err := submitRequest(ctx, ws, req.App, req.Name, req.Body.Inputs, req.Body.ReleaseId, req.Body.ParentTaskId)
+	if err != nil {
+		return nil, err
 	}
 	tasks, err := s.owners.Execution.Submit(ctx, submit)
 	if err != nil {
@@ -130,6 +107,34 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 		out.Tasks[n] = taskOut(task)
 	}
 	return out, nil
+}
+
+func submitRequest(ctx context.Context, ws identity.Workspace, app, function string, in []apitypes.TaskInput, release, parent *uuid.UUID) (execution.SubmitRequest, error) {
+	inputs := make([]execution.TaskInput, len(in))
+	for n, input := range in {
+		payload, err := payloadFrom(apitypes.Payload{
+			Encoding: apitypes.PayloadEncoding(input.Encoding), Value: input.Value, Data: input.Data,
+		})
+		if err != nil {
+			return execution.SubmitRequest{}, fmt.Errorf("input %d: %w", n, err)
+		}
+		inputs[n] = execution.TaskInput{Payload: payload}
+		if input.DependsOn != nil {
+			for _, dep := range *input.DependsOn {
+				inputs[n].DependsOn = append(inputs[n].DependsOn, execution.TaskID(dep))
+			}
+		}
+	}
+	submit := execution.SubmitRequest{Workspace: ws.ID, App: app, Function: function, Inputs: inputs, Release: release}
+	switch c, ok := containerFrom(ctx); {
+	case ok && c.Task != nil:
+		// A task spawned from inside a running task records it as parent,
+		// whatever the body names.
+		submit.Parent = (*execution.TaskID)(c.Task)
+	case parent != nil:
+		submit.Parent = (*execution.TaskID)(parent)
+	}
+	return submit, nil
 }
 
 // GetTask reads a task, waiting for it to finish when asked.
@@ -249,10 +254,7 @@ func (l logStream) visit(w http.ResponseWriter) error {
 				}
 			}
 			for _, entry := range batch {
-				if err := enc.Encode(apitypes.LogEntry{
-					Id: entry.ID, TaskId: uuid.UUID(entry.Task), Attempt: entry.Attempt,
-					Stream: apitypes.LogEntryStream(entry.Stream), Data: entry.Data, Time: entry.Time,
-				}); err != nil {
+				if err := enc.Encode(logEntryOut(entry)); err != nil {
 					return fmt.Errorf("write log entry: %w", err)
 				}
 			}
@@ -266,6 +268,13 @@ func (l logStream) visit(w http.ResponseWriter) error {
 		l.server.logger.WarnContext(l.ctx, "log stream ended early", "source", l.source.Kind, "id", l.source.ID, "error", err)
 	}
 	return nil
+}
+
+func logEntryOut(e execution.LogEntry) apitypes.LogEntry {
+	return apitypes.LogEntry{
+		Id: e.ID, TaskId: uuid.UUID(e.Task), Attempt: e.Attempt,
+		Stream: apitypes.LogEntryStream(e.Stream), Data: e.Data, Time: e.Time,
+	}
 }
 
 func payloadFrom(p apitypes.Payload) (execution.Payload, error) {

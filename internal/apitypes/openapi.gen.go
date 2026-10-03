@@ -4568,6 +4568,18 @@ type RichDisplayKind string
 // RichDisplayMediaType defines model for RichDisplay.MediaType.
 type RichDisplayMediaType string
 
+// RunTaskRequest defines model for RunTaskRequest.
+type RunTaskRequest struct {
+	// Input A task's arguments. A cloudpickle input refers to each pending FunctionCall it contains by the persistent id `("function_call", task_id)` and lists those ids in `depends_on`; the task waits until they succeed and the runner resolves each id to that task's result.
+	Input TaskInput `json:"input"`
+
+	// ParentTaskId The task that submits this one, which becomes its parent.
+	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
+
+	// ReleaseId Run on this release, such as a prepared one, instead of the active one.
+	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
+}
+
 // Sandbox defines model for Sandbox.
 type Sandbox struct {
 	App       AppName   `json:"app"`
@@ -4943,6 +4955,15 @@ type TaskPendingProgress struct {
 
 // TaskPendingReason defines model for TaskPendingReason.
 type TaskPendingReason string
+
+// TaskRunEvent One line of a runTask stream. The first carries the admitted task, each following one a log entry, and the last the task when it finished or the wait passed, with `result` once it succeeded.
+type TaskRunEvent struct {
+	Log *LogEntry `json:"log,omitempty"`
+
+	// Result A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
+	Result *Payload `json:"result,omitempty"`
+	Task   *Task    `json:"task,omitempty"`
+}
 
 // TaskStatus defines model for TaskStatus.
 type TaskStatus string
@@ -5694,6 +5715,12 @@ type InvokeFunctionParams struct {
 	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
 }
 
+// RunTaskParams defines parameters for RunTask.
+type RunTaskParams struct {
+	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
+	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
 // InvokeFunctionVersionParams defines parameters for InvokeFunctionVersion.
 type InvokeFunctionVersionParams struct {
 	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
@@ -6193,6 +6220,9 @@ type PrepareReleaseJSONRequestBody = WorkloadSpec
 
 // InvokeFunctionJSONRequestBody defines body for InvokeFunction for application/json ContentType.
 type InvokeFunctionJSONRequestBody = InvocationBody
+
+// RunTaskJSONRequestBody defines body for RunTask for application/json ContentType.
+type RunTaskJSONRequestBody = RunTaskRequest
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
