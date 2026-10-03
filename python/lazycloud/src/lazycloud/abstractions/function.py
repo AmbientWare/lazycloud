@@ -72,12 +72,16 @@ from lazycloud.contracts.api import (
     Encoding,
     ErrorCode,
     LogEntry,
+    Payload,
+    RunTaskRequest,
     Stream,
     SubmitTasksRequest,
     TaskInput,
+    TaskRunEvent,
     TaskStatus,
     WorkloadSpec,
 )
+from lazycloud.contracts.api import Task as TaskView
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.exceptions import (
@@ -88,10 +92,19 @@ from lazycloud.exceptions import (
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
-from lazycloud.session.task import FunctionCall, Task, parent_task_id, task_input
+from lazycloud.session.task import (
+    TERMINAL_STATUSES,
+    FunctionCall,
+    Task,
+    decode_payload,
+    parent_task_id,
+    task_input,
+)
 from lazycloud.terminal import Terminal, TerminalStep
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from lazycloud.abstractions.shell import ShellSession
     from lazycloud.contracts.api import Deployment, Preview
 
@@ -552,25 +565,63 @@ class Function(Generic[P, R]):
 
     def _remote_call(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> R:
         client, workspace = self._invocation_session()
-        payload = self._input(args, kwargs, workspace)
+        request = RunTaskRequest(
+            input=self._input(args, kwargs, workspace), **self._target(workspace)
+        )
         with self._task_step() as step:
-            task = self._submit(client, workspace, [payload])[0]
-            step.update(f"{short_id(task.task_id)} submitted")
-            return cast(R, self._follow(task, step))
+            events = client.run_task(workspace, self._app_slug, self.resource_name, request)
+            try:
+                # Ctrl-C waits for admission, so the admitted task is known
+                # and cancelled rather than left running.
+                admitted, interrupted = _uninterrupted(lambda: next(events, None))
+            except SdkError as exc:
+                error = self._admission_error(exc, workspace)
+                if error is exc:
+                    raise
+                raise error from exc
+            if admitted is None or admitted.task is None:
+                events.close()
+                msg = "the run stream ended before it named the admitted task"
+                raise FunctionOperationError(msg)
+            task = Task(str(admitted.task.id), workspace, client)
+            if interrupted is not None:
+                events.close()
+                _cancel_tasks([task])
+                raise interrupted
+            step.update(f"{short_id(task.task_id)} {admitted.task.status.value}")
+            return cast(R, self._follow(task, step, events))
 
-    def _follow(self, task: Task, step: TerminalStep) -> Any:
-        """Print the task's output and wait for it; anything that ends the wait early cancels it."""
+    def _follow(
+        self,
+        task: Task,
+        step: TerminalStep,
+        events: Generator[TaskRunEvent, None, None] | None = None,
+    ) -> Any:
+        """Print the task's output and wait for it; anything that ends the wait early cancels it.
+
+        `events` is the rest of the task's run stream. A task the stream
+        leaves unfinished is followed through its logs and waited on.
+        """
         reporter = PendingProgressReporter(terminal=self.terminal, step=step)
         watcher = _QueuedTaskWatcher(task, step, reporter)
+        view: TaskView | None = None
+        result: Payload | None = None
         try:
             watcher.start()
             try:
-                task.follow_logs(self._print_log)
+                cursor = 0
+                if events is not None:
+                    view, result, cursor = self._read_run(events)
+                if view is None or view.status not in TERMINAL_STATUSES:
+                    task.follow_logs(self._print_log, after=cursor)
             finally:
                 watcher.stop()
+                if events is not None:
+                    events.close()
             if self.terminal is not None:
                 self.terminal.flush_remote_output()
-            view = task.wait_view()
+            if view is None or view.status not in TERMINAL_STATUSES:
+                view = task.wait_view()
         except BaseException as exc:
             failures = _cancel_tasks([task])
             if failures and not isinstance(exc, KeyboardInterrupt):
@@ -582,7 +633,30 @@ class Function(Generic[P, R]):
             raise
         reporter.update(task.task_id, None)
         step.update(f"{short_id(task.task_id)} {view.status.value}")
+        if result is not None and view.status is TaskStatus.succeeded:
+            return decode_payload(result)
         return task.outcome(view)
+
+    def _read_run(
+        self, events: Iterator[TaskRunEvent]
+    ) -> tuple[TaskView | None, Payload | None, int]:
+        """Print a run stream's log entries and return its last task state, that
+        state's result and the last entry's id. A dropped stream returns what
+        arrived before it dropped."""
+        view: TaskView | None = None
+        result: Payload | None = None
+        cursor = 0
+        try:
+            for event in events:
+                if event.log is not None:
+                    cursor = event.log.id
+                    self._print_log(event.log)
+                if event.task is not None:
+                    view, result = event.task, event.result
+        except Exception as exc:
+            if not is_transient(exc):
+                raise
+        return view, result, cursor
 
     def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str) -> TaskInput:
         encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
@@ -602,12 +676,21 @@ class Function(Generic[P, R]):
             self._release_id(workspace)
         return client, workspace
 
-    def _submit(self, client: ApiClient, workspace: str, inputs: list[TaskInput]) -> list[Task]:
-        target: dict[str, UUID] = {}
+    def _target(self, workspace: str) -> dict[str, UUID]:
+        """The release a call from here runs on, or the task it runs under."""
         if is_local():
-            target["release_id"] = self._release_id(workspace)
-        elif parent := parent_task_id():
-            target["parent_task_id"] = parent
+            return {"release_id": self._release_id(workspace)}
+        if parent := parent_task_id():
+            return {"parent_task_id": parent}
+        return {}
+
+    def _admission_error(self, exc: SdkError, workspace: str) -> SdkError:
+        if isinstance(exc, ApiError) and exc.code is ErrorCode.not_found:
+            return FunctionNotDeployedError(self._app_slug, self.resource_name, workspace)
+        return exc
+
+    def _submit(self, client: ApiClient, workspace: str, inputs: list[TaskInput]) -> list[Task]:
+        target = self._target(workspace)
         tasks: list[Task] = []
         for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
             request = SubmitTasksRequest(inputs=inputs[start : start + MAX_SUBMIT_BATCH], **target)
@@ -620,9 +703,7 @@ class Function(Generic[P, R]):
                     )
                 )
             except SdkError as exc:
-                error: SdkError = exc
-                if isinstance(exc, ApiError) and exc.code is ErrorCode.not_found:
-                    error = FunctionNotDeployedError(self._app_slug, self.resource_name, workspace)
+                error = self._admission_error(exc, workspace)
                 if not tasks:
                     raise error from exc
                 raise MapSubmissionError(
@@ -745,7 +826,8 @@ class _QueuedTaskWatcher:
     def _watch(self) -> None:
         task_id = UUID(self.task.task_id)
         status: TaskStatus | None = None
-        while not self._stopped.is_set():
+        # A call that finishes within the first interval is never read.
+        while not self._stopped.wait(QUEUED_POLL_SECONDS):
             try:
                 view = self.task.client.get_task(self.task.workspace, task_id)
             except Exception as exc:
@@ -758,7 +840,6 @@ class _QueuedTaskWatcher:
                 self.reporter.update(self.task.task_id, view.pending)
                 if view.status is not TaskStatus.queued:
                     return
-            self._stopped.wait(QUEUED_POLL_SECONDS)
 
 
 def _uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:

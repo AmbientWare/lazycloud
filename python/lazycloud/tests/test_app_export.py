@@ -148,20 +148,19 @@ def _task(task_id: str, function: str, status: str, **extra: object) -> dict[str
 def _serve_task(
     api: FakeApi, function: str, task_id: str, *, result: object = None, **finished: object
 ) -> None:
-    api.route("POST", f"{FUNCTIONS}/{function}/tasks")(
-        lambda _: json_reply({"tasks": [_task(task_id, function, "queued")]}, 201)
-    )
     status = "failed" if "failure" in finished else "succeeded"
-    api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")(
-        lambda _: json_reply(_task(task_id, function, status, **finished))
-    )
-    api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/result")(
-        lambda _: json_reply({"encoding": "json", "value": result})
+    final: dict[str, object] = {"task": _task(task_id, function, status, **finished)}
+    if status == "succeeded":
+        final["result"] = {"encoding": "json", "value": result}
+    events: list[dict[str, object]] = [{"task": _task(task_id, function, "queued")}, final]
+    body = b"".join(json.dumps(event).encode() + b"\n" for event in events)
+    api.route("POST", f"{FUNCTIONS}/{function}/run")(
+        lambda _: (200, {"Content-Type": "application/x-ndjson"}, body)
     )
 
 
 def _submitted(api: FakeApi, function: str) -> list[Any]:
-    return [request.json() for request in api.calls("POST", f"{FUNCTIONS}/{function}/tasks")]
+    return [request.json() for request in api.calls("POST", f"{FUNCTIONS}/{function}/run")]
 
 
 def test_export_writes_a_typed_package_whose_functions_run_remotely(
@@ -203,7 +202,7 @@ def test_export_writes_a_typed_package_whose_functions_run_remotely(
     _serve_task(fake_api, "summarize_sales", _uuid(201), result=12)
     assert clients.summarize_sales.remote([1, 2, 3], scale=2) == 12
     assert _submitted(fake_api, "summarize_sales") == [
-        {"inputs": [{"encoding": "json", "value": {"args": [[1, 2, 3]], "kwargs": {"scale": 2}}}]}
+        {"input": {"encoding": "json", "value": {"args": [[1, 2, 3]], "kwargs": {"scale": 2}}}}
     ]
 
     _serve_task(
@@ -214,7 +213,7 @@ def test_export_writes_a_typed_package_whose_functions_run_remotely(
         [sale(regionName="east", amount=3), sale(regionName="west", amount=4)]
     )
     assert summary == clients.build_summary.Summary(total=7, regions=["east", "west"])
-    sent = _submitted(fake_api, "build_summary")[0]["inputs"][0]["value"]
+    sent = _submitted(fake_api, "build_summary")[0]["input"]["value"]
     assert sent == {
         "args": [[{"regionName": "east", "amount": 3}, {"regionName": "west", "amount": 4}]],
         "kwargs": {},
