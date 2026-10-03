@@ -115,13 +115,13 @@ from tasks t
 left join task_results r on r.task_id = t.id
 where t.id = @id and t.workspace_id = @workspace_id;
 
--- name: NewestAppTasks :many
--- When the newest task of each live function of an app was submitted, from
--- each function's newest task alone; a function without tasks has no row.
-select newest.created_at
+-- name: AppFunctionsNewestTask :many
+-- Each live function of a live app, and when its newest task was
+-- submitted; null for a function without tasks.
+select w.name, t.created_at as newest
 from apps a
 join workloads w on w.app_id = a.id and w.kind = 'function' and w.desired_state <> 'deleted'
-cross join lateral (select t.created_at from tasks t where t.workload_id = w.id order by t.id desc limit 1) newest
+left join tasks t on t.id = (select n.id from tasks n where n.workload_id = w.id order by n.id desc limit 1)
 where a.workspace_id = @workspace_id and a.name = @app and a.state <> 'deleted';
 
 -- name: TaskLatencies :many

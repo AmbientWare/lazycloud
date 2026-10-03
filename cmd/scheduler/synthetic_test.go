@@ -1,9 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
@@ -36,5 +43,27 @@ func TestSyntheticLatencySplitsCapacityWaitFromPlacement(t *testing.T) {
 		if got.admission != c.admission || got.capacity != c.capacity || got.execution != c.run || got.total != c.total {
 			t.Errorf("%s: %+v", name, got)
 		}
+	}
+}
+
+// Until the probe app is deployed the check submits nothing and logs no
+// error: one line says the app is missing, and later passes stay quiet.
+func TestSyntheticCheckStaysQuietWhileTheAppIsNotDeployed(t *testing.T) {
+	pool := dbtest.New(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	check, err := newSyntheticCheck(fmt.Sprintf("%s/synthetic", uuid.New()), execution.NewExecution(pool), func() bool { return true }, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		check.pass(t.Context())
+	}
+	var tasks int
+	if err := pool.QueryRow(t.Context(), "select count(*) from tasks").Scan(&tasks); err != nil || tasks != 0 || len(check.round) != 0 {
+		t.Fatalf("submitted %d tasks, round %v: %v", tasks, check.round, err)
+	}
+	if strings.Contains(logs.String(), "level=ERROR") || strings.Count(logs.String(), "synthetic app not deployed") != 1 {
+		t.Fatalf("logs:\n%s", logs.String())
 	}
 }

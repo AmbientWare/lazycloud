@@ -201,11 +201,16 @@ func TestTaskLatenciesReadWhereACallsTimeWent(t *testing.T) {
 	e := NewExecution(pool)
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
-	if newest, err := e.NewestAppTask(t.Context(), f.workspace, "reports"); err != nil || newest != nil {
+	if newest, err := e.NewestTasks(t.Context(), f.workspace, "missing"); err != nil || len(newest) != 0 {
+		t.Fatalf("app not deployed: %v %v", newest, err)
+	}
+	newest, err := e.NewestTasks(t.Context(), f.workspace, "reports")
+	if at, ok := newest["summarize"]; err != nil || !ok || at != nil {
 		t.Fatalf("newest before any task: %v %v", newest, err)
 	}
 	task := submit(t, e, f, 1)[0]
-	if newest, err := e.NewestAppTask(t.Context(), f.workspace, "reports"); err != nil || newest == nil || !newest.Equal(task.CreatedAt) {
+	newest, err = e.NewestTasks(t.Context(), f.workspace, "reports")
+	if at := newest["summarize"]; err != nil || at == nil || !at.Equal(task.CreatedAt) {
 		t.Fatalf("newest %v %v, want %v", newest, err, task.CreatedAt)
 	}
 	host, container := placedContainer(t, pool, f, ContainerReady, 1)

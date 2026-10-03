@@ -15,10 +15,11 @@ import (
 
 const (
 	// syntheticInterval is how often the probes are called, counted from
-	// the newest probe task, so restarts do not call them more often.
+	// the newest probe task so restarts do not call them more often.
 	syntheticInterval = 6 * time.Hour
-	// syntheticTick paces the check: it submits a due round, then reads the
-	// round until every probe finished or syntheticTimeout passed.
+	// syntheticTick paces the check: a pass submits a due round, or reads
+	// the round in flight until every probe finished or syntheticTimeout
+	// passed.
 	syntheticTick    = time.Minute
 	syntheticTimeout = 15 * time.Minute
 )
@@ -44,8 +45,10 @@ type submittedProbe struct {
 // syntheticCheck calls the platform's probe functions and logs where each
 // call's time went: admission and placement, capacity wait, and execution.
 // A call past its budget, failed or unfinished logs an error. The probes are
-// an app the operator deploys into a workspace it owns; a round in flight
-// when the scheduler stops goes unreported.
+// an app the operator deploys into a workspace it owns; while it is not
+// deployed the check submits nothing. A round in flight when the scheduler
+// stops goes unreported. Only the loop's pass reads or writes the fields
+// after logger.
 type syntheticCheck struct {
 	exec      *execution.Execution
 	workspace identity.WorkspaceID
@@ -54,9 +57,12 @@ type syntheticCheck struct {
 	// leader calls the probes, so replicas never call them twice.
 	leading func() bool
 	logger  *slog.Logger
-	// round is the probes submitted and not yet reported; only the loop's
-	// pass reads or writes it.
+	// round is the probes submitted and not yet reported.
 	round []submittedProbe
+	// next is when a round is due; a failed submission waits for it too.
+	next time.Time
+	// absent is set once the check logged that the app is not deployed.
+	absent bool
 }
 
 // newSyntheticCheck reads LAZYCLOUD_SYNTHETIC_APP, <workspace id>/<app>.
@@ -70,22 +76,46 @@ func newSyntheticCheck(setting string, exec *execution.Execution, leading func()
 }
 
 func (s *syntheticCheck) pass(ctx context.Context) bool {
-	if !s.leading() {
+	now := time.Now()
+	switch {
+	case !s.leading():
+		return false
+	case len(s.round) > 0:
+		s.report(ctx, now)
+		return false
+	case now.Before(s.next):
 		return false
 	}
-	if len(s.round) > 0 {
-		s.report(ctx, time.Now())
-		return false
-	}
-	newest, err := s.exec.NewestAppTask(ctx, s.workspace, s.app)
+	newest, err := s.exec.NewestTasks(ctx, s.workspace, s.app)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "synthetic check", "error", err)
 		return false
 	}
-	if newest != nil && time.Since(*newest) < syntheticInterval {
+	var due []syntheticProbe
+	var last time.Time
+	for _, p := range syntheticProbes() {
+		at, deployed := newest[p.function]
+		if !deployed {
+			continue
+		}
+		due = append(due, p)
+		if at != nil && at.After(last) {
+			last = *at
+		}
+	}
+	if len(due) == 0 {
+		if !s.absent {
+			s.logger.InfoContext(ctx, "synthetic app not deployed; no probes run", "app", s.app)
+		}
+		s.absent = true
 		return false
 	}
-	for _, p := range syntheticProbes() {
+	s.absent = false
+	if s.next = last.Add(syntheticInterval); now.Before(s.next) {
+		return false
+	}
+	s.next = now.Add(syntheticInterval)
+	for _, p := range due {
 		tasks, err := s.exec.Submit(ctx, execution.SubmitRequest{
 			Workspace: s.workspace, App: s.app, Function: p.function,
 			Inputs: []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [], "kwargs": {}}`)}}},
@@ -153,11 +183,11 @@ type latencySplit struct {
 	total, admission, capacity, execution time.Duration
 }
 
-// splitLatency divides a finished call from submit to finish. Capacity wait
-// runs from the container's creation until its host became ready, zero on a
-// host already serving, and to the finish for a container never placed;
-// admission and placement are the time before and after it until the
-// container was placed; execution is the container's start and the call.
+// splitLatency divides a call from submit to finish. Capacity wait runs from
+// the container's creation until its host was ready: zero on a host already
+// serving, to the finish for a container never placed. Admission and
+// placement is the rest of the time until the container was placed;
+// execution is the container's start and the call.
 func splitLatency(l execution.TaskLatency) latencySplit {
 	finished := l.Submitted
 	if l.Finished != nil {

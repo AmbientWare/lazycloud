@@ -12,6 +12,46 @@ import (
 	"github.com/google/uuid"
 )
 
+const appFunctionsNewestTask = `-- name: AppFunctionsNewestTask :many
+select w.name, t.created_at as newest
+from apps a
+join workloads w on w.app_id = a.id and w.kind = 'function' and w.desired_state <> 'deleted'
+left join tasks t on t.id = (select n.id from tasks n where n.workload_id = w.id order by n.id desc limit 1)
+where a.workspace_id = $1 and a.name = $2 and a.state <> 'deleted'
+`
+
+type AppFunctionsNewestTaskParams struct {
+	WorkspaceID uuid.UUID
+	App         string
+}
+
+type AppFunctionsNewestTaskRow struct {
+	Name   string
+	Newest *time.Time
+}
+
+// Each live function of a live app, and when its newest task was
+// submitted; null for a function without tasks.
+func (q *Queries) AppFunctionsNewestTask(ctx context.Context, arg AppFunctionsNewestTaskParams) ([]AppFunctionsNewestTaskRow, error) {
+	rows, err := q.db.Query(ctx, appFunctionsNewestTask, arg.WorkspaceID, arg.App)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AppFunctionsNewestTaskRow
+	for rows.Next() {
+		var i AppFunctionsNewestTaskRow
+		if err := rows.Scan(&i.Name, &i.Newest); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAppTasks = `-- name: ListAppTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
@@ -238,41 +278,6 @@ func (q *Queries) LiveAppID(ctx context.Context, arg LiveAppIDParams) (uuid.UUID
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
-}
-
-const newestAppTasks = `-- name: NewestAppTasks :many
-select newest.created_at
-from apps a
-join workloads w on w.app_id = a.id and w.kind = 'function' and w.desired_state <> 'deleted'
-cross join lateral (select t.created_at from tasks t where t.workload_id = w.id order by t.id desc limit 1) newest
-where a.workspace_id = $1 and a.name = $2 and a.state <> 'deleted'
-`
-
-type NewestAppTasksParams struct {
-	WorkspaceID uuid.UUID
-	App         string
-}
-
-// When the newest task of each live function of an app was submitted, from
-// each function's newest task alone; a function without tasks has no row.
-func (q *Queries) NewestAppTasks(ctx context.Context, arg NewestAppTasksParams) ([]time.Time, error) {
-	rows, err := q.db.Query(ctx, newestAppTasks, arg.WorkspaceID, arg.App)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []time.Time
-	for rows.Next() {
-		var created_at time.Time
-		if err := rows.Scan(&created_at); err != nil {
-			return nil, err
-		}
-		items = append(items, created_at)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const pendingFacts = `-- name: PendingFacts :many

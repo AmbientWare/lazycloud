@@ -282,20 +282,19 @@ func (e *Execution) RerunTask(ctx context.Context, workspace identity.WorkspaceI
 	return tasks[0], nil
 }
 
-// NewestAppTask is when the newest task of any live function of app was
-// submitted; nil when none has one.
-func (e *Execution) NewestAppTask(ctx context.Context, workspace identity.WorkspaceID, app string) (*time.Time, error) {
-	times, err := e.queries.NewestAppTasks(ctx, NewestAppTasksParams{WorkspaceID: uuid.UUID(workspace), App: app})
+// NewestTasks is when each live function of app last had a task submitted,
+// by function name: nil for one without tasks, and no entry for a function
+// or app not deployed.
+func (e *Execution) NewestTasks(ctx context.Context, workspace identity.WorkspaceID, app string) (map[string]*time.Time, error) {
+	rows, err := e.queries.AppFunctionsNewestTask(ctx, AppFunctionsNewestTaskParams{WorkspaceID: uuid.UUID(workspace), App: app})
 	if err != nil {
-		return nil, fmt.Errorf("read newest task of app %s: %w", app, err)
+		return nil, fmt.Errorf("read newest tasks of app %s: %w", app, err)
 	}
-	var newest *time.Time
-	for _, t := range times {
-		if newest == nil || t.After(*newest) {
-			newest = &t
-		}
+	out := make(map[string]*time.Time, len(rows))
+	for _, r := range rows {
+		out[r.Name] = r.Newest
 	}
-	return newest, nil
+	return out, nil
 }
 
 // TaskLatency is where one task's time went: submitted, then its current
