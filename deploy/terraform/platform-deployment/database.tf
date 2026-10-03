@@ -36,8 +36,9 @@ locals {
   # Both URLs name the direct port 5432, not PgBouncer on 6432: pgx caches
   # prepared statements per connection, which transaction pooling breaks,
   # and LISTEN, the migration, metering and leader locks keep state in their
-  # session. At pool_max_conns 4 a server holds 4+4 plus 3 hijacked (LISTEN, edge watch, changes), a scheduler 4+4 plus 2 (LISTEN, leader): 2x11 + 2x10 = 42.
-  # A rollout adds one surge server (11; schedulers do not surge) and psql 1: peak 54 of 60, 3 kept for superusers; migrate (wave -1) and publish-agent-release (PostSync), 4 each, run outside the rollout.
+  # session. Budget at pool_max_conns 4: a server holds 11 (two pools and
+  # three hijacked), a scheduler 10, so two of each hold 42. A rollout's
+  # surge server and an operator psql peak at 54 of 60.
   database_url = format(
     "postgres://%s:%s@%s:5432/%s?sslmode=verify-full&pool_max_conns=%d",
     urlencode(planetscale_postgres_branch_role.platform.username),
