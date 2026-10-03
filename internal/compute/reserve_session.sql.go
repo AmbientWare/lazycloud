@@ -62,34 +62,6 @@ func (q *Queries) EndLastStop(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const insertActivation = `-- name: InsertActivation :exec
-insert into fleet_activations (kind, instance_type, region, gpu_type, seconds, outcome)
-values ($1, $2, $3, $4,
-        greatest(0, extract(epoch from now() - $5::timestamptz))::float8, $6)
-`
-
-type InsertActivationParams struct {
-	Kind         string
-	InstanceType string
-	Region       string
-	GpuType      string
-	StartedAt    time.Time
-	Outcome      string
-}
-
-// Seconds are measured on the database clock, which set started_at.
-func (q *Queries) InsertActivation(ctx context.Context, arg InsertActivationParams) error {
-	_, err := q.db.Exec(ctx, insertActivation,
-		arg.Kind,
-		arg.InstanceType,
-		arg.Region,
-		arg.GpuType,
-		arg.StartedAt,
-		arg.Outcome,
-	)
-	return err
-}
-
 const liveHostContainers = `-- name: LiveHostContainers :one
 select count(*) from containers where host_id = $1 and state <> 'stopped'
 `
@@ -99,15 +71,6 @@ func (q *Queries) LiveHostContainers(ctx context.Context, id *uuid.UUID) (int64,
 	var count int64
 	err := row.Scan(&count)
 	return count, err
-}
-
-const pruneActivations = `-- name: PruneActivations :exec
-delete from fleet_activations where at < now() - interval '1 day'
-`
-
-func (q *Queries) PruneActivations(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, pruneActivations)
-	return err
 }
 
 const recordResumeOutcome = `-- name: RecordResumeOutcome :exec
@@ -192,25 +155,15 @@ func (q *Queries) ReserveSessionHost(ctx context.Context, id uuid.UUID) (Reserve
 }
 
 const resumeHost = `-- name: ResumeHost :one
-select phase, session_epoch, kind, provider, reserve_mode, resume_requested_at, sleep_attempt_id, sleep_boot_id,
-       image_evidence, instance_type, region, gpu_type, created_at
+select phase, reserve_mode, sleep_attempt_id, sleep_boot_id
 from hosts where id = $1 for update
 `
 
 type ResumeHostRow struct {
-	Phase             string
-	SessionEpoch      int64
-	Kind              string
-	Provider          string
-	ReserveMode       *string
-	ResumeRequestedAt *time.Time
-	SleepAttemptID    *uuid.UUID
-	SleepBootID       *string
-	ImageEvidence     string
-	InstanceType      string
-	Region            string
-	GpuType           string
-	CreatedAt         time.Time
+	Phase          string
+	ReserveMode    *string
+	SleepAttemptID *uuid.UUID
+	SleepBootID    *string
 }
 
 // What a Hello settles about a host coming back from the reserve.
@@ -219,18 +172,9 @@ func (q *Queries) ResumeHost(ctx context.Context, id uuid.UUID) (ResumeHostRow, 
 	var i ResumeHostRow
 	err := row.Scan(
 		&i.Phase,
-		&i.SessionEpoch,
-		&i.Kind,
-		&i.Provider,
 		&i.ReserveMode,
-		&i.ResumeRequestedAt,
 		&i.SleepAttemptID,
 		&i.SleepBootID,
-		&i.ImageEvidence,
-		&i.InstanceType,
-		&i.Region,
-		&i.GpuType,
-		&i.CreatedAt,
 	)
 	return i, err
 }

@@ -27,23 +27,6 @@ const (
 	ResumeColdBoot ResumeOutcome = "cold_boot"
 )
 
-// ActivationKind is what a fleet activation sample measures.
-type ActivationKind string
-
-const (
-	// ActivationProvision is a launch until the host's first session.
-	ActivationProvision ActivationKind = "provision"
-	// ActivationBoot is a requested start of a plainly stopped reserve
-	// until its Hello.
-	ActivationBoot ActivationKind = "boot"
-	// ActivationResume is a requested start of a hibernated reserve until
-	// its Hello.
-	ActivationResume ActivationKind = "resume"
-)
-
-// activationReady is the outcome of a provision sample.
-const activationReady = "ready"
-
 // ReserveRequest is what a session asks of a host the planner is returning
 // to the reserve.
 type ReserveRequest struct {
@@ -258,24 +241,10 @@ func settleSession(ctx context.Context, q *Queries, host uuid.UUID, open Session
 	}
 	phase := Phase(h.Phase)
 	outcome := resumeOutcome(h, open)
-	switch {
-	case phase == PhaseJoining && h.SessionEpoch == 0 && HostKind(h.Kind) == KindPlatform && Provider(h.Provider) == ProviderAWS:
-		if err := recordActivation(ctx, q, h, ActivationProvision, activationReady, h.CreatedAt); err != nil {
-			return err
-		}
-	case phase == PhaseResuming || (outcome != nil && (phase == PhaseStopping || phase == PhaseStopped)):
+	if phase == PhaseResuming || (outcome != nil && (phase == PhaseStopping || phase == PhaseStopped)) {
 		if outcome != nil {
 			if err := q.RecordResumeOutcome(ctx, RecordResumeOutcomeParams{ID: host, Outcome: (*string)(outcome)}); err != nil {
 				return fmt.Errorf("record resume outcome: %w", err)
-			}
-			if phase == PhaseResuming && h.ResumeRequestedAt != nil {
-				kind := ActivationBoot
-				if *outcome == ResumeMemoryRestored || ImageEvidence(h.ImageEvidence) == EvidenceSaved {
-					kind = ActivationResume
-				}
-				if err := recordActivation(ctx, q, h, kind, string(*outcome), *h.ResumeRequestedAt); err != nil {
-					return err
-				}
 			}
 		}
 		if phase != PhaseResuming {
@@ -324,20 +293,6 @@ func resumeOutcome(h ResumeHostRow, open SessionOpen) *ResumeOutcome {
 		return ptr(ResumeColdBoot)
 	case open.SleptSeconds > 0:
 		return ptr(ResumeMemoryRestored)
-	}
-	return nil
-}
-
-// recordActivation keeps one sample of how long an activation took since
-// started, and drops samples older than a day.
-func recordActivation(ctx context.Context, q *Queries, h ResumeHostRow, kind ActivationKind, outcome string, started time.Time) error {
-	if err := q.InsertActivation(ctx, InsertActivationParams{
-		Kind: string(kind), InstanceType: h.InstanceType, Region: h.Region, GpuType: h.GpuType, StartedAt: started, Outcome: outcome,
-	}); err != nil {
-		return fmt.Errorf("record activation: %w", err)
-	}
-	if err := q.PruneActivations(ctx); err != nil {
-		return fmt.Errorf("prune activations: %w", err)
 	}
 	return nil
 }

@@ -41,7 +41,7 @@ type VCPUQuota struct {
 func QuotaUse(hosts []FleetHost, catalog []CatalogType) map[QuotaKey]int64 {
 	used := map[QuotaKey]int64{}
 	for _, h := range hosts {
-		if h.resumable() || h.State == FleetFailed {
+		if h.resumable() {
 			continue
 		}
 		if i := slices.IndexFunc(catalog, func(t CatalogType) bool { return t.Name == h.InstanceType }); i >= 0 {
@@ -87,9 +87,6 @@ type OfferInputs struct {
 	// OwnerPays is set for a connected account's offers: the account pays
 	// its own hosts, so no purchase margin applies.
 	OwnerPays bool
-	// PlainStop names the region/type pairs whose hibernation booted cold
-	// within the last day; reserves there stop plainly.
-	PlainStop map[string]bool
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
@@ -229,8 +226,7 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // sold in the region, in a market the need allows, not cooling, with a
 // complete cost, whose usable capacity covers the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and that keep the purchase margin
-// unless the owner pays. A reserve offer hibernates where the type does,
-// outside PlainStop.
+// unless the owner pays. A reserve offer hibernates where the type does.
 // Order: the need's GPU preference, cooling regions last, complete hourly
 // cost, region preference, fewest hosts in the zone, key. An offer whose
 // host would exceed a known vCPU quota is skipped.
@@ -265,9 +261,9 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) {
 					continue
 				}
-				hibernate := reserve && t.Hibernates && !in.PlainStop[region+"/"+t.Name]
-				disk := rootDiskMicros(region, t.RootGiB(hibernate))
 				for _, market := range markets {
+					hibernate := reserve && t.Hibernates
+					disk := rootDiskMicros(region, t.RootGiB(hibernate))
 					compute := onDemand
 					if market == MarketSpot {
 						if compute, ok = spotPrice(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name); !ok {

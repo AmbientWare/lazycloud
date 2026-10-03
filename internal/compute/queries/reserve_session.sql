@@ -21,8 +21,7 @@ where id = @id and phase = 'preparing' and phase_at = @phase_at;
 
 -- name: ResumeHost :one
 -- What a Hello settles about a host coming back from the reserve.
-select phase, session_epoch, kind, provider, reserve_mode, resume_requested_at, sleep_attempt_id, sleep_boot_id,
-       image_evidence, instance_type, region, gpu_type, created_at
+select phase, reserve_mode, sleep_attempt_id, sleep_boot_id
 from hosts where id = @id for update;
 
 -- name: RecordResumeOutcome :exec
@@ -47,12 +46,3 @@ update hosts
 set resume_requested_at = null, stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
     stopped_at = null, updated_at = now()
 where id = @id;
-
--- name: InsertActivation :exec
--- Seconds are measured on the database clock, which set started_at.
-insert into fleet_activations (kind, instance_type, region, gpu_type, seconds, outcome)
-values (@kind, @instance_type, @region, @gpu_type,
-        greatest(0, extract(epoch from now() - @started_at::timestamptz))::float8, @outcome);
-
--- name: PruneActivations :exec
-delete from fleet_activations where at < now() - interval '1 day';

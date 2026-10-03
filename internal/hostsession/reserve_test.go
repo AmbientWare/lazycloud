@@ -60,25 +60,6 @@ func (h *harness) waitPhase(host compute.HostID, phase string) reserveHost {
 	}
 }
 
-// activations lists the fleet activation samples as kind/outcome.
-func (h *harness) activations() []string {
-	h.t.Helper()
-	rows, err := h.pool.Query(h.t.Context(), "select kind || '/' || outcome from fleet_activations order by at, id")
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			h.t.Fatal(err)
-		}
-		out = append(out, s)
-	}
-	return out
-}
-
 func openHello(t *testing.T, ctx context.Context, client hostproto.HostServiceClient, hello *hostproto.Hello) hostStream {
 	t.Helper()
 	stream, err := client.Session(ctx)
@@ -260,8 +241,8 @@ func (h *harness) stoppedReserve(host compute.HostID, phase, evidence string, mo
 }
 
 // A Hello after a requested resume settles the attempt it names once:
-// memory restored in the same boot or a cold boot in a new one, with an
-// activation sample. A reserve the planner refreshes prepares again.
+// memory restored in the same boot or a cold boot in a new one. A reserve
+// the planner refreshes prepares again.
 func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 	h := start(t)
 	stop := "stop"
@@ -273,18 +254,16 @@ func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 		slept    float64
 		phase    string
 		outcome  string
-		sample   string
 		// proven is the hibernation evidence the resume report leaves.
 		proven string
 	}{
-		{"hibernated", "saved", nil, "boot-1", 31, "ready", "memory_restored", "resume/memory_restored", "saved"},
-		{"hibernation EC2 had not confirmed", "unknown", nil, "boot-1", 31, "ready", "memory_restored", "resume/memory_restored", "saved"},
-		{"silent hibernation failure", "saved", nil, "boot-2", 0, "ready", "cold_boot", "resume/cold_boot", "failed"},
-		{"plain stop", "unavailable", nil, "boot-2", 0, "ready", "cold_boot", "boot/cold_boot", "unavailable"},
-		{"refresh", "unavailable", &stop, "boot-2", 0, "preparing", "cold_boot", "boot/cold_boot", "unavailable"},
+		{"hibernated", "saved", nil, "boot-1", 31, "ready", "memory_restored", "saved"},
+		{"hibernation EC2 had not confirmed", "unknown", nil, "boot-1", 31, "ready", "memory_restored", "saved"},
+		{"silent hibernation failure", "saved", nil, "boot-2", 0, "ready", "cold_boot", "failed"},
+		{"plain stop", "unavailable", nil, "boot-2", 0, "ready", "cold_boot", "unavailable"},
+		{"refresh", "unavailable", &stop, "boot-2", 0, "preparing", "cold_boot", "unavailable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			h.exec("delete from fleet_activations")
 			host, ctx := h.enroll()
 			first := open(t, ctx, h.client)
 			h.waitPhase(host, "ready")
@@ -307,9 +286,6 @@ from hosts where id = $1`, uuid.UUID(host)).Scan(&stopFacts); err != nil {
 			if stopFacts != 0 {
 				t.Fatalf("%d facts of the last stop survived the resume", stopFacts)
 			}
-			if got := h.activations(); len(got) != 1 || got[0] != c.sample {
-				t.Fatalf("samples %v, want %s", got, c.sample)
-			}
 			var evidence string
 			if err := h.pool.QueryRow(h.t.Context(), "select image_evidence from hosts where id = $1", uuid.UUID(host)).Scan(&evidence); err != nil {
 				t.Fatal(err)
@@ -320,8 +296,8 @@ from hosts where id = $1`, uuid.UUID(host)).Scan(&stopFacts); err != nil {
 			// The same report again settles nothing more.
 			openHello(t, ctx, h.client, hello)
 			time.Sleep(300 * time.Millisecond)
-			if got := h.activations(); len(got) != 1 {
-				t.Fatalf("a repeated Hello recorded %v", got)
+			if again := h.reserveHost(host); again.phase != c.phase || *again.outcome != c.outcome {
+				t.Fatalf("a repeated Hello moved the host to %+v", again)
 			}
 		})
 	}
@@ -350,7 +326,6 @@ func TestUnrequestedWakeGoesBackToTheReserve(t *testing.T) {
 		}, "stopping"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			h.exec("delete from fleet_activations")
 			host, ctx := h.enroll()
 			first := open(t, ctx, h.client)
 			h.waitPhase(host, "ready")
@@ -362,15 +337,12 @@ func TestUnrequestedWakeGoesBackToTheReserve(t *testing.T) {
 			if r := h.waitPhase(host, c.want); c.want == "stopping" && r.attempt == nil {
 				t.Fatal("a reconnect settled the attempt")
 			}
-			if got := h.activations(); len(got) != 0 {
-				t.Fatalf("an unrequested wake recorded %v", got)
-			}
 		})
 	}
 }
 
-// The first session of a launched platform host records a provision sample
-// and, bought for the reserve, prepares instead of serving.
+// The first session of a launched platform host bought for the reserve
+// prepares instead of serving.
 func TestFirstSessionOfALaunchedHost(t *testing.T) {
 	h := start(t)
 	for _, c := range []struct {
@@ -382,19 +354,11 @@ func TestFirstSessionOfALaunchedHost(t *testing.T) {
 		{"bought for the reserve", ptr("hibernate"), "preparing"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			h.exec("delete from fleet_activations")
 			host, ctx := h.enroll()
 			h.exec(`update hosts set provider = 'aws', instance_type = 'm7i.large', region = 'us-east-2', reserve_mode = $2,
                 created_at = now() - interval '90 seconds' where id = $1`, uuid.UUID(host), c.mode)
 			open(t, ctx, h.client)
 			h.waitPhase(host, c.want)
-			var seconds float64
-			if err := h.pool.QueryRow(h.t.Context(), "select seconds from fleet_activations where kind = 'provision' and outcome = 'ready'").Scan(&seconds); err != nil {
-				t.Fatal(err)
-			}
-			if seconds < 89 || seconds > 120 {
-				t.Fatalf("provision took %v s", seconds)
-			}
 		})
 	}
 }

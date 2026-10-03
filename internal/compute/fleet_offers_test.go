@@ -230,7 +230,7 @@ func offerKeys(offers []FleetOffer) []string {
 	return keys
 }
 
-func TestAConnectionPaysItsOwnHostsAndAColdBootStopsReservesPlainly(t *testing.T) {
+func TestAConnectionPaysItsOwnHosts(t *testing.T) {
 	in := offerInputs(t)
 	in.Rates = nil
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
@@ -240,15 +240,6 @@ func TestAConnectionPaysItsOwnHostsAndAColdBootStopsReservesPlainly(t *testing.T
 	in.OwnerPays = true
 	if offers := RankOffers(DefaultPolicy(), need, false, in); len(offers) == 0 {
 		t.Fatal("a connected account got no offers")
-	}
-	in = offerInputs(t)
-	in.Catalog = []CatalogType{mustType(t, "m7i.xlarge")}
-	if offers := RankOffers(DefaultPolicy(), need, true, in); len(offers) != 1 || !offers[0].Hibernate {
-		t.Fatalf("reserve offers %v, want one that hibernates", offerKeys(offers))
-	}
-	in.PlainStop = map[string]bool{"us-east-2/m7i.xlarge": true}
-	if offers := RankOffers(DefaultPolicy(), need, true, in); len(offers) != 1 || offers[0].Hibernate {
-		t.Fatalf("reserve offers %v, want one that stops plainly after a cold boot", offerKeys(offers))
 	}
 }
 

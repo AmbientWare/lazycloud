@@ -20,7 +20,6 @@ const (
 	FleetStarting    FleetState = "starting"
 	FleetDraining    FleetState = "draining"
 	FleetUnavailable FleetState = "unavailable"
-	FleetFailed      FleetState = "failed"
 	FleetTerminating FleetState = "terminating"
 )
 
@@ -84,7 +83,8 @@ type FleetSummary struct {
 	Release *FleetRelease
 }
 
-// FleetNodes lists platform hosts with an instance by id after the cursor.
+// FleetNodes lists live platform hosts with an instance by id after the
+// cursor; a failed host keeps its failure on its row and in the logs.
 func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([]FleetNode, error) {
 	release, err := c.TargetRelease(ctx)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -108,8 +108,8 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 			Allocated:  FleetCapacity{CPUMillis: r.UsedCpu, MemoryBytes: r.UsedMemory, GPUs: int(r.UsedGpus)},
 			Containers: int(r.Containers),
 			State: fleetStateOf(hostStanding{
-				Phase: r.Phase, State: r.State, CapacityState: r.CapacityState, CapacityReason: r.CapacityReason,
-				ImageEvidence: r.ImageEvidence, LastSeenAt: r.LastSeenAt, ReserveMode: r.ReserveMode, Containers: r.Containers,
+				Phase: r.Phase, State: r.State, CapacityState: r.CapacityState, ImageEvidence: r.ImageEvidence,
+				LastSeenAt: r.LastSeenAt, ReserveMode: r.ReserveMode,
 			}, now),
 		}
 		switch n.State {
@@ -117,7 +117,7 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 			n.Ready = onRelease(n.ID, &r.AgentVersion, target)
 		case FleetStopped, FleetHibernateUnverified, FleetImageSaved:
 			n.Ready = onRelease(n.ID, r.PreparedAgentVersion, target)
-		case FleetStarting, FleetDraining, FleetPreparing, FleetStopping, FleetUnavailable, FleetFailed, FleetTerminating:
+		case FleetStarting, FleetDraining, FleetPreparing, FleetStopping, FleetUnavailable, FleetTerminating:
 		}
 		out = append(out, n)
 	}
@@ -132,8 +132,8 @@ func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
 	if err != nil {
 		return FleetSummary{}, err
 	}
-	// One reserve pass publishes every market it plans, so the plan is the
-	// newest pass's markets; a market it no longer plans keeps an older row.
+	// A pass publishes every market it plans, so the plan is the newest
+	// pass's markets; a market it no longer plans keeps an older row.
 	var newest time.Time
 	for _, m := range markets {
 		if m.GeneratedAt.After(newest) {
@@ -166,7 +166,7 @@ func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
 		return FleetSummary{}, err
 	}
 	rows, err := c.queries.FleetRollout(ctx, FleetRolloutParams{
-		LiveAfter: summary.ObservedAt.Add(-LivenessTimeout), Consolidating: reasonConsolidating, Version: release.Version,
+		LiveAfter: summary.ObservedAt.Add(-LivenessTimeout), Version: release.Version,
 	})
 	if err != nil {
 		return FleetSummary{}, fmt.Errorf("count the agent rollout: %w", err)

@@ -43,11 +43,6 @@ func TestCoverChoosesTheLowerTotalCostForRequiredCapacity(t *testing.T) {
 }
 
 func TestCoverFitsALargeRequestOnOneHostDespiteAggregateRoom(t *testing.T) {
-	need := CoverNeed{Shapes: []FleetCapacity{cpuGiB(16_000, 32)}}
-	r := Cover([]FleetOffer{coverSmall, coverLarge}, need, hourlyCost, CoverLimits{Nodes: 16})
-	if !slices.Equal(boughtNames(r), []string{"large"}) {
-		t.Fatalf("bought %v", boughtNames(r))
-	}
 	items := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(16_000, 32), Count: 1}}}
 	if r := Cover([]FleetOffer{coverSmall, coverLarge}, items, hourlyCost, CoverLimits{Nodes: 16}); !slices.Equal(boughtNames(r), []string{"large"}) {
 		t.Fatalf("items bought %v", boughtNames(r))

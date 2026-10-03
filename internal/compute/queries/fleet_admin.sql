@@ -1,8 +1,8 @@
 -- name: PlatformHosts :many
--- Platform hosts with an instance, with the reservations of their live
--- containers, by id after the cursor; failed ones for a day. A launch the
--- provider refused has no instance and is left out.
-select h.id, h.provider, h.phase, h.state, h.capacity_state, h.capacity_reason, h.last_seen_at,
+-- Live platform hosts with an instance, with the reservations of their live
+-- containers, by id after the cursor. A failed host keeps its failure on
+-- its row; a launch the provider refused has no instance.
+select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at,
        (h.token_hash is not null)::bool as enrolled, h.instance_id::text as instance_id, h.region, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.agent_version, h.reserve_mode,
        h.image_evidence, h.prepared_agent_version,
@@ -17,20 +17,18 @@ left join lateral (
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
-where h.kind = 'platform' and h.instance_id is not null and h.phase <> 'deleted'
-  and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
+where h.kind = 'platform' and h.instance_id is not null and h.phase not in ('deleted', 'failed')
   and h.id > @after_id
 order by h.id
 limit @max_rows;
 
 -- name: FleetRollout :many
--- Platform hosts by where they stand on the agent release: connected
+-- Live platform hosts by where they stand on the agent release: connected
 -- serving or draining hosts on it (current) or on another (updating),
 -- reserves, and other enrolled hosts (offline). Draining and serving are
--- fleetStateOf's: an emptied consolidating host is not draining.
+-- fleetStateOf's.
 select (case
-    when h.phase = 'draining' or (h.phase = 'ready' and ((h.capacity_state <> 'available'
-            and (h.capacity_reason <> @consolidating::text or live.containers > 0))
+    when h.phase = 'draining' or (h.phase = 'ready' and (h.capacity_state <> 'available'
         or (h.state = 'online' and coalesce(h.last_seen_at > @live_after::timestamptz, false))))
         then case when h.agent_version = @version::text then 'current' else 'updating' end
     when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'
@@ -38,10 +36,6 @@ select (case
     else ''
 end)::text as phase, count(*)::int as hosts
 from hosts h
-left join lateral (
-    select count(*) as containers from containers c where c.host_id = h.id and c.state <> 'stopped'
-) live on true
-where h.kind = 'platform' and h.phase <> 'deleted'
-  and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
+where h.kind = 'platform' and h.phase not in ('deleted', 'failed')
 group by 1
 order by 1;

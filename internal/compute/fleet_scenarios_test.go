@@ -48,9 +48,6 @@ type simArrival struct {
 	need  Requirement
 	count int
 	runs  time.Duration
-	// ahead is how long before it the arrival is scheduled, zero when it
-	// is not.
-	ahead time.Duration
 }
 
 type simResult struct {
@@ -71,13 +68,8 @@ type sim struct {
 	start   time.Time
 	hosts   []*simHost
 	pending []*simContainer
-	history map[ReserveMarket][]Arrival
-	markets map[ReserveMarket]MarketRecord
 	next    byte
 	r       simResult
-	planned time.Time
-	// demandOnly plans without forecasts.
-	demandOnly bool
 	// quotas are EC2's vCPU quotas; the planner reads them only with
 	// knowQuota.
 	quotas    map[QuotaKey]int64
@@ -115,7 +107,7 @@ func newSim(t *testing.T, p Policy) *sim {
 		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}, {ID: "c", Zone: "us-east-2c", ZoneID: "use2-az3"},
 	}}}
 	return &sim{
-		t: t, p: p, now: offerNow, start: offerNow, history: map[ReserveMarket][]Arrival{}, markets: map[ReserveMarket]MarketRecord{},
+		t: t, p: p, now: offerNow, start: offerNow,
 		in: OfferInputs{Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks)},
 	}
 }
@@ -128,15 +120,10 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				for range a.count {
 					s.pending = append(s.pending, &simContainer{id: uuid.New(), need: a.need, arrived: s.now, runs: a.runs})
 				}
-				m := marketOfNeed(a.need)
-				s.history[m] = append(s.history[m], Arrival{At: s.now, Shape: needShape(a.need), Count: a.count, Duration: a.runs})
 			}
 		}
 		s.place()
-		if len(s.pending) > 0 || !s.now.Before(s.planned.Add(s.p.PlanInterval)) {
-			s.plan(arrivals)
-			s.planned = s.now
-		}
+		s.plan()
 		s.account()
 		s.now = s.now.Add(simTick)
 	}
@@ -164,7 +151,7 @@ func (s *sim) advance() {
 		switch {
 		case h.State == FleetStarting:
 			h.State = FleetServing
-		case h.State == FleetPreparing && h.hibernating():
+		case h.State == FleetPreparing && *h.ReserveMode == ReserveHibernate:
 			h.State, h.Current = FleetImageSaved, true
 			s.r.stops++
 		case h.State == FleetPreparing:
@@ -215,8 +202,8 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 	return fh
 }
 
-func (s *sim) plan(arrivals []simArrival) {
-	snapshot := FleetSnapshot{Now: s.now, Offers: s.in, Markets: s.markets, Forecasts: map[ReserveMarket]MarketForecast{}}
+func (s *sim) plan() {
+	snapshot := FleetSnapshot{Now: s.now, Offers: s.in}
 	snapshot.Offers.Now = s.now
 	if s.knowQuota {
 		for key, vcpus := range s.quotas {
@@ -235,7 +222,6 @@ func (s *sim) plan(arrivals []simArrival) {
 	snapshot.HostRoom, snapshot.ReserveRoom = simMaxHosts-live, simMaxHosts-reserves
 	groups := map[string]*DemandGroup{}
 	var order []string
-	pending := map[ReserveMarket]FleetCapacity{}
 	for _, c := range s.pending {
 		key := fmt.Sprint(c.need)
 		if groups[key] == nil {
@@ -243,38 +229,13 @@ func (s *sim) plan(arrivals []simArrival) {
 			order = append(order, key)
 		}
 		groups[key].Containers = append(groups[key].Containers, PendingContainer{ID: c.id, Host: c.host})
-		m := marketOfNeed(c.need)
-		pending[m] = pending[m].Plus(needShape(c.need))
 	}
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
-	scheduled := map[ReserveMarket][]Arrival{}
-	for _, a := range arrivals {
-		at := s.start.Add(a.at)
-		if a.ahead > 0 && at.After(s.now) && !at.After(s.now.Add(a.ahead)) {
-			m := marketOfNeed(a.need)
-			scheduled[m] = append(scheduled[m], Arrival{At: at, Shape: needShape(a.need), Count: a.count, Duration: a.runs})
-		}
-	}
-	for _, m := range s.p.Markets() {
-		if s.demandOnly {
-			break
-		}
-		snapshot.Forecasts[m] = ForecastMarket(s.p, s.now, ForecastInput{
-			Market: m, Arrivals: s.history[m], Scheduled: scheduled[m], Pending: pending[m], Hosts: snapshot.Hosts,
-		})
-	}
 	plan := PlanFleet(s.p, snapshot)
 	s.check(snapshot, plan)
 	s.apply(plan)
-}
-
-func marketOfNeed(r Requirement) ReserveMarket {
-	if r.GPUsNeeded() > 0 {
-		return ReserveMarket{GPU: r.GPUs[0]}
-	}
-	return ReserveMarket{Preemptible: r.Preemptible}
 }
 
 // check asserts no purchase serves a container a ready reserve would fit.
@@ -326,7 +287,7 @@ func (s *sim) launch(a FleetAction, reserve bool) (HostID, bool) {
 	h := &simHost{offer: o, FleetHost: FleetHost{
 		ID: HostID{s.next, 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
-		LaunchedAt: ptr(s.now), HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
+		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
 	}}
 	h.until = s.now.Add(simProvision)
 	if reserve {
@@ -370,10 +331,6 @@ func (s *sim) apply(plan FleetPlan) {
 			s.host(*a.Host).State = FleetDraining
 		case ActionRetireReserve:
 			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
-		case ActionConsolidate:
-			from, to := s.host(*a.Host), s.host(*a.Destination)
-			to.containers, from.containers = append(to.containers, from.containers...), nil
-			s.markets[a.Market] = MarketRecord{CooldownUntil: ptr(s.now.Add(s.p.ConsolidationCooldown))}
 		}
 	}
 	for _, w := range plan.Waits {
@@ -388,9 +345,9 @@ func (s *sim) apply(plan FleetPlan) {
 		}
 	}
 	for _, h := range s.hosts {
-		h.LightSince = nil
-		if since, ok := plan.LightSince[h.ID]; ok {
-			h.LightSince = ptr(since)
+		h.IdleSince = nil
+		if since, ok := plan.IdleSince[h.ID]; ok {
+			h.IdleSince = ptr(since)
 		}
 	}
 }
@@ -438,10 +395,10 @@ func cpuNeed(cpu int64, memGiB int64) Requirement {
 }
 
 func TestFleetScenarios(t *testing.T) {
-	burst := func(at time.Duration, need Requirement, count int, ahead time.Duration) []simArrival {
+	burst := func(at time.Duration, need Requirement, count int) []simArrival {
 		var out []simArrival
 		for i := range count {
-			out = append(out, simArrival{at: at + time.Duration(i%6)*simTick, need: need, count: 1, runs: 10 * time.Minute, ahead: ahead})
+			out = append(out, simArrival{at: at + time.Duration(i%6)*simTick, need: need, count: 1, runs: 10 * time.Minute})
 		}
 		return out
 	}
@@ -452,22 +409,18 @@ func TestFleetScenarios(t *testing.T) {
 		arrivals []simArrival
 	}{
 		{"quiet day", 24 * time.Hour, nil},
-		{"burst", 2 * time.Hour, burst(time.Hour, cpuNeed(1000, 2), 40, 0)},
-		{"scheduled burst", 2 * time.Hour, burst(time.Hour, cpuNeed(1000, 2), 40, 6*time.Minute)},
-		{"reserve depletion", 3 * time.Hour, append(append(burst(time.Hour, cpuNeed(2000, 4), 12, 0),
-			burst(time.Hour+15*time.Minute, cpuNeed(2000, 4), 12, 0)...), burst(time.Hour+30*time.Minute, cpuNeed(2000, 4), 12, 0)...)},
-		{"GPU burst", 2 * time.Hour, burst(time.Hour, gpu, 4, 0)},
-		{"8-16 vCPU burst", 2 * time.Hour, append(burst(time.Hour, cpuNeed(8000, 16), 5, 0), burst(time.Hour, cpuNeed(16_000, 32), 3, 0)...)},
+		{"burst", 2 * time.Hour, burst(time.Hour, cpuNeed(1000, 2), 40)},
+		{"reserve depletion", 3 * time.Hour, append(append(burst(time.Hour, cpuNeed(2000, 4), 12),
+			burst(time.Hour+15*time.Minute, cpuNeed(2000, 4), 12)...), burst(time.Hour+30*time.Minute, cpuNeed(2000, 4), 12)...)},
+		{"GPU burst", 2 * time.Hour, burst(time.Hour, gpu, 4)},
+		{"8-16 vCPU burst", 2 * time.Hour, append(burst(time.Hour, cpuNeed(8000, 16), 5), burst(time.Hour, cpuNeed(16_000, 32), 3)...)},
 	}
 	for _, sc := range scenarios {
 		for _, policy := range []struct {
-			name       string
-			p          Policy
-			demandOnly bool
-		}{{"default policy", DefaultPolicy(), false}, {"demand only", demandOnly(), true}} {
-			s := newSim(t, policy.p)
-			s.demandOnly = policy.demandOnly
-			r := s.run(sc.d, sc.arrivals)
+			name string
+			p    Policy
+		}{{"default policy", DefaultPolicy()}, {"demand only", demandOnly()}} {
+			r := newSim(t, policy.p).run(sc.d, sc.arrivals)
 			t.Log(r.row(sc.name + ", " + policy.name))
 			for _, v := range r.violations {
 				t.Errorf("%s, %s: %s", sc.name, policy.name, v)
@@ -492,7 +445,7 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 			want += a.Offer.HourlyMicros
 		case ActionBuyReserve:
 			want += a.Offer.StoppedMicros
-		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionConsolidate, ActionRightsize, ActionRefresh:
+		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionRefresh:
 			t.Fatalf("an empty fleet's first pass %s", a.Kind)
 		}
 	}

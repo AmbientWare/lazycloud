@@ -76,8 +76,8 @@ func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
 	if plan := e.fleet(admin).Plan; plan != nil {
 		t.Fatalf("fleet summary before any plan: %+v, want no plan", plan)
 	}
-	if result, err := e.compute.Plan(ctx, slog.New(slog.DiscardHandler)); err != nil || !result.Published {
-		t.Fatalf("plan the fleet: %+v %v, want a published plan", result, err)
+	if _, err := e.compute.Plan(ctx, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("plan the fleet: %v", err)
 	}
 	published, err := e.compute.PublishedPlan(ctx)
 	if err != nil {
@@ -134,7 +134,9 @@ func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
 	}
 }
 
-func TestFleetNodesListReserveStatesAndNeverARefusedLaunch(t *testing.T) {
+// Nodes lists live hosts in their fleet state; a failed host and a launch
+// the provider refused are left out.
+func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
 	ctx := t.Context()
 	e := newEnv(t)
 	admin := e.administrator()
@@ -167,8 +169,8 @@ func TestFleetNodesListReserveStatesAndNeverARefusedLaunch(t *testing.T) {
 		e.fleetHost(fleetHost{instance: "i-0resuming", phase: "resuming"}):                  {apitypes.FleetStarting, false},
 		e.fleetHost(fleetHost{instance: "i-0refreshing", phase: "resuming", reserve: stop}): {apitypes.FleetPreparing, false},
 		e.fleetHost(fleetHost{instance: "i-0terminating", phase: "terminating"}):            {apitypes.FleetTerminating, false},
-		e.fleetHost(fleetHost{instance: "i-0failed", phase: "failed"}):                      {apitypes.FleetFailed, false},
 	}
+	failed := e.fleetHost(fleetHost{instance: "i-0failed", phase: "failed"})
 	refused := e.fleetHost(fleetHost{phase: "failed"})
 	requested := e.fleetHost(fleetHost{phase: "requested"})
 
@@ -197,9 +199,9 @@ func TestFleetNodesListReserveStatesAndNeverARefusedLaunch(t *testing.T) {
 		}
 		cursor = *page.NextCursor
 	}
-	for _, absent := range []uuid.UUID{refused, requested} {
+	for _, absent := range []uuid.UUID{failed, refused, requested} {
 		if n, ok := got[absent]; ok {
-			t.Errorf("host without an instance listed: %+v", n)
+			t.Errorf("failed host or one without an instance listed: %+v", n)
 		}
 	}
 	if r := e.fleet(admin).Release; r == nil || r.Complete || r.Phases["current"] != 1 || r.Phases["updating"] != 1 || r.Phases["reserve"] != 6 {
@@ -213,31 +215,6 @@ func TestFleetNodesListReserveStatesAndNeverARefusedLaunch(t *testing.T) {
 		case n.State != w.state || n.Ready != w.ready || n.InstanceId == nil || *n.InstanceId == "":
 			t.Errorf("node %v: state %s ready %v, want %s ready %v", deref(n.InstanceId), n.State, n.Ready, w.state, w.ready)
 		}
-	}
-}
-
-// An emptied consolidating host that lost its connection is unavailable on
-// Nodes, and the rollout counts it offline rather than on the release.
-func TestFleetRolloutAndNodesAgreeOnAnEmptiedConsolidatingHost(t *testing.T) {
-	ctx := t.Context()
-	e := newEnv(t)
-	admin := e.administrator()
-	if err := e.compute.PublishAgentRelease(ctx, compute.AgentRelease{
-		Version: "2.0.0", SHA256: map[string]string{"amd64": strings.Repeat("a", 64)}, RolloutPercent: 100,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	host := e.fleetHost(fleetHost{instance: "i-0consolidated", phase: "ready", agent: "2.0.0"})
-	if _, err := e.pool.Exec(ctx, `update hosts set capacity_state = 'draining', capacity_reason = 'consolidating' where id = $1`, host); err != nil {
-		t.Fatal(err)
-	}
-	var page apitypes.FleetNodePage
-	if status := e.do("GET", "/v1/fleet/nodes", admin, nil, &page); status != 200 || len(page.Nodes) != 1 ||
-		page.Nodes[0].State != apitypes.FleetUnavailable {
-		t.Fatalf("fleet nodes: %d %+v, want the host unavailable", status, page.Nodes)
-	}
-	if r := e.fleet(admin).Release; r == nil || r.Phases["current"] != 0 || r.Phases["offline"] != 1 {
-		t.Fatalf("rollout %+v, want the host offline", r)
 	}
 }
 

@@ -10,21 +10,19 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 
 -- name: PlannerHosts :many
 -- Every cloud host the fleet holds or is buying, with what its live
--- containers reserve and how many of them did not accept interruption.
-select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state, h.capacity_reason,
+-- containers reserve.
+select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
-       h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros, h.launched_at,
+       h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.updating_until, h.light_since,
+       h.prepared_agent_version, h.updating_until, h.idle_since,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
-       coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
-       coalesce(used.pinned, 0)::int as pinned
+       coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
-           count(*) as containers,
-           count(*) filter (where c.rate_class in ('non_preemptible', 'pinned_non_preemptible')) as pinned
+           count(*) as containers
     from containers c
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
@@ -60,79 +58,6 @@ left join releases r on r.id = b.release_id
 group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 order by 4, 5, 6, 2 desc, 3 desc;
 
--- name: RecentArrivals :many
--- Platform containers placed since @since_id, a uuidv7 bound on the
--- arrivals index, by 10-second bucket and shape: how many arrived and how
--- long the stopped ones served. gpu_type is the model placement gave them.
--- Pending containers are the pending demand, read in its batch.
-select date_bin('10 seconds', c.created_at, timestamptz '2000-01-01 00:00:00+00')::timestamptz as at,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)::jsonb as gpus,
-       c.gpu_type, c.cpu_millis, c.memory_bytes, c.gpu_count,
-       coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
-       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       count(*)::int as arrived,
-       coalesce(avg(extract(epoch from c.stopped_at - c.ready_at))
-           filter (where c.stopped_at is not null and c.ready_at is not null), 0)::float8 as served_seconds
-from containers c
-join workspaces ws on ws.id = c.workspace_id
-left join releases r on r.id = c.release_id
-where c.id >= @since_id and c.state <> 'pending' and ws.connection_id is null
-  and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
-group by 1, 2, 3, 4, 5, 6, 7, 8, 9
-order by 1;
-
--- name: ScheduledDemand :many
--- Platform functions due to fire by @until, with their active release's
--- shape and scaling, the ready containers a warm minimum keeps (read only
--- for a release that keeps one) and the 95th percentile run time of tasks
--- since @since_id.
-select s.workload_id, s.next_fire_at, (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)::jsonb as gpus,
-       coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
-       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       coalesce((r.spec ->> 'concurrency')::int, 1)::int as concurrency,
-       coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
-       coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
-       coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
-       coalesce(warm.containers, 0)::int as warm_containers,
-       coalesce(run.p95, 0)::float8 as run_seconds
-from schedules s
-join workloads w on w.id = s.workload_id
-join releases r on r.id = w.active_release_id
-join apps a on a.id = w.app_id
-join workspaces ws on ws.id = a.workspace_id
-left join lateral (
-    select count(*) as containers from containers c
-    where c.release_id = r.id and c.state = 'ready' and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
-) warm on true
-left join lateral (
-    select percentile_cont(0.95) within group (order by extract(epoch from t.finished_at - t.started_at)) as p95
-    from tasks t
-    where t.workload_id = w.id and t.id >= @since_id and t.finished_at > t.started_at
-) run on true
-where s.next_fire_at > now() and s.next_fire_at <= @until
-  and w.desired_state = 'active' and a.state = 'active' and ws.state = 'active' and ws.connection_id is null
-  and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
-  and coalesce(jsonb_array_length(r.spec -> 'disks'), 0) = 0
-order by s.next_fire_at, s.workload_id;
-
--- name: ActivationStats :many
--- Fleet activations of the last day by kind, hardware and resume outcome,
--- with the 95th percentile time of those that became ready.
-select kind, instance_type, region, gpu_type,
-       (case when outcome in ('memory_restored', 'cold_boot') then outcome else '' end)::text as resume_outcome,
-       count(*) filter (where outcome <> 'failed')::int as ready,
-       count(*) filter (where outcome = 'failed')::int as failed,
-       coalesce(percentile_cont(0.95) within group (order by seconds) filter (where outcome <> 'failed'), 0)::float8 as p95
-from fleet_activations
-where at > now() - interval '1 day'
-group by 1, 2, 3, 4, 5
-order by 1, 2, 3, 4, 5;
-
 -- name: PlannerCooldowns :many
 -- Offers cooling now, and refusals recent enough to cool their region. A
 -- cooldown with no refusal behind it has no refused_at.
@@ -145,8 +70,7 @@ order by connection_key, region, instance_type, market;
 -- The published markets. An expired plan is no plan; readers compare
 -- expires_at with their clock. The cast gives sqlc a row type apart from
 -- the admin FleetMarket.
-select market::text as market, plan, generated_at, expires_at, pressure_since,
-       consolidating_host, consolidation_started_at, consolidation_cooldown_until
+select market::text as market, plan, generated_at, expires_at
 from fleet_markets
 order by market;
 
@@ -179,7 +103,7 @@ from jsonb_to_recordset(@hosts::jsonb) as v(
 -- requested resume serves.
 update hosts h
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(), resume_requested_at = now(),
-    reserve_mode = case when v.refresh then h.reserve_mode end, light_since = null, updated_at = now()
+    reserve_mode = case when v.refresh then h.reserve_mode end, idle_since = null, updated_at = now()
 from (select unnest(@ids::uuid[]) as id, unnest(@refresh::bool[]) as refresh) v
 where h.id = v.id and h.phase = 'stopped'
 returning h.id;
@@ -191,7 +115,7 @@ returning h.id;
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any(@hibernate_ids::uuid[]) then 'hibernate' else 'stop' end,
-    light_since = null, updated_at = now()
+    idle_since = null, updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id;
@@ -201,7 +125,7 @@ returning h.id;
 -- termination; a host that took a container since the snapshot stays.
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = @reason, reserve_mode = null,
-    light_since = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    idle_since = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id;
@@ -218,28 +142,12 @@ where h.id = any(@ids::uuid[])
            and (h.launch_lease_until is null or h.launch_lease_until < now())))
 returning h.id;
 
--- name: CordonHosts :many
--- Lightly used hosts stop taking work while their containers drain onto
--- the rest of the market.
-update hosts
-set capacity_state = 'draining', capacity_reason = 'consolidating', updated_at = now()
-where id = any(@ids::uuid[]) and phase = 'ready' and capacity_state = 'available'
-returning id;
-
--- name: UncordonHosts :exec
--- A consolidated host that emptied takes work again; retention decides
--- what happens to it.
+-- name: SetIdleSince :exec
+-- When each changed serving host became idle; null clears it.
 update hosts h
-set capacity_state = 'available', capacity_reason = '', updated_at = now()
-where h.id = any(@ids::uuid[]) and h.phase = 'ready' and h.capacity_reason = 'consolidating'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped');
-
--- name: SetLightSince :exec
--- When each changed serving host became lightly used; null clears it.
-update hosts h
-set light_since = v.light_since
-from jsonb_to_recordset(@hosts::jsonb) as v(id uuid, light_since timestamptz)
-where h.id = v.id and h.light_since is distinct from v.light_since;
+set idle_since = v.idle_since
+from jsonb_to_recordset(@hosts::jsonb) as v(id uuid, idle_since timestamptz)
+where h.id = v.id and h.idle_since is distinct from v.idle_since;
 
 -- name: SetCapacityWaits :execrows
 -- Records why each pending container waits; unchanged rows are not
@@ -271,20 +179,12 @@ where id = any(@ids::uuid[]) and phase = 'preparing' and phase_at < now() - make
 returning id;
 
 -- name: UpsertFleetMarkets :exec
--- Each changed market's published plan and planner state. Rows carry the
--- stored plan forward when this pass publishes none.
-insert into fleet_markets (market, plan, generated_at, expires_at, pressure_since, consolidating_host,
-                           consolidation_started_at, consolidation_cooldown_until)
-select v.market, v.plan, v.generated_at, v.expires_at, v.pressure_since, v.consolidating_host,
-       v.consolidation_started_at, v.consolidation_cooldown_until
-from jsonb_to_recordset(@markets::jsonb) as v(
-    market text, plan jsonb, generated_at timestamptz, expires_at timestamptz, pressure_since timestamptz,
-    consolidating_host uuid, consolidation_started_at timestamptz, consolidation_cooldown_until timestamptz)
+-- Every platform market's published plan.
+insert into fleet_markets (market, plan, generated_at, expires_at)
+select v.market, v.plan, v.generated_at, v.expires_at
+from jsonb_to_recordset(@markets::jsonb) as v(market text, plan jsonb, generated_at timestamptz, expires_at timestamptz)
 on conflict (market) do update
-set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = excluded.expires_at,
-    pressure_since = excluded.pressure_since, consolidating_host = excluded.consolidating_host,
-    consolidation_started_at = excluded.consolidation_started_at,
-    consolidation_cooldown_until = excluded.consolidation_cooldown_until;
+set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = excluded.expires_at;
 
 -- name: NotifyHosts :exec
 -- Wakes the sessions of hosts the pass moved, once it commits.
