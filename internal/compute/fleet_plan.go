@@ -819,13 +819,13 @@ func (ps *pass) retain(v *marketView) {
 }
 
 // leave returns a leaving host to the reserve while the market's reserve
-// falls short and EC2 can stop the host, hibernating a host launched able
-// to; it drains the host otherwise.
+// falls short and EC2 can stop the host, hibernating an on-demand host
+// launched able to; it drains the host otherwise.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	_, catalogued := ps.typeNamed(h.InstanceType)
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && !ps.reserveHeld(v).Covers(v.stopped) {
 		mode := ReserveStop
-		if h.HibernationConfigured {
+		if h.HibernationConfigured && h.Market == MarketOnDemand {
 			mode = ReserveHibernate
 		}
 		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false

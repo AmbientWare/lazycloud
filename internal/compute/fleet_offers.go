@@ -226,7 +226,8 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // sold in the region, in a market the need allows, not cooling, with a
 // complete cost, whose usable capacity covers the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and that keep the purchase margin
-// unless the owner pays. A reserve offer hibernates where the type does.
+// unless the owner pays. An on-demand reserve offer hibernates where the
+// type does (see hibernates).
 // Order: the need's GPU preference, cooling regions last, complete hourly
 // cost, region preference, fewest hosts in the zone, key. An offer whose
 // host would exceed a known vCPU quota is skipped.
@@ -262,7 +263,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					continue
 				}
 				for _, market := range markets {
-					hibernate := reserve && t.Hibernates
+					hibernate := reserve && hibernates(t, market)
 					disk := rootDiskMicros(region, t.RootGiB(hibernate))
 					compute := onDemand
 					if market == MarketSpot {
@@ -299,6 +300,16 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 		)
 	})
 	return offers
+}
+
+// hibernates reports whether a reserve of type t bought in market sleeps by
+// hibernating. Spot reserves stop plainly: in us-east-2 a Spot c6a.2xlarge
+// hibernation on 2026-09-27 never reached stopped and was forced, while an
+// on-demand c6a.2xlarge hibernated in the same call, and a Spot m6a.8xlarge
+// was forced after 11 minutes on 2026-09-28. A forced stop loses the image
+// after holding the host for providerDeadline.
+func hibernates(t CatalogType, market Market) bool {
+	return t.Hibernates && market == MarketOnDemand
 }
 
 // preferHealthy drops offers in cooling regions while another offer

@@ -230,7 +230,7 @@ func offerKeys(offers []FleetOffer) []string {
 	return keys
 }
 
-func TestAConnectionPaysItsOwnHosts(t *testing.T) {
+func TestAConnectionPaysItsOwnHostsAndOnlyOnDemandReservesHibernate(t *testing.T) {
 	in := offerInputs(t)
 	in.Rates = nil
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
@@ -240,6 +240,18 @@ func TestAConnectionPaysItsOwnHosts(t *testing.T) {
 	in.OwnerPays = true
 	if offers := RankOffers(DefaultPolicy(), need, false, in); len(offers) == 0 {
 		t.Fatal("a connected account got no offers")
+	}
+	in = offerInputs(t)
+	in.Catalog = []CatalogType{mustType(t, "m7i.xlarge")}
+	in.Spot = []SpotQuote{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "m7i.xlarge", HourlyMicros: 80_000, ObservedAt: offerNow}}
+	for _, preemptible := range []bool{false, true} {
+		need.Preemptible = preemptible
+		offers := RankOffers(DefaultPolicy(), need, true, in)
+		if len(offers) == 0 || offers[0].Hibernate == preemptible ||
+			offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(offers[0].Hibernate)) {
+			t.Errorf("preemptible %v: reserve offers %v, want the %s one to hibernate %v", preemptible, offerKeys(offers),
+				map[bool]string{true: "Spot", false: "on-demand"}[preemptible], !preemptible)
+		}
 	}
 }
 

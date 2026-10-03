@@ -484,14 +484,14 @@ func TestPlannedCapacityUsesTheMemoryHostsOfTheTypeReported(t *testing.T) {
 }
 
 // A pass in an empty fleet buys the warm floors to serve and the stopped
-// floors as reserves that hibernate.
+// floors as reserves: on-demand ones hibernate, Spot ones stop plainly.
 func TestAnEmptyFleetBuysTheFloorsAsServingHostsAndReserves(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	if r := plan(t, o); r.Requested == 0 {
 		t.Fatalf("plan %+v, want floors bought", r)
 	}
-	for market, mode := range map[string]string{"spot": "hibernate", "on_demand": "hibernate"} {
+	for market, mode := range map[string]string{"spot": "stop", "on_demand": "hibernate"} {
 		serving := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode is null", market)
 		reserves := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode = $2", market, mode)
 		others := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode <> $2", market, mode)
