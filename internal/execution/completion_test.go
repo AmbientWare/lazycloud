@@ -188,7 +188,7 @@ where t.id = any($1)`, f.tasks, uuid.UUID(f.otherHosts)).Scan(&succeeded, &resul
 	notes := taskNotes()
 	woken := map[string]bool{}
 	for _, payload := range notes {
-		for id := range strings.SplitSeq(payload, ",") {
+		for id := range strings.SplitSeq(payload, "\n") {
 			woken[id] = true
 		}
 	}
@@ -224,6 +224,86 @@ func TestACompletionThatFailsItsWriteLeavesTheOthersWritten(t *testing.T) {
 		}
 		if status, _ := taskState(t, pool, task); status != want {
 			t.Fatalf("task %d is %s, want %s", i, status, want)
+		}
+	}
+}
+
+// Two batches that each finish one upstream task with success and one with
+// failure lock their shared dependents in one id-ordered statement, so they
+// wait on each other instead of deadlocking. A third transaction holds one
+// dependent until both batches queue behind it.
+func TestBatchesSharingDependentsDoNotDeadlock(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := runningBatch(t, pool, `{}`, 4)
+	ctx := t.Context()
+	// x waits on tasks 0 and 3, y on tasks 2 and 1.
+	var x, y uuid.UUID
+	err := pool.QueryRow(ctx, `
+with up as (select * from tasks where id = any($1)),
+     dep as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, unmet_dependencies)
+             select workspace_id, workload_id, release_id, 'queued', 0, 1, 2 from up limit 2 returning id),
+     pair as (select id, row_number() over (order by id) n from dep),
+     ins as (insert into task_inputs (task_id, encoding, data) select id, 'json', '1' from dep),
+     edges as (insert into task_dependencies (task_id, depends_on)
+               select pair.id, u from pair, unnest(case when pair.n = 1 then array[$2::uuid, $5::uuid] else array[$4::uuid, $3::uuid] end) u)
+select (select id from pair where n = 1), (select id from pair where n = 2)`,
+		f.tasks, f.tasks[0], f.tasks[1], f.tasks[2], f.tasks[3]).Scan(&x, &y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "update tasks set max_attempts = 1 where id = any($1)", f.tasks); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := hold.Exec(ctx, "select 1 from tasks where id = $1 for update", x); err != nil {
+		t.Fatal(err)
+	}
+	waitForLockWaits := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			var waiting int
+			if err := pool.QueryRow(ctx, `select count(*) from pg_stat_activity
+where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if waiting >= want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d transactions wait on a lock, want %d", waiting, want)
+			}
+		}
+	}
+	finishPair := func(succeeds, fails int) error {
+		return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+			_, err := e.finishAttempts(ctx, tx, &f.host, nil, []AttemptOutcome{
+				{Attempt: f.attempts[succeeds], State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte(`1`)}},
+				{Attempt: f.attempts[fails], State: AttemptFailed, Failure: &Failure{Kind: FailureUserError, Message: "bad"}},
+			})
+			return err
+		})
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- finishPair(0, 1) }()
+	waitForLockWaits(1)
+	go func() { errs <- finishPair(2, 3) }()
+	waitForLockWaits(2)
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("finish a batch: %v", err)
+		}
+	}
+	for _, dependent := range []uuid.UUID{x, y} {
+		if status, failure := taskState(t, pool, dependent); status != string(TaskFailed) || failure == nil || *failure != string(FailureDependencyFailed) {
+			t.Fatalf("dependent is %s with failure %v, want failed by its upstream", status, failure)
 		}
 	}
 }

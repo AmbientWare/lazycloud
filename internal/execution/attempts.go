@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -58,12 +59,12 @@ func (o AttemptOutcome) validate() error {
 
 // finishAttempts records outcomes in tx and advances their tasks: success
 // stores the result, a retryable failure with attempts left requeues after
-// the release's retry delay, anything else fails the task. It reports per
-// outcome whether the attempt was stale, which changes nothing: not
-// running, repeated earlier in outcomes, or, when host is set, not assigned
-// to host or not on containers[n]. containers is nil or parallel to
-// outcomes. When host is set and an attempt ran on a draining container,
-// the host is woken, as it may now stop the container.
+// the release's retry delay, anything else fails the task. It returns which
+// outcomes were stale and changed nothing: the attempt was not running, was
+// repeated earlier in outcomes, or, with host set, was not assigned to host
+// or not on containers[n]. containers is nil or parallel to outcomes. With
+// host set, an attempt that ran on a draining container wakes the host,
+// which may now stop the container.
 func (e *Execution) finishAttempts(ctx context.Context, tx pgx.Tx, host *compute.HostID, containers []ContainerID, outcomes []AttemptOutcome) ([]bool, error) {
 	stale := make([]bool, len(outcomes))
 	if len(outcomes) == 0 {
@@ -220,10 +221,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 			return err
 		}
 	}
-	if err := e.resolveDependents(ctx, tx, results.TaskIds, upstreamSucceeded); err != nil {
-		return err
-	}
-	if err := e.failDependents(ctx, tx, failed.Ids); err != nil {
+	if err := e.resolveOutcomeDependents(ctx, tx, results.TaskIds, failed.Ids); err != nil {
 		return err
 	}
 	if err := database.NotifyAll(ctx, tx, database.ChannelTask, ids); err != nil {
@@ -259,26 +257,39 @@ func (e *Execution) retryPolicies(ctx context.Context, q *Queries, live []liveOu
 	return policies, nil
 }
 
-// mayRetry reports whether failure is retryable and task has attempts left,
-// so its release's retry policy decides.
+// mayRetry reports whether failure is retryable and task has attempts left.
+// The release's retry policy then decides.
 func mayRetry(task LockTasksForAttemptsRow, failure Failure) bool {
 	return failure.Kind.Retryable() && task.AttemptCount < task.MaxAttempts
 }
 
-// failDependents fails the queued dependents of failed upstream tasks, each
-// naming its upstream as when that task failed alone. With several
-// upstream tasks every dependent locks first in one id-ordered statement.
-func (e *Execution) failDependents(ctx context.Context, tx pgx.Tx, upstream []uuid.UUID) error {
-	if len(upstream) > 1 {
-		closure, err := e.queries.WithTx(tx).LockDependentClosure(ctx, upstream)
-		if err != nil {
-			return fmt.Errorf("lock dependents: %w", err)
-		}
-		if len(closure) == 0 {
-			return nil
-		}
+// resolveOutcomeDependents applies the outcomes of succeeded and failed
+// upstream tasks to their dependents. When it takes more than one locking
+// statement, every dependent locks first in a single id-ordered one, so
+// transactions that finish several upstream tasks never deadlock on shared
+// dependents. A dependent of failed tasks names its first failed upstream,
+// as when that task failed alone.
+func (e *Execution) resolveOutcomeDependents(ctx context.Context, tx pgx.Tx, succeeded, failed []uuid.UUID) error {
+	if len(failed) == 0 {
+		return e.resolveDependents(ctx, tx, succeeded, upstreamSucceeded)
 	}
-	for _, id := range upstream {
+	if len(succeeded) == 0 && len(failed) == 1 {
+		return e.resolveDependents(ctx, tx, failed, upstreamUnsuccessful)
+	}
+	locked, err := e.queries.WithTx(tx).LockOutcomeDependents(ctx, LockOutcomeDependentsParams{Succeeded: succeeded, Failed: failed})
+	if err != nil {
+		return fmt.Errorf("lock dependents: %w", err)
+	}
+	if len(locked) == 0 {
+		return nil
+	}
+	if err := e.resolveDependents(ctx, tx, succeeded, upstreamSucceeded); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(locked, func(row LockOutcomeDependentsRow) bool { return row.AfterFailure }) {
+		return nil
+	}
+	for _, id := range failed {
 		if err := e.resolveDependents(ctx, tx, []uuid.UUID{id}, upstreamUnsuccessful); err != nil {
 			return err
 		}
