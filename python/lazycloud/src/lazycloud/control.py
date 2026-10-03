@@ -5,13 +5,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 from urllib.parse import urlencode
 
-from lazycloud.clients.api import ApiClient
-from lazycloud.clients.storage import StorageClient
-from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.exceptions import ConfigurationError
+
+# Declaring an app imports this module; the clients load only when used.
+if TYPE_CHECKING:
+    from lazycloud.clients.api import ApiClient
+    from lazycloud.clients.storage import StorageClient
+    from lazycloud.clients.workloads import WorkloadsClient
 
 # Set by the platform in every workload container.
 CONTAINER_API_ENV = "LAZYCLOUD_CONTAINER_API"
@@ -97,6 +100,8 @@ def endpoint_url(endpoint: str, *, tls: bool) -> str:
 
 
 def api_client(config: ControlClientConfig) -> ApiClient:
+    from lazycloud.clients.api import ApiClient
+
     if config.container_api:
         return ApiClient(
             endpoint=config.endpoint,
@@ -113,10 +118,14 @@ def api_client(config: ControlClientConfig) -> ApiClient:
 
 
 def storage_client(config: ControlClientConfig) -> StorageClient:
+    from lazycloud.clients.storage import StorageClient
+
     return StorageClient(api_client(config), require_workspace(config))
 
 
 def workloads_client(config: ControlClientConfig) -> WorkloadsClient:
+    from lazycloud.clients.workloads import WorkloadsClient
+
     return WorkloadsClient(api_client(config), require_workspace(config))
 
 

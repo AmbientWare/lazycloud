@@ -71,12 +71,12 @@ from lazycloud.client_contracts import (
 from lazycloud.env import is_local
 from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.references import dotted_reference
-from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
     from lazycloud.abstractions.image import ImageBuildResult
     from lazycloud.abstractions.shell import ShellSession
     from lazycloud.contracts.api import Deployment, Preview, WorkloadSpec
+    from lazycloud.terminal import Terminal
 
 P = ParamSpec("P")
 R = TypeVar("R")

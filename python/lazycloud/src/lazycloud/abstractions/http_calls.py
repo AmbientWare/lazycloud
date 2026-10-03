@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 from urllib.parse import urlencode
 
-import httpx
 from pydantic import JsonValue, ValidationError
 
 from lazycloud._shared.autoscaling import Autoscaler
@@ -17,14 +16,15 @@ from lazycloud._shared.gpu import gpu_preference
 from lazycloud._shared.image_building.python import python_minor_version
 from lazycloud.abstractions.metadata import lifecycle_hook_references
 from lazycloud.client_contracts import build_client_contract
-from lazycloud.contracts.api import WorkloadKind, WorkloadSpec
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.exceptions import SdkError
 from lazycloud.json_contracts import parse_json_value
 
+# httpx and the API models load with the first request.
 if TYPE_CHECKING:
     from lazycloud.abstractions.image import ImageBuildResult
+    from lazycloud.contracts.api import WorkloadSpec
 
 InvocationTargetName: TypeAlias = Literal["auto", "served", "deployed"]
 INVOCATION_TARGETS = ("auto", "served", "deployed")
@@ -75,6 +75,7 @@ def http_workload_spec(
 ) -> WorkloadSpec:
     """The API definition of an HTTP workload for an uploaded source and a ready image."""
     from lazycloud.abstractions.function import _resources, _volume_spec, placement_fields
+    from lazycloud.contracts.api import WorkloadSpec
 
     http: dict[str, Any] = {
         "kind": kind,
@@ -191,6 +192,7 @@ def resolve_url(
     gets no token: the platform credential never reaches a workload.
     """
     from lazycloud.abstractions.serve import read_serve_preview
+    from lazycloud.contracts.api import WorkloadKind
 
     target = options.target.strip().lower()
     if target not in INVOCATION_TARGETS:
@@ -251,6 +253,8 @@ def send_request(
     token: str | None,
     timeout_seconds: float,
 ) -> EndpointResponse:
+    import httpx
+
     target = url.rstrip("/") + "/" + path.lstrip("/") if path else url
     request_headers = dict(headers or {})
     if token and not any(key.lower() == "authorization" for key in request_headers):

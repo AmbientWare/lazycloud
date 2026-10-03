@@ -54,6 +54,7 @@ BUILD_ID = "0192f0a0-0000-7000-8000-0000000000b1"
 NOW = "2026-09-30T12:00:00Z"
 FUNCTION = "/v1/workspaces/team/apps/reports/workloads/function/summarize_sales"
 TASKS = f"{FUNCTION}/tasks"
+RUN = f"{FUNCTION}/run"
 
 REPORTS = """\
 import lazycloud
@@ -117,6 +118,29 @@ def _inputs(request: ApiRequest) -> list[dict[str, Any]]:
         assert item["encoding"] == "cloudpickle"
         decoded.append(pickle.loads(base64.b64decode(item["data"])))
     return decoded
+
+
+def _entry(task_id: str, number: int, stream: str, data: str) -> dict[str, object]:
+    return {
+        "id": number,
+        "task_id": task_id,
+        "attempt": 1,
+        "stream": stream,
+        "data": data,
+        "time": NOW,
+    }
+
+
+def _events(*events: dict[str, object], dropped: bool = False) -> Reply:
+    """A runTask stream of these TaskRunEvents, dropped after the last when `dropped`."""
+
+    def lines() -> Iterator[bytes]:
+        for event in events:
+            yield json.dumps(event).encode() + b"\n"
+        if dropped:
+            raise StreamAborted
+
+    return 200, {"Content-Type": "application/x-ndjson"}, lines()
 
 
 def _image(ready: bool, python_version: str = "3.11") -> dict[str, object]:
@@ -682,7 +706,7 @@ def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
     assert ("authorization" in sent) is authorized
 
 
-def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
+def test_remote_runs_in_one_request_and_returns_the_value(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -690,32 +714,58 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
     _serve_deployment(fake_api, stored=set())
+    task_id = _task_id(6)
+    fake_api.route("POST", RUN)(
+        lambda _: _events(
+            {"task": _task(task_id)},
+            {"log": _entry(task_id, 1, "stdout", "summing 3 values")},
+            {
+                "task": _task(task_id, "succeeded"),
+                "result": {"encoding": "cloudpickle", "data": _pickled(5500)},
+            },
+        )
+    )
+
+    assert reports.summarize_sales.remote([1200, 3500, 800]) == 5500
+
+    # The working-tree release is prepared first; the call itself is one request.
+    run = fake_api.requests[-1]
+    assert (run.method, run.path) == ("POST", RUN)
+    assert [r for r in fake_api.requests if "/tasks" in r.path] == []
+    body = run.json()
+    assert body["release_id"] == RELEASE_ID
+    assert body["input"]["encoding"] == "cloudpickle"
+    assert pickle.loads(base64.b64decode(body["input"]["data"])) == {
+        "args": [[1200, 3500, 800]],
+        "kwargs": {},
+    }
+    assert "summing 3 values" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("ending", ["dropped", "wait-passed"])
+def test_remote_follows_a_task_the_run_stream_leaves_unfinished(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fake_api: FakeApi,
+    ending: str,
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     task_id = _task_id(7)
-    log_streams: list[Iterator[bytes]] = []
-
-    def entry(number: int, stream: str, data: str) -> bytes:
-        record: dict[str, object] = {
-            "id": number,
-            "task_id": task_id,
-            "attempt": 1,
-            "stream": stream,
-            "data": data,
-            "time": NOW,
-        }
-        return json.dumps(record).encode() + b"\n"
-
-    def dropped() -> Iterator[bytes]:
-        yield entry(1, "stdout", "summing 3 values")
-        raise StreamAborted
-
-    def finished() -> Iterator[bytes]:
-        yield entry(2, "stderr", "total ready")
-
-    log_streams.extend([dropped(), finished()])
-
-    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
+    first = _entry(task_id, 1, "stdout", "summing 3 values")
+    if ending == "dropped":
+        fake_api.route("POST", RUN)(
+            lambda _: _events({"task": _task(task_id)}, {"log": first}, dropped=True)
+        )
+    else:
+        fake_api.route("POST", RUN)(
+            lambda _: _events(
+                {"task": _task(task_id)}, {"log": first}, {"task": _task(task_id, "running")}
+            )
+        )
     fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(
-        lambda _: (200, {"Content-Type": "application/x-ndjson"}, log_streams.pop(0))
+        lambda _: json_reply(_entry(task_id, 2, "stderr", "total ready"))
     )
     fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")(
         lambda _: json_reply(_task(task_id, "succeeded"))
@@ -726,13 +776,8 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
 
     assert reports.summarize_sales.remote([1200, 3500, 800]) == 5500
 
-    (submit,) = fake_api.calls("POST", TASKS)
-    assert _inputs(submit) == [{"args": [[1200, 3500, 800]], "kwargs": {}}]
     logs = fake_api.calls("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")
-    assert [(r.query["after"], r.query["follow"]) for r in logs] == [
-        (["0"], ["true"]),
-        (["1"], ["true"]),
-    ]
+    assert [(r.query["after"], r.query["follow"]) for r in logs] == [(["1"], ["true"])]
     reads = fake_api.calls("GET", f"/v1/workspaces/team/tasks/{task_id}")
     assert [r.query["wait_seconds"] for r in reads if "wait_seconds" in r.query] == [["30"]]
     stderr = capsys.readouterr().err
@@ -743,10 +788,10 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
 def _serve_failed_task(api: FakeApi, failure: dict[str, object]) -> None:
     _serve_deployment(api, stored=set())
     task_id = _task_id(9)
-    api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
-    api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(lambda _: (200, {}, b""))
-    api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")(
-        lambda _: json_reply(_task(task_id, "failed", failure=failure))
+    api.route("POST", RUN)(
+        lambda _: _events(
+            {"task": _task(task_id)}, {"task": _task(task_id, "failed", failure=failure)}
+        )
     )
 
 
@@ -899,7 +944,6 @@ def test_remote_cancels_the_task_when_following_ends_early(
     _serve_deployment(fake_api, stored=set())
     task_id = _task_id(60)
     logs = f"/v1/workspaces/team/tasks/{task_id}/logs"
-    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
     fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")(
         lambda _: json_reply(_task(task_id, "running"))
     )
@@ -908,16 +952,12 @@ def test_remote_cancels_the_task_when_following_ends_early(
     )
     if ending == "ctrl-c":
         reports.summarize_sales.terminal = _InterruptedTerminal()
-        line: dict[str, object] = {
-            "id": 1,
-            "task_id": task_id,
-            "attempt": 1,
-            "stream": "stdout",
-            "data": "x",
-        }
-        fake_api.route("GET", logs)(lambda _: json_reply({**line, "time": NOW}))
+        fake_api.route("POST", RUN)(
+            lambda _: _events({"task": _task(task_id)}, {"log": _entry(task_id, 1, "stdout", "x")})
+        )
         expected: type[BaseException] = KeyboardInterrupt
     else:
+        fake_api.route("POST", RUN)(lambda _: _events({"task": _task(task_id)}, dropped=True))
         fake_api.route("GET", logs)(lambda _: error_reply("forbidden", "token revoked", 403))
         expected = ApiError
 
@@ -934,12 +974,12 @@ def test_ctrl_c_during_submit_cancels_the_admitted_task(
     _serve_deployment(fake_api, stored=set())
     task_id = _task_id(61)
 
-    @fake_api.route("POST", TASKS)
-    def submit(_: ApiRequest) -> Reply:
+    @fake_api.route("POST", RUN)
+    def run(_: ApiRequest) -> Reply:
         # The user presses Ctrl-C after the server admitted the task.
         threading.Timer(0.05, _thread.interrupt_main).start()
         time.sleep(0.3)
-        return json_reply({"tasks": [_task(task_id)]}, 201)
+        return _events({"task": _task(task_id)})
 
     cancel = f"/v1/workspaces/team/tasks/{task_id}/cancel"
     fake_api.route("POST", cancel)(lambda _: json_reply(_task(task_id, "cancelled")))
@@ -1004,21 +1044,20 @@ def test_remote_reports_why_a_queued_task_waits(
     }
 
     @fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")
-    def read(request: ApiRequest) -> Reply:
-        if "wait_seconds" in request.query:
-            return json_reply(_task(task_id, "succeeded"))
+    def read(_: ApiRequest) -> Reply:
         polled.set()
         return json_reply(_task(task_id, pending=pending))
 
-    def logs(_: ApiRequest) -> Reply:
+    def finished() -> Iterator[bytes]:
+        yield json.dumps({"task": _task(task_id)}).encode() + b"\n"
         assert polled.wait(5)
-        return 200, {}, b""
+        final: dict[str, object] = {
+            "task": _task(task_id, "succeeded"),
+            "result": {"encoding": "json", "value": 3},
+        }
+        yield json.dumps(final).encode() + b"\n"
 
-    fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(logs)
-    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
-    fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/result")(
-        lambda _: json_reply({"encoding": "json", "value": 3})
-    )
+    fake_api.route("POST", RUN)(lambda _: (200, {}, finished()))
     updates: list[tuple[str, TaskPendingReason | None]] = []
 
     with lazycloud.progress(lambda task, update: updates.append((task, update and update.reason))):

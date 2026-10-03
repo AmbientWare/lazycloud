@@ -215,12 +215,13 @@ class Task:
     def cancel(self) -> TaskView:
         return self._read(lambda: self.client.cancel_task(self.workspace, self._id))
 
-    def follow_logs(self, emit: Callable[[LogEntry], None]) -> None:
-        """Deliver log entries until the task finishes, resuming after dropped streams."""
+    def follow_logs(self, emit: Callable[[LogEntry], None], *, after: int = 0) -> None:
+        """Deliver log entries after `after` until the task finishes, resuming dropped streams."""
         for entry in follow_log_stream(
             lambda after: self.client.stream_task_logs(
                 self.workspace, self._id, after=after, follow=True
-            )
+            ),
+            after=after,
         ):
             emit(entry)
 
@@ -352,14 +353,15 @@ EntryT = TypeVar("EntryT", LogEntry, ContainerLogEntry)
 
 
 def follow_log_stream(
-    open_stream: Callable[[int], Iterator[EntryT]],
+    open_stream: Callable[[int], Iterator[EntryT]], *, after: int = 0
 ) -> Iterator[EntryT]:
     """Yield a followed log stream, reopening after the last entry when it drops.
 
-    `open_stream` receives the id of the last delivered entry, 0 at first.
-    Non-transient failures, and transient ones past the retry budget, raise.
+    `open_stream` receives the id of the last delivered entry, `after` at
+    first. Non-transient failures, and transient ones past the retry budget,
+    raise.
     """
-    cursor = 0
+    cursor = after
     failures = 0
     failing_since = 0.0
     while True:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-from asyncio import AbstractEventLoop
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+# asyncio loads on the first async call, not at container start.
+if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop
 
 R = TypeVar("R")
 
@@ -17,10 +19,14 @@ def run_sync(awaitable: Awaitable[R], loop: AbstractEventLoop | None = None) -> 
 
 
 async def to_thread(func: Callable[..., R], *args: Any, **kwargs: Any) -> R:
+    import asyncio
+
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
 def _event_loop() -> AbstractEventLoop:
+    import asyncio
+
     try:
         return asyncio.get_event_loop()
     except RuntimeError:
