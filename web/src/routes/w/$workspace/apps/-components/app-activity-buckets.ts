@@ -1,8 +1,6 @@
+import { ACTIVITY_HOURS, activityHourIndex, activityHours } from "@/lib/activity-window";
 import type { Schemas } from "@/lib/api/client";
 import type { TaskActivityBand } from "@/lib/format";
-
-const HOUR_MS = 60 * 60 * 1_000;
-const HOUR_COUNT = 24;
 
 export type AppRunActivity = {
   tasks: number[];
@@ -36,14 +34,11 @@ export function appRunActivity(
     other: hours(),
     succeeded: hours(),
   };
-  const currentHour = Math.floor(now.getTime() / HOUR_MS) * HOUR_MS;
-  const firstHour = currentHour - (HOUR_COUNT - 1) * HOUR_MS;
+  const drawn = activityHours(now.getTime());
 
   for (const bucket of (series ?? []).flatMap((item) => item.buckets)) {
-    const timestamp = new Date(bucket.timestamp).getTime();
-    if (!Number.isFinite(timestamp)) continue;
-    const index = Math.floor((Math.floor(timestamp / HOUR_MS) * HOUR_MS - firstHour) / HOUR_MS);
-    if (index < 0 || index >= HOUR_COUNT) continue;
+    const index = activityHourIndex(bucket.timestamp, drawn);
+    if (index < 0) continue;
     for (const status of Object.keys(STATUS_BANDS) as (keyof typeof STATUS_BANDS)[]) {
       const amount = Math.max(Math.trunc(bucket.status_counts[status]), 0);
       tasks[index] += amount;
@@ -65,7 +60,7 @@ export function appRunActivity(
 }
 
 function hours(): number[] {
-  return Array.from({ length: HOUR_COUNT }, () => 0);
+  return Array.from({ length: ACTIVITY_HOURS }, () => 0);
 }
 
 function sum(values: number[]): number {

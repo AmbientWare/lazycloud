@@ -50,6 +50,7 @@ export const workspaceQueryKeys = {
     summaries: (workspace: string) => [...workspaceRoot(workspace), "apps", "summaries"] as const,
     detail: (workspace: string, app: string) =>
       [...workspaceRoot(workspace), "apps", "detail", app] as const,
+    details: (workspace: string) => [...workspaceRoot(workspace), "apps", "detail"] as const,
     activities: (workspace: string) => [...workspaceRoot(workspace), "apps", "activity"] as const,
     activity: (workspace: string, app: string) =>
       [...workspaceRoot(workspace), "apps", "activity", app] as const,
@@ -63,29 +64,40 @@ export const workspaceQueryKeys = {
   invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
   workloads: {
     root: (workspace: string) => [...workspaceRoot(workspace), "workloads"] as const,
+    lists: (workspace: string) => [...workspaceRoot(workspace), "workloads", "list"] as const,
     list: (workspace: string, app: string | null) =>
       [...workspaceRoot(workspace), "workloads", "list", { app }] as const,
+    // Container changes refresh every detail, which holds running counts and
+    // devbox status.
+    details: (workspace: string) => [...workspaceRoot(workspace), "workloads", "detail"] as const,
     detail: workloadKey,
-    versions: (workspace: string, workload: WorkloadRef) =>
-      [...workloadKey(workspace, workload), "versions"] as const,
     devbox: (workspace: string, { app, name }: Pick<WorkloadRef, "app" | "name">) =>
       [...workloadKey(workspace, { app, kind: "pod", name }), "devbox"] as const,
-    performance: (workspace: string, workload: WorkloadRef, windowSeconds: number) =>
-      [...workloadKey(workspace, workload), "performance", windowSeconds] as const,
+    versions: (workspace: string, { app, kind, name }: WorkloadRef) =>
+      [...workspaceRoot(workspace), "workloads", "versions", app, kind, name] as const,
+    // Keyed by id, which every task, request and container change names.
+    activities: (workspace: string) =>
+      [...workspaceRoot(workspace), "workloads", "activity"] as const,
+    activity: (workspace: string, workloadId: string) =>
+      [...workspaceRoot(workspace), "workloads", "activity", workloadId] as const,
+    performance: (workspace: string, workloadId: string, windowSeconds: number) =>
+      [
+        ...workspaceRoot(workspace),
+        "workloads",
+        "activity",
+        workloadId,
+        "performance",
+        windowSeconds,
+      ] as const,
   },
   tasks: {
     root: (workspace: string) => [...workspaceRoot(workspace), "tasks"] as const,
     lists: (workspace: string) => [...workspaceRoot(workspace), "tasks", "list"] as const,
     list: (workspace: string, options: TaskListKeyParts) =>
       [...workspaceRoot(workspace), "tasks", "list", options] as const,
-    // Under the task lists, so the changes that refresh those refresh these.
-    requests: (workspace: string, app: string, name: string, limit: number) =>
-      [...workspaceRoot(workspace), "tasks", "list", "requests", { app, name, limit }] as const,
     details: (workspace: string) => [...workspaceRoot(workspace), "tasks", "detail"] as const,
     detail: (workspace: string, taskId: string) =>
       [...workspaceRoot(workspace), "tasks", "detail", taskId] as const,
-    request: (workspace: string, requestId: string) =>
-      [...workspaceRoot(workspace), "tasks", "detail", "request", requestId] as const,
     callGraphs: (workspace: string) =>
       [...workspaceRoot(workspace), "tasks", "call-graph"] as const,
     callGraph: (workspace: string, rootTaskId: string) =>
@@ -93,6 +105,13 @@ export const workspaceQueryKeys = {
     aggregates: (workspace: string) => [...workspaceRoot(workspace), "tasks", "aggregate"] as const,
     metrics: (workspace: string, hours: number, app: string | null) =>
       [...workspaceRoot(workspace), "tasks", "aggregate", "metrics", hours, app] as const,
+  },
+  requests: {
+    lists: (workspace: string) => [...workspaceRoot(workspace), "requests", "list"] as const,
+    list: (workspace: string, app: string, name: string, limit: number) =>
+      [...workspaceRoot(workspace), "requests", "list", { app, name, limit }] as const,
+    detail: (workspace: string, requestId: string) =>
+      [...workspaceRoot(workspace), "requests", "detail", requestId] as const,
   },
   containers: {
     root: (workspace: string) => [...workspaceRoot(workspace), "containers"] as const,

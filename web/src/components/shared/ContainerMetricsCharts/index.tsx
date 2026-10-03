@@ -1,16 +1,15 @@
 import { Area, CartesianGrid, ComposedChart, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
-import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import {
   ChartContainer,
   ChartLegend,
   ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
+  emptyAxis,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +17,6 @@ import {
   buildMetricData,
   formatBytes,
   formatBytesPerSecond,
-  hasIoSamples,
   latestComputeReadout,
   type MetricDatum,
 } from "./metrics";
@@ -35,26 +33,33 @@ type BytesKey = keyof Pick<
   "memoryUsed" | "memoryTotal" | "gpuMemoryUsed" | "gpuMemoryTotal"
 >;
 
+/**
+ * A container's compute samples. Every chart keeps its size while samples
+ * are pending or absent.
+ */
 export function ContainerMetricsCharts({
   metrics,
+  pending = false,
+  empty = "No compute samples",
+  gpu = false,
   showIo = true,
   className,
 }: {
   metrics: Schemas["ContainerMetrics"] | undefined;
+  pending?: boolean;
+  /** What the charts say while there are no samples to draw. */
+  empty?: string;
+  /** Draw GPU memory before any sample reports it. */
+  gpu?: boolean;
   /** Network and disk throughput; off where a panel shows only what the container holds. */
   showIo?: boolean;
   className?: string;
 }) {
   const data = metrics ? buildMetricData(metrics) : [];
-
-  if (!data.length) {
-    return <PanelEmpty message="No compute samples" className="h-44" />;
-  }
-
-  const hasGpu = data.some((point) => point.gpuMemoryTotal > 0);
-  const hasIo = showIo && hasIoSamples(metrics?.points ?? []);
+  const emptyLabel = pending || data.length > 0 ? undefined : empty;
+  const hasGpu = gpu || data.some((point) => point.gpuMemoryTotal > 0);
   const readout = latestComputeReadout(data);
-  const latest = data[data.length - 1];
+  const latest = data.at(-1);
   const gpuReadout = latest?.gpuMemoryTotal ? formatBytes(latest.gpuMemoryUsed) : undefined;
   const diskReadout =
     latest && latest.diskReadRate !== null && latest.diskWriteRate !== null
@@ -63,12 +68,10 @@ export function ContainerMetricsCharts({
 
   return (
     <div
-      className={cn(
-        "content-transition grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2",
-        className,
-      )}
+      aria-busy={pending}
+      className={cn("grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2", className)}
     >
-      <CpuChart data={data} readout={readout?.cpu} />
+      <CpuChart data={data} readout={readout?.cpu} empty={emptyLabel} />
       <MemoryChart
         title="Memory"
         data={data}
@@ -77,6 +80,7 @@ export function ContainerMetricsCharts({
         usedLabel="RSS"
         color="var(--chart-2)"
         readout={readout?.memory}
+        empty={emptyLabel}
       />
       {hasGpu ? (
         <MemoryChart
@@ -87,9 +91,10 @@ export function ContainerMetricsCharts({
           usedLabel="Used"
           color="var(--chart-3)"
           readout={gpuReadout}
+          empty={emptyLabel}
         />
       ) : null}
-      {hasIo ? (
+      {showIo ? (
         <>
           <RatePairChart
             title="Network"
@@ -100,6 +105,7 @@ export function ContainerMetricsCharts({
             secondaryLabel="Sent"
             color="var(--chart-5)"
             readout={readout?.network ?? undefined}
+            empty={emptyLabel}
           />
           <RatePairChart
             title="Disk I/O"
@@ -110,6 +116,7 @@ export function ContainerMetricsCharts({
             secondaryLabel="Written"
             color="var(--chart-4)"
             readout={diskReadout}
+            empty={emptyLabel}
           />
         </>
       ) : null}
@@ -117,15 +124,9 @@ export function ContainerMetricsCharts({
   );
 }
 
-/** Layout-matched loading placeholder for one compute chart panel. */
-export function ChartSkeleton() {
-  return (
-    <div className="space-y-2" aria-hidden="true">
-      <Skeleton className="h-3.5 w-16" />
-      <Skeleton className="h-44 w-full" />
-    </div>
-  );
-}
+/** Charts with no samples draw 0 to 1 GiB and 0 to 1 MiB/s. */
+const EMPTY_BYTE_TICKS = [0, 256, 512, 768, 1024].map((mebibytes) => mebibytes * 1024 ** 2);
+const EMPTY_RATE_TICKS = [0, 256, 512, 768, 1024].map((kibibytes) => kibibytes * 1024);
 
 /** Metric name and latest-sample readout. */
 function ChartHeader({ title, readout }: { title: string; readout?: string }) {
@@ -138,7 +139,15 @@ function ChartHeader({ title, readout }: { title: string; readout?: string }) {
 }
 
 /** CPU utilization as a percentage of the container allocation on a fixed 0-100% axis. */
-function CpuChart({ data, readout }: { data: MetricDatum[]; readout?: string }) {
+function CpuChart({
+  data,
+  readout,
+  empty,
+}: {
+  data: MetricDatum[];
+  readout?: string;
+  empty?: string;
+}) {
   const config: ChartConfig = {
     cpuPercent: { label: "Used", color: "var(--chart-1)" },
   };
@@ -146,7 +155,7 @@ function CpuChart({ data, readout }: { data: MetricDatum[]; readout?: string }) 
   return (
     <section className="space-y-2" aria-label="CPU">
       <ChartHeader title="CPU" readout={readout} />
-      <ChartContainer config={config} className="h-44 w-full">
+      <ChartContainer config={config} className="h-44 w-full" empty={empty}>
         <LineChart
           data={data}
           syncId={METRICS_SYNC_ID}
@@ -168,6 +177,7 @@ function CpuChart({ data, readout }: { data: MetricDatum[]; readout?: string }) 
             axisLine={false}
             width={44}
             domain={[0, 100]}
+            allowDataOverflow={data.length === 0}
             ticks={[0, 25, 50, 75, 100]}
             tickFormatter={(value: number | string) => `${value}%`}
             tick={{ fontSize: 10 }}
@@ -210,6 +220,7 @@ function MemoryChart({
   usedLabel,
   color,
   readout,
+  empty,
 }: {
   title: string;
   data: MetricDatum[];
@@ -219,6 +230,7 @@ function MemoryChart({
   /** Per-metric hue; the capacity line stays muted. */
   color: string;
   readout?: string;
+  empty?: string;
 }) {
   const config: ChartConfig = {
     [usedKey]: { label: usedLabel, color },
@@ -228,7 +240,7 @@ function MemoryChart({
   return (
     <section className="space-y-2" aria-label={title}>
       <ChartHeader title={title} readout={readout} />
-      <ChartContainer config={config} className="h-44 w-full">
+      <ChartContainer config={config} className="h-44 w-full" empty={empty}>
         <ComposedChart
           data={data}
           syncId={METRICS_SYNC_ID}
@@ -249,6 +261,7 @@ function MemoryChart({
             tickLine={false}
             axisLine={false}
             width={76}
+            {...emptyAxis(data.length === 0, EMPTY_BYTE_TICKS)}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytes)}
             tick={{ fontSize: 10 }}
           />
@@ -296,6 +309,7 @@ function RatePairChart({
   secondaryLabel,
   color,
   readout,
+  empty,
 }: {
   title: string;
   data: MetricDatum[];
@@ -305,6 +319,7 @@ function RatePairChart({
   secondaryLabel: string;
   color: string;
   readout?: string;
+  empty?: string;
 }) {
   const config: ChartConfig = {
     [primaryKey]: { label: primaryLabel, color },
@@ -314,7 +329,7 @@ function RatePairChart({
   return (
     <section className="space-y-2" aria-label={title}>
       <ChartHeader title={title} readout={readout} />
-      <ChartContainer config={config} className="h-44 w-full">
+      <ChartContainer config={config} className="h-44 w-full" empty={empty}>
         <LineChart
           data={data}
           syncId={METRICS_SYNC_ID}
@@ -335,6 +350,7 @@ function RatePairChart({
             tickLine={false}
             axisLine={false}
             width={76}
+            {...emptyAxis(data.length === 0, EMPTY_RATE_TICKS)}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytesPerSecond)}
             tick={{ fontSize: 10 }}
           />

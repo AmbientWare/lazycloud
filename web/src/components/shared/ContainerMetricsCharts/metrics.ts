@@ -48,11 +48,6 @@ export function buildMetricData(metrics: Schemas["ContainerMetrics"]): MetricDat
     });
 }
 
-/** Whether any sample carries an interval, i.e. was recorded with I/O counters. */
-export function hasIoSamples(points: Schemas["ContainerMetricPoint"][]): boolean {
-  return points.some((point) => point.interval_ms > 0);
-}
-
 export type ComputeReadout = {
   cpu: string;
   memory: string;
