@@ -121,15 +121,28 @@ func (t HeadroomTarget) Of(load FleetCapacity) FleetCapacity {
 type MarketReserve struct {
 	Warm    HeadroomTarget
 	Stopped HeadroomTarget
-	// FitLargest keeps, among the stopped machines, one that fits the
-	// market's largest recent shape (Policy.LargestShape).
-	FitLargest bool
+	Largest LargestReserve
 }
 
-// LargestShape sizes the stopped machine each FitLargest market keeps: the
-// largest CPU, memory and GPUs its containers reserved within Window, capped
-// at Cap. A CPU market without such containers keeps one of Default; a GPU
-// market keeps none.
+// LargestReserve is how a market keeps a stopped machine that fits its
+// largest recent shape (Policy.LargestShape).
+type LargestReserve string
+
+const (
+	// LargestNone keeps none.
+	LargestNone LargestReserve = ""
+	// LargestShared keeps one among the machines that hold the stopped
+	// target.
+	LargestShared LargestReserve = "shared"
+	// LargestApart keeps one beside the machines that hold the stopped
+	// target. Work resumes it only when no other reserve fits.
+	LargestApart LargestReserve = "apart"
+)
+
+// LargestShape sizes a market's LargestReserve machine: the largest CPU,
+// memory and GPUs its containers reserved within Window, capped at Cap. A
+// CPU market without such containers keeps one of Default; a GPU market
+// keeps none.
 type LargestShape struct {
 	Window       time.Duration
 	Default, Cap FleetCapacity
@@ -181,11 +194,11 @@ type Policy struct {
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
 	cpu := MarketReserve{
-		Warm:       HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
-		Stopped:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},
-		FitLargest: true,
+		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
+		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},
+		Largest: LargestApart,
 	}
-	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
+	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, Largest: LargestShared}
 	// What a host of 16 vCPU and 32 GiB, a size that hibernates, offers;
 	// and the cap, what one of 32 vCPU and 64 GiB offers, with one card.
 	fits := CatalogType{CPUMillis: 16_000, MemoryBytes: 32 * gib}.Usable(0)
