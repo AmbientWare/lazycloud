@@ -158,6 +158,32 @@ func TestStoppingReserveHibernatesOnceEC2AllowsAndSettlesIntoTheReserve(t *testi
 	}
 }
 
+// A pass done with a host leaves it for the next look within seconds, not
+// for the claim's two-minute lease. The recheck repeats no stop EC2 is
+// still carrying out.
+func TestAStoppingReserveIsRecheckedWithinSecondsOfItsStopCall(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c030")
+	ec2.add(fakeInstance{ID: "i-0000000000000c030", State: "running", Hibernation: true, Launched: time.Now().Add(-time.Hour)}, host.String())
+	recheck := func() {
+		run(t, o.pool, "update hosts set launch_lease_until = launch_lease_until - interval '10 seconds' where id = $1", uuid.UUID(host))
+		actuate(t, o)
+	}
+
+	if r := actuate(t, o); r.Stopped != 1 {
+		t.Fatalf("actuate %+v, want one hibernation", r)
+	}
+	recheck()
+	if n := len(emulator.calls("StopInstances")); n != 1 {
+		t.Fatalf("%d StopInstances calls, want the one while EC2 stops it", n)
+	}
+	ec2.set("i-0000000000000c030", func(i *fakeInstance) { i.State = "stopped" })
+	recheck()
+	if f := stopOf(t, o, host); f.Phase != "stopped" || f.Evidence != string(compute.EvidenceSaved) {
+		t.Fatalf("after EC2 stopped it %+v, want stopped on the recheck with the image saved", f)
+	}
+}
+
 // EC2 names a hibernation in the stop reason; a hibernation that stopped
 // for another reason saved no image.
 func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {

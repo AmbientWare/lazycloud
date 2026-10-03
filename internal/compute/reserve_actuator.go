@@ -15,8 +15,13 @@ import (
 )
 
 const (
-	// actuatorLease holds a claimed host for one pass of provider calls.
+	// actuatorLease holds a claimed host while its pass makes provider
+	// calls.
 	actuatorLease = 2 * time.Minute
+	// actuatorRecheck is how soon a pass that is done with a host looks at
+	// it again. What keeps a call from repeating is the recorded stop and
+	// refusal times and EC2's launch time, not the lease.
+	actuatorRecheck = 10 * time.Second
 	// providerCallsPerPass bounds the start, stop and terminate calls of
 	// one pass.
 	providerCallsPerPass = 10
@@ -42,10 +47,10 @@ type ActuateResult struct {
 // Actuate performs the provider calls platform hosts wait on: StopInstances
 // for a host the agent proved ready to stop, StartInstances for a reserve
 // asked to resume, and termination, cancelling a Spot reserve's persistent
-// request first. Each host is claimed with a lease; the calls run outside
-// any transaction against what EC2 reports now, so a retry after a lost
-// answer repeats nothing EC2 already did. Outcomes are written with a phase
-// guard.
+// request first. Each host is claimed with a lease, cut to actuatorRecheck
+// once the pass is done with it; the calls run outside any transaction
+// against what EC2 reports now, so a retry after a lost answer repeats
+// nothing EC2 already did. Outcomes are written with a phase guard.
 func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResult, error) {
 	var result ActuateResult
 	claimed, err := c.queries.ClaimProviderActions(ctx, ClaimProviderActionsParams{
@@ -103,6 +108,18 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 				logger.ErrorContext(ctx, "reserve action", "host_id", h.ID, "phase", h.Phase, "error", err)
 			}
 		}
+	}
+	recheck := RecheckProviderActionsParams{RecheckSeconds: actuatorRecheck.Seconds()}
+	for _, h := range claimed {
+		if h.LaunchLeaseUntil != nil {
+			recheck.Ids, recheck.Leases = append(recheck.Ids, h.ID), append(recheck.Leases, *h.LaunchLeaseUntil)
+		}
+	}
+	if len(recheck.Ids) == 0 {
+		return result, nil
+	}
+	if err := c.queries.RecheckProviderActions(ctx, recheck); err != nil {
+		return result, fmt.Errorf("recheck provider actions: %w", err)
 	}
 	return result, nil
 }
