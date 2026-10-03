@@ -124,10 +124,9 @@ func costExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 }
 
 // The planning pass sends a fixed number of statements, and no snapshot
-// read touches more container or task rows than the pending batch as the
-// backlog and history grow: it reads the batch, live containers per host
-// and the recent window, never the backlog or history. Run with -v for the
-// cost table.
+// read touches more container rows than the pending batch as the backlog
+// and history grow: it reads the batch and live containers per host, never
+// the backlog or history. Run with -v for the cost table.
 func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	pool := dbtest.New(t)
 	counter := &statementCounter{}
@@ -144,8 +143,8 @@ func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, IdleTimeout: 5 * time.Minute, Networks: map[string]Network{
 		"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3"),
 	}}})
-	// Twenty functions, ten of them scheduled within the horizon, and a
-	// hundred serving hosts with four live containers each.
+	// Twenty functions and a hundred serving hosts with four live
+	// containers each.
 	costExec(t, pool, `
 with ws as (insert into workspaces (name) select 'ws-' || n from generate_series(1, 20) n returning id),
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id, workspace_id),
@@ -156,14 +155,6 @@ with ws as (insert into workspaces (name) select 'ws-' || n from generate_series
              from wl returning id, workload_id)
 select count(*) from rel`)
 	costExec(t, pool, "update workloads w set active_release_id = r.id from releases r where r.workload_id = w.id")
-	costExec(t, pool, `
-insert into schedules (workload_id, expression, next_fire_at)
-select id, '*/5 * * * *', now() + interval '2 minutes' from workloads order by id limit 10`)
-	// The first scheduled function keeps a warm container, so the pass
-	// counts its ready ones.
-	costExec(t, pool, `
-update releases set spec = spec || '{"autoscaler": {"min_containers": 1, "max_containers": 20000}}'
-where id = (select active_release_id from workloads order by id limit 1)`)
 	costExec(t, pool, `
 insert into hosts (name, token_hash, state, last_seen_at, kind, provider, phase, cpu_millis, memory_bytes, market, region,
                    availability_zone, availability_zone_id, instance_type, instance_id, launched_at, session_epoch)
@@ -193,21 +184,10 @@ select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, 'stoppe
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
 join apps a on a.id = w.app_id`, toHistory-history)
-		costExec(t, pool, `
-insert into tasks (id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at, finished_at)
-select uuidv7(- interval '2 days'), a.workspace_id, w.id, w.active_release_id, 'succeeded', 1, 1,
-       now() - interval '2 days', now() - interval '2 days' + interval '30 seconds'
-from generate_series(1, $1) n
-join lateral (select w.id, w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
-join apps a on a.id = w.app_id`, toHistory-history)
-		costExec(t, pool, `
-insert into fleet_activations (kind, instance_type, region, seconds, outcome, at)
-select 'provision', 'm7i.4xlarge', 'us-east-2', 240, 'ready', now() - interval '2 days' from generate_series(1, $1)`, (toHistory-history)/10)
 		costExec(t, pool, "analyze")
 		pending, history = toPending, toHistory
 	}
 	p := DefaultPolicy()
-	now := time.Now()
 	scans := []struct {
 		name  string
 		query string
@@ -215,9 +195,6 @@ select 'provision', 'm7i.4xlarge', 'us-east-2', 240, 'ready', now() - interval '
 	}{
 		{"hosts", plannerHosts, nil},
 		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
-		{"recent arrivals", recentArrivals, []any{uuidFloor(now.Add(-p.History))}},
-		{"scheduled demand", scheduledDemand, []any{uuidFloor(now.Add(-p.History)), now.Add(p.TotalHorizon())}},
-		{"activation stats", activationStats, nil},
 		{"cooldowns", plannerCooldowns, []any{p.RegionFailureWindow.Seconds()}},
 		{"markets", fleetMarkets, nil},
 	}
@@ -237,8 +214,8 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 		counter.n.Store(0)
 		start := time.Now()
 		result, err := c.Plan(t.Context(), slog.New(slog.DiscardHandler))
-		if err != nil || !result.Published {
-			t.Fatalf("plan %+v %v, want a reserve pass", result, err)
+		if err != nil || result.Skipped {
+			t.Fatalf("plan %+v %v", result, err)
 		}
 		out := cost{statements: counter.n.Load(), wall: time.Since(start), buffers: map[string]int{}}
 		var row []string
@@ -263,7 +240,7 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 	grow(2_000, 1_000)
 	small := measure("2,000 pending, 1,000 finished")
 	grow(10_000, 20_000)
-	// A deep backlog on the warm scheduled function too.
+	// A deep backlog on one function too.
 	costExec(t, pool, `
 insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
 select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
@@ -276,7 +253,7 @@ insert into containers (workspace_id, release_id, state, slots, cpu_millis, memo
 select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30, now() - interval '1 hour'
 from (select active_release_id, app_id from workloads order by id offset 1 limit 1) w
 join apps a on a.id = w.app_id, generate_series(1, 5000)`)
-	large := measure("15,000 pending, 10,000 more on a warm cron function, 20,000 finished")
+	large := measure("25,000 pending, 20,000 finished")
 	if large.statements != small.statements {
 		t.Errorf("the pass sent %d statements at 10,000 pending and %d at 2,000, want a fixed number", large.statements, small.statements)
 	}

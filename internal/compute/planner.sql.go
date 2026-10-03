@@ -12,60 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const activationStats = `-- name: ActivationStats :many
-select kind, instance_type, region, gpu_type,
-       (case when outcome in ('memory_restored', 'cold_boot') then outcome else '' end)::text as resume_outcome,
-       count(*) filter (where outcome <> 'failed')::int as ready,
-       count(*) filter (where outcome = 'failed')::int as failed,
-       coalesce(percentile_cont(0.95) within group (order by seconds) filter (where outcome <> 'failed'), 0)::float8 as p95
-from fleet_activations
-where at > now() - interval '1 day'
-group by 1, 2, 3, 4, 5
-order by 1, 2, 3, 4, 5
-`
-
-type ActivationStatsRow struct {
-	Kind          string
-	InstanceType  string
-	Region        string
-	GpuType       string
-	ResumeOutcome string
-	Ready         int32
-	Failed        int32
-	P95           float64
-}
-
-// Fleet activations of the last day by kind, hardware and resume outcome,
-// with the 95th percentile time of those that became ready.
-func (q *Queries) ActivationStats(ctx context.Context) ([]ActivationStatsRow, error) {
-	rows, err := q.db.Query(ctx, activationStats)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ActivationStatsRow
-	for rows.Next() {
-		var i ActivationStatsRow
-		if err := rows.Scan(
-			&i.Kind,
-			&i.InstanceType,
-			&i.Region,
-			&i.GpuType,
-			&i.ResumeOutcome,
-			&i.Ready,
-			&i.Failed,
-			&i.P95,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const coolOffers = `-- name: CoolOffers :exec
 insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
 select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => $1::float8),
@@ -86,39 +32,10 @@ func (q *Queries) CoolOffers(ctx context.Context, arg CoolOffersParams) error {
 	return err
 }
 
-const cordonHosts = `-- name: CordonHosts :many
-update hosts
-set capacity_state = 'draining', capacity_reason = 'consolidating', updated_at = now()
-where id = any($1::uuid[]) and phase = 'ready' and capacity_state = 'available'
-returning id
-`
-
-// Lightly used hosts stop taking work while their containers drain onto
-// the rest of the market.
-func (q *Queries) CordonHosts(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, cordonHosts, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const drainHosts = `-- name: DrainHosts :many
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,
-    light_since = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    idle_since = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any($2::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id
@@ -189,21 +106,16 @@ func (q *Queries) FailPreparing(ctx context.Context, arg FailPreparingParams) ([
 }
 
 const fleetMarkets = `-- name: FleetMarkets :many
-select market::text as market, plan, generated_at, expires_at, pressure_since,
-       consolidating_host, consolidation_started_at, consolidation_cooldown_until
+select market::text as market, plan, generated_at, expires_at
 from fleet_markets
 order by market
 `
 
 type FleetMarketsRow struct {
-	Market                     string
-	Plan                       []byte
-	GeneratedAt                time.Time
-	ExpiresAt                  time.Time
-	PressureSince              *time.Time
-	ConsolidatingHost          *uuid.UUID
-	ConsolidationStartedAt     *time.Time
-	ConsolidationCooldownUntil *time.Time
+	Market      string
+	Plan        []byte
+	GeneratedAt time.Time
+	ExpiresAt   time.Time
 }
 
 // The published markets. An expired plan is no plan; readers compare
@@ -223,10 +135,6 @@ func (q *Queries) FleetMarkets(ctx context.Context) ([]FleetMarketsRow, error) {
 			&i.Plan,
 			&i.GeneratedAt,
 			&i.ExpiresAt,
-			&i.PressureSince,
-			&i.ConsolidatingHost,
-			&i.ConsolidationStartedAt,
-			&i.ConsolidationCooldownUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -452,20 +360,18 @@ func (q *Queries) PlannerCooldowns(ctx context.Context, windowSeconds float64) (
 }
 
 const plannerHosts = `-- name: PlannerHosts :many
-select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state, h.capacity_reason,
+select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
-       h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros, h.launched_at,
+       h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.updating_until, h.light_since,
+       h.prepared_agent_version, h.updating_until, h.idle_since,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
-       coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
-       coalesce(used.pinned, 0)::int as pinned
+       coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
-           count(*) as containers,
-           count(*) filter (where c.rate_class in ('non_preemptible', 'pinned_non_preemptible')) as pinned
+           count(*) as containers
     from containers c
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
@@ -482,7 +388,6 @@ type PlannerHostsRow struct {
 	PhaseAt               time.Time
 	State                 string
 	CapacityState         string
-	CapacityReason        string
 	LastSeenAt            *time.Time
 	SessionEpoch          int64
 	Region                string
@@ -495,7 +400,6 @@ type PlannerHostsRow struct {
 	CpuMillis             int64
 	MemoryBytes           int64
 	HourlyMicros          *int64
-	LaunchedAt            *time.Time
 	InterruptionAt        *time.Time
 	ReserveMode           *string
 	HibernationConfigured bool
@@ -503,16 +407,15 @@ type PlannerHostsRow struct {
 	ImageEvidence         string
 	PreparedAgentVersion  *string
 	UpdatingUntil         *time.Time
-	LightSince            *time.Time
+	IdleSince             *time.Time
 	UsedCpu               int64
 	UsedMemory            int64
 	UsedGpus              int32
 	Containers            int32
-	Pinned                int32
 }
 
 // Every cloud host the fleet holds or is buying, with what its live
-// containers reserve and how many of them did not accept interruption.
+// containers reserve.
 func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	rows, err := q.db.Query(ctx, plannerHosts)
 	if err != nil {
@@ -530,7 +433,6 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.PhaseAt,
 			&i.State,
 			&i.CapacityState,
-			&i.CapacityReason,
 			&i.LastSeenAt,
 			&i.SessionEpoch,
 			&i.Region,
@@ -543,7 +445,6 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.CpuMillis,
 			&i.MemoryBytes,
 			&i.HourlyMicros,
-			&i.LaunchedAt,
 			&i.InterruptionAt,
 			&i.ReserveMode,
 			&i.HibernationConfigured,
@@ -551,81 +452,11 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.ImageEvidence,
 			&i.PreparedAgentVersion,
 			&i.UpdatingUntil,
-			&i.LightSince,
+			&i.IdleSince,
 			&i.UsedCpu,
 			&i.UsedMemory,
 			&i.UsedGpus,
 			&i.Containers,
-			&i.Pinned,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const recentArrivals = `-- name: RecentArrivals :many
-select date_bin('10 seconds', c.created_at, timestamptz '2000-01-01 00:00:00+00')::timestamptz as at,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)::jsonb as gpus,
-       c.gpu_type, c.cpu_millis, c.memory_bytes, c.gpu_count,
-       coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
-       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       count(*)::int as arrived,
-       coalesce(avg(extract(epoch from c.stopped_at - c.ready_at))
-           filter (where c.stopped_at is not null and c.ready_at is not null), 0)::float8 as served_seconds
-from containers c
-join workspaces ws on ws.id = c.workspace_id
-left join releases r on r.id = c.release_id
-where c.id >= $1 and c.state <> 'pending' and ws.connection_id is null
-  and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
-group by 1, 2, 3, 4, 5, 6, 7, 8, 9
-order by 1
-`
-
-type RecentArrivalsRow struct {
-	At            time.Time
-	Preemptible   bool
-	Gpus          []byte
-	GpuType       string
-	CpuMillis     int64
-	MemoryBytes   int64
-	GpuCount      int32
-	Region        string
-	Zone          string
-	Arrived       int32
-	ServedSeconds float64
-}
-
-// Platform containers placed since @since_id, a uuidv7 bound on the
-// arrivals index, by 10-second bucket and shape: how many arrived and how
-// long the stopped ones served. gpu_type is the model placement gave them.
-// Pending containers are the pending demand, read in its batch.
-func (q *Queries) RecentArrivals(ctx context.Context, sinceID uuid.UUID) ([]RecentArrivalsRow, error) {
-	rows, err := q.db.Query(ctx, recentArrivals, sinceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []RecentArrivalsRow
-	for rows.Next() {
-		var i RecentArrivalsRow
-		if err := rows.Scan(
-			&i.At,
-			&i.Preemptible,
-			&i.Gpus,
-			&i.GpuType,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.GpuCount,
-			&i.Region,
-			&i.Zone,
-			&i.Arrived,
-			&i.ServedSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -639,8 +470,8 @@ func (q *Queries) RecentArrivals(ctx context.Context, sinceID uuid.UUID) ([]Rece
 
 const resumeReserves = `-- name: ResumeReserves :many
 update hosts h
-set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(), resume_requested_at = now(),
-    reserve_mode = case when v.refresh then h.reserve_mode end, light_since = null, updated_at = now()
+set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
+    reserve_mode = case when v.refresh then h.reserve_mode end, idle_since = null, updated_at = now()
 from (select unnest($1::uuid[]) as id, unnest($2::bool[]) as refresh) v
 where h.id = v.id and h.phase = 'stopped'
 returning h.id
@@ -711,7 +542,7 @@ const returnToReserve = `-- name: ReturnToReserve :many
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
-    light_since = null, updated_at = now()
+    idle_since = null, updated_at = now()
 where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id
@@ -745,104 +576,6 @@ func (q *Queries) ReturnToReserve(ctx context.Context, arg ReturnToReserveParams
 	return items, nil
 }
 
-const scheduledDemand = `-- name: ScheduledDemand :many
-select s.workload_id, s.next_fire_at, (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)::jsonb as gpus,
-       coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
-       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       coalesce((r.spec ->> 'concurrency')::int, 1)::int as concurrency,
-       coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
-       coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
-       coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
-       coalesce(warm.containers, 0)::int as warm_containers,
-       coalesce(run.p95, 0)::float8 as run_seconds
-from schedules s
-join workloads w on w.id = s.workload_id
-join releases r on r.id = w.active_release_id
-join apps a on a.id = w.app_id
-join workspaces ws on ws.id = a.workspace_id
-left join lateral (
-    select count(*) as containers from containers c
-    where c.release_id = r.id and c.state = 'ready' and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
-) warm on true
-left join lateral (
-    select percentile_cont(0.95) within group (order by extract(epoch from t.finished_at - t.started_at)) as p95
-    from tasks t
-    where t.workload_id = w.id and t.id >= $1 and t.finished_at > t.started_at
-) run on true
-where s.next_fire_at > now() and s.next_fire_at <= $2
-  and w.desired_state = 'active' and a.state = 'active' and ws.state = 'active' and ws.connection_id is null
-  and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
-  and coalesce(jsonb_array_length(r.spec -> 'disks'), 0) = 0
-order by s.next_fire_at, s.workload_id
-`
-
-type ScheduledDemandParams struct {
-	SinceID uuid.UUID
-	Until   time.Time
-}
-
-type ScheduledDemandRow struct {
-	WorkloadID      uuid.UUID
-	NextFireAt      time.Time
-	CpuMillis       int64
-	MemoryBytes     int64
-	Gpus            []byte
-	GpuCount        int32
-	Preemptible     bool
-	Region          string
-	Zone            string
-	Concurrency     int32
-	MaxContainers   int32
-	MinContainers   int32
-	KeepWarmSeconds int32
-	WarmContainers  int32
-	RunSeconds      float64
-}
-
-// Platform functions due to fire by @until, with their active release's
-// shape and scaling, the ready containers a warm minimum keeps (read only
-// for a release that keeps one) and the 95th percentile run time of tasks
-// since @since_id.
-func (q *Queries) ScheduledDemand(ctx context.Context, arg ScheduledDemandParams) ([]ScheduledDemandRow, error) {
-	rows, err := q.db.Query(ctx, scheduledDemand, arg.SinceID, arg.Until)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ScheduledDemandRow
-	for rows.Next() {
-		var i ScheduledDemandRow
-		if err := rows.Scan(
-			&i.WorkloadID,
-			&i.NextFireAt,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.Gpus,
-			&i.GpuCount,
-			&i.Preemptible,
-			&i.Region,
-			&i.Zone,
-			&i.Concurrency,
-			&i.MaxContainers,
-			&i.MinContainers,
-			&i.KeepWarmSeconds,
-			&i.WarmContainers,
-			&i.RunSeconds,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const setCapacityWaits = `-- name: SetCapacityWaits :execrows
 update containers c
 set capacity_wait = nullif(w.wait, ''), capacity_host_id = nullif(w.host, '00000000-0000-0000-0000-000000000000'::uuid)
@@ -868,50 +601,28 @@ func (q *Queries) SetCapacityWaits(ctx context.Context, arg SetCapacityWaitsPara
 	return result.RowsAffected(), nil
 }
 
-const setLightSince = `-- name: SetLightSince :exec
+const setIdleSince = `-- name: SetIdleSince :exec
 update hosts h
-set light_since = v.light_since
-from jsonb_to_recordset($1::jsonb) as v(id uuid, light_since timestamptz)
-where h.id = v.id and h.light_since is distinct from v.light_since
+set idle_since = v.idle_since
+from jsonb_to_recordset($1::jsonb) as v(id uuid, idle_since timestamptz)
+where h.id = v.id and h.idle_since is distinct from v.idle_since
 `
 
-// When each changed serving host became lightly used; null clears it.
-func (q *Queries) SetLightSince(ctx context.Context, hosts []byte) error {
-	_, err := q.db.Exec(ctx, setLightSince, hosts)
-	return err
-}
-
-const uncordonHosts = `-- name: UncordonHosts :exec
-update hosts h
-set capacity_state = 'available', capacity_reason = '', updated_at = now()
-where h.id = any($1::uuid[]) and h.phase = 'ready' and h.capacity_reason = 'consolidating'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
-`
-
-// A consolidated host that emptied takes work again; retention decides
-// what happens to it.
-func (q *Queries) UncordonHosts(ctx context.Context, ids []uuid.UUID) error {
-	_, err := q.db.Exec(ctx, uncordonHosts, ids)
+// When each changed serving host became idle; null clears it.
+func (q *Queries) SetIdleSince(ctx context.Context, hosts []byte) error {
+	_, err := q.db.Exec(ctx, setIdleSince, hosts)
 	return err
 }
 
 const upsertFleetMarkets = `-- name: UpsertFleetMarkets :exec
-insert into fleet_markets (market, plan, generated_at, expires_at, pressure_since, consolidating_host,
-                           consolidation_started_at, consolidation_cooldown_until)
-select v.market, v.plan, v.generated_at, v.expires_at, v.pressure_since, v.consolidating_host,
-       v.consolidation_started_at, v.consolidation_cooldown_until
-from jsonb_to_recordset($1::jsonb) as v(
-    market text, plan jsonb, generated_at timestamptz, expires_at timestamptz, pressure_since timestamptz,
-    consolidating_host uuid, consolidation_started_at timestamptz, consolidation_cooldown_until timestamptz)
+insert into fleet_markets (market, plan, generated_at, expires_at)
+select v.market, v.plan, v.generated_at, v.expires_at
+from jsonb_to_recordset($1::jsonb) as v(market text, plan jsonb, generated_at timestamptz, expires_at timestamptz)
 on conflict (market) do update
-set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = excluded.expires_at,
-    pressure_since = excluded.pressure_since, consolidating_host = excluded.consolidating_host,
-    consolidation_started_at = excluded.consolidation_started_at,
-    consolidation_cooldown_until = excluded.consolidation_cooldown_until
+set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = excluded.expires_at
 `
 
-// Each changed market's published plan and planner state. Rows carry the
-// stored plan forward when this pass publishes none.
+// Every platform market's published plan.
 func (q *Queries) UpsertFleetMarkets(ctx context.Context, markets []byte) error {
 	_, err := q.db.Exec(ctx, upsertFleetMarkets, markets)
 	return err

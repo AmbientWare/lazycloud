@@ -964,7 +964,6 @@ func (e FleetNodeProvider) Valid() bool {
 // Defines values for FleetState.
 const (
 	FleetDraining            FleetState = "draining"
-	FleetFailed              FleetState = "failed"
 	FleetHibernateUnverified FleetState = "hibernate_unverified"
 	FleetImageSaved          FleetState = "image_saved"
 	FleetPreparing           FleetState = "preparing"
@@ -980,8 +979,6 @@ const (
 func (e FleetState) Valid() bool {
 	switch e {
 	case FleetDraining:
-		return true
-	case FleetFailed:
 		return true
 	case FleetHibernateUnverified:
 		return true

@@ -2,7 +2,6 @@ package compute
 
 import (
 	"cmp"
-	"math/bits"
 	"slices"
 	"strconv"
 )
@@ -10,23 +9,17 @@ import (
 // coverWidth bounds the partial covers kept after each added node.
 const coverWidth = 128
 
-// coverShapes bounds the shapes one cover tracks; more merge into one
-// covering shape.
-const coverShapes = 64
-
 // CoverItem is Count requests of one shape; each goes whole onto one node.
 type CoverItem struct {
 	Shape FleetCapacity
 	Count int
 }
 
-// CoverNeed is what a set of new nodes must supply: items placed whole,
-// aggregate room beyond the items, and shapes that must each fit an empty
-// chosen node.
+// CoverNeed is what a set of new nodes must supply: items placed whole and
+// aggregate room beyond the items.
 type CoverNeed struct {
 	Items     []CoverItem
 	Aggregate FleetCapacity
-	Shapes    []FleetCapacity
 }
 
 // CoverNode is one node to buy and how many of each item it takes, by the
@@ -45,22 +38,20 @@ type CoverLimits struct {
 
 // CoverResult is the chosen nodes and what they leave unmet.
 type CoverResult struct {
-	Nodes       []CoverNode
-	UnmetItems  []CoverItem
-	Supplied    FleetCapacity
-	UnmetShapes []FleetCapacity
+	Nodes      []CoverNode
+	UnmetItems []CoverItem
+	Supplied   FleetCapacity
 }
 
 // Complete reports whether the nodes meet the whole need.
 func (r CoverResult) Complete(need CoverNeed) bool {
-	return len(r.UnmetItems) == 0 && len(r.UnmetShapes) == 0 && r.Supplied.Covers(need.Aggregate)
+	return len(r.UnmetItems) == 0 && r.Supplied.Covers(need.Aggregate)
 }
 
 type coverState struct {
 	cost      int64
 	remaining []int
 	supplied  FleetCapacity
-	unmet     uint64
 	nodes     []int
 	placed    [][]int
 	progress  float64
@@ -74,7 +65,6 @@ type coverState struct {
 // progress. A complete cover minimizes cost among those explored; without
 // one, the cover that places the most returns with what is unmet.
 func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, limits CoverLimits) CoverResult {
-	need.Shapes = mergeShapes(need.Shapes, coverShapes)
 	candidates := coverCandidates(offers, need, cost, limits)
 	var quotas []QuotaKey
 	for key := range limits.VCPUs {
@@ -87,10 +77,7 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, lim
 		order[i] = i
 	}
 	slices.SortStableFunc(order, func(a, b int) int { return shapeOrder(need.Items[b].Shape, need.Items[a].Shape) })
-	start := coverState{remaining: make([]int, len(need.Items)), unmet: uint64(1)<<len(need.Shapes) - 1, quota: make([]int64, len(quotas))}
-	if len(need.Shapes) == coverShapes {
-		start.unmet = ^uint64(0)
-	}
+	start := coverState{remaining: make([]int, len(need.Items)), quota: make([]int64, len(quotas))}
 	for i, item := range need.Items {
 		start.remaining[i] = item.Count
 	}
@@ -152,10 +139,7 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, lim
 func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, limits CoverLimits) []FleetOffer {
 	var out []FleetOffer
 	for _, o := range offers {
-		useful := !need.Aggregate.Empty() ||
-			slices.ContainsFunc(need.Items, func(i CoverItem) bool { return o.Usable.Covers(i.Shape) }) ||
-			slices.ContainsFunc(need.Shapes, func(s FleetCapacity) bool { return o.Usable.Covers(s) })
-		if !useful {
+		if need.Aggregate.Empty() && !slices.ContainsFunc(need.Items, func(i CoverItem) bool { return o.Usable.Covers(i.Shape) }) {
 			continue
 		}
 		_, limited := limits.VCPUs[o.Quota]
@@ -187,29 +171,23 @@ func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order 
 		}
 	}
 	supplied := s.supplied.Plus(free).Lower(need.Aggregate)
-	unmet := s.unmet
-	for i, shape := range need.Shapes {
-		if o.Usable.Covers(shape) {
-			unmet &^= 1 << i
-		}
-	}
-	moved = moved || supplied != s.supplied || unmet != s.unmet
+	moved = moved || supplied != s.supplied
 	next := coverState{
-		cost: s.cost + price, remaining: remaining, supplied: supplied, unmet: unmet,
+		cost: s.cost + price, remaining: remaining, supplied: supplied,
 		nodes: append(slices.Clone(s.nodes), c), placed: append(slices.Clone(s.placed), placed), quota: slices.Clone(s.quota),
 	}
 	next.progress = next.coverage(need, total)
 	return next, moved
 }
 
-// coverage is the items placed, the shapes covered and the share of each
-// aggregate dimension supplied.
+// coverage is the items placed and the share of each aggregate dimension
+// supplied.
 func (s coverState) coverage(need CoverNeed, total int) float64 {
 	left := 0
 	for _, n := range s.remaining {
 		left += n
 	}
-	progress := float64(total-left) + float64(len(need.Shapes)-bits.OnesCount64(s.unmet&(uint64(1)<<len(need.Shapes)-1)))
+	progress := float64(total - left)
 	for _, d := range [][2]int64{
 		{s.supplied.CPUMillis, need.Aggregate.CPUMillis},
 		{s.supplied.MemoryBytes, need.Aggregate.MemoryBytes},
@@ -225,8 +203,7 @@ func (s coverState) coverage(need CoverNeed, total int) float64 {
 func (s coverState) ratio() float64 { return float64(s.cost) / max(s.progress, 0.001) }
 
 func (s coverState) complete(need CoverNeed) bool {
-	return s.unmet&(uint64(1)<<len(need.Shapes)-1) == 0 && !slices.ContainsFunc(s.remaining, func(n int) bool { return n > 0 }) &&
-		s.supplied.Covers(need.Aggregate)
+	return !slices.ContainsFunc(s.remaining, func(n int) bool { return n > 0 }) && s.supplied.Covers(need.Aggregate)
 }
 
 func (s coverState) key() string {
@@ -237,15 +214,14 @@ func (s coverState) key() string {
 	b = strconv.AppendInt(append(b, '|'), s.supplied.CPUMillis, 10)
 	b = strconv.AppendInt(append(b, ','), s.supplied.MemoryBytes, 10)
 	b = strconv.AppendInt(append(b, ','), int64(s.supplied.GPUs), 10)
-	b = strconv.AppendUint(append(b, '|'), s.unmet, 16)
 	for _, v := range s.quota {
 		b = strconv.AppendInt(append(b, ','), v, 10)
 	}
 	return string(b)
 }
 
-// betterPartial prefers more items placed, then fewer shapes unmet, then
-// more aggregate supplied, then lower cost.
+// betterPartial prefers more items placed, then more aggregate supplied,
+// then lower cost.
 func (s coverState) betterPartial(other coverState) bool {
 	sum := func(v []int) int {
 		n := 0
@@ -256,7 +232,6 @@ func (s coverState) betterPartial(other coverState) bool {
 	}
 	return cmp.Or(
 		cmp.Compare(sum(other.remaining), sum(s.remaining)),
-		cmp.Compare(bits.OnesCount64(other.unmet), bits.OnesCount64(s.unmet)),
 		cmp.Compare(s.supplied.CPUMillis, other.supplied.CPUMillis),
 		cmp.Compare(s.supplied.MemoryBytes, other.supplied.MemoryBytes),
 		cmp.Compare(s.supplied.GPUs, other.supplied.GPUs),
@@ -274,36 +249,10 @@ func (s coverState) result(candidates []FleetOffer, need CoverNeed) CoverResult 
 			r.UnmetItems = append(r.UnmetItems, CoverItem{Shape: need.Items[i].Shape, Count: left})
 		}
 	}
-	for i, shape := range need.Shapes {
-		if s.unmet&(1<<i) != 0 {
-			r.UnmetShapes = append(r.UnmetShapes, shape)
-		}
-	}
 	return r
 }
 
 // shapeOrder sorts shapes by GPUs, then memory, then CPU.
 func shapeOrder(a, b FleetCapacity) int {
 	return cmp.Or(cmp.Compare(a.GPUs, b.GPUs), cmp.Compare(a.MemoryBytes, b.MemoryBytes), cmp.Compare(a.CPUMillis, b.CPUMillis))
-}
-
-// mergeShapes keeps at most limit distinct shapes, largest first; the rest
-// merge into one shape that covers each of them. The merged shape may
-// overstate a request but never hides one that must fit.
-func mergeShapes(shapes []FleetCapacity, limit int) []FleetCapacity {
-	var distinct []FleetCapacity
-	for _, s := range shapes {
-		if !s.Empty() && !slices.Contains(distinct, s) {
-			distinct = append(distinct, s)
-		}
-	}
-	slices.SortFunc(distinct, func(a, b FleetCapacity) int { return shapeOrder(b, a) })
-	if len(distinct) <= limit {
-		return distinct
-	}
-	merged := distinct[limit-1]
-	for _, s := range distinct[limit:] {
-		merged = merged.Upper(s)
-	}
-	return append(distinct[:limit-1:limit-1], merged)
 }

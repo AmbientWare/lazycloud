@@ -45,12 +45,7 @@ func (a FleetCapacity) Clamp() FleetCapacity { return a.Upper(FleetCapacity{}) }
 
 // Percent is p percent of a, each dimension rounded up.
 func (a FleetCapacity) Percent(p int64) FleetCapacity {
-	up := func(v int64) int64 {
-		if v*p > 0 {
-			return (v*p + 99) / 100
-		}
-		return v * p / 100
-	}
+	up := func(v int64) int64 { return (v*p + 99) / 100 }
 	return FleetCapacity{CPUMillis: up(a.CPUMillis), MemoryBytes: up(a.MemoryBytes), GPUs: int(up(int64(a.GPUs)))}
 }
 
@@ -133,14 +128,9 @@ type Policy struct {
 	// MarginPercent is the share of rate-card revenue a purchase must keep
 	// after its supplier cost.
 	MarginPercent int64
-	// Resume, StoppedBoot and Provision are the activation defaults when
-	// too few activations were observed.
-	Resume, StoppedBoot, Provision time.Duration
-	// ActivationSamples is how many ready activations make a p95 usable.
-	ActivationSamples int
-	// PlanInterval is the planning cadence; EarlyPlanInterval the faster
-	// one while running headroom has been short for Pressure.
-	PlanInterval, EarlyPlanInterval, Pressure time.Duration
+	// Provision is how long a bought host runs, paid for, before it serves
+	// or stops as a reserve.
+	Provision time.Duration
 	// CostHorizon is how long a purchase is priced over.
 	CostHorizon time.Duration
 	// MaxGrowthActions bounds the resumes and purchases of one market in
@@ -150,17 +140,8 @@ type Policy struct {
 	// GPU is the on-demand reserve per GPU model; a model left out keeps
 	// none.
 	GPU map[string]MarketReserve
-	// A serving host at or under ConsolidationPercent of every dimension
-	// for ConsolidationLight is lightly used. Consolidation waits
-	// ConsolidationCooldown between moves and gives one up after
-	// ConsolidationDeadline.
-	ConsolidationPercent                                             int64
-	ConsolidationLight, ConsolidationCooldown, ConsolidationDeadline time.Duration
-	// IdleTimeout is the fleet's configured idle wait; an idle host leaves
-	// after the later of it and ConsolidationLight.
+	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
-	// BillingMinimum is what EC2 bills a started instance at least.
-	BillingMinimum time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
@@ -168,38 +149,25 @@ type Policy struct {
 	// RegionFailureWindow rank that region after the others.
 	RegionFailures      int
 	RegionFailureWindow time.Duration
-	// ShortWindow and History are the forecast's arrival windows;
-	// RequestShapes bounds the shapes a forecast keeps.
-	ShortWindow, History time.Duration
-	RequestShapes        int
 }
 
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
-	// The CPU floors keep about $231/month of warm spares and stopped
-	// reserves at zero load.
 	cpu := MarketReserve{
 		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
 		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},
 	}
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}}
 	return Policy{
-		MarginPercent: 30,
-		Resume:        30 * time.Second, StoppedBoot: 120 * time.Second, Provision: 300 * time.Second,
-		ActivationSamples: 20,
-		PlanInterval:      60 * time.Second, EarlyPlanInterval: 20 * time.Second, Pressure: 5 * time.Second,
+		MarginPercent:    30,
+		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
 		Spot:             cpu, OnDemand: cpu,
-		GPU:                  map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
-		ConsolidationPercent: 30,
-		ConsolidationLight:   600 * time.Second, ConsolidationCooldown: 900 * time.Second, ConsolidationDeadline: time.Hour,
+		GPU:            map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
 		IdleTimeout:    5 * time.Minute,
-		BillingMinimum: 60 * time.Second,
 		SpotPriceAge:   time.Hour,
 		RegionFailures: 2, RegionFailureWindow: 30 * time.Minute,
-		ShortWindow: 60 * time.Second, History: 600 * time.Second,
-		RequestShapes: 32,
 	}
 }
 
@@ -228,69 +196,4 @@ func (p Policy) Markets() []ReserveMarket {
 		markets = append(markets, ReserveMarket{GPU: card})
 	}
 	return markets
-}
-
-// WarmHorizon is the default reach of the warm forecast: a resume and the
-// pass that orders it.
-func (p Policy) WarmHorizon() time.Duration { return p.Resume + p.PlanInterval }
-
-// TotalHorizon is the default reach of the total forecast: a provision and
-// the pass that orders it.
-func (p Policy) TotalHorizon() time.Duration { return p.Provision + p.PlanInterval }
-
-// MarketTargets are what one market keeps: running free room, stopped
-// reserve, and the part of the reserve that hibernates.
-type MarketTargets struct {
-	Warm, Stopped, Hibernation FleetCapacity
-}
-
-// TargetInputs are what a market's targets depend on.
-type TargetInputs struct {
-	Load     FleetCapacity
-	Forecast *MarketForecast
-	// RunningLoads are the loads of the market's running hosts.
-	RunningLoads []FleetCapacity
-	// HibernationShapes are the usable shapes of hibernation-capable types
-	// the market holds or can buy as reserves.
-	HibernationShapes []FleetCapacity
-	// Shapes are the market's recent request shapes.
-	Shapes []FleetCapacity
-}
-
-// TargetsFor sets a market's targets. Warm is the floor or a share of load,
-// raised to the forecast's warm; the stopped reserve is the rest of the
-// total target. A Spot CPU reserve must take any running host's work, and a
-// CPU market hibernates its whole reserve when every recent shape fits a
-// hibernation-capable shape.
-func TargetsFor(p Policy, m ReserveMarket, in TargetInputs) MarketTargets {
-	reserve := p.Reserve(m)
-	var forecastWarm, forecastTotal FleetCapacity
-	if in.Forecast != nil {
-		forecastWarm, forecastTotal = in.Forecast.Warm, in.Forecast.Total
-	}
-	warm := reserve.Warm.Of(in.Load).Upper(forecastWarm)
-	total := reserve.Stopped.Of(in.Load).Plus(warm).Upper(forecastTotal)
-	stopped := total.Minus(warm).Clamp()
-	if m.Preemptible && m.GPU == "" {
-		// An interrupted Spot host's work must fit the reserve that
-		// replaces it.
-		for _, load := range in.RunningLoads {
-			stopped = stopped.Upper(load)
-		}
-	}
-	var hibernation FleetCapacity
-	if m.GPU == "" && len(in.HibernationShapes) > 0 && everyShapeFits(in.Shapes, in.HibernationShapes) {
-		hibernation = stopped
-	}
-	return MarketTargets{Warm: warm, Stopped: stopped.Upper(hibernation), Hibernation: hibernation}
-}
-
-// everyShapeFits reports whether each shape fits one of hosts.
-func everyShapeFits(shapes, hosts []FleetCapacity) bool {
-	for _, shape := range shapes {
-		if !slices.ContainsFunc(hosts, func(h FleetCapacity) bool { return h.Covers(shape) }) {
-			return false
-		}
-	}
-	return true
 }

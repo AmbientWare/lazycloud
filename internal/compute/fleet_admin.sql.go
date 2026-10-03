@@ -14,28 +14,22 @@ import (
 
 const fleetRollout = `-- name: FleetRollout :many
 select (case
-    when h.phase = 'draining' or (h.phase = 'ready' and ((h.capacity_state <> 'available'
-            and (h.capacity_reason <> $1::text or live.containers > 0))
-        or (h.state = 'online' and coalesce(h.last_seen_at > $2::timestamptz, false))))
-        then case when h.agent_version = $3::text then 'current' else 'updating' end
+    when h.phase = 'draining' or (h.phase = 'ready' and (h.capacity_state <> 'available'
+        or (h.state = 'online' and coalesce(h.last_seen_at > $1::timestamptz, false))))
+        then case when h.agent_version = $2::text then 'current' else 'updating' end
     when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'
     when h.token_hash is not null then 'offline'
     else ''
 end)::text as phase, count(*)::int as hosts
 from hosts h
-left join lateral (
-    select count(*) as containers from containers c where c.host_id = h.id and c.state <> 'stopped'
-) live on true
-where h.kind = 'platform' and h.phase <> 'deleted'
-  and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
+where h.kind = 'platform' and h.phase not in ('deleted', 'failed')
 group by 1
 order by 1
 `
 
 type FleetRolloutParams struct {
-	Consolidating string
-	LiveAfter     time.Time
-	Version       string
+	LiveAfter time.Time
+	Version   string
 }
 
 type FleetRolloutRow struct {
@@ -43,12 +37,12 @@ type FleetRolloutRow struct {
 	Hosts int32
 }
 
-// Platform hosts by where they stand on the agent release: connected
+// Live platform hosts by where they stand on the agent release: connected
 // serving or draining hosts on it (current) or on another (updating),
-// reserves, and other enrolled hosts (offline). Draining and serving are
-// fleetStateOf's: an emptied consolidating host is not draining.
+// reserves, and other enrolled hosts (offline). Draining and serving match
+// fleetStateOf.
 func (q *Queries) FleetRollout(ctx context.Context, arg FleetRolloutParams) ([]FleetRolloutRow, error) {
-	rows, err := q.db.Query(ctx, fleetRollout, arg.Consolidating, arg.LiveAfter, arg.Version)
+	rows, err := q.db.Query(ctx, fleetRollout, arg.LiveAfter, arg.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +62,7 @@ func (q *Queries) FleetRollout(ctx context.Context, arg FleetRolloutParams) ([]F
 }
 
 const platformHosts = `-- name: PlatformHosts :many
-select h.id, h.provider, h.phase, h.state, h.capacity_state, h.capacity_reason, h.last_seen_at,
+select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at,
        (h.token_hash is not null)::bool as enrolled, h.instance_id::text as instance_id, h.region, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.agent_version, h.reserve_mode,
        h.image_evidence, h.prepared_agent_version,
@@ -83,8 +77,7 @@ left join lateral (
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
-where h.kind = 'platform' and h.instance_id is not null and h.phase <> 'deleted'
-  and (h.phase <> 'failed' or h.phase_at > now() - interval '1 day')
+where h.kind = 'platform' and h.instance_id is not null and h.phase not in ('deleted', 'failed')
   and h.id > $1
 order by h.id
 limit $2
@@ -101,7 +94,6 @@ type PlatformHostsRow struct {
 	Phase                string
 	State                string
 	CapacityState        string
-	CapacityReason       string
 	LastSeenAt           *time.Time
 	Enrolled             bool
 	InstanceID           string
@@ -122,9 +114,8 @@ type PlatformHostsRow struct {
 	Containers           int32
 }
 
-// Platform hosts with an instance, with the reservations of their live
-// containers, by id after the cursor; failed ones for a day. A launch the
-// provider refused has no instance and is left out.
+// Live platform hosts with an instance and their live containers'
+// reservations, by id after the cursor.
 func (q *Queries) PlatformHosts(ctx context.Context, arg PlatformHostsParams) ([]PlatformHostsRow, error) {
 	rows, err := q.db.Query(ctx, platformHosts, arg.AfterID, arg.MaxRows)
 	if err != nil {
@@ -140,7 +131,6 @@ func (q *Queries) PlatformHosts(ctx context.Context, arg PlatformHostsParams) ([
 			&i.Phase,
 			&i.State,
 			&i.CapacityState,
-			&i.CapacityReason,
 			&i.LastSeenAt,
 			&i.Enrolled,
 			&i.InstanceID,

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -112,5 +113,39 @@ func TestMarkLostKeepsAHostThatReportedAfterTheScan(t *testing.T) {
 	}
 	if marked {
 		t.Fatal("a host that reported again was marked lost")
+	}
+}
+
+// A reserve stopping or stopped with its reserve mode set is asleep: its
+// silence is not a loss, whether it fell asleep before the scan or after.
+func TestASleepingReserveIsNotLost(t *testing.T) {
+	pool := dbtest.New(t)
+	silent := newHost(t, pool, "now() - interval '1 minute'")
+	stopping := newHost(t, pool, "now() - interval '1 minute'")
+	stopped := newHost(t, pool, "now() - interval '1 minute'")
+	exec(t, pool, "update hosts set phase = 'stopping', reserve_mode = 'hibernate' where id = $1", uuid.UUID(stopping))
+	exec(t, pool, "update hosts set phase = 'stopped', reserve_mode = 'stop' where id = $1", uuid.UUID(stopped))
+	stale, err := StaleHosts(t.Context(), pool, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || stale[0].ID != silent {
+		t.Fatalf("stale hosts %v, want only the silent serving host", stale)
+	}
+	exec(t, pool, "update hosts set phase = 'stopping', reserve_mode = 'stop' where id = $1", uuid.UUID(silent))
+	err = pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		for _, host := range []HostID{silent, stopping, stopped} {
+			marked, err := MarkLost(t.Context(), tx, host)
+			if err != nil {
+				return err
+			}
+			if marked {
+				return fmt.Errorf("sleeping reserve %s marked lost", host)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
