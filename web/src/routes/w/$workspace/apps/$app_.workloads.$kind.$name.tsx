@@ -5,11 +5,9 @@ import { ArrowLeft } from "lucide-react";
 
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
-import { Panel } from "@/components/shared/Panel";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,23 +16,21 @@ import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import {
-  performanceQueryOptions,
   isWorkloadKind,
   workloadNotFound,
   workloadQueryOptions,
   workloadRunning,
 } from "@/lib/queries/deployments";
 import type { WorkloadRef } from "@/lib/queries/workspace-keys";
-import { requestsQueryOptions, servesRequests, tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { CallMethods } from "./-workloads/CallMethods";
 import { DevboxActions, DevboxConnect, DevboxWorkspace } from "./-workloads/DevboxDetail";
-import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
 import { PodInstances, type PodInstanceStatusFilter } from "./-workloads/PodInstances";
 import { VersionHistory } from "./-workloads/VersionHistory";
+import { WorkloadActivity } from "./-workloads/WorkloadActivity";
 import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
 
@@ -230,78 +226,8 @@ function WorkloadDetail({ address }: { address: WorkloadRef }) {
         ) : null}
       </Tabs>
 
-      {!isPod ? (
-        <Panel
-          title="Activity"
-          contentClassName="flex flex-col overflow-hidden p-0"
-          className="min-h-[24rem] shrink-0 xl:min-h-0"
-        >
-          <WorkloadLatency workspace={workspace.name} workload={workload} />
-          <WorkloadRuns workspaceName={workspace.name} workload={workload} />
-        </Panel>
-      ) : null}
+      {!isPod ? <WorkloadActivity workspace={workspace.name} workload={workload} /> : null}
     </WorkspacePage>
-  );
-}
-
-function WorkloadLatency({
-  workspace,
-  workload,
-}: {
-  workspace: string;
-  workload: Schemas["Workload"];
-}) {
-  const latency = useQuery(performanceQueryOptions(workspace, workload));
-
-  if (!(latency.isPending || latency.isError || latencyHasSignal(latency.data?.buckets))) {
-    return null;
-  }
-
-  return (
-    <div className="h-52 shrink-0 border-b border-border/80 p-3">
-      <PanelErrorBoundary title="Performance could not be displayed">
-        <LatencyPanel
-          buckets={latency.data?.buckets}
-          pending={latency.isPending}
-          error={latency.error}
-          kind={workload.kind}
-        />
-      </PanelErrorBoundary>
-    </div>
-  );
-}
-
-function WorkloadRuns({
-  workspaceName,
-  workload,
-}: {
-  workspaceName: string;
-  workload: Schemas["Workload"];
-}) {
-  const { app, kind, name } = workload;
-  const requests = servesRequests(kind);
-  const tasks = useQuery({
-    ...tasksQueryOptions(workspaceName, { app, function: name }),
-    enabled: !requests,
-  });
-  const served = useQuery({ ...requestsQueryOptions(workspaceName, app, name), enabled: requests });
-  const rows = requests ? served : tasks;
-  if (rows.isError) {
-    return <PanelError message={rows.error.message} />;
-  }
-  return (
-    <TaskTable
-      tasks={rows.isPending ? undefined : rows.data}
-      showApp={false}
-      showWorkload={false}
-      taskLink={(taskId) => ({
-        to: "/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId",
-        params: { workspace: workspaceName, app, kind, name, taskId },
-      })}
-      emptyMessage="No tasks yet"
-      compact
-      className="min-h-0 flex-1"
-    />
   );
 }
 

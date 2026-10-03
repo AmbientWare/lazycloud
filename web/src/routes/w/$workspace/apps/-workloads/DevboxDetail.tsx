@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Play, Square } from "lucide-react";
 
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
-import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
+import { ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { Fact } from "@/components/shared/Fact";
@@ -426,44 +426,42 @@ export function DevboxWorkspace({
           ) : null
         }
       >
-        {devbox?.container_id ? (
-          <DevboxMetrics
-            workspace={workspace}
-            containerId={devbox.container_id}
-            live={devbox.state === "running"}
-          />
-        ) : devbox ? (
-          <PanelEmpty message="Metrics appear while the devbox runs" className="h-44" />
-        ) : (
-          <ChartSkeleton />
-        )}
+        <DevboxMetrics
+          workspace={workspace}
+          devbox={devbox}
+          gpu={(spec.resources.gpu_count ?? 0) > 0}
+        />
       </Panel>
     </>
   );
 }
 
+/** The devbox container's samples. The charts keep their size while it has none. */
 function DevboxMetrics({
   workspace,
-  containerId,
-  live,
+  devbox,
+  gpu,
 }: {
   workspace: string;
-  containerId: string;
-  live: boolean;
+  devbox: Devbox | undefined;
+  gpu: boolean;
 }) {
-  const metrics = useQuery(containerMetricsQueryOptions(workspace, containerId, live));
-  if (metrics.isPending) {
-    return (
-      <div className="grid gap-y-5">
-        <ChartSkeleton />
-        <ChartSkeleton />
-      </div>
-    );
-  }
+  const containerId = devbox?.container_id;
+  const metrics = useQuery({
+    ...containerMetricsQueryOptions(workspace, containerId ?? "", devbox?.state === "running"),
+    enabled: containerId !== undefined,
+  });
   if (metrics.isError) return <PanelError message={metrics.error.message} layout="centered" />;
   return (
     <PanelErrorBoundary title="Metrics could not be displayed">
-      <ContainerMetricsCharts metrics={metrics.data} showIo={false} className="lg:grid-cols-1" />
+      <ContainerMetricsCharts
+        metrics={containerId ? metrics.data : undefined}
+        pending={!devbox || (containerId !== undefined && metrics.isPending)}
+        empty={containerId ? undefined : "Metrics appear while the devbox runs"}
+        gpu={gpu}
+        showIo={false}
+        className="lg:grid-cols-1"
+      />
     </PanelErrorBoundary>
   );
 }

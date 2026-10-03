@@ -6164,7 +6164,10 @@ components:
 
     ChangeTopic:
       type: string
-      enum: [apps, deployments, tasks, containers, storage.secrets, storage.volumes, usage]
+      description: >-
+        requests: endpoint or ASGI requests were recorded. A requests change
+        counts one deployment's requests and names no resource.
+      enum: [apps, deployments, tasks, requests, containers, storage.secrets, storage.volumes, usage]
 
     ChangeKind:
       type: string

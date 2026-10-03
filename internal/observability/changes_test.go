@@ -230,3 +230,35 @@ from workspace_members m, generate_series(1, 3) g where m.workspace_id = $1`, uu
 		t.Fatalf("usage change %+v", event)
 	}
 }
+
+// A batch of request records sends one change per deployment with its
+// count; a batch written again records nothing and sends nothing.
+func TestRequestRecordsPublishOneChangePerDeployment(t *testing.T) {
+	f := newFixture(t, `{}`)
+	_, _, api, apiRelease := f.addFunction("acme", "web", "api", `{}`)
+	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
+
+	insert := `insert into http_requests (id, workspace_id, workload_id, release_id, method, path, status,
+                           started_at, duration_ms, request_bytes, response_bytes)
+select ('00000000-0000-7000-8000-' || lpad(g::text, 12, '0'))::uuid, $1, w.workload, w.release, 'GET', '/', 200, now(), 5, 0, 0
+from generate_series(1, 5) g,
+     lateral (select case when g <= 3 then $2::uuid else $4::uuid end as workload,
+                     case when g <= 3 then $3::uuid else $5::uuid end as release) w
+on conflict (id) do nothing`
+	f.exec1(insert, uuid.UUID(f.workspace), f.workload, f.release, api, apiRelease)
+	_, event := nextEvent(t, sub)
+	counts := map[uuid.UUID]int{}
+	for _, c := range event.Changes {
+		if c.Topic != apitypes.ChangeTopicRequests || c.Change != apitypes.ChangeKindCreated || c.ResourceId != nil ||
+			c.DeploymentId == nil || c.AppId == nil || c.Count == nil {
+			t.Fatalf("request change %+v", c)
+		}
+		counts[*c.DeploymentId] = *c.Count
+	}
+	if len(counts) != 2 || counts[f.workload] != 3 || counts[api] != 2 {
+		t.Fatalf("request counts by deployment %v", counts)
+	}
+
+	f.exec1(insert, uuid.UUID(f.workspace), f.workload, f.release, api, apiRelease)
+	noEvent(t, sub, 200*time.Millisecond)
+}

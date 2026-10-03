@@ -1,5 +1,4 @@
 import { Panel } from "@/components/shared/Panel";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -7,6 +6,10 @@ import { cn } from "@/lib/utils";
 import { AppActivityChart, AppActivityLegend } from "./AppActivityChart";
 import { appRunActivity } from "./app-activity-buckets";
 
+/**
+ * The app's tasks per hour over the last day. The chart keeps its size while
+ * the read is pending.
+ */
 export function AppActivitySection({
   series,
   runningContainers,
@@ -19,15 +22,16 @@ export function AppActivitySection({
   error: string | undefined;
 }) {
   const activity = appRunActivity(series);
+  const count = (value: number) => (pending ? "—" : value.toLocaleString());
 
   return (
     <div
       role="region"
       aria-labelledby="app-activity-heading"
+      aria-busy={pending}
       className="min-h-[16rem] lg:h-full lg:min-h-0"
     >
       <Panel
-        pending={pending}
         title={<span id="app-activity-heading">Activity</span>}
         action={<AppActivityLegend activity={activity} />}
         className="h-full"
@@ -37,23 +41,11 @@ export function AppActivitySection({
           <div className="flex h-full min-h-32 items-center justify-center px-4 text-sm text-destructive">
             {error}
           </div>
-        ) : pending ? (
-          <div
-            className="flex h-full min-h-32 flex-col justify-between gap-3 p-4"
-            aria-hidden="true"
-          >
-            <div className="flex gap-3">
-              <Skeleton className="h-7 w-20" />
-              <Skeleton className="h-4 w-16" />
-            </div>
-            <Skeleton className="h-20 w-full" />
-            <Skeleton className="h-3 w-full" />
-          </div>
         ) : (
           <div className="flex h-full min-h-0 flex-col px-4 py-2">
             <div className="flex shrink-0 items-baseline gap-2">
               <span className="readout text-2xl leading-none text-foreground">
-                {activity.total.toLocaleString()}
+                {count(activity.total)}
               </span>
               <span className="text-xs text-muted-foreground">Tasks</span>
               <span
@@ -62,7 +54,7 @@ export function AppActivitySection({
                   activity.totals.failed > 0 ? "text-destructive" : "text-muted-foreground",
                 )}
               >
-                {activity.totals.failed.toLocaleString()} failed
+                {count(activity.totals.failed)} failed
               </span>
               <span
                 className={cn(
@@ -70,7 +62,7 @@ export function AppActivitySection({
                   activity.totals.inFlight > 0 ? "text-warning" : "text-muted-foreground",
                 )}
               >
-                {activity.totals.inFlight.toLocaleString()} pending
+                {count(activity.totals.inFlight)} pending
               </span>
               {/* Counted now, not over the window the figures beside it cover —
                   labelled "running" rather than given the same 24-hour framing. */}
