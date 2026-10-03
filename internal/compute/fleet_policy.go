@@ -149,15 +149,16 @@ type LargestShape struct {
 }
 
 // of is the shape market m's reserve fits, given the largest its containers
-// reserved; empty for none. A GPU reserve holds one card.
+// reserved; empty for none. A GPU reserve holds one card; a CPU reserve
+// fits at least the default.
 func (s LargestShape) of(m ReserveMarket, largest FleetCapacity) FleetCapacity {
 	switch {
 	case m.GPU != "" && largest.GPUs == 0:
 		return FleetCapacity{}
 	case m.GPU != "":
 		largest.GPUs = 1
-	case largest.Empty():
-		largest = s.Default
+	default:
+		largest = largest.Upper(s.Default)
 	}
 	return largest.Lower(s.Cap)
 }
