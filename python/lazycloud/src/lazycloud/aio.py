@@ -3,8 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
-# asyncio loads with the first async call; user modules import this one at
-# every container start.
+# asyncio loads on the first async call, not at container start.
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
 

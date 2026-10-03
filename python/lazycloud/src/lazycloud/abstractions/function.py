@@ -77,8 +77,8 @@ from lazycloud.exceptions import (
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
 
-# Calls load the API client, the task session and the terminal on first use;
-# declaring a function, as every container start does, needs none of them.
+# Every container start declares functions; the API client, task session and
+# terminal load only when a call needs them.
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -113,7 +113,7 @@ class FunctionOperationError(SdkError):
 
 
 class _Unset:
-    """A field not yet given its default."""
+    """Marks a field whose default is built on first read."""
 
 
 _UNSET = _Unset()
@@ -212,10 +212,7 @@ class Function(Generic[P, R]):
 
     @property
     def terminal(self) -> Terminal | None:
-        """Where calls show their progress and output; None shows nothing.
-
-        Shown by default only outside a workload container.
-        """
+        """Where calls print progress and output, or None; on by default outside containers."""
         if isinstance(self._terminal, _Unset):
             from lazycloud.terminal import Terminal
 
@@ -595,8 +592,7 @@ class Function(Generic[P, R]):
         with self._task_step() as step:
             events = client.run_task(workspace, self._app_slug, self.resource_name, request)
             try:
-                # Ctrl-C waits for admission, so the admitted task is known
-                # and cancelled rather than left running.
+                # Ctrl-C waits for admission so the admitted task can be cancelled.
                 admitted, interrupted = _uninterrupted(lambda: next(events, None))
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
@@ -623,8 +619,8 @@ class Function(Generic[P, R]):
     ) -> Any:
         """Print the task's output and wait for it; anything that ends the wait early cancels it.
 
-        `events` is the rest of the task's run stream. A task the stream
-        leaves unfinished is followed through its logs and waited on.
+        `events` is the rest of its run stream; a task the stream leaves
+        unfinished is followed through its logs.
         """
         from lazycloud._terminal.formatting import short_id
         from lazycloud.contracts.api import TaskStatus
@@ -668,9 +664,9 @@ class Function(Generic[P, R]):
     def _read_run(
         self, events: Iterator[TaskRunEvent]
     ) -> tuple[TaskView | None, Payload | None, int]:
-        """Print a run stream's log entries and return its last task state, that
-        state's result and the last entry's id. A dropped stream returns what
-        arrived before it dropped."""
+        """Print the stream's log entries; return the last task state, its result
+        and the last entry id. A dropped stream returns what arrived before the drop.
+        """
         from lazycloud.clients.api import is_transient
 
         view: TaskView | None = None
@@ -876,7 +872,7 @@ class _QueuedTaskWatcher:
 
         task_id = UUID(self.task.task_id)
         status: TaskStatus | None = None
-        # A call that finishes within the first interval is never read.
+        # Sleep first: a call that finishes within one interval needs no read.
         while not self._stopped.wait(QUEUED_POLL_SECONDS):
             try:
                 view = self.task.client.get_task(self.task.workspace, task_id)

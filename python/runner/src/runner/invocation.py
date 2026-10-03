@@ -36,7 +36,6 @@ def invoke_handler(
 
     result = call_handler(handler, args, kwargs, FunctionPayloadEncoding(encoding.value))
     if inspect.isawaitable(result):
-        # asyncio loads only for a handler that returns an awaitable.
         import asyncio
 
         return asyncio.run(_await(result))

@@ -216,8 +216,7 @@ class Task:
         return self._read(lambda: self.client.cancel_task(self.workspace, self._id))
 
     def follow_logs(self, emit: Callable[[LogEntry], None], *, after: int = 0) -> None:
-        """Deliver log entries after `after` until the task finishes, resuming
-        after dropped streams."""
+        """Deliver log entries after `after` until the task finishes, resuming dropped streams."""
         for entry in follow_log_stream(
             lambda after: self.client.stream_task_logs(
                 self.workspace, self._id, after=after, follow=True

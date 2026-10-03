@@ -1,7 +1,6 @@
-"""Image resolution and builds through the API, with their terminal step.
+"""Image resolution and builds through the API, shown as the terminal step Image.
 
-`Image` declares an image without any of this, so declaring apps loads no
-API client.
+Kept apart from `Image` so declaring an app loads no API client.
 """
 
 from __future__ import annotations

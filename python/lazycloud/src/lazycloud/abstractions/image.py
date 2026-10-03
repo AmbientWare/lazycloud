@@ -35,7 +35,7 @@ from lazycloud._shared.image_building.credentials import (
 )
 from lazycloud._shared.image_building.python import normalize_python_version
 
-# Declaring an image needs no API client; image_build talks to the API.
+# Declaring an image loads no API client; image_build makes the API calls.
 if TYPE_CHECKING:
     from lazycloud.abstractions.image_project import ImageProject
     from lazycloud.clients.api import ApiClient

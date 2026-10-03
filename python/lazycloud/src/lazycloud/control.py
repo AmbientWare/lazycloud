@@ -10,8 +10,7 @@ from urllib.parse import urlencode
 
 from lazycloud.exceptions import ConfigurationError
 
-# The clients load on first use: user modules import this one to declare
-# apps, which needs no client.
+# Declaring an app imports this module; the clients load only when used.
 if TYPE_CHECKING:
     from lazycloud.clients.api import ApiClient
     from lazycloud.clients.storage import StorageClient

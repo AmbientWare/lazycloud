@@ -4956,7 +4956,7 @@ type TaskPendingProgress struct {
 // TaskPendingReason defines model for TaskPendingReason.
 type TaskPendingReason string
 
-// TaskRunEvent One line of a runTask stream. The first carries the admitted task, each following one a log entry, and the last the task when it finished or the wait passed, with `result` once it succeeded.
+// TaskRunEvent One line of a runTask stream. The first carries the admitted task, the middle ones log entries, and the last the task when it finishes or the wait passes, with `result` if it succeeded.
 type TaskRunEvent struct {
 	Log *LogEntry `json:"log,omitempty"`
 

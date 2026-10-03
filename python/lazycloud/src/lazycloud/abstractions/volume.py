@@ -22,8 +22,7 @@ from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
 from lazycloud.control import ResourceControlBinding, storage_client
 
-# The storage client and the API models load on first use, not when an app
-# declares a volume.
+# Declaring a volume loads no storage client or API models.
 if TYPE_CHECKING:
     from lazycloud.clients.storage import StorageClient
     from lazycloud.contracts import api
@@ -426,12 +425,12 @@ class Volume(ResourceControlBinding["StorageClient"]):
         return MultipartAbort(upload_id=upload_id, volume_name=self.name, volume_path=path)
 
     def _upload_file(self, source: Path, destination: str) -> str:
+        from lazycloud.clients.storage import upload_file_parts
+
         size = source.stat().st_size
         if size <= MULTIPART_THRESHOLD_BYTES:
             return self.write_bytes(destination, source.read_bytes())
         part_size = max(_PUT_PART_SIZE_BYTES, math.ceil(size / _MAX_UPLOAD_PARTS))
-        from lazycloud.clients.storage import upload_file_parts
-
         upload = self._start_upload(destination, file_size=size, chunk_size=part_size)
         try:
             parts = upload_file_parts(source, upload.parts)

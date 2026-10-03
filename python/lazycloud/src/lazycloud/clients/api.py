@@ -299,12 +299,10 @@ class ApiClient:
     ) -> Generator[TaskRunEvent, None, None]:
         """Admit one task and yield its events as they arrive.
 
-        The first event carries the admitted task, the following ones its log
-        entries and the last one the task once it finished or the server's
-        wait passed, with the result when it succeeded. The server writes a
-        blank line at least every 15 seconds.
+        The first event carries the admitted task, the middle ones its log
+        entries, and the last the task once it finishes or the server's wait
+        passes, with the result if it succeeded.
         """
-
         return self._stream_ndjson(
             TaskRunEvent,
             "POST",

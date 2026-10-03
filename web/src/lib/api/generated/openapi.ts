@@ -499,7 +499,7 @@ export interface paths {
         put?: never;
         /**
          * Admit one task and stream it until it finishes or the wait passes
-         * @description One request for a call that waits on its task: submitTasks for one input, followed log entries and the finished task with its result. A task still running when the wait passes ends the stream with its current state; the caller waits on it with getTask. A blank line follows 15 seconds without entries.
+         * @description Admits one input as submitTasks does, then streams its log entries and the finished task with its result. A task still running when the wait passes ends the stream with its current state, and the caller waits on it with getTask. A blank line follows 15 seconds without entries.
          */
         post: operations["runTask"];
         delete?: never;
@@ -3827,7 +3827,7 @@ export interface components {
              */
             parent_task_id?: string;
         };
-        /** @description One line of a runTask stream. The first carries the admitted task, each following one a log entry, and the last the task when it finished or the wait passed, with `result` once it succeeded. */
+        /** @description One line of a runTask stream. The first carries the admitted task, the middle ones log entries, and the last the task when it finishes or the wait passes, with `result` if it succeeded. */
         TaskRunEvent: {
             task?: components["schemas"]["Task"];
             log?: components["schemas"]["LogEntry"];

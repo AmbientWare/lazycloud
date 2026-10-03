@@ -443,7 +443,6 @@ def _is_url(value: str) -> bool:
 
 
 def _download_bytes(url: str, *, field: str) -> bytes:
-    # urllib.request loads with the first URL a field reads, not with the schema.
     import urllib.error
 
     try:
