@@ -114,26 +114,3 @@ select t.status, r.encoding, r.data, r.display
 from tasks t
 left join task_results r on r.task_id = t.id
 where t.id = @id and t.workspace_id = @workspace_id;
-
--- name: AppFunctionsNewestTask :many
--- Each live function of a live app, and when its newest task was
--- submitted; null for a function without tasks.
-select w.name, t.created_at as newest
-from apps a
-join workloads w on w.app_id = a.id and w.kind = 'function' and w.desired_state <> 'deleted'
-left join tasks t on t.id = (select n.id from tasks n where n.workload_id = w.id order by n.id desc limit 1)
-where a.workspace_id = @workspace_id and a.name = @app and a.state <> 'deleted';
-
--- name: TaskLatencies :many
--- Where each task's time went: when it was submitted and finished, when the
--- container of its current attempt was created and placed, and its host's
--- phase and since when.
-select t.id, t.status, t.created_at, t.finished_at, c.created_at as container_created_at,
-       c.assigned_at, h.phase as host_phase, h.phase_at as host_phase_at,
-       coalesce(h.instance_type, '')::text as instance_type, coalesce(h.market, '')::text as market
-from tasks t
-left join attempts at on at.id = t.current_attempt_id
-left join containers c on c.id = at.container_id
-left join hosts h on h.id = c.host_id
-where t.id = any(@ids::uuid[]) and t.workspace_id = @workspace_id
-order by t.id;
