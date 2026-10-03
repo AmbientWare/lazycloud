@@ -19,7 +19,7 @@ where id = $1
   and state = 'online'
   and last_seen_at < now() - make_interval(secs => $2::float8)
   and (updating_until is null or updating_until < now())
-  and not (phase in ('stopping', 'stopped') and reserve_mode is not null)
+  and not (phase = 'resuming' or phase in ('stopping', 'stopped') and reserve_mode is not null)
 `
 
 type MarkHostLostParams struct {
@@ -28,7 +28,7 @@ type MarkHostLostParams struct {
 }
 
 // Rechecks staleness under the row lock, so a host that reconnected, or went
-// to sleep in the reserve, after the scan stays online.
+// to sleep in the reserve or began waking, after the scan stays online.
 func (q *Queries) MarkHostLost(ctx context.Context, arg MarkHostLostParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markHostLost, arg.ID, arg.TimeoutSeconds)
 	if err != nil {
@@ -43,7 +43,7 @@ from hosts
 where state = 'online'
   and last_seen_at < now() - make_interval(secs => $1::float8)
   and (updating_until is null or updating_until < now())
-  and not (phase in ('stopping', 'stopped') and reserve_mode is not null)
+  and not (phase = 'resuming' or phase in ('stopping', 'stopped') and reserve_mode is not null)
   and (last_seen_at, id) > ($2::timestamptz, $3::uuid)
 order by last_seen_at, id
 limit $4
@@ -63,7 +63,8 @@ type StaleHostsRow struct {
 
 // Online hosts silent for longer than the liveness timeout, in (last_seen_at,
 // id) order after the cursor. Reads the hosts_online partial index. A reserve
-// stopping or stopped is asleep, not lost.
+// stopping, stopped or resuming is asleep or waking, not lost; reconcile
+// bounds a resume that never reconnects.
 func (q *Queries) StaleHosts(ctx context.Context, arg StaleHostsParams) ([]StaleHostsRow, error) {
 	rows, err := q.db.Query(ctx, staleHosts,
 		arg.TimeoutSeconds,
