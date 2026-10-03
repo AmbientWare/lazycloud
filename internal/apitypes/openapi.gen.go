@@ -435,6 +435,7 @@ const (
 	ChangeTopicApps           ChangeTopic = "apps"
 	ChangeTopicContainers     ChangeTopic = "containers"
 	ChangeTopicDeployments    ChangeTopic = "deployments"
+	ChangeTopicRequests       ChangeTopic = "requests"
 	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
 	ChangeTopicStorageVolumes ChangeTopic = "storage.volumes"
 	ChangeTopicTasks          ChangeTopic = "tasks"
@@ -449,6 +450,8 @@ func (e ChangeTopic) Valid() bool {
 	case ChangeTopicContainers:
 		return true
 	case ChangeTopicDeployments:
+		return true
+	case ChangeTopicRequests:
 		return true
 	case ChangeTopicStorageSecrets:
 		return true
@@ -2696,7 +2699,7 @@ type ChangeReset struct {
 // ChangeResetReason behind: the client read too slowly and events were dropped. missed: the server lost its database connection and may have missed changes. unknown_cursor: Last-Event-ID is older than the events the server holds.
 type ChangeResetReason string
 
-// ChangeTopic defines model for ChangeTopic.
+// ChangeTopic requests: the edge recorded endpoint or ASGI requests; each change is grouped by deployment, with a count.
 type ChangeTopic string
 
 // CheckpointSpec Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers.
@@ -4501,7 +4504,9 @@ type ResourceChange struct {
 	// Status The resource's state after the change.
 	Status *string             `json:"status,omitempty"`
 	TaskId *openapi_types.UUID `json:"task_id,omitempty"`
-	Topic  ChangeTopic         `json:"topic"`
+
+	// Topic requests: the edge recorded endpoint or ASGI requests; each change is grouped by deployment, with a count.
+	Topic ChangeTopic `json:"topic"`
 }
 
 // Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.

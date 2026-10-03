@@ -6164,7 +6164,10 @@ components:
 
     ChangeTopic:
       type: string
-      enum: [apps, deployments, tasks, containers, storage.secrets, storage.volumes, usage]
+      description: >-
+        requests: the edge recorded endpoint or ASGI requests; each change
+        is grouped by deployment, with a count.
+      enum: [apps, deployments, tasks, requests, containers, storage.secrets, storage.volumes, usage]
 
     ChangeKind:
       type: string
