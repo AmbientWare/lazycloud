@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -403,10 +404,16 @@ func (sh shellSocket) VisitOpenContainerShellResponse(w http.ResponseWriter) err
 	return nil
 }
 
+// containerWaitBackstop rechecks a waited-for container when no ready
+// notification arrives, which catches stops and lost notifications.
+const containerWaitBackstop = 2 * time.Second
+
 // waitReady waits for a container to become ready, as a shell to a new
 // container does.
 func (s *Server) waitReady(ctx context.Context, container execution.ContainerID) (execution.ContainerRoute, error) {
 	deadline := time.Now().Add(shellReadyWait)
+	wake, cancel := s.owners.Listener.Subscribe(database.ChannelContainerOp, container.String())
+	defer cancel()
 	for {
 		route, err := s.owners.Execution.Route(ctx, container)
 		if err != nil {
@@ -427,7 +434,8 @@ func (s *Server) waitReady(ctx context.Context, container execution.ContainerID)
 		select {
 		case <-ctx.Done():
 			return route, fmt.Errorf("wait for the container: %w", ctx.Err())
-		case <-time.After(250 * time.Millisecond):
+		case <-wake:
+		case <-time.After(containerWaitBackstop):
 		}
 	}
 }
