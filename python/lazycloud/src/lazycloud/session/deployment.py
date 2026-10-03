@@ -70,7 +70,12 @@ class WorkloadDefinition(Protocol):
 
     _app_slug: str
     image: Image
-    terminal: Terminal | None
+
+    @property
+    def terminal(self) -> Terminal | None: ...
+
+    @terminal.setter
+    def terminal(self, value: Terminal | None) -> None: ...
 
     @property
     def resource_name(self) -> str: ...

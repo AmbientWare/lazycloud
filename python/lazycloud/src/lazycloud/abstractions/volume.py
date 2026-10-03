@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import (
     AliasChoices,
@@ -20,15 +20,13 @@ from pydantic import (
 from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
-from lazycloud.clients.storage import (
-    StorageClient,
-    download_presigned,
-    get_presigned,
-    put_presigned,
-    upload_file_parts,
-)
-from lazycloud.contracts import api
 from lazycloud.control import ResourceControlBinding, storage_client
+
+# The storage client and the API models load on first use, not when an app
+# declares a volume.
+if TYPE_CHECKING:
+    from lazycloud.clients.storage import StorageClient
+    from lazycloud.contracts import api
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
 DEFAULT_MULTIPART_CHUNK_SIZE_BYTES = 5 * 1024 * 1024
@@ -44,14 +42,6 @@ class PresignedUrlMethod(StringEnum):
     HeadObject = "head-object"
     PutObject = "put-object"
     UploadPart = "upload-part"
-
-
-_PRESIGN_METHODS = {
-    PresignedUrlMethod.GetObject: api.Method.get,
-    PresignedUrlMethod.HeadObject: api.Method.head,
-    PresignedUrlMethod.PutObject: api.Method.put,
-    PresignedUrlMethod.UploadPart: api.Method.upload_part,
-}
 
 
 class CloudBucketConfig(BaseModel):
@@ -228,7 +218,7 @@ class CloudBucket:
 
 
 @dataclass(slots=True)
-class Volume(ResourceControlBinding[StorageClient]):
+class Volume(ResourceControlBinding["StorageClient"]):
     name: str
     mount_path: str | None = None
     workspace: str | None = None
@@ -266,6 +256,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         return self.write_bytes(relative_path, content.encode("utf-8"))
 
     def write_bytes(self, relative_path: str | Path, content: bytes) -> str:
+        from lazycloud.clients.storage import put_presigned
+
         url = self.presigned_url(relative_path, method=PresignedUrlMethod.PutObject).url
         put_presigned(url, content)
         return self._volume_path(relative_path)
@@ -274,6 +266,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         return self.read_bytes(relative_path).decode(encoding)
 
     def read_bytes(self, relative_path: str | Path) -> bytes:
+        from lazycloud.clients.storage import get_presigned
+
         return get_presigned(self.presigned_url(relative_path).url)
 
     def list(self, relative_path: str | Path = ".") -> list[str]:
@@ -312,6 +306,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         return self._volume_path(destination_root.as_posix())
 
     def get(self, source: str | Path, destination: str | Path) -> Path:
+        from lazycloud.clients.storage import download_presigned
+
         destination_path = Path(destination).expanduser().resolve()
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         download_presigned(self.presigned_url(source).url, destination_path)
@@ -346,9 +342,17 @@ class Volume(ResourceControlBinding[StorageClient]):
         upload_id: str | None = None,
         part_number: int | None = None,
     ) -> PresignedUrl:
+        from lazycloud.contracts import api
+
+        methods = {
+            PresignedUrlMethod.GetObject: api.Method.get,
+            PresignedUrlMethod.HeadObject: api.Method.head,
+            PresignedUrlMethod.PutObject: api.Method.put,
+            PresignedUrlMethod.UploadPart: api.Method.upload_part,
+        }
         fields: dict[str, object] = {
             "path": _relative_path(relative_path).as_posix(),
-            "method": _PRESIGN_METHODS[method],
+            "method": methods[method],
             "expires_seconds": expires_seconds,
             "upload_id": upload_id,
             "part_number": part_number,
@@ -397,6 +401,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         relative_path: str | Path,
         completed_parts: list[CompletedPart],
     ) -> MultipartCompletion:
+        from lazycloud.contracts import api
+
         path = _relative_path(relative_path).as_posix()
         self._complete_upload(
             upload_id,
@@ -411,6 +417,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         )
 
     def abort_multipart_upload(self, upload_id: str, relative_path: str | Path) -> MultipartAbort:
+        from lazycloud.contracts import api
+
         path = _relative_path(relative_path).as_posix()
         self.control_client.abort_volume_upload(
             self.name, api.AbortVolumeUploadRequest(path=path, upload_id=upload_id)
@@ -422,6 +430,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         if size <= MULTIPART_THRESHOLD_BYTES:
             return self.write_bytes(destination, source.read_bytes())
         part_size = max(_PUT_PART_SIZE_BYTES, math.ceil(size / _MAX_UPLOAD_PARTS))
+        from lazycloud.clients.storage import upload_file_parts
+
         upload = self._start_upload(destination, file_size=size, chunk_size=part_size)
         try:
             parts = upload_file_parts(source, upload.parts)
@@ -434,6 +444,8 @@ class Volume(ResourceControlBinding[StorageClient]):
     def _start_upload(
         self, relative_path: str | Path, *, file_size: int, chunk_size: int
     ) -> api.MultipartUpload:
+        from lazycloud.contracts import api
+
         request = api.CreateVolumeUploadRequest(
             path=_relative_path(relative_path).as_posix(),
             size_bytes=file_size,
@@ -442,6 +454,8 @@ class Volume(ResourceControlBinding[StorageClient]):
         return self.control_client.create_volume_upload(self.name, request)
 
     def _complete_upload(self, upload_id: str, path: str, parts: list[api.CompletedPart]) -> None:
+        from lazycloud.contracts import api
+
         self.control_client.complete_volume_upload(
             self.name, api.CompleteVolumeUploadRequest(path=path, upload_id=upload_id, parts=parts)
         )

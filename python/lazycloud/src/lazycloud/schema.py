@@ -3,24 +3,23 @@ from __future__ import annotations
 import base64
 import binascii
 import errno
-import tempfile
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
-from typing import Any, BinaryIO, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, BinaryIO, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from PIL import Image as PILImage
-from PIL.PngImagePlugin import PngInfo
 from pydantic import ConfigDict, TypeAdapter, with_config
 from pydantic import ValidationError as PydanticValidationError
 from typing_extensions import Self, TypedDict
 
 from lazycloud._shared.errors import InvalidInputError
 from lazycloud.json_contracts import JsonValue
+
+# Pillow loads when an image field handles a value, not when a schema names one.
+if TYPE_CHECKING:
+    from PIL import Image as PILImage
 
 
 class ValidationError(InvalidInputError, ValueError):
@@ -248,6 +247,8 @@ class Image(File):
         }
 
     def validate(self, value: Any) -> Any:
+        from PIL import Image as PILImage
+
         if isinstance(value, ValidatedImage):
             value = value.data
         try:
@@ -268,6 +269,8 @@ class Image(File):
             raise ValidationError(f"invalid image data: {type(exc).__name__}") from None
 
     def encode_input(self, value: Any) -> Any:
+        from PIL import Image as PILImage
+
         if isinstance(value, PILImage.Image):
             data, _ = self._encode_image(value)
             return base64.b64encode(data).decode("ascii")
@@ -276,6 +279,8 @@ class Image(File):
         return super().encode_input(value)
 
     def dump(self, value: Any) -> str:
+        from PIL import Image as PILImage
+
         if isinstance(value, str) and _is_url(value):
             return value
 
@@ -288,6 +293,8 @@ class Image(File):
         return _publish_bytes(data, suffix=f".{format_name.lower()}")
 
     def _encode_image(self, value: PILImage.Image) -> tuple[bytes, str]:
+        from PIL.PngImagePlugin import PngInfo
+
         output_format = (value.format or "PNG").upper()
         self._validate_image(output_format, value.size)
         save_params: dict[str, object] = {"exif": b"", "icc_profile": None, "xmp": b""}
@@ -415,6 +422,8 @@ class Schema:
 
 
 def _publish_bytes(data: bytes, *, suffix: str) -> str:
+    import tempfile
+
     from lazycloud.abstractions.artifact import Artifact
 
     with tempfile.TemporaryDirectory(prefix="lazycloud-output-") as directory:
@@ -434,6 +443,9 @@ def _is_url(value: str) -> bool:
 
 
 def _download_bytes(url: str, *, field: str) -> bytes:
+    # urllib.request loads with the first URL a field reads, not with the schema.
+    import urllib.error
+
     try:
         with _url_binary_response(url) as response:
             return response.read()
@@ -446,6 +458,8 @@ def _download_bytes(url: str, *, field: str) -> bytes:
 
 
 def _url_binary_response(url: str) -> UrlBinaryResponse:
+    import urllib.request
+
     response: object = urllib.request.urlopen(url)
     if not isinstance(response, UrlBinaryResponse):
         raise ValidationError("URL response does not provide binary content")

@@ -49,7 +49,6 @@ from lazycloud._shared.placement import ProductRegion
 from lazycloud._shared.resources import parse_memory_mib
 from lazycloud._shared.serialization import to_json_value
 from lazycloud._shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
-from lazycloud._terminal.formatting import short_id
 from lazycloud.abstractions.image import Image, ImageBuildResult
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -67,21 +66,6 @@ from lazycloud.client_contracts import (
     schema_from_contract_parameters,
     schema_from_contract_return,
 )
-from lazycloud.clients.api import ApiClient, ApiError, is_transient
-from lazycloud.contracts.api import (
-    Encoding,
-    ErrorCode,
-    LogEntry,
-    Payload,
-    RunTaskRequest,
-    Stream,
-    SubmitTasksRequest,
-    TaskInput,
-    TaskRunEvent,
-    TaskStatus,
-    WorkloadSpec,
-)
-from lazycloud.contracts.api import Task as TaskView
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.exceptions import (
@@ -92,21 +76,26 @@ from lazycloud.exceptions import (
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
-from lazycloud.session.task import (
-    TERMINAL_STATUSES,
-    FunctionCall,
-    Task,
-    decode_payload,
-    parent_task_id,
-    task_input,
-)
-from lazycloud.terminal import Terminal, TerminalStep
 
+# Calls load the API client, the task session and the terminal on first use;
+# declaring a function, as every container start does, needs none of them.
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from lazycloud.abstractions.shell import ShellSession
-    from lazycloud.contracts.api import Deployment, Preview
+    from lazycloud.clients.api import ApiClient
+    from lazycloud.contracts.api import (
+        Deployment,
+        LogEntry,
+        Payload,
+        Preview,
+        TaskInput,
+        TaskRunEvent,
+        WorkloadSpec,
+    )
+    from lazycloud.contracts.api import Task as TaskView
+    from lazycloud.session.task import FunctionCall, Task
+    from lazycloud.terminal import Terminal, TerminalStep
 
 
 # Inputs per submit request; the API rejects larger batches.
@@ -121,6 +110,13 @@ T = TypeVar("T")
 
 class FunctionOperationError(SdkError):
     pass
+
+
+class _Unset:
+    """A field not yet given its default."""
+
+
+_UNSET = _Unset()
 
 
 class FunctionOptions(TypedDict, total=False):
@@ -208,13 +204,27 @@ class Function(Generic[P, R]):
     metadata: dict[str, Any] = field(default_factory=dict)
     client: ApiClient | None = field(default=None, init=False, repr=False)
     workspace: str | None = field(default=None, init=False)
-    terminal: Terminal | None = field(
-        default_factory=lambda: Terminal(default_enabled=is_local()), init=False, repr=False
-    )
+    _terminal: Terminal | _Unset | None = field(default=_UNSET, init=False, repr=False)
     _release: tuple[str, UUID] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         update_wrapper(self, self.func)
+
+    @property
+    def terminal(self) -> Terminal | None:
+        """Where calls show their progress and output; None shows nothing.
+
+        Shown by default only outside a workload container.
+        """
+        if isinstance(self._terminal, _Unset):
+            from lazycloud.terminal import Terminal
+
+            self._terminal = Terminal(default_enabled=is_local())
+        return self._terminal
+
+    @terminal.setter
+    def terminal(self, value: Terminal | None) -> None:
+        self._terminal = value
 
     @property
     def resource_name(self) -> str:
@@ -335,6 +345,8 @@ class Function(Generic[P, R]):
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
     ) -> WorkloadSpec:
         """The API definition of this function for an uploaded source and a ready image."""
+        from lazycloud.contracts.api import WorkloadSpec
+
         self.require_supported()
         policy = self._retry_policy()
         spec: dict[str, Any] = {
@@ -509,6 +521,8 @@ class Function(Generic[P, R]):
         The task is detached: Ctrl-C while waiting on the call leaves it running,
         unlike `.remote()` and `.map()`. Ctrl-C during the submit cancels it.
         """
+        from lazycloud.session.task import FunctionCall
+
         client, workspace = self._invocation_session()
         task = self._submit(client, workspace, [self._input(args, kwargs, workspace)])[0]
         return FunctionCall(task)
@@ -524,6 +538,8 @@ class Function(Generic[P, R]):
 
     def spawn_map(self, inputs: Sequence[Any]) -> list[FunctionCall[R]]:
         """Submit one task per input, in batches, and return the calls in input order."""
+        from lazycloud.session.task import FunctionCall
+
         if not inputs:
             return []
         client, workspace = self._invocation_session()
@@ -550,6 +566,8 @@ class Function(Generic[P, R]):
 
     def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
         """Submit one task with JSON arguments; its result comes back as JSON."""
+        from lazycloud.contracts.api import Encoding, TaskInput
+
         client, workspace = self._invocation_session()
         payload = TaskInput(
             encoding=Encoding.json,
@@ -559,11 +577,17 @@ class Function(Generic[P, R]):
 
     def run_task(self, task: Task) -> Any:
         """Follow a submitted task's output until it finishes, then return its outcome."""
+        from lazycloud._terminal.formatting import short_id
+
         with self._task_step() as step:
             step.update(f"{short_id(task.task_id)} submitted")
             return self._follow(task, step)
 
     def _remote_call(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> R:
+        from lazycloud._terminal.formatting import short_id
+        from lazycloud.contracts.api import RunTaskRequest
+        from lazycloud.session.task import Task
+
         client, workspace = self._invocation_session()
         request = RunTaskRequest(
             input=self._input(args, kwargs, workspace), **self._target(workspace)
@@ -602,6 +626,10 @@ class Function(Generic[P, R]):
         `events` is the rest of the task's run stream. A task the stream
         leaves unfinished is followed through its logs and waited on.
         """
+        from lazycloud._terminal.formatting import short_id
+        from lazycloud.contracts.api import TaskStatus
+        from lazycloud.session.task import TERMINAL_STATUSES, decode_payload
+
         reporter = PendingProgressReporter(terminal=self.terminal, step=step)
         watcher = _QueuedTaskWatcher(task, step, reporter)
         view: TaskView | None = None
@@ -643,6 +671,8 @@ class Function(Generic[P, R]):
         """Print a run stream's log entries and return its last task state, that
         state's result and the last entry's id. A dropped stream returns what
         arrived before it dropped."""
+        from lazycloud.clients.api import is_transient
+
         view: TaskView | None = None
         result: Payload | None = None
         cursor = 0
@@ -659,6 +689,8 @@ class Function(Generic[P, R]):
         return view, result, cursor
 
     def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str) -> TaskInput:
+        from lazycloud.session.task import task_input
+
         encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
         return task_input(encoded_args, encoded_kwargs, workspace=workspace)
 
@@ -678,6 +710,8 @@ class Function(Generic[P, R]):
 
     def _target(self, workspace: str) -> dict[str, UUID]:
         """The release a call from here runs on, or the task it runs under."""
+        from lazycloud.session.task import parent_task_id
+
         if is_local():
             return {"release_id": self._release_id(workspace)}
         if parent := parent_task_id():
@@ -685,11 +719,17 @@ class Function(Generic[P, R]):
         return {}
 
     def _admission_error(self, exc: SdkError, workspace: str) -> SdkError:
+        from lazycloud.clients.api import ApiError
+        from lazycloud.contracts.api import ErrorCode
+
         if isinstance(exc, ApiError) and exc.code is ErrorCode.not_found:
             return FunctionNotDeployedError(self._app_slug, self.resource_name, workspace)
         return exc
 
     def _submit(self, client: ApiClient, workspace: str, inputs: list[TaskInput]) -> list[Task]:
+        from lazycloud.contracts.api import SubmitTasksRequest
+        from lazycloud.session.task import FunctionCall, Task
+
         target = self._target(workspace)
         tasks: list[Task] = []
         for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
@@ -776,6 +816,8 @@ class Function(Generic[P, R]):
         return policy if policy is not None else RetryPolicy(max_attempts=1)
 
     def _print_log(self, entry: LogEntry) -> None:
+        from lazycloud.contracts.api import Stream
+
         if self.terminal is None:
             return
         data = entry.data if entry.data.endswith("\n") else entry.data + "\n"
@@ -783,11 +825,15 @@ class Function(Generic[P, R]):
         self.terminal.remote_output(data, stream=stream)
 
     def _task_step(self) -> AbstractContextManager[TerminalStep]:
+        from lazycloud.terminal import Terminal, TerminalStep
+
         if self.terminal is None:
             return nullcontext(TerminalStep(name="Task", terminal=Terminal(quiet=True)))
         return self.terminal.step("Task", "submitting")
 
     def _error(self, message: str) -> None:
+        from lazycloud.terminal import Terminal
+
         terminal = self.terminal or Terminal()
         terminal.error(message)
 
@@ -824,6 +870,10 @@ class _QueuedTaskWatcher:
             self._thread.join(timeout=self.task.client.timeout_seconds)
 
     def _watch(self) -> None:
+        from lazycloud._terminal.formatting import short_id
+        from lazycloud.clients.api import is_transient
+        from lazycloud.contracts.api import TaskStatus
+
         task_id = UUID(self.task.task_id)
         status: TaskStatus | None = None
         # A call that finishes within the first interval is never read.
