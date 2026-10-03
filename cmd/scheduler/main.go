@@ -145,8 +145,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	// Cloud instances reach the server across a network, so they always
 	// dial with TLS.
+	// The scheduler ships with the server, so the server serves the agent
+	// release of this version.
 	computeConfig := compute.Config{
 		InstallURL: os.Getenv("LAZYCLOUD_INSTALL_URL"), ServerAddress: os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"), Fleet: fleet,
+	}
+	if version != "dev" {
+		computeConfig.ServedRelease = version
 	}
 	if err := computeConfig.CheckFleet(); err != nil {
 		return err

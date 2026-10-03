@@ -72,6 +72,12 @@ type Config struct {
 	// they accept only for a loopback address. Otherwise they dial with TLS
 	// and verify the server's certificate.
 	ServerPlaintext bool
+	// ServedRelease is the agent release InstallURL serves: the server
+	// carries only the archive of its own version. While the published
+	// target names another release, as between a deploy's rollout and its
+	// publish job, hosts wait instead of launching to a download that
+	// fails. Empty skips the check (development builds).
+	ServedRelease string
 	// Fleet is the platform's AWS capacity.
 	Fleet Fleet
 }
