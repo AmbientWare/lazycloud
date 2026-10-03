@@ -226,8 +226,7 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // sold in the region, in a market the need allows, not cooling, with a
 // complete cost, whose usable capacity covers the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and that keep the purchase margin
-// unless the owner pays. An on-demand reserve offer hibernates where the
-// type does (see hibernates).
+// unless the owner pays. A reserve offer hibernates where hibernates allows.
 // Order: the need's GPU preference, cooling regions last, complete hourly
 // cost, region preference, fewest hosts in the zone, key. An offer whose
 // host would exceed a known vCPU quota is skipped.
@@ -302,14 +301,18 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 	return offers
 }
 
+// hibernationRAMLimit is the most RAM a reserve hibernates. EC2 writes it
+// to the gp3 root at 125 MiB/s: 32 GiB takes about 4.5 minutes of the
+// 10-minute providerDeadline, while 128 GiB would outlast it.
+const hibernationRAMLimit = 32 * gib
+
 // hibernates reports whether a reserve of type t bought in market sleeps by
-// hibernating. Spot reserves stop plainly: in us-east-2 a Spot c6a.2xlarge
-// hibernation on 2026-09-27 never reached stopped and was forced, while an
-// on-demand c6a.2xlarge hibernated in the same call, and a Spot m6a.8xlarge
-// was forced after 11 minutes on 2026-09-28. A forced stop loses the image
-// after holding the host for providerDeadline.
+// hibernating: an on-demand one of at most hibernationRAMLimit. Spot
+// hibernations of a c6a.2xlarge and an m6a.8xlarge in us-east-2 hung until
+// forced on 2026-09-27 and 28, and a forced stop loses the image after
+// holding the host for providerDeadline.
 func hibernates(t CatalogType, market Market) bool {
-	return t.Hibernates && market == MarketOnDemand
+	return t.Hibernates && t.MemoryBytes <= hibernationRAMLimit && market == MarketOnDemand
 }
 
 // preferHealthy drops offers in cooling regions while another offer

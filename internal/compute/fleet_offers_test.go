@@ -255,6 +255,21 @@ func TestAConnectionPaysItsOwnHostsAndOnlyOnDemandReservesHibernate(t *testing.T
 	}
 }
 
+// An on-demand reserve hibernates only with at most 32 GiB of RAM; a larger
+// image would not finish writing within providerDeadline, so it stops
+// plainly on the plain root.
+func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
+	in := offerInputs(t)
+	for name, want := range map[string]bool{"m7i.2xlarge": true, "m6a.4xlarge": false, "r6a.4xlarge": false, "m7i.8xlarge": false} {
+		typ := mustType(t, name)
+		in.Catalog = []CatalogType{typ}
+		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
+		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want)) {
+			t.Errorf("%s: reserve offers %v, want one that hibernates %v", name, offerKeys(offers), want)
+		}
+	}
+}
+
 func TestOffersSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "g4dn.xlarge")}

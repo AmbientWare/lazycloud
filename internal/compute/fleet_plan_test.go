@@ -341,8 +341,12 @@ func TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt(t *testing.T) {
 	}
 }
 
-// planFast is a small shape that hibernates.
-var planFast = CatalogType{Name: "fast", CPUMillis: 8000, MemoryBytes: 16 * gib, Hibernates: true, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+// planFast is a small shape that hibernates; planRoomy can hibernate but
+// has more RAM than a reserve hibernates.
+var (
+	planFast  = CatalogType{Name: "fast", CPUMillis: 8000, MemoryBytes: 16 * gib, Hibernates: true, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+	planRoomy = CatalogType{Name: "roomy", CPUMillis: 8000, MemoryBytes: 64 * gib, Hibernates: true, prices: [4]int64{200_000, 200_000, 200_000, 200_000}}
+)
 
 // Current load is what containers hold now: what the market's hosts run and
 // what its pending containers ask for.
@@ -439,13 +443,13 @@ func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 }
 
 // An idle host goes back to the reserve while the reserve is short: an
-// on-demand host launched able to hibernates, any other stops plainly. Once
-// the reserve is held, it drains.
+// on-demand host of at most 32 GiB launched able to hibernates, any other
+// stops plainly. Once the reserve is held, it drains.
 func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, small)
 	p.Spot = MarketReserve{Stopped: HeadroomTarget{Floor: small}}
-	hibernating := func(market Market) FleetHost {
-		h := idle(planHost(1, planFast, FleetServing))
+	hibernating := func(typ CatalogType, market Market) FleetHost {
+		h := idle(planHost(1, typ, FleetServing))
 		h.Market, h.HibernationConfigured = market, true
 		return h
 	}
@@ -455,11 +459,12 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 		mode ReserveMode
 	}{
 		{"plain", idle(planHost(1, planSmall, FleetServing)), ReserveStop},
-		{"on-demand, hibernation configured", hibernating(MarketOnDemand), ReserveHibernate},
-		{"Spot, hibernation configured", hibernating(MarketSpot), ReserveStop},
+		{"on-demand, hibernation configured", hibernating(planFast, MarketOnDemand), ReserveHibernate},
+		{"on-demand, 64 GiB", hibernating(planRoomy, MarketOnDemand), ReserveStop},
+		{"Spot, hibernation configured", hibernating(planFast, MarketSpot), ReserveStop},
 	} {
 		s := planSnapshot(t, c.host)
-		s.Offers.Catalog = append(s.Offers.Catalog, planFast)
+		s.Offers.Catalog = append(s.Offers.Catalog, planFast, planRoomy)
 		plan := PlanFleet(p, s)
 		if got := actionsOf(plan, ActionReturnToReserve); len(got) != 1 || *got[0].Mode != c.mode || len(actionsOf(plan, ActionDrain)) > 0 {
 			t.Errorf("%s: %+v", c.name, plan.Actions)
