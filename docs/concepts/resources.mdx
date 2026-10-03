@@ -34,13 +34,19 @@ def embed(texts: list[str]) -> list[list[float]]:
     ...
 ```
 
-Models are `GpuType.T4`, `A10G`, `L4` and `L40S`. A list is a preference order:
+Models are `GpuType.T4`, `A10G`, `L4`, `L40S`, `A100_40`, `A100_80`, `H100`, and
+`H200`. A list is a preference order:
 `gpu=[GpuType.L40S, GpuType.A10G, GpuType.Any]` takes the first model with free
-capacity, and `GpuType.Any` at the end takes whatever is left. The
-[pricing page](https://lazycloud.dev/pricing) lists models coming soon; a
-deployment that asks only for those is refused until they arrive.
+capacity, and `GpuType.Any` at the end takes whatever is left. Plain
+`GpuType.A100` is rejected because the two sizes aren't interchangeable.
 `gpu_count` sets GPUs per container, and your [plan](/platform/plans) sets
 which models you can use.
+
+The platform fleet runs T4, A10G, L4 and L40S; the
+[pricing page](https://lazycloud.dev/pricing) lists the others as coming soon.
+They run now on [your own machines](/platform/compute) or a connected AWS
+account. On the fleet, a deployment that names only coming-soon models is
+refused.
 
 ## Preemptible capacity
 

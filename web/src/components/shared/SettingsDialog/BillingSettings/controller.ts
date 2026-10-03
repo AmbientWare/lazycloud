@@ -44,7 +44,7 @@ export type BillingSettingsController = {
   isLoading: boolean;
   loadError: Error | null;
   offers: readonly PlanOffer[];
-  /** Every GPU model work may request now, which an offer's models are read against. */
+  /** The GPU models the platform fleet runs, which an offer's models are read against. */
   offeredGpuTypes: readonly string[];
   settling: boolean;
   cancelScheduledChange: () => void;

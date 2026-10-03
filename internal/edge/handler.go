@@ -103,7 +103,7 @@ func (e *Edge) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var limit *billing.LimitError
 	var gpu *billing.GPUUnavailableError
 	switch {
-	// Billing's refusals: no GPU model the workload accepts is offered yet
+	// Billing's refusals: the fleet runs no GPU model the workload accepts
 	// (400), the account must pay (402), or it is at a plan limit it can act
 	// on (409).
 	case errors.As(err, &gpu):

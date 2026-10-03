@@ -157,7 +157,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		// limit refuses it rather than queueing it.
 		grant, err := billing.Admit(ctx, tx, billing.Request{
 			Workspace: uuid.UUID(workspace), Start: 1, Cold: true, GPUs: int(params.GpuCount),
-			GPUModels: gpuModels(spec), Pinned: pinned(spec),
+			GPUModels: gpuModels(spec), Pinned: pinned(spec), Machine: compute.PinnedMachine(spec) != "",
 		})
 		if err != nil {
 			return fmt.Errorf("admit instance: %w", err)
@@ -297,8 +297,10 @@ func intOf(v *int32) *int {
 	return &n
 }
 
+// gpuCount is the cards each container holds, as planning reads it: a GPU
+// list without a positive count holds one.
 func gpuCount(r apitypes.Resources) int {
-	if r.GpuCount != nil {
+	if r.GpuCount != nil && *r.GpuCount > 0 {
 		return *r.GpuCount
 	}
 	if r.Gpu != nil && len(*r.Gpu) > 0 {

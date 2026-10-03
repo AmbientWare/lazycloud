@@ -34,17 +34,17 @@ type ConflictError struct{ Message string }
 
 func (e *ConflictError) Error() string { return e.Message }
 
-// GPUUnavailableError refuses work that accepts only GPU models the
-// platform does not offer yet.
+// GPUUnavailableError refuses work only the platform fleet can serve that
+// accepts only GPU models the fleet does not offer.
 type GPUUnavailableError struct{ Models []GPUType }
 
 func (e *GPUUnavailableError) Error() string {
-	verb := "is"
+	verb, pronoun := "is", "it"
 	if len(e.Models) > 1 {
-		verb = "are"
+		verb, pronoun = "are", "them"
 	}
-	return fmt.Sprintf("%s %s coming soon and cannot be requested yet; the GPU models available now are %s",
-		joinModels(e.Models), verb, joinModels(enabledGPUs()))
+	return fmt.Sprintf("%s %s coming soon to the platform fleet, which offers %s; a joined machine or a connected AWS account can run %s now",
+		joinModels(e.Models), verb, joinModels(enabledGPUs()), pronoun)
 }
 
 // InvalidError is a request billing rejects.

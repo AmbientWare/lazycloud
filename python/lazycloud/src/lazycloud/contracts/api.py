@@ -3062,7 +3062,8 @@ class ComputeSummary(APIModel):
 class GpuRate(APIModel):
     gpu_type: str
     enabled: Annotated[
-        bool, Field(description="Whether work may request the model; if not, it is coming soon.")
+        bool,
+        Field(description="Whether the platform fleet runs the model; if not, it is coming soon."),
     ]
     nanos_per_card_hour: CardRates
 

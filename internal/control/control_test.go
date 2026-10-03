@@ -166,18 +166,39 @@ func TestDeployRequiresRegisteredSourceAndChangesNothing(t *testing.T) {
 	}
 }
 
-// A deployment that accepts only GPU models not offered yet is refused at
-// once with billing's typed error; one offered model in its preference
-// deploys.
-func TestDeployRefusesGPUModelsNotOfferedYet(t *testing.T) {
-	spec := function("train")
-	spec.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
-	var unoffered *billing.GPUUnavailableError
-	if _, err := Resolve(spec); !errors.As(err, &unoffered) || !strings.Contains(err.Error(), "coming soon") {
-		t.Fatalf("H100 alone: %v", err)
+// A workload only the platform fleet can serve is refused when it names
+// only models the fleet does not offer; one pinned to a joined machine, or
+// in a connected account's workspace, deploys any model.
+func TestDeployRefusesGPUModelsOnlyWhereTheFleetMustServeThem(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	h100 := function("train")
+	h100.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
+	deployOne := func(spec apitypes.WorkloadSpec) error {
+		_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
+		return err
 	}
-	spec.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100, apitypes.L4}
-	if _, err := Resolve(spec); err != nil {
-		t.Fatalf("H100 then L4: %v", err)
+	var unoffered *billing.GPUUnavailableError
+	if err := deployOne(h100); !errors.As(err, &unoffered) || !strings.Contains(err.Error(), "coming soon") {
+		t.Fatalf("H100 on the fleet: %v", err)
+	}
+	fallback := h100
+	fallback.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100, apitypes.L4}
+	if err := deployOne(fallback); err != nil {
+		t.Fatalf("H100 then L4 on the fleet: %v", err)
+	}
+	pinned := h100
+	pinned.Placement = &apitypes.Placement{Machine: new("gpu-1")}
+	if err := deployOne(pinned); err != nil {
+		t.Fatalf("H100 on a joined machine: %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+with owner as (select user_id from workspace_members where workspace_id = $1 and role = 'owner'),
+     conn as (insert into cloud_connections (account_id, aws_account_id, phase) select user_id, '123456789012', 'ready' from owner returning id)
+update workspaces set connection_id = (select id from conn) where id = $1`, uuid.UUID(ws)); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployOne(h100); err != nil {
+		t.Fatalf("H100 in a connected account: %v", err)
 	}
 }

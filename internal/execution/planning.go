@@ -176,16 +176,12 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		if count <= 0 {
 			return nil
 		}
-		models := make([]billing.GPUType, len(release.GpuModels))
-		for n, m := range release.GpuModels {
-			models[n] = billing.GPUType(m)
-		}
 		grant, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: release.WorkspaceID, Start: count, GPUs: int(release.GpuCount), GPUModels: models, Pinned: release.Pinned,
+			Workspace: release.WorkspaceID, Start: count, GPUs: int(release.GpuCount),
+			GPUModels: billingModels(release.GpuModels), Pinned: release.Pinned, Machine: release.Machine,
 		})
 		if refusedToWait(err) {
-			// The account cannot pay, or no GPU model it asks for is offered
-			// yet; its tasks wait. Submission refuses new ones.
+			// Its tasks wait; submission refuses new ones.
 			return nil
 		}
 		if err != nil {
@@ -228,8 +224,8 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 }
 
 // refusedToWait reports an admission refusal planning waits out rather
-// than fails on: the account cannot pay, or no GPU model the work accepts is
-// offered yet.
+// than fails on: the account cannot pay, or the fleet offers no GPU model
+// the work accepts.
 func refusedToWait(err error) bool {
 	var payment *billing.PaymentRequiredError
 	var gpu *billing.GPUUnavailableError

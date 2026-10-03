@@ -62,7 +62,7 @@ select r.id as release_id,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
        -- What billing prices and admits: the cards each container holds (a
        -- GPU list without a count holds one), and whether placement is
-       -- preemptible and pinned to a region or zone.
+       -- preemptible and pinned to a region, zone or machine.
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
@@ -70,6 +70,7 @@ select r.id as release_id,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
+       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
        q.available::int as queued_available,
        run.running::int as running,
        c.pending::int as pending,

@@ -93,12 +93,13 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 	}
 }
 
-// The fleet buys only GPU models billing has enabled, even for work that
-// names a disabled one first.
-func TestOffersHoldOnlyEnabledGPUModels(t *testing.T) {
+// The platform fleet buys only the GPU models it offers, even for work that
+// names another first; a connected account buys any model.
+func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-east-1": oneZone("us-east-1a", "use1-az1")}
-	offers := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"H100", GPUAny}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
+	need := Requirement{GPUs: []string{"H100", GPUAny}, CPUMillis: 1000, MemoryBytes: gib}
+	offers := RankOffers(DefaultPolicy(), need, false, in)
 	if len(offers) == 0 {
 		t.Fatal("no offer for any model")
 	}
@@ -106,6 +107,10 @@ func TestOffersHoldOnlyEnabledGPUModels(t *testing.T) {
 		if !billing.GPUEnabled(o.Type.GPU) {
 			t.Fatalf("offered %s", o.Key())
 		}
+	}
+	in.OwnerPays = true
+	if offers := RankOffers(connectionPolicy(DefaultPolicy()), need, false, in); len(offers) == 0 || offers[0].Type.GPU != "H100" {
+		t.Fatalf("connected account offers %v", offerKeys(offers))
 	}
 }
 

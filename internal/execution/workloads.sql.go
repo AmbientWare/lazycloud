@@ -800,6 +800,7 @@ select r.id as release_id,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
+       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
        coalesce((r.spec -> 'pod' ->> 'block_network')::boolean, false)::bool as block_network,
        coalesce(array(select jsonb_array_elements_text(r.spec -> 'pod' -> 'allow_list')), '{}')::text[] as allow_list,
        exists (
@@ -861,6 +862,7 @@ type PodReleasesRow struct {
 	GpuModels       []string
 	Preemptible     bool
 	Pinned          bool
+	Machine         bool
 	BlockNetwork    bool
 	AllowList       []string
 	ActiveReady     bool
@@ -903,6 +905,7 @@ func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]Pod
 			&i.GpuModels,
 			&i.Preemptible,
 			&i.Pinned,
+			&i.Machine,
 			&i.BlockNetwork,
 			&i.AllowList,
 			&i.ActiveReady,

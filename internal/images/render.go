@@ -15,7 +15,6 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
 // Tools copied into images that need them, pinned by digest.
@@ -153,10 +152,7 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 		// One model, not a preference: it is the machine the image is
 		// built on.
 		if gpu := apitypes.GpuType(*def.Gpu); !gpu.Valid() || gpu == apitypes.Any {
-			return spec{}, invalid("gpu %q is not a GPU model; name one such as L4 or A10G", *def.Gpu)
-		}
-		if err := billing.CheckGPUModels([]billing.GPUType{billing.GPUType(*def.Gpu)}); err != nil {
-			return spec{}, fmt.Errorf("image gpu: %w", err)
+			return spec{}, invalid("gpu %q is not a GPU model; name one such as L4 or A100-80", *def.Gpu)
 		}
 		s.gpu = *def.Gpu
 	}

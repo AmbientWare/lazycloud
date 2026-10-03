@@ -81,7 +81,7 @@ terminal. The dashboard has the same flow under Settings, then Compute.
 from lazycloud import GpuType
 
 
-@app.function(gpu=GpuType.L40S, machine="gpu-1")
+@app.function(gpu=GpuType.A100_80, machine="gpu-1")
 def train() -> None:
     ...
 ```

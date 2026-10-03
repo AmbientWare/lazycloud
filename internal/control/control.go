@@ -80,15 +80,6 @@ func Resolve(spec apitypes.WorkloadSpec) (apitypes.WorkloadSpec, error) {
 	if r := spec.Resources; r.MemoryLimitMib != nil && *r.MemoryLimitMib < r.MemoryMib {
 		return out, &InvalidSpecError{Function: spec.Name, Reason: "resources.memory_limit_mib is below memory_mib"}
 	}
-	if r := spec.Resources; r.Gpu != nil {
-		models := make([]billing.GPUType, len(*r.Gpu))
-		for n, g := range *r.Gpu {
-			models[n] = billing.GPUType(g)
-		}
-		if err := billing.CheckGPUModels(models); err != nil {
-			return out, fmt.Errorf("function %s: %w", spec.Name, err)
-		}
-	}
 
 	scaler := apitypes.Autoscaler{}
 	if spec.Autoscaler != nil {
@@ -288,10 +279,31 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 	return out, nil
 }
 
+// checkFleetGPUs refuses, with billing's GPUUnavailableError, a workload
+// only the platform fleet can serve that names only GPU models the fleet
+// does not offer.
+func checkFleetGPUs(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, spec apitypes.WorkloadSpec) error {
+	if spec.Resources.Gpu == nil {
+		return nil
+	}
+	models := make([]billing.GPUType, len(*spec.Resources.Gpu))
+	for n, g := range *spec.Resources.Gpu {
+		models[n] = billing.GPUType(g)
+	}
+	machine := spec.Placement != nil && spec.Placement.Machine != nil && *spec.Placement.Machine != ""
+	if err := billing.CheckFleetGPUs(ctx, tx, workspace, machine, models); err != nil {
+		return fmt.Errorf("function %s: %w", spec.Name, err)
+	}
+	return nil
+}
+
 // deployFunction upserts and locks the workload, then keeps or replaces its
 // active release. Execution is woken for the new release and for the one it
 // replaces, which drains once its work finishes.
 func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, workspace, app uuid.UUID, appName string, f resolvedFunction) (apitypes.Release, error) {
+	if err := checkFleetGPUs(ctx, tx, workspace, f.spec); err != nil {
+		return apitypes.Release{}, err
+	}
 	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Kind: string(f.spec.Kind), Name: f.spec.Name})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)

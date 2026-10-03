@@ -3560,7 +3560,7 @@ type FleetSummary struct {
 
 // GpuRate defines model for GpuRate.
 type GpuRate struct {
-	// Enabled Whether work may request the model; if not, it is coming soon.
+	// Enabled Whether the platform fleet runs the model; if not, it is coming soon.
 	Enabled bool   `json:"enabled"`
 	GpuType string `json:"gpu_type"`
 
@@ -3568,7 +3568,7 @@ type GpuRate struct {
 	NanosPerCardHour CardRates `json:"nanos_per_card_hour"`
 }
 
-// GpuType A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80. Only models the pricing catalog marks enabled may be requested; a request naming only others is refused with unsupported.
+// GpuType A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80. The platform fleet runs only the models the pricing catalog marks enabled; work only it can serve that names only other models is refused with unsupported.
 type GpuType string
 
 // HealthCheck An HTTP GET that must answer 2xx or 3xx before the container takes traffic.

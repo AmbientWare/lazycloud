@@ -16,7 +16,7 @@ export type RateLine = {
   figure: number | string;
   unit: string;
   fractionDigits?: number;
-  /** Shown muted beside the figure, such as a model not offered yet. */
+  /** Shown muted beside the figure, such as a model the fleet does not run yet. */
   note?: string;
 };
 

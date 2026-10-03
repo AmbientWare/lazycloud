@@ -110,11 +110,10 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 		count := desired - active
 		grant, err := billing.Admit(ctx, tx, billing.Request{
 			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount),
-			GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned,
+			GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,
 		})
 		if refusedToWait(err) {
-			// Connections wait and time out until the account can pay or a GPU
-			// model it asks for is offered.
+			// Connections wait and time out.
 			return nil
 		}
 		if err != nil {
