@@ -50,6 +50,9 @@ type FleetHost struct {
 	HourlyMicros *int64
 	// IdleSince is when the serving host became idle, as last recorded.
 	IdleSince *time.Time
+	// PhaseAt is when the host entered its phase; a serving host's is when
+	// it became ready.
+	PhaseAt time.Time
 }
 
 func (h FleetHost) market() ReserveMarket { return reserveMarketOf(h.Market, h.GPU) }
@@ -205,7 +208,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 	ps := &pass{
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{},
-		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, stopped: map[ReserveMarket]FleetCapacity{},
+		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, byMarket: map[ReserveMarket]*marketView{},
 		claimed: map[HostID]bool{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}}, quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog),
 	}
 	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
@@ -237,8 +240,7 @@ type pass struct {
 	waiting, limited      map[ReserveMarket]bool
 	hostRoom, reserveRoom int
 	offers                map[string][]FleetOffer
-	// stopped is each market's stopped target.
-	stopped map[ReserveMarket]FleetCapacity
+	byMarket              map[ReserveMarket]*marketView
 	// claimed are serving hosts pending work fits.
 	claimed map[HostID]bool
 	// quotaUsed is what running hosts and this pass's starts count
@@ -258,8 +260,9 @@ type marketView struct {
 	load          FleetCapacity
 	warm, stopped FleetCapacity
 	// largest is the shape one of the market's reserves fits; empty for
-	// none.
+	// none. apart keeps that reserve beside the stopped target.
 	largest FleetCapacity
+	apart   bool
 	mayGrow bool
 	retired map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover.
@@ -336,10 +339,12 @@ func (ps *pass) views(items []pendingItem) []*marketView {
 		}
 		r := ps.p.Reserve(m)
 		v.warm, v.stopped = r.Warm.Of(v.load), r.Stopped.Of(v.load)
-		if r.FitLargest {
-			v.largest = ps.p.LargestShape.of(m, largest)
+		switch r.Largest {
+		case LargestApart, LargestShared:
+			v.largest, v.apart = ps.p.LargestShape.of(m, largest), r.Largest == LargestApart
+		case LargestNone:
 		}
-		ps.stopped[m] = v.stopped
+		ps.byMarket[m] = v
 		views = append(views, v)
 	}
 	return views
@@ -636,21 +641,34 @@ func (ps *pass) ready(h FleetHost) bool {
 	return h.resumable() && h.Current && !h.Protected && !ps.cooled(h) && ps.startable(h)
 }
 
+// reserveFor is the ready reserve to resume for work of market m. It
+// prefers one whose resume leaves a reserve that fits the largest shape,
+// then one of m, then the smallest, then the cheapest.
 func (ps *pass) reserveFor(need Requirement, m ReserveMarket) *FleetHost {
 	var candidates []*FleetHost
+	takesLarge := map[HostID]bool{}
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
 		if !ps.ready(*h) || !h.capacity().Fits(need) || (need.Preemptible && h.Market == MarketOnDemand && !ps.lendable(*h)) {
 			continue
 		}
 		candidates = append(candidates, h)
+		takesLarge[h.ID] = !ps.leavesLarge(*h)
 	}
 	if len(candidates) == 0 {
 		return nil
 	}
 	return slices.MinFunc(candidates, func(a, b *FleetHost) int {
-		return cmp.Or(boolOrder(a.market() != m, b.market() != m), cheaper(a, b))
+		return cmp.Or(boolOrder(takesLarge[a.ID], takesLarge[b.ID]), boolOrder(a.market() != m, b.market() != m),
+			shapeOrder(a.Usable, b.Usable), cheaper(a, b))
 	})
+}
+
+// leavesLarge reports whether resuming reserve h leaves a reserve that fits
+// the largest shape, where h fits it and the market keeps one apart.
+func (ps *pass) leavesLarge(h FleetHost) bool {
+	v := ps.byMarket[h.market()]
+	return !v.apart || !h.Usable.Covers(v.largest) || ps.holdsLargest(v, h.ID)
 }
 
 // cheaper orders hosts by known hourly cost, unknown last.
@@ -662,10 +680,8 @@ func cheaper(a, b *FleetHost) int {
 // lendable reports whether Spot work may resume on-demand reserve h: the
 // ready on-demand reserves left without it still meet their stopped target.
 func (ps *pass) lendable(h FleetHost) bool {
-	m := h.market()
-	held := totalOf(ps.inMarket(m, func(r FleetHost) bool { return r.resumable() && r.Current && !r.Protected }),
-		func(r *FleetHost) FleetCapacity { return r.Usable })
-	return held.Minus(h.Usable).Covers(ps.stopped[m])
+	v := ps.byMarket[h.market()]
+	return ps.floor(v, h.ID, func(r FleetHost) bool { return r.resumable() && r.Current && !r.Protected }).Covers(v.stopped)
 }
 
 // demandClass is containers that can share offers.
@@ -789,8 +805,9 @@ func (ps *pass) warmPending(v *marketView) FleetCapacity {
 	return pending
 }
 
-// grow keeps the warm target while no work waits: resume ready reserves,
-// cheapest first, then buy the cheapest cover of what is short.
+// grow keeps the warm target while no work waits: resume ready reserves
+// that leave a large-shape reserve, cheapest first, then buy the cheapest
+// cover of what is short.
 func (ps *pass) grow(v *marketView) {
 	if !v.mayGrow {
 		return
@@ -801,6 +818,9 @@ func (ps *pass) grow(v *marketView) {
 	for _, h := range reserves {
 		if short.Empty() || ps.room(v.m) <= 0 || ps.hostRoom <= 0 {
 			break
+		}
+		if !ps.leavesLarge(*h) {
+			continue
 		}
 		ps.resume(v.m, h, ActionResume, nil)
 		short = short.Minus(h.Usable).Clamp()
@@ -842,7 +862,7 @@ func (ps *pass) retain(v *marketView) {
 // hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
-	short := !ps.reserveHeld(v).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
+	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
 		if h.HibernationConfigured && hibernates(t, h.Market) {
@@ -858,16 +878,41 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 	ps.act(FleetAction{Kind: ActionDrain, Market: v.m, Host: ptr(h.ID)})
 }
 
-// reserveHeld is the market's reserve capacity, ready or not, with this
-// pass's reserve purchases.
-func (ps *pass) reserveHeld(v *marketView) FleetCapacity {
-	held := totalOf(ps.inMarket(v.m, func(h FleetHost) bool { return h.reserve() && !v.retired[h.ID] }), func(h *FleetHost) FleetCapacity { return h.Usable })
-	for _, n := range ps.planned {
-		if n.market == v.m && n.reserve {
-			held = held.Plus(n.offer.Usable)
+// floor is what holds the market's stopped target: the reserves keep
+// selects, less skip, retired ones and the large-shape reserve kept apart.
+func (ps *pass) floor(v *marketView, skip HostID, keep func(FleetHost) bool) FleetCapacity {
+	large := ps.largeReserve(v, skip)
+	return totalOf(ps.inMarket(v.m, func(h FleetHost) bool {
+		return h.reserve() && keep(h) && h.ID != skip && !v.retired[h.ID] && (large == nil || h.ID != large.ID)
+	}), func(h *FleetHost) FleetCapacity { return h.Usable })
+}
+
+// largeReserve is the reserve a market keeps apart for its largest shape:
+// the smallest, then cheapest, that fits it, not retired and other than
+// skip. It is nil when the market keeps none apart or no reserve fits.
+func (ps *pass) largeReserve(v *marketView, skip HostID) *FleetHost {
+	if !v.apart || v.largest.Empty() {
+		return nil
+	}
+	var large *FleetHost
+	for _, h := range ps.inMarket(v.m, FleetHost.reserve) {
+		if h.ID != skip && !v.retired[h.ID] && h.Usable.Covers(v.largest) &&
+			(large == nil || cmp.Or(shapeOrder(h.Usable, large.Usable), cheaper(h, large)) < 0) {
+			large = h
 		}
 	}
-	return held
+	return large
+}
+
+// largeAway reports whether a host of the market that fits the largest
+// shape may still return to the reserve: EC2 can stop it, and it starts,
+// idles or became ready within the idle timeout.
+func (ps *pass) largeAway(v *marketView) bool {
+	return len(ps.inMarket(v.m, func(h FleetHost) bool {
+		_, idle := ps.plan.IdleSince[h.ID]
+		return h.Usable.Covers(v.largest) && h.Stoppable && !h.Protected &&
+			(starting(h) || serving(h) && (idle || ps.s.Now.Sub(h.PhaseAt) < ps.p.IdleTimeout))
+	})) > 0
 }
 
 // holdsLargest reports whether a reserve of the market other than skip, or
@@ -887,33 +932,50 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 }
 
 // While no work waits, reserves buys the stopped target's shortfall and,
-// when no reserve fits the largest shape, one that does, which counts toward
-// the target. With the target held, it retires the reserves the market no
-// longer needs.
+// when no reserve fits the largest shape, one that does. A shared one counts
+// toward the target. One kept apart is bought on its own, and not while a
+// host that fits the shape may still return to the reserve. With the target
+// held, it retires the reserves the market no longer needs.
 func (ps *pass) reserves(v *marketView) {
-	short := v.stopped.Minus(ps.reserveHeld(v)).Clamp()
-	need := CoverNeed{Aggregate: short}
-	if !ps.holdsLargest(v, HostID{}) {
-		need = CoverNeed{Items: []CoverItem{{Shape: v.largest, Count: 1}}, Aggregate: short.Minus(v.largest).Clamp()}
-	}
+	short := v.stopped.Minus(ps.floor(v, HostID{}, FleetHost.reserve)).Clamp()
 	v.stoppedShort = short
-	if v.mayGrow && (!need.Aggregate.Empty() || len(need.Items) > 0) {
-		offers := preferHealthy(ps.marketOffers(v.m, true))
-		if len(need.Items) > 0 {
-			offers = preferHibernating(offers, v.largest)
+	largest := CoverNeed{Items: []CoverItem{{Shape: v.largest, Count: 1}}}
+	switch held := ps.holdsLargest(v, HostID{}); {
+	case !v.mayGrow:
+	case v.apart:
+		if !short.Empty() {
+			v.stoppedShort = short.Minus(ps.buyReserves(v, CoverNeed{Aggregate: short}, short).Supplied).Clamp()
 		}
-		result := Cover(offers, need, reserveCost(ps.p), ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom)))
-		for _, node := range result.Nodes {
-			ps.buy(v.m, node.Offer, ActionBuyReserve, nil, nil)
+		if !held && !ps.largeAway(v) && len(ps.buyReserves(v, largest, v.largest).UnmetItems) > 0 {
+			v.stoppedShort = v.stoppedShort.Upper(v.largest)
 		}
-		v.stoppedShort = need.Aggregate.Minus(result.Supplied).Clamp()
+	case !held:
+		largest.Aggregate = short.Minus(v.largest).Clamp()
+		result := ps.buyReserves(v, largest, v.largest)
+		v.stoppedShort = largest.Aggregate.Minus(result.Supplied).Clamp()
 		if len(result.UnmetItems) > 0 {
 			v.stoppedShort = short.Minus(result.Supplied).Clamp().Upper(v.largest)
 		}
+	case !short.Empty():
+		v.stoppedShort = short.Minus(ps.buyReserves(v, CoverNeed{Aggregate: short}, FleetCapacity{}).Supplied).Clamp()
 	}
 	if short.Empty() {
 		ps.retire(v)
 	}
+}
+
+// buyReserves buys the cheapest reserves that cover need, ones that
+// hibernate wherever one fits shape.
+func (ps *pass) buyReserves(v *marketView, need CoverNeed, shape FleetCapacity) CoverResult {
+	offers := preferHealthy(ps.marketOffers(v.m, true))
+	if !shape.Empty() {
+		offers = preferHibernating(offers, shape)
+	}
+	result := Cover(offers, need, reserveCost(ps.p), ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom)))
+	for _, node := range result.Nodes {
+		ps.buy(v.m, node.Offer, ActionBuyReserve, nil, nil)
+	}
+	return result
 }
 
 // preferHibernating drops the offers that fit shape without hibernating
@@ -932,32 +994,24 @@ func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
 // It keeps the ready capacity the target needs, so a pending reserve never
 // stands in for a ready one, and a reserve that fits the largest shape.
 func (ps *pass) retire(v *marketView) {
-	reserves := ps.inMarket(v.m, FleetHost.reserve)
-	ready := func(h *FleetHost) bool { return h.resumable() && h.Current }
-	held := totalOf(reserves, func(h *FleetHost) FleetCapacity { return h.Usable })
-	readyHeld := totalOf(slices.DeleteFunc(slices.Clone(reserves), func(h *FleetHost) bool { return !ready(h) }),
-		func(h *FleetHost) FleetCapacity { return h.Usable })
-	needReady := readyHeld.Lower(v.stopped)
+	ready := func(h FleetHost) bool { return h.resumable() && h.Current }
+	needReady := ps.floor(v, HostID{}, ready).Lower(v.stopped)
 	growable := func(h *FleetHost) bool {
 		_, ok := ps.typeNamed(h.InstanceType)
 		return ok && !ps.cooled(*h)
 	}
-	candidates := slices.DeleteFunc(slices.Clone(reserves), func(h *FleetHost) bool { return h.Protected || h.State == FleetStopping })
+	candidates := ps.inMarket(v.m, func(h FleetHost) bool { return h.reserve() && !h.Protected && h.State != FleetStopping })
 	slices.SortStableFunc(candidates, func(a, b *FleetHost) int {
-		return cmp.Or(boolOrder(growable(a), growable(b)), boolOrder(ready(a), ready(b)),
+		return cmp.Or(boolOrder(growable(a), growable(b)), boolOrder(ready(*a), ready(*b)),
 			cmp.Compare(ps.stoppedMicros(*b), ps.stoppedMicros(*a)), cmp.Compare(b.Usable.CPUMillis, a.Usable.CPUMillis),
 			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 	})
 	for _, h := range candidates {
-		if !held.Minus(h.Usable).Covers(v.stopped) || (ready(h) && !readyHeld.Minus(h.Usable).Covers(needReady)) ||
+		if !ps.floor(v, h.ID, FleetHost.reserve).Covers(v.stopped) || !ps.floor(v, h.ID, ready).Covers(needReady) ||
 			!ps.holdsLargest(v, h.ID) {
 			continue
 		}
 		v.retired[h.ID] = true
-		held = held.Minus(h.Usable)
-		if ready(h) {
-			readyHeld = readyHeld.Minus(h.Usable)
-		}
 		ps.reserveRoom++
 		ps.act(FleetAction{Kind: ActionRetireReserve, Market: v.m, Host: ptr(h.ID)})
 	}

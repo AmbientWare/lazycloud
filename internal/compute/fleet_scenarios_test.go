@@ -154,7 +154,7 @@ func (s *sim) advance() {
 		}
 		switch {
 		case h.State == FleetStarting:
-			h.State = FleetServing
+			h.State, h.PhaseAt = FleetServing, s.now
 		case h.State == FleetPreparing && *h.ReserveMode == ReserveHibernate:
 			h.State, h.Current = FleetImageSaved, true
 			s.r.stops++
@@ -502,10 +502,11 @@ func TestFleetQuotaScenario(t *testing.T) {
 	}
 }
 
-// Each CPU market keeps one reserve that fits its largest recent shape and
-// each GPU model work used keeps one, through a burst of 16 vCPU work and
-// the quiet hours after; a model nobody used keeps none.
-func TestReservesHoldOneLargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
+// Each CPU market keeps a floor reserve and one beside it that fits its
+// largest recent shape, and each GPU model work used keeps one, through a
+// burst of 16 vCPU work and the quiet hours after; a model nobody used keeps
+// none.
+func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 	s := newSim(t, DefaultPolicy())
 	s.recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
 	sixteen := cpuNeed(16_000, 16)
@@ -519,20 +520,19 @@ func TestReservesHoldOneLargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 	if len(r.waits) != 4 || len(r.violations) > 0 {
 		t.Fatalf("placed %d of 4, violations %v", len(r.waits), r.violations)
 	}
-	want := map[ReserveMarket]int{{Preemptible: true}: 1, {}: 1, {GPU: "T4"}: 1}
+	want := map[ReserveMarket]int{{Preemptible: true}: 2, {}: 2, {GPU: "T4"}: 1}
 	held := map[ReserveMarket][]string{}
+	large := map[ReserveMarket]bool{}
 	for _, h := range s.hosts {
 		if !h.reserve() {
 			continue
 		}
 		held[h.market()] = append(held[h.market()], h.InstanceType)
-		if h.GPU == "" && !h.Usable.Covers(reservedShape(sixteen)) {
-			t.Errorf("%s reserve %s does not fit 16 vCPU", h.market(), h.InstanceType)
-		}
+		large[h.market()] = large[h.market()] || h.Usable.Covers(reservedShape(sixteen))
 	}
 	for m, n := range want {
-		if len(held[m]) != n || s.mostReserves[m] > n {
-			t.Errorf("%s holds %v and held up to %d; want %d", m, held[m], s.mostReserves[m], n)
+		if len(held[m]) != n || s.mostReserves[m] > n || (m.GPU == "" && !large[m]) {
+			t.Errorf("%s holds %v and held up to %d; want %d, one that fits 16 vCPU", m, held[m], s.mostReserves[m], n)
 		}
 	}
 	if len(held) != len(want) {
