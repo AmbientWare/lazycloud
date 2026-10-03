@@ -18,6 +18,10 @@ type HostID uuid.UUID
 
 func (id HostID) String() string { return uuid.UUID(id).String() }
 
+// MarshalText writes the id as a UUID string, so JSON logs and documents
+// carry it in the form every other id takes.
+func (id HostID) MarshalText() ([]byte, error) { return uuid.UUID(id).MarshalText() } //nolint:wrapcheck // uuid encodes it
+
 // HostState is a host's session authority: whether it may act and whether
 // its containers count as running.
 type HostState string
