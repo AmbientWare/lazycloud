@@ -5,8 +5,10 @@ config:
   LAZYCLOUD_LOG_FORMAT: json
   # Fleet limits (internal/compute/fleet_config.go). Code defaults: 20
   # running hosts per owner and as many platform reserves, 5m idle before
-  # a host leaves. Headroom is the fleet policy's (fleet_policy.go).
-  LAZYCLOUD_FLEET_MAX_HOSTS: "20"
+  # a host leaves. Headroom is the fleet policy's (fleet_policy.go). The
+  # planner also buys only within each region's EC2 vCPU quotas, which
+  # bind before 250 hosts do.
+  LAZYCLOUD_FLEET_MAX_HOSTS: "250"
   LAZYCLOUD_FLEET_IDLE_TIMEOUT: 5m
   # AMIs the Node images workflow baked, per region: Amazon Linux 2023 with
   # Docker, gVisor (runsc as Docker's runtime, --host-uds=all), nbd, and
