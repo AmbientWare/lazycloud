@@ -142,9 +142,7 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 		"m7i.large on_demand us-east-2 us-east-2a ",
 		"m7i.large spot us-east-2 us-east-2a ",
 		"m7i.large spot us-east-2 us-east-2b ",
-		// An m7i.large's complete cost in us-west-1 is past the purchase
-		// margin for Spot-tolerant work.
-		"m7i.xlarge spot us-west-1 us-west-1b ",
+		"m7i.large spot us-west-1 us-west-1b ",
 	}
 	if got := requested(t, o); len(got) != len(want) || !equal(got, want) {
 		t.Fatalf("requested hosts\n%q\nwant\n%q", got, want)
@@ -175,13 +173,14 @@ func TestCapacityPacksDemandOntoOneHostAndCountsHostsInFlight(t *testing.T) {
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	release := newRelease(t, o.pool, dev, `{}`)
-	// An m7i.large offers 1500 millicores after the agent's reserve.
+	// These fill the 2000 millicores of an m7i.large.
 	pendingContainer(t, o.pool, dev, release, 250, 256<<20)
 	pendingContainer(t, o.pool, dev, release, 1000, gib)
 	pendingContainer(t, o.pool, dev, release, 250, 256<<20)
+	pendingContainer(t, o.pool, dev, release, 500, 256<<20)
 
 	if result := planCapacity(t, o); result.Requested != 1 {
-		t.Fatalf("result %+v, want one host for all three", result)
+		t.Fatalf("result %+v, want one host for all four", result)
 	}
 	if result := planCapacity(t, o); result.Requested != 0 {
 		t.Fatalf("second pass requested %d more hosts for demand a host in flight covers", result.Requested)

@@ -45,7 +45,8 @@ func TestOfferAppliesLimits(t *testing.T) {
 		ok      bool
 		gpus    int32
 	}{
-		{"detected cpu keeps a reserve", machine, Limits{}, "capacity.max_cpu", "using 7200m CPU", true, 2},
+		{"detected cpu is every core", machine, Limits{}, "capacity.max_cpu", "using 8000m CPU", true, 2},
+		{"every core of 16", detected{cpuMillis: 16000, memoryBytes: 64 << 30}, Limits{}, "capacity.max_cpu", "using 16000m CPU", true, 0},
 		{"cpu limit", machine, Limits{CPUMillis: 1500}, "capacity.max_cpu", "using 1500m CPU", true, 2},
 		{"cpu above the machine", machine, Limits{CPUMillis: 9000}, "capacity.max_cpu", "requested CPU exceeds detected CPU", false, 2},
 		{"memory limit", machine, Limits{MemoryBytes: 4 << 30}, "capacity.max_memory", "using 4096 MB memory", true, 2},

@@ -1,6 +1,14 @@
 -- name: WorkspaceOwner :one
 select user_id from workspace_members where workspace_id = @workspace_id and role = 'owner';
 
+-- name: AdmissionWorkspace :one
+-- The workspace's owner, and whether it lives in a connected account, whose
+-- capacity serves its containers instead of the platform fleet.
+select m.user_id, (w.connection_id is not null)::bool as connected
+from workspace_members m
+join workspaces w on w.id = m.workspace_id
+where m.workspace_id = @workspace_id and m.role = 'owner';
+
 -- name: AccountStanding :one
 select a.terms_version, a.scheduled_terms_version, a.status, a.payment_method_attached_at, a.complimentary_since,
        a.monthly_usage_limit_nanos, b.balance_nanos, b.accrued_nanos, b.month_spent_nanos, b.month_started_at,

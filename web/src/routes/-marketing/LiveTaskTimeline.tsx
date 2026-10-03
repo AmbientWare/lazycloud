@@ -47,7 +47,7 @@ const TASKS: TimelineTask[] = [
     depth: 2,
     start: 10,
     duration: 12,
-    resource: "A100 · 40 GiB",
+    resource: "L40S · 48 GiB",
     volume: true,
   },
   {

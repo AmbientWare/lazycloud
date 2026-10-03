@@ -25,6 +25,7 @@ import {
   MarketingHero,
   shell,
 } from "./-marketing/MarketingPrimitives";
+import { computeGroups, RateList, type Meter, type RateGroup } from "./-marketing/UsageRates";
 import "./pricing.css";
 
 export const Route = createLazyFileRoute("/pricing")({
@@ -33,72 +34,10 @@ export const Route = createLazyFileRoute("/pricing")({
 
 type PricingCatalog = Schemas["PricingCatalog"];
 
-const SECONDS_PER_HOUR = 3600;
-
-type Meter = "hour" | "second";
-
-function metered(nanosPerHour: number, meter: Meter): number {
-  return meter === "hour" ? nanosPerHour : nanosPerHour / SECONDS_PER_HOUR;
-}
-
 const meters = [
   { value: "hour", label: "Per hour" },
   { value: "second", label: "Per second" },
 ] as const satisfies readonly { value: Meter; label: string }[];
-
-type RateLine = {
-  label: string;
-  figure: number | string;
-  unit: string;
-  fractionDigits?: number;
-};
-
-type RateGroup = {
-  heading?: string;
-  lines: readonly RateLine[];
-};
-
-function perLabel(meter: Meter): string {
-  return meter === "second" ? "sec" : "hr";
-}
-
-function computeGroups(placement: Schemas["PlacementRate"], meter: Meter): readonly RateGroup[] {
-  const rates = placement.compute_rates.filter((rate) => rate.billing_owner === "platform_fleet");
-  const shape = rates.find((rate) => rate.gpu_type === undefined);
-  if (!shape) throw new Error("the pricing catalog has no platform fleet rate");
-  const fleetGpuRates = rates
-    .flatMap(({ gpu_type: gpuType, ...rate }) => (gpuType ? [{ ...rate, gpuType }] : []))
-    .sort((left, right) => right.nanos_per_gpu_card_hour - left.nanos_per_gpu_card_hour);
-  const per = perLabel(meter);
-  return [
-    {
-      heading: "GPU",
-      lines: fleetGpuRates.map((rate) => ({
-        label: rate.gpuType,
-        figure: metered(rate.nanos_per_gpu_card_hour, meter),
-        unit: `/ ${per}`,
-        fractionDigits: meter === "hour" ? 2 : 6,
-      })),
-    },
-    {
-      heading: "CPU and memory",
-      lines: [
-        {
-          label: "CPU",
-          figure: metered(shape.nanos_per_cpu_core_hour, meter),
-          unit: `/ CPU / ${per}`,
-          fractionDigits: meter === "hour" ? 4 : 8,
-        },
-        {
-          label: "Memory",
-          figure: metered(shape.nanos_per_memory_gib_hour, meter),
-          unit: `/ GiB / ${per}`,
-          fractionDigits: meter === "hour" ? 4 : 8,
-        },
-      ],
-    },
-  ];
-}
 
 function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
   return [
@@ -154,7 +93,8 @@ function MarketingPricing() {
   const catalog = pricing.data;
 
   const placement = catalog?.placement_rates.find((rate) => rate.rate_class === "auto");
-  const offeredGpuTypes = catalog?.gpu_rates.map((rate) => rate.gpu_type) ?? [];
+  const offeredGpuTypes =
+    catalog?.gpu_rates.filter((rate) => rate.enabled).map((rate) => rate.gpu_type) ?? [];
   if (catalog && !placement) throw new Error("the pricing catalog has no base compute rates");
 
   return (
@@ -195,7 +135,10 @@ function MarketingPricing() {
             <div className="mt-4" id={fleetRatesId} aria-busy={pricing.isPending}>
               {catalog && placement ? (
                 <RateList
-                  groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
+                  groups={[
+                    ...computeGroups(placement, catalog.gpu_rates, meter),
+                    ...platformGroups(catalog),
+                  ]}
                 />
               ) : (
                 <div className="border-t border-border py-5">
@@ -351,42 +294,6 @@ function PlanLimit({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline justify-between gap-3 border-b border-border/50 py-1.5 last:border-b-0">
       <dt className="min-w-0 text-muted-foreground">{label}</dt>
       <dd className="min-w-0 text-right font-mono text-xs font-medium">{value}</dd>
-    </div>
-  );
-}
-
-function RateList({ groups }: { groups: readonly RateGroup[] }) {
-  return (
-    <div className="space-y-3">
-      {groups.map((group) => (
-        <MarketingCard
-          surface="inset"
-          className="px-3 py-3 [--surface-grain-blend:soft-light]"
-          key={group.heading ?? group.lines[0].label}
-        >
-          {group.heading ? (
-            <h3 className="mb-2.5 text-[12px] font-medium">{group.heading}</h3>
-          ) : null}
-          <dl className="space-y-1.5">
-            {group.lines.map((line) => (
-              <div
-                className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"
-                key={line.label}
-              >
-                <dt className="min-w-0 text-[13px] leading-snug text-muted-foreground">
-                  {line.label}
-                </dt>
-                <dd className="shrink-0 font-mono text-[13px] whitespace-nowrap">
-                  {typeof line.figure === "number"
-                    ? formatCostNanos(line.figure, "USD", line.fractionDigits ?? 4)
-                    : line.figure}{" "}
-                  <span className="text-muted-foreground">{line.unit}</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </MarketingCard>
-      ))}
     </div>
   );
 }
