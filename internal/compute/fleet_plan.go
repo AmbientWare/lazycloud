@@ -837,9 +837,9 @@ func (ps *pass) retain(v *marketView) {
 }
 
 // leave returns a leaving host to the reserve while the market's reserve
-// falls short, or lacks the host's fit for the largest shape, and EC2 can
-// stop the host, hibernating one launched able to
-// where hibernates allows; it drains the host otherwise.
+// falls short, or holds nothing that fits the largest shape and the host
+// does, and EC2 can stop the host, hibernating one launched able to where
+// hibernates allows; it drains the host otherwise.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
 	short := !ps.reserveHeld(v).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
