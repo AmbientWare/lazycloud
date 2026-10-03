@@ -80,6 +80,11 @@ describe("workspace live invalidation ownership", () => {
     ).toContainEqual(activity);
   });
 
+  it("ignores a topic newer than the page", () => {
+    const future = change("future" as Schemas["ChangeTopic"]);
+    expect(workspaceInvalidationTargets("dev", future)).toEqual([]);
+  });
+
   it("refreshes every detail of a grouped change and no container metrics", () => {
     const grouped = workspaceInvalidationTargets(
       "dev",

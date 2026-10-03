@@ -87,6 +87,9 @@ export function workspaceInvalidationTargets(
       ]);
     case "usage":
       return [{ queryKey: accountQueryKeys.usage.root(), expensive: true }];
+    // A server newer than this page publishes topics it caches nothing for.
+    default:
+      return [];
   }
 }
 
