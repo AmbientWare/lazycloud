@@ -42,7 +42,6 @@ func TestPerCompletionCostIgnoresBacklog(t *testing.T) {
 		{"fail tasks", failTasks, []any{[]byte(`{}`), queued}},
 		{"fail queued tasks of release", failQueuedTasksOfRelease, []any{[]byte(`{}`), queued}},
 		{"planning releases", planningReleases, []any{uuid.Nil, planningBatch}},
-		{"queued available", queuedAvailable, []any{[]uuid.UUID{f.release}, int64(16)}},
 		{"claim", lockClaimCandidates, []any{f.release, int32(4)}},
 		{"next queued", nextQueuedAt, []any{f.release}},
 		{"live work", hasLiveWork, nil},

@@ -185,15 +185,13 @@ func (q *Queries) HasLiveWork(ctx context.Context) (bool, error) {
 const lockIdleContainers = `-- name: LockIdleContainers :many
 select c.id
 from containers c
-cross join lateral (
-    select coalesce(max(a.finished_at), c.ready_at)::timestamptz as since from attempts a where a.container_id = c.id
-) idle
 where c.release_id = $1::uuid
   and c.state = 'ready'
   and c.purpose = 'serve'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
-  and idle.since < now() - make_interval(secs => $2::float8)
-order by idle.since, c.id
+  and coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at)
+      < now() - make_interval(secs => $2::float8)
+order by coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at), c.id
 limit $3
 for update of c skip locked
 `
@@ -290,10 +288,11 @@ select r.id as release_id,
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
-       gpu.models as gpu_models,
+       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
+       q.available::int as queued_available,
        run.running::int as running,
        c.pending::int as pending,
        c.starting::int as starting,
@@ -305,12 +304,17 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 cross join lateral (
+    select count(*) as available from (
+        select 1 from tasks t
+        where t.release_id = r.id and t.status = 'queued'
+          and t.available_at <= now() and t.unmet_dependencies = 0
+        limit greatest(coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1), 1)::bigint
+              * greatest(coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1), 1)::bigint
+    ) capped
+) q
+cross join lateral (
     select count(*) as running from tasks t where t.release_id = r.id and t.status = 'running'
 ) run
-cross join lateral (
-    select coalesce(array_agg(m.model order by m.n), '{}')::text[] as models
-    from jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu') with ordinality as m(model, n)
-) gpu
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
@@ -343,6 +347,7 @@ type PlanningReleasesRow struct {
 	GpuModels         []string
 	Preemptible       bool
 	Pinned            bool
+	QueuedAvailable   int32
 	Running           int32
 	Pending           int32
 	Starting          int32
@@ -355,7 +360,8 @@ type PlanningReleasesRow struct {
 // reads a partial index of live rows, so retained history costs nothing. The
 // queued releases are found by skipping through tasks_queued one release at
 // a time, so a deep backlog costs one probe per release, not per task.
-// QueuedAvailable counts their due tasks.
+// Demand past max_containers * tasks_per_container changes no decision, so
+// the count stops there and a deep backlog reads a bounded prefix.
 func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesParams) ([]PlanningReleasesRow, error) {
 	rows, err := q.db.Query(ctx, planningReleases, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -382,58 +388,13 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			&i.GpuModels,
 			&i.Preemptible,
 			&i.Pinned,
+			&i.QueuedAvailable,
 			&i.Running,
 			&i.Pending,
 			&i.Starting,
 			&i.Ready,
 			&i.Draining,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const queuedAvailable = `-- name: QueuedAvailable :many
-select r.id::uuid as release_id, q.available::int as available
-from unnest($1::uuid[]) as r(id)
-cross join lateral (
-    select count(*) as available from (
-        select 1 from tasks t
-        where t.release_id = r.id and t.status = 'queued'
-          and t.available_at <= now() and t.unmet_dependencies = 0
-        limit $2::bigint
-    ) capped
-) q
-`
-
-type QueuedAvailableParams struct {
-	ReleaseIds []uuid.UUID
-	Cap        int64
-}
-
-type QueuedAvailableRow struct {
-	ReleaseID uuid.UUID
-	Available int32
-}
-
-// Due queued tasks of each release, counted up to @cap: the planner passes
-// max_containers * tasks_per_container, past which demand changes no
-// decision, so a deep backlog reads a bounded prefix of tasks_queued.
-func (q *Queries) QueuedAvailable(ctx context.Context, arg QueuedAvailableParams) ([]QueuedAvailableRow, error) {
-	rows, err := q.db.Query(ctx, queuedAvailable, arg.ReleaseIds, arg.Cap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []QueuedAvailableRow
-	for rows.Next() {
-		var i QueuedAvailableRow
-		if err := rows.Scan(&i.ReleaseID, &i.Available); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

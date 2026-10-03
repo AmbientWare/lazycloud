@@ -1,13 +1,15 @@
 -- name: GrantCredit :one
--- A grant is written once per source; no row when the source was granted.
-insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
-values (@user_id, @kind, @source, @amount_nanos, @effective_at, sqlc.narg(expires_at))
-on conflict (user_id, source) do nothing
-returning id;
-
--- name: MarkBalancesDue :exec
--- The accounts get a rollup on its next pass.
-update billing_balances set due = true where user_id = any(@user_ids::uuid[]);
+-- A grant is written once per source; the account becomes due so the new
+-- credit covers any negative balance first.
+with lot as (
+    insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
+    values (@user_id, @kind, @source, @amount_nanos, @effective_at, sqlc.narg(expires_at))
+    on conflict (user_id, source) do nothing
+    returning id
+), due as (
+    update billing_balances set due = true where user_id = @user_id and exists (select 1 from lot)
+)
+select id from lot;
 
 -- name: LotBySource :one
 select id from credit_lots where user_id = @user_id and source = @source;

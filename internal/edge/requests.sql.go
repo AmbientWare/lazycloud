@@ -66,38 +66,45 @@ func (q *Queries) GetRequest(ctx context.Context, arg GetRequestParams) (GetRequ
 	return i, err
 }
 
-const insertRequestCallbacks = `-- name: InsertRequestCallbacks :many
-insert into task_callbacks (request_id, release_id, workspace_id, url, event, attempt, max_attempts, state,
-                            finished_at, last_error)
-select b.id, b.release_id, b.workspace_id, b.url, b.event, 1, 1,
-       case when w.pending + b.n <= $1::bigint then 'pending' else 'failed' end,
-       case when w.pending + b.n <= $1::bigint then null else now() end,
-       case when w.pending + b.n <= $1::bigint then null
-            else 'dropped: ' || $1::bigint || ' callbacks of this release were already waiting' end
-from (
+const insertRequestCallbacks = `-- name: InsertRequestCallbacks :one
+with batch as (
     select h.id, h.workspace_id, h.release_id, r.spec ->> 'callback_url' as url,
            case when h.status = 499 then 'cancelled' when h.status >= 500 then 'failed' else 'succeeded' end as event,
            row_number() over (partition by h.release_id order by h.id) as n
     from http_requests h
     join releases r on r.id = h.release_id
-    where h.id = any($2::uuid[]) and r.spec ->> 'callback_url' is not null
-) b
-join (
-    select r.id as release_id, c.pending
-    from releases r
-    cross join lateral (
-        select count(*) as pending from task_callbacks p where p.release_id = r.id and p.state = 'pending'
-    ) c
-    where r.id in (select h.release_id from http_requests h where h.id = any($2::uuid[]))
-      and r.spec ->> 'callback_url' is not null
-) w on w.release_id = b.release_id
-on conflict (request_id) do nothing
-returning state
+    where h.id = any($1::uuid[]) and r.spec ->> 'callback_url' is not null
+), waiting as (
+    select b.release_id, (
+        select count(*) from task_callbacks p where p.release_id = b.release_id and p.state = 'pending'
+    ) as pending
+    from (select distinct release_id from batch) b
+), inserted as (
+    insert into task_callbacks (request_id, release_id, workspace_id, url, event, attempt, max_attempts, state,
+                                finished_at, last_error)
+    select b.id, b.release_id, b.workspace_id, b.url, b.event, 1, 1,
+           case when w.pending + b.n <= $2::bigint then 'pending' else 'failed' end,
+           case when w.pending + b.n <= $2::bigint then null else now() end,
+           case when w.pending + b.n <= $2::bigint then null
+                else 'dropped: ' || $2::bigint || ' callbacks of this release were already waiting' end
+    from batch b
+    join waiting w on w.release_id = b.release_id
+    on conflict (request_id) do nothing
+    returning state
+)
+select count(*) filter (where state = 'pending')::int as queued,
+       count(*) filter (where state = 'failed')::int as dropped
+from inserted
 `
 
 type InsertRequestCallbacksParams struct {
-	MaxPending int64
 	Ids        []uuid.UUID
+	MaxPending int64
+}
+
+type InsertRequestCallbacksRow struct {
+	Queued  int32
+	Dropped int32
 }
 
 // A callback per written request whose release names a callback_url: a
@@ -105,26 +112,13 @@ type InsertRequestCallbacksParams struct {
 // a release's callbacks wait, the rest are recorded as failed with the
 // reason instead of queued, so a flood of requests cannot fill the queue
 // every workspace's callbacks share. Concurrent edges can each fill the cap
-// once. A batch written again adds none. Returns the state of each callback
-// written.
-func (q *Queries) InsertRequestCallbacks(ctx context.Context, arg InsertRequestCallbacksParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, insertRequestCallbacks, arg.MaxPending, arg.Ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var state string
-		if err := rows.Scan(&state); err != nil {
-			return nil, err
-		}
-		items = append(items, state)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// once. A batch written again adds none. Returns the queued and dropped
+// counts.
+func (q *Queries) InsertRequestCallbacks(ctx context.Context, arg InsertRequestCallbacksParams) (InsertRequestCallbacksRow, error) {
+	row := q.db.QueryRow(ctx, insertRequestCallbacks, arg.Ids, arg.MaxPending)
+	var i InsertRequestCallbacksRow
+	err := row.Scan(&i.Queued, &i.Dropped)
+	return i, err
 }
 
 const insertRequests = `-- name: InsertRequests :exec

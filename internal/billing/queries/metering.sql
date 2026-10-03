@@ -47,69 +47,67 @@ left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
 where c.ready_at is not null and c.stopped_at >= @since and not coalesce(u.complete, false);
 
--- name: InsertAccounts :many
--- The accounts that did not exist yet.
-insert into billing_accounts (user_id)
-select unnest(@user_ids::uuid[])
-on conflict do nothing
-returning user_id, created_at;
-
--- name: InsertTrialCredit :exec
--- The trial credit of accounts InsertAccounts created.
-insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
-select a.user_id, 'trial', 'trial', @trial_nanos::bigint, a.created_at, a.created_at + make_interval(days => @trial_days::int)
-from (select unnest(@user_ids::uuid[]) as user_id, unnest(@created_ats::timestamptz[]) as created_at) a;
-
--- name: InsertTrialBalances :exec
--- The balances, holding the trial credit, of accounts InsertAccounts created.
+-- name: EnsureAccounts :exec
+-- Creates the accounts that do not exist yet with their trial credit and
+-- a balance holding it.
+with created as (
+    insert into billing_accounts (user_id)
+    select unnest(@user_ids::uuid[])
+    on conflict do nothing
+    returning user_id, created_at
+), trial as (
+    insert into credit_lots (user_id, kind, source, amount_nanos, effective_at, expires_at)
+    select user_id, 'trial', 'trial', @trial_nanos::bigint, created_at, created_at + make_interval(days => @trial_days::int)
+    from created
+)
 insert into billing_balances (user_id, balance_nanos, month_started_at, recheck_at)
-select a.user_id, @trial_nanos::bigint, date_trunc('month', a.created_at, 'UTC'),
-       least(a.created_at + make_interval(days => @trial_days::int), date_trunc('month', a.created_at, 'UTC') + interval '1 month')
-from (select unnest(@user_ids::uuid[]) as user_id, unnest(@created_ats::timestamptz[]) as created_at) a;
+select user_id, @trial_nanos::bigint, date_trunc('month', created_at, 'UTC'),
+       least(created_at + make_interval(days => @trial_days::int), date_trunc('month', created_at, 'UTC') + interval '1 month')
+from created;
 
--- name: InsertLedgerEntries :many
--- Entries already written are skipped and not returned, so a repeated batch
--- adds nothing to the hourly totals.
-insert into ledger_entries (
-    source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
-    billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
-    container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos,
-    egress_bytes, egress_nanos)
-select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
-       nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
-       nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
-       nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
-       e.cpu_millis, e.memory_bytes, e.pricing_version,
-       e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
-       e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos
-from (
-    select unnest(@source_kinds::text[]) as source_kind, unnest(@source_ids::uuid[]) as source_id, unnest(@started_ats::timestamptz[]) as started_at,
-           unnest(@ended_ats::timestamptz[]) as ended_at, unnest(@user_ids::uuid[]) as user_id,
-           unnest(@workspace_ids::uuid[]) as workspace_id, unnest(@app_ids::uuid[]) as app_id,
-           unnest(@workload_ids::uuid[]) as workload_id, unnest(@categories::text[]) as category,
-           unnest(@billing_owners::text[]) as billing_owner, unnest(@rate_classes::text[]) as rate_class,
-           unnest(@gpu_types::text[]) as gpu_type, unnest(@gpu_counts::int[]) as gpu_count,
-           unnest(@cpu_millis::bigint[]) as cpu_millis, unnest(@memory_bytes::bigint[]) as memory_bytes,
-           unnest(@pricing_versions::text[]) as pricing_version,
-           unnest(@container_nanos::bigint[]) as container_nanos, unnest(@cpu_nanos::bigint[]) as cpu_nanos,
-           unnest(@memory_nanos::bigint[]) as memory_nanos, unnest(@gpu_nanos::bigint[]) as gpu_nanos,
-           unnest(@stored_bytes::bigint[]) as stored_bytes, unnest(@attached_bytes::bigint[]) as attached_bytes,
-           unnest(@storage_nanos::bigint[]) as storage_nanos, unnest(@attached_nanos::bigint[]) as attached_nanos,
-           unnest(@egress_bytes::bigint[]) as egress_bytes, unnest(@egress_nanos::bigint[]) as egress_nanos
-) e
-on conflict (source_kind, source_id, started_at) do nothing
-returning user_id, started_at, cost_nanos::bigint as cost_nanos;
-
--- name: AddLedgerHours :exec
--- Adds the entries InsertLedgerEntries wrote to their hourly totals.
-insert into billing_hours (user_id, hour, cost_nanos)
-select e.user_id, date_trunc('hour', e.started_at, 'UTC'), sum(e.cost_nanos)::bigint
-from (
-    select unnest(@user_ids::uuid[]) as user_id, unnest(@started_ats::timestamptz[]) as started_at,
-           unnest(@cost_nanos::bigint[]) as cost_nanos
-) e
-group by 1, 2
-on conflict (user_id, hour) do update set cost_nanos = billing_hours.cost_nanos + excluded.cost_nanos;
+-- name: InsertLedgerEntries :exec
+-- Entries already written are skipped, so a repeated batch adds nothing to
+-- the hourly totals. Accounts with new cost become due for a rollup.
+with entry as (
+    insert into ledger_entries (
+        source_kind, source_id, started_at, ended_at, user_id, workspace_id, app_id, workload_id, category,
+        billing_owner, rate_class, gpu_type, gpu_count, cpu_millis, memory_bytes, pricing_version,
+        container_nanos, cpu_nanos, memory_nanos, gpu_nanos, stored_bytes, attached_bytes, storage_nanos, attached_nanos,
+        egress_bytes, egress_nanos)
+    select e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id,
+           nullif(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           nullif(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           nullif(e.category, ''), e.billing_owner, e.rate_class, nullif(e.gpu_type, ''), e.gpu_count,
+           e.cpu_millis, e.memory_bytes, e.pricing_version,
+           e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos,
+           e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos
+    from (
+        select unnest(@source_kinds::text[]) as source_kind, unnest(@source_ids::uuid[]) as source_id, unnest(@started_ats::timestamptz[]) as started_at,
+               unnest(@ended_ats::timestamptz[]) as ended_at, unnest(@user_ids::uuid[]) as user_id,
+               unnest(@workspace_ids::uuid[]) as workspace_id, unnest(@app_ids::uuid[]) as app_id,
+               unnest(@workload_ids::uuid[]) as workload_id, unnest(@categories::text[]) as category,
+               unnest(@billing_owners::text[]) as billing_owner, unnest(@rate_classes::text[]) as rate_class,
+               unnest(@gpu_types::text[]) as gpu_type, unnest(@gpu_counts::int[]) as gpu_count,
+               unnest(@cpu_millis::bigint[]) as cpu_millis, unnest(@memory_bytes::bigint[]) as memory_bytes,
+               unnest(@pricing_versions::text[]) as pricing_version,
+               unnest(@container_nanos::bigint[]) as container_nanos, unnest(@cpu_nanos::bigint[]) as cpu_nanos,
+               unnest(@memory_nanos::bigint[]) as memory_nanos, unnest(@gpu_nanos::bigint[]) as gpu_nanos,
+               unnest(@stored_bytes::bigint[]) as stored_bytes, unnest(@attached_bytes::bigint[]) as attached_bytes,
+               unnest(@storage_nanos::bigint[]) as storage_nanos, unnest(@attached_nanos::bigint[]) as attached_nanos,
+               unnest(@egress_bytes::bigint[]) as egress_bytes, unnest(@egress_nanos::bigint[]) as egress_nanos
+    ) e
+    on conflict (source_kind, source_id, started_at) do nothing
+    returning user_id, started_at, cost_nanos
+), hour as (
+    insert into billing_hours (user_id, hour, cost_nanos)
+    select user_id, date_trunc('hour', started_at, 'UTC'), sum(cost_nanos)::bigint
+    from entry
+    group by 1, 2
+    on conflict (user_id, hour) do update set cost_nanos = billing_hours.cost_nanos + excluded.cost_nanos
+    returning user_id
+)
+update billing_balances set due = true
+where user_id in (select user_id from hour);
 
 -- name: AdvanceCursors :exec
 insert into usage_cursors (source_kind, source_id, billed_through, complete, updated_at)

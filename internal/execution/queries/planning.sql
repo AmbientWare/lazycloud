@@ -4,7 +4,6 @@
 -- reads a partial index of live rows, so retained history costs nothing. The
 -- queued releases are found by skipping through tasks_queued one release at
 -- a time, so a deep backlog costs one probe per release, not per task.
--- QueuedAvailable counts their due tasks.
 with recursive queued (release_id) as (
     (select t.release_id from tasks t
      where t.status = 'queued' and t.release_id > @after_id
@@ -67,10 +66,11 @@ select r.id as release_id,
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
-       gpu.models as gpu_models,
+       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
+       q.available::int as queued_available,
        run.running::int as running,
        c.pending::int as pending,
        c.starting::int as starting,
@@ -81,13 +81,20 @@ join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
+-- Demand past max_containers * tasks_per_container changes no decision, so
+-- the count stops there and a deep backlog reads a bounded prefix.
+cross join lateral (
+    select count(*) as available from (
+        select 1 from tasks t
+        where t.release_id = r.id and t.status = 'queued'
+          and t.available_at <= now() and t.unmet_dependencies = 0
+        limit greatest(coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1), 1)::bigint
+              * greatest(coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1), 1)::bigint
+    ) capped
+) q
 cross join lateral (
     select count(*) as running from tasks t where t.release_id = r.id and t.status = 'running'
 ) run
-cross join lateral (
-    select coalesce(array_agg(m.model order by m.n), '{}')::text[] as models
-    from jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu') with ordinality as m(model, n)
-) gpu
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
@@ -96,21 +103,6 @@ cross join lateral (
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id;
-
--- name: QueuedAvailable :many
--- Due queued tasks of each release, counted up to @cap: the planner passes
--- max_containers * tasks_per_container, past which demand changes no
--- decision, so a deep backlog reads a bounded prefix of tasks_queued.
-select r.id::uuid as release_id, q.available::int as available
-from unnest(@release_ids::uuid[]) as r(id)
-cross join lateral (
-    select count(*) as available from (
-        select 1 from tasks t
-        where t.release_id = r.id and t.status = 'queued'
-          and t.available_at <= now() and t.unmet_dependencies = 0
-        limit @cap::bigint
-    ) capped
-) q;
 
 -- name: CreatePendingContainers :many
 -- Placement records the GPU model and whose machine a container got.
@@ -140,15 +132,13 @@ returning id;
 -- to run a task. DrainIdleContainers rechecks idleness after these locks.
 select c.id
 from containers c
-cross join lateral (
-    select coalesce(max(a.finished_at), c.ready_at)::timestamptz as since from attempts a where a.container_id = c.id
-) idle
 where c.release_id = @release_id::uuid
   and c.state = 'ready'
   and c.purpose = 'serve'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
-  and idle.since < now() - make_interval(secs => @keep_warm_seconds::float8)
-order by idle.since, c.id
+  and coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at)
+      < now() - make_interval(secs => @keep_warm_seconds::float8)
+order by coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at), c.id
 limit @count
 for update of c skip locked;
 
