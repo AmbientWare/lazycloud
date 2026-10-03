@@ -7,6 +7,7 @@ import {
   ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
+  emptyAxis,
   type ChartConfig,
 } from "@/components/ui/chart";
 import type { Schemas } from "@/lib/api/client";
@@ -33,9 +34,8 @@ type BytesKey = keyof Pick<
 >;
 
 /**
- * A container's compute samples. Every chart keeps its frame and axes while
- * the samples are pending or absent, so the panel never changes size as they
- * arrive.
+ * A container's compute samples. Every chart keeps its size while samples
+ * are pending or absent.
  */
 export function ContainerMetricsCharts({
   metrics,
@@ -124,14 +124,9 @@ export function ContainerMetricsCharts({
   );
 }
 
-/** The byte axes of a chart with no samples, which nothing else would scale. */
+/** Charts with no samples draw 0 to 1 GiB and 0 to 1 MiB/s. */
 const EMPTY_BYTE_TICKS = [0, 256, 512, 768, 1024].map((mebibytes) => mebibytes * 1024 ** 2);
 const EMPTY_RATE_TICKS = [0, 256, 512, 768, 1024].map((kibibytes) => kibibytes * 1024);
-
-/** Recharts draws no ticks for an axis without data unless its domain may overflow. */
-function emptyAxis(data: MetricDatum[], ticks: number[]) {
-  return data.length > 0 ? {} : { domain: [0, ticks.at(-1) ?? 0], ticks, allowDataOverflow: true };
-}
 
 /** Metric name and latest-sample readout. */
 function ChartHeader({ title, readout }: { title: string; readout?: string }) {
@@ -181,8 +176,8 @@ function CpuChart({
             tickLine={false}
             axisLine={false}
             width={44}
-            {...emptyAxis(data, [0, 25, 50, 75, 100])}
             domain={[0, 100]}
+            allowDataOverflow={data.length === 0}
             ticks={[0, 25, 50, 75, 100]}
             tickFormatter={(value: number | string) => `${value}%`}
             tick={{ fontSize: 10 }}
@@ -266,7 +261,7 @@ function MemoryChart({
             tickLine={false}
             axisLine={false}
             width={76}
-            {...emptyAxis(data, EMPTY_BYTE_TICKS)}
+            {...emptyAxis(data.length === 0, EMPTY_BYTE_TICKS)}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytes)}
             tick={{ fontSize: 10 }}
           />
@@ -355,7 +350,7 @@ function RatePairChart({
             tickLine={false}
             axisLine={false}
             width={76}
-            {...emptyAxis(data, EMPTY_RATE_TICKS)}
+            {...emptyAxis(data.length === 0, EMPTY_RATE_TICKS)}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytesPerSecond)}
             tick={{ fontSize: 10 }}
           />

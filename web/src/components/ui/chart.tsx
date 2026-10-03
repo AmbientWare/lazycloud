@@ -49,7 +49,7 @@ function ChartContainer({
     width: number;
     height: number;
   };
-  /** Shown over the plot, which keeps its frame and axes, while it has nothing to draw. */
+  /** Shown over the plot while it has nothing to draw; the frame and axes stay. */
   empty?: React.ReactNode;
 }) {
   const uniqueId = React.useId();
@@ -323,7 +323,16 @@ function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key:
   return configLabelKey in config ? config[configLabelKey] : config[key];
 }
 
+/**
+ * Fixed Y-axis ticks for a plot with nothing to draw. Recharts draws no ticks
+ * on an axis without data unless its domain may overflow.
+ */
+function emptyAxis(empty: boolean, ticks: number[]) {
+  return empty ? { domain: [0, ticks.at(-1) ?? 0], ticks, allowDataOverflow: true } : {};
+}
+
 export {
+  emptyAxis,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,

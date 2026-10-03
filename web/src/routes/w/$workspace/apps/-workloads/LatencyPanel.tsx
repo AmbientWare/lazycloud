@@ -7,6 +7,7 @@ import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
+  emptyAxis,
   type ChartConfig,
 } from "@/components/ui/chart";
 import { activityHourIndex, activityHours } from "@/lib/activity-window";
@@ -19,17 +20,13 @@ const config: ChartConfig = {
   p95: { label: "p95", color: "var(--chart-3)" },
 };
 
-/**
- * The duration axis, in milliseconds, of a plot with no points. Recharts draws
- * no ticks for an axis without data unless its domain may overflow.
- */
+/** A plot with no points draws 0 to 1 s. */
 const EMPTY_AXIS_TICKS = [0, 250, 500, 750, 1_000];
 
 /**
- * Workload latency: run time p50/p95 per hour over the drawn activity window
- * from the SQL-windowed rollup, with volume, failure and cold-start counts
- * over the same window. The plot keeps its frame and hours while the read is
- * pending or empty, so the panel never changes size as data arrives.
+ * Run time p50 and p95 per hour over the activity window, with volume,
+ * failure and cold-start counts. The plot keeps its size while the read is
+ * pending or empty.
  */
 export function LatencyPanel({
   buckets,
@@ -100,9 +97,7 @@ export function LatencyPanel({
             tickLine={false}
             axisLine={false}
             width={46}
-            domain={plotted ? undefined : [0, EMPTY_AXIS_TICKS.at(-1) ?? 0]}
-            ticks={plotted ? undefined : EMPTY_AXIS_TICKS}
-            allowDataOverflow={!plotted}
+            {...emptyAxis(!plotted, EMPTY_AXIS_TICKS)}
             tick={{ fontSize: 10 }}
             tickFormatter={(value: number | string) => formatAxisDuration(value)}
           />
