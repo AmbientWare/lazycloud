@@ -115,8 +115,6 @@ constraints. Keep task plans and progress with the task, not in the tree.
   every model into every layer. Update contracts and Python/runner/web consumers
   together; avoid hand-maintained parallel schemas.
 - Freeze every migration once deployed; add a new one for each change.
-- A migration cannot read or write a table it creates (Neki's router
-  rejects it inside the transaction); seed or backfill in the next file.
   Production resets and data imports require separately authorized scope.
 
 ## Acceptance
