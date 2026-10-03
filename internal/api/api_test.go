@@ -398,9 +398,9 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 	}
 }
 
-// runEvents posts a RunTask request and returns the response with a reader
-// of its events.
-func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (*http.Response, func() (apitypes.TaskRunEvent, bool)) {
+// runEvents posts a RunTask request and returns the response's status and
+// content type with a reader of its events.
+func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (int, string, func() (apitypes.TaskRunEvent, bool)) {
 	e.t.Helper()
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -418,7 +418,7 @@ func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (*http.Respon
 	}
 	e.t.Cleanup(func() { _ = resp.Body.Close() })
 	scanner := bufio.NewScanner(resp.Body)
-	return resp, func() (apitypes.TaskRunEvent, bool) {
+	return resp.StatusCode, resp.Header.Get("Content-Type"), func() (apitypes.TaskRunEvent, bool) {
 		for scanner.Scan() {
 			if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
 				continue
@@ -440,9 +440,9 @@ func TestRunTaskStreamsTheTaskItsLogsAndResult(t *testing.T) {
 	raw := json.RawMessage(`{"args": [[1200, 3500, 800]], "kwargs": {}}`)
 	input := apitypes.TaskInput{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}
 
-	resp, next := e.runEvents(fnPath+"/run", apitypes.RunTaskRequest{Input: input})
-	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/x-ndjson" {
-		t.Fatalf("run: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	status, contentType, next := e.runEvents(fnPath+"/run", apitypes.RunTaskRequest{Input: input})
+	if status != 200 || contentType != "application/x-ndjson" {
+		t.Fatalf("run: %d %s", status, contentType)
 	}
 	admitted, ok := next()
 	if !ok || admitted.Task == nil || admitted.Task.Status != apitypes.TaskStatusQueued || admitted.Log != nil {
@@ -464,7 +464,7 @@ func TestRunTaskStreamsTheTaskItsLogsAndResult(t *testing.T) {
 
 	// A task still queued when the wait passes ends the stream with its state.
 	started := time.Now()
-	_, next = e.runEvents(fnPath+"/run?wait_seconds=1", apitypes.RunTaskRequest{Input: input})
+	_, _, next = e.runEvents(fnPath+"/run?wait_seconds=1", apitypes.RunTaskRequest{Input: input})
 	if first, ok := next(); !ok || first.Task == nil {
 		t.Fatalf("admitted event %+v", first)
 	}
