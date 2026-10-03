@@ -30,7 +30,6 @@ const states: Record<Schemas["FleetState"], string> = {
   preparing: "Preparing reserve",
   stopping: "Stopping",
   unavailable: "Unavailable",
-  failed: "Failed",
   terminating: "Terminating",
   stopped: "Stopped",
   hibernate_unverified: "Hibernation unverified",
@@ -274,7 +273,7 @@ function NodeTable({ nodes }: { nodes: Schemas["FleetNode"][] }) {
             <TableCell>
               <span
                 className={
-                  node.state === "failed" || node.state === "unavailable"
+                  node.state === "unavailable"
                     ? "text-xs text-destructive"
                     : node.state === "hibernate_unverified"
                       ? "text-xs text-warning"
