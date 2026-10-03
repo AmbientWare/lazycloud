@@ -436,7 +436,7 @@ export function DevboxWorkspace({
   );
 }
 
-/** The running container's samples; the charts hold their frames while it has none. */
+/** The devbox container's samples. The charts keep their size while it has none. */
 function DevboxMetrics({
   workspace,
   devbox,

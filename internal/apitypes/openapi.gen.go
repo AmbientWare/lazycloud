@@ -2699,7 +2699,7 @@ type ChangeReset struct {
 // ChangeResetReason behind: the client read too slowly and events were dropped. missed: the server lost its database connection and may have missed changes. unknown_cursor: Last-Event-ID is older than the events the server holds.
 type ChangeResetReason string
 
-// ChangeTopic requests: the edge recorded endpoint or ASGI requests; each change is grouped by deployment, with a count.
+// ChangeTopic requests: endpoint or ASGI requests were recorded. A requests change counts one deployment's requests and names no resource.
 type ChangeTopic string
 
 // CheckpointSpec Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers.
@@ -4505,7 +4505,7 @@ type ResourceChange struct {
 	Status *string             `json:"status,omitempty"`
 	TaskId *openapi_types.UUID `json:"task_id,omitempty"`
 
-	// Topic requests: the edge recorded endpoint or ASGI requests; each change is grouped by deployment, with a count.
+	// Topic requests: endpoint or ASGI requests were recorded. A requests change counts one deployment's requests and names no resource.
 	Topic ChangeTopic `json:"topic"`
 }
 

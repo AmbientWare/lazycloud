@@ -163,9 +163,9 @@ export function selectTaskList(
 }
 
 /**
- * The newest requests one endpoint or ASGI workload served. The edge writes
- * records in batches about a second after each request ends, and each batch
- * publishes a requests change.
+ * The newest requests one endpoint or ASGI workload served. The edge records
+ * them in batches about a second after they end, and each batch publishes a
+ * requests change.
  */
 export function requestsQueryOptions(workspace: string, app: string, name: string, limit = 50) {
   return queryOptions({

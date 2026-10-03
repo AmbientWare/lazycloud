@@ -123,8 +123,7 @@ export function useReconnectingStream(
 
 /**
  * Follow a server-sent-event endpoint, resuming with `Last-Event-ID` after
- * each reconnect. `onEvent` receives every parsed frame; the one from the
- * latest render handles it, even mid-connection.
+ * each reconnect. The latest render's `onEvent` receives every parsed frame.
  */
 export function useEventStream(
   url: string | null,

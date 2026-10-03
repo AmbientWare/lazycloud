@@ -10,10 +10,7 @@ import { requestsQueryOptions, servesRequests, tasksQueryOptions } from "@/lib/q
 
 import { LatencyPanel } from "./LatencyPanel";
 
-/**
- * A function's, endpoint's or ASGI app's latency over the last day above its
- * newest tasks or requests. The change stream refreshes both.
- */
+/** Latency over the last day above the newest tasks or requests. */
 export function WorkloadActivity({
   workspace,
   workload,
@@ -71,7 +68,7 @@ function WorkloadRuns({
         to: "/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId",
         params: { workspace, app, kind, name, taskId },
       })}
-      emptyMessage="No tasks yet"
+      emptyMessage={requests ? "No requests yet" : "No tasks yet"}
       compact
       className="min-h-0 flex-1"
     />

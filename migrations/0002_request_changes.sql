@@ -1,6 +1,5 @@
--- Request records publish on the change stream. The edge writes them in
--- batches, so each statement sends one grouped change per deployment it
--- recorded requests for.
+-- The edge writes request records in batches. Each statement publishes one
+-- change per deployment, with its request count.
 create function observe_created_requests() returns trigger
 language plpgsql as $$
 begin

@@ -4733,7 +4733,7 @@ export interface components {
             time: string;
         };
         /**
-         * @description requests: the edge recorded endpoint or ASGI requests; each change is grouped by deployment, with a count.
+         * @description requests: endpoint or ASGI requests were recorded. A requests change counts one deployment's requests and names no resource.
          * @enum {string}
          */
         ChangeTopic: "apps" | "deployments" | "tasks" | "requests" | "containers" | "storage.secrets" | "storage.volumes" | "usage";

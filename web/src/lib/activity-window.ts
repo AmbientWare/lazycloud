@@ -13,8 +13,8 @@ export function activityHours(now = Date.now()): number[] {
 }
 
 /**
- * Where an activity read starts. It is computed per fetch and kept out of
- * query keys, which would otherwise change every hour.
+ * Where an activity read starts, computed per fetch and kept out of query
+ * keys, which would otherwise change every hour.
  */
 export function activityStart(now = Date.now()): string {
   return new Date(activityHours(now)[0]).toISOString();

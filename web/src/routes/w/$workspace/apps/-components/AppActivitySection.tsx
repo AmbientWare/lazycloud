@@ -7,9 +7,8 @@ import { AppActivityChart, AppActivityLegend } from "./AppActivityChart";
 import { appRunActivity } from "./app-activity-buckets";
 
 /**
- * The app's tasks per hour over the last day. The chart keeps its frame and
- * hours while the read is pending, so the section never changes size as data
- * arrives.
+ * The app's tasks per hour over the last day. The chart keeps its size while
+ * the read is pending.
  */
 export function AppActivitySection({
   series,

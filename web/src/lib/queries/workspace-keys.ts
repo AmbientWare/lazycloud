@@ -67,8 +67,8 @@ export const workspaceQueryKeys = {
     lists: (workspace: string) => [...workspaceRoot(workspace), "workloads", "list"] as const,
     list: (workspace: string, app: string | null) =>
       [...workspaceRoot(workspace), "workloads", "list", { app }] as const,
-    // Under a workload's detail sit the reads its containers move: its
-    // running count and a devbox's status.
+    // Container changes refresh every detail, which holds running counts and
+    // devbox status.
     details: (workspace: string) => [...workspaceRoot(workspace), "workloads", "detail"] as const,
     detail: workloadKey,
     devbox: (workspace: string, { app, name }: Pick<WorkloadRef, "app" | "name">) =>
