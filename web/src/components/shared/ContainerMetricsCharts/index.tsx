@@ -124,16 +124,13 @@ export function ContainerMetricsCharts({
   );
 }
 
-/** The tops of the byte axes while nothing scales them. */
-const EMPTY_AXIS_MAX_BYTES = 1024 ** 3;
-const EMPTY_AXIS_MAX_RATE = 1024 ** 2;
+/** The byte axes of a chart with no samples, which nothing else would scale. */
+const EMPTY_BYTE_TICKS = [0, 256, 512, 768, 1024].map((mebibytes) => mebibytes * 1024 ** 2);
+const EMPTY_RATE_TICKS = [0, 256, 512, 768, 1024].map((kibibytes) => kibibytes * 1024);
 
-function byteDomain(dataMax: number): number {
-  return dataMax > 0 ? dataMax : EMPTY_AXIS_MAX_BYTES;
-}
-
-function rateDomain(dataMax: number): number {
-  return dataMax > 0 ? dataMax : EMPTY_AXIS_MAX_RATE;
+/** Recharts draws no ticks for an axis without data unless its domain may overflow. */
+function emptyAxis(data: MetricDatum[], ticks: number[]) {
+  return data.length > 0 ? {} : { domain: [0, ticks.at(-1) ?? 0], ticks, allowDataOverflow: true };
 }
 
 /** Metric name and latest-sample readout. */
@@ -184,6 +181,7 @@ function CpuChart({
             tickLine={false}
             axisLine={false}
             width={44}
+            {...emptyAxis(data, [0, 25, 50, 75, 100])}
             domain={[0, 100]}
             ticks={[0, 25, 50, 75, 100]}
             tickFormatter={(value: number | string) => `${value}%`}
@@ -268,7 +266,7 @@ function MemoryChart({
             tickLine={false}
             axisLine={false}
             width={76}
-            domain={[0, byteDomain]}
+            {...emptyAxis(data, EMPTY_BYTE_TICKS)}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytes)}
             tick={{ fontSize: 10 }}
           />
@@ -357,7 +355,7 @@ function RatePairChart({
             tickLine={false}
             axisLine={false}
             width={76}
-            domain={[0, rateDomain]}
+            {...emptyAxis(data, EMPTY_RATE_TICKS)}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytesPerSecond)}
             tick={{ fontSize: 10 }}
           />

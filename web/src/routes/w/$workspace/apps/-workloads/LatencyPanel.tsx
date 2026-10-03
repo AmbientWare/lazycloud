@@ -19,8 +19,11 @@ const config: ChartConfig = {
   p95: { label: "p95", color: "var(--chart-3)" },
 };
 
-/** The duration axis an empty plot is drawn against, in milliseconds. */
-const EMPTY_AXIS_MAX_MS = 1_000;
+/**
+ * The duration axis, in milliseconds, of a plot with no points. Recharts draws
+ * no ticks for an axis without data unless its domain may overflow.
+ */
+const EMPTY_AXIS_TICKS = [0, 250, 500, 750, 1_000];
 
 /**
  * Workload latency: run time p50/p95 per hour over the drawn activity window
@@ -52,6 +55,8 @@ export function LatencyPanel({
   const count = (value: number) => (pending ? "—" : Intl.NumberFormat().format(value));
   const duration = (value: number | undefined) =>
     value === undefined ? "—" : formatDuration(value);
+  const rows = latencyRows(known);
+  const plotted = rows.some((row) => row.p50 !== null || row.p95 !== null);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -79,7 +84,7 @@ export function LatencyPanel({
             : `No ${requests ? "requests" : "finished tasks"} in the last 24 hours`
         }
       >
-        <LineChart data={latencyRows(known)} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+        <LineChart data={rows} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="label"
@@ -95,7 +100,9 @@ export function LatencyPanel({
             tickLine={false}
             axisLine={false}
             width={46}
-            domain={[0, (dataMax: number) => (dataMax > 0 ? dataMax : EMPTY_AXIS_MAX_MS)]}
+            domain={plotted ? undefined : [0, EMPTY_AXIS_TICKS.at(-1) ?? 0]}
+            ticks={plotted ? undefined : EMPTY_AXIS_TICKS}
+            allowDataOverflow={!plotted}
             tick={{ fontSize: 10 }}
             tickFormatter={(value: number | string) => formatAxisDuration(value)}
           />
@@ -119,7 +126,7 @@ export function LatencyPanel({
             name="p50"
             stroke="var(--color-p50)"
             strokeWidth={2}
-            dot={false}
+            dot={isolatedDot(rows, "p50")}
             activeDot={{ r: 3 }}
             isAnimationActive={false}
           />
@@ -130,7 +137,7 @@ export function LatencyPanel({
             stroke="var(--color-p95)"
             strokeWidth={2}
             strokeDasharray="5 3"
-            dot={false}
+            dot={isolatedDot(rows, "p95")}
             activeDot={{ r: 3 }}
             isAnimationActive={false}
           />
@@ -140,13 +147,15 @@ export function LatencyPanel({
   );
 }
 
+type LatencyRow = { label: string; p50: number | null; p95: number | null };
+
 /** One row per drawn hour; an hour the server reported nothing for plots no point. */
-function latencyRows(buckets: Schemas["PerformanceBucket"][]) {
+function latencyRows(buckets: Schemas["PerformanceBucket"][]): LatencyRow[] {
   const hours = activityHours();
-  const rows = hours.map((hour) => ({
+  const rows: LatencyRow[] = hours.map((hour) => ({
     label: format(hour, "HH:mm"),
-    p50: null as number | null,
-    p95: null as number | null,
+    p50: null,
+    p95: null,
   }));
   for (const bucket of buckets) {
     const index = activityHourIndex(bucket.timestamp, hours);
@@ -155,6 +164,19 @@ function latencyRows(buckets: Schemas["PerformanceBucket"][]) {
     rows[index].p95 = bucket.p95_ms ?? null;
   }
   return rows;
+}
+
+/** A line needs two neighbouring hours, so an hour alone between gaps is drawn as a dot. */
+function isolatedDot(rows: LatencyRow[], series: "p50" | "p95") {
+  return function IsolatedDot({ cx, cy, index }: { cx?: number; cy?: number; index?: number }) {
+    const alone =
+      index !== undefined &&
+      rows[index]?.[series] != null &&
+      rows[index - 1]?.[series] == null &&
+      rows[index + 1]?.[series] == null;
+    if (!alone || cx === undefined || cy === undefined) return <g key={index} />;
+    return <circle key={index} cx={cx} cy={cy} r={2.5} fill={`var(--color-${series})`} />;
+  };
 }
 
 function LatencyReadout({
