@@ -269,3 +269,37 @@ func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
 		t.Fatalf("%d cooldowns after errors that were not capacity refusals", n)
 	}
 }
+
+// Between a deploy's rollout and its publish job the target still names the
+// last release, whose archive the new server no longer serves; a host
+// launched then fails its bootstrap. Launches wait for the served release.
+func TestLaunchesWaitUntilTheTargetReleaseIsTheServedOne(t *testing.T) {
+	emulator := newAWS(t)
+	config := fleetConfig(emulator.fleet(compute.Fleet{}))
+	config.ServedRelease = "1.1.0"
+	o := newOwners(t, config)
+	publish(t, o.compute)
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	host := requestedHost(t, o, dev, `{}`)
+
+	if n := launch(t, o); n != 0 || len(emulator.calls("RunInstances")) != 0 {
+		t.Fatalf("launched %d to release 1.0.0 while the server serves 1.1.0", n)
+	}
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseRequested) {
+		t.Fatalf("waiting host is %s, want requested", phase)
+	}
+	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{Version: "1.1.0", SHA256: map[string]string{
+		"amd64": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d once the served release is the target, want 1", n)
+	}
+	data, err := base64.StdEncoding.DecodeString(emulator.calls("RunInstances")[0].Form.Get("UserData"))
+	if err != nil || !strings.Contains(string(data), "--agent-version '1.1.0'") {
+		t.Fatalf("the launch did not install the served release: %v", err)
+	}
+}
