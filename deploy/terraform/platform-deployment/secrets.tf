@@ -21,7 +21,7 @@ resource "aws_secretsmanager_secret_version" "platform" {
   secret_id = aws_secretsmanager_secret.platform.id
   secret_string = jsonencode({
     LAZYCLOUD_DATABASE_URL          = local.database_url
-    LAZYCLOUD_DATABASE_SESSION_URL  = local.session_database_url
+    LAZYCLOUD_DATABASE_SESSION_URL  = local.database_url
     LAZYCLOUD_SECRETS_MASTER_KEY    = random_bytes.secrets_master_key.base64
     LAZYCLOUD_STRIPE_WEBHOOK_SECRET = stripe_webhook_endpoint.billing.secret
     # The tunnel's whole identity, which cloudflared reads as is.

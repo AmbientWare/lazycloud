@@ -243,8 +243,9 @@ create table hosts (
     connection_id uuid references cloud_connections (id) on delete set null,
     -- The account that joined a machine.
     account_id uuid references users (id) on delete set null,
+    -- preparing: the agent is proving the host may stop into the reserve.
     phase text not null default 'ready' check (phase in (
-        'requested', 'provisioning', 'booting', 'joining', 'ready', 'draining', 'stopping', 'stopped',
+        'requested', 'provisioning', 'booting', 'joining', 'ready', 'draining', 'preparing', 'stopping', 'stopped',
         'resuming', 'terminating', 'deleted', 'failed'
     )),
     phase_message text not null default '',
@@ -274,11 +275,10 @@ create table hosts (
     hourly_micros bigint,
     instance_id text unique,
     launch_attempts integer not null default 0,
-    -- A launcher holds a requested host until this passes.
+    -- A launcher holds a requested host until this passes, and the reserve
+    -- actuator holds a host for its start, stop and terminate calls.
     launch_lease_until timestamptz,
     launched_at timestamptz,
-    -- Set while a ready cloud host has no live container.
-    idle_since timestamptz,
     -- The provider will reclaim the instance at this time.
     interruption_at timestamptz,
     -- The authorization and node role a connection host launched with: its
@@ -288,7 +288,42 @@ create table hosts (
     node_role_arn text,
     -- An agent restarting into a new release stays unlost until this passes.
     updating_until timestamptz,
-    updated_at timestamptz not null default now()
+    updated_at timestamptz not null default now(),
+    -- How the host sleeps in the reserve; null while it serves.
+    reserve_mode text check (reserve_mode in ('stop', 'hibernate')),
+    -- The instance launched able to hibernate.
+    hibernation_configured boolean not null default false,
+    -- The persistent Spot request that launched a Spot reserve; it must be
+    -- cancelled before the instance terminates, or EC2 relaunches it.
+    spot_request_id text,
+    -- The AMI the instance launched from.
+    node_image text,
+    -- When EC2 accepted this stop, and when a stuck stop was forced.
+    stop_requested_at timestamptz,
+    force_stop_at timestamptz,
+    -- When EC2 first refused to hibernate this stop; refusals are retried
+    -- for a while before the host stops plainly.
+    hibernate_refused_at timestamptz,
+    -- When EC2 reported the instance stopped.
+    stopped_at timestamptz,
+    -- Whether the last stop saved a hibernation image: unknown while a
+    -- hibernation stops, saved once EC2 stopped it for the hibernation
+    -- (the agent's resume report proves it), failed when EC2 stopped it
+    -- otherwise, unavailable after a plain or forced stop.
+    image_evidence text not null default 'unknown'
+        check (image_evidence in ('unknown', 'saved', 'failed', 'unavailable')),
+    -- The PrepareReserve attempt the agent answered ready, and the boot it
+    -- answered in. The resume report naming it settles it once.
+    sleep_attempt_id uuid,
+    sleep_boot_id text,
+    -- The agent release the host ran when it last proved it could stop.
+    prepared_agent_version text,
+    -- The driver reported every GPU when the host last proved it could stop.
+    gpu_proven boolean not null default false,
+    -- How the host came back from its last stop: with its memory, or booted.
+    last_resume_outcome text check (last_resume_outcome in ('memory_restored', 'cold_boot')),
+    -- When a serving host became idle; null while it runs containers.
+    idle_since timestamptz
 );
 
 create index hosts_online on hosts (last_seen_at) where state = 'online';
@@ -296,6 +331,12 @@ create index hosts_online on hosts (last_seen_at) where state = 'online';
 create unique index hosts_machine_name on hosts (account_id, name) where kind = 'machine' and phase <> 'deleted';
 -- Cloud hosts the fleet loops act on: neither deleted nor failed.
 create index hosts_fleet on hosts (kind, phase) where provider = 'aws' and phase not in ('deleted', 'failed');
+-- Hosts waiting on a start, stop or terminate call.
+create index hosts_provider_actions on hosts (phase, phase_at)
+    where provider = 'aws' and phase in ('stopping', 'resuming', 'terminating');
+-- The admin Nodes page and the agent rollout read live platform hosts by id
+-- without walking the failed and deleted history, which is kept forever.
+create index hosts_platform on hosts (id) where kind = 'platform' and phase not in ('deleted', 'failed');
 
 -- The workspaces a joined machine serves.
 create table host_workspaces (
@@ -321,6 +362,8 @@ create table host_join_tokens (
 create index host_join_tokens_host on host_join_tokens (host_id) where used_at is null;
 
 -- An offer that lacked capacity is skipped until the cooldown ends.
+-- refused_at is when the offer was last refused, so refusals across a
+-- region's offers can be counted over a window longer than the cooldown.
 create table capacity_cooldowns (
     connection_key text not null,
     region text not null,
@@ -328,7 +371,55 @@ create table capacity_cooldowns (
     market text not null check (market in ('spot', 'on_demand')),
     until timestamptz not null,
     reason text not null,
+    refused_at timestamptz,
     primary key (connection_key, region, instance_type, market)
+);
+
+-- The latest Spot price per zone and type, refreshed by the scheduler
+-- leader. A region that fails to refresh keeps its rows; readers ignore a
+-- price observed too long ago.
+create table spot_prices (
+    region text not null,
+    availability_zone_id text not null,
+    instance_type text not null,
+    hourly_micros bigint not null check (hourly_micros > 0),
+    effective_at timestamptz not null,
+    observed_at timestamptz not null,
+    primary key (region, availability_zone_id, instance_type)
+);
+
+-- The platform account's EC2 vCPU quotas per region, quota class and
+-- market, read hourly; vcpus is null until read. A quota refusal holds the
+-- class at no room until refused_until.
+create table fleet_quotas (
+    region text not null,
+    quota_class text not null check (quota_class in ('standard', 'g', 'p')),
+    market text not null check (market in ('spot', 'on_demand')),
+    vcpus integer check (vcpus >= 0),
+    observed_at timestamptz,
+    refused_until timestamptz,
+    primary key (region, quota_class, market)
+);
+
+-- The catalog types EC2 offers in each availability zone of the platform's
+-- regions. EC2 refuses a launch into a zone that does not offer its type,
+-- and the refusal would cool the type in the whole region.
+create table fleet_zone_offerings (
+    region text not null,
+    availability_zone_id text not null,
+    instance_type text not null,
+    observed_at timestamptz not null,
+    primary key (region, availability_zone_id, instance_type)
+);
+
+-- One row per purchase market, written by the fleet planning pass. plan is
+-- the market's targets and measures as of generated_at, current until
+-- expires_at; an expired plan is no plan.
+create table fleet_markets (
+    market text primary key,
+    plan jsonb not null,
+    generated_at timestamptz not null,
+    expires_at timestamptz not null
 );
 
 -- The GPUs a release's container reserves: gpu_count, or one when it names
@@ -1500,6 +1591,8 @@ create table container_metric_rollup (
     only_row boolean primary key default true check (only_row),
     rolled_through timestamptz not null
 );
+
+insert into container_metric_rollup (rolled_through) values (date_trunc('minute', now() - interval '1 hour'));
 
 -- How long each stage of a container's start took on its host. The host
 -- restates the stages in its reports; the first report of a stage wins.

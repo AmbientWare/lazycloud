@@ -8,13 +8,10 @@ select a.terms_version, a.status, a.stripe_customer_id, a.period_started_at, a.p
        pending.id as pending_purchase_id,
        (select coalesce(sum(p.amount_nanos), 0) from credit_purchases p
         where p.user_id = a.user_id and p.kind = 'automatic' and p.status in ('pending', 'succeeded')
-          and p.created_at >= date_trunc('month', clock.now, 'UTC'))::bigint as month_automatic_nanos,
-       clock.now
+          and p.created_at >= date_trunc('month', now(), 'UTC'))::bigint as month_automatic_nanos,
+       now()::timestamptz as now
 from billing_accounts a
 join billing_balances b on b.user_id = a.user_id
--- Neki's router fails to bind now() in a select list beside these
--- subqueries, so the instant comes from a joined row.
-cross join (select now()::timestamptz as now) clock
 -- At most one: credit_purchases_automatic_open.
 left join credit_purchases pending
     on pending.user_id = a.user_id and pending.kind = 'automatic' and pending.status = 'pending'
@@ -36,10 +33,15 @@ update billing_accounts set reload_paused_purchase_id = null, reload_pause_reaso
 where user_id = @user_id;
 
 -- name: SetComplimentary :execrows
-update billing_accounts a
-set complimentary_since = case when @complimentary::bool then coalesce(a.complimentary_since, now()) end,
-    updated_at = now()
-where a.user_id = @user_id;
+-- Waiving marks the balance due, so the rollup covers usage from then on.
+with account as (
+    update billing_accounts a
+    set complimentary_since = case when @complimentary::bool then coalesce(a.complimentary_since, now()) end,
+        updated_at = now()
+    where a.user_id = @user_id
+    returning a.user_id
+)
+update billing_balances b set due = true where b.user_id in (select account.user_id from account);
 
 -- name: AccountUser :one
 select id, email from users where id = @id;

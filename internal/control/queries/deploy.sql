@@ -34,8 +34,5 @@ set desired_state = 'deleted', deleted_at = now()
 where w.app_id = @app_id and w.desired_state <> 'deleted'
   and w.active_release_id is not null
   and not (w.kind || ':' || w.name = any(@keep::text[]))
-returning w.id, w.name;
-
--- name: CountReleaseVersions :one
--- Counts the versioned releases of the workloads.
-select count(*)::int as versions from releases where workload_id = any(@workload_ids::uuid[]) and version > 0;
+returning w.name,
+          (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions;

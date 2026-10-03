@@ -44,14 +44,17 @@ select r.id as release_id,
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
-       gpu.models as gpu_models,
+       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
        demand.current::int as demand,
        demand.peak::int as peak,
        coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,
-       active.ready as active_ready,
+       exists (
+           select 1 from containers ac
+           where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'
+       )::bool as active_ready,
        (r.load_error is not null or r.start_failures >= @start_failure_limit::int)::bool as failed,
        c.pending::int as pending,
        c.starting::int as starting,
@@ -63,16 +66,6 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join previews p on p.release_id = r.id
-cross join lateral (
-    select coalesce(array_agg(m.model order by m.n), '{}')::text[] as models
-    from jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu') with ordinality as m(model, n)
-) gpu
-cross join lateral (
-    select exists (
-        select 1 from containers ac
-        where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'
-    ) as ready
-) active
 cross join lateral (
     select coalesce(sum(l.in_flight + l.waiting), 0) as current, coalesce(sum(l.window_peak), 0) as peak
     from endpoint_loads l where l.release_id = r.id and l.expires_at > now()

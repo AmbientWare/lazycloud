@@ -4,12 +4,10 @@ select user_id from workspace_members where workspace_id = @workspace_id and rol
 -- name: AccountStanding :one
 select a.terms_version, a.scheduled_terms_version, a.status, a.payment_method_attached_at, a.complimentary_since,
        a.monthly_usage_limit_nanos, b.balance_nanos, b.accrued_nanos, b.month_spent_nanos, b.month_started_at,
-       (p.id is not null)::bool as plan_change_pending,
+       exists (select 1 from plan_changes p where p.user_id = a.user_id and p.state = 'open')::bool as plan_change_pending,
        now()::timestamptz as now
 from billing_accounts a
 join billing_balances b on b.user_id = a.user_id
--- plan_changes_open allows one open change per account.
-left join plan_changes p on p.user_id = a.user_id and p.state = 'open'
 where a.user_id = @user_id;
 
 -- name: LockAccountContainers :exec
