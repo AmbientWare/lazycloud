@@ -50,13 +50,12 @@ func (q *Queries) AcceptReserveStop(ctx context.Context, arg AcceptReserveStopPa
 
 const endLastStop = `-- name: EndLastStop :exec
 update hosts
-set resume_requested_at = null, stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
-    stopped_at = null, updated_at = now()
+set stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null, stopped_at = null, updated_at = now()
 where id = $1
 `
 
-// A resume joined: the request and the last stop's facts end, even when
-// the actuator never recorded the start, so the next stop starts clean.
+// A resume joined: the last stop's facts end, even when the actuator never
+// recorded the start, so the next stop starts clean.
 func (q *Queries) EndLastStop(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, endLastStop, id)
 	return err

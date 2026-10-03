@@ -60,17 +60,15 @@ func staleMarkets(t *testing.T, o owners) {
 }
 
 type hostRow struct {
-	Phase           string
-	ReserveMode     *string
-	ResumeRequested bool
+	Phase       string
+	ReserveMode *string
 }
 
 func hostRowOf(t *testing.T, o owners, host compute.HostID) hostRow {
 	t.Helper()
 	var r hostRow
 	if err := o.pool.QueryRow(t.Context(), `
-select phase, reserve_mode, resume_requested_at is not null from hosts where id = $1`,
-		uuid.UUID(host)).Scan(&r.Phase, &r.ReserveMode, &r.ResumeRequested); err != nil {
+select phase, reserve_mode from hosts where id = $1`, uuid.UUID(host)).Scan(&r.Phase, &r.ReserveMode); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -87,7 +85,7 @@ func TestPendingWorkResumesAReadyReserveBeforeBuying(t *testing.T) {
 	if r := planCapacity(t, o); r.Resumed != 1 || r.Requested != 0 {
 		t.Fatalf("plan %+v, want the reserve resumed and nothing bought", r)
 	}
-	if h := hostRowOf(t, o, reserve); h.Phase != string(compute.PhaseResuming) || !h.ResumeRequested || h.ReserveMode != nil {
+	if h := hostRowOf(t, o, reserve); h.Phase != string(compute.PhaseResuming) || h.ReserveMode != nil {
 		t.Fatalf("reserve %+v, want a requested resume to serve", h)
 	}
 	if w := capacityWait(t, o, container); w != string(compute.WaitProvisioning) {
@@ -538,7 +536,7 @@ func TestSurplusReservesRetireAndAStaleOneRefreshes(t *testing.T) {
 	if r := plan(t, o); r.Resumed != 1 {
 		t.Fatalf("plan %+v, want the stale reserve refreshed", r)
 	}
-	if h := hostRowOf(t, o, stale); h.Phase != string(compute.PhaseResuming) || h.ReserveMode == nil || !h.ResumeRequested {
+	if h := hostRowOf(t, o, stale); h.Phase != string(compute.PhaseResuming) || h.ReserveMode == nil {
 		t.Fatalf("stale reserve %+v, want resuming with its reserve mode kept", h)
 	}
 }

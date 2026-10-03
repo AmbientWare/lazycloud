@@ -225,8 +225,8 @@ func unproven(answer ReserveAnswer, want string, row ReserveProofHostRow, live i
 // settleSession moves a host whose session is opening out of the reserve
 // phases, in the session's transaction and before it records the new boot.
 //
-// The planner writes resuming together with resume_requested_at, so a
-// resuming host is a requested resume. A stopping or stopped host that comes
+// Only the planner moves a stopped host to resuming, so a resuming host is
+// a requested resume. A stopping or stopped host that comes
 // back with a sleep or a new boot was not asked to: it is kept out of
 // placement and goes back through preparing, since the planner still holds
 // it as a reserve. A host joining with a reserve mode, bought for the reserve

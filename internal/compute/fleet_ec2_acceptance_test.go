@@ -298,7 +298,6 @@ func (r liveReserve) cycle(launched time.Time) {
 	}
 
 	// The planner resumes it.
-	run(t, r.o.pool, "update hosts set resume_requested_at = now() where id = $1", r.host)
 	r.move(compute.PhaseResuming)
 	asked := time.Now()
 	r.act()

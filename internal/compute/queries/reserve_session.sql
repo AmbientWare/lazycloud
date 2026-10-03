@@ -40,9 +40,8 @@ set last_resume_outcome = @outcome,
 where id = @id;
 
 -- name: EndLastStop :exec
--- A resume joined: the request and the last stop's facts end, even when
--- the actuator never recorded the start, so the next stop starts clean.
+-- A resume joined: the last stop's facts end, even when the actuator never
+-- recorded the start, so the next stop starts clean.
 update hosts
-set resume_requested_at = null, stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
-    stopped_at = null, updated_at = now()
+set stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null, stopped_at = null, updated_at = now()
 where id = @id;

@@ -470,7 +470,7 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 
 const resumeReserves = `-- name: ResumeReserves :many
 update hosts h
-set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(), resume_requested_at = now(),
+set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
     reserve_mode = case when v.refresh then h.reserve_mode end, idle_since = null, updated_at = now()
 from (select unnest($1::uuid[]) as id, unnest($2::bool[]) as refresh) v
 where h.id = v.id and h.phase = 'stopped'

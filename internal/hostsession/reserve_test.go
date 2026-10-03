@@ -29,16 +29,15 @@ type reserveHost struct {
 	preparedVersion *string
 	gpuProven       bool
 	outcome         *string
-	resumeRequested *time.Time
 }
 
 func (h *harness) reserveHost(host compute.HostID) reserveHost {
 	h.t.Helper()
 	var r reserveHost
 	if err := h.pool.QueryRow(h.t.Context(), `
-select phase, phase_message, sleep_attempt_id, sleep_boot_id, prepared_agent_version, gpu_proven, last_resume_outcome, resume_requested_at
+select phase, phase_message, sleep_attempt_id, sleep_boot_id, prepared_agent_version, gpu_proven, last_resume_outcome
 from hosts where id = $1`, uuid.UUID(host)).Scan(&r.phase, &r.message, &r.attempt, &r.sleepBoot, &r.preparedVersion, &r.gpuProven,
-		&r.outcome, &r.resumeRequested); err != nil {
+		&r.outcome); err != nil {
 		h.t.Fatal(err)
 	}
 	return r
@@ -234,7 +233,6 @@ func (h *harness) stoppedReserve(host compute.HostID, phase, evidence string, mo
 	h.t.Helper()
 	h.exec(`update hosts set provider = 'aws', instance_type = 'm7i.large', region = 'us-east-2', phase = $2, phase_at = now(),
         image_evidence = $3, reserve_mode = $4, sleep_attempt_id = $5, sleep_boot_id = 'boot-1',
-        resume_requested_at = case when $2 = 'resuming' then now() - interval '30 seconds' end,
         stop_requested_at = now() - interval '5 minutes', force_stop_at = now(), hibernate_refused_at = now(),
         stopped_at = now() - interval '4 minutes'
         where id = $1`, uuid.UUID(host), phase, evidence, mode, attempt)
@@ -273,7 +271,7 @@ func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 			hello := &hostproto.Hello{BootId: c.boot, SleepAttemptId: attempt.String(), SleptSeconds: c.slept}
 			openHello(t, ctx, h.client, hello)
 			r := h.waitPhase(host, c.phase)
-			if r.outcome == nil || *r.outcome != c.outcome || r.attempt != nil || r.resumeRequested != nil {
+			if r.outcome == nil || *r.outcome != c.outcome || r.attempt != nil {
 				t.Fatalf("after the resume %+v", r)
 			}
 			// The last stop's facts end with it, even though no actuator
@@ -371,7 +369,7 @@ func TestResumeOfAHostThatNeverStopped(t *testing.T) {
 	host, ctx := h.enroll()
 	stream := open(t, ctx, h.client)
 	h.waitPhase(host, "ready")
-	h.exec(`update hosts set phase = 'resuming', phase_at = now(), resume_requested_at = now(), sleep_boot_id = 'boot-1'
+	h.exec(`update hosts set phase = 'resuming', phase_at = now(), sleep_boot_id = 'boot-1'
         where id = $1`, uuid.UUID(host))
 	ended := make(chan error, 1)
 	go func() {

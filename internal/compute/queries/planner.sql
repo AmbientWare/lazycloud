@@ -102,7 +102,7 @@ from jsonb_to_recordset(@hosts::jsonb) as v(
 -- refresh, kept so the host prepares and stops again once it joins. Only a
 -- requested resume serves.
 update hosts h
-set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(), resume_requested_at = now(),
+set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
     reserve_mode = case when v.refresh then h.reserve_mode end, idle_since = null, updated_at = now()
 from (select unnest(@ids::uuid[]) as id, unnest(@refresh::bool[]) as refresh) v
 where h.id = v.id and h.phase = 'stopped'
