@@ -95,12 +95,11 @@ if [ "$VARIANT" = gpu ]; then
   fi
   runsc_args='["--host-uds=all", "--nvproxy"]'
 fi
-# Hosts offer containers every core. Containers run in lazycloud-workloads.slice,
-# and system.slice (the agent, Docker, containerd) outweighs it tenfold for
-# CPU, so a container pinning every core cannot starve heartbeats. runsc
-# starts the sandbox and gofer inside the container's cgroup, so their CPU
-# and memory count against the container; only the shim and runsc's own
-# commands run in system.slice.
+# Hosts offer containers every core. Docker starts every container in
+# lazycloud-workloads.slice, which system.slice (the agent, Docker,
+# containerd) outweighs tenfold for CPU, so busy containers cannot starve
+# heartbeats. runsc puts the sandbox and gofer in the container's cgroup;
+# only the shim and runsc's own commands run in system.slice.
 printf '[Unit]\nDescription=LazyCloud workload containers\n\n[Slice]\nCPUWeight=100\n' \
   >/etc/systemd/system/lazycloud-workloads.slice
 mkdir -p /etc/systemd/system/system.slice.d

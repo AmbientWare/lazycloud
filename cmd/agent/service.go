@@ -148,8 +148,10 @@ func renderUnit(root, state, wrapper string, args []string) string {
 		"KillSignal=SIGINT",
 		"TimeoutStopSec=30",
 		"LimitNOFILE=1048576",
-		// The host offers containers every core, so the agent outweighs
-		// them for CPU: containers weigh about 40 per reserved core.
+		// Containers get every core. On a joined machine Docker puts them
+		// beside the agent in system.slice, each weighing about 40 per
+		// reserved core; fleet hosts give them a slice of their own
+		// (deploy/ami/node-setup.sh).
 		"CPUWeight=1000",
 		"",
 		"[Install]",

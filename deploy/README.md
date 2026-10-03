@@ -41,7 +41,7 @@ the operator writes and Terraform only reads. All variables carry the
 | Listen addresses, `PUBLIC_URL`, `EDGE_URL`, `EDGE_TCP_URL`, `EDGE_TCP_CERT`/`_KEY`, `AGENT_SERVER_ADDR`, `INSTALL_URL`, `CLIENT_RELEASE_VERSION`, `DRAIN_DELAY`, telemetry | chart | server; the scheduler takes `AGENT_SERVER_ADDR` and `INSTALL_URL` for user data |
 | Object store, workspace buckets, ECR registry and host role, Cloudflare zone, fleet account, networks, node role and instance profile, `AWS_REGION` | values | server, scheduler |
 | `FLEET_IMAGES`, `FLEET_MAX_HOSTS`, `FLEET_IDLE_TIMEOUT`, `LOG_FORMAT` | env file | server, scheduler |
-| `SYNTHETIC_APP`, `<workspace id>/synthetic` after deploying `deploy/synthetic/app.py` there; unset runs no synthetic check | env file | scheduler |
+| `SYNTHETIC_APP`: `<workspace id>/synthetic`, where `deploy/synthetic/app.py` is deployed; unset calls no probes | env file | scheduler |
 | `AGENT_DIST_DIR` | server image | server |
 | Agent `--server`, `--gateway`, `--cloud-host-id`, `--agent-version`, `--agent-sha256` | launcher user data | agent on fleet hosts |
 | `OCI_RUNTIME=runsc` | node image | agent on fleet hosts |

@@ -101,8 +101,8 @@ type FleetSnapshot struct {
 	Now     time.Time
 	Hosts   []FleetHost
 	Pending []DemandGroup
-	// Recent is the largest shape each market's containers reserved within
-	// the policy's LargestShape window, beside the pending ones.
+	// Recent is the largest shape each market's placed containers reserved
+	// within the policy's LargestShape window.
 	Recent map[ReserveMarket]FleetCapacity
 	Offers OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
@@ -836,10 +836,10 @@ func (ps *pass) retain(v *marketView) {
 	}
 }
 
-// leave returns a leaving host to the reserve while the market's reserve
-// falls short, or holds nothing that fits the largest shape and the host
-// does, and EC2 can stop the host, hibernating one launched able to where
-// hibernates allows; it drains the host otherwise.
+// leave returns a leaving host to the reserve when EC2 can stop it and the
+// market's reserve falls short, or holds nothing that fits the largest shape
+// while the host does. A host launched able to hibernate does where
+// hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
 	short := !ps.reserveHeld(v).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
@@ -886,10 +886,10 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 	})
 }
 
-// reserves buys the stopped target's shortfall, and a reserve that fits the
-// largest shape when none does, while no work waits; then, with the target
-// held, it retires the reserves the market no longer needs. The reserve
-// bought to fit the largest shape counts toward the target.
+// While no work waits, reserves buys the stopped target's shortfall and,
+// when no reserve fits the largest shape, one that does, which counts toward
+// the target. With the target held, it retires the reserves the market no
+// longer needs.
 func (ps *pass) reserves(v *marketView) {
 	short := v.stopped.Minus(ps.reserveHeld(v)).Clamp()
 	need := CoverNeed{Aggregate: short}

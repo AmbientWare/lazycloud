@@ -473,8 +473,8 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 }
 
 // With no recent demand, an empty fleet's on-demand reserve is a hibernating
-// 16 vCPU host; a 16 vCPU request then resumes it rather than buying, and
-// once the work is gone the pass buys the reserve back.
+// 16 vCPU host. A 16 vCPU request resumes it rather than buying, and while
+// it serves the work the pass buys another reserve.
 func TestPlanKeepsAReserveThatFitsTheLargestShapeAndResumesIt(t *testing.T) {
 	p := DefaultPolicy()
 	p.Spot, p.GPU, p.OnDemand.Warm = MarketReserve{}, nil, HeadroomTarget{}

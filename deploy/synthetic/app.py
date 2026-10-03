@@ -1,9 +1,9 @@
-"""Probe functions the scheduler calls every six hours to time first calls.
+"""Probes the scheduler calls every six hours to time first calls.
 
-Deploy into a workspace the operator owns, then set the scheduler's
+Deploy into a workspace the operator owns and set the scheduler's
 LAZYCLOUD_SYNTHETIC_APP to <workspace id>/synthetic. Each probe returns at
-once, keeps no container warm and runs on capacity that is not preempted, so
-a call starts on a warm host or resumes a reserve.
+once, keeps no container warm and avoids preemptible capacity, so a call
+starts on a warm host or resumes a reserve.
 """
 
 from lazycloud import App, GpuType
