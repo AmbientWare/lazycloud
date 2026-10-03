@@ -34,8 +34,8 @@ func (c *writeCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pg
 
 func (*writeCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// countedHarness serves the host service over a pool whose completion
-// transactions writes counts; base is the same database untraced.
+// countedHarness serves the host service over a pool traced by writes;
+// base is the same database untraced.
 func countedHarness(t *testing.T) (h *harness, base *pgxpool.Pool, writes *writeCounter) {
 	t.Helper()
 	base = dbtest.New(t)

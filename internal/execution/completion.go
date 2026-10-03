@@ -36,9 +36,9 @@ func (e *Execution) CompleteAttempt(ctx context.Context, host compute.HostID, co
 // transaction, and returns one error per completion. Only a running attempt
 // on the completion's container, assigned to host, accepts an outcome;
 // anything else gets ErrStaleAttempt and changes nothing. A result above
-// MaxPayloadBytes fails the attempt instead. When the transaction fails,
-// each completion is written again in its own, so a failure stays with the
-// completion that caused it.
+// MaxPayloadBytes fails the attempt instead. When the transaction fails
+// before ctx ends, each completion retries in its own transaction, so a
+// failure stays with the completion that caused it.
 func (e *Execution) CompleteAttempts(ctx context.Context, host compute.HostID, completions []Completion) []error {
 	containers := make([]ContainerID, len(completions))
 	outcomes := make([]AttemptOutcome, len(completions))
