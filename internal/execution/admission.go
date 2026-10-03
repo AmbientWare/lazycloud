@@ -209,14 +209,9 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 			}
 		}
 
-		ids := make([]uuid.UUID, len(req.Inputs))
-		for n := range ids {
-			if ids[n], err = uuid.NewV7(); err != nil {
-				return fmt.Errorf("task id: %w", err)
-			}
-		}
-		rows, err := insertSubmitted(ctx, tx, InsertTasksParams{
-			Ids:          ids,
+		rows, err := q.InsertTasks(ctx, InsertTasksParams{
+			Encodings:    encodings,
+			Data:         data,
 			Unmet:        unmet,
 			WorkspaceID:  uuid.UUID(req.Workspace),
 			WorkloadID:   fn.ID,
@@ -226,8 +221,11 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 			RootTaskID:   root,
 			ScheduledFor: req.ScheduledFor,
 			Traceparent:  traceparent(ctx),
-		}, encodings, data, req.Inputs)
+		})
 		if err != nil {
+			return fmt.Errorf("insert tasks: %w", err)
+		}
+		if err := recordDependencies(ctx, q, req.Inputs, rows); err != nil {
 			return err
 		}
 		tasks = make([]Task, len(rows))
@@ -331,22 +329,7 @@ func uniqueTasks(ids []TaskID) []TaskID {
 	return out
 }
 
-// insertSubmitted inserts the tasks of p, their inputs and the dependency
-// edges the inputs name in one round trip, and returns the tasks in input
-// order. The submit picks the task ids, so no statement needs another's
-// result; the batch runs them in order, so inputs and edges find their tasks.
-func insertSubmitted(ctx context.Context, tx pgx.Tx, p InsertTasksParams, encodings []string, data [][]byte, inputs []TaskInput) ([]InsertTasksRow, error) {
-	var inserted []InsertTasksRow
-	batch := &pgx.Batch{}
-	batch.Queue(insertTasks, p.Ids, p.WorkspaceID, p.WorkloadID, p.ReleaseID, p.MaxAttempts, p.ParentTaskID,
-		p.RootTaskID, p.Unmet, p.ScheduledFor, p.Traceparent).Query(func(rows pgx.Rows) error {
-		var err error
-		if inserted, err = pgx.CollectRows(rows, pgx.RowToStructByPos[InsertTasksRow]); err != nil {
-			return fmt.Errorf("read inserted tasks: %w", err)
-		}
-		return nil
-	})
-	batch.Queue(insertTaskInputs, p.Ids, encodings, data)
+func recordDependencies(ctx context.Context, q *Queries, inputs []TaskInput, rows []InsertTasksRow) error {
 	var tasks, upstream []uuid.UUID
 	for n, input := range inputs {
 		seen := map[TaskID]bool{}
@@ -355,25 +338,17 @@ func insertSubmitted(ctx context.Context, tx pgx.Tx, p InsertTasksParams, encodi
 				continue
 			}
 			seen[dep] = true
-			tasks = append(tasks, p.Ids[n])
+			tasks = append(tasks, rows[n].ID)
 			upstream = append(upstream, uuid.UUID(dep))
 		}
 	}
-	if len(tasks) > 0 {
-		batch.Queue(insertDependencies, tasks, upstream)
+	if len(tasks) == 0 {
+		return nil
 	}
-	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
-		return nil, fmt.Errorf("insert tasks: %w", err)
+	if err := q.InsertDependencies(ctx, InsertDependenciesParams{TaskIds: tasks, DependsOn: upstream}); err != nil {
+		return fmt.Errorf("insert dependencies: %w", err)
 	}
-	created := make(map[uuid.UUID]time.Time, len(inserted))
-	for _, row := range inserted {
-		created[row.ID] = row.CreatedAt
-	}
-	rows := make([]InsertTasksRow, len(p.Ids))
-	for n, id := range p.Ids {
-		rows[n] = InsertTasksRow{ID: id, CreatedAt: created[id]}
-	}
-	return rows, nil
+	return nil
 }
 
 func compareUUID(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) }

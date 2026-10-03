@@ -28,6 +28,117 @@ func (q *Queries) AssignedContainerRelease(ctx context.Context, arg AssignedCont
 	return release_id, err
 }
 
+const claimQueuedTasks = `-- name: ClaimQueuedTasks :many
+with candidate as (
+    select t.id, t.attempt_count, t.available_at
+    from tasks t
+    where t.release_id = $1 and t.status = 'queued' and t.available_at <= now()
+      and t.unmet_dependencies = 0
+    order by t.available_at, t.id
+    limit $2
+    for update skip locked
+), sized as (
+    select c.id, c.attempt_count,
+           row_number() over w as turn,
+           sum(octet_length(i.data) + coalesce(dep.bytes, 0)) over w as total_bytes
+    from candidate c
+    join task_inputs i on i.task_id = c.id
+    cross join lateral (
+        select sum(octet_length(r.data)) as bytes
+        from task_dependencies d
+        join task_results r on r.task_id = d.depends_on
+        where d.task_id = c.id
+    ) dep
+    window w as (order by c.available_at, c.id)
+), picked as (
+    select id, attempt_count from sized
+    where turn = 1 or total_bytes <= $3::bigint
+), attempt as (
+    insert into attempts (task_id, number, container_id, state, deadline_at)
+    select picked.id, picked.attempt_count + 1, $4, 'running',
+           now() + make_interval(secs => $5::float8)
+    from picked
+    returning attempts.id, attempts.task_id, attempts.number, attempts.deadline_at
+), claimed as (
+    update tasks
+    set status = 'running',
+        current_attempt_id = attempt.id,
+        attempt_count = attempt.number,
+        started_at = coalesce(tasks.started_at, now())
+    from attempt
+    where tasks.id = attempt.task_id
+)
+select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
+       i.encoding, i.data, t.max_attempts, t.parent_task_id,
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent
+from attempt
+join task_inputs i on i.task_id = attempt.task_id
+join tasks t on t.id = attempt.task_id
+order by attempt.id
+`
+
+type ClaimQueuedTasksParams struct {
+	ReleaseID      uuid.UUID
+	MaxTasks       int32
+	MaxInputBytes  int64
+	ContainerID    uuid.UUID
+	TimeoutSeconds float64
+}
+
+type ClaimQueuedTasksRow struct {
+	TaskID       uuid.UUID
+	AttemptID    uuid.UUID
+	Number       int32
+	DeadlineAt   time.Time
+	Encoding     string
+	Data         []byte
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   uuid.UUID
+	Traceparent  *string
+}
+
+// Due queued tasks of the release become running attempts on the container.
+// Concurrent claimers skip each other's rows. The claim takes the longest
+// prefix whose inputs total at most max_input_bytes, and always the first
+// task, so the response stays within the host message limit.
+func (q *Queries) ClaimQueuedTasks(ctx context.Context, arg ClaimQueuedTasksParams) ([]ClaimQueuedTasksRow, error) {
+	rows, err := q.db.Query(ctx, claimQueuedTasks,
+		arg.ReleaseID,
+		arg.MaxTasks,
+		arg.MaxInputBytes,
+		arg.ContainerID,
+		arg.TimeoutSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ClaimQueuedTasksRow
+	for rows.Next() {
+		var i ClaimQueuedTasksRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.AttemptID,
+			&i.Number,
+			&i.DeadlineAt,
+			&i.Encoding,
+			&i.Data,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.Traceparent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countRunningAttemptsOnContainer = `-- name: CountRunningAttemptsOnContainer :one
 select count(*) from attempts where container_id = $1 and state = 'running'
 `
@@ -37,81 +148,6 @@ func (q *Queries) CountRunningAttemptsOnContainer(ctx context.Context, container
 	var count int64
 	err := row.Scan(&count)
 	return count, err
-}
-
-const insertClaimAttempts = `-- name: InsertClaimAttempts :exec
-insert into attempts (task_id, number, container_id, state, deadline_at)
-select t.id, t.attempt_count + 1, $1, 'running',
-       now() + make_interval(secs => $2::float8)
-from unnest($3::uuid[]) with ordinality as p(id, n)
-join tasks t on t.id = p.id
-order by p.n
-`
-
-type InsertClaimAttemptsParams struct {
-	ContainerID    uuid.UUID
-	TimeoutSeconds float64
-	TaskIds        []uuid.UUID
-}
-
-// A running attempt on the container for each locked task, in claim order.
-func (q *Queries) InsertClaimAttempts(ctx context.Context, arg InsertClaimAttemptsParams) error {
-	_, err := q.db.Exec(ctx, insertClaimAttempts, arg.ContainerID, arg.TimeoutSeconds, arg.TaskIds)
-	return err
-}
-
-const lockClaimCandidates = `-- name: LockClaimCandidates :many
-select t.id, (octet_length(i.data) + coalesce(dep.bytes, 0))::bigint as input_bytes
-from (
-    select t.id, t.available_at
-    from tasks t
-    where t.release_id = $1 and t.status = 'queued' and t.available_at <= now()
-      and t.unmet_dependencies = 0
-    order by t.available_at, t.id
-    limit $2
-    for update skip locked
-) t
-join task_inputs i on i.task_id = t.id
-cross join lateral (
-    select sum(octet_length(r.data)) as bytes
-    from task_dependencies d
-    join task_results r on r.task_id = d.depends_on
-    where d.task_id = t.id
-) dep
-order by t.available_at, t.id
-`
-
-type LockClaimCandidatesParams struct {
-	ReleaseID uuid.UUID
-	MaxTasks  int32
-}
-
-type LockClaimCandidatesRow struct {
-	ID         uuid.UUID
-	InputBytes int64
-}
-
-// Due queued tasks of the release, oldest first, with the bytes each hands
-// its runner: its input and its upstream results. Concurrent claimers skip
-// each other's rows, and the locks hold until the claim commits.
-func (q *Queries) LockClaimCandidates(ctx context.Context, arg LockClaimCandidatesParams) ([]LockClaimCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, lockClaimCandidates, arg.ReleaseID, arg.MaxTasks)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []LockClaimCandidatesRow
-	for rows.Next() {
-		var i LockClaimCandidatesRow
-		if err := rows.Scan(&i.ID, &i.InputBytes); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const lockContainerForClaim = `-- name: LockContainerForClaim :one
@@ -160,63 +196,4 @@ func (q *Queries) NextQueuedAt(ctx context.Context, releaseID uuid.UUID) (time.T
 	var available_at time.Time
 	err := row.Scan(&available_at)
 	return available_at, err
-}
-
-const startClaimedTasks = `-- name: StartClaimedTasks :many
-update tasks t
-set status = 'running',
-    current_attempt_id = a.id,
-    attempt_count = a.number,
-    started_at = coalesce(t.started_at, now())
-from attempts a
-join task_inputs i on i.task_id = a.task_id
-where t.id = any($1::uuid[]) and a.task_id = t.id and a.number = t.attempt_count + 1
-returning t.id as task_id, a.id as attempt_id, a.number, a.deadline_at,
-          i.encoding, i.data, t.max_attempts, t.parent_task_id,
-          coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent
-`
-
-type StartClaimedTasksRow struct {
-	TaskID       uuid.UUID
-	AttemptID    uuid.UUID
-	Number       int32
-	DeadlineAt   time.Time
-	Encoding     string
-	Data         []byte
-	MaxAttempts  int32
-	ParentTaskID *uuid.UUID
-	RootTaskID   uuid.UUID
-	Traceparent  *string
-}
-
-// Runs after InsertClaimAttempts: each task moves to the attempt it just got.
-func (q *Queries) StartClaimedTasks(ctx context.Context, taskIds []uuid.UUID) ([]StartClaimedTasksRow, error) {
-	rows, err := q.db.Query(ctx, startClaimedTasks, taskIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []StartClaimedTasksRow
-	for rows.Next() {
-		var i StartClaimedTasksRow
-		if err := rows.Scan(
-			&i.TaskID,
-			&i.AttemptID,
-			&i.Number,
-			&i.DeadlineAt,
-			&i.Encoding,
-			&i.Data,
-			&i.MaxAttempts,
-			&i.ParentTaskID,
-			&i.RootTaskID,
-			&i.Traceparent,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
