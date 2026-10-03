@@ -9,6 +9,13 @@ resource "planetscale_postgres_branch" "main" {
   cluster_size       = var.planetscale_cluster_size
   region             = var.planetscale_region
   deletion_protected = true
+
+  # PS-10 defaults to 25 connections; database_url's comment budgets these.
+  parameters = {
+    pgconf = {
+      max_connections = tostring(var.database_max_connections)
+    }
+  }
 }
 
 # The server migrates at start, so its role needs DDL: it inherits
@@ -29,9 +36,8 @@ locals {
   # Both URLs name the direct port 5432, not PgBouncer on 6432: pgx caches
   # prepared statements per connection, which transaction pooling breaks,
   # and LISTEN, the migration, metering and leader locks keep state in their
-  # session. Each process opens one pool per URL, so it holds at most twice
-  # pool_max_conns backends; the bound keeps every replica within the
-  # branch's max_connections.
+  # session. At pool_max_conns 4 a server holds 4+4 plus 3 hijacked (LISTEN, edge watch, changes), a scheduler 4+4 plus 2 (LISTEN, leader): 2x11 + 2x10 = 42.
+  # A rollout adds one surge server (11; schedulers do not surge) and psql 1: peak 54 of 60, 3 kept for superusers; migrate (wave -1) and publish-agent-release (PostSync), 4 each, run outside the rollout.
   database_url = format(
     "postgres://%s:%s@%s:5432/%s?sslmode=verify-full&pool_max_conns=%d",
     urlencode(planetscale_postgres_branch_role.platform.username),

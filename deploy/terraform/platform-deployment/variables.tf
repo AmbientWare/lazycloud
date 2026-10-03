@@ -70,7 +70,13 @@ variable "fleet_cidr" {
 variable "database_pool_max_connections" {
   description = "pool_max_conns of each of a process's two pools, one per database URL; the session pool holds the listener and the locks."
   type        = number
-  default     = 8
+  default     = 4
+}
+
+variable "database_max_connections" {
+  description = "max_connections of the branch; database.tf budgets the processes against it."
+  type        = number
+  default     = 60
 }
 
 # The chart creates the two load balancers; their hostnames arrive after the
