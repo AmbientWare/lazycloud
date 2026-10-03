@@ -40,3 +40,26 @@ func TestFleetMarketsAreSpotOnDemandAndTheReservedCards(t *testing.T) {
 		t.Fatalf("markets %v", got)
 	}
 }
+
+// A CPU market's large-shape reserve fits at least the default, so small
+// recent work can't shrink it below what a 16 vCPU request needs; recent
+// work only raises it, up to the cap.
+func TestLargeShapeReserveFitsAtLeastTheDefault(t *testing.T) {
+	s := DefaultPolicy().LargestShape
+	spot := ReserveMarket{Preemptible: true}
+	cases := []struct {
+		name   string
+		recent FleetCapacity
+		want   FleetCapacity
+	}{
+		{"no recent work", FleetCapacity{}, s.Default},
+		{"small recent work", cpuGiB(1000, 1), s.Default},
+		{"larger recent work", cpuGiB(24000, 48), cpuGiB(24000, 48).Upper(s.Default).Lower(s.Cap)},
+		{"beyond the cap", cpuGiB(64000, 256), cpuGiB(64000, 256).Lower(s.Cap)},
+	}
+	for _, c := range cases {
+		if got := s.of(spot, c.recent); got != c.want {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
