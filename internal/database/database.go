@@ -53,14 +53,13 @@ func Notify(ctx context.Context, tx pgx.Tx, channel Channel, payload string) err
 	return nil
 }
 
-// maxPayloadBytes is below PostgreSQL's NOTIFY payload limit of 8000 bytes.
+// PostgreSQL rejects a NOTIFY payload of 8000 bytes or more.
 const maxPayloadBytes = 7999
 
-// NotifyAll queues a wake-up for every distinct payload in one statement.
-// It joins payloads with payloadSeparator into as few notifications as the
-// payload limit allows, and the Listener splits them again. A commit writes
-// its notifications under a lock every notifying commit takes, so fewer of
-// them hold it for less time.
+// NotifyAll queues a wake-up for each distinct payload in one statement,
+// packed into as few notifications as maxPayloadBytes allows. Every
+// notifying commit writes its notifications under one shared lock, so
+// fewer notifications hold it for less time.
 func NotifyAll(ctx context.Context, tx pgx.Tx, channel Channel, payloads []string) error {
 	if len(payloads) == 0 {
 		return nil

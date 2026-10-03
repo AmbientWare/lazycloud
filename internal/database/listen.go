@@ -12,12 +12,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Channel names a NOTIFY channel. Payloads are resource ids; NotifyAll
-// joins several into one payload with payloadSeparator.
+// Channel names a NOTIFY channel. A payload is one or more keys, usually
+// resource ids, joined by payloadSeparator.
 type Channel string
 
-// payloadSeparator joins the ids of one notification. No id contains it.
-const payloadSeparator = ","
+// payloadSeparator joins the keys of one payload. No key contains it: ids
+// are UUIDs and collection names exclude control characters.
+const payloadSeparator = "\n"
 
 const (
 	// ChannelHost wakes the session serving a host; payload is the host id.
@@ -141,7 +142,7 @@ func (l *Listener) listen(ctx context.Context) error {
 	}
 }
 
-// wake wakes the subscribers of each id in payload and of the channel.
+// wake wakes the subscribers of each key in payload and of the channel.
 func (l *Listener) wake(channel Channel, payload string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

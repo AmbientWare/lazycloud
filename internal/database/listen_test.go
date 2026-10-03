@@ -57,8 +57,8 @@ func TestListenerWakesOnCommittedNotify(t *testing.T) {
 	}
 }
 
-// NotifyAll packs many ids into few notifications, and each id still wakes
-// its own subscribers and no others.
+// NotifyAll packs many keys into few notifications, and each key still
+// wakes its own subscribers and no others, even a queue key with a comma.
 func TestNotifyAllWakesEveryPackedID(t *testing.T) {
 	pool := dbtest.New(t)
 	listener := database.NewListener(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), database.ChannelTask)
@@ -66,6 +66,7 @@ func TestNotifyAllWakesEveryPackedID(t *testing.T) {
 	for n := range ids {
 		ids[n] = uuid.NewString()
 	}
+	ids[0] += ":jobs,urgent"
 	first, cancelFirst := listener.Subscribe(database.ChannelTask, ids[0])
 	defer cancelFirst()
 	last, cancelLast := listener.Subscribe(database.ChannelTask, ids[len(ids)-1])
