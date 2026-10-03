@@ -73,6 +73,19 @@ func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
 	e.fleetHost(fleetHost{instance: "i-0serving", phase: "ready", online: true})
 	e.fleetHost(fleetHost{instance: "i-0saved", phase: "stopped", reserve: ptr("hibernate"), evidence: "saved"})
 
+	// A pending container too large for the serving host is Spot load but
+	// allocated nowhere.
+	if _, err := e.pool.Exec(ctx, `
+with ws as (insert into workspaces (name) values ('fleet-pending') returning id),
+     app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id, workspace_id),
+     wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
+     rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id)
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
+select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); err != nil {
+		t.Fatal(err)
+	}
+
 	if plan := e.fleet(admin).Plan; plan != nil {
 		t.Fatalf("fleet summary before any plan: %+v, want no plan", plan)
 	}
@@ -105,10 +118,17 @@ func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
 		if got == nil {
 			t.Fatalf("market %+v missing from %+v", want, plan.Markets)
 		}
+		var allocated compute.FleetCapacity
+		for _, s := range want.States {
+			allocated = allocated.Plus(s.Allocated)
+		}
 		if got.WarmFree != capacity(want.WarmFree) || got.WarmTarget != capacity(want.WarmTarget) ||
 			got.ReserveReady != capacity(want.ReserveReady) || got.ReserveTarget != capacity(want.StoppedTarget) ||
-			got.Allocated != capacity(want.Load) || got.Reason != string(want.Reason) || len(got.States) != len(want.States) {
+			got.Allocated != capacity(allocated) || got.Reason != string(want.Reason) || len(got.States) != len(want.States) {
 			t.Errorf("market %s/%s: %+v, want the published %+v", map[bool]string{true: "spot", false: "on_demand"}[want.Preemptible], want.GPUType, got, want)
+		}
+		if want.Preemptible && want.GPUType == "" && (want.Load.CPUMillis != 8000 || got.Allocated != (apitypes.FleetCapacity{})) {
+			t.Errorf("Spot CPU: load %+v, allocated %+v; want the pending container as load and nothing allocated", want.Load, got.Allocated)
 		}
 		if want.Preemptible || want.GPUType != "" {
 			continue
