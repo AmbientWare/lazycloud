@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -279,4 +280,62 @@ func (e *Execution) RerunTask(ctx context.Context, workspace identity.WorkspaceI
 		return Task{}, err
 	}
 	return tasks[0], nil
+}
+
+// NewestAppTask is when the newest task of any live function of app was
+// submitted; nil when none has one.
+func (e *Execution) NewestAppTask(ctx context.Context, workspace identity.WorkspaceID, app string) (*time.Time, error) {
+	times, err := e.queries.NewestAppTasks(ctx, NewestAppTasksParams{WorkspaceID: uuid.UUID(workspace), App: app})
+	if err != nil {
+		return nil, fmt.Errorf("read newest task of app %s: %w", app, err)
+	}
+	var newest *time.Time
+	for _, t := range times {
+		if newest == nil || t.After(*newest) {
+			newest = &t
+		}
+	}
+	return newest, nil
+}
+
+// TaskLatency is where one task's time went: submitted, then its current
+// attempt's container created and placed on a host, then finished. A time
+// is nil before it happens.
+type TaskLatency struct {
+	Task             TaskID
+	Status           TaskStatus
+	Submitted        time.Time
+	ContainerCreated *time.Time
+	Placed           *time.Time
+	Finished         *time.Time
+	// HostReady is when the container's host last became ready; nil unless
+	// it still serves.
+	HostReady *time.Time
+	// InstanceType and Market are the host's; empty before placement or on
+	// a joined machine.
+	InstanceType string
+	Market       string
+}
+
+// TaskLatencies reads the latency of each of the workspace's tasks ids.
+func (e *Execution) TaskLatencies(ctx context.Context, workspace identity.WorkspaceID, ids []TaskID) ([]TaskLatency, error) {
+	raw := make([]uuid.UUID, len(ids))
+	for n, id := range ids {
+		raw[n] = uuid.UUID(id)
+	}
+	rows, err := e.queries.TaskLatencies(ctx, TaskLatenciesParams{Ids: raw, WorkspaceID: uuid.UUID(workspace)})
+	if err != nil {
+		return nil, fmt.Errorf("read task latencies: %w", err)
+	}
+	out := make([]TaskLatency, len(rows))
+	for n, r := range rows {
+		out[n] = TaskLatency{
+			Task: TaskID(r.ID), Status: TaskStatus(r.Status), Submitted: r.CreatedAt, ContainerCreated: r.ContainerCreatedAt,
+			Placed: r.AssignedAt, Finished: r.FinishedAt, InstanceType: r.InstanceType, Market: r.Market,
+		}
+		if r.HostPhase != nil && compute.Phase(*r.HostPhase) == compute.PhaseReady {
+			out[n].HostReady = r.HostPhaseAt
+		}
+	}
+	return out, nil
 }

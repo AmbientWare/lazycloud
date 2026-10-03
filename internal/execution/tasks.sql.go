@@ -240,6 +240,41 @@ func (q *Queries) LiveAppID(ctx context.Context, arg LiveAppIDParams) (uuid.UUID
 	return id, err
 }
 
+const newestAppTasks = `-- name: NewestAppTasks :many
+select newest.created_at
+from apps a
+join workloads w on w.app_id = a.id and w.kind = 'function' and w.desired_state <> 'deleted'
+cross join lateral (select t.created_at from tasks t where t.workload_id = w.id order by t.id desc limit 1) newest
+where a.workspace_id = $1 and a.name = $2 and a.state <> 'deleted'
+`
+
+type NewestAppTasksParams struct {
+	WorkspaceID uuid.UUID
+	App         string
+}
+
+// When the newest task of each live function of an app was submitted, from
+// each function's newest task alone; a function without tasks has no row.
+func (q *Queries) NewestAppTasks(ctx context.Context, arg NewestAppTasksParams) ([]time.Time, error) {
+	rows, err := q.db.Query(ctx, newestAppTasks, arg.WorkspaceID, arg.App)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []time.Time
+	for rows.Next() {
+		var created_at time.Time
+		if err := rows.Scan(&created_at); err != nil {
+			return nil, err
+		}
+		items = append(items, created_at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pendingFacts = `-- name: PendingFacts :many
 with task as (
     select t.id, t.release_id, t.unmet_dependencies, t.attempt_count, t.available_at, t.created_at,
@@ -353,6 +388,70 @@ func (q *Queries) TaskForRerun(ctx context.Context, arg TaskForRerunParams) (Tas
 		&i.DependsOn,
 	)
 	return i, err
+}
+
+const taskLatencies = `-- name: TaskLatencies :many
+select t.id, t.status, t.created_at, t.finished_at, c.created_at as container_created_at,
+       c.assigned_at, h.phase as host_phase, h.phase_at as host_phase_at,
+       coalesce(h.instance_type, '')::text as instance_type, coalesce(h.market, '')::text as market
+from tasks t
+left join attempts at on at.id = t.current_attempt_id
+left join containers c on c.id = at.container_id
+left join hosts h on h.id = c.host_id
+where t.id = any($1::uuid[]) and t.workspace_id = $2
+order by t.id
+`
+
+type TaskLatenciesParams struct {
+	Ids         []uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type TaskLatenciesRow struct {
+	ID                 uuid.UUID
+	Status             string
+	CreatedAt          time.Time
+	FinishedAt         *time.Time
+	ContainerCreatedAt *time.Time
+	AssignedAt         *time.Time
+	HostPhase          *string
+	HostPhaseAt        *time.Time
+	InstanceType       string
+	Market             string
+}
+
+// Where each task's time went: when it was submitted and finished, when the
+// container of its current attempt was created and placed, and its host's
+// phase and since when.
+func (q *Queries) TaskLatencies(ctx context.Context, arg TaskLatenciesParams) ([]TaskLatenciesRow, error) {
+	rows, err := q.db.Query(ctx, taskLatencies, arg.Ids, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskLatenciesRow
+	for rows.Next() {
+		var i TaskLatenciesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Status,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.ContainerCreatedAt,
+			&i.AssignedAt,
+			&i.HostPhase,
+			&i.HostPhaseAt,
+			&i.InstanceType,
+			&i.Market,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const taskResult = `-- name: TaskResult :one
