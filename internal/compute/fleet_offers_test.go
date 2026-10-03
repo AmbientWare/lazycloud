@@ -230,7 +230,7 @@ func offerKeys(offers []FleetOffer) []string {
 	return keys
 }
 
-func TestAConnectionPaysItsOwnHostsAndAColdBootStopsReservesPlainly(t *testing.T) {
+func TestAConnectionPaysItsOwnHostsAndOnlyOnDemandReservesHibernate(t *testing.T) {
 	in := offerInputs(t)
 	in.Rates = nil
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
@@ -243,12 +243,30 @@ func TestAConnectionPaysItsOwnHostsAndAColdBootStopsReservesPlainly(t *testing.T
 	}
 	in = offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.xlarge")}
-	if offers := RankOffers(DefaultPolicy(), need, true, in); len(offers) != 1 || !offers[0].Hibernate {
-		t.Fatalf("reserve offers %v, want one that hibernates", offerKeys(offers))
+	in.Spot = []SpotQuote{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "m7i.xlarge", HourlyMicros: 80_000, ObservedAt: offerNow}}
+	for _, preemptible := range []bool{false, true} {
+		need.Preemptible = preemptible
+		offers := RankOffers(DefaultPolicy(), need, true, in)
+		if len(offers) == 0 || offers[0].Hibernate == preemptible ||
+			offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(offers[0].Hibernate)) {
+			t.Errorf("preemptible %v: reserve offers %v, want the %s one to hibernate %v", preemptible, offerKeys(offers),
+				map[bool]string{true: "Spot", false: "on-demand"}[preemptible], !preemptible)
+		}
 	}
-	in.PlainStop = map[string]bool{"us-east-2/m7i.xlarge": true}
-	if offers := RankOffers(DefaultPolicy(), need, true, in); len(offers) != 1 || offers[0].Hibernate {
-		t.Fatalf("reserve offers %v, want one that stops plainly after a cold boot", offerKeys(offers))
+}
+
+// An on-demand reserve hibernates only with at most 32 GiB of RAM; a larger
+// image would not finish writing within providerDeadline, so it stops
+// plainly on the plain root.
+func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
+	in := offerInputs(t)
+	for name, want := range map[string]bool{"m7i.2xlarge": true, "m6a.4xlarge": false, "r6a.4xlarge": false, "m7i.8xlarge": false} {
+		typ := mustType(t, name)
+		in.Catalog = []CatalogType{typ}
+		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
+		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want)) {
+			t.Errorf("%s: reserve offers %v, want one that hibernates %v", name, offerKeys(offers), want)
+		}
 	}
 }
 

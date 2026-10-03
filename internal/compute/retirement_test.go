@@ -19,11 +19,10 @@ func cloudHost(t *testing.T, o owners, market compute.Market, instance string) c
 	})
 }
 
-// lightFor makes a host launched an hour ago lightly used for ago.
-func lightFor(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
+// idleFor makes a host idle for ago.
+func idleFor(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
 	t.Helper()
-	run(t, o.pool, "update hosts set launched_at = now() - interval '1 hour', light_since = now() - make_interval(secs => $2) where id = $1",
-		uuid.UUID(host), ago.Seconds())
+	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
 }
 
 // terminated lists the instance ids every TerminateInstances call named.
@@ -36,7 +35,7 @@ func terminated(e *awsEmulator) []string {
 	return out
 }
 
-// Idle hosts leave only once lightly used past the idle wait and while the
+// Idle hosts leave only once idle past the idle timeout and while the
 // market's free room beyond its warm target covers them; a one-time Spot
 // host cannot stop, so it drains and terminates.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
@@ -49,19 +48,18 @@ func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
 	recent := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a003")
 	busy := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a004")
 	other := cloudHost(t, o, compute.MarketOnDemand, "i-0000000000000a005")
-	lightFor(t, o, oldest, 30*time.Minute)
-	lightFor(t, o, idle, 20*time.Minute)
-	lightFor(t, o, recent, time.Minute)
-	lightFor(t, o, busy, time.Hour)
-	lightFor(t, o, other, time.Hour)
-	// Busy past the light-use share, so it does not consolidate either,
-	// with a container that arrived before the forecast's window.
+	idleFor(t, o, oldest, 30*time.Minute)
+	idleFor(t, o, idle, 20*time.Minute)
+	idleFor(t, o, recent, time.Minute)
+	idleFor(t, o, busy, time.Hour)
+	idleFor(t, o, other, time.Hour)
+	// A container runs on it, so it is not idle.
 	run(t, o.pool, `
 insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
 values (uuidv7(interval '-1 hour'), $1, $2, 'ready', $3, 1, 1500, 1 << 28, now(), now())`, dev, newRelease(t, o.pool, dev, `{}`), uuid.UUID(busy))
 
-	if result := plan(t, o); !result.Published || result.Drained != 2 {
-		t.Fatalf("plan %+v, want a reserve pass that drains two hosts", result)
+	if result := plan(t, o); result.Drained != 2 {
+		t.Fatalf("plan %+v, want two hosts drained", result)
 	}
 	result, err := o.compute.Retire(t.Context(), discard())
 	if err != nil {

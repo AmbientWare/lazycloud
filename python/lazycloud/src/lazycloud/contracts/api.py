@@ -1863,7 +1863,6 @@ class FleetState(str, Enum):
     FleetPreparing = "preparing"
     FleetStopping = "stopping"
     FleetUnavailable = "unavailable"
-    FleetFailed = "failed"
     FleetTerminating = "terminating"
     FleetStopped = "stopped"
     FleetHibernateUnverified = "hibernate_unverified"

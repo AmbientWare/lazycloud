@@ -49,19 +49,20 @@ func plan(t *testing.T, o owners) compute.PlanResult {
 	return result
 }
 
-// planCapacity runs a pass that acts on pending demand only, as passes
-// between reserve passes do: a plan published just now makes no reserve
-// pass due. The fleet regions have Spot prices at 40% of on-demand.
+// planCapacity runs a pass and deletes the floors it bought, the hosts no
+// pending container waits for, so a test sees what its demand bought. The
+// fleet regions have Spot prices at 40% of on-demand.
 func planCapacity(t *testing.T, o owners) compute.PlanResult {
 	t.Helper()
 	spotPrices(t, o)
-	run(t, o.pool, `
-insert into fleet_markets (market, plan, generated_at, expires_at) values ('on_demand:cpu', '{}', now(), now() + interval '5 minutes')
-on conflict (market) do update set generated_at = now(), expires_at = now() + interval '5 minutes'`)
 	result := plan(t, o)
-	if result.Published {
-		t.Fatal("a pass right after a published plan planned reserves")
-	}
+	result.Requested -= scan[int](t, o.pool, `
+with floors as (
+    delete from hosts h where h.phase = 'requested'
+      and not exists (select 1 from containers c where c.capacity_host_id = h.id)
+    returning 1
+)
+select count(*)::int from floors`)
 	return result
 }
 
@@ -227,8 +228,12 @@ func TestConcurrentCapacityPassesBuyEachHostOnce(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if got := requested(t, o); len(got) != 3 {
-		t.Fatalf("concurrent passes requested %d hosts, want 3, one per container", len(got))
+	if n := scan[int](t, o.pool, `select count(distinct capacity_host_id) from containers c
+join hosts h on h.id = c.capacity_host_id and h.phase = 'requested'`); n != 3 {
+		t.Fatalf("concurrent passes bought %d hosts for the containers, want 3, one per container", n)
+	}
+	if result := plan(t, o); result.Requested != 0 {
+		t.Fatalf("a pass after the concurrent ones %+v, want nothing more bought", result)
 	}
 }
 

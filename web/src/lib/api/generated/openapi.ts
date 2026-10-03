@@ -2695,7 +2695,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The platform's hosts with their state, capacity and load
+         * The platform's live hosts with their state, capacity and load
          * @description Platform administrators only.
          */
         get: operations["listFleetNodes"];
@@ -5353,7 +5353,7 @@ export interface components {
          * @description A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
          * @enum {string}
          */
-        FleetState: "serving" | "starting" | "draining" | "preparing" | "stopping" | "unavailable" | "failed" | "terminating" | "stopped" | "hibernate_unverified" | "image_saved";
+        FleetState: "serving" | "starting" | "draining" | "preparing" | "stopping" | "unavailable" | "terminating" | "stopped" | "hibernate_unverified" | "image_saved";
         FleetStateCapacity: {
             state: components["schemas"]["FleetState"];
             machines: number;
@@ -11422,7 +11422,7 @@ export const awsAuthorizationErrorValues: ReadonlyArray<FlattenedDeepRequired<co
 export const awsAuthorizationGenerationAuthorization_modeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationGeneration"]["authorization_mode"]> = ["managed_stack", "existing_role"];
 export const awsStackActionRequestCapabilitiesValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsStackAction"]["request"]["Capabilities"]> = ["CAPABILITY_NAMED_IAM"];
 export const awsStackActionRequestOnFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsStackAction"]["request"]["OnFailure"]> = ["DELETE"];
-export const fleetStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetState"]> = ["serving", "starting", "draining", "preparing", "stopping", "unavailable", "failed", "terminating", "stopped", "hibernate_unverified", "image_saved"];
+export const fleetStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetState"]> = ["serving", "starting", "draining", "preparing", "stopping", "unavailable", "terminating", "stopped", "hibernate_unverified", "image_saved"];
 export const fleetNodeProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetNode"]["provider"]> = ["agent", "aws"];
 export const planIdValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PlanId"]> = ["free", "team", "business"];
 export const termsVersionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TermsVersion"]> = ["free-v2", "team-v3", "business-v2"];

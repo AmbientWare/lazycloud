@@ -2,12 +2,10 @@ package compute
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,15 +14,9 @@ import (
 
 // fleetRead is what one planning pass reads, all in its transaction.
 type fleetRead struct {
-	now time.Time
-	// until ends the scheduled forecast: a provision, or the slowest
-	// observed activation, and the pass that orders it.
-	until     time.Time
+	now       time.Time
 	hosts     []PlannerHostsRow
 	pending   []PendingDemandRow
-	arrivals  []RecentArrivalsRow
-	scheduled []ScheduledDemandRow
-	stats     []ActivationStat
 	cooldowns []PlannerCooldownsRow
 	markets   map[string]FleetMarketsRow
 	// release is the target agent release; nil when none is published.
@@ -36,7 +28,7 @@ type fleetRead struct {
 }
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
-// each bounded by live rows, the pending batch or a recent window.
+// each bounded by live rows or the pending batch.
 func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetRead, error) {
 	r := fleetRead{now: now, markets: map[string]FleetMarketsRow{}}
 	var err error
@@ -45,32 +37,6 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
-	}
-	if r.arrivals, err = q.RecentArrivals(ctx, uuidFloor(now.Add(-p.History))); err != nil {
-		return r, fmt.Errorf("read recent arrivals: %w", err)
-	}
-	stats, err := q.ActivationStats(ctx)
-	if err != nil {
-		return r, fmt.Errorf("read activation stats: %w", err)
-	}
-	horizon := p.TotalHorizon()
-	for _, s := range stats {
-		stat := ActivationStat{
-			Kind: ActivationKind(s.Kind), InstanceType: s.InstanceType, Region: s.Region, GPU: s.GpuType,
-			Ready: int(s.Ready), Failed: int(s.Failed),
-		}
-		if s.ResumeOutcome != "" {
-			stat.Outcome = ptr(ResumeOutcome(s.ResumeOutcome))
-		}
-		if s.Ready > 0 {
-			stat.P95 = ptr(time.Duration(s.P95 * float64(time.Second)))
-			horizon = max(horizon, *stat.P95+p.PlanInterval)
-		}
-		r.stats = append(r.stats, stat)
-	}
-	r.until = now.Add(horizon)
-	if r.scheduled, err = q.ScheduledDemand(ctx, ScheduledDemandParams{SinceID: uuidFloor(now.Add(-p.History)), Until: r.until}); err != nil {
-		return r, fmt.Errorf("read scheduled demand: %w", err)
 	}
 	if r.cooldowns, err = q.PlannerCooldowns(ctx, p.RegionFailureWindow.Seconds()); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
@@ -107,36 +73,23 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	return r, nil
 }
 
-// uuidFloor is the least uuidv7 stamped at t, so ids created from t on sort
-// at or above it.
-func uuidFloor(t time.Time) uuid.UUID {
-	var stamp [8]byte
-	binary.BigEndian.PutUint64(stamp[:], uint64(t.UnixMilli())) //nolint:gosec // Times after 1970.
-	var id uuid.UUID
-	copy(id[:6], stamp[2:])
-	id[6], id[8] = 0x70, 0x80
-	return id
-}
-
 // hostStanding is what a cloud host's fleet state derives from, for the
 // planner and the admin Nodes list alike.
 type hostStanding struct {
-	Phase, State, CapacityState, CapacityReason, ImageEvidence string
-	LastSeenAt                                                 *time.Time
-	ReserveMode                                                *string
-	Containers                                                 int32
+	Phase, State, CapacityState, ImageEvidence string
+	LastSeenAt                                 *time.Time
+	ReserveMode                                *string
 }
 
 func (h PlannerHostsRow) standing() hostStanding {
 	return hostStanding{
-		Phase: h.Phase, State: h.State, CapacityState: h.CapacityState, CapacityReason: h.CapacityReason,
-		ImageEvidence: h.ImageEvidence, LastSeenAt: h.LastSeenAt, ReserveMode: h.ReserveMode, Containers: h.Containers,
+		Phase: h.Phase, State: h.State, CapacityState: h.CapacityState, ImageEvidence: h.ImageEvidence,
+		LastSeenAt: h.LastSeenAt, ReserveMode: h.ReserveMode,
 	}
 }
 
 // fleetStateOf is where a cloud host stands in the fleet. A host bought for
-// the reserve or refreshing prepares until it stops; a consolidated host
-// that emptied serves again.
+// the reserve or refreshing prepares until it stops.
 func fleetStateOf(h hostStanding, now time.Time) FleetState {
 	reserve := h.ReserveMode != nil
 	switch Phase(h.Phase) {
@@ -146,7 +99,7 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 		}
 		return FleetStarting
 	case PhaseReady:
-		if CapacityState(h.CapacityState) != CapacityAvailable && (h.CapacityReason != reasonConsolidating || h.Containers > 0) {
+		if CapacityState(h.CapacityState) != CapacityAvailable {
 			return FleetDraining
 		}
 		if HostState(h.State) == HostOnline && h.LastSeenAt != nil && now.Sub(*h.LastSeenAt) < LivenessTimeout {
@@ -170,31 +123,29 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 			}
 		}
 		return FleetStopped
-	case PhaseTerminating:
+	case PhaseTerminating, PhaseDeleted, PhaseFailed:
+		// The planner and the Nodes list read no deleted or failed host.
 		return FleetTerminating
-	case PhaseDeleted, PhaseFailed:
-		return FleetFailed
 	}
 	return FleetUnavailable
 }
 
 // fleetHostOf is a cloud host as PlanFleet sees it. Only an on-demand host
-// or a Spot reserve on a persistent request can stop, and a host of a type
-// whose hibernation booted cold in its region stops plainly. A host whose
-// agent refused to prove a stop serves with its reserve mode still set; it
-// is not asked again, so retention drains it.
-func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease, plainStop map[string]bool) FleetHost {
+// or a Spot host on a persistent request can stop. A host whose agent
+// refused to prove a stop serves with its reserve mode still set; it is not
+// asked again, so retention drains it.
+func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetHost {
 	market := marketOf(h.Market)
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: h.UsedCpu, MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
-		Containers: int(h.Containers), Pinned: int(h.Pinned), Protected: h.InterruptionAt != nil, LaunchedAt: h.LaunchedAt,
+		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
 		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
-		HibernationConfigured: h.HibernationConfigured && !plainStop[h.Region+"/"+h.InstanceType],
+		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, LightSince: h.LightSince,
+		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince,
 	}
 }
 
@@ -256,180 +207,6 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 	return out, nil
 }
 
-// reservedShape is what a requirement reserves on a host.
-func reservedShape(r Requirement) FleetCapacity {
-	return FleetCapacity{CPUMillis: r.CPUMillis, MemoryBytes: r.MemoryBytes, GPUs: r.GPUsNeeded()}
-}
-
-// forecastMarket is the market demand of these GPUs is forecast in: CPU
-// work by its interruption tolerance, GPU work in the on-demand market of
-// the card placement gave it, else of the first reserved card it accepts,
-// a card the fleet holds first for "any". GPU work no reserved card serves
-// keeps no reserve and is not forecast.
-func forecastMarket(p Policy, gpus []string, placed string, preemptible bool, stocked map[string]bool) (ReserveMarket, bool) {
-	if len(gpus) == 0 {
-		return ReserveMarket{Preemptible: preemptible}, true
-	}
-	if reservedCard(p, placed) {
-		return ReserveMarket{GPU: placed}, true
-	}
-	for _, model := range gpus {
-		if model != GPUAny {
-			if reservedCard(p, model) {
-				return ReserveMarket{GPU: model}, true
-			}
-			continue
-		}
-		var cards []string
-		for card := range p.GPU {
-			cards = append(cards, card)
-		}
-		slices.SortFunc(cards, func(a, b string) int {
-			if stocked[a] != stocked[b] {
-				return boolOrder(!stocked[a], !stocked[b])
-			}
-			return strings.Compare(a, b)
-		})
-		if len(cards) > 0 {
-			return ReserveMarket{GPU: cards[0]}, true
-		}
-	}
-	return ReserveMarket{}, false
-}
-
-// placementKey is demand pinned to a region or zone, in one market and
-// shape.
-type placementKey struct {
-	market       ReserveMarket
-	region, zone string
-	shape        FleetCapacity
-}
-
-// demandInputs are one market's forecast inputs.
-type demandInputs struct {
-	arrivals  []Arrival
-	workloads []ScheduledWorkload
-	pending   FleetCapacity
-	shapes    []FleetCapacity
-}
-
-func (d *demandInputs) addPending(shape FleetCapacity, n int) {
-	d.pending = d.pending.Plus(shape.Times(n))
-	if !slices.Contains(d.shapes, shape) {
-		d.shapes = append(d.shapes, shape)
-	}
-}
-
-// forecasts are each platform market's demand forecast and the demand
-// pinned to a location: recent arrivals, scheduled runs and pending
-// containers, with horizons from activation samples and the reserves that
-// could meet them.
-func forecasts(p Policy, r fleetRead, hosts []FleetHost, groups []pendingGroup) (map[ReserveMarket]MarketForecast, map[ReserveMarket][]LocationDemand) {
-	stocked := map[string]bool{}
-	for _, h := range hosts {
-		if h.GPU != "" && h.State != FleetTerminating {
-			stocked[h.GPU] = true
-		}
-	}
-	markets := map[ReserveMarket]*demandInputs{}
-	places := map[placementKey]*demandInputs{}
-	var placeOrder []placementKey
-	inputs := func(m ReserveMarket, region, zone string, shape FleetCapacity) []*demandInputs {
-		if markets[m] == nil {
-			markets[m] = &demandInputs{}
-		}
-		out := []*demandInputs{markets[m]}
-		if region != "" || zone != "" {
-			k := placementKey{market: m, region: region, zone: zone, shape: shape}
-			if places[k] == nil {
-				places[k] = &demandInputs{}
-				placeOrder = append(placeOrder, k)
-			}
-			out = append(out, places[k])
-		}
-		return out
-	}
-	for _, a := range r.arrivals {
-		var gpus []string
-		if json.Unmarshal(a.Gpus, &gpus) != nil || a.Arrived == 0 {
-			continue
-		}
-		m, ok := forecastMarket(p, gpus, a.GpuType, a.Preemptible, stocked)
-		if !ok {
-			continue
-		}
-		shape := FleetCapacity{CPUMillis: a.CpuMillis, MemoryBytes: a.MemoryBytes, GPUs: int(a.GpuCount)}
-		arrival := Arrival{At: a.At, Shape: shape, Count: int(a.Arrived), Duration: time.Duration(a.ServedSeconds * float64(time.Second))}
-		for _, d := range inputs(m, a.Region, a.Zone, shape) {
-			d.arrivals = append(d.arrivals, arrival)
-		}
-	}
-	for _, s := range r.scheduled {
-		var gpus []string
-		if json.Unmarshal(s.Gpus, &gpus) != nil {
-			continue
-		}
-		m, ok := forecastMarket(p, gpus, "", s.Preemptible, stocked)
-		if !ok {
-			continue
-		}
-		cards := int(s.GpuCount)
-		if cards == 0 && len(gpus) > 0 {
-			cards = 1
-		}
-		shape := FleetCapacity{CPUMillis: s.CpuMillis, MemoryBytes: s.MemoryBytes, GPUs: cards}
-		w := ScheduledWorkload{
-			ID: s.WorkloadID, Shape: shape, Concurrency: int(s.Concurrency), MaxContainers: int(s.MaxContainers),
-			Existing: min(int(s.WarmContainers), int(s.MinContainers)), AlwaysWarm: s.MinContainers > 0,
-			KeepWarm: time.Duration(s.KeepWarmSeconds) * time.Second, Duration: time.Duration(s.RunSeconds * float64(time.Second)),
-			Runs: []ScheduledRun{{At: s.NextFireAt, Count: 1}},
-		}
-		for _, d := range inputs(m, s.Region, s.Zone, shape) {
-			d.workloads = append(d.workloads, w)
-		}
-	}
-	for _, g := range groups {
-		if g.connection != nil {
-			continue
-		}
-		m, ok := forecastMarket(p, g.group.Need.GPUs, "", g.group.Need.Preemptible, stocked)
-		if !ok {
-			continue
-		}
-		shape := reservedShape(g.group.Need)
-		for _, d := range inputs(m, g.group.Need.Region, g.group.Need.Zone, shape) {
-			d.addPending(shape, len(g.group.Containers))
-		}
-	}
-	forecast := func(m ReserveMarket, region string, d *demandInputs) MarketForecast {
-		scheduled := ScheduledArrivals(d.workloads, r.now, r.until)
-		return ForecastMarket(p, r.now, ForecastInput{
-			Market: m, Region: region, Arrivals: d.arrivals, Scheduled: scheduled, Pending: d.pending, PendingShapes: d.shapes,
-			Stats: r.stats, Hosts: hosts,
-		})
-	}
-	out := map[ReserveMarket]MarketForecast{}
-	for m, d := range markets {
-		out[m] = forecast(m, "", d)
-	}
-	locations := map[ReserveMarket][]LocationDemand{}
-	for _, k := range placeOrder {
-		f := forecast(k.market, k.region, places[k])
-		count := 0
-		for _, dim := range [][2]int64{
-			{f.Warm.CPUMillis, k.shape.CPUMillis}, {f.Warm.MemoryBytes, k.shape.MemoryBytes}, {int64(f.Warm.GPUs), int64(k.shape.GPUs)},
-		} {
-			if dim[1] > 0 {
-				count = max(count, int((dim[0]+dim[1]-1)/dim[1]))
-			}
-		}
-		if count > 0 {
-			locations[k.market] = append(locations[k.market], LocationDemand{Region: k.region, Zone: k.zone, Shape: k.shape, Count: count})
-		}
-	}
-	return out, locations
-}
-
 // offerCooldowns are the cooldowns of one owner: "platform" or a
 // connection id.
 func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
@@ -454,18 +231,6 @@ func vcpuQuotas(rooms []QuotaRoom) []VCPUQuota {
 	for _, r := range rooms {
 		if r.Known {
 			out = append(out, VCPUQuota{Key: QuotaKey{Region: r.Region, Class: r.Class, Market: r.Market}, VCPUs: r.VCPUs})
-		}
-	}
-	return out
-}
-
-// plainStops are the region/type pairs whose hibernation booted cold within
-// the last day: their reserves stop plainly.
-func plainStops(stats []ActivationStat) map[string]bool {
-	out := map[string]bool{}
-	for _, s := range stats {
-		if s.Kind == ActivationResume && s.Outcome != nil && *s.Outcome == ResumeColdBoot && s.Ready > 0 {
-			out[s.Region+"/"+s.InstanceType] = true
 		}
 	}
 	return out
