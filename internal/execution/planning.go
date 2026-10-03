@@ -301,7 +301,7 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	if err := recordCallbacks(ctx, q, CallbackCancelled, cancelled, nil); err != nil {
 		return err
 	}
-	if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(cancelled)); err != nil {
+	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(cancelled)); err != nil {
 		return err
 	}
 	if err := e.resolveDependents(ctx, tx, cancelled, upstreamUnsuccessful); err != nil {
@@ -332,23 +332,7 @@ func notifyHosts(ctx context.Context, tx pgx.Tx, drained []drainedContainer) err
 			hosts = append(hosts, container.host.String())
 		}
 	}
-	return notifyAll(ctx, tx, database.ChannelHost, hosts)
-}
-
-// notifyAll queues one notification per payload in a single round trip.
-// PostgreSQL drops duplicates within a transaction.
-func notifyAll(ctx context.Context, tx pgx.Tx, channel database.Channel, payloads []string) error {
-	if len(payloads) == 0 {
-		return nil
-	}
-	batch := &pgx.Batch{}
-	for _, payload := range payloads {
-		batch.Queue("select pg_notify($1, $2)", string(channel), payload)
-	}
-	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
-		return fmt.Errorf("notify %s: %w", channel, err)
-	}
-	return nil
+	return database.NotifyAll(ctx, tx, database.ChannelHost, hosts)
 }
 
 func logPlan(ctx context.Context, logger *slog.Logger, plan releasePlan) {

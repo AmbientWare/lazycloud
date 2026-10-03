@@ -6,6 +6,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,42 @@ func OpenSession(ctx context.Context, url string, main *pgxpool.Pool) (pool *pgx
 // Notify queues a wake-up that PostgreSQL delivers when tx commits.
 func Notify(ctx context.Context, tx pgx.Tx, channel Channel, payload string) error {
 	if _, err := tx.Exec(ctx, "select pg_notify($1, $2)", string(channel), payload); err != nil {
+		return fmt.Errorf("notify %s: %w", channel, err)
+	}
+	return nil
+}
+
+// maxPayloadBytes is below PostgreSQL's NOTIFY payload limit of 8000 bytes.
+const maxPayloadBytes = 7999
+
+// NotifyAll queues a wake-up for every distinct payload in one statement.
+// It joins payloads with payloadSeparator into as few notifications as the
+// payload limit allows, and the Listener splits them again. A commit writes
+// its notifications under a lock every notifying commit takes, so fewer of
+// them hold it for less time.
+func NotifyAll(ctx context.Context, tx pgx.Tx, channel Channel, payloads []string) error {
+	if len(payloads) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(payloads))
+	var packed []string
+	var b strings.Builder
+	for _, p := range payloads {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		if b.Len() > 0 && b.Len()+len(payloadSeparator)+len(p) > maxPayloadBytes {
+			packed = append(packed, b.String())
+			b.Reset()
+		}
+		if b.Len() > 0 {
+			b.WriteString(payloadSeparator)
+		}
+		b.WriteString(p)
+	}
+	packed = append(packed, b.String())
+	if _, err := tx.Exec(ctx, "select pg_notify($1, p) from unnest($2::text[]) p", string(channel), packed); err != nil {
 		return fmt.Errorf("notify %s: %w", channel, err)
 	}
 	return nil

@@ -341,7 +341,7 @@ func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, logger *slog.Log
 		return nil
 	}
 	err = pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		return notifyAll(ctx, tx, database.ChannelContainerOp, ids)
+		return database.NotifyAll(ctx, tx, database.ChannelContainerOp, ids)
 	})
 	if err != nil {
 		return fmt.Errorf("container operation: %w", err)

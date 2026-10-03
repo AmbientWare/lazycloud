@@ -103,7 +103,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if err := recordCallbacks(ctx, q, CallbackFailed, failed, nil); err != nil {
 			return err
 		}
-		if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
+		if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
 			return err
 		}
 		if err := e.resolveDependents(ctx, tx, failed, upstreamUnsuccessful); err != nil {
