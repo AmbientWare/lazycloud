@@ -33,6 +33,9 @@ func (s *Server) RunTask(ctx context.Context, req RunTaskRequestObject) (RunTask
 	return taskRun{ctx: ctx, server: s, workspace: ws.ID, task: tasks[0], wait: invokeWait(req.Params.WaitSeconds)}, nil
 }
 
+// runWriteTimeout drops a client that stops reading the run stream.
+const runWriteTimeout = 30 * time.Second
+
 // taskRun writes a RunTask response as NDJSON TaskRunEvents, flushing each
 // line. Once the status is sent a failure can only end the stream early,
 // which the client reads as a task still running.
@@ -49,8 +52,11 @@ func (t taskRun) VisitRunTaskResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)
 	flush := http.NewResponseController(w)
+	// The container API writer has no deadline; its stream has flow control.
+	extend := func() { _ = flush.SetWriteDeadline(time.Now().Add(runWriteTimeout)) }
 	enc := json.NewEncoder(w)
 	write := func(event apitypes.TaskRunEvent) error {
+		extend()
 		if err := enc.Encode(event); err != nil {
 			return fmt.Errorf("write task event: %w", err)
 		}
@@ -71,6 +77,7 @@ func (t taskRun) VisitRunTaskResponse(w http.ResponseWriter) error {
 			execution.LogSource{Kind: execution.LogsOfTask, ID: uuid.UUID(t.task.ID)},
 			execution.LogQuery{Follow: true, Heartbeat: logHeartbeat},
 			func(batch []execution.LogEntry) error {
+				extend()
 				if len(batch) == 0 {
 					if _, err := w.Write([]byte("\n")); err != nil {
 						return fmt.Errorf("write heartbeat: %w", err)
