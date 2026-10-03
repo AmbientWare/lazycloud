@@ -468,6 +468,66 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	return items, nil
 }
 
+const recentShapes = `-- name: RecentShapes :many
+with recent as (
+    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
+    order by c.id desc
+    limit $2
+)
+select (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+       max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
+from recent
+where billing_owner = 'platform_fleet' and assigned_at is not null
+group by 1, 2
+order by 1, 2
+`
+
+type RecentShapesParams struct {
+	WindowSeconds float64
+	SampleSize    int32
+}
+
+type RecentShapesRow struct {
+	Preemptible bool
+	GpuType     string
+	CpuMillis   int64
+	MemoryBytes int64
+	Gpus        int32
+}
+
+// The largest CPU, memory and GPUs placed platform containers reserved, by
+// purchase market and GPU model, among the newest containers created within
+// the window, up to the sample. The sample follows the primary key, so it
+// reads at most sample_size rows whatever the history; the subquery makes
+// its bound a constant the index can use.
+func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
+	rows, err := q.db.Query(ctx, recentShapes, arg.WindowSeconds, arg.SampleSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecentShapesRow
+	for rows.Next() {
+		var i RecentShapesRow
+		if err := rows.Scan(
+			&i.Preemptible,
+			&i.GpuType,
+			&i.CpuMillis,
+			&i.MemoryBytes,
+			&i.Gpus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resumeReserves = `-- name: ResumeReserves :many
 update hosts h
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),

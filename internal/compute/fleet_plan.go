@@ -101,7 +101,10 @@ type FleetSnapshot struct {
 	Now     time.Time
 	Hosts   []FleetHost
 	Pending []DemandGroup
-	Offers  OfferInputs
+	// Recent is the largest shape each market's containers reserved within
+	// the policy's LargestShape window, beside the pending ones.
+	Recent map[ReserveMarket]FleetCapacity
+	Offers OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
@@ -254,8 +257,11 @@ type marketView struct {
 	m             ReserveMarket
 	load          FleetCapacity
 	warm, stopped FleetCapacity
-	mayGrow       bool
-	retired       map[HostID]bool
+	// largest is the shape one of the market's reserves fits; empty for
+	// none.
+	largest FleetCapacity
+	mayGrow bool
+	retired map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover.
 	shortfall, stoppedShort FleetCapacity
 }
@@ -321,13 +327,18 @@ func (ps *pass) views(items []pendingItem) []*marketView {
 	for _, m := range markets {
 		v := &marketView{m: m, retired: map[HostID]bool{}}
 		v.load = totalOf(ps.inMarket(m, func(FleetHost) bool { return true }), func(h *FleetHost) FleetCapacity { return h.Load })
+		largest := ps.s.Recent[m]
 		for _, it := range items {
 			if it.market == m {
 				v.load = v.load.Plus(reservedShape(it.need))
+				largest = largest.Upper(reservedShape(it.need))
 			}
 		}
 		r := ps.p.Reserve(m)
 		v.warm, v.stopped = r.Warm.Of(v.load), r.Stopped.Of(v.load)
+		if r.FitLargest {
+			v.largest = ps.p.LargestShape.of(m, largest)
+		}
 		ps.stopped[m] = v.stopped
 		views = append(views, v)
 	}
@@ -826,11 +837,13 @@ func (ps *pass) retain(v *marketView) {
 }
 
 // leave returns a leaving host to the reserve while the market's reserve
-// falls short and EC2 can stop the host, hibernating one launched able to
+// falls short, or lacks the host's fit for the largest shape, and EC2 can
+// stop the host, hibernating one launched able to
 // where hibernates allows; it drains the host otherwise.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
-	if ps.reserveRoom > 0 && catalogued && h.Stoppable && !ps.reserveHeld(v).Covers(v.stopped) {
+	short := !ps.reserveHeld(v).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
+	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
 		if h.HibernationConfigured && hibernates(t, h.Market) {
 			mode = ReserveHibernate
@@ -857,29 +870,67 @@ func (ps *pass) reserveHeld(v *marketView) FleetCapacity {
 	return held
 }
 
-// reserves buys the stopped target's shortfall while no work waits, or
-// retires the reserves it no longer needs.
+// holdsLargest reports whether a reserve of the market other than skip, or
+// one this pass buys, fits the market's largest shape.
+func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
+	if v.largest.Empty() {
+		return true
+	}
+	for _, h := range ps.inMarket(v.m, FleetHost.reserve) {
+		if h.ID != skip && !v.retired[h.ID] && h.Usable.Covers(v.largest) {
+			return true
+		}
+	}
+	return slices.ContainsFunc(ps.planned, func(n plannedHost) bool {
+		return n.market == v.m && n.reserve && n.offer.Usable.Covers(v.largest)
+	})
+}
+
+// reserves buys the stopped target's shortfall, and a reserve that fits the
+// largest shape when none does, while no work waits; then, with the target
+// held, it retires the reserves the market no longer needs. The reserve
+// bought to fit the largest shape counts toward the target.
 func (ps *pass) reserves(v *marketView) {
-	v.stoppedShort = v.stopped.Minus(ps.reserveHeld(v)).Clamp()
-	if v.stoppedShort.Empty() {
+	short := v.stopped.Minus(ps.reserveHeld(v)).Clamp()
+	need := CoverNeed{Aggregate: short}
+	if !ps.holdsLargest(v, HostID{}) {
+		need = CoverNeed{Items: []CoverItem{{Shape: v.largest, Count: 1}}, Aggregate: short.Minus(v.largest).Clamp()}
+	}
+	v.stoppedShort = short
+	if v.mayGrow && (!need.Aggregate.Empty() || len(need.Items) > 0) {
+		offers := preferHealthy(ps.marketOffers(v.m, true))
+		if len(need.Items) > 0 {
+			offers = preferHibernating(offers, v.largest)
+		}
+		result := Cover(offers, need, reserveCost(ps.p), ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom)))
+		for _, node := range result.Nodes {
+			ps.buy(v.m, node.Offer, ActionBuyReserve, nil, nil)
+		}
+		v.stoppedShort = need.Aggregate.Minus(result.Supplied).Clamp()
+		if len(result.UnmetItems) > 0 {
+			v.stoppedShort = short.Minus(result.Supplied).Clamp().Upper(v.largest)
+		}
+	}
+	if short.Empty() {
 		ps.retire(v)
-		return
 	}
-	if !v.mayGrow {
-		return
+}
+
+// preferHibernating drops the offers that fit shape without hibernating
+// while one that hibernates fits it, so the reserve that fits resumes from
+// memory.
+func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
+	fits := func(o FleetOffer) bool { return o.Usable.Covers(shape) }
+	if !slices.ContainsFunc(offers, func(o FleetOffer) bool { return o.Hibernate && fits(o) }) {
+		return offers
 	}
-	result := Cover(preferHealthy(ps.marketOffers(v.m, true)), CoverNeed{Aggregate: v.stoppedShort}, reserveCost(ps.p),
-		ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom)))
-	for _, node := range result.Nodes {
-		ps.buy(v.m, node.Offer, ActionBuyReserve, nil, nil)
-	}
-	v.stoppedShort = v.stoppedShort.Minus(result.Supplied).Clamp()
+	return slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return !o.Hibernate && fits(o) })
 }
 
 // retire terminates reserves beyond the stopped target: ones the market
 // cannot buy again first, then ones not ready, then the costliest to hold.
 // It keeps the ready capacity the target needs, so a pending reserve never
-// stands in for a ready one.
+// stands in for a ready one, and a reserve that fits the largest shape.
 func (ps *pass) retire(v *marketView) {
 	reserves := ps.inMarket(v.m, FleetHost.reserve)
 	ready := func(h *FleetHost) bool { return h.resumable() && h.Current }
@@ -898,7 +949,8 @@ func (ps *pass) retire(v *marketView) {
 			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 	})
 	for _, h := range candidates {
-		if !held.Minus(h.Usable).Covers(v.stopped) || (ready(h) && !readyHeld.Minus(h.Usable).Covers(needReady)) {
+		if !held.Minus(h.Usable).Covers(v.stopped) || (ready(h) && !readyHeld.Minus(h.Usable).Covers(needReady)) ||
+			!ps.holdsLargest(v, h.ID) {
 			continue
 		}
 		v.retired[h.ID] = true

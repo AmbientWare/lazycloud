@@ -281,7 +281,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		}
 	}
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Offers: in,
+		Now: now, Hosts: hosts, Pending: pending, Recent: largestShapes(ps.r.recent), Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves),
 	}
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
