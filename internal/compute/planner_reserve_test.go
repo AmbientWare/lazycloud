@@ -540,3 +540,155 @@ func TestSurplusReservesRetireAndAStaleOneRefreshes(t *testing.T) {
 		t.Fatalf("stale reserve %+v, want resuming with its reserve mode kept", h)
 	}
 }
+
+// settledFleet runs a pass on an empty fleet and brings up what it bought
+// an hour ago: serving hosts ready, reserves stopped, hibernated ones with
+// their image saved.
+func settledFleet(t *testing.T, o owners) {
+	t.Helper()
+	plan(t, o)
+	run(t, o.pool, `
+update hosts set phase = case when reserve_mode is null then 'ready' else 'stopped' end,
+       state = case when reserve_mode is null then 'online' else 'offline' end, last_seen_at = now(),
+       phase_at = now() - interval '1 hour', prepared_agent_version = '1.0.0',
+       image_evidence = case when reserve_mode = 'hibernate' then 'saved' else 'unavailable' end
+where phase = 'requested'`)
+}
+
+// onDemandReserves are the on-demand floor and large-shape reserves of a
+// settled fleet.
+func onDemandReserves(t *testing.T, o owners) (floor, large compute.HostID) {
+	t.Helper()
+	ids := scan[[]uuid.UUID](t, o.pool, `select coalesce(array_agg(id order by cpu_millis, id), '{}') from hosts
+where reserve_mode is not null and market = 'on_demand'`)
+	if len(ids) != 2 {
+		t.Fatalf("on-demand reserves %v, want a floor and a large-shape one", ids)
+	}
+	return compute.HostID(ids[0]), compute.HostID(ids[1])
+}
+
+// largeBought counts the on-demand hosts requested that fit 16 vCPU.
+func largeBought(t *testing.T, o owners) int {
+	t.Helper()
+	return scan[int](t, o.pool, "select count(*)::int from hosts where phase = 'requested' and market = 'on_demand' and cpu_millis >= 16000")
+}
+
+// serveFromReserve brings a resumed reserve up ready now.
+func serveFromReserve(t *testing.T, o owners, host compute.HostID) {
+	t.Helper()
+	run(t, o.pool, "update hosts set phase = 'ready', state = 'online', last_seen_at = now(), phase_at = now(), reserve_mode = null where id = $1",
+		uuid.UUID(host))
+}
+
+// placeOn makes a container ready on host.
+func placeOn(t *testing.T, o owners, container uuid.UUID, host compute.HostID) {
+	t.Helper()
+	run(t, o.pool, "update containers set state = 'ready', host_id = $2, assigned_at = now(), ready_at = now() where id = $1",
+		container, uuid.UUID(host))
+}
+
+// At zero load each CPU market keeps a reserve sized for the stopped floor
+// and one beside it that fits the default 16 vCPU largest shape, and the
+// next pass changes nothing.
+func TestAtZeroLoadEachCPUMarketHoldsAFloorReserveAndALargeShapeReserve(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	spotPrices(t, o)
+	settledFleet(t, o)
+	for _, market := range []compute.Market{compute.MarketSpot, compute.MarketOnDemand} {
+		cpus := scan[[]int64](t, o.pool, `select coalesce(array_agg(cpu_millis order by cpu_millis), '{}') from hosts
+where reserve_mode is not null and market = $1`, string(market))
+		if len(cpus) != 2 || cpus[0] < 6000 || cpus[0] >= 16_000 || cpus[1] < 16_000 {
+			t.Errorf("%s reserves of %v millicpus, want one for the 6 vCPU floor and one of 16 vCPU", market, cpus)
+		}
+	}
+	if r := plan(t, o); r != (compute.PlanResult{}) {
+		t.Fatalf("the settled fleet's next pass %+v, want nothing to do", r)
+	}
+}
+
+// A burst of 1 vCPU work beyond the warm room resumes the floor reserve; the
+// large-shape reserve stays stopped and nothing of its size is bought.
+func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	settledFleet(t, o)
+	floor, large := onDemandReserves(t, o)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+	for range 3 {
+		pendingContainer(t, o.pool, dev, release, 1000, gib)
+	}
+
+	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhaseResuming) {
+		t.Fatalf("plan %+v, want the floor reserve resumed", r)
+	}
+	serveFromReserve(t, o, floor)
+	plan(t, o)
+	if h := hostRowOf(t, o, large); h.Phase != string(compute.PhaseStopped) || largeBought(t, o) != 0 {
+		t.Fatalf("large-shape reserve %s, %d large hosts bought; want it stopped and none bought", h.Phase, largeBought(t, o))
+	}
+}
+
+// A 16 vCPU request resumes the large-shape reserve, and the pass replaces
+// it once the host has served past the idle timeout.
+func TestASixteenVCPURequestResumesTheLargeShapeReserve(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	settledFleet(t, o)
+	floor, large := onDemandReserves(t, o)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 16_000, 16*gib)
+
+	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, large).Phase != string(compute.PhaseResuming) ||
+		hostRowOf(t, o, floor).Phase != string(compute.PhaseStopped) {
+		t.Fatalf("plan %+v, want only the large-shape reserve resumed", r)
+	}
+	if got := scan[uuid.UUID](t, o.pool, "select capacity_host_id from containers where id = $1", container); got != uuid.UUID(large) {
+		t.Fatalf("container waits for %s, want the large-shape reserve", got)
+	}
+	serveFromReserve(t, o, large)
+	placeOn(t, o, container, large)
+	if plan(t, o); largeBought(t, o) != 0 {
+		t.Fatal("bought a large host while the resumed one may still return")
+	}
+	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
+	if plan(t, o); largeBought(t, o) != 1 {
+		t.Fatalf("%d large hosts bought once the resumed one served past the idle timeout, want 1", largeBought(t, o))
+	}
+}
+
+// Small work that nothing else fits resumes the large-shape reserve. While
+// the host may return, busy within the idle timeout or idle, no replacement
+// is bought, and once idle for the timeout it returns to the reserve.
+func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	settledFleet(t, o)
+	floor, large := onDemandReserves(t, o)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+	// The floor reserve already serves earlier work, and the burst needs
+	// more memory than the warm host has.
+	serveFromReserve(t, o, floor)
+	placeOn(t, o, pendingContainer(t, o.pool, dev, release, 4000, 8*gib), floor)
+	burst := pendingContainer(t, o.pool, dev, release, 1000, 8*gib)
+
+	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, large).Phase != string(compute.PhaseResuming) {
+		t.Fatalf("plan %+v, want the large-shape reserve resumed", r)
+	}
+	serveFromReserve(t, o, large)
+	placeOn(t, o, burst, large)
+	if plan(t, o); largeBought(t, o) != 0 {
+		t.Fatal("bought a large host while the resumed one serves within the idle timeout")
+	}
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
+	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
+	if plan(t, o); largeBought(t, o) != 0 {
+		t.Fatal("bought a large host while the resumed one idles")
+	}
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
+	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
+		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
+			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
+	}
+}
