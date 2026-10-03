@@ -1,7 +1,6 @@
 # PlanetScale Postgres. Applying the branch creates the database when it
 # does not exist, so this one resource is the database. The major version is
-# pinned: an upgrade is a decision, not something an apply discovers. The
-# schema needs 18 for uuidv7().
+# pinned: an upgrade is a decision, not something an apply discovers.
 resource "planetscale_postgres_branch" "main" {
   organization       = var.planetscale_organization
   database           = var.deployment
