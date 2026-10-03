@@ -551,8 +551,12 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 		_, err := f.images.Build(ctx, ws, def, false)
 		return err
 	}
+	var unoffered *billing.GPUUnavailableError
+	if err := build("H100", "true"); !errors.As(err, &unoffered) {
+		t.Fatalf("a model not offered yet is refused: %v", err)
+	}
 	var unpaid *billing.PaymentRequiredError
-	if err := build("H100", "true"); !errors.As(err, &unpaid) {
+	if err := build("L40S", "true"); !errors.As(err, &unpaid) {
 		t.Fatalf("a model the plan does not allow is refused: %v", err)
 	}
 	if err := build("L4", "true"); err != nil {

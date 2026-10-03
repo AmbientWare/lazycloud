@@ -121,6 +121,32 @@ func (t HeadroomTarget) Of(load FleetCapacity) FleetCapacity {
 type MarketReserve struct {
 	Warm    HeadroomTarget
 	Stopped HeadroomTarget
+	// FitLargest keeps, among the stopped machines, one that fits the
+	// market's largest recent shape (Policy.LargestShape).
+	FitLargest bool
+}
+
+// LargestShape sizes the stopped machine each FitLargest market keeps: the
+// largest CPU, memory and GPUs its containers reserved within Window, capped
+// at Cap. A CPU market without such containers keeps one of Default; a GPU
+// market keeps none.
+type LargestShape struct {
+	Window       time.Duration
+	Default, Cap FleetCapacity
+}
+
+// of is the shape market m's reserve fits, given the largest its containers
+// reserved; empty for none. A GPU reserve holds one card.
+func (s LargestShape) of(m ReserveMarket, largest FleetCapacity) FleetCapacity {
+	switch {
+	case m.GPU != "" && largest.GPUs == 0:
+		return FleetCapacity{}
+	case m.GPU != "":
+		largest.GPUs = 1
+	case largest.Empty():
+		largest = s.Default
+	}
+	return largest.Lower(s.Cap)
 }
 
 // Policy is the fleet capacity policy, reviewed like prices.
@@ -139,7 +165,8 @@ type Policy struct {
 	Spot, OnDemand   MarketReserve
 	// GPU is the on-demand reserve per GPU model; a model left out keeps
 	// none.
-	GPU map[string]MarketReserve
+	GPU          map[string]MarketReserve
+	LargestShape LargestShape
 	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
@@ -154,10 +181,15 @@ type Policy struct {
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
 	cpu := MarketReserve{
-		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
-		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},
+		Warm:       HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
+		Stopped:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},
+		FitLargest: true,
 	}
-	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}}
+	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
+	// What a host of 16 vCPU and 32 GiB, a size that hibernates, offers;
+	// and the cap, what one of 32 vCPU and 64 GiB offers, with one card.
+	fits := CatalogType{CPUMillis: 16_000, MemoryBytes: 32 * gib}.Usable(0)
+	limit := CatalogType{CPUMillis: 32_000, MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
 	return Policy{
 		MarginPercent:    30,
 		Provision:        300 * time.Second,
@@ -165,6 +197,7 @@ func DefaultPolicy() Policy {
 		MaxGrowthActions: 16,
 		Spot:             cpu, OnDemand: cpu,
 		GPU:            map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
+		LargestShape:   LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
 		IdleTimeout:    5 * time.Minute,
 		SpotPriceAge:   time.Hour,
 		RegionFailures: 2, RegionFailureWindow: 30 * time.Minute,

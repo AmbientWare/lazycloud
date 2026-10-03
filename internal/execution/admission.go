@@ -160,7 +160,10 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		if err != nil {
 			return fmt.Errorf("count live containers: %w", err)
 		}
-		if _, err := billing.Admit(ctx, tx, billing.Request{Workspace: uuid.UUID(req.Workspace), Cold: live == 0}); err != nil {
+		if _, err := billing.Admit(ctx, tx, billing.Request{
+			Workspace: uuid.UUID(req.Workspace), Cold: live == 0, GPUs: gpuCount(spec.Resources), GPUModels: gpuModels(spec),
+			Machine: compute.PinnedMachine(spec) != "",
+		}); err != nil {
 			return err
 		}
 

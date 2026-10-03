@@ -17,6 +17,7 @@ type fleetRead struct {
 	now       time.Time
 	hosts     []PlannerHostsRow
 	pending   []PendingDemandRow
+	recent    []RecentShapesRow
 	cooldowns []PlannerCooldownsRow
 	markets   map[string]FleetMarketsRow
 	// release is the target agent release; nil when none is published.
@@ -37,6 +38,11 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
+	}
+	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch,
+	}); err != nil {
+		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
 	if r.cooldowns, err = q.PlannerCooldowns(ctx, p.RegionFailureWindow.Seconds()); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
@@ -205,6 +211,27 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+// largestShapes are the largest shape each market's placed platform
+// containers reserved. GPU work belongs to the on-demand market of its
+// model, as its demand does; GPU work without a recorded model counts in
+// no market.
+func largestShapes(rows []RecentShapesRow) map[ReserveMarket]FleetCapacity {
+	out := map[ReserveMarket]FleetCapacity{}
+	for _, r := range rows {
+		var m ReserveMarket
+		switch {
+		case r.GpuType != "":
+			m = ReserveMarket{GPU: r.GpuType}
+		case r.Gpus > 0:
+			continue
+		default:
+			m = ReserveMarket{Preemptible: r.Preemptible}
+		}
+		out[m] = out[m].Upper(FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)})
+	}
+	return out
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

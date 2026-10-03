@@ -50,10 +50,10 @@ func (b *Billing) Catalog(t time.Time) (apitypes.PricingCatalog, error) {
 			NanosPerCpuCoreHour: rate.CPUCoreHour, NanosPerMemoryGibHour: rate.MemoryGiBHour,
 		})
 	}
-	for _, model := range gpuModels() {
+	for _, model := range GPUModels() {
 		var cards apitypes.CardRates
 		for _, owner := range billingOwners() {
-			rate, err := card.computeRate(owner, ClassAuto, model)
+			rate, err := card.computeRate(owner, ClassAuto, model.Type)
 			if err != nil {
 				return apitypes.PricingCatalog{}, err
 			}
@@ -66,7 +66,7 @@ func (b *Billing) Catalog(t time.Time) (apitypes.PricingCatalog, error) {
 				cards.SelfHosted = rate.GPUCardHour
 			}
 		}
-		out.GpuRates = append(out.GpuRates, apitypes.GpuRate{GpuType: string(model), NanosPerCardHour: cards})
+		out.GpuRates = append(out.GpuRates, apitypes.GpuRate{GpuType: string(model.Type), Enabled: model.Enabled, NanosPerCardHour: cards})
 	}
 	for _, placement := range placements() {
 		since, ok := card.classSince[placement.Class]

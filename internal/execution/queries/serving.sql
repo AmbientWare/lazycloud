@@ -48,6 +48,7 @@ select r.id as release_id,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
         or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
+       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
        demand.current::int as demand,
        demand.peak::int as peak,
        coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,

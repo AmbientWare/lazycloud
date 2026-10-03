@@ -58,6 +58,26 @@ left join releases r on r.id = b.release_id
 group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 order by 4, 5, 6, 2 desc, 3 desc;
 
+-- name: RecentShapes :many
+-- The largest CPU, memory and GPUs placed platform containers reserved, by
+-- purchase market and GPU model, among the newest containers created within
+-- the window, up to the sample. The sample follows the primary key, so it
+-- reads at most sample_size rows whatever the history; the subquery makes
+-- its bound a constant the index can use.
+with recent as (
+    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
+    order by c.id desc
+    limit @sample_size
+)
+select (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+       max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
+from recent
+where billing_owner = 'platform_fleet' and assigned_at is not null
+group by 1, 2
+order by 1, 2;
+
 -- name: PlannerCooldowns :many
 -- Offers cooling now, and refusals recent enough to cool their region. A
 -- cooldown with no refusal behind it has no refused_at.

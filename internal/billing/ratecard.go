@@ -63,7 +63,7 @@ const (
 // GPUType names a GPU model; the empty value is no GPU.
 type GPUType string
 
-// The GPU models the platform rents, in published order.
+// The GPU models the rate card prices, in published order.
 const (
 	GPUT4     GPUType = "T4"
 	GPUA10G   GPUType = "A10G"
@@ -76,8 +76,46 @@ const (
 	noGPU     GPUType = ""
 )
 
+// GPUModel is a GPU model the rate card prices. The platform fleet buys and
+// runs only enabled models and lists the others as coming soon; joined
+// machines and connected accounts run any.
+type GPUModel struct {
+	Type    GPUType
+	Enabled bool
+}
+
+// GPUModels are the priced models in published order.
+func GPUModels() []GPUModel {
+	return []GPUModel{
+		{GPUT4, true}, {GPUA10G, true}, {GPUL4, true}, {GPUL40S, true},
+		{GPUA10040, false}, {GPUA10080, false}, {GPUH100, false}, {GPUH200, false},
+	}
+}
+
+// GPUEnabled reports whether the platform fleet offers model.
+func GPUEnabled(model string) bool {
+	return slices.Contains(enabledGPUs(), GPUType(model))
+}
+
+// gpuModels are every priced model.
 func gpuModels() []GPUType {
-	return []GPUType{GPUT4, GPUA10G, GPUL4, GPUL40S, GPUA10040, GPUA10080, GPUH100, GPUH200}
+	models := GPUModels()
+	out := make([]GPUType, len(models))
+	for n, m := range models {
+		out[n] = m.Type
+	}
+	return out
+}
+
+// enabledGPUs are the models the platform fleet offers, in published order.
+func enabledGPUs() []GPUType {
+	var out []GPUType
+	for _, m := range GPUModels() {
+		if m.Enabled {
+			out = append(out, m.Type)
+		}
+	}
+	return out
 }
 
 // noCardGPUs are the models an account without a saved card may use.

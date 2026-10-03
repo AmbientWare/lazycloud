@@ -7,12 +7,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
-
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -219,17 +219,12 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if count <= 0 {
 			return nil
 		}
-		models := make([]billing.GPUType, len(row.GpuModels))
-		for n, m := range row.GpuModels {
-			models[n] = billing.GPUType(m)
-		}
 		grant, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount), GPUModels: models, Pinned: row.Pinned,
+			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount),
+			GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,
 		})
-		var refused *billing.PaymentRequiredError
-		if errors.As(err, &refused) {
-			// The account cannot pay; requests wait and time out until it
-			// can.
+		if refusedToWait(err) {
+			// Requests wait and time out; the edge refuses new ones.
 			return nil
 		}
 		if err != nil {
@@ -313,21 +308,12 @@ func clampInt32(n int) int32 {
 // AdmitCold asks billing whether the workspace may start a container of
 // spec for a request that has none, so the edge can refuse the request at
 // once instead of letting it wait for a container planning will not start.
-// It returns billing's PaymentRequiredError or LimitError.
+// It returns billing's GPUUnavailableError, PaymentRequiredError or
+// LimitError.
 func (e *Execution) AdmitCold(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) error {
-	req := billing.Request{Workspace: workspace, Cold: true}
-	if r := spec.Resources; r.GpuCount != nil && *r.GpuCount > 0 {
-		req.GPUs = *r.GpuCount
-	} else if r.Gpu != nil && len(*r.Gpu) > 0 {
-		req.GPUs = 1
-	}
-	if r := spec.Resources; r.Gpu != nil {
-		for _, m := range *r.Gpu {
-			req.GPUModels = append(req.GPUModels, billing.GPUType(m))
-		}
-	}
-	if p := spec.Placement; p != nil {
-		req.Pinned = (p.Region != nil && *p.Region != "") || (p.AvailabilityZone != nil && *p.AvailabilityZone != "")
+	req := billing.Request{
+		Workspace: workspace, Cold: true, GPUs: gpuCount(spec.Resources), GPUModels: gpuModels(spec),
+		Pinned: pinned(spec), Machine: compute.PinnedMachine(spec) != "",
 	}
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		_, err := billing.Admit(ctx, tx, req)

@@ -32,6 +32,10 @@ type Request struct {
 	// Pinned marks placement in a chosen region or zone, which needs a plan
 	// with region selection.
 	Pinned bool
+	// Machine marks work pinned to a joined machine. It, and work in a
+	// connected account's workspace, may run GPU models the platform fleet
+	// does not offer.
+	Machine bool
 }
 
 // GPUAny accepts whichever model has capacity.
@@ -42,7 +46,8 @@ type Grant struct {
 	// Start is how many of the requested containers may start.
 	Start int
 	// GPUModels are the models placement may give a GPU container: the
-	// requested ones the account may use, every allowed model for any.
+	// requested ones the account may use, every allowed model for any. On
+	// the platform fleet only the models it offers are among them.
 	GPUModels []GPUType
 }
 
@@ -132,15 +137,23 @@ func (s standing) fundsRefusal() error {
 const statusPastDue = "past_due"
 
 // Admit decides, inside the caller's transaction, whether the workspace's
-// billing account may take on req. It refuses work the account cannot pay
-// for with a PaymentRequiredError and cold work at the concurrency limit
-// with a LimitError. Starting containers takes the account's container lock
-// for the rest of tx, so concurrent starts count each other.
+// billing account may take on req. It refuses GPU work only the platform
+// fleet can serve, naming only models it does not offer, with a
+// GPUUnavailableError; work the account cannot pay for with a
+// PaymentRequiredError; and cold work at the concurrency limit with a
+// LimitError. Starting containers takes the account's container lock for the
+// rest of tx, so concurrent starts count each other.
 func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	q := New(tx)
-	owner, err := q.WorkspaceOwner(ctx, req.Workspace)
+	ws, err := q.AdmissionWorkspace(ctx, req.Workspace)
 	if err != nil {
 		return Grant{}, fmt.Errorf("read workspace owner: %w", err)
+	}
+	owner, fleet := ws.UserID, !req.Machine && !ws.Connected
+	if req.GPUs > 0 && fleet {
+		if err := unoffered(req.GPUModels); err != nil {
+			return Grant{}, err
+		}
 	}
 	if req.Start > 0 {
 		if err := q.LockAccountContainers(ctx, owner); err != nil {
@@ -159,7 +172,7 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	}
 	var grant Grant
 	if req.GPUs > 0 {
-		models, err := s.entitlements.gpuModels(req.GPUModels)
+		models, err := s.entitlements.gpuModels(req.GPUModels, fleet)
 		if err != nil {
 			return Grant{}, err
 		}
@@ -191,14 +204,56 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	return grant, nil
 }
 
-// gpuModels narrows requested models to the ones the account may use. A
-// request for any model, or for none by name, gets every allowed model; a
-// named model the account may not use is refused.
-func (e Entitlements) gpuModels(requested []GPUType) ([]GPUType, error) {
+// CheckFleetGPUs refuses, with a GPUUnavailableError, GPU work only the
+// platform fleet can serve when every model it names is one the fleet does
+// not offer. machine marks work pinned to a joined machine.
+func CheckFleetGPUs(ctx context.Context, db DBTX, workspace uuid.UUID, machine bool, models []GPUType) error {
+	refusal := unoffered(models)
+	if refusal == nil || machine {
+		return nil
+	}
+	ws, err := New(db).AdmissionWorkspace(ctx, workspace)
+	if err != nil {
+		return fmt.Errorf("read workspace owner: %w", err)
+	}
+	if ws.Connected {
+		return nil
+	}
+	return refusal
+}
+
+// unoffered refuses a GPU preference that names models and none the fleet
+// offers. Any, or no model by name, takes whatever the fleet offers.
+func unoffered(requested []GPUType) error {
+	var models []GPUType
+	for _, m := range requested {
+		if m == GPUAny || GPUEnabled(string(m)) {
+			return nil
+		}
+		models = append(models, m)
+	}
+	if len(models) > 0 {
+		return &GPUUnavailableError{Models: models}
+	}
+	return nil
+}
+
+// gpuModels narrows requested models to the ones the account may use, and
+// on the platform fleet to the ones it offers. A request for any model, or
+// for none by name, gets every model left; a named model the account may
+// not use is refused.
+func (e Entitlements) gpuModels(requested []GPUType, fleet bool) ([]GPUType, error) {
+	allowed := e.GPUTypes
+	if fleet {
+		allowed = slices.DeleteFunc(slices.Clone(allowed), func(m GPUType) bool { return !GPUEnabled(string(m)) })
+	}
 	var named []GPUType
 	for _, m := range requested {
 		if m == GPUAny {
-			return e.GPUTypes, nil
+			return allowed, nil
+		}
+		if fleet && !GPUEnabled(string(m)) {
+			continue
 		}
 		if !slices.Contains(e.GPUTypes, m) {
 			return nil, &PaymentRequiredError{Message: fmt.Sprintf(
@@ -207,7 +262,7 @@ func (e Entitlements) gpuModels(requested []GPUType) ([]GPUType, error) {
 		named = append(named, m)
 	}
 	if len(named) == 0 {
-		return e.GPUTypes, nil
+		return allowed, nil
 	}
 	return named, nil
 }

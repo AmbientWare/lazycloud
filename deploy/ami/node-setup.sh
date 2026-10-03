@@ -95,6 +95,16 @@ if [ "$VARIANT" = gpu ]; then
   fi
   runsc_args='["--host-uds=all", "--nvproxy"]'
 fi
+# Hosts offer containers every core. Docker starts every container in
+# lazycloud-workloads.slice, which system.slice (the agent, Docker,
+# containerd) outweighs tenfold for CPU, so busy containers cannot starve
+# heartbeats. runsc puts the sandbox and gofer in the container's cgroup;
+# only the shim and runsc's own commands run in system.slice.
+printf '[Unit]\nDescription=LazyCloud workload containers\n\n[Slice]\nCPUWeight=100\n' \
+  >/etc/systemd/system/lazycloud-workloads.slice
+mkdir -p /etc/systemd/system/system.slice.d
+printf '[Slice]\nCPUWeight=1000\n' >/etc/systemd/system/system.slice.d/lazycloud.conf
+systemctl daemon-reload
 daemon=/etc/docker/daemon.json
 [ -s "$daemon" ] || echo '{}' >"$daemon"
 python3 - "$daemon" "$dest/runsc" "$runsc_args" <<'PY'
@@ -103,12 +113,14 @@ path, runsc, args = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 with open(path) as f:
     config = json.load(f)
 config.setdefault("runtimes", {})["runsc"] = {"path": runsc, "runtimeArgs": args}
+config["cgroup-parent"] = "lazycloud-workloads.slice"
 with open(path, "w") as f:
     json.dump(config, f, indent=4)
     f.write("\n")
 PY
 systemctl restart docker
 docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'
+systemctl show -p CPUWeight system.slice | grep -qx 'CPUWeight=1000'
 
 # The agent's unit (written by its install-service) runs workloads under
 # runsc on these hosts.

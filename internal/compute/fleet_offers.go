@@ -225,8 +225,9 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // offer prices the root disk a hibernating reserve needs. It keeps offers
 // sold in the region, in a market the need allows, not cooling, with a
 // complete cost, whose usable capacity covers the need, whose GPUs the need
-// accepts (GPU hosts only for GPU work), and that keep the purchase margin
-// unless the owner pays. A reserve offer hibernates where hibernates allows.
+// accepts (GPU hosts only for GPU work), and, unless the owner pays, whose
+// GPU model the platform fleet offers and that keep the purchase margin. A
+// reserve offer hibernates where hibernates allows.
 // Order: the need's GPU preference, cooling regions last, complete hourly
 // cost, region preference, fewest hosts in the zone, key. An offer whose
 // host would exceed a known vCPU quota is skipped.
@@ -254,7 +255,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 				if zones, known := in.ZoneTypes[region]; known && !slices.Contains(zones[subnet.ZoneID], t.Name) {
 					continue
 				}
-				if !sold || (gpus > 0) != (t.GPUCount > 0) || t.GPUCount < gpus || (gpus > 0 && !GPUAccepted(need.GPUs, t.GPU)) {
+				if !sold || (gpus > 0) != (t.GPUCount > 0) || t.GPUCount < gpus || (gpus > 0 && !GPUAccepted(need.GPUs, t.GPU)) ||
+					(t.GPU != "" && !in.OwnerPays && !billing.GPUEnabled(t.GPU)) {
 					continue
 				}
 				usable := t.Usable(in.ReportedMemory[t.Name])

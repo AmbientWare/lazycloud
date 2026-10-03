@@ -57,6 +57,27 @@ func (q *Queries) AccountStanding(ctx context.Context, userID uuid.UUID) (Accoun
 	return i, err
 }
 
+const admissionWorkspace = `-- name: AdmissionWorkspace :one
+select m.user_id, (w.connection_id is not null)::bool as connected
+from workspace_members m
+join workspaces w on w.id = m.workspace_id
+where m.workspace_id = $1 and m.role = 'owner'
+`
+
+type AdmissionWorkspaceRow struct {
+	UserID    uuid.UUID
+	Connected bool
+}
+
+// The workspace's owner, and whether it lives in a connected account, whose
+// capacity serves its containers instead of the platform fleet.
+func (q *Queries) AdmissionWorkspace(ctx context.Context, workspaceID uuid.UUID) (AdmissionWorkspaceRow, error) {
+	row := q.db.QueryRow(ctx, admissionWorkspace, workspaceID)
+	var i AdmissionWorkspaceRow
+	err := row.Scan(&i.UserID, &i.Connected)
+	return i, err
+}
+
 const connectedCloudCount = `-- name: ConnectedCloudCount :one
 select count(*)::int from cloud_connections where account_id = $1
 `

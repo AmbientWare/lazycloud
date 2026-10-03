@@ -408,11 +408,11 @@ func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
 }
 
 // At zero load the warm floor converges on the cheapest host that meets it:
-// an idle c6a.2xlarge ($0.32/h) is replaced by an m7i.xlarge ($0.21/h) and
+// an idle c6a.2xlarge ($0.32/h) is replaced by an m7i.large ($0.12/h) and
 // leaves once the replacement serves. A host running work is not replaced.
 func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 	p := DefaultPolicy()
-	p.Spot, p.GPU, p.OnDemand.Stopped = MarketReserve{}, nil, HeadroomTarget{}
+	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
 	snapshot := func(hosts ...FleetHost) FleetSnapshot {
 		s := planSnapshot(t, hosts...)
 		s.Offers.Catalog = FleetCatalog()
@@ -421,13 +421,13 @@ func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 	big := idle(planHost(1, mustType(t, "c6a.2xlarge"), FleetServing))
 	plan := PlanFleet(p, snapshot(big))
 	if moves := actionsOf(plan, ActionRightsize); len(plan.Actions) != 1 || len(moves) != 1 || *moves[0].Host != big.ID ||
-		moves[0].Offer.Type.Name != "m7i.xlarge" {
+		moves[0].Offer.Type.Name != "m7i.large" {
 		t.Fatalf("idle c6a.2xlarge: %+v", plan.Actions)
 	}
-	if plan := PlanFleet(p, snapshot(big, planHost(2, mustType(t, "m7i.xlarge"), FleetStarting))); len(plan.Actions) > 0 {
+	if plan := PlanFleet(p, snapshot(big, planHost(2, mustType(t, "m7i.large"), FleetStarting))); len(plan.Actions) > 0 {
 		t.Fatalf("while the replacement starts: %+v", plan.Actions)
 	}
-	plan = PlanFleet(p, snapshot(big, idle(planHost(2, mustType(t, "m7i.xlarge"), FleetServing))))
+	plan = PlanFleet(p, snapshot(big, idle(planHost(2, mustType(t, "m7i.large"), FleetServing))))
 	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
 		t.Fatalf("once it serves: %+v", plan.Actions)
 	}
@@ -469,5 +469,42 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 	s := planSnapshot(t, idle(planHost(1, planSmall, FleetServing)), planHost(2, planSmall, FleetStopped))
 	if plan := PlanFleet(p, s); !slices.Equal(hostsOf(plan.Actions), []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
 		t.Fatalf("reserve already held: %+v", plan.Actions)
+	}
+}
+
+// With no recent demand, an empty fleet's on-demand reserve is a hibernating
+// 16 vCPU host. A 16 vCPU request resumes it rather than buying, and while
+// it serves the work the pass buys another reserve.
+func TestPlanKeepsAReserveThatFitsTheLargestShapeAndResumesIt(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU, p.OnDemand.Warm = MarketReserve{}, nil, HeadroomTarget{}
+	s := planSnapshot(t)
+	s.Offers.Catalog = FleetCatalog()
+	reserves := actionsOf(PlanFleet(p, s), ActionBuyReserve)
+	if len(reserves) != 1 || reserves[0].Offer.Type.CPUMillis != 16_000 || *reserves[0].Mode != ReserveHibernate {
+		t.Fatalf("empty fleet reserves %+v", reserves)
+	}
+
+	reserve := planHost(1, reserves[0].Offer.Type, FleetImageSaved)
+	reserve.ReserveMode = ptr(ReserveHibernate)
+	s = planSnapshot(t, reserve)
+	s.Offers.Catalog = FleetCatalog()
+	g, id := pendingOne(Requirement{CPUMillis: 16_000, MemoryBytes: 16 * gib}, nil)
+	s.Pending = []DemandGroup{g}
+	plan := PlanFleet(p, s)
+	if resumes := actionsOf(plan, ActionResume); len(resumes) != 1 || *resumes[0].Host != reserve.ID ||
+		len(actionsOf(plan, ActionBuy, ActionBuyReserve)) > 0 {
+		t.Fatalf("16 vCPU request: %+v", plan.Actions)
+	}
+	if w := waitOf(t, plan, id); w.Host == nil || *w.Host != reserve.ID {
+		t.Fatalf("wait %+v", w)
+	}
+
+	reserve.State, reserve.ReserveMode = FleetServing, nil
+	reserve.Load, reserve.Containers = reservedShape(g.Need), 1
+	s = planSnapshot(t, reserve)
+	s.Offers.Catalog = FleetCatalog()
+	if again := actionsOf(PlanFleet(p, s), ActionBuyReserve); len(again) != 1 || again[0].Offer.Type.CPUMillis != 16_000 {
+		t.Fatalf("serving the work, reserves %+v", again)
 	}
 }

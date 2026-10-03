@@ -5052,7 +5052,7 @@ export interface components {
             series: components["schemas"]["AccountActivitySeries"][];
         };
         /**
-         * @description A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80.
+         * @description A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80. The platform fleet runs only the models the pricing catalog marks enabled; work only it can serve that names only other models is refused with unsupported.
          * @enum {string}
          */
         GpuType: "T4" | "A10G" | "L4" | "L40S" | "A100-40" | "A100-80" | "H100" | "H200" | "any";
@@ -5487,6 +5487,8 @@ export interface components {
         };
         GpuRate: {
             gpu_type: string;
+            /** @description Whether the platform fleet runs the model; if not, it is coming soon. */
+            enabled: boolean;
             nanos_per_card_hour: components["schemas"]["CardRates"];
         };
         /** @description What one card costs an hour on each kind of capacity. */

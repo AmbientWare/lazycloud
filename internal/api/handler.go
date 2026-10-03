@@ -331,6 +331,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		limit           *billing.LimitError
 		billingConflict *billing.ConflictError
 		billingInvalid  *billing.InvalidError
+		gpuUnavailable  *billing.GPUUnavailableError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -417,6 +418,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, computeDown.Error())
 	case errors.Is(err, compute.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
+	case errors.As(err, &gpuUnavailable):
+		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())
 	case errors.As(err, &payment):
 		writeJSONError(w, http.StatusPaymentRequired, apitypes.PaymentRequired, payment.Error())
 	case errors.As(err, &limit):

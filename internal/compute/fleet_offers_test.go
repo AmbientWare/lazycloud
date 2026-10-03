@@ -30,15 +30,14 @@ func offerInputs(t *testing.T) OfferInputs {
 	}
 }
 
-func TestOffersNeverIncludeANodeTheRequestWouldExactlyFill(t *testing.T) {
+// A request of every vCPU of an AWS size buys that size, not the next one up.
+func TestARequestOfEveryVCPUBuysThatSize(t *testing.T) {
 	in := offerInputs(t)
-	in.Catalog = []CatalogType{
-		{Name: "exact", CPUMillis: 2000, MemoryBytes: 4 * gib, prices: [4]int64{50_000, 50_000, 50_000, 50_000}},
-		{Name: "larger", CPUMillis: 4000, MemoryBytes: 8 * gib, prices: [4]int64{90_000, 90_000, 90_000, 90_000}},
-	}
-	offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 2000, MemoryBytes: 4 * gib}, false, in)
-	if len(offers) != 1 || offers[0].Type.Name != "larger" {
-		t.Fatalf("offers %v", offerKeys(offers))
+	for _, vcpus := range []int64{8, 16} {
+		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: vcpus * 1000, MemoryBytes: 8 * gib}, false, in)
+		if len(offers) == 0 || offers[0].Type.CPUMillis != vcpus*1000 {
+			t.Fatalf("%d vCPU request: offers %v", vcpus, offerKeys(offers))
+		}
 	}
 }
 
@@ -78,9 +77,9 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 	gpuType := func(name, model string, micros int64) CatalogType {
 		return CatalogType{Name: name, CPUMillis: 16_000, MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
 	}
-	in.Catalog = []CatalogType{gpuType("h100", "H100", 1_000_000), gpuType("l4", "L4", 300_000), gpuType("t4", "T4", 200_000), mustType(t, "m7i.large")}
-	preferred := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"H100", "L4"}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
-	if len(preferred) == 0 || preferred[0].Type.GPU != "H100" {
+	in.Catalog = []CatalogType{gpuType("l40s", "L40S", 1_000_000), gpuType("l4", "L4", 300_000), gpuType("t4", "T4", 200_000), mustType(t, "m7i.large")}
+	preferred := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"L40S", "L4"}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
+	if len(preferred) == 0 || preferred[0].Type.GPU != "L40S" {
 		t.Fatalf("first offer %v", offerKeys(preferred))
 	}
 	anyCard := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{GPUAny}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
@@ -91,6 +90,27 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 		if o.Type.GPUCount > 0 {
 			t.Fatalf("CPU work offered GPU host %s", o.Key())
 		}
+	}
+}
+
+// The platform fleet buys only the GPU models it offers, even for work that
+// names another first; a connected account buys any model.
+func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
+	in := offerInputs(t)
+	in.Networks = map[string]Network{"us-east-1": oneZone("us-east-1a", "use1-az1")}
+	need := Requirement{GPUs: []string{"H100", GPUAny}, CPUMillis: 1000, MemoryBytes: gib}
+	offers := RankOffers(DefaultPolicy(), need, false, in)
+	if len(offers) == 0 {
+		t.Fatal("no offer for any model")
+	}
+	for _, o := range offers {
+		if !billing.GPUEnabled(o.Type.GPU) {
+			t.Fatalf("offered %s", o.Key())
+		}
+	}
+	in.OwnerPays = true
+	if offers := RankOffers(connectionPolicy(DefaultPolicy()), need, false, in); len(offers) == 0 || offers[0].Type.GPU != "H100" {
+		t.Fatalf("connected account offers %v", offerKeys(offers))
 	}
 }
 
