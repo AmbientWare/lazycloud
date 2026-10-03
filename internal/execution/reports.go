@@ -88,6 +88,11 @@ func (e *Execution) ApplyReport(ctx context.Context, host compute.HostID, report
 				if err := q.MarkContainerReady(ctx, row.ID); err != nil {
 					return fmt.Errorf("mark container ready: %w", err)
 				}
+				// Callers waiting on this container, such as a shell or a
+				// connect, wake on its own key.
+				if err := database.Notify(ctx, tx, database.ChannelContainerOp, report.Container.String()); err != nil {
+					return err
+				}
 			}
 			// A ready build container runs its build; nothing else waits.
 			if release := row.ReleaseID; state == ContainerStarting && release != nil {

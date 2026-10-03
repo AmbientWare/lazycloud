@@ -12,6 +12,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/control"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -264,6 +265,8 @@ func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 		wait = *req.Params.WaitSeconds
 	}
 	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+	wake, cancel := s.owners.Listener.Subscribe(database.ChannelContainerOp, req.Container.String())
+	defer cancel()
 	for {
 		i, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container))
 		if err != nil {
@@ -288,7 +291,8 @@ func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 		select {
 		case <-ctx.Done():
 			return nil, errStillStarting
-		case <-time.After(min(250*time.Millisecond, time.Until(deadline))):
+		case <-wake:
+		case <-time.After(min(containerWaitBackstop, time.Until(deadline))):
 		}
 	}
 }
