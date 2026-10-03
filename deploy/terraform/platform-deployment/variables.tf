@@ -34,8 +34,14 @@ variable "cloudflare_zone_id" {
 }
 
 variable "planetscale_organization" {
-  description = "PlanetScale organization, enrolled in the Neki Platform Preview."
+  description = "PlanetScale organization."
   type        = string
+}
+
+variable "planetscale_cluster_size" {
+  description = "Cluster size of the branch. PS_10_AWS_ARM is the smallest production size in AWS; the provider rejects the SKU spelling without the suffix."
+  type        = string
+  default     = "PS_10_AWS_ARM"
 }
 
 variable "planetscale_region" {
@@ -62,9 +68,15 @@ variable "fleet_cidr" {
 }
 
 variable "database_pool_max_connections" {
-  description = "pool_max_conns of each server, scheduler and job process; each holds a listener and a lock connection."
+  description = "pool_max_conns of each of a process's two pools, one per database URL; the session pool holds the listener and the locks."
   type        = number
-  default     = 8
+  default     = 4
+}
+
+variable "database_max_connections" {
+  description = "max_connections of the branch; database.tf budgets the processes against it."
+  type        = number
+  default     = 60
 }
 
 # The chart creates the two load balancers; their hostnames arrive after the

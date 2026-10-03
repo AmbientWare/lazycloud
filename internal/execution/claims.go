@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,14 +130,17 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		if spec.TimeoutSeconds != nil {
 			timeout = *spec.TimeoutSeconds
 		}
-		candidates, err := q.LockClaimCandidates(ctx, LockClaimCandidatesParams{
-			ReleaseID: c.ReleaseID,
-			MaxTasks:  int32(limit), //nolint:gosec // Bounded by the container's slots.
+		rows, err := q.ClaimQueuedTasks(ctx, ClaimQueuedTasksParams{
+			ReleaseID:      c.ReleaseID,
+			MaxTasks:       int32(limit), //nolint:gosec // Bounded by the container's slots.
+			MaxInputBytes:  MaxClaimInputBytes,
+			ContainerID:    uuid.UUID(container),
+			TimeoutSeconds: float64(timeout),
 		})
 		if err != nil {
-			return fmt.Errorf("lock queued tasks: %w", err)
+			return fmt.Errorf("claim tasks: %w", err)
 		}
-		if len(candidates) == 0 {
+		if len(rows) == 0 {
 			at, err := q.NextQueuedAt(ctx, c.ReleaseID)
 			if err == nil {
 				next = &at
@@ -146,10 +148,6 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 				return fmt.Errorf("read next queued task: %w", err)
 			}
 			return nil
-		}
-		rows, err := startAttempts(ctx, tx, uuid.UUID(container), float64(timeout), claimPrefix(candidates))
-		if err != nil {
-			return err
 		}
 		claimed = make([]ClaimedTask, len(rows))
 		ids := make([]uuid.UUID, len(rows))
@@ -183,49 +181,4 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		return nil, nil, fmt.Errorf("claim on container %s: %w", container, err)
 	}
 	return claimed, next, nil
-}
-
-// claimPrefix is the longest prefix of the locked candidates whose input
-// bytes total at most MaxClaimInputBytes, and always the first, so the
-// claim response stays within the host message limit.
-func claimPrefix(candidates []LockClaimCandidatesRow) []uuid.UUID {
-	tasks := make([]uuid.UUID, 0, len(candidates))
-	var total int64
-	for _, c := range candidates {
-		total += c.InputBytes
-		if len(tasks) > 0 && total > MaxClaimInputBytes {
-			break
-		}
-		tasks = append(tasks, c.ID)
-	}
-	return tasks
-}
-
-// startAttempts starts a running attempt on container for each locked task
-// in one round trip and returns them in the order of tasks. The batch runs
-// in order, so StartClaimedTasks finds the attempts InsertClaimAttempts
-// created.
-func startAttempts(ctx context.Context, tx pgx.Tx, container uuid.UUID, timeout float64, tasks []uuid.UUID) ([]StartClaimedTasksRow, error) {
-	var started []StartClaimedTasksRow
-	batch := &pgx.Batch{}
-	batch.Queue(insertClaimAttempts, container, timeout, tasks)
-	batch.Queue(startClaimedTasks, tasks).Query(func(rows pgx.Rows) error {
-		var err error
-		if started, err = pgx.CollectRows(rows, pgx.RowToStructByPos[StartClaimedTasksRow]); err != nil {
-			return fmt.Errorf("read started tasks: %w", err)
-		}
-		return nil
-	})
-	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
-		return nil, fmt.Errorf("start attempts: %w", err)
-	}
-	if len(started) != len(tasks) {
-		return nil, fmt.Errorf("start attempts: %d of %d tasks started", len(started), len(tasks))
-	}
-	order := make(map[uuid.UUID]int, len(tasks))
-	for n, task := range tasks {
-		order[task] = n
-	}
-	slices.SortFunc(started, func(a, b StartClaimedTasksRow) int { return order[a.TaskID] - order[b.TaskID] })
-	return started, nil
 }

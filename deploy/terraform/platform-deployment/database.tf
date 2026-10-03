@@ -1,43 +1,50 @@
-# PlanetScale Neki. The branch creates the database with its default
-# configuration profile (one shard, a primary and two replicas), router
-# group and admin; size them in the dashboard or with
-# `pscale size cluster list --engine neki`. Processes connect to the router
-# on 5432 over TLS; the router pools backends itself, so there is no
-# client-side pooler. The org must have joined the Neki Platform Preview.
-resource "planetscale_neki_branch" "main" {
+# PlanetScale Postgres. Applying the branch creates the database when it
+# does not exist, so this one resource is the database. The major version is
+# pinned: an upgrade is a decision, not something an apply discovers.
+resource "planetscale_postgres_branch" "main" {
   organization       = var.planetscale_organization
   database           = var.deployment
   name               = "main"
+  major_version      = "17"
+  cluster_size       = var.planetscale_cluster_size
   region             = var.planetscale_region
   deletion_protected = true
+
+  # PS-10 defaults to 25 connections; database_url's comment budgets these.
+  parameters = {
+    pgconf = {
+      max_connections = tostring(var.database_max_connections)
+    }
+  }
 }
 
-# The server migrates at start, so its role needs DDL: `postgres`. The role
-# owns the schema it migrated; replacing the role (`-replace` rotates its
-# password) hands that schema to `postgres`, which the new role inherits,
-# instead of failing on or dropping the owned tables.
-resource "planetscale_neki_role" "platform" {
+# The server migrates at start, so its role needs DDL: it inherits
+# `postgres` (the API rejects the `pscale_*` names). The role owns the schema
+# it migrated; replacing the role (`-replace` rotates its password) hands
+# that schema to `postgres` instead of failing on or dropping the owned
+# tables.
+resource "planetscale_postgres_branch_role" "platform" {
   organization    = var.planetscale_organization
-  database        = planetscale_neki_branch.main.database
-  branch          = planetscale_neki_branch.main.name
+  database        = planetscale_postgres_branch.main.database
+  branch          = planetscale_postgres_branch.main.name
   name            = "platform"
   inherited_roles = ["postgres"]
   successor       = "postgres"
 }
 
 locals {
+  # Both URLs name the direct port 5432, not PgBouncer on 6432: pgx caches
+  # prepared statements per connection, which transaction pooling breaks,
+  # and LISTEN, the migration, metering and leader locks keep state in their
+  # session. Budget at pool_max_conns 4: a server holds 11 (two pools and
+  # three hijacked), a scheduler 10, so two of each hold 42. A rollout's
+  # surge server and an operator psql peak at 54 of 60.
   database_url = format(
-    "postgres://%s:%s@%s:5432/postgres?sslmode=verify-full&pool_max_conns=%d",
-    urlencode(planetscale_neki_role.platform.username),
-    urlencode(planetscale_neki_role.platform.password),
-    planetscale_neki_role.platform.access_host_url,
+    "postgres://%s:%s@%s:5432/%s?sslmode=verify-full&pool_max_conns=%d",
+    urlencode(planetscale_postgres_branch_role.platform.username),
+    urlencode(planetscale_postgres_branch_role.platform.password),
+    planetscale_postgres_branch_role.platform.access_host_url,
+    planetscale_postgres_branch_role.platform.database_name,
     var.database_pool_max_connections,
   )
-  # LAZYCLOUD_DATABASE_SESSION_URL: LISTEN, the migration, metering and
-  # leader locks hold state in their session and need a direct connection.
-  # Neki has one endpoint, the router, and the router keeps a session that
-  # holds state on one backend until it ends, so both URLs name it; the
-  # runbook checks LISTEN and session locks through it before the first
-  # release.
-  session_database_url = local.database_url
 }

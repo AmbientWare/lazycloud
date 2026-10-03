@@ -13,51 +13,57 @@ for no key update of c;
 -- name: CountRunningAttemptsOnContainer :one
 select count(*) from attempts where container_id = @container_id and state = 'running';
 
--- name: LockClaimCandidates :many
--- Due queued tasks of the release, oldest first, with the bytes each hands
--- its runner: its input and its upstream results. Concurrent claimers skip
--- each other's rows, and the locks hold until the claim commits.
-select t.id, (octet_length(i.data) + coalesce(dep.bytes, 0))::bigint as input_bytes
-from (
-    select t.id, t.available_at
+-- name: ClaimQueuedTasks :many
+-- Due queued tasks of the release become running attempts on the container.
+-- Concurrent claimers skip each other's rows. The claim takes the longest
+-- prefix whose inputs total at most max_input_bytes, and always the first
+-- task, so the response stays within the host message limit.
+with candidate as (
+    select t.id, t.attempt_count, t.available_at
     from tasks t
     where t.release_id = @release_id and t.status = 'queued' and t.available_at <= now()
       and t.unmet_dependencies = 0
     order by t.available_at, t.id
     limit @max_tasks
     for update skip locked
-) t
-join task_inputs i on i.task_id = t.id
-cross join lateral (
-    select sum(octet_length(r.data)) as bytes
-    from task_dependencies d
-    join task_results r on r.task_id = d.depends_on
-    where d.task_id = t.id
-) dep
-order by t.available_at, t.id;
-
--- name: InsertClaimAttempts :exec
--- A running attempt on the container for each locked task, in claim order.
-insert into attempts (task_id, number, container_id, state, deadline_at)
-select t.id, t.attempt_count + 1, @container_id, 'running',
-       now() + make_interval(secs => @timeout_seconds::float8)
-from unnest(@task_ids::uuid[]) with ordinality as p(id, n)
-join tasks t on t.id = p.id
-order by p.n;
-
--- name: StartClaimedTasks :many
--- Runs after InsertClaimAttempts: each task moves to the attempt it just got.
-update tasks t
-set status = 'running',
-    current_attempt_id = a.id,
-    attempt_count = a.number,
-    started_at = coalesce(t.started_at, now())
-from attempts a
-join task_inputs i on i.task_id = a.task_id
-where t.id = any(@task_ids::uuid[]) and a.task_id = t.id and a.number = t.attempt_count + 1
-returning t.id as task_id, a.id as attempt_id, a.number, a.deadline_at,
-          i.encoding, i.data, t.max_attempts, t.parent_task_id,
-          coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent;
+), sized as (
+    select c.id, c.attempt_count,
+           row_number() over w as turn,
+           sum(octet_length(i.data) + coalesce(dep.bytes, 0)) over w as total_bytes
+    from candidate c
+    join task_inputs i on i.task_id = c.id
+    cross join lateral (
+        select sum(octet_length(r.data)) as bytes
+        from task_dependencies d
+        join task_results r on r.task_id = d.depends_on
+        where d.task_id = c.id
+    ) dep
+    window w as (order by c.available_at, c.id)
+), picked as (
+    select id, attempt_count from sized
+    where turn = 1 or total_bytes <= @max_input_bytes::bigint
+), attempt as (
+    insert into attempts (task_id, number, container_id, state, deadline_at)
+    select picked.id, picked.attempt_count + 1, @container_id, 'running',
+           now() + make_interval(secs => @timeout_seconds::float8)
+    from picked
+    returning attempts.id, attempts.task_id, attempts.number, attempts.deadline_at
+), claimed as (
+    update tasks
+    set status = 'running',
+        current_attempt_id = attempt.id,
+        attempt_count = attempt.number,
+        started_at = coalesce(tasks.started_at, now())
+    from attempt
+    where tasks.id = attempt.task_id
+)
+select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
+       i.encoding, i.data, t.max_attempts, t.parent_task_id,
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent
+from attempt
+join task_inputs i on i.task_id = attempt.task_id
+join tasks t on t.id = attempt.task_id
+order by attempt.id;
 
 -- name: NextQueuedAt :one
 -- When the release's next queued task becomes due, if any.

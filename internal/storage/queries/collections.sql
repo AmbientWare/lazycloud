@@ -125,14 +125,12 @@ delete from maps where workspace_id = @workspace_id and name = @name;
 
 -- name: SweepExpiredMapEntries :execrows
 delete from map_entries
-where ctid = any((
-    select array_agg(e.ctid) from (
-        select ctid from map_entries
-        where expires_at is not null and expires_at <= now()
-        limit @max_rows
-        for update skip locked
-    ) e
-)::tid[]);
+where ctid = any(array(
+    select ctid from map_entries
+    where expires_at is not null and expires_at <= now()
+    limit @max_rows
+    for update skip locked
+));
 
 -- name: InsertMapEntryIfAbsent :one
 -- Writes only when the key is missing or expired; no row means it exists.

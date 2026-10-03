@@ -15,8 +15,7 @@ version, Deploy records it on the `prod` branch, and Argo CD syncs the chart
 Some releases need a step before Ship. New scheduler IAM applies
 `platform-deployment` first; it only adds permissions. A change to
 `deploy/ami` runs Node images from main and lands a PR updating
-`LAZYCLOUD_FLEET_IMAGES`. A change to SQL runs `acceptance/neki/check.sh`,
-so every query executes through Neki's router first.
+`LAZYCLOUD_FLEET_IMAGES`.
 
 ## Settings and secrets
 
@@ -58,7 +57,7 @@ document in us-east-1 and the account's GitHub OIDC provider.
 
 1. Apply `platform-core` with `cluster_api_cidrs` set to your address.
 2. Apply `platform-deployment`. **Care:** it needs the operator document and
-   a PlanetScale organization enrolled in Neki.
+   a PlanetScale organization.
 3. Apply `github`.
 4. Run Node images and commit its `LAZYCLOUD_FLEET_IMAGES` into the env file.
 5. Run Ship.
@@ -73,8 +72,8 @@ document in us-east-1 and the account's GitHub OIDC provider.
 ## Constraints
 
 - LISTEN, the migration, metering and leader locks need a connection that
-  keeps its session: `LAZYCLOUD_DATABASE_SESSION_URL`. Neki's router does;
-  behind any other pooler, point it at a direct endpoint.
+  keeps its session: `LAZYCLOUD_DATABASE_SESSION_URL`, a direct endpoint
+  rather than a transaction pooler.
 - Node capacity installs before Argo CD, whose pre-install hooks need a node.
 - Argo CD reads `deploy/argocd/apps` from main, and the deployment from `prod`.
 - Only the prod environment's deploy key pushes `prod`; Deploy refuses a tag
