@@ -123,7 +123,8 @@ export function useReconnectingStream(
 
 /**
  * Follow a server-sent-event endpoint, resuming with `Last-Event-ID` after
- * each reconnect. `onEvent` receives every parsed frame.
+ * each reconnect. `onEvent` receives every parsed frame; the one from the
+ * latest render handles it, even mid-connection.
  */
 export function useEventStream(
   url: string | null,
@@ -140,6 +141,10 @@ export function useEventStream(
   },
 ): EventStreamStatus {
   const key = url && enabled ? url : null;
+  const onEventRef = useRef(onEvent);
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  });
   return useReconnectingStream(
     key,
     async ({ signal, cursor, onOpen: opened }) => {
@@ -149,7 +154,7 @@ export function useEventStream(
         onOpen: opened,
         onEvent: (event) => {
           if (event.id) cursor.value = event.id;
-          onEvent(event);
+          onEventRef.current(event);
         },
       });
       return "reconnect";

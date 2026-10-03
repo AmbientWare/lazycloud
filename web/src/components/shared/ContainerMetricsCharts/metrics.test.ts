@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
 
-import { buildMetricData, hasIoSamples, latestComputeReadout } from "./metrics";
+import { buildMetricData, latestComputeReadout } from "./metrics";
 
 function metrics(points: Partial<Schemas["ContainerMetricPoint"]>[]): Schemas["ContainerMetrics"] {
   return {
@@ -41,7 +41,6 @@ describe("container metric chart data", () => {
     expect(datum.networkSentRate).toBe((512 * 1024) / 5);
     expect(datum.diskReadRate).toBe(2 * 1024);
     expect(datum.diskWriteRate).toBe(0);
-    expect(hasIoSamples(series.points)).toBe(true);
   });
 
   it("leaves gaps instead of fake zero rates for samples without an interval", () => {
@@ -50,7 +49,6 @@ describe("container metric chart data", () => {
     expect(datum.networkRecvRate).toBeNull();
     expect(datum.diskWriteRate).toBeNull();
     expect(datum.cpuPercent).toBe(25);
-    expect(hasIoSamples(series.points)).toBe(false);
   });
 
   it("keeps the network readout null until interval-bearing samples arrive", () => {

@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
+import { activityStart } from "@/lib/activity-window";
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
 import { workloadKindValues } from "@/lib/api/generated/openapi";
 
@@ -125,21 +126,19 @@ export function selectVersionList(
   return selectInfiniteList(data, hasNextPage, (version) => String(version.version));
 }
 
-/** Run time percentiles, outcomes and cold starts per hour over the last day. */
-export function performanceQueryOptions(
-  workspace: string,
-  workload: WorkloadRef,
-  windowSeconds = 3600,
-) {
+/** Run time percentiles, outcomes and cold starts per hour over the drawn activity window. */
+export function performanceQueryOptions(workspace: string, workload: Schemas["Workload"]) {
+  const windowSeconds = 3600;
   return queryOptions({
-    queryKey: workspaceQueryKeys.workloads.performance(workspace, workload, windowSeconds),
-    queryFn: () =>
+    queryKey: workspaceQueryKeys.workloads.performance(workspace, workload.id, windowSeconds),
+    queryFn: ({ signal }) =>
       ok(
         api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance", {
           params: {
             path: workloadPath(workspace, workload),
-            query: { window_seconds: windowSeconds },
+            query: { window_seconds: windowSeconds, start: activityStart() },
           },
+          signal,
         }),
       ),
     meta: workspaceLiveQueryMeta(true),

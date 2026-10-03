@@ -21,6 +21,7 @@ describe("workspace live invalidation ownership", () => {
         task_id: "task-2",
         root_task_id: "task-1",
         container_id: "container-1",
+        deployment_id: "workload-1",
       }),
     );
 
@@ -33,7 +34,50 @@ describe("workspace live invalidation ownership", () => {
       { queryKey: workspaceQueryKeys.tasks.aggregates("dev"), expensive: true },
       { queryKey: workspaceQueryKeys.apps.summaries("dev"), expensive: true },
       { queryKey: workspaceQueryKeys.apps.activities("dev"), expensive: true },
+      { queryKey: workspaceQueryKeys.workloads.activity("dev", "workload-1"), expensive: true },
     ]);
+  });
+
+  it("refreshes request lists and the serving workload's activity once requests are recorded", () => {
+    const recorded = { resource_id: undefined, count: 3 };
+    expect(
+      workspaceInvalidationTargets(
+        "dev",
+        change("requests", { ...recorded, deployment_id: "workload-1" }),
+      ),
+    ).toEqual([
+      { queryKey: workspaceQueryKeys.requests.lists("dev") },
+      { queryKey: workspaceQueryKeys.workloads.activity("dev", "workload-1"), expensive: true },
+    ]);
+    expect(workspaceInvalidationTargets("dev", change("requests", recorded))).toContainEqual({
+      queryKey: workspaceQueryKeys.workloads.activities("dev"),
+      expensive: true,
+    });
+  });
+
+  it("refreshes running counts on a container change, and activity on a cold start", () => {
+    const stopped = workspaceInvalidationTargets(
+      "dev",
+      change("containers", { container_id: "container-1", deployment_id: "workload-1" }),
+    );
+    for (const queryKey of [
+      workspaceQueryKeys.workloads.lists("dev"),
+      workspaceQueryKeys.workloads.details("dev"),
+      workspaceQueryKeys.apps.details("dev"),
+    ]) {
+      expect(stopped).toContainEqual({ queryKey });
+    }
+    const activity = {
+      queryKey: workspaceQueryKeys.workloads.activity("dev", "workload-1"),
+      expensive: true,
+    };
+    expect(stopped).not.toContainEqual(activity);
+    expect(
+      workspaceInvalidationTargets(
+        "dev",
+        change("containers", { change: "created", deployment_id: "workload-1" }),
+      ),
+    ).toContainEqual(activity);
   });
 
   it("refreshes every detail of a grouped change and no container metrics", () => {

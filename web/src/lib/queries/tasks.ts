@@ -163,13 +163,13 @@ export function selectTaskList(
 }
 
 /**
- * The newest requests one endpoint or ASGI workload served. The change stream
- * carries no request records, and the edge writes one about a second after
- * the request ends, so the list is reread while it is shown.
+ * The newest requests one endpoint or ASGI workload served. The edge writes
+ * records in batches about a second after each request ends, and each batch
+ * publishes a requests change.
  */
 export function requestsQueryOptions(workspace: string, app: string, name: string, limit = 50) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.requests(workspace, app, name, limit),
+    queryKey: workspaceQueryKeys.requests.list(workspace, app, name, limit),
     queryFn: async ({ signal }) =>
       (
         await ok(
@@ -179,7 +179,6 @@ export function requestsQueryOptions(workspace: string, app: string, name: strin
           }),
         )
       ).data,
-    refetchInterval: 10_000,
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -227,7 +226,7 @@ export function taskQueryOptions(workspace: string, taskId: string) {
 /** An endpoint or ASGI request record, which is complete once it exists. */
 export function requestQueryOptions(workspace: string, requestId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.request(workspace, requestId),
+    queryKey: workspaceQueryKeys.requests.detail(workspace, requestId),
     queryFn: ({ signal }) =>
       ok(
         api.GET("/v1/workspaces/{workspace}/requests/{http_request}", {

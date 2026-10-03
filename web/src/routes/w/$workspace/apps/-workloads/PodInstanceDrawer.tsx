@@ -5,7 +5,7 @@ import { CliHint } from "@/components/shared/CliHint";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
-import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
+import { ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { PanelError } from "@/components/shared/PanelError";
 import { ShellButton } from "@/components/shared/ShellDialog";
@@ -194,16 +194,15 @@ function PodInstanceDrawerBody({
             ) : null}
           </div>
           <div className="p-4">
-            {metrics.isPending ? (
-              <div className="grid gap-x-6 gap-y-5 lg:grid-cols-2">
-                <ChartSkeleton />
-                <ChartSkeleton />
-              </div>
-            ) : metrics.isError ? (
+            {metrics.isError ? (
               <PanelError message={metrics.error.message} layout="centered" />
             ) : (
               <PanelErrorBoundary title="Instance metrics could not be displayed">
-                <ContainerMetricsCharts metrics={metrics.data} />
+                <ContainerMetricsCharts
+                  metrics={metrics.data}
+                  pending={metrics.isPending}
+                  gpu={(record.gpu_count ?? 0) > 0}
+                />
               </PanelErrorBoundary>
             )}
           </div>

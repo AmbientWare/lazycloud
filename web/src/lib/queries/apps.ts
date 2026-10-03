@@ -1,5 +1,6 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
+import { activityStart } from "@/lib/activity-window";
 import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { allPages, listWorkloads, newestFirst } from "./deployments";
@@ -38,22 +39,12 @@ export function appQueryOptions(workspace: string, app: string) {
   });
 }
 
-/** Hourly buckets the activity charts draw: the current hour and the 23 before it. */
-const HOURS_DRAWN = 24;
-
-function activitySince(now = Date.now()): string {
-  const hour = 3_600_000;
-  return new Date(Math.floor(now / hour) * hour - (HOURS_DRAWN - 1) * hour).toISOString();
-}
-
 function taskActivity(workspace: string, app?: string): Promise<Schemas["TaskActivity"]> {
-  // The start is computed per fetch and left out of the query key, which
-  // would otherwise change on every refetch.
   return ok(
     api.GET("/v1/workspaces/{workspace}/metrics/activity", {
       params: {
         path: { workspace },
-        query: { window_seconds: 3600, start: activitySince(), app },
+        query: { window_seconds: 3600, start: activityStart(), app },
       },
     }),
   );

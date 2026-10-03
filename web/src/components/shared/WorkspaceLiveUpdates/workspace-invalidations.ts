@@ -24,6 +24,12 @@ export function workspaceInvalidationTargets(
   const containerId =
     change.container_id ?? (change.topic === "containers" ? change.resource_id : undefined);
   const appSummaries = { queryKey: keys.apps.summaries(workspace), expensive: true };
+  const workloadActivity = {
+    queryKey: change.deployment_id
+      ? keys.workloads.activity(workspace, change.deployment_id)
+      : keys.workloads.activities(workspace),
+    expensive: true,
+  };
 
   switch (change.topic) {
     // A change names its app by id and app reads are keyed by name, so an app
@@ -49,7 +55,10 @@ export function workspaceInvalidationTargets(
         { queryKey: keys.tasks.aggregates(workspace), expensive: true },
         appSummaries,
         { queryKey: keys.apps.activities(workspace), expensive: true },
+        workloadActivity,
       ]);
+    case "requests":
+      return [{ queryKey: keys.requests.lists(workspace) }, workloadActivity];
     case "containers":
       return compact([
         { queryKey: keys.containers.lists(workspace) },
@@ -58,9 +67,15 @@ export function workspaceInvalidationTargets(
           : containerId && { queryKey: keys.containers.detail(workspace, containerId) },
         containerId && { queryKey: keys.containers.lifecycle(workspace, containerId) },
         taskId && { queryKey: keys.tasks.detail(workspace, taskId) },
-        // A container's start and stop move its tasks' timelines.
+        // A container's start and stop move its tasks' timelines, the running
+        // counts of its workload and app, and a devbox's status.
         { queryKey: keys.tasks.callGraphs(workspace) },
+        { queryKey: keys.workloads.lists(workspace) },
+        { queryKey: keys.workloads.details(workspace) },
+        { queryKey: keys.apps.details(workspace) },
         appSummaries,
+        // A created container is a cold start.
+        change.change === "created" && workloadActivity,
       ]);
     case "storage.secrets":
       return [{ queryKey: keys.storage.secrets(workspace) }];

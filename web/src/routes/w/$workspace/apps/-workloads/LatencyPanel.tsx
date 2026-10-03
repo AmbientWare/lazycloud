@@ -1,4 +1,4 @@
-import { format, parseISO } from "date-fns";
+import { format } from "date-fns";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
@@ -9,25 +9,24 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Skeleton } from "@/components/ui/skeleton";
+import { activityHourIndex, activityHours } from "@/lib/activity-window";
 import type { Schemas } from "@/lib/api/client";
 import { formatDuration } from "@/lib/format";
+import { servesRequests } from "@/lib/queries/tasks";
+
+const config: ChartConfig = {
+  p50: { label: "p50", color: "var(--muted-foreground)" },
+  p95: { label: "p95", color: "var(--chart-3)" },
+};
+
+/** The duration axis an empty plot is drawn against, in milliseconds. */
+const EMPTY_AXIS_MAX_MS = 1_000;
 
 /**
- * Whether the window holds anything to plot.
- *
- * The caller decides with this rather than the panel reporting emptiness where
- * the chart would be: the region beneath it already says a workload has run
- * nothing, and one silence stated twice reads as two separate findings.
- */
-export function latencyHasSignal(buckets: Schemas["PerformanceBucket"][] | undefined): boolean {
-  return (buckets ?? []).some((bucket) => bucket.count > 0 || bucket.cold_starts > 0);
-}
-
-/**
- * Function-level latency: task-duration p50/p95 per hour over the last 24h
- * from the SQL-windowed rollup, with a cold-start frequency readout counting
- * container creations for the function's stubs in the same window.
+ * Workload latency: run time p50/p95 per hour over the drawn activity window
+ * from the SQL-windowed rollup, with volume, failure and cold-start counts
+ * over the same window. The plot keeps its frame and hours while the read is
+ * pending or empty, so the panel never changes size as data arrives.
  */
 export function LatencyPanel({
   buckets,
@@ -38,60 +37,49 @@ export function LatencyPanel({
   buckets: Schemas["PerformanceBucket"][] | undefined;
   pending: boolean;
   error: Error | null;
-  kind: string;
+  kind: Schemas["WorkloadKind"];
 }) {
-  // The failure is read before the absence it causes: the caller keeps this
-  // panel mounted on error and has no buckets to pass, so a skeleton checked
-  // first is a load that never finishes in place of the reason it did not.
   if (error) {
     return <PanelError message={error.message} layout="centered" />;
   }
-  if (pending || !buckets) {
-    return <LatencySkeleton />;
-  }
 
-  const tasks = buckets.reduce((total, bucket) => total + bucket.count, 0);
-  const coldStarts = buckets.reduce((total, bucket) => total + bucket.cold_starts, 0);
-  const failures = buckets.reduce((total, bucket) => total + bucket.status_counts.failed, 0);
-  const latest = [...buckets].reverse().find((bucket) => bucket.count > 0);
-
-  const data = buckets.map((bucket) => ({
-    label: formatBucketTime(bucket.timestamp),
-    p50: bucket.p50_ms ?? null,
-    p95: bucket.p95_ms ?? null,
-  }));
-  const config: ChartConfig = {
-    p50: { label: "p50", color: "var(--muted-foreground)" },
-    p95: { label: "p95", color: "var(--chart-3)" },
-  };
+  const requests = servesRequests(kind);
+  const known = buckets ?? [];
+  const tasks = known.reduce((total, bucket) => total + bucket.count, 0);
+  const coldStarts = known.reduce((total, bucket) => total + bucket.cold_starts, 0);
+  const failures = known.reduce((total, bucket) => total + bucket.status_counts.failed, 0);
+  const latest = [...known].reverse().find((bucket) => bucket.count > 0);
+  const count = (value: number) => (pending ? "—" : Intl.NumberFormat().format(value));
+  const duration = (value: number | undefined) =>
+    value === undefined ? "—" : formatDuration(value);
 
   return (
-    <div className="content-transition flex h-full min-h-0 flex-col gap-2">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       {/* One line so the plot keeps the height: the readings qualify the chart,
           they are not a second panel above it. */}
       <div className="flex shrink-0 flex-wrap items-end gap-x-8 gap-y-2">
-        <LatencyReadout
-          label="Latest p50"
-          value={latest?.p50_ms == null ? "—" : formatDuration(latest.p50_ms)}
-          series="p50"
-        />
-        <LatencyReadout
-          label="Latest p95"
-          value={latest?.p95_ms == null ? "—" : formatDuration(latest.p95_ms)}
-          series="p95"
-        />
+        <LatencyReadout label="Latest p50" value={duration(latest?.p50_ms)} series="p50" />
+        <LatencyReadout label="Latest p95" value={duration(latest?.p95_ms)} series="p95" />
         <dl className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 pb-0.5 text-[11px] text-muted-foreground">
-          <LatencyFact label={volumeLabel(kind)} value={Intl.NumberFormat().format(tasks)} />
+          <LatencyFact label={requests ? "Requests (24h)" : "Tasks (24h)"} value={count(tasks)} />
           <LatencyFact
-            label={kind === "endpoint" || kind === "asgi" ? "Errors (24h)" : "Failed tasks"}
-            value={Intl.NumberFormat().format(failures)}
+            label={requests ? "Errors (24h)" : "Failed tasks"}
+            value={count(failures)}
             danger={failures > 0}
           />
-          <LatencyFact label="Cold starts" value={Intl.NumberFormat().format(coldStarts)} />
+          <LatencyFact label="Cold starts" value={count(coldStarts)} />
         </dl>
       </div>
-      <ChartContainer config={config} className="min-h-16 w-full flex-1 aspect-auto">
-        <LineChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+      <ChartContainer
+        config={config}
+        className="min-h-16 w-full flex-1 aspect-auto"
+        empty={
+          pending || latest
+            ? undefined
+            : `No ${requests ? "requests" : "finished tasks"} in the last 24 hours`
+        }
+      >
+        <LineChart data={latencyRows(known)} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="label"
@@ -107,6 +95,7 @@ export function LatencyPanel({
             tickLine={false}
             axisLine={false}
             width={46}
+            domain={[0, (dataMax: number) => (dataMax > 0 ? dataMax : EMPTY_AXIS_MAX_MS)]}
             tick={{ fontSize: 10 }}
             tickFormatter={(value: number | string) => formatAxisDuration(value)}
           />
@@ -151,21 +140,21 @@ export function LatencyPanel({
   );
 }
 
-function LatencySkeleton() {
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-2" aria-hidden="true">
-      <div className="flex shrink-0 flex-wrap items-end gap-x-8 gap-y-2">
-        {["p50", "p95"].map((series) => (
-          <div key={series} className="space-y-1">
-            <Skeleton className="h-2.5 w-16" />
-            <Skeleton className="h-4 w-12" />
-          </div>
-        ))}
-        <Skeleton className="h-3 w-64" />
-      </div>
-      <Skeleton className="min-h-16 flex-1" />
-    </div>
-  );
+/** One row per drawn hour; an hour the server reported nothing for plots no point. */
+function latencyRows(buckets: Schemas["PerformanceBucket"][]) {
+  const hours = activityHours();
+  const rows = hours.map((hour) => ({
+    label: format(hour, "HH:mm"),
+    p50: null as number | null,
+    p95: null as number | null,
+  }));
+  for (const bucket of buckets) {
+    const index = activityHourIndex(bucket.timestamp, hours);
+    if (index < 0) continue;
+    rows[index].p50 = bucket.p50_ms ?? null;
+    rows[index].p95 = bucket.p95_ms ?? null;
+  }
+  return rows;
 }
 
 function LatencyReadout({
@@ -210,19 +199,6 @@ function LatencyFact({
       </dd>
     </div>
   );
-}
-
-function volumeLabel(kind: string): string {
-  if (kind === "endpoint" || kind === "asgi") return "Requests (24h)";
-  return "Tasks (24h)";
-}
-
-function formatBucketTime(timestamp: string): string {
-  try {
-    return format(parseISO(timestamp), "HH:mm");
-  } catch {
-    return timestamp;
-  }
 }
 
 function formatAxisDuration(value: number | string): string {

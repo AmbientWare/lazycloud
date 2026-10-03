@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
+import { ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { CopyId } from "@/components/shared/CopyId";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
@@ -128,20 +128,17 @@ function ContainerDetails({
         <h3 id="container-compute-heading" className="micro-label">
           Compute
         </h3>
-        {metrics.isPending ? (
-          <>
-            <CapacitySkeleton />
-            <div className="mt-5 grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2">
-              <ChartSkeleton />
-              <ChartSkeleton />
-            </div>
-          </>
-        ) : metrics.isError ? (
+        {metrics.isError ? (
           <PanelError message={metrics.error.message} />
         ) : (
           <>
-            <ContainerCapacity metrics={metrics.data} />
-            <ContainerMetricsCharts metrics={metrics.data} className="mt-5 sm:grid-cols-2" />
+            {metrics.data ? <ContainerCapacity metrics={metrics.data} /> : <CapacitySkeleton />}
+            <ContainerMetricsCharts
+              metrics={metrics.data}
+              pending={metrics.isPending}
+              gpu={(container.gpu_count ?? 0) > 0}
+              className="mt-5 sm:grid-cols-2"
+            />
           </>
         )}
       </section>
