@@ -179,14 +179,15 @@ func (e *Execution) stopContainer(ctx context.Context, tx pgx.Tx, workspace iden
 	if err != nil {
 		return fmt.Errorf("list running attempts: %w", err)
 	}
-	for _, attempt := range attempts {
-		err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{
+	outcomes := make([]AttemptOutcome, len(attempts))
+	for n, attempt := range attempts {
+		outcomes[n] = AttemptOutcome{
 			Attempt: AttemptID(attempt), State: AttemptLost,
 			Failure: &Failure{Kind: FailureLost, Message: cause.lost},
-		})
-		if err != nil && !errors.Is(err, ErrStaleAttempt) {
-			return err
 		}
+	}
+	if _, err := e.finishAttempts(ctx, tx, nil, nil, outcomes); err != nil {
+		return err
 	}
 	if row.HostID != nil {
 		if err := database.Notify(ctx, tx, database.ChannelHost, row.HostID.String()); err != nil {

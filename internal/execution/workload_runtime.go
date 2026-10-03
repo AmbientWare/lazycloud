@@ -93,19 +93,20 @@ const (
 )
 
 // recordCallbacks records in q's transaction a callback for each task whose
-// release has a callback_url. failure is the attempt failure behind a retry.
-func recordCallbacks(ctx context.Context, q *Queries, event CallbackEvent, tasks []uuid.UUID, failure *Failure) error {
+// release has a callback_url. failures, nil or one per task, are the attempt
+// failures behind retries.
+func recordCallbacks(ctx context.Context, q *Queries, event CallbackEvent, tasks []uuid.UUID, failures []Failure) error {
 	if len(tasks) == 0 {
 		return nil
 	}
-	var encoded []byte
-	if failure != nil {
+	encoded := make([][]byte, len(failures))
+	for n, failure := range failures {
 		var err error
-		if encoded, err = json.Marshal(failure); err != nil {
+		if encoded[n], err = json.Marshal(failure); err != nil {
 			return fmt.Errorf("encode callback failure: %w", err)
 		}
 	}
-	queued, err := q.EnqueueCallbacks(ctx, EnqueueCallbacksParams{Event: string(event), TaskIds: tasks, Failure: encoded})
+	queued, err := q.EnqueueCallbacks(ctx, EnqueueCallbacksParams{Event: string(event), TaskIds: tasks, Failures: encoded})
 	if err != nil {
 		return fmt.Errorf("enqueue %s callbacks: %w", event, err)
 	}

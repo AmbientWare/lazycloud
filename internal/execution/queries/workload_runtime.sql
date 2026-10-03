@@ -16,13 +16,15 @@ where t.id = @task_id and t.status = 'running' and a.container_id = @container_i
 select state from containers where id = @id and host_id = @host_id for update;
 
 -- name: EnqueueCallbacks :execrows
--- One outbox row per task whose release names a callback_url. A repeated
--- transition for the same attempt adds nothing.
+-- One outbox row per task whose release names a callback_url, with the
+-- failure at the task's position; tasks past the end of failures get none.
+-- A repeated transition for the same attempt adds nothing.
 insert into task_callbacks (task_id, workspace_id, url, event, attempt, max_attempts, failure)
-select t.id, t.workspace_id, r.spec ->> 'callback_url', @event, t.attempt_count, t.max_attempts, sqlc.narg(failure)::jsonb
-from tasks t
+select t.id, t.workspace_id, r.spec ->> 'callback_url', @event, t.attempt_count, t.max_attempts, v.failure
+from (select unnest(@task_ids::uuid[]) as task_id, unnest(@failures::jsonb[]) as failure) v
+join tasks t on t.id = v.task_id
 join releases r on r.id = t.release_id
-where t.id = any(@task_ids::uuid[]) and r.spec ->> 'callback_url' is not null
+where r.spec ->> 'callback_url' is not null
 on conflict (task_id, event, attempt) do nothing;
 
 -- name: WakeCallbackDelivery :exec
