@@ -467,9 +467,10 @@ func fitFirst(hosts []HostCapacity, r Requirement) int {
 // hosts covering the rest.
 func (ps *pass) demand(items []pendingItem) {
 	var ready, coming []HostCapacity
-	for _, h := range ps.hosts {
+	var readyAt []int
+	for i, h := range ps.hosts {
 		if h.State == FleetServing {
-			ready = append(ready, h.capacity())
+			ready, readyAt = append(ready, h.capacity()), append(readyAt, i)
 		}
 		if h.State == FleetStarting {
 			coming = append(coming, h.capacity())
@@ -481,7 +482,10 @@ func (ps *pass) demand(items []pendingItem) {
 			continue
 		}
 		if i := fitFirst(ready, it.need); i >= 0 {
-			ps.claimed[ready[i].Host] = true
+			// The room it takes is load, not warm headroom.
+			h := &ps.hosts[readyAt[i]]
+			h.Load = h.Load.Plus(reservedShape(it.need))
+			ps.claimed[h.ID] = true
 			continue
 		}
 		ps.waiting[it.market] = true

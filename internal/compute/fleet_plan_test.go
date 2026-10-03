@@ -401,6 +401,19 @@ func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
 	}
 }
 
+// Pending work that fits ready room takes it, so that room is no longer
+// headroom: an idle host the warm target needs once the work lands stays.
+func TestPlanCountsRoomPendingWorkTakesAgainstTheWarmTarget(t *testing.T) {
+	need := Requirement{CPUMillis: 6000, MemoryBytes: 8 * gib}
+	s := planSnapshot(t, planHost(1, planSmall, FleetServing), idle(planHost(2, planSmall, FleetServing)))
+	g, _ := pendingOne(need, nil)
+	s.Pending = []DemandGroup{g}
+	plan := PlanFleet(planPolicy(cpuGiB(4000, 8), FleetCapacity{}), s)
+	if mp := marketPlan(t, plan, onDemand); len(plan.Actions) > 0 || mp.WarmFree != small.Times(2).Minus(reservedShape(need)) {
+		t.Fatalf("actions %+v, warm free %+v", plan.Actions, mp.WarmFree)
+	}
+}
+
 func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
 	cheap := idle(planHost(1, planSmall, FleetServing))
 	costly := idle(planHost(2, planSmall, FleetServing))
