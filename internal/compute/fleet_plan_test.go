@@ -406,6 +406,37 @@ func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
 	}
 }
 
+// At zero load the warm floor converges on the cheapest host that meets it:
+// an idle c6a.2xlarge ($0.32/h) is replaced by an m7i.xlarge ($0.21/h) and
+// leaves once the replacement serves. A host running work is not replaced.
+func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU, p.OnDemand.Stopped = MarketReserve{}, nil, HeadroomTarget{}
+	snapshot := func(hosts ...FleetHost) FleetSnapshot {
+		s := planSnapshot(t, hosts...)
+		s.Offers.Catalog = FleetCatalog()
+		return s
+	}
+	big := idle(planHost(1, mustType(t, "c6a.2xlarge"), FleetServing))
+	plan := PlanFleet(p, snapshot(big))
+	if moves := actionsOf(plan, ActionRightsize); len(plan.Actions) != 1 || len(moves) != 1 || *moves[0].Host != big.ID ||
+		moves[0].Offer.Type.Name != "m7i.xlarge" {
+		t.Fatalf("idle c6a.2xlarge: %+v", plan.Actions)
+	}
+	if plan := PlanFleet(p, snapshot(big, planHost(2, mustType(t, "m7i.xlarge"), FleetStarting))); len(plan.Actions) > 0 {
+		t.Fatalf("while the replacement starts: %+v", plan.Actions)
+	}
+	plan = PlanFleet(p, snapshot(big, idle(planHost(2, mustType(t, "m7i.xlarge"), FleetServing))))
+	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
+		t.Fatalf("once it serves: %+v", plan.Actions)
+	}
+	busy := planHost(1, mustType(t, "c6a.2xlarge"), FleetServing)
+	busy.Load, busy.Containers = cpuGiB(1000, 1), 1
+	if plan := PlanFleet(p, snapshot(busy)); len(plan.Actions) > 0 {
+		t.Fatalf("a serving host was replaced: %+v", plan.Actions)
+	}
+}
+
 // An idle host goes back to the reserve while the reserve is short,
 // hibernating when it launched able to. Once the reserve is held, it
 // drains.

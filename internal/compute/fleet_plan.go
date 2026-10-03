@@ -907,8 +907,9 @@ func (ps *pass) retire(v *marketView) {
 // rightsize replaces the idle host whose cheaper replacement pays back
 // most: the hourly saving over the cost horizon must exceed what the new
 // host costs while it provisions. Only an idle host the warm target needs
-// is replaced, and only while nothing else in the market grows, starts or
-// leaves.
+// is replaced, by another type, and only while nothing else in the market
+// grows, starts or leaves, so the warm target converges on the cheapest
+// type that meets it; Spot price moves between zones churn nothing.
 func (ps *pass) rightsize(v *marketView) {
 	moving := slices.ContainsFunc(ps.plan.Actions, func(a FleetAction) bool {
 		return a.Market == v.m && a.Kind != ActionRetireReserve
@@ -937,7 +938,7 @@ func (ps *pass) rightsize(v *marketView) {
 		}
 		for _, o := range ps.marketOffers(v.m, false) {
 			payback := (*h.HourlyMicros-o.HourlyMicros)*horizon - o.HourlyMicros*provision
-			if !o.CoolingRegion && o.Usable.Covers(need) && payback > bestPayback {
+			if !o.CoolingRegion && o.Type.Name != h.InstanceType && o.Usable.Covers(need) && payback > bestPayback {
 				best, replaced, bestPayback = &o, h, payback
 			}
 		}
