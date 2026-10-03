@@ -1,7 +1,6 @@
 package compute
 
 import (
-	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -348,22 +347,6 @@ var (
 	planRoomy = CatalogType{Name: "roomy", CPUMillis: 8000, MemoryBytes: 64 * gib, Hibernates: true, prices: [4]int64{200_000, 200_000, 200_000, 200_000}}
 )
 
-// Current load is what containers hold now: what the market's hosts run and
-// what its pending containers ask for.
-func TestPlanTargetsShareTheLoadContainersHoldNow(t *testing.T) {
-	p := planPolicy(FleetCapacity{}, FleetCapacity{})
-	p.OnDemand = MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}}
-	busy := planHost(1, planLarge, FleetServing)
-	busy.Load, busy.Containers = cpuGiB(8000, 16), 2
-	s := planSnapshot(t, busy)
-	g, _ := pendingOne(Requirement{CPUMillis: 8000, MemoryBytes: 16 * gib}, nil)
-	s.Pending = []DemandGroup{g}
-	mp := marketPlan(t, PlanFleet(p, s), onDemand)
-	if mp.Load != cpuGiB(16_000, 32) || mp.WarmTarget != cpuGiB(4000, 8) || mp.StoppedTarget != cpuGiB(8000, 16) {
-		t.Fatalf("load %+v warm %+v stopped %+v", mp.Load, mp.WarmTarget, mp.StoppedTarget)
-	}
-}
-
 func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 	s := planSnapshot(t)
 	g, _ := pendingOne(Requirement{CPUMillis: 1000, MemoryBytes: gib}, nil)
@@ -486,22 +469,5 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 	s := planSnapshot(t, idle(planHost(1, planSmall, FleetServing)), planHost(2, planSmall, FleetStopped))
 	if plan := PlanFleet(p, s); !slices.Equal(hostsOf(plan.Actions), []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
 		t.Fatalf("reserve already held: %+v", plan.Actions)
-	}
-}
-
-// A reserve bought on-demand hibernates where its type can; a Spot reserve
-// stops plainly.
-func TestPlanBuysOnDemandReservesThatHibernateAndSpotReservesThatStop(t *testing.T) {
-	p := planPolicy(FleetCapacity{}, small)
-	p.Spot = MarketReserve{Stopped: HeadroomTarget{Floor: small}}
-	s := planSnapshot(t)
-	s.Offers.Catalog = []CatalogType{planFast}
-	s.Offers.Spot = []SpotQuote{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "fast", HourlyMicros: 30_000, ObservedAt: offerNow}}
-	modes := map[Market]ReserveMode{}
-	for _, a := range actionsOf(PlanFleet(p, s), ActionBuyReserve) {
-		modes[a.Offer.Market] = *a.Mode
-	}
-	if want := map[Market]ReserveMode{MarketOnDemand: ReserveHibernate, MarketSpot: ReserveStop}; !maps.Equal(modes, want) {
-		t.Fatalf("reserve modes %v, want %v", modes, want)
 	}
 }

@@ -192,12 +192,12 @@ type FleetPlan struct {
 }
 
 // PlanFleet decides one pass over a snapshot. Pending demand goes on ready
-// room, then starting hosts, then resumed reserves, then purchases. Then per
-// market: the warm target is kept with resumed reserves and purchases while
-// no work waits; idle hosts beyond it leave, into the reserve while the
-// reserve is short; the stopped target is bought or its surplus retired; an
-// idle host a cheaper one could replace is rightsized; and stale reserves
-// refresh.
+// room, then starting hosts, then resumed reserves, then purchases. Then, in
+// each market, resumes and purchases keep the warm target while no work
+// waits. Idle hosts beyond it leave, into the reserve while the reserve is
+// short. The pass buys reserves up to the stopped target or retires the
+// surplus, rightsizes an idle host a cheaper type could replace, and
+// refreshes stale reserves.
 func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 	ps := &pass{
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
@@ -418,7 +418,7 @@ func (ps *pass) act(a FleetAction) int {
 	return len(ps.plan.Actions) - 1
 }
 
-// buy launches a host from o, a reserve in its sleep mode or to serve.
+// buy launches a host from o, to serve or as a reserve in its sleep mode.
 func (ps *pass) buy(m ReserveMarket, o FleetOffer, kind FleetActionKind, containers []uuid.UUID, replaces *HostID) int {
 	reserve := kind == ActionBuyReserve
 	var mode *ReserveMode
@@ -908,12 +908,12 @@ func (ps *pass) retire(v *marketView) {
 	}
 }
 
-// rightsize replaces the idle host whose cheaper replacement pays back
-// most: the hourly saving over the cost horizon must exceed what the new
-// host costs while it provisions. Only an idle host the warm target needs
-// is replaced, by another type, and only while nothing else in the market
-// grows, starts or leaves, so the warm target converges on the cheapest
-// type that meets it; Spot price moves between zones churn nothing.
+// rightsize replaces the idle host whose cheaper type pays back most: the
+// hourly saving over the cost horizon must exceed what the new host costs
+// while it provisions. It replaces only an idle host the warm target needs,
+// and only while nothing else in the market grows, starts or leaves, so the
+// warm target converges on the cheapest type. The same type in another zone
+// never replaces it, so a Spot price move between zones buys nothing.
 func (ps *pass) rightsize(v *marketView) {
 	moving := slices.ContainsFunc(ps.plan.Actions, func(a FleetAction) bool {
 		return a.Market == v.m && a.Kind != ActionRetireReserve

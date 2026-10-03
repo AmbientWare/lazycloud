@@ -39,8 +39,8 @@ type FleetRolloutRow struct {
 
 // Live platform hosts by where they stand on the agent release: connected
 // serving or draining hosts on it (current) or on another (updating),
-// reserves, and other enrolled hosts (offline). Draining and serving are
-// fleetStateOf's.
+// reserves, and other enrolled hosts (offline). Draining and serving match
+// fleetStateOf.
 func (q *Queries) FleetRollout(ctx context.Context, arg FleetRolloutParams) ([]FleetRolloutRow, error) {
 	rows, err := q.db.Query(ctx, fleetRollout, arg.LiveAfter, arg.Version)
 	if err != nil {
@@ -114,9 +114,8 @@ type PlatformHostsRow struct {
 	Containers           int32
 }
 
-// Live platform hosts with an instance, with the reservations of their live
-// containers, by id after the cursor. A failed host keeps its failure on
-// its row; a launch the provider refused has no instance.
+// Live platform hosts with an instance and their live containers'
+// reservations, by id after the cursor.
 func (q *Queries) PlatformHosts(ctx context.Context, arg PlatformHostsParams) ([]PlatformHostsRow, error) {
 	rows, err := q.db.Query(ctx, platformHosts, arg.AfterID, arg.MaxRows)
 	if err != nil {

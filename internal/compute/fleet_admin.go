@@ -83,8 +83,8 @@ type FleetSummary struct {
 	Release *FleetRelease
 }
 
-// FleetNodes lists live platform hosts with an instance by id after the
-// cursor; a failed host keeps its failure on its row and in the logs.
+// FleetNodes lists live platform hosts with an instance, by id after the
+// cursor.
 func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([]FleetNode, error) {
 	release, err := c.TargetRelease(ctx)
 	if err != nil && !errors.Is(err, ErrNotFound) {

@@ -23,8 +23,8 @@ const (
 	// planExpiry is how long a published plan stays current; an expired
 	// plan is no plan.
 	planExpiry = 5 * time.Minute
-	// planRefresh is how often a pass publishes the plan when it acted on
-	// no market.
+	// planRefresh is how often a pass that acted on nothing publishes the
+	// plan again.
 	planRefresh = time.Minute
 	// preparingLimit bounds a return to the reserve whose agent never
 	// answers. The session asks again every ReserveAttemptTimeout, and an

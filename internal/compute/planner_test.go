@@ -49,10 +49,9 @@ func plan(t *testing.T, o owners) compute.PlanResult {
 	return result
 }
 
-// planCapacity runs a pass and removes the hosts it bought for no pending
-// container, the floors of markets no work waits in, so a test sees what
-// its demand bought. The fleet regions have Spot prices at 40% of
-// on-demand.
+// planCapacity runs a pass and deletes the floors it bought, the hosts no
+// pending container waits for, so a test sees what its demand bought. The
+// fleet regions have Spot prices at 40% of on-demand.
 func planCapacity(t *testing.T, o owners) compute.PlanResult {
 	t.Helper()
 	spotPrices(t, o)

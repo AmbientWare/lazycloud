@@ -1,7 +1,6 @@
 -- name: PlatformHosts :many
--- Live platform hosts with an instance, with the reservations of their live
--- containers, by id after the cursor. A failed host keeps its failure on
--- its row; a launch the provider refused has no instance.
+-- Live platform hosts with an instance and their live containers'
+-- reservations, by id after the cursor.
 select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at,
        (h.token_hash is not null)::bool as enrolled, h.instance_id::text as instance_id, h.region, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.agent_version, h.reserve_mode,
@@ -25,8 +24,8 @@ limit @max_rows;
 -- name: FleetRollout :many
 -- Live platform hosts by where they stand on the agent release: connected
 -- serving or draining hosts on it (current) or on another (updating),
--- reserves, and other enrolled hosts (offline). Draining and serving are
--- fleetStateOf's.
+-- reserves, and other enrolled hosts (offline). Draining and serving match
+-- fleetStateOf.
 select (case
     when h.phase = 'draining' or (h.phase = 'ready' and (h.capacity_state <> 'available'
         or (h.state = 'online' and coalesce(h.last_seen_at > @live_after::timestamptz, false))))

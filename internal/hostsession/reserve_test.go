@@ -353,8 +353,8 @@ func TestFirstSessionOfALaunchedHost(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			host, ctx := h.enroll()
-			h.exec(`update hosts set provider = 'aws', instance_type = 'm7i.large', region = 'us-east-2', reserve_mode = $2,
-                created_at = now() - interval '90 seconds' where id = $1`, uuid.UUID(host), c.mode)
+			h.exec(`update hosts set provider = 'aws', instance_type = 'm7i.large', region = 'us-east-2', reserve_mode = $2
+                where id = $1`, uuid.UUID(host), c.mode)
 			open(t, ctx, h.client)
 			h.waitPhase(host, c.want)
 		})

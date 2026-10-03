@@ -128,8 +128,8 @@ type Policy struct {
 	// MarginPercent is the share of rate-card revenue a purchase must keep
 	// after its supplier cost.
 	MarginPercent int64
-	// Provision is how long a bought host runs before it serves or stops
-	// as a reserve; a purchase pays for it.
+	// Provision is how long a bought host runs, paid for, before it serves
+	// or stops as a reserve.
 	Provision time.Duration
 	// CostHorizon is how long a purchase is priced over.
 	CostHorizon time.Duration
