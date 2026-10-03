@@ -97,10 +97,10 @@ func (e *Execution) resolveDependents(ctx context.Context, tx pgx.Tx, upstream [
 			return err
 		}
 	}
-	if err := notifyAll(ctx, tx, database.ChannelClaim, ready); err != nil {
+	if err := database.NotifyAll(ctx, tx, database.ChannelClaim, ready); err != nil {
 		return err
 	}
-	return notifyAll(ctx, tx, database.ChannelExecution, ready)
+	return database.NotifyAll(ctx, tx, database.ChannelExecution, ready)
 }
 
 // failQueued fails queued tasks with failure and wakes their waiters and
@@ -117,10 +117,10 @@ func (e *Execution) failQueued(ctx context.Context, tx pgx.Tx, ids, releases []u
 	if err := recordCallbacks(ctx, q, CallbackFailed, ids, nil); err != nil {
 		return err
 	}
-	if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(ids)); err != nil {
+	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(ids)); err != nil {
 		return err
 	}
-	if err := notifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases)); err != nil {
+	if err := database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases)); err != nil {
 		return err
 	}
 	if !cascade {

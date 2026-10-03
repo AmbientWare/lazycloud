@@ -78,7 +78,8 @@ type Server struct {
 	shutdown context.CancelFunc
 	// receivers are the per-session goroutines reading host messages. Each
 	// ends when its RPC ends.
-	receivers sync.WaitGroup
+	receivers   sync.WaitGroup
+	completions completions
 }
 
 // NewServer returns the host service. listener must listen on
@@ -88,6 +89,7 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 	return &Server{
 		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger,
 		lifetime: lifetime, shutdown: shutdown,
+		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
 	}
 }
 
@@ -107,9 +109,12 @@ func (s *Server) ServerOptions() []grpc.ServerOption {
 // Shutdown ends open sessions and long polls so a graceful stop completes.
 func (s *Server) Shutdown() { s.shutdown() }
 
-// Wait returns once every session's receive goroutine has ended. Call it
-// after the gRPC server stopped.
-func (s *Server) Wait() { s.receivers.Wait() }
+// Wait returns once every session's receive goroutine and every completion
+// writer has ended. Call it after the gRPC server stopped.
+func (s *Server) Wait() {
+	s.receivers.Wait()
+	s.completions.writers.Wait()
+}
 
 type hostKey struct{}
 
@@ -270,7 +275,8 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 	return out, nil
 }
 
-// CompleteTask records an attempt's outcome.
+// CompleteTask records an attempt's outcome, written together with the
+// host's other completions waiting at the time.
 func (s *Server) CompleteTask(ctx context.Context, req *hostproto.CompleteTaskRequest) (*hostproto.CompleteTaskResponse, error) {
 	container, err := parseContainer(req.GetContainerId())
 	if err != nil {
@@ -308,7 +314,7 @@ func (s *Server) CompleteTask(ctx context.Context, req *hostproto.CompleteTaskRe
 	default:
 		return nil, status.Error(codes.InvalidArgument, "an outcome is required")
 	}
-	if err := s.execution.CompleteAttempt(ctx, hostFrom(ctx), container, outcome); err != nil {
+	if err := s.complete(ctx, hostFrom(ctx), execution.Completion{Container: container, Outcome: outcome}); err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
 	return &hostproto.CompleteTaskResponse{}, nil

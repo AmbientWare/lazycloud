@@ -11,142 +11,208 @@ import (
 	"github.com/google/uuid"
 )
 
-const failTask = `-- name: FailTask :exec
-update tasks set status = 'failed', failure = $1, finished_at = now() where id = $2
+const failRunningTasks = `-- name: FailRunningTasks :exec
+update tasks t
+set status = 'failed', failure = v.failure, finished_at = now()
+from (select unnest($1::uuid[]) as id, unnest($2::jsonb[]) as failure) v
+where t.id = v.id
 `
 
-type FailTaskParams struct {
-	Failure []byte
-	ID      uuid.UUID
+type FailRunningTasksParams struct {
+	Ids      []uuid.UUID
+	Failures [][]byte
 }
 
-func (q *Queries) FailTask(ctx context.Context, arg FailTaskParams) error {
-	_, err := q.db.Exec(ctx, failTask, arg.Failure, arg.ID)
+func (q *Queries) FailRunningTasks(ctx context.Context, arg FailRunningTasksParams) error {
+	_, err := q.db.Exec(ctx, failRunningTasks, arg.Ids, arg.Failures)
 	return err
 }
 
-const insertTaskResult = `-- name: InsertTaskResult :exec
-insert into task_results (task_id, encoding, data, display) values ($1, $2, $3, $4)
+const insertTaskResults = `-- name: InsertTaskResults :exec
+insert into task_results (task_id, encoding, data, display)
+select unnest($1::uuid[]), unnest($2::text[]), unnest($3::bytea[]), unnest($4::jsonb[])
 `
 
-type InsertTaskResultParams struct {
-	TaskID   uuid.UUID
-	Encoding string
-	Data     []byte
-	Display  []byte
+type InsertTaskResultsParams struct {
+	TaskIds   []uuid.UUID
+	Encodings []string
+	Data      [][]byte
+	Displays  [][]byte
 }
 
-func (q *Queries) InsertTaskResult(ctx context.Context, arg InsertTaskResultParams) error {
-	_, err := q.db.Exec(ctx, insertTaskResult,
-		arg.TaskID,
-		arg.Encoding,
+// A null display element stores no display.
+func (q *Queries) InsertTaskResults(ctx context.Context, arg InsertTaskResultsParams) error {
+	_, err := q.db.Exec(ctx, insertTaskResults,
+		arg.TaskIds,
+		arg.Encodings,
 		arg.Data,
-		arg.Display,
+		arg.Displays,
 	)
 	return err
 }
 
-const lockRunningAttempt = `-- name: LockRunningAttempt :one
-select a.id, a.task_id, a.number, a.container_id, c.host_id
+const lockRunningAttempts = `-- name: LockRunningAttempts :many
+select a.id, a.container_id, c.host_id, c.state as container_state
 from attempts a
 join containers c on c.id = a.container_id
-where a.id = $1 and a.state = 'running'
+where a.id = any($1::uuid[]) and a.state = 'running'
+order by a.id
 for update of a
 `
 
-type LockRunningAttemptRow struct {
-	ID          uuid.UUID
-	TaskID      uuid.UUID
-	Number      int32
-	ContainerID uuid.UUID
-	HostID      *uuid.UUID
+type LockRunningAttemptsRow struct {
+	ID             uuid.UUID
+	ContainerID    uuid.UUID
+	HostID         *uuid.UUID
+	ContainerState string
 }
 
-func (q *Queries) LockRunningAttempt(ctx context.Context, attemptID uuid.UUID) (LockRunningAttemptRow, error) {
-	row := q.db.QueryRow(ctx, lockRunningAttempt, attemptID)
-	var i LockRunningAttemptRow
-	err := row.Scan(
-		&i.ID,
-		&i.TaskID,
-		&i.Number,
-		&i.ContainerID,
-		&i.HostID,
-	)
-	return i, err
+// Running attempts in id order, with the container each runs on.
+func (q *Queries) LockRunningAttempts(ctx context.Context, ids []uuid.UUID) ([]LockRunningAttemptsRow, error) {
+	rows, err := q.db.Query(ctx, lockRunningAttempts, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockRunningAttemptsRow
+	for rows.Next() {
+		var i LockRunningAttemptsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContainerID,
+			&i.HostID,
+			&i.ContainerState,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-const lockTaskForAttempt = `-- name: LockTaskForAttempt :one
-select t.id, t.status, t.attempt_count, t.max_attempts, t.release_id,
-       t.current_attempt_id, r.spec
-from tasks t
-join releases r on r.id = t.release_id
-where t.id = (select task_id from attempts where attempts.id = $1)
+const lockTasksForAttempts = `-- name: LockTasksForAttempts :many
+select a.id as attempt_id, t.id, t.status, t.attempt_count, t.max_attempts, t.release_id,
+       t.current_attempt_id
+from attempts a
+join tasks t on t.id = a.task_id
+where a.id = any($1::uuid[])
+order by t.id
 for update of t
 `
 
-type LockTaskForAttemptRow struct {
+type LockTasksForAttemptsRow struct {
+	AttemptID        uuid.UUID
 	ID               uuid.UUID
 	Status           string
 	AttemptCount     int32
 	MaxAttempts      int32
 	ReleaseID        uuid.UUID
 	CurrentAttemptID *uuid.UUID
-	Spec             []byte
 }
 
 // Lock order everywhere in execution: container, then task, then attempt.
-func (q *Queries) LockTaskForAttempt(ctx context.Context, attemptID uuid.UUID) (LockTaskForAttemptRow, error) {
-	row := q.db.QueryRow(ctx, lockTaskForAttempt, attemptID)
-	var i LockTaskForAttemptRow
-	err := row.Scan(
-		&i.ID,
-		&i.Status,
-		&i.AttemptCount,
-		&i.MaxAttempts,
-		&i.ReleaseID,
-		&i.CurrentAttemptID,
-		&i.Spec,
-	)
-	return i, err
+// Tasks lock in id order so concurrent batches never deadlock on each other.
+func (q *Queries) LockTasksForAttempts(ctx context.Context, attemptIds []uuid.UUID) ([]LockTasksForAttemptsRow, error) {
+	rows, err := q.db.Query(ctx, lockTasksForAttempts, attemptIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockTasksForAttemptsRow
+	for rows.Next() {
+		var i LockTasksForAttemptsRow
+		if err := rows.Scan(
+			&i.AttemptID,
+			&i.ID,
+			&i.Status,
+			&i.AttemptCount,
+			&i.MaxAttempts,
+			&i.ReleaseID,
+			&i.CurrentAttemptID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-const requeueTask = `-- name: RequeueTask :exec
-update tasks
+const releaseSpecs = `-- name: ReleaseSpecs :many
+select id, spec from releases where id = any($1::uuid[])
+`
+
+type ReleaseSpecsRow struct {
+	ID   uuid.UUID
+	Spec []byte
+}
+
+func (q *Queries) ReleaseSpecs(ctx context.Context, ids []uuid.UUID) ([]ReleaseSpecsRow, error) {
+	rows, err := q.db.Query(ctx, releaseSpecs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReleaseSpecsRow
+	for rows.Next() {
+		var i ReleaseSpecsRow
+		if err := rows.Scan(&i.ID, &i.Spec); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const requeueTasks = `-- name: RequeueTasks :exec
+update tasks t
 set status = 'queued',
     current_attempt_id = null,
-    available_at = now() + make_interval(secs => $1::float8)
-where id = $2
+    available_at = now() + make_interval(secs => v.delay_seconds)
+from (select unnest($1::uuid[]) as id, unnest($2::float8[]) as delay_seconds) v
+where t.id = v.id
 `
 
-type RequeueTaskParams struct {
-	DelaySeconds float64
-	ID           uuid.UUID
+type RequeueTasksParams struct {
+	Ids          []uuid.UUID
+	DelaySeconds []float64
 }
 
-func (q *Queries) RequeueTask(ctx context.Context, arg RequeueTaskParams) error {
-	_, err := q.db.Exec(ctx, requeueTask, arg.DelaySeconds, arg.ID)
+func (q *Queries) RequeueTasks(ctx context.Context, arg RequeueTasksParams) error {
+	_, err := q.db.Exec(ctx, requeueTasks, arg.Ids, arg.DelaySeconds)
 	return err
 }
 
-const setAttemptState = `-- name: SetAttemptState :exec
-update attempts set state = $1, finished_at = now() where id = $2
+const setAttemptStates = `-- name: SetAttemptStates :exec
+update attempts a
+set state = v.state, finished_at = now()
+from (select unnest($1::uuid[]) as id, unnest($2::text[]) as state) v
+where a.id = v.id
 `
 
-type SetAttemptStateParams struct {
-	State string
-	ID    uuid.UUID
+type SetAttemptStatesParams struct {
+	Ids    []uuid.UUID
+	States []string
 }
 
-func (q *Queries) SetAttemptState(ctx context.Context, arg SetAttemptStateParams) error {
-	_, err := q.db.Exec(ctx, setAttemptState, arg.State, arg.ID)
+func (q *Queries) SetAttemptStates(ctx context.Context, arg SetAttemptStatesParams) error {
+	_, err := q.db.Exec(ctx, setAttemptStates, arg.Ids, arg.States)
 	return err
 }
 
-const succeedTask = `-- name: SucceedTask :exec
-update tasks set status = 'succeeded', finished_at = now() where id = $1
+const succeedTasks = `-- name: SucceedTasks :exec
+update tasks set status = 'succeeded', finished_at = now() where id = any($1::uuid[])
 `
 
-func (q *Queries) SucceedTask(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, succeedTask, id)
+func (q *Queries) SucceedTasks(ctx context.Context, ids []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, succeedTasks, ids)
 	return err
 }

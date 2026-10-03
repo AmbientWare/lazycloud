@@ -54,7 +54,12 @@ type harness struct {
 // PostgreSQL.
 func start(t *testing.T) *harness {
 	t.Helper()
-	pool := dbtest.New(t)
+	return serve(t, dbtest.New(t))
+}
+
+// serve serves the host service on a random local port over pool.
+func serve(t *testing.T, pool *pgxpool.Pool) *harness {
+	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp)
 	e := execution.NewExecution(pool)

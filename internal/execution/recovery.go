@@ -36,13 +36,16 @@ func (e *Execution) TimeOutAttempts(ctx context.Context, logger *slog.Logger) (i
 		}
 		for _, attempt := range overdue {
 			err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-				err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{
+				stale, err := e.finishAttempts(ctx, tx, nil, nil, []AttemptOutcome{{
 					Attempt: AttemptID(attempt.ID),
 					State:   AttemptTimedOut,
 					Failure: &Failure{Kind: FailureTimeout, Message: "attempt exceeded its timeout"},
-				})
+				}})
 				if err != nil {
 					return err
+				}
+				if stale[0] {
+					return ErrStaleAttempt
 				}
 				if attempt.HostID == nil {
 					return nil

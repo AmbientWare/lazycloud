@@ -45,23 +45,25 @@ func (q *Queries) ContainerAuthority(ctx context.Context, arg ContainerAuthority
 
 const enqueueCallbacks = `-- name: EnqueueCallbacks :execrows
 insert into task_callbacks (task_id, workspace_id, url, event, attempt, max_attempts, failure)
-select t.id, t.workspace_id, r.spec ->> 'callback_url', $1, t.attempt_count, t.max_attempts, $2::jsonb
-from tasks t
+select t.id, t.workspace_id, r.spec ->> 'callback_url', $1, t.attempt_count, t.max_attempts, v.failure
+from (select unnest($2::uuid[]) as task_id, unnest($3::jsonb[]) as failure) v
+join tasks t on t.id = v.task_id
 join releases r on r.id = t.release_id
-where t.id = any($3::uuid[]) and r.spec ->> 'callback_url' is not null
+where r.spec ->> 'callback_url' is not null
 on conflict (task_id, event, attempt) do nothing
 `
 
 type EnqueueCallbacksParams struct {
-	Event   string
-	Failure []byte
-	TaskIds []uuid.UUID
+	Event    string
+	TaskIds  []uuid.UUID
+	Failures [][]byte
 }
 
-// One outbox row per task whose release names a callback_url. A repeated
-// transition for the same attempt adds nothing.
+// One outbox row per task whose release names a callback_url, with the
+// failure at the task's position; tasks past the end of failures get none.
+// A repeated transition for the same attempt adds nothing.
 func (q *Queries) EnqueueCallbacks(ctx context.Context, arg EnqueueCallbacksParams) (int64, error) {
-	result, err := q.db.Exec(ctx, enqueueCallbacks, arg.Event, arg.Failure, arg.TaskIds)
+	result, err := q.db.Exec(ctx, enqueueCallbacks, arg.Event, arg.TaskIds, arg.Failures)
 	if err != nil {
 		return 0, err
 	}

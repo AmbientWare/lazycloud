@@ -6,6 +6,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,41 @@ func OpenSession(ctx context.Context, url string, main *pgxpool.Pool) (pool *pgx
 // Notify queues a wake-up that PostgreSQL delivers when tx commits.
 func Notify(ctx context.Context, tx pgx.Tx, channel Channel, payload string) error {
 	if _, err := tx.Exec(ctx, "select pg_notify($1, $2)", string(channel), payload); err != nil {
+		return fmt.Errorf("notify %s: %w", channel, err)
+	}
+	return nil
+}
+
+// PostgreSQL rejects a NOTIFY payload of 8000 bytes or more.
+const maxPayloadBytes = 7999
+
+// NotifyAll queues a wake-up for each distinct payload in one statement,
+// packed into as few notifications as maxPayloadBytes allows. Every
+// notifying commit writes its notifications under one shared lock, so
+// fewer notifications hold it for less time.
+func NotifyAll(ctx context.Context, tx pgx.Tx, channel Channel, payloads []string) error {
+	if len(payloads) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(payloads))
+	var packed []string
+	var b strings.Builder
+	for _, p := range payloads {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		if b.Len() > 0 && b.Len()+len(payloadSeparator)+len(p) > maxPayloadBytes {
+			packed = append(packed, b.String())
+			b.Reset()
+		}
+		if b.Len() > 0 {
+			b.WriteString(payloadSeparator)
+		}
+		b.WriteString(p)
+	}
+	packed = append(packed, b.String())
+	if _, err := tx.Exec(ctx, "select pg_notify($1, p) from unnest($2::text[]) p", string(channel), packed); err != nil {
 		return fmt.Errorf("notify %s: %w", channel, err)
 	}
 	return nil
