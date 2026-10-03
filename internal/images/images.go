@@ -1010,7 +1010,8 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes, gpu)
 		var unpaid *billing.PaymentRequiredError
 		var limit *billing.LimitError
-		if errors.As(err, &unpaid) || errors.As(err, &limit) {
+		var unoffered *billing.GPUUnavailableError
+		if errors.As(err, &unpaid) || errors.As(err, &limit) || errors.As(err, &unoffered) {
 			return fail(reason + "; " + err.Error())
 		}
 		return err

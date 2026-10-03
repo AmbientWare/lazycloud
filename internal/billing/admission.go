@@ -132,11 +132,17 @@ func (s standing) fundsRefusal() error {
 const statusPastDue = "past_due"
 
 // Admit decides, inside the caller's transaction, whether the workspace's
-// billing account may take on req. It refuses work the account cannot pay
-// for with a PaymentRequiredError and cold work at the concurrency limit
-// with a LimitError. Starting containers takes the account's container lock
+// billing account may take on req. It refuses GPU work that accepts no
+// enabled model with a GPUUnavailableError, work the account cannot pay for
+// with a PaymentRequiredError and cold work at the concurrency limit with a
+// LimitError. Starting containers takes the account's container lock
 // for the rest of tx, so concurrent starts count each other.
 func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
+	if req.GPUs > 0 {
+		if err := CheckGPUModels(req.GPUModels); err != nil {
+			return Grant{}, err
+		}
+	}
 	q := New(tx)
 	owner, err := q.WorkspaceOwner(ctx, req.Workspace)
 	if err != nil {
@@ -191,14 +197,35 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	return grant, nil
 }
 
+// CheckGPUModels refuses, with a GPUUnavailableError, a GPU preference that
+// names models and none of them enabled. Any, or no model by name, accepts
+// every enabled model.
+func CheckGPUModels(requested []GPUType) error {
+	var unavailable []GPUType
+	for _, m := range requested {
+		if m == GPUAny || GPUEnabled(string(m)) {
+			return nil
+		}
+		unavailable = append(unavailable, m)
+	}
+	if len(unavailable) > 0 {
+		return &GPUUnavailableError{Models: unavailable}
+	}
+	return nil
+}
+
 // gpuModels narrows requested models to the ones the account may use. A
-// request for any model, or for none by name, gets every allowed model; a
+// request for any model, or for none by name, gets every allowed model. A
+// model not enabled is dropped, after CheckGPUModels kept one that is; a
 // named model the account may not use is refused.
 func (e Entitlements) gpuModels(requested []GPUType) ([]GPUType, error) {
 	var named []GPUType
 	for _, m := range requested {
 		if m == GPUAny {
 			return e.GPUTypes, nil
+		}
+		if !GPUEnabled(string(m)) {
+			continue
 		}
 		if !slices.Contains(e.GPUTypes, m) {
 			return nil, &PaymentRequiredError{Message: fmt.Sprintf(

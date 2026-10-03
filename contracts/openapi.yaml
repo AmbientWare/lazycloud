@@ -6556,7 +6556,9 @@ components:
     GpuType:
       description: >-
         A GPU model, or any for whatever model has capacity. A100 is not a
-        model: name A100-40 or A100-80.
+        model: name A100-40 or A100-80. Only models the pricing catalog
+        marks enabled may be requested; a request naming only others is
+        refused with unsupported.
       type: string
       enum: [T4, A10G, L4, L40S, A100-40, A100-80, H100, H200, any]
 
@@ -7215,9 +7217,12 @@ components:
 
     GpuRate:
       type: object
-      required: [gpu_type, nanos_per_card_hour]
+      required: [gpu_type, enabled, nanos_per_card_hour]
       properties:
         gpu_type: { type: string }
+        enabled:
+          description: Whether work may request the model; if not, it is coming soon.
+          type: boolean
         nanos_per_card_hour: { $ref: "#/components/schemas/CardRates" }
 
     CardRates:

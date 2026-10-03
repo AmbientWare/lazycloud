@@ -226,10 +226,9 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		grant, err := billing.Admit(ctx, tx, billing.Request{
 			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount), GPUModels: models, Pinned: row.Pinned,
 		})
-		var refused *billing.PaymentRequiredError
-		if errors.As(err, &refused) {
-			// The account cannot pay; requests wait and time out until it
-			// can.
+		if refusedToWait(err) {
+			// Requests wait and time out until the account can pay or a GPU
+			// model the release asks for is offered; the edge refuses new ones.
 			return nil
 		}
 		if err != nil {

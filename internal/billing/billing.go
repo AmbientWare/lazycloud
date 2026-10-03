@@ -7,6 +7,7 @@ package billing
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -32,6 +33,19 @@ func (e *LimitError) Error() string { return e.Message }
 type ConflictError struct{ Message string }
 
 func (e *ConflictError) Error() string { return e.Message }
+
+// GPUUnavailableError refuses work that accepts only GPU models the
+// platform does not offer yet.
+type GPUUnavailableError struct{ Models []GPUType }
+
+func (e *GPUUnavailableError) Error() string {
+	verb := "is"
+	if len(e.Models) > 1 {
+		verb = "are"
+	}
+	return fmt.Sprintf("%s %s coming soon and cannot be requested yet; the GPU models available now are %s",
+		joinModels(e.Models), verb, joinModels(enabledGPUs()))
+}
 
 // InvalidError is a request billing rejects.
 type InvalidError struct{ Message string }

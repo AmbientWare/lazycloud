@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -162,5 +163,21 @@ func TestDeployRequiresRegisteredSourceAndChangesNothing(t *testing.T) {
 	}
 	if apps != 0 {
 		t.Fatalf("a failed deploy left %d apps", apps)
+	}
+}
+
+// A deployment that accepts only GPU models not offered yet is refused at
+// once with billing's typed error; one offered model in its preference
+// deploys.
+func TestDeployRefusesGPUModelsNotOfferedYet(t *testing.T) {
+	spec := function("train")
+	spec.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
+	var unoffered *billing.GPUUnavailableError
+	if _, err := Resolve(spec); !errors.As(err, &unoffered) || !strings.Contains(err.Error(), "coming soon") {
+		t.Fatalf("H100 alone: %v", err)
+	}
+	spec.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100, apitypes.L4}
+	if _, err := Resolve(spec); err != nil {
+		t.Fatalf("H100 then L4: %v", err)
 	}
 }

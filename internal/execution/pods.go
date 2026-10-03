@@ -112,9 +112,9 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount),
 			GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned,
 		})
-		var refused *billing.PaymentRequiredError
-		if errors.As(err, &refused) {
-			// Connections wait and time out until the account can pay.
+		if refusedToWait(err) {
+			// Connections wait and time out until the account can pay or a GPU
+			// model it asks for is offered.
 			return nil
 		}
 		if err != nil {

@@ -1,6 +1,9 @@
 package billing
 
 import (
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,8 +91,8 @@ func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
 	}
 	// Without a card only the trial models, and region selection needs Team.
 	f.setAccount(owner, "payment_method_attached_at = null")
-	if _, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUH100}}); !paymentRequired(err) {
-		t.Fatalf("H100 without a card: %v", err)
+	if _, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUL40S}}); !paymentRequired(err) {
+		t.Fatalf("L40S without a card: %v", err)
 	}
 	grant, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUAny}})
 	if err != nil || len(grant.GPUModels) != 3 {
@@ -101,6 +104,38 @@ func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
 	f.setAccount(owner, "terms_version = 'team-v3'")
 	if _, err := f.admit(Request{Workspace: ws, Pinned: true}); err != nil {
 		t.Fatalf("pinned region on Team: %v", err)
+	}
+}
+
+// A model not offered yet is refused at admission with a typed error, so its
+// work never waits for capacity the fleet will not buy; one offered model in
+// the preference admits the work on that model alone.
+func TestAdmitRefusesGPUModelsNotOfferedYet(t *testing.T) {
+	f := newFixture(t)
+	owner := f.user()
+	ws := f.workspace(owner)
+	f.setAccount(owner, "payment_method_attached_at = now()")
+	_, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{GPUH100, GPUA10080}})
+	var unavailable *GPUUnavailableError
+	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "H100, A100-80 are coming soon") {
+		t.Fatalf("H100 or A100-80: %v", err)
+	}
+	grant, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUH100, GPUL4}})
+	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUL4}) {
+		t.Fatalf("H100 then L4: %+v %v", grant, err)
+	}
+	grant, err = f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUAny}})
+	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUT4, GPUA10G, GPUL4, GPUL40S}) {
+		t.Fatalf("any: %+v %v", grant, err)
+	}
+	catalog, err := f.billing.Catalog(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rate := range catalog.GpuRates {
+		if rate.Enabled != GPUEnabled(rate.GpuType) || rate.NanosPerCardHour.PlatformFleet <= 0 {
+			t.Errorf("catalog GPU %+v", rate)
+		}
 	}
 }
 

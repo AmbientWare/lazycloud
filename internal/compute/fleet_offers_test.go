@@ -77,9 +77,9 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 	gpuType := func(name, model string, micros int64) CatalogType {
 		return CatalogType{Name: name, CPUMillis: 16_000, MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
 	}
-	in.Catalog = []CatalogType{gpuType("h100", "H100", 1_000_000), gpuType("l4", "L4", 300_000), gpuType("t4", "T4", 200_000), mustType(t, "m7i.large")}
-	preferred := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"H100", "L4"}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
-	if len(preferred) == 0 || preferred[0].Type.GPU != "H100" {
+	in.Catalog = []CatalogType{gpuType("l40s", "L40S", 1_000_000), gpuType("l4", "L4", 300_000), gpuType("t4", "T4", 200_000), mustType(t, "m7i.large")}
+	preferred := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"L40S", "L4"}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
+	if len(preferred) == 0 || preferred[0].Type.GPU != "L40S" {
 		t.Fatalf("first offer %v", offerKeys(preferred))
 	}
 	anyCard := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{GPUAny}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
@@ -89,6 +89,22 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 	for _, o := range RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, false, in) {
 		if o.Type.GPUCount > 0 {
 			t.Fatalf("CPU work offered GPU host %s", o.Key())
+		}
+	}
+}
+
+// The fleet buys only GPU models billing has enabled, even for work that
+// names a disabled one first.
+func TestOffersHoldOnlyEnabledGPUModels(t *testing.T) {
+	in := offerInputs(t)
+	in.Networks = map[string]Network{"us-east-1": oneZone("us-east-1a", "use1-az1")}
+	offers := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"H100", GPUAny}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
+	if len(offers) == 0 {
+		t.Fatal("no offer for any model")
+	}
+	for _, o := range offers {
+		if !billing.GPUEnabled(o.Type.GPU) {
+			t.Fatalf("offered %s", o.Key())
 		}
 	}
 }

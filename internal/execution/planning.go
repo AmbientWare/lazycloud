@@ -183,9 +183,9 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		grant, err := billing.Admit(ctx, tx, billing.Request{
 			Workspace: release.WorkspaceID, Start: count, GPUs: int(release.GpuCount), GPUModels: models, Pinned: release.Pinned,
 		})
-		var refused *billing.PaymentRequiredError
-		if errors.As(err, &refused) {
-			// The account cannot pay; its tasks wait until it can.
+		if refusedToWait(err) {
+			// The account cannot pay, or no GPU model it asks for is offered
+			// yet; its tasks wait. Submission refuses new ones.
 			return nil
 		}
 		if err != nil {
@@ -225,6 +225,15 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		}
 	}
 	return nil
+}
+
+// refusedToWait reports an admission refusal planning waits out rather
+// than fails on: the account cannot pay, or no GPU model the work accepts is
+// offered yet.
+func refusedToWait(err error) bool {
+	var payment *billing.PaymentRequiredError
+	var gpu *billing.GPUUnavailableError
+	return errors.As(err, &payment) || errors.As(err, &gpu)
 }
 
 // desiredContainers is clamp(ceil(demand / tasksPerContainer), minimum,

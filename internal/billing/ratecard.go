@@ -63,7 +63,7 @@ const (
 // GPUType names a GPU model; the empty value is no GPU.
 type GPUType string
 
-// The GPU models the platform rents, in published order.
+// The GPU models the rate card prices, in published order.
 const (
 	GPUT4     GPUType = "T4"
 	GPUA10G   GPUType = "A10G"
@@ -76,8 +76,45 @@ const (
 	noGPU     GPUType = ""
 )
 
+// GPUModel is a GPU model the rate card prices. Only an enabled model may
+// be requested and bought; the others are listed as coming soon.
+type GPUModel struct {
+	Type    GPUType
+	Enabled bool
+}
+
+// GPUModels are the priced models in published order.
+func GPUModels() []GPUModel {
+	return []GPUModel{
+		{GPUT4, true}, {GPUA10G, true}, {GPUL4, true}, {GPUL40S, true},
+		{GPUA10040, false}, {GPUA10080, false}, {GPUH100, false}, {GPUH200, false},
+	}
+}
+
+// GPUEnabled reports whether model may be requested and bought.
+func GPUEnabled(model string) bool {
+	return slices.Contains(enabledGPUs(), GPUType(model))
+}
+
+// gpuModels are every priced model, enabled or not.
 func gpuModels() []GPUType {
-	return []GPUType{GPUT4, GPUA10G, GPUL4, GPUL40S, GPUA10040, GPUA10080, GPUH100, GPUH200}
+	models := GPUModels()
+	out := make([]GPUType, len(models))
+	for n, m := range models {
+		out[n] = m.Type
+	}
+	return out
+}
+
+// enabledGPUs are the models that may be requested, in published order.
+func enabledGPUs() []GPUType {
+	var out []GPUType
+	for _, m := range GPUModels() {
+		if m.Enabled {
+			out = append(out, m.Type)
+		}
+	}
+	return out
 }
 
 // noCardGPUs are the models an account without a saved card may use.
@@ -175,7 +212,7 @@ func Plans() []Plan {
 			ID: PlanFree, Name: "Free", Summary: "What an account costs before it has agreed to anything.",
 			Terms: TermsFree, MonthlyNanos: 0, IncludedNanos: 0,
 			Entitlements: Entitlements{
-				MaxCPUContainers: 30, MaxGPUs: 5, GPUTypes: gpuModels(),
+				MaxCPUContainers: 30, MaxGPUs: 5, GPUTypes: enabledGPUs(),
 				MaxWorkspaces: limitOf(1), MaxMembers: limitOf(1),
 				SelfHosted: true, RetentionDays: 1,
 			},
@@ -188,7 +225,7 @@ func Plans() []Plan {
 			ID: PlanTeam, Name: "Team", Summary: "A monthly subscription with included usage credit.",
 			Terms: TermsTeam, MonthlyNanos: 49 * NanosPerUSD, IncludedNanos: 25 * NanosPerUSD,
 			Entitlements: Entitlements{
-				MaxCPUContainers: 1_000, MaxGPUs: 50, GPUTypes: gpuModels(),
+				MaxCPUContainers: 1_000, MaxGPUs: 50, GPUTypes: enabledGPUs(),
 				MaxWorkspaces: Limit{Unlimited: true}, MaxMembers: limitOf(3),
 				CustomDomains: true, SelfHosted: true, RegionSelection: true,
 				RetentionDays: 30, MaxWorkspaceDiskGiB: paidDiskGiB,
@@ -204,7 +241,7 @@ func Plans() []Plan {
 			ID: PlanBusiness, Name: "Business", Summary: "BYO cloud, unlimited members, and higher concurrency.",
 			Terms: TermsBusiness, MonthlyNanos: 199 * NanosPerUSD, IncludedNanos: 100 * NanosPerUSD,
 			Entitlements: Entitlements{
-				MaxCPUContainers: 2_000, MaxGPUs: 100, GPUTypes: gpuModels(),
+				MaxCPUContainers: 2_000, MaxGPUs: 100, GPUTypes: enabledGPUs(),
 				MaxWorkspaces: Limit{Unlimited: true}, MaxMembers: Limit{Unlimited: true},
 				ConnectedCloud: true, CustomDomains: true, SelfHosted: true, RegionSelection: true,
 				RetentionDays: 90, MaxWorkspaceDiskGiB: paidDiskGiB,

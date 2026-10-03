@@ -44,7 +44,7 @@ export type BillingSettingsController = {
   isLoading: boolean;
   loadError: Error | null;
   offers: readonly PlanOffer[];
-  /** Every GPU model the catalog rents, which an offer's models are read against. */
+  /** Every GPU model work may request now, which an offer's models are read against. */
   offeredGpuTypes: readonly string[];
   settling: boolean;
   cancelScheduledChange: () => void;
@@ -116,7 +116,8 @@ export function useBillingSettingsController({
     isLoading: query.isPending || catalog.isPending,
     loadError: query.error ?? catalog.error,
     offers: planOffers(query.data, catalog.data),
-    offeredGpuTypes: catalog.data?.gpu_rates.map((rate) => rate.gpu_type) ?? [],
+    offeredGpuTypes:
+      catalog.data?.gpu_rates.filter((rate) => rate.enabled).map((rate) => rate.gpu_type) ?? [],
     settling,
     cancelScheduledChange: () => {
       const held = query.data?.plan;

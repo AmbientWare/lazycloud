@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
@@ -78,6 +79,15 @@ func Resolve(spec apitypes.WorkloadSpec) (apitypes.WorkloadSpec, error) {
 	}
 	if r := spec.Resources; r.MemoryLimitMib != nil && *r.MemoryLimitMib < r.MemoryMib {
 		return out, &InvalidSpecError{Function: spec.Name, Reason: "resources.memory_limit_mib is below memory_mib"}
+	}
+	if r := spec.Resources; r.Gpu != nil {
+		models := make([]billing.GPUType, len(*r.Gpu))
+		for n, g := range *r.Gpu {
+			models[n] = billing.GPUType(g)
+		}
+		if err := billing.CheckGPUModels(models); err != nil {
+			return out, fmt.Errorf("function %s: %w", spec.Name, err)
+		}
 	}
 
 	scaler := apitypes.Autoscaler{}
