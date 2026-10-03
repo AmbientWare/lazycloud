@@ -506,6 +506,35 @@ paths:
               schema: { $ref: "#/components/schemas/SubmitTasksResponse" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/run:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/WorkloadPath"
+    post:
+      operationId: runTask
+      summary: Admit one task and stream it until it finishes or the wait passes
+      description: >-
+        Admits one input as submitTasks does, then streams its log entries
+        and the finished task with its result. A task still running when the
+        wait passes ends the stream with its current state, and the caller
+        waits on it with getTask. A blank line follows 15 seconds without
+        entries.
+      parameters:
+        - $ref: "#/components/parameters/InvokeWait"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunTaskRequest" }
+      responses:
+        "200":
+          description: Newline-delimited TaskRunEvent objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/workspaces/{workspace}/tasks/{task}:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -4688,6 +4717,31 @@ components:
               maxItems: 100
               uniqueItems: true
               items: { type: string, format: uuid }
+
+    RunTaskRequest:
+      type: object
+      required: [input]
+      properties:
+        input: { $ref: "#/components/schemas/TaskInput" }
+        release_id:
+          description: Run on this release, such as a prepared one, instead of the active one.
+          type: string
+          format: uuid
+        parent_task_id:
+          description: The task that submits this one, which becomes its parent.
+          type: string
+          format: uuid
+
+    TaskRunEvent:
+      description: >-
+        One line of a runTask stream. The first carries the admitted task,
+        the middle ones log entries, and the last the task when it finishes
+        or the wait passes, with `result` if it succeeded.
+      type: object
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        log: { $ref: "#/components/schemas/LogEntry" }
+        result: { $ref: "#/components/schemas/Payload" }
 
     SubmitTasksResponse:
       type: object

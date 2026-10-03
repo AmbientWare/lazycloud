@@ -3,12 +3,14 @@ from __future__ import annotations
 import builtins
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from lazycloud._shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount, parse_disk_size_bytes
-from lazycloud.clients.api import ApiConnectionError, ApiError
-from lazycloud.clients.storage import StorageClient
-from lazycloud.contracts import api
 from lazycloud.control import resolve_control_client_config, storage_client
+
+if TYPE_CHECKING:
+    from lazycloud.clients.storage import StorageClient
+    from lazycloud.contracts import api
 
 
 class DiskOperationError(RuntimeError):
@@ -32,6 +34,8 @@ class Disk:
     @staticmethod
     def list(*, workspace: str | None = None) -> builtins.list[api.Disk]:
         """Every disk in the workspace, by name."""
+        from lazycloud.clients.api import ApiConnectionError, ApiError
+
         client = _storage(workspace)
         disks: builtins.list[api.Disk] = []
         cursor: str | None = None
@@ -47,6 +51,8 @@ class Disk:
 
     def delete(self, *, workspace: str | None = None) -> None:
         """Delete this disk and everything written to it; refused while a container holds it."""
+        from lazycloud.clients.api import ApiConnectionError, ApiError
+
         try:
             _storage(workspace).delete_disk(self.name)
         except (ApiError, ApiConnectionError) as exc:

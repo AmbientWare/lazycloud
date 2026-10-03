@@ -19,18 +19,20 @@ from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.http.client_manifests import ClientContract
 from lazycloud._shared.serialization import to_json_value
 from lazycloud.abstractions.http_calls import EndpointResponse, request_timeout, send_request
-from lazycloud.clients.api import ApiClient, ApiError
+from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError
 from lazycloud.contracts.api import (
     Encoding,
     ErrorCode,
-    SubmitTasksRequest,
+    Payload,
+    RunTaskRequest,
     TaskInput,
     TaskStatus,
 )
+from lazycloud.contracts.api import Task as TaskView
 from lazycloud.control import api_client, resolve_control_client_config
 from lazycloud.exceptions import FunctionNotDeployedError, SdkError
 from lazycloud.json_contracts import JsonValue
-from lazycloud.session.task import Task
+from lazycloud.session.task import TERMINAL_STATUSES, Task
 
 
 class ClientHandleError(SdkError):
@@ -68,7 +70,7 @@ class ResourceManifest(BaseModel):
 
 @dataclass(slots=True)
 class FunctionHandle:
-    """Submits JSON tasks to a function's active release and waits for their results."""
+    """Runs JSON tasks on a function's active release and returns their results."""
 
     manifest: ResourceManifest
     endpoint: str
@@ -88,32 +90,42 @@ class FunctionHandle:
 
     def remote_json(self, *args: Any, **kwargs: Any) -> JsonValue:
         client = self._api()
-        request = SubmitTasksRequest(
-            inputs=[
-                TaskInput(
-                    encoding=Encoding.json,
-                    value={
-                        "args": [_json_argument(item) for item in args],
-                        "kwargs": {key: _json_argument(item) for key, item in kwargs.items()},
-                    },
-                )
-            ]
+        request = RunTaskRequest(
+            input=TaskInput(
+                encoding=Encoding.json,
+                value={
+                    "args": [_json_argument(item) for item in args],
+                    "kwargs": {key: _json_argument(item) for key, item in kwargs.items()},
+                },
+            )
         )
+        events = client.run_task(self.workspace, self.app, self.name, request)
+        view: TaskView | None = None
+        payload: Payload | None = None
         try:
-            response = client.submit_tasks(self.workspace, self.app, self.name, request)
+            for event in events:
+                if event.task is not None:
+                    view, payload = event.task, event.result
         except ApiError as exc:
             if exc.code is ErrorCode.not_found:
                 raise FunctionNotDeployedError(self.app, self.name, self.workspace) from exc
             raise
-        if len(response.tasks) != 1:
-            msg = f"submitting one task returned {len(response.tasks)}"
-            raise ClientHandleError(msg)
-        task = Task(str(response.tasks[0].id), self.workspace, client)
-        view = task.wait_view()
+        except ApiConnectionError:
+            # A stream that drops after admission is waited on below.
+            if view is None:
+                raise
+        finally:
+            events.close()
+        if view is None:
+            raise ClientHandleError("the run stream ended before it named the admitted task")
+        task = Task(str(view.id), self.workspace, client)
+        if view.status not in TERMINAL_STATUSES:
+            view = task.wait_view()
         if view.status is not TaskStatus.succeeded:
             # Raises the remote exception, a typed failure or the cancellation.
             return task.outcome(view)
-        payload = client.get_task_result(self.workspace, view.id)
+        if payload is None:
+            payload = client.get_task_result(self.workspace, view.id)
         if payload.encoding is not Encoding.json:
             msg = f"task {task.task_id} returned a {payload.encoding.value} result, not JSON"
             raise ClientHandleError(msg)

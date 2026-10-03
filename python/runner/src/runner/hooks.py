@@ -8,7 +8,6 @@ attempt; a failing one is reported on stderr and the rest still run.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import os
 import sys
@@ -37,6 +36,8 @@ def _call(reference: str, context: object) -> None:
     target = getattr(hook, "func", hook)
     result = target(context)
     if inspect.isawaitable(result):
+        import asyncio
+
         asyncio.run(_await(result))
 
 

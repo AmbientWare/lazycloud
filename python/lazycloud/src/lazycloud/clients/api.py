@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, TypeVar, overload
@@ -43,6 +43,7 @@ from lazycloud.contracts.api import (
     Me,
     Payload,
     Release,
+    RunTaskRequest,
     ScaleRequest,
     Secret,
     SecretCreate,
@@ -58,6 +59,7 @@ from lazycloud.contracts.api import (
     SubmitTasksResponse,
     Task,
     TaskPage,
+    TaskRunEvent,
     TaskStatus,
     UploadTarget,
     Workload,
@@ -284,6 +286,30 @@ class ApiClient:
             "POST",
             workload_path(workspace, app, WorkloadKind.function, function, "tasks"),
             body=request,
+        )
+
+    def run_task(
+        self,
+        workspace: str,
+        app: str,
+        function: str,
+        request: RunTaskRequest,
+        *,
+        wait_seconds: int | None = None,
+    ) -> Generator[TaskRunEvent, None, None]:
+        """Admit one task and yield its events as they arrive.
+
+        The first event carries the admitted task, the middle ones its log
+        entries, and the last the task once it finishes or the server's wait
+        passes, with the result if it succeeded.
+        """
+        return self._stream_ndjson(
+            TaskRunEvent,
+            "POST",
+            workload_path(workspace, app, WorkloadKind.function, function, "run"),
+            params={"wait_seconds": wait_seconds} if wait_seconds is not None else {},
+            body=request,
+            follow=True,
         )
 
     def get_task(self, workspace: str, task_id: UUID, *, wait_seconds: int = 0) -> Task:
@@ -600,12 +626,36 @@ class ApiClient:
             params["tail"] = tail
         if follow:
             params["follow"] = "true"
+        return self._stream_ndjson(model, "GET", path, params=params, follow=follow)
+
+    def _stream_ndjson(
+        self,
+        model: type[ModelT],
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, str | int],
+        body: BaseModel | None = None,
+        follow: bool,
+    ) -> Generator[ModelT, None, None]:
+        """Yield each line of an NDJSON response, skipping heartbeats.
+
+        A followed stream reads longer than the server's heartbeat window.
+        """
         read = self.timeout_seconds
         if follow:
             read = max(read, _LOG_HEARTBEAT_WINDOW_SECONDS)
         timeout = httpx.Timeout(self.timeout_seconds, read=read)
+        content = (
+            body.model_dump_json(exclude_unset=True, by_alias=True).encode()
+            if body is not None
+            else None
+        )
+        headers = {"Content-Type": "application/json"} if content is not None else None
         try:
-            with self._client().stream("GET", path, params=params, timeout=timeout) as response:
+            with self._client().stream(
+                method, path, params=params, content=content, headers=headers, timeout=timeout
+            ) as response:
                 report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
                 if response.status_code >= 300:
                     response.read()
@@ -619,10 +669,10 @@ class ApiClient:
                         raise ApiError(
                             status_code=response.status_code,
                             code=None,
-                            message=f"invalid log entry from {path}: {exc}",
+                            message=f"invalid {model.__name__} from {path}: {exc}",
                         ) from exc
         except httpx.HTTPError as exc:
-            raise ApiConnectionError("GET", path, str(exc) or type(exc).__name__) from exc
+            raise ApiConnectionError(method, path, str(exc) or type(exc).__name__) from exc
 
     def list_secrets(
         self, workspace: str, *, cursor: str | None = None, limit: int | None = None
