@@ -148,6 +148,9 @@ func renderUnit(root, state, wrapper string, args []string) string {
 		"KillSignal=SIGINT",
 		"TimeoutStopSec=30",
 		"LimitNOFILE=1048576",
+		// The host offers containers every core, so the agent outweighs
+		// them for CPU: containers weigh about 40 per reserved core.
+		"CPUWeight=1000",
 		"",
 		"[Install]",
 		"WantedBy=multi-user.target",

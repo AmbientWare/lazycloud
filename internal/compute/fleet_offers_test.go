@@ -30,15 +30,14 @@ func offerInputs(t *testing.T) OfferInputs {
 	}
 }
 
-func TestOffersNeverIncludeANodeTheRequestWouldExactlyFill(t *testing.T) {
+// A request of every vCPU of an AWS size buys that size, not the next one up.
+func TestARequestOfEveryVCPUBuysThatSize(t *testing.T) {
 	in := offerInputs(t)
-	in.Catalog = []CatalogType{
-		{Name: "exact", CPUMillis: 2000, MemoryBytes: 4 * gib, prices: [4]int64{50_000, 50_000, 50_000, 50_000}},
-		{Name: "larger", CPUMillis: 4000, MemoryBytes: 8 * gib, prices: [4]int64{90_000, 90_000, 90_000, 90_000}},
-	}
-	offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 2000, MemoryBytes: 4 * gib}, false, in)
-	if len(offers) != 1 || offers[0].Type.Name != "larger" {
-		t.Fatalf("offers %v", offerKeys(offers))
+	for _, vcpus := range []int64{8, 16} {
+		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: vcpus * 1000, MemoryBytes: 8 * gib}, false, in)
+		if len(offers) == 0 || offers[0].Type.CPUMillis != vcpus*1000 {
+			t.Fatalf("%d vCPU request: offers %v", vcpus, offerKeys(offers))
+		}
 	}
 }
 

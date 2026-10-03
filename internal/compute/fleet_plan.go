@@ -282,8 +282,9 @@ type pendingItem struct {
 	wait   int
 }
 
-// pendingItems lists the pending containers largest first, each with a
-// wait slot and the market its demand belongs to.
+// pendingItems lists the pending containers, each with a wait slot and the
+// market its demand belongs to: those a host was bought for first, so other
+// work never takes their room, then largest first.
 func (ps *pass) pendingItems() []pendingItem {
 	var items []pendingItem
 	for _, g := range ps.s.Pending {
@@ -293,7 +294,9 @@ func (ps *pass) pendingItems() []pendingItem {
 			items = append(items, pendingItem{id: c.ID, need: g.Need, market: m, bought: c.Host, wait: len(ps.plan.Waits) - 1})
 		}
 	}
-	slices.SortStableFunc(items, func(a, b pendingItem) int { return size(b.need) - size(a.need) })
+	slices.SortStableFunc(items, func(a, b pendingItem) int {
+		return cmp.Or(boolOrder(a.bought == nil, b.bought == nil), size(b.need)-size(a.need))
+	})
 	return items
 }
 

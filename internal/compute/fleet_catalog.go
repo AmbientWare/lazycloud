@@ -30,16 +30,17 @@ func (t CatalogType) OnDemandMicros(region string) (int64, bool) {
 	return t.prices[n], true
 }
 
-// Usable is what a host of the type offers containers: the agent keeps the
-// larger of a floor and a tenth of each (agent/capacity.go). Memory is 94%
-// of nominal until a host of the type has reported, then what it reported.
+// Usable is what a host of the type offers containers, as the agent computes
+// it (agent/capacity.go): every vCPU, and memory less the larger of a floor
+// and a tenth. Memory is 94% of nominal until a host of the type has
+// reported, then what it reported.
 func (t CatalogType) Usable(reportedMemory int64) FleetCapacity {
 	memory := reportedMemory
 	if memory <= 0 {
 		nominal := t.MemoryBytes * 94 / 100
 		memory = nominal - max(512<<20, nominal/10)
 	}
-	return FleetCapacity{CPUMillis: t.CPUMillis - max(500, t.CPUMillis/10), MemoryBytes: memory, GPUs: t.GPUCount}
+	return FleetCapacity{CPUMillis: t.CPUMillis, MemoryBytes: memory, GPUs: t.GPUCount}
 }
 
 // RootGiB is the root volume a host of the type launches with: a

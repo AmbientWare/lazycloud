@@ -19,13 +19,12 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
-// The host keeps a reserve for the agent, Docker and the kernel: the larger
-// of a fixed floor and a tenth of the machine. An explicit limit replaces the
-// reserve.
-const (
-	reserveCPUMillis   = 500
-	reserveMemoryBytes = 512 << 20
-)
+// The host offers every core and keeps memory for the agent, Docker and the
+// kernel: the larger of a fixed floor and a tenth of the machine. The agent
+// and system services get CPU through a higher CPU weight than workloads
+// (renderUnit in cmd/agent, deploy/ami/node-setup.sh). An explicit limit
+// replaces what was detected.
+const reserveMemoryBytes = 512 << 20
 
 // gpuQueryTimeout bounds nvidia-smi; a hung driver means no GPUs.
 const gpuQueryTimeout = 5 * time.Second
@@ -92,7 +91,7 @@ func (o offer) failed() []*hostproto.PreflightCheck {
 // join.
 func resolveOffer(machine detected, limits Limits) offer {
 	o := offer{capacity: &hostproto.Capacity{
-		CpuMillis:   max(0, machine.cpuMillis-max(reserveCPUMillis, machine.cpuMillis/10)),
+		CpuMillis:   machine.cpuMillis,
 		MemoryBytes: max(0, machine.memoryBytes-max(reserveMemoryBytes, machine.memoryBytes/10)),
 	}}
 	if limits.CPUMillis > 0 {
