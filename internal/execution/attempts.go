@@ -66,6 +66,9 @@ func (o AttemptOutcome) validate() error {
 // the host is woken, as it may now stop the container.
 func (e *Execution) finishAttempts(ctx context.Context, tx pgx.Tx, host *compute.HostID, containers []ContainerID, outcomes []AttemptOutcome) ([]bool, error) {
 	stale := make([]bool, len(outcomes))
+	if len(outcomes) == 0 {
+		return stale, nil
+	}
 	ids := make([]uuid.UUID, 0, len(outcomes))
 	seen := make(map[uuid.UUID]bool, len(outcomes))
 	for n, o := range outcomes {
