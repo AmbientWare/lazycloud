@@ -499,9 +499,8 @@ func TestAnEmptyFleetBuysTheFloorsAsServingHostsAndReserves(t *testing.T) {
 	}
 }
 
-// Reserves beyond the targets retire; a reserve prepared for an older agent
-// release the target still needs resumes to prepare again.
-func TestSurplusReservesRetireAndAStaleOneRefreshes(t *testing.T) {
+// Reserves beyond the targets retire.
+func TestSurplusReservesRetire(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
 		Version: "1.0.0", RolloutPercent: 100,
@@ -522,22 +521,6 @@ func TestSurplusReservesRetireAndAStaleOneRefreshes(t *testing.T) {
 		if n := scan[int](t, o.pool, "select count(*) from hosts where id = any($1) and phase = $2", reserves, phase); n != want {
 			t.Errorf("%d reserves %s, want %d", n, phase, want)
 		}
-	}
-
-	o = newOwners(t, fleetConfig(compute.Fleet{}))
-	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
-		Version: "1.0.0", RolloutPercent: 100,
-		SHA256: map[string]string{"amd64": strings.Repeat("a1", 32), "arm64": strings.Repeat("b2", 32)},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	stale := stoppedReserve(t, o, "m7i.2xlarge", "i-0000000000000fb04")
-	run(t, o.pool, "update hosts set prepared_agent_version = '0.9.0' where id = $1", uuid.UUID(stale))
-	if r := plan(t, o); r.Resumed != 1 {
-		t.Fatalf("plan %+v, want the stale reserve refreshed", r)
-	}
-	if h := hostRowOf(t, o, stale); h.Phase != string(compute.PhaseResuming) || h.ReserveMode == nil {
-		t.Fatalf("stale reserve %+v, want resuming with its reserve mode kept", h)
 	}
 }
 
@@ -690,5 +673,57 @@ func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *te
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
 		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
+	}
+}
+
+// After an agent release each market refreshes its stale reserves one at a
+// time, the floor reserve first. The large-shape reserve stays ready
+// meanwhile, and a burst resumes it instead of buying.
+func TestAnAgentReleaseRefreshesOneReserveAtATimeAndABurstResumesAStaleOne(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	spotPrices(t, o)
+	settledFleet(t, o)
+	floor, large := onDemandReserves(t, o)
+	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
+		Version: "1.1.0", RolloutPercent: 100,
+		SHA256: map[string]string{"amd64": strings.Repeat("a1", 32), "arm64": strings.Repeat("b2", 32)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refreshing := func(market compute.Market) []uuid.UUID {
+		return scan[[]uuid.UUID](t, o.pool, `select coalesce(array_agg(id), '{}') from hosts
+where reserve_mode is not null and market = $1 and phase = 'resuming'`, string(market))
+	}
+
+	if r := plan(t, o); r.Resumed != 2 || r.Requested != 0 {
+		t.Fatalf("plan %+v, want one refresh per CPU market and nothing bought", r)
+	}
+	if got := refreshing(compute.MarketOnDemand); !slices.Equal(got, []uuid.UUID{uuid.UUID(floor)}) ||
+		hostRowOf(t, o, large).Phase != string(compute.PhaseStopped) {
+		t.Fatalf("on-demand reserves refreshing %v, want only the floor reserve", got)
+	}
+	spot := refreshing(compute.MarketSpot)
+	if len(spot) != 1 {
+		t.Fatalf("spot reserves refreshing %v, want one", spot)
+	}
+	if r := plan(t, o); r.Resumed != 0 {
+		t.Fatalf("plan %+v, want no refresh while one is in flight", r)
+	}
+	run(t, o.pool, "update hosts set phase = 'stopped', phase_at = now(), prepared_agent_version = '1.1.0' where id = $1", spot[0])
+	if r := plan(t, o); r.Resumed != 1 || len(refreshing(compute.MarketSpot)) != 1 || refreshing(compute.MarketSpot)[0] == spot[0] {
+		t.Fatalf("plan %+v, want the other spot reserve refreshed once the first stopped", r)
+	}
+
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+	for range 3 {
+		pendingContainer(t, o.pool, dev, release, 1000, gib)
+	}
+	if r := plan(t, o); r.Resumed != 1 || r.Requested != 0 {
+		t.Fatalf("plan %+v, want the stale reserve resumed and nothing bought", r)
+	}
+	if h := hostRowOf(t, o, large); h.Phase != string(compute.PhaseResuming) || h.ReserveMode != nil {
+		t.Fatalf("large-shape reserve %+v, want resumed to serve", h)
 	}
 }

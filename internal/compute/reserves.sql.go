@@ -25,7 +25,7 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.phase, h.region, h.instance_type, h.market, h.instance_id, h.spot_request_id, h.reserve_mode,
-          h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at
+          h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at, h.launch_lease_until
 `
 
 type ClaimProviderActionsParams struct {
@@ -46,6 +46,7 @@ type ClaimProviderActionsRow struct {
 	StopRequestedAt       *time.Time
 	ForceStopAt           *time.Time
 	HibernateRefusedAt    *time.Time
+	LaunchLeaseUntil      *time.Time
 }
 
 // Platform hosts waiting on a start, stop or terminate call that no other
@@ -73,6 +74,7 @@ func (q *Queries) ClaimProviderActions(ctx context.Context, arg ClaimProviderAct
 			&i.StopRequestedAt,
 			&i.ForceStopAt,
 			&i.HibernateRefusedAt,
+			&i.LaunchLeaseUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -105,6 +107,27 @@ func (q *Queries) MarkReserveStopped(ctx context.Context, arg MarkReserveStopped
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const recheckProviderActions = `-- name: RecheckProviderActions :exec
+update hosts h
+set launch_lease_until = now() + make_interval(secs => $1::float8), updated_at = now()
+from (select unnest($2::uuid[]) as id, unnest($3::timestamptz[]) as lease) v
+where h.id = v.id and h.launch_lease_until = v.lease
+`
+
+type RecheckProviderActionsParams struct {
+	RecheckSeconds float64
+	Ids            []uuid.UUID
+	Leases         []time.Time
+}
+
+// Hosts a pass is done with come up again after the recheck delay. A host
+// whose lease moved on, cleared by a phase change or claimed by another
+// actuator after it expired, keeps it.
+func (q *Queries) RecheckProviderActions(ctx context.Context, arg RecheckProviderActionsParams) error {
+	_, err := q.db.Exec(ctx, recheckProviderActions, arg.RecheckSeconds, arg.Ids, arg.Leases)
+	return err
 }
 
 const recordHibernateRefused = `-- name: RecordHibernateRefused :execrows

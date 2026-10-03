@@ -636,9 +636,10 @@ func (ps *pass) resumeFor(items []pendingItem) []pendingItem {
 	return left
 }
 
-// ready is a stopped reserve the current agent can resume now.
+// ready is a stopped reserve that can resume now. One prepared for an older
+// agent release serves too: its session updates the agent in place.
 func (ps *pass) ready(h FleetHost) bool {
-	return h.resumable() && h.Current && !h.Protected && !ps.cooled(h) && ps.startable(h)
+	return h.resumable() && !h.Protected && !ps.cooled(h) && ps.startable(h)
 }
 
 // reserveFor is the ready reserve to resume for work of market m. It
@@ -681,7 +682,7 @@ func cheaper(a, b *FleetHost) int {
 // ready on-demand reserves left without it still meet their stopped target.
 func (ps *pass) lendable(h FleetHost) bool {
 	v := ps.byMarket[h.market()]
-	return ps.floor(v, h.ID, func(r FleetHost) bool { return r.resumable() && r.Current && !r.Protected }).Covers(v.stopped)
+	return ps.floor(v, h.ID, func(r FleetHost) bool { return r.resumable() && !r.Protected }).Covers(v.stopped)
 }
 
 // demandClass is containers that can share offers.
@@ -990,11 +991,12 @@ func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
 }
 
 // retire terminates reserves beyond the stopped target: ones the market
-// cannot buy again first, then ones not ready, then the costliest to hold.
+// cannot buy again first, then ones not ready, then ones prepared for an
+// older agent release, then the costliest to hold.
 // It keeps the ready capacity the target needs, so a pending reserve never
 // stands in for a ready one, and a reserve that fits the largest shape.
 func (ps *pass) retire(v *marketView) {
-	ready := func(h FleetHost) bool { return h.resumable() && h.Current }
+	ready := FleetHost.resumable
 	needReady := ps.floor(v, HostID{}, ready).Lower(v.stopped)
 	growable := func(h *FleetHost) bool {
 		_, ok := ps.typeNamed(h.InstanceType)
@@ -1002,7 +1004,7 @@ func (ps *pass) retire(v *marketView) {
 	}
 	candidates := ps.inMarket(v.m, func(h FleetHost) bool { return h.reserve() && !h.Protected && h.State != FleetStopping })
 	slices.SortStableFunc(candidates, func(a, b *FleetHost) int {
-		return cmp.Or(boolOrder(growable(a), growable(b)), boolOrder(ready(*a), ready(*b)),
+		return cmp.Or(boolOrder(growable(a), growable(b)), boolOrder(ready(*a), ready(*b)), boolOrder(a.Current, b.Current),
 			cmp.Compare(ps.stoppedMicros(*b), ps.stoppedMicros(*a)), cmp.Compare(b.Usable.CPUMillis, a.Usable.CPUMillis),
 			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 	})
@@ -1061,17 +1063,26 @@ func (ps *pass) rightsize(v *marketView) {
 	}
 }
 
-// refresh resumes reserves prepared for an older agent release so they
-// update in place and stop again.
+// refresh resumes a reserve prepared for an older agent release so it
+// updates in place and stops again. A market refreshes one reserve at a
+// time, and only while none of its reserves is being prepared or stopping,
+// so the others stay ready. It picks first one whose absence leaves a
+// reserve that fits the largest shape.
 func (ps *pass) refresh(v *marketView) {
-	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && !h.Current && !h.Protected && !ps.cooled(h) }) {
-		if v.retired[h.ID] || ps.room(v.m) <= 0 || ps.hostRoom <= 0 || !ps.startable(*h) {
-			continue
-		}
-		ps.hostRoom--
-		ps.start(h.Region, h.InstanceType, h.Market)
-		ps.act(FleetAction{Kind: ActionRefresh, Market: v.m, Host: ptr(h.ID)})
+	if ps.room(v.m) <= 0 || ps.hostRoom <= 0 ||
+		len(ps.inMarket(v.m, func(h FleetHost) bool { return h.reserve() && !h.resumable() && !v.retired[h.ID] })) > 0 ||
+		slices.ContainsFunc(ps.planned, func(n plannedHost) bool { return n.market == v.m && n.reserve }) {
+		return
 	}
+	stale := ps.inMarket(v.m, func(h FleetHost) bool { return ps.ready(h) && !h.Current && !v.retired[h.ID] })
+	if len(stale) == 0 {
+		return
+	}
+	h := slices.MinFunc(stale, func(a, b *FleetHost) int { return boolOrder(!ps.leavesLarge(*a), !ps.leavesLarge(*b)) })
+	h.State = FleetPreparing
+	ps.hostRoom--
+	ps.start(h.Region, h.InstanceType, h.Market)
+	ps.act(FleetAction{Kind: ActionRefresh, Market: v.m, Host: ptr(h.ID)})
 }
 
 // report is the market's published plan.
@@ -1082,7 +1093,7 @@ func (ps *pass) report(v *marketView) MarketPlan {
 			continue
 		}
 		reserve = reserve.Plus(h.Usable)
-		if h.resumable() && h.Current {
+		if h.resumable() {
 			ready = ready.Plus(h.Usable)
 		}
 	}

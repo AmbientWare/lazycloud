@@ -267,7 +267,7 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			continue
 		}
 		for _, h := range snapshot.Hosts {
-			if !h.resumable() || !h.Current || resumed[h.ID] {
+			if !h.resumable() || resumed[h.ID] {
 				continue
 			}
 			for _, c := range s.pending {

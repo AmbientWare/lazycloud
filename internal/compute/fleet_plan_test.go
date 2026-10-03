@@ -110,18 +110,6 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 	}
 }
 
-func TestPlanResumesOnlyAReserveReadyForTheCurrentAgent(t *testing.T) {
-	for _, current := range []bool{true, false} {
-		reserve := planHost(1, planSmall, FleetStopped)
-		reserve.Current = current
-		plan := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, reserve))
-		resumed, bought := len(actionsOf(plan, ActionResume)) > 0, len(actionsOf(plan, ActionBuy)) > 0
-		if resumed != current || bought == current {
-			t.Errorf("current %v: resumed %v bought %v", current, resumed, bought)
-		}
-	}
-}
-
 func TestPlanRefreshesAStaleReserveTheTargetNeedsAndRetiresOneItDoesNot(t *testing.T) {
 	stale := planHost(1, planSmall, FleetStopped)
 	stale.Current = false

@@ -14,7 +14,16 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.phase, h.region, h.instance_type, h.market, h.instance_id, h.spot_request_id, h.reserve_mode,
-          h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at;
+          h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at, h.launch_lease_until;
+
+-- name: RecheckProviderActions :exec
+-- Hosts a pass is done with come up again after the recheck delay. A host
+-- whose lease moved on, cleared by a phase change or claimed by another
+-- actuator after it expired, keeps it.
+update hosts h
+set launch_lease_until = now() + make_interval(secs => @recheck_seconds::float8), updated_at = now()
+from (select unnest(@ids::uuid[]) as id, unnest(@leases::timestamptz[]) as lease) v
+where h.id = v.id and h.launch_lease_until = v.lease;
 
 -- name: RecordStopRequested :execrows
 -- EC2 accepted a stop of a stopping host: a hibernation leaves its image
