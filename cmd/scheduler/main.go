@@ -397,15 +397,6 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			return false
 		}))
 	})
-	if setting := os.Getenv("LAZYCLOUD_SYNTHETIC_APP"); setting != "" {
-		check, err := newSyntheticCheck(setting, exec, p.isLeading, logger)
-		if err != nil {
-			return err
-		}
-		group.Go(func() error {
-			return p.loop(ctx, cadence{every: syntheticTick}, nil, nil, every("synthetic", syntheticTick, check.pass))
-		})
-	}
 	accounts.start(ctx, group, p, beats)
 	newBillingLoops(pool, session, exec, store, logger).start(ctx, group, p)
 	if healthListener != nil {
