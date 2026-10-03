@@ -81,10 +81,10 @@ func (e *Execution) AppendLogs(ctx context.Context, host compute.HostID, contain
 				followers = append(followers, row.WorkloadID.String())
 			}
 		}
-		if err := notifyAll(ctx, tx, database.ChannelTask, tasks); err != nil {
+		if err := database.NotifyAll(ctx, tx, database.ChannelTask, tasks); err != nil {
 			return err
 		}
-		return notifyAll(ctx, tx, database.ChannelLogs, followers)
+		return database.NotifyAll(ctx, tx, database.ChannelLogs, followers)
 	})
 	if err != nil {
 		return fmt.Errorf("append logs: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,8 +12,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Channel names a NOTIFY channel. Payloads are resource ids.
+// Channel names a NOTIFY channel. A payload is one or more keys, usually
+// resource ids, joined by payloadSeparator.
 type Channel string
+
+// payloadSeparator joins the keys of one payload. No key contains it: ids
+// are UUIDs and collection names exclude control characters.
+const payloadSeparator = "\n"
 
 const (
 	// ChannelHost wakes the session serving a host; payload is the host id.
@@ -132,15 +138,23 @@ func (l *Listener) listen(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("wait for notification: %w", err)
 		}
-		channel := Channel(notification.Channel)
-		l.wake(subKey{channel: channel, payload: notification.Payload})
-		l.wake(subKey{channel: channel})
+		l.wake(Channel(notification.Channel), notification.Payload)
 	}
 }
 
-func (l *Listener) wake(key subKey) {
+// wake wakes the subscribers of each key in payload and of the channel.
+func (l *Listener) wake(channel Channel, payload string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if payload != "" {
+		for id := range strings.SplitSeq(payload, payloadSeparator) {
+			l.wakeKey(subKey{channel: channel, payload: id})
+		}
+	}
+	l.wakeKey(subKey{channel: channel})
+}
+
+func (l *Listener) wakeKey(key subKey) {
 	for sub := range l.subs[key] {
 		select {
 		case sub.wake <- struct{}{}:

@@ -111,6 +111,57 @@ func (q *Queries) LockDependentClosure(ctx context.Context, upstream []uuid.UUID
 	return items, nil
 }
 
+const lockOutcomeDependents = `-- name: LockOutcomeDependents :many
+with recursive closure (id) as (
+    select d.task_id from task_dependencies d where d.depends_on = any($2::uuid[])
+    union
+    select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
+)
+select l.id, l.after_failure from (
+    select t.id, t.status, t.id = any(array(select id from closure)) as after_failure
+    from tasks t
+    where t.id = any(array(select id from closure)
+                     || array(select d.task_id from task_dependencies d where d.depends_on = any($1::uuid[])))
+    order by t.id
+    offset 0
+    for update
+) l
+where l.status = 'queued'
+`
+
+type LockOutcomeDependentsParams struct {
+	Succeeded []uuid.UUID
+	Failed    []uuid.UUID
+}
+
+type LockOutcomeDependentsRow struct {
+	ID           uuid.UUID
+	AfterFailure bool
+}
+
+// The queued direct dependents of succeeded and queued transitive
+// dependents of failed, locked together in id order and read by key, as
+// LockQueuedDependents. after_failure marks a dependent of failed.
+func (q *Queries) LockOutcomeDependents(ctx context.Context, arg LockOutcomeDependentsParams) ([]LockOutcomeDependentsRow, error) {
+	rows, err := q.db.Query(ctx, lockOutcomeDependents, arg.Succeeded, arg.Failed)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockOutcomeDependentsRow
+	for rows.Next() {
+		var i LockOutcomeDependentsRow
+		if err := rows.Scan(&i.ID, &i.AfterFailure); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockQueuedDependents = `-- name: LockQueuedDependents :many
 select l.id from (
     select t.id, t.status from tasks t

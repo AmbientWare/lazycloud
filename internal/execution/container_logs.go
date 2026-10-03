@@ -62,12 +62,7 @@ func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID
 		if err != nil {
 			return fmt.Errorf("insert container logs: %w", err)
 		}
-		for _, release := range releases {
-			if err := database.Notify(ctx, tx, ChannelContainerLog, release.String()); err != nil {
-				return err
-			}
-		}
-		return nil
+		return database.NotifyAll(ctx, tx, ChannelContainerLog, uuidStrings(releases))
 	})
 	if err != nil {
 		return fmt.Errorf("append container logs: %w", err)

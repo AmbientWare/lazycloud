@@ -56,10 +56,9 @@ func (e *Execution) cancelTask(ctx context.Context, tx pgx.Tx, workspace *identi
 	}
 	if status == TaskRunning && task.CurrentAttemptID != nil {
 		attempt := *task.CurrentAttemptID
-		// The task is already cancelled, so finishAttempt only records
-		// the attempt's outcome.
-		err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{Attempt: AttemptID(attempt), State: AttemptCancelled})
-		if err != nil && !errors.Is(err, ErrStaleAttempt) {
+		// The task is already cancelled, so this only records the
+		// attempt's outcome.
+		if _, err := e.finishAttempts(ctx, tx, nil, nil, []AttemptOutcome{{Attempt: AttemptID(attempt), State: AttemptCancelled}}); err != nil {
 			return false, err
 		}
 		host, err := q.AttemptHost(ctx, attempt)

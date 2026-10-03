@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -51,14 +52,20 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 	if err != nil {
 		return fmt.Errorf("list running attempts: %w", err)
 	}
-	for _, attempt := range attempts {
-		lost := &Failure{Kind: FailureLost, Message: fmt.Sprintf("container stopped: %s", exit.Reason)}
-		if exit.Message != "" {
-			lost.Message += ": " + exit.Message
-		}
-		if err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{Attempt: AttemptID(attempt), State: AttemptLost, Failure: lost}); err != nil {
-			return err
-		}
+	lost := &Failure{Kind: FailureLost, Message: fmt.Sprintf("container stopped: %s", exit.Reason)}
+	if exit.Message != "" {
+		lost.Message += ": " + exit.Message
+	}
+	outcomes := make([]AttemptOutcome, len(attempts))
+	for n, attempt := range attempts {
+		outcomes[n] = AttemptOutcome{Attempt: AttemptID(attempt), State: AttemptLost, Failure: lost}
+	}
+	stale, err := e.finishAttempts(ctx, tx, nil, nil, outcomes)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(stale, true) {
+		return ErrStaleAttempt
 	}
 
 	if row.ReleaseID == nil {
@@ -103,7 +110,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if err := recordCallbacks(ctx, q, CallbackFailed, failed, nil); err != nil {
 			return err
 		}
-		if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
+		if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
 			return err
 		}
 		if err := e.resolveDependents(ctx, tx, failed, upstreamUnsuccessful); err != nil {

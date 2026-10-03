@@ -64,7 +64,7 @@ func (e *Execution) PublishEndpointLoads(ctx context.Context, edge uuid.UUID, lo
 		for n, release := range wake {
 			payloads[n] = release.String()
 		}
-		return notifyAll(ctx, tx, database.ChannelExecution, payloads)
+		return database.NotifyAll(ctx, tx, database.ChannelExecution, payloads)
 	})
 	if err != nil {
 		return fmt.Errorf("publish endpoint loads: %w", err)

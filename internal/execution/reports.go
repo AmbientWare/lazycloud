@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -145,14 +146,19 @@ func (e *Execution) loseOmittedAttempts(ctx context.Context, tx pgx.Tx, report C
 	if err != nil {
 		return fmt.Errorf("list omitted attempts: %w", err)
 	}
-	for _, attempt := range omitted {
-		err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{
+	outcomes := make([]AttemptOutcome, len(omitted))
+	for n, attempt := range omitted {
+		outcomes[n] = AttemptOutcome{
 			Attempt: AttemptID(attempt), State: AttemptLost,
 			Failure: &Failure{Kind: FailureLost, Message: "the host no longer runs the attempt"},
-		})
-		if err != nil {
-			return fmt.Errorf("lose attempt %s: %w", attempt, err)
 		}
+	}
+	stale, err := e.finishAttempts(ctx, tx, nil, nil, outcomes)
+	if err != nil {
+		return fmt.Errorf("lose attempts: %w", err)
+	}
+	if slices.Contains(stale, true) {
+		return fmt.Errorf("lose attempts: %w", ErrStaleAttempt)
 	}
 	return nil
 }

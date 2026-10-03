@@ -98,14 +98,13 @@ func (e *Execution) StopBuildContainers(ctx context.Context, tx pgx.Tx, build uu
 	if err != nil {
 		return fmt.Errorf("drain build containers: %w", err)
 	}
+	var hosts []string
 	for _, row := range drained {
 		if row.HostID != nil {
-			if err := database.Notify(ctx, tx, database.ChannelHost, row.HostID.String()); err != nil {
-				return err
-			}
+			hosts = append(hosts, row.HostID.String())
 		}
 	}
-	return nil
+	return database.NotifyAll(ctx, tx, database.ChannelHost, hosts)
 }
 
 // BuildStart asks a host to start a build container it was assigned.

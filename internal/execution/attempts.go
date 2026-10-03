@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,111 +40,259 @@ type AttemptOutcome struct {
 	Failure *Failure
 }
 
-// finishAttempt records outcome in tx and advances the task: success stores
-// the result, a retryable failure with attempts left requeues after the
-// release's retry delay, anything else fails the task. When host is set the
-// attempt's container must be assigned to it.
-func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.HostID, outcome AttemptOutcome) error {
-	q := e.queries.WithTx(tx)
-	attemptID := uuid.UUID(outcome.Attempt)
-	task, err := q.LockTaskForAttempt(ctx, attemptID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrStaleAttempt
-	}
-	if err != nil {
-		return fmt.Errorf("lock task: %w", err)
-	}
-	attempt, err := q.LockRunningAttempt(ctx, attemptID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrStaleAttempt
-	}
-	if err != nil {
-		return fmt.Errorf("lock attempt: %w", err)
-	}
-	if host != nil && (attempt.HostID == nil || *attempt.HostID != uuid.UUID(*host)) {
-		return ErrStaleAttempt
-	}
-	if err := q.SetAttemptState(ctx, SetAttemptStateParams{ID: attemptID, State: string(outcome.State)}); err != nil {
-		return fmt.Errorf("set attempt state: %w", err)
-	}
-	if TaskStatus(task.Status) != TaskRunning || task.CurrentAttemptID == nil || *task.CurrentAttemptID != attemptID {
-		// The task moved on, for example through cancellation; only the
-		// attempt row records this outcome.
-		return nil
-	}
-
-	switch outcome.State {
+func (o AttemptOutcome) validate() error {
+	switch o.State {
 	case AttemptSucceeded:
-		if outcome.Result == nil {
+		if o.Result == nil {
 			return errors.New("succeeded attempt without a result")
 		}
-		if err := q.InsertTaskResult(ctx, InsertTaskResultParams{
-			TaskID: task.ID, Encoding: string(outcome.Result.Encoding), Data: outcome.Result.Data,
-			Display: []byte(outcome.Result.Display),
-		}); err != nil {
-			return fmt.Errorf("insert result: %w", err)
-		}
-		if err := q.SucceedTask(ctx, task.ID); err != nil {
-			return fmt.Errorf("succeed task: %w", err)
-		}
-		if err := recordCallbacks(ctx, q, CallbackSucceeded, []uuid.UUID{task.ID}, nil); err != nil {
-			return err
-		}
-		if err := e.resolveDependents(ctx, tx, []uuid.UUID{task.ID}, upstreamSucceeded); err != nil {
-			return err
-		}
 	case AttemptFailed, AttemptTimedOut, AttemptLost:
-		if outcome.Failure == nil {
-			return fmt.Errorf("%s attempt without a failure", outcome.State)
-		}
-		var policy RetryPolicy
-		retry := false
-		if outcome.Failure.Kind.Retryable() && int(task.AttemptCount) < int(task.MaxAttempts) {
-			var spec apitypes.WorkloadSpec
-			if err := json.Unmarshal(task.Spec, &spec); err != nil {
-				return fmt.Errorf("decode release spec: %w", err)
-			}
-			policy = RetryPolicyOf(spec)
-			retry = policy.Retries(outcome.Failure.Kind)
-		}
-		if retry {
-			delay := policy.NextAttemptDelay(int(task.AttemptCount) + 1)
-			if err := q.RequeueTask(ctx, RequeueTaskParams{ID: task.ID, DelaySeconds: delay.Seconds()}); err != nil {
-				return fmt.Errorf("requeue task: %w", err)
-			}
-			if err := recordCallbacks(ctx, q, CallbackRetry, []uuid.UUID{task.ID}, outcome.Failure); err != nil {
-				return err
-			}
-			if err := database.Notify(ctx, tx, database.ChannelClaim, task.ReleaseID.String()); err != nil {
-				return err
-			}
-		} else {
-			if err := e.failTask(ctx, q, task.ID, *outcome.Failure); err != nil {
-				return err
-			}
-			if err := e.resolveDependents(ctx, tx, []uuid.UUID{task.ID}, upstreamUnsuccessful); err != nil {
-				return err
-			}
+		if o.Failure == nil {
+			return fmt.Errorf("%s attempt without a failure", o.State)
 		}
 	case AttemptCancelled:
-		// Cancellation finishes the task itself before cancelling the attempt.
-		return nil
 	case AttemptRunning:
 		return errors.New("an outcome cannot be running")
 	}
-	if err := database.Notify(ctx, tx, database.ChannelTask, task.ID.String()); err != nil {
-		return err
-	}
-	return database.Notify(ctx, tx, database.ChannelExecution, task.ReleaseID.String())
+	return nil
 }
 
-func (e *Execution) failTask(ctx context.Context, q *Queries, task uuid.UUID, failure Failure) error {
-	encoded, err := json.Marshal(failure)
+// finishAttempts records outcomes in tx and advances their tasks: success
+// stores the result, a retryable failure with attempts left requeues after
+// the release's retry delay, anything else fails the task. It returns which
+// outcomes were stale and changed nothing: the attempt was not running, was
+// repeated earlier in outcomes, or, with host set, was not assigned to host
+// or not on containers[n]. containers is nil or parallel to outcomes. With
+// host set, an attempt that ran on a draining container wakes the host,
+// which may now stop the container.
+func (e *Execution) finishAttempts(ctx context.Context, tx pgx.Tx, host *compute.HostID, containers []ContainerID, outcomes []AttemptOutcome) ([]bool, error) {
+	stale := make([]bool, len(outcomes))
+	if len(outcomes) == 0 {
+		return stale, nil
+	}
+	ids := make([]uuid.UUID, 0, len(outcomes))
+	seen := make(map[uuid.UUID]bool, len(outcomes))
+	for n, o := range outcomes {
+		if err := o.validate(); err != nil {
+			return nil, err
+		}
+		id := uuid.UUID(o.Attempt)
+		if seen[id] {
+			stale[n] = true
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	q := e.queries.WithTx(tx)
+	taskRows, err := q.LockTasksForAttempts(ctx, ids)
 	if err != nil {
-		return fmt.Errorf("encode failure: %w", err)
+		return nil, fmt.Errorf("lock tasks: %w", err)
 	}
-	if err := q.FailTask(ctx, FailTaskParams{ID: task, Failure: encoded}); err != nil {
-		return fmt.Errorf("fail task: %w", err)
+	tasks := make(map[uuid.UUID]LockTasksForAttemptsRow, len(taskRows))
+	for _, row := range taskRows {
+		tasks[row.AttemptID] = row
 	}
-	return recordCallbacks(ctx, q, CallbackFailed, []uuid.UUID{task}, nil)
+	attemptRows, err := q.LockRunningAttempts(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("lock attempts: %w", err)
+	}
+	running := make(map[uuid.UUID]LockRunningAttemptsRow, len(attemptRows))
+	for _, row := range attemptRows {
+		running[row.ID] = row
+	}
+
+	var set SetAttemptStatesParams
+	var live []liveOutcome
+	wakeHost := false
+	for n, o := range outcomes {
+		if stale[n] {
+			continue
+		}
+		id := uuid.UUID(o.Attempt)
+		task, locked := tasks[id]
+		attempt, ok := running[id]
+		if !locked || !ok ||
+			(host != nil && (attempt.HostID == nil || *attempt.HostID != uuid.UUID(*host))) ||
+			(containers != nil && attempt.ContainerID != uuid.UUID(containers[n])) {
+			stale[n] = true
+			continue
+		}
+		set.Ids = append(set.Ids, id)
+		set.States = append(set.States, string(o.State))
+		wakeHost = wakeHost || (host != nil && ContainerState(attempt.ContainerState) == ContainerDraining)
+		// A task that moved on, for example through cancellation, keeps
+		// this outcome on the attempt row only.
+		if TaskStatus(task.Status) == TaskRunning && task.CurrentAttemptID != nil && *task.CurrentAttemptID == id &&
+			o.State != AttemptCancelled {
+			live = append(live, liveOutcome{task: task, outcome: o})
+		}
+	}
+	if len(set.Ids) > 0 {
+		if err := q.SetAttemptStates(ctx, set); err != nil {
+			return nil, fmt.Errorf("set attempt states: %w", err)
+		}
+	}
+	if err := e.advanceTasks(ctx, tx, live); err != nil {
+		return nil, err
+	}
+	if wakeHost {
+		if err := database.Notify(ctx, tx, database.ChannelHost, host.String()); err != nil {
+			return nil, err
+		}
+	}
+	return stale, nil
+}
+
+// liveOutcome is an outcome of its task's current attempt.
+type liveOutcome struct {
+	task    LockTasksForAttemptsRow
+	outcome AttemptOutcome
+}
+
+// advanceTasks applies the outcomes of the tasks' current attempts, whose
+// rows the caller holds, and wakes the tasks' waiters and planning.
+func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutcome) error {
+	if len(live) == 0 {
+		return nil
+	}
+	q := e.queries.WithTx(tx)
+	policies, err := e.retryPolicies(ctx, q, live)
+	if err != nil {
+		return err
+	}
+	var results InsertTaskResultsParams
+	var requeue RequeueTasksParams
+	var retryFailures []Failure
+	var failed FailRunningTasksParams
+	var retryReleases, ids, releases []string
+	for _, l := range live {
+		task, o := l.task, l.outcome
+		ids = append(ids, task.ID.String())
+		releases = append(releases, task.ReleaseID.String())
+		if o.State == AttemptSucceeded {
+			results.TaskIds = append(results.TaskIds, task.ID)
+			results.Encodings = append(results.Encodings, string(o.Result.Encoding))
+			results.Data = append(results.Data, o.Result.Data)
+			results.Displays = append(results.Displays, []byte(o.Result.Display))
+			continue
+		}
+		if policy := policies[task.ReleaseID]; mayRetry(task, *o.Failure) && policy.Retries(o.Failure.Kind) {
+			requeue.Ids = append(requeue.Ids, task.ID)
+			requeue.DelaySeconds = append(requeue.DelaySeconds, policy.NextAttemptDelay(int(task.AttemptCount)+1).Seconds())
+			retryFailures = append(retryFailures, *o.Failure)
+			retryReleases = append(retryReleases, task.ReleaseID.String())
+			continue
+		}
+		encoded, err := json.Marshal(o.Failure)
+		if err != nil {
+			return fmt.Errorf("encode failure: %w", err)
+		}
+		failed.Ids = append(failed.Ids, task.ID)
+		failed.Failures = append(failed.Failures, encoded)
+	}
+	if len(results.TaskIds) > 0 {
+		if err := q.InsertTaskResults(ctx, results); err != nil {
+			return fmt.Errorf("insert results: %w", err)
+		}
+		if err := q.SucceedTasks(ctx, results.TaskIds); err != nil {
+			return fmt.Errorf("succeed tasks: %w", err)
+		}
+		if err := recordCallbacks(ctx, q, CallbackSucceeded, results.TaskIds, nil); err != nil {
+			return err
+		}
+	}
+	if len(requeue.Ids) > 0 {
+		if err := q.RequeueTasks(ctx, requeue); err != nil {
+			return fmt.Errorf("requeue tasks: %w", err)
+		}
+		if err := recordCallbacks(ctx, q, CallbackRetry, requeue.Ids, retryFailures); err != nil {
+			return err
+		}
+		if err := database.NotifyAll(ctx, tx, database.ChannelClaim, retryReleases); err != nil {
+			return err
+		}
+	}
+	if len(failed.Ids) > 0 {
+		if err := q.FailRunningTasks(ctx, failed); err != nil {
+			return fmt.Errorf("fail tasks: %w", err)
+		}
+		if err := recordCallbacks(ctx, q, CallbackFailed, failed.Ids, nil); err != nil {
+			return err
+		}
+	}
+	if err := e.resolveOutcomeDependents(ctx, tx, results.TaskIds, failed.Ids); err != nil {
+		return err
+	}
+	if err := database.NotifyAll(ctx, tx, database.ChannelTask, ids); err != nil {
+		return err
+	}
+	return database.NotifyAll(ctx, tx, database.ChannelExecution, releases)
+}
+
+// retryPolicies reads the retry policy of each release with a failed task
+// that may retry.
+func (e *Execution) retryPolicies(ctx context.Context, q *Queries, live []liveOutcome) (map[uuid.UUID]RetryPolicy, error) {
+	var releases []uuid.UUID
+	for _, l := range live {
+		if l.outcome.Failure != nil && mayRetry(l.task, *l.outcome.Failure) {
+			releases = append(releases, l.task.ReleaseID)
+		}
+	}
+	if len(releases) == 0 {
+		return nil, nil
+	}
+	rows, err := q.ReleaseSpecs(ctx, releases)
+	if err != nil {
+		return nil, fmt.Errorf("read release specs: %w", err)
+	}
+	policies := make(map[uuid.UUID]RetryPolicy, len(rows))
+	for _, row := range rows {
+		var spec apitypes.WorkloadSpec
+		if err := json.Unmarshal(row.Spec, &spec); err != nil {
+			return nil, fmt.Errorf("decode release spec: %w", err)
+		}
+		policies[row.ID] = RetryPolicyOf(spec)
+	}
+	return policies, nil
+}
+
+// mayRetry reports whether failure is retryable and task has attempts left.
+// The release's retry policy then decides.
+func mayRetry(task LockTasksForAttemptsRow, failure Failure) bool {
+	return failure.Kind.Retryable() && task.AttemptCount < task.MaxAttempts
+}
+
+// resolveOutcomeDependents applies the outcomes of succeeded and failed
+// upstream tasks to their dependents. When it takes more than one locking
+// statement, every dependent locks first in a single id-ordered one, so
+// transactions that finish several upstream tasks never deadlock on shared
+// dependents. A dependent of failed tasks names its first failed upstream,
+// as when that task failed alone.
+func (e *Execution) resolveOutcomeDependents(ctx context.Context, tx pgx.Tx, succeeded, failed []uuid.UUID) error {
+	if len(failed) == 0 {
+		return e.resolveDependents(ctx, tx, succeeded, upstreamSucceeded)
+	}
+	if len(succeeded) == 0 && len(failed) == 1 {
+		return e.resolveDependents(ctx, tx, failed, upstreamUnsuccessful)
+	}
+	locked, err := e.queries.WithTx(tx).LockOutcomeDependents(ctx, LockOutcomeDependentsParams{Succeeded: succeeded, Failed: failed})
+	if err != nil {
+		return fmt.Errorf("lock dependents: %w", err)
+	}
+	if len(locked) == 0 {
+		return nil
+	}
+	if err := e.resolveDependents(ctx, tx, succeeded, upstreamSucceeded); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(locked, func(row LockOutcomeDependentsRow) bool { return row.AfterFailure }) {
+		return nil
+	}
+	for _, id := range failed {
+		if err := e.resolveDependents(ctx, tx, []uuid.UUID{id}, upstreamUnsuccessful); err != nil {
+			return err
+		}
+	}
+	return nil
 }

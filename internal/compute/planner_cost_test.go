@@ -124,9 +124,10 @@ func costExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 }
 
 // The planning pass sends a fixed number of statements, and no snapshot
-// read touches more container rows than the pending batch as the backlog
-// and history grow: it reads the batch and live containers per host, never
-// the backlog or history. Run with -v for the cost table.
+// read touches more container rows than the pending batch as the backlog,
+// history and fleet grow to 250 hosts: it reads the batch and live
+// containers per host, never the backlog or history. Run with -v for the
+// cost table.
 func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	pool := dbtest.New(t)
 	counter := &statementCounter{}
@@ -143,8 +144,7 @@ func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, IdleTimeout: 5 * time.Minute, Networks: map[string]Network{
 		"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3"),
 	}}})
-	// Twenty functions and a hundred serving hosts with four live
-	// containers each.
+	// Twenty functions, and serving hosts with four live containers each.
 	costExec(t, pool, `
 with ws as (insert into workspaces (name) select 'ws-' || n from generate_series(1, 20) n returning id),
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id, workspace_id),
@@ -155,18 +155,24 @@ with ws as (insert into workspaces (name) select 'ws-' || n from generate_series
              from wl returning id, workload_id)
 select count(*) from rel`)
 	costExec(t, pool, "update workloads w set active_release_id = r.id from releases r where r.workload_id = w.id")
-	costExec(t, pool, `
+	hosts := 0
+	addHosts := func(to int) {
+		costExec(t, pool, `
 insert into hosts (name, token_hash, state, last_seen_at, kind, provider, phase, cpu_millis, memory_bytes, market, region,
                    availability_zone, availability_zone_id, instance_type, instance_id, launched_at, session_epoch)
 select 'h', sha256(n::text::bytea), 'online', now(), 'platform', 'aws', 'ready', 14400, 54 * (1::bigint << 30), 'on_demand',
        'us-east-2', 'us-east-2a', 'use2-az1', 'm7i.4xlarge', 'i-' || lpad(to_hex(n), 17, '0'), now() - interval '1 hour', 1
-from generate_series(1, 100) n`)
-	costExec(t, pool, `
+from generate_series($1::int, $2::int) n`, hosts+1, to)
+		costExec(t, pool, `
 insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
 select a.workspace_id, w.active_release_id, 'ready', h.id, 1, 1000, 2::bigint << 30, now(), now()
 from hosts h cross join generate_series(1, 4) n
 join lateral (select w.id, w.active_release_id, w.app_id from workloads w order by w.id offset n limit 1) w on true
-join apps a on a.id = w.app_id`)
+join apps a on a.id = w.app_id
+where h.name = 'h' and not exists (select 1 from containers c where c.host_id = h.id)`)
+		hosts = to
+	}
+	addHosts(100)
 	pending := 0
 	history := 0
 	grow := func(toPending, toHistory int) {
@@ -257,5 +263,11 @@ join apps a on a.id = w.app_id, generate_series(1, 5000)`)
 	large := measure("25,000 pending, 20,000 finished")
 	if large.statements != small.statements {
 		t.Errorf("the pass sent %d statements at 10,000 pending and %d at 2,000, want a fixed number", large.statements, small.statements)
+	}
+	addHosts(250)
+	costExec(t, pool, "analyze")
+	fleet := measure("25,000 pending, 20,000 finished, 250 hosts")
+	if fleet.statements != large.statements {
+		t.Errorf("the pass sent %d statements with 250 hosts and %d with 100, want a fixed number", fleet.statements, large.statements)
 	}
 }

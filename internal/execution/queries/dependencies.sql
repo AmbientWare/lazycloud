@@ -87,3 +87,23 @@ select l.id, l.in_release from (
     for update of t
 ) l
 where l.status = 'queued';
+
+-- name: LockOutcomeDependents :many
+-- The queued direct dependents of succeeded and queued transitive
+-- dependents of failed, locked together in id order and read by key, as
+-- LockQueuedDependents. after_failure marks a dependent of failed.
+with recursive closure (id) as (
+    select d.task_id from task_dependencies d where d.depends_on = any(@failed::uuid[])
+    union
+    select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
+)
+select l.id, l.after_failure from (
+    select t.id, t.status, t.id = any(array(select id from closure)) as after_failure
+    from tasks t
+    where t.id = any(array(select id from closure)
+                     || array(select d.task_id from task_dependencies d where d.depends_on = any(@succeeded::uuid[])))
+    order by t.id
+    offset 0
+    for update
+) l
+where l.status = 'queued';

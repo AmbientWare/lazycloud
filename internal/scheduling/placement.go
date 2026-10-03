@@ -112,18 +112,14 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 		if err != nil {
 			return fmt.Errorf("assign containers: %w", err)
 		}
-		notified := map[uuid.UUID]bool{}
+		var notify []string
 		for _, a := range assigned {
-			if a.HostID == nil || notified[*a.HostID] {
-				continue
-			}
-			notified[*a.HostID] = true
-			if err := database.Notify(ctx, tx, database.ChannelHost, a.HostID.String()); err != nil {
-				return err
+			if a.HostID != nil {
+				notify = append(notify, a.HostID.String())
 			}
 		}
 		out.assigned = assigned
-		return nil
+		return database.NotifyAll(ctx, tx, database.ChannelHost, notify)
 	})
 	if err != nil {
 		return placeBatchResult{}, fmt.Errorf("placement batch: %w", err)

@@ -56,7 +56,13 @@ select att.task_id, att.id, host.id from att, host`, spec, maxAttempts).Scan(&f.
 }
 
 func finish(ctx context.Context, e *Execution, host *compute.HostID, outcome AttemptOutcome) error {
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error { return e.finishAttempt(ctx, tx, host, outcome) })
+	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		stale, err := e.finishAttempts(ctx, tx, host, nil, []AttemptOutcome{outcome})
+		if err == nil && stale[0] {
+			err = ErrStaleAttempt
+		}
+		return err
+	})
 }
 
 func taskState(t *testing.T, pool *pgxpool.Pool, task uuid.UUID) (status string, failure *string) {
