@@ -728,6 +728,31 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 	}
 }
 
+// After a burst the warm host, idle for the timeout, stays to hold the warm
+// target while the resumed floor reserve, idle since the burst ended, is
+// still within it; once the resumed host has idled for the timeout it
+// returns to the reserve. Nothing is bought or drained.
+func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	settledFleet(t, o)
+	floor, _ := onDemandReserves(t, o)
+	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
+where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
+	serveFromReserve(t, o, floor)
+	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
+	if r := plan(t, o); r.Returned != 0 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
+		t.Fatalf("plan %+v, warm host %s; want the warm host kept and nothing else done yet", r, hostRowOf(t, o, warm).Phase)
+	}
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	r := plan(t, o)
+	if r.Returned != 1 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) ||
+		hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
+		t.Fatalf("plan %+v, floor host %s, warm host %s; want the floor host back in the reserve, the warm host serving, nothing bought",
+			r, hostRowOf(t, o, floor).Phase, hostRowOf(t, o, warm).Phase)
+	}
+}
+
 // A floor reserve resumed for work that runs past the idle timeout is
 // replaced: the busy host is not due back.
 func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
