@@ -482,19 +482,19 @@ func TestPlannedCapacityUsesTheMemoryHostsOfTheTypeReported(t *testing.T) {
 }
 
 // A pass in an empty fleet buys the warm floors to serve and the stopped
-// floors as reserves: on-demand ones hibernate, Spot ones stop plainly.
+// floors as reserves that hibernate.
 func TestAnEmptyFleetBuysTheFloorsAsServingHostsAndReserves(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	if r := plan(t, o); r.Requested == 0 {
 		t.Fatalf("plan %+v, want floors bought", r)
 	}
-	for market, mode := range map[string]string{"spot": "stop", "on_demand": "hibernate"} {
+	for _, market := range []string{"spot", "on_demand"} {
 		serving := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode is null", market)
-		reserves := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode = $2", market, mode)
-		others := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode <> $2", market, mode)
+		reserves := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode = 'hibernate'", market)
+		others := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode <> 'hibernate'", market)
 		if serving == 0 || reserves == 0 || others > 0 {
-			t.Errorf("%s market bought %d serving hosts, %d reserves that %s and %d others", market, serving, reserves, mode, others)
+			t.Errorf("%s market bought %d serving hosts, %d reserves that hibernate and %d others", market, serving, reserves, others)
 		}
 	}
 }

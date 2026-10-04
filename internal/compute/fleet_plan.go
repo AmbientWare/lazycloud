@@ -889,7 +889,7 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
-		if h.HibernationConfigured && hibernates(t, h.Market) {
+		if h.HibernationConfigured && hibernates(t) {
 			mode = ReserveHibernate
 		}
 		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false
