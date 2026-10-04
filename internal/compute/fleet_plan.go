@@ -852,16 +852,19 @@ func (ps *pass) retain(v *marketView) {
 		return
 	}
 	idle := ps.inMarket(v.m, func(h FleetHost) bool { return serving(h) && ps.idleLong(h) })
-	slices.SortStableFunc(idle, func(a, b *FleetHost) int {
-		return cmp.Or(cmp.Compare(b.hourly(), a.hourly()), cmp.Compare(b.Usable.CPUMillis, a.Usable.CPUMillis),
-			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
-	})
+	slices.SortStableFunc(idle, leavingOrder)
 	for _, h := range idle {
 		if surplus.Minus(h.Usable).Covers(FleetCapacity{}) {
 			surplus = surplus.Minus(h.Usable)
 			ps.leave(v, h)
 		}
 	}
+}
+
+// leavingOrder is the order idle hosts leave in: the most expensive first.
+func leavingOrder(a, b *FleetHost) int {
+	return cmp.Or(cmp.Compare(b.hourly(), a.hourly()), cmp.Compare(b.Usable.CPUMillis, a.Usable.CPUMillis),
+		cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 }
 
 // leave returns a leaving host to the reserve when EC2 can stop it and the
@@ -977,8 +980,9 @@ func (ps *pass) reserves(v *marketView) {
 }
 
 // floorDue records when market v's stopped floor went short and reports
-// whether to buy for it: once it has been short for the idle timeout, so a
-// reserve resumed for a burst can return before a replacement is bought.
+// whether to buy for it: once it has been short for the idle timeout and no
+// idle host beyond the warm target is due back, so a reserve resumed for a
+// burst returns before a replacement is bought.
 func (ps *pass) floorDue(v *marketView, short FleetCapacity) bool {
 	if short.Empty() {
 		return false
@@ -988,7 +992,30 @@ func (ps *pass) floorDue(v *marketView, short FleetCapacity) bool {
 		since = ps.s.Now
 	}
 	v.floorShortSince = &since
-	return ps.s.Now.Sub(since) >= ps.p.IdleTimeout
+	return ps.s.Now.Sub(since) >= ps.p.IdleTimeout && !ps.returning(v).Covers(short)
+}
+
+// returning is the capacity of market v's idle hosts that will return to
+// the reserve once idle for the timeout: those retain lets leave, beyond the
+// warm target, that EC2 can stop.
+func (ps *pass) returning(v *marketView) FleetCapacity {
+	surplus := ps.warmFree(v).Minus(v.warm)
+	idle := ps.inMarket(v.m, func(h FleetHost) bool {
+		_, idle := ps.plan.IdleSince[h.ID]
+		return serving(h) && idle && !h.Protected
+	})
+	slices.SortStableFunc(idle, leavingOrder)
+	var back FleetCapacity
+	for _, h := range idle {
+		if !surplus.Minus(h.Usable).Covers(FleetCapacity{}) {
+			continue
+		}
+		surplus = surplus.Minus(h.Usable)
+		if _, catalogued := ps.typeNamed(h.InstanceType); h.Stoppable && catalogued {
+			back = back.Plus(h.Usable)
+		}
+	}
+	return back
 }
 
 // buyReserves buys the cheapest reserves that cover need, ones that
