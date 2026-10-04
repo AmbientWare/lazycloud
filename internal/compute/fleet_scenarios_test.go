@@ -76,6 +76,9 @@ type sim struct {
 	knowQuota bool
 	// recent is the largest recent shape per market the planner reads.
 	recent map[ReserveMarket]FleetCapacity
+	// floorShortSince carries each market's floor shortfall from one pass to
+	// the next, as the published plan does.
+	floorShortSince map[ReserveMarket]time.Time
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
 }
@@ -237,7 +240,14 @@ func (s *sim) plan() {
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
+	snapshot.FloorShortSince = s.floorShortSince
 	plan := PlanFleet(s.p, snapshot)
+	s.floorShortSince = map[ReserveMarket]time.Time{}
+	for _, mp := range plan.Markets {
+		if mp.FloorShortSince != nil {
+			s.floorShortSince[mp.Market] = *mp.FloorShortSince
+		}
+	}
 	s.check(snapshot, plan)
 	s.apply(plan)
 	held := map[ReserveMarket]int{}
@@ -449,11 +459,13 @@ func TestFleetScenarios(t *testing.T) {
 }
 
 // TestFleetSpendAtZeroLoadIsTheFloorsCost checks a quiet fleet settles on
-// exactly what an empty fleet's first pass buys for the floors.
+// exactly what an empty fleet buys for the floors once they are due.
 func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 	s := newSim(t, DefaultPolicy())
 	r := s.run(6*time.Hour, nil)
-	first := PlanFleet(DefaultPolicy(), FleetSnapshot{Now: offerNow, Offers: s.in, HostRoom: simMaxHosts, ReserveRoom: simMaxHosts})
+	due := offerNow.Add(-time.Hour)
+	first := PlanFleet(DefaultPolicy(), FleetSnapshot{Now: offerNow, Offers: s.in, HostRoom: simMaxHosts, ReserveRoom: simMaxHosts,
+		FloorShortSince: map[ReserveMarket]time.Time{{}: due, {Preemptible: true}: due}})
 	var want int64
 	for _, a := range first.Actions {
 		switch a.Kind {
@@ -531,7 +543,9 @@ func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 		large[h.market()] = large[h.market()] || h.Usable.Covers(reservedShape(sixteen))
 	}
 	for m, n := range want {
-		if len(held[m]) != n || s.mostReserves[m] > n || (m.GPU == "" && !large[m]) {
+		// A host returning from the burst may briefly sit beside the
+		// reserves it replaces before the surplus retires.
+		if len(held[m]) != n || s.mostReserves[m] > n+1 || (m.GPU == "" && !large[m]) {
 			t.Errorf("%s holds %v and held up to %d; want %d, one that fits 16 vCPU", m, held[m], s.mostReserves[m], n)
 		}
 	}

@@ -530,6 +530,10 @@ func TestSurplusReservesRetire(t *testing.T) {
 func settledFleet(t *testing.T, o owners) {
 	t.Helper()
 	plan(t, o)
+	// A floor short since longer than the idle timeout is bought now.
+	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '1 hour'))
+where plan ? 'floor_short_since'`)
+	plan(t, o)
 	run(t, o.pool, `
 update hosts set phase = case when reserve_mode is null then 'ready' else 'stopped' end,
        state = case when reserve_mode is null then 'online' else 'offline' end, last_seen_at = now(),
@@ -673,6 +677,37 @@ func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *te
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
 		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
+	}
+}
+
+// A burst that resumes the floor reserve buys no replacement while the
+// floor has been short for less than the idle timeout, so the resumed host
+// can return first; a floor short for longer is bought again.
+func TestABurstOnTheFloorReserveBuysNoReplacementWithinTheIdleTimeout(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	settledFleet(t, o)
+	floor, _ := onDemandReserves(t, o)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+	burst := pendingContainer(t, o.pool, dev, release, 1000, 8*gib)
+	floorBought := func() int {
+		return scan[int](t, o.pool, `select count(*) from hosts
+where market = 'on_demand' and reserve_mode is not null and phase = 'requested' and cpu_millis < 16000`)
+	}
+
+	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhaseResuming) {
+		t.Fatalf("plan %+v, want the floor reserve resumed", r)
+	}
+	serveFromReserve(t, o, floor)
+	placeOn(t, o, burst, floor)
+	if plan(t, o); floorBought() != 0 {
+		t.Fatal("bought a floor reserve as soon as the floor went short")
+	}
+	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '6 minutes'))
+where plan ? 'floor_short_since'`)
+	if plan(t, o); floorBought() != 1 {
+		t.Fatalf("%d floor reserves bought after the floor was short past the idle timeout, want 1", floorBought())
 	}
 }
 

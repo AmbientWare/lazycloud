@@ -112,6 +112,9 @@ type FleetSnapshot struct {
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
 	ReserveRoom int
+	// FloorShortSince is when each market's stopped floor went short, from
+	// the last published plan.
+	FloorShortSince map[ReserveMarket]time.Time
 }
 
 // FleetActionKind is what an action asks for.
@@ -184,8 +187,10 @@ type MarketPlan struct {
 	StoppedTarget                     FleetCapacity
 	ReserveReady, ReservePending      FleetCapacity
 	Shortfall, StoppedShortfall       FleetCapacity
-	Reason                            MarketReason
-	States                            []FleetStateCapacity
+	// FloorShortSince is when the stopped floor went short; nil while held.
+	FloorShortSince *time.Time
+	Reason          MarketReason
+	States          []FleetStateCapacity
 }
 
 // FleetPlan is one pass's decisions.
@@ -267,6 +272,8 @@ type marketView struct {
 	retired map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover.
 	shortfall, stoppedShort FleetCapacity
+	// floorShortSince is when the stopped floor went short; nil while held.
+	floorShortSince *time.Time
 }
 
 func (ps *pass) inMarket(m ReserveMarket, keep func(FleetHost) bool) []*FleetHost {
@@ -940,12 +947,16 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 func (ps *pass) reserves(v *marketView) {
 	short := v.stopped.Minus(ps.floor(v, HostID{}, FleetHost.reserve)).Clamp()
 	v.stoppedShort = short
+	floorDue := ps.floorDue(v, short)
 	largest := CoverNeed{Items: []CoverItem{{Shape: v.largest, Count: 1}}}
 	switch held := ps.holdsLargest(v, HostID{}); {
 	case !v.mayGrow:
 	case v.apart:
-		if !short.Empty() {
+		if !short.Empty() && floorDue {
 			v.stoppedShort = short.Minus(ps.buyReserves(v, CoverNeed{Aggregate: short}, short).Supplied).Clamp()
+			if v.stoppedShort.Empty() {
+				v.floorShortSince = nil
+			}
 		}
 		if !held && !ps.largeAway(v) && len(ps.buyReserves(v, largest, v.largest).UnmetItems) > 0 {
 			v.stoppedShort = v.stoppedShort.Upper(v.largest)
@@ -963,6 +974,21 @@ func (ps *pass) reserves(v *marketView) {
 	if short.Empty() {
 		ps.retire(v)
 	}
+}
+
+// floorDue records when market v's stopped floor went short and reports
+// whether to buy for it: once it has been short for the idle timeout, so a
+// reserve resumed for a burst can return before a replacement is bought.
+func (ps *pass) floorDue(v *marketView, short FleetCapacity) bool {
+	if short.Empty() {
+		return false
+	}
+	since, ok := ps.s.FloorShortSince[v.m]
+	if !ok {
+		since = ps.s.Now
+	}
+	v.floorShortSince = &since
+	return ps.s.Now.Sub(since) >= ps.p.IdleTimeout
 }
 
 // buyReserves buys the cheapest reserves that cover need, ones that
@@ -1100,7 +1126,7 @@ func (ps *pass) report(v *marketView) MarketPlan {
 	plan := MarketPlan{
 		Market: v.m, Load: v.load, WarmTarget: v.warm, WarmFree: ps.warmFree(v), WarmPending: ps.warmPending(v),
 		StoppedTarget: v.stopped, ReserveReady: ready, ReservePending: reserve.Minus(ready).Clamp(),
-		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, States: ps.states(v.m),
+		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, FloorShortSince: v.floorShortSince, States: ps.states(v.m),
 	}
 	switch {
 	case !v.mayGrow:
