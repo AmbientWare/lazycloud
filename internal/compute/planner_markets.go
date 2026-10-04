@@ -11,15 +11,18 @@ import (
 // PublishedMarket is one market's plan as the planner publishes it in
 // fleet_markets, for every replica and the admin page.
 type PublishedMarket struct {
-	Preemptible   bool                 `json:"preemptible"`
-	GPUType       string               `json:"gpu_type"`
-	Load          FleetCapacity        `json:"load"`
-	WarmTarget    FleetCapacity        `json:"warm_target"`
-	WarmFree      FleetCapacity        `json:"warm_free"`
-	StoppedTarget FleetCapacity        `json:"stopped_target"`
-	ReserveReady  FleetCapacity        `json:"reserve_ready"`
-	Reason        MarketReason         `json:"reason"`
-	States        []FleetStateCapacity `json:"states"`
+	Preemptible   bool          `json:"preemptible"`
+	GPUType       string        `json:"gpu_type"`
+	Load          FleetCapacity `json:"load"`
+	WarmTarget    FleetCapacity `json:"warm_target"`
+	WarmFree      FleetCapacity `json:"warm_free"`
+	StoppedTarget FleetCapacity `json:"stopped_target"`
+	ReserveReady  FleetCapacity `json:"reserve_ready"`
+	Reason        MarketReason  `json:"reason"`
+	// FloorShortSince is when the stopped floor went short; the next pass
+	// reads it back.
+	FloorShortSince *time.Time           `json:"floor_short_since,omitempty"`
+	States          []FleetStateCapacity `json:"states"`
 	// Decision summarizes the market's plan; the planner logs it when it
 	// changes.
 	Decision string `json:"decision"`
@@ -35,6 +38,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out := PublishedMarket{
 		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Load: mp.Load, WarmTarget: mp.WarmTarget, WarmFree: mp.WarmFree,
 		StoppedTarget: mp.StoppedTarget, ReserveReady: mp.ReserveReady, Reason: mp.Reason, States: mp.States,
+		FloorShortSince: mp.FloorShortSince,
 	}
 	var names []string
 	for _, a := range actions {

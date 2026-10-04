@@ -283,6 +283,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	s := FleetSnapshot{
 		Now: now, Hosts: hosts, Pending: pending, Recent: largestShapes(ps.r.recent), Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves),
+		FloorShortSince: ps.floorShortSince(),
 	}
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
 	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
@@ -489,8 +490,23 @@ func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
 	}
 }
 
-// publish writes every platform market's plan when the pass acted or the
-// last plan is planRefresh old, and logs each decision that changed.
+// floorShortSince is when each market's stopped floor went short, from the
+// published plans; an unreadable plan reads as never short.
+func (ps *fleetPass) floorShortSince() map[ReserveMarket]time.Time {
+	out := map[ReserveMarket]time.Time{}
+	for _, m := range ps.r.markets {
+		var stored PublishedMarket
+		if json.Unmarshal(m.Plan, &stored) != nil || stored.FloorShortSince == nil {
+			continue
+		}
+		out[ReserveMarket{Preemptible: stored.Preemptible, GPU: stored.GPUType}] = *stored.FloorShortSince
+	}
+	return out
+}
+
+// publish writes every platform market's plan when the pass acted, a
+// market's floor shortfall began or ended, or the last plan is planRefresh
+// old, and logs each decision that changed.
 func (ps *fleetPass) publish(plan FleetPlan) error {
 	var last time.Time
 	for _, m := range ps.r.markets {
@@ -498,7 +514,12 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 			last = m.GeneratedAt
 		}
 	}
-	if len(plan.Actions) == 0 && ps.r.now.Sub(last) < planRefresh {
+	stored := ps.floorShortSince()
+	floorMoved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
+		since, ok := stored[mp.Market]
+		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince)
+	})
+	if len(plan.Actions) == 0 && !floorMoved && ps.r.now.Sub(last) < planRefresh {
 		return nil
 	}
 	for _, mp := range plan.Markets {
