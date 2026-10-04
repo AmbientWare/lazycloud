@@ -427,7 +427,7 @@ func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 }
 
 // An idle host goes back to the reserve while the reserve is short: an
-// on-demand host of at most 32 GiB launched able to hibernates, any other
+// host of at most 32 GiB launched able to hibernate does, any other
 // stops plainly. Once the reserve is held, it drains.
 func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, small)
@@ -445,7 +445,7 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 		{"plain", idle(planHost(1, planSmall, FleetServing)), ReserveStop},
 		{"on-demand, hibernation configured", hibernating(planFast, MarketOnDemand), ReserveHibernate},
 		{"on-demand, 64 GiB", hibernating(planRoomy, MarketOnDemand), ReserveStop},
-		{"Spot, hibernation configured", hibernating(planFast, MarketSpot), ReserveStop},
+		{"Spot, hibernation configured", hibernating(planFast, MarketSpot), ReserveHibernate},
 	} {
 		s := planSnapshot(t, c.host)
 		s.Offers.Catalog = append(s.Offers.Catalog, planFast, planRoomy)

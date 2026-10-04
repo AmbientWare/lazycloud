@@ -81,7 +81,7 @@ func TestRealEC2Fleet(t *testing.T) {
 		publish(t, o.compute)
 		for _, c := range []reserveCase{
 			{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate},
-			{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveStop},
+			{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveHibernate},
 			{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1},
 		} {
 			cycles := runs
