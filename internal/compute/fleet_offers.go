@@ -264,7 +264,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					continue
 				}
 				for _, market := range markets {
-					hibernate := reserve && hibernates(t, market)
+					hibernate := reserve && hibernates(t)
 					disk := rootDiskMicros(region, t.RootGiB(hibernate))
 					compute := onDemand
 					if market == MarketSpot {
@@ -308,13 +308,11 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 // 10-minute providerDeadline, while 128 GiB would outlast it.
 const hibernationRAMLimit = 32 * gib
 
-// hibernates reports whether a reserve of type t bought in market sleeps by
-// hibernating: an on-demand one of at most hibernationRAMLimit. Spot
-// hibernations of a c6a.2xlarge and an m6a.8xlarge in us-east-2 hung until
-// forced on 2026-09-27 and 28, and a forced stop loses the image after
-// holding the host for providerDeadline.
-func hibernates(t CatalogType, market Market) bool {
-	return t.Hibernates && t.MemoryBytes <= hibernationRAMLimit && market == MarketOnDemand
+// hibernates reports whether a reserve of type t hibernates instead of
+// stopping: Spot or on-demand, the type supports it and has at most
+// hibernationRAMLimit of RAM.
+func hibernates(t CatalogType) bool {
+	return t.Hibernates && t.MemoryBytes <= hibernationRAMLimit
 }
 
 // preferHealthy drops offers in cooling regions while another offer

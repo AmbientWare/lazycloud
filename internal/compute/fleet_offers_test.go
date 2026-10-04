@@ -250,7 +250,7 @@ func offerKeys(offers []FleetOffer) []string {
 	return keys
 }
 
-func TestAConnectionPaysItsOwnHostsAndOnlyOnDemandReservesHibernate(t *testing.T) {
+func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing.T) {
 	in := offerInputs(t)
 	in.Rates = nil
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
@@ -267,15 +267,13 @@ func TestAConnectionPaysItsOwnHostsAndOnlyOnDemandReservesHibernate(t *testing.T
 	for _, preemptible := range []bool{false, true} {
 		need.Preemptible = preemptible
 		offers := RankOffers(DefaultPolicy(), need, true, in)
-		if len(offers) == 0 || offers[0].Hibernate == preemptible ||
-			offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(offers[0].Hibernate)) {
-			t.Errorf("preemptible %v: reserve offers %v, want the %s one to hibernate %v", preemptible, offerKeys(offers),
-				map[bool]string{true: "Spot", false: "on-demand"}[preemptible], !preemptible)
+		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true)) {
+			t.Errorf("preemptible %v: reserve offers %v, want one that hibernates", preemptible, offerKeys(offers))
 		}
 	}
 }
 
-// An on-demand reserve hibernates only with at most 32 GiB of RAM; a larger
+// A reserve hibernates only with at most 32 GiB of RAM; a larger
 // image would not finish writing within providerDeadline, so it stops
 // plainly on the plain root.
 func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
