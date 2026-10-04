@@ -844,27 +844,40 @@ func (ps *pass) grow(v *marketView) {
 	v.shortfall = short
 }
 
-// retain releases idle hosts the market no longer needs, most expensive
-// first, while the free room left over the warm target still covers it.
+// retain releases the idle hosts the market no longer needs once each has
+// been idle for the timeout.
 func (ps *pass) retain(v *marketView) {
-	surplus := ps.warmFree(v).Minus(v.warm)
-	if !surplus.Covers(FleetCapacity{}) {
-		return
-	}
-	idle := ps.inMarket(v.m, func(h FleetHost) bool { return serving(h) && ps.idleLong(h) })
-	slices.SortStableFunc(idle, leavingOrder)
-	for _, h := range idle {
-		if surplus.Minus(h.Usable).Covers(FleetCapacity{}) {
-			surplus = surplus.Minus(h.Usable)
+	for _, h := range ps.leavers(v) {
+		if ps.idleLong(*h) {
 			ps.leave(v, h)
 		}
 	}
 }
 
-// leavingOrder is the order idle hosts leave in: the most expensive first.
-func leavingOrder(a, b *FleetHost) int {
-	return cmp.Or(cmp.Compare(b.hourly(), a.hourly()), cmp.Compare(b.Usable.CPUMillis, a.Usable.CPUMillis),
-		cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
+// leavers are market v's idle serving hosts beyond the warm target: the
+// cheapest idle hosts stay until they, with the free room of the busy ones,
+// hold the target, and the rest leave once idle for the timeout.
+func (ps *pass) leavers(v *marketView) []*FleetHost {
+	idle := func(h FleetHost) bool {
+		_, ok := ps.plan.IdleSince[h.ID]
+		return ok && !h.Protected
+	}
+	candidates := ps.inMarket(v.m, func(h FleetHost) bool { return serving(h) && idle(h) })
+	kept := totalOf(ps.inMarket(v.m, func(h FleetHost) bool { return serving(h) && !idle(h) }),
+		func(h *FleetHost) FleetCapacity { return h.free() })
+	slices.SortStableFunc(candidates, func(a, b *FleetHost) int {
+		return cmp.Or(cmp.Compare(a.hourly(), b.hourly()), cmp.Compare(a.Usable.CPUMillis, b.Usable.CPUMillis),
+			cmp.Compare(a.Usable.MemoryBytes, b.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
+	})
+	var out []*FleetHost
+	for _, h := range candidates {
+		if kept.Covers(v.warm) {
+			out = append(out, h)
+			continue
+		}
+		kept = kept.Plus(h.free())
+	}
+	return out
 }
 
 // leave returns a leaving host to the reserve when EC2 can stop it and the
@@ -996,21 +1009,10 @@ func (ps *pass) floorDue(v *marketView, short FleetCapacity) bool {
 }
 
 // returning is the capacity of market v's idle hosts that will return to
-// the reserve once idle for the timeout: those retain lets leave, beyond the
-// warm target, that EC2 can stop.
+// the reserve once idle for the timeout: the leavers EC2 can stop.
 func (ps *pass) returning(v *marketView) FleetCapacity {
-	surplus := ps.warmFree(v).Minus(v.warm)
-	idle := ps.inMarket(v.m, func(h FleetHost) bool {
-		_, idle := ps.plan.IdleSince[h.ID]
-		return serving(h) && idle && !h.Protected
-	})
-	slices.SortStableFunc(idle, leavingOrder)
 	var back FleetCapacity
-	for _, h := range idle {
-		if !surplus.Minus(h.Usable).Covers(FleetCapacity{}) {
-			continue
-		}
-		surplus = surplus.Minus(h.Usable)
+	for _, h := range ps.leavers(v) {
 		if _, catalogued := ps.typeNamed(h.InstanceType); h.Stoppable && catalogued {
 			back = back.Plus(h.Usable)
 		}
