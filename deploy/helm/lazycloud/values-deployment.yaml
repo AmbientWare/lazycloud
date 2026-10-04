@@ -1,0 +1,54 @@
+{
+  "awsRegion": "us-east-1",
+  "cloudflared": {
+    "tunnelId": "a25a4c07-3b74-417d-bc80-b80e327e7407"
+  },
+  "config": {
+    "LAZYCLOUD_AWS_PRINCIPAL_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-control-plane",
+    "LAZYCLOUD_FLEET_ACCOUNT_ID": "534742592531",
+    "LAZYCLOUD_FLEET_INSTANCE_PROFILE": "lazycloud-prod-fleet-node",
+    "LAZYCLOUD_FLEET_NAME": "lazycloud-prod",
+    "LAZYCLOUD_FLEET_NETWORKS": "{\"us-east-1\":{\"security_group_id\":\"sg-0902f1dffb8b2288a\",\"subnets\":[{\"id\":\"subnet-04114b8562a26bdd6\",\"zone\":\"us-east-1a\",\"zone_id\":\"use1-az6\"},{\"id\":\"subnet-006bef930c2f55eb5\",\"zone\":\"us-east-1b\",\"zone_id\":\"use1-az1\"},{\"id\":\"subnet-07e85968455ecdc02\",\"zone\":\"us-east-1c\",\"zone_id\":\"use1-az2\"},{\"id\":\"subnet-052733d868bfda809\",\"zone\":\"us-east-1d\",\"zone_id\":\"use1-az4\"},{\"id\":\"subnet-09233e45e6bf26f9d\",\"zone\":\"us-east-1e\",\"zone_id\":\"use1-az3\"},{\"id\":\"subnet-0a85708055d120550\",\"zone\":\"us-east-1f\",\"zone_id\":\"use1-az5\"}],\"vpc_id\":\"vpc-03ddde85318123257\"},\"us-east-2\":{\"security_group_id\":\"sg-0aced8fb9712cbf90\",\"subnets\":[{\"id\":\"subnet-0fb8d44f71ef2e5fc\",\"zone\":\"us-east-2a\",\"zone_id\":\"use2-az1\"},{\"id\":\"subnet-01b37f487270b5d33\",\"zone\":\"us-east-2b\",\"zone_id\":\"use2-az2\"},{\"id\":\"subnet-06fd252b8805d6106\",\"zone\":\"us-east-2c\",\"zone_id\":\"use2-az3\"}],\"vpc_id\":\"vpc-0bf0d076a149e1e81\"},\"us-west-1\":{\"security_group_id\":\"sg-0af12a0b8e08a3e9c\",\"subnets\":[{\"id\":\"subnet-0a3ce2742d1295cc1\",\"zone\":\"us-west-1b\",\"zone_id\":\"usw1-az3\"},{\"id\":\"subnet-0a149df6434f3fde0\",\"zone\":\"us-west-1c\",\"zone_id\":\"usw1-az1\"}],\"vpc_id\":\"vpc-025508cf91d9637ab\"},\"us-west-2\":{\"security_group_id\":\"sg-0a0e9af79a56357a6\",\"subnets\":[{\"id\":\"subnet-023075a1c1c8a30dd\",\"zone\":\"us-west-2a\",\"zone_id\":\"usw2-az2\"},{\"id\":\"subnet-0fcbdef725f2d2895\",\"zone\":\"us-west-2b\",\"zone_id\":\"usw2-az1\"},{\"id\":\"subnet-0bd252607aed4d972\",\"zone\":\"us-west-2c\",\"zone_id\":\"usw2-az3\"},{\"id\":\"subnet-0b64b5500e10ebd86\",\"zone\":\"us-west-2d\",\"zone_id\":\"usw2-az4\"}],\"vpc_id\":\"vpc-06f333b4ab9b89281\"}}",
+    "LAZYCLOUD_FLEET_NODE_ROLE_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-fleet-node",
+    "LAZYCLOUD_OBJECT_STORE_BUCKET": "lazycloud-prod-objects-534742592531",
+    "LAZYCLOUD_OBJECT_STORE_REGION": "us-east-1",
+    "LAZYCLOUD_WORKSPACE_BUCKET_PREFIX": "lazycloud-prod-workspace",
+    "LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER": "aws",
+    "LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-workspace-storage"
+  },
+  "domain": "lazycloud.dev",
+  "externalSecrets": {
+    "documents": {
+      "operator": "lazycloud-prod/operator",
+      "platform": "lazycloud-prod/platform"
+    },
+    "enabled": true,
+    "readerRoleArn": "arn:aws:iam::534742592531:role/lazycloud-prod-secrets-reader",
+    "region": "us-east-1"
+  },
+  "image": {
+    "registry": "534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/release"
+  },
+  "networkPolicy": {
+    "hostCIDRs": [
+      "10.80.0.0/16"
+    ],
+    "nodeCIDRs": [
+      "10.80.0.0/16"
+    ]
+  },
+  "server": {
+    "config": {
+      "LAZYCLOUD_CLOUDFLARE_ZONE_ID": "7de4ad3cd44f8592d1c47db937c59f4f",
+      "LAZYCLOUD_IMAGE_REGISTRY": "534742592531.dkr.ecr.us-east-1.amazonaws.com",
+      "LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-registry-hosts",
+      "LAZYCLOUD_IMAGE_REPOSITORY": "lazycloud/workload-images"
+    },
+    "hostService": {
+      "certificateArn": "arn:aws:acm:us-east-1:534742592531:certificate/dd25d7ba-6c25-4262-b82b-aef7d2b0ce18"
+    }
+  },
+  "release": {
+    "version": "0.1.90"
+  }
+}
