@@ -110,23 +110,27 @@ func digestOf(c byte) imagefs.Digest {
 // Traces are bounded in number and size, and ones nobody ends expire: a
 // read or an end drops them, so reads stop taking the lock.
 func TestTracesAreBounded(t *testing.T) {
-	const life = 200 * time.Millisecond
-	tr := newTracer(life)
 	layer := digestOf('0')
+	bounded := newTracer(traceLife)
 	for i := range maxTraces {
-		if err := tr.start(fmt.Sprint(i), []imagefs.Digest{layer}, true); err != nil {
+		if err := bounded.start(fmt.Sprint(i), []imagefs.Digest{layer}, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := tr.start("one more", []imagefs.Digest{layer}, true); status.Code(err) != codes.ResourceExhausted {
+	if err := bounded.start("one more", []imagefs.Digest{layer}, true); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("trace %d started: %v", maxTraces+1, err)
 	}
 	for frame := range maxTraceReads + 10 {
-		tr.record(layer, frame)
+		bounded.record(layer, frame)
 	}
-	got, ok := tr.end("0")
-	if !ok || len(got.reads) != maxTraceReads {
-		t.Fatalf("a trace past its bound holds %d reads", len(got.reads))
+	if got, ok := bounded.end("0"); !ok || len(got.reads) != maxTraceReads {
+		t.Fatalf("a trace past its bound ended %v, %+v", ok, got)
+	}
+
+	const life = 200 * time.Millisecond
+	tr := newTracer(life)
+	if err := tr.start("first", []imagefs.Digest{layer}, true); err != nil {
+		t.Fatal(err)
 	}
 	time.Sleep(life)
 	tr.record(layer, 0)
