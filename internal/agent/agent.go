@@ -264,7 +264,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	offered := resolveOffer(machine, cfg.Limits)
-	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker), snapshotterCheck(ctx, docker)}, offered.checks...)
+	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker), snapshotterCheck(ctx, docker, cfg.Snapshotter)}, offered.checks...)
 	var metadata *imds.Client
 	if cfg.IMDSEndpoint != "" {
 		metadata = newIMDS(cfg.IMDSEndpoint)
@@ -435,8 +435,7 @@ func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.Prefligh
 
 // snapshotterCheck fails unless the host's snapshotter serves its socket
 // and Docker stores images on it: every image a host runs is read lazily.
-func snapshotterCheck(ctx context.Context, docker *client.Client) *hostproto.PreflightCheck {
-	socket := layersource.Socket
+func snapshotterCheck(ctx context.Context, docker *client.Client, socket string) *hostproto.PreflightCheck {
 	const remediation = "run lazycloud-agent install-service as root, which installs lazycloud-snapshotter and sets Docker's storage driver"
 	if info, err := os.Stat(socket); err != nil || info.Mode()&os.ModeSocket == 0 {
 		return check("snapshotter", false, "lazycloud-snapshotter is not serving "+socket, remediation)

@@ -22,22 +22,24 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	containertypes "github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// lazyImages are the workload images the tests start. Every host reads
-// workload images through its snapshotter, so TestMain converts their
-// layers into the development object store and grants them, as publishing
-// and the server do for a platform image.
-var lazyImages = []string{testImage, "python:3.12-alpine"}
+// lazyImages are the workload images the tests start from a registry.
+// Every host reads workload images through its snapshotter, so TestMain
+// converts their layers into the development object store, as publishing
+// does, and start commands carry the grants the server would send.
+var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage}
 
-// grantLazyImages converts and grants lazyImages for twelve hours.
-func grantLazyImages(ctx context.Context) error {
+// imageLayers holds the layer grants of each of lazyImages.
+var imageLayers = map[string][]*hostproto.LayerGrant{}
+
+// convertLazyImages fills imageLayers with grants for twelve hours.
+func convertLazyImages(ctx context.Context) error {
 	cfg := storagetest.Config()
 	store := s3.New(s3.Options{
 		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
@@ -45,7 +47,6 @@ func grantLazyImages(ctx context.Context) error {
 	})
 	presign := s3.NewPresignClient(store)
 	expires := time.Now().Add(12 * time.Hour)
-	var grants []layersource.Grant
 	for _, ref := range lazyImages {
 		r, err := name.ParseReference(ref)
 		if err != nil {
@@ -64,84 +65,73 @@ func grantLazyImages(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("convert a layer of %s: %w", ref, err)
 			}
-			grants = append(grants, grant)
+			imageLayers[ref] = append(imageLayers[ref], grant)
 		}
 	}
-	sources, err := layersource.Dial(layersource.Socket)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = sources.Close() }()
-	return sources.Grant(ctx, grants)
+	return nil
 }
 
-func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket string, l v1.Layer, expires time.Time) (layersource.Grant, error) {
+func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket string, l v1.Layer, expires time.Time) (*hostproto.LayerGrant, error) {
 	tar, err := l.Uncompressed()
 	if err != nil {
-		return layersource.Grant{}, err
+		return nil, err
 	}
 	defer func() { _ = tar.Close() }()
 	data, err := os.CreateTemp("", "layer-data")
 	if err != nil {
-		return layersource.Grant{}, err
+		return nil, err
 	}
 	defer func() { _ = data.Close(); _ = os.Remove(data.Name()) }()
 	ix, err := imagefs.Convert(ctx, tar, data)
 	if err != nil {
-		return layersource.Grant{}, err
+		return nil, err
 	}
 	index, err := ix.Marshal()
 	if err != nil {
-		return layersource.Grant{}, err
+		return nil, err
 	}
 	if _, err := data.Seek(0, 0); err != nil {
-		return layersource.Grant{}, err
+		return nil, err
 	}
 	key := "agent-test/layers/" + strings.TrimPrefix(string(ix.Layer), "sha256:")
 	urls := map[string]string{}
 	for object, body := range map[string]io.Reader{"index": bytes.NewReader(index), "data": data} {
 		if _, err := store.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key + "/" + object), Body: body}); err != nil {
-			return layersource.Grant{}, fmt.Errorf("upload %s: %w", object, err)
+			return nil, fmt.Errorf("upload %s: %w", object, err)
 		}
 		signed, err := presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key + "/" + object)},
 			s3.WithPresignExpires(time.Until(expires)))
 		if err != nil {
-			return layersource.Grant{}, err
+			return nil, err
 		}
 		urls[object] = signed.URL
 	}
-	return layersource.Grant{Layer: ix.Layer, IndexURL: urls["index"], DataURL: urls["data"], ExpiresAt: expires}, nil
+	return &hostproto.LayerGrant{DiffId: string(ix.Layer), IndexUrl: urls["index"], DataUrl: urls["data"], ExpiresAt: timestamppb.New(expires)}, nil
 }
 
-// A converted image pulls through containerd with no layer downloaded and
-// runs under Docker from its lazily read layers.
-func TestLazyPullDownloadsNoLayer(t *testing.T) {
+// withImage points a start at image and carries its grants.
+func withImage(start *hostproto.ServerMessage, image string) *hostproto.ServerMessage {
+	start.GetStart().Image = image
+	start.GetStart().Layers = imageLayers[image]
+	return start
+}
+
+// noLayerSince fails if any layer blob of image reached containerd's
+// content store since: a lazy pull downloads manifests and configs only.
+// containerd shares content across namespaces, so a blob an earlier pull
+// stored may be present.
+func noLayerSince(t *testing.T, image string, since time.Time) {
+	t.Helper()
 	ctx := t.Context()
 	ctrd, err := containerd.New(containerdSocket, containerd.WithDefaultNamespace("moby"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = ctrd.Close() }()
-	docker, err := client.New(client.FromEnv)
+	named, err := reference.ParseDockerRef(image)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = docker.Close() }()
-	cache := &imageCache{docker: docker, containerd: ctrd}
-	named, err := reference.ParseDockerRef(testImage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := docker.ImageRemove(ctx, testImage, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
-		t.Fatal(err)
-	}
-
-	began := time.Now()
-	pulled, err := cache.ensureLazy(ctx, testImage, nil, "")
-	if err != nil || !pulled {
-		t.Fatalf("lazy pull: pulled %v, %v", pulled, err)
-	}
-	t.Logf("pull took %v", time.Since(began))
 	img, err := ctrd.GetImage(ctx, named.String())
 	if err != nil {
 		t.Fatal(err)
@@ -150,44 +140,13 @@ func TestLazyPullDownloadsNoLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// containerd shares content across namespaces, so a blob another pull
-	// stored may be present; none may arrive with this one.
 	for _, layer := range manifest.Layers {
 		info, err := ctrd.ContentStore().Info(ctx, layer.Digest)
-		if err == nil && !info.CreatedAt.Before(began) {
-			t.Fatalf("the pull downloaded layer blob %s", layer.Digest)
+		if err == nil && !info.CreatedAt.Before(since) {
+			t.Fatalf("the pull of %s downloaded layer blob %s", image, layer.Digest)
 		}
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			t.Fatal(err)
 		}
 	}
-	if again, err := cache.ensureLazy(ctx, testImage, nil, ""); err != nil || again {
-		t.Fatalf("a second pull: pulled %v, %v", again, err)
-	}
-
-	began = time.Now()
-	created, err := docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config: &containertypes.Config{Image: testImage, User: "0",
-			Entrypoint: []string{"python", "-c", "import json, sqlite3, asyncio, ssl"}},
-		HostConfig: &containertypes.HostConfig{Runtime: testRuntime()},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_, _ = docker.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
-	}()
-	if _, err := docker.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	wait := docker.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{})
-	select {
-	case result := <-wait.Result:
-		if result.StatusCode != 0 {
-			t.Fatalf("the container exited %d", result.StatusCode)
-		}
-	case err := <-wait.Error:
-		t.Fatal(err)
-	}
-	t.Logf("run took %v", time.Since(began))
 }

@@ -97,4 +97,6 @@ jobs:
           docker compose run --rm object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race ./internal/agent/... ./internal/imagefs/...
+      - run: go test -race ./internal/agent/... ./internal/imagefs ./internal/imagefs/layersource
+      # The snapshotter mounts FUSE and overlay filesystems as root, as on hosts.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/imagefs/snapshotter
