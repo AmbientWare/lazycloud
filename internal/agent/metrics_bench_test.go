@@ -17,10 +17,10 @@ func BenchmarkSampleContainer(b *testing.B) {
 	}
 	source := &usageSource{cgroupDir: dir, pid: os.Getpid()}
 	now := time.Now()
-	source.sample("c", now, cpu.Topology{ThreadsPerCore: 2}, nil)
+	source.sample("c", now, cpu.Topology{Threads: 2, Cores: 1}, nil)
 	b.ResetTimer()
 	for i := range b.N {
-		if source.sample("c", now.Add(time.Duration(i+1)*time.Second), cpu.Topology{ThreadsPerCore: 2}, nil) == nil {
+		if source.sample("c", now.Add(time.Duration(i+1)*time.Second), cpu.Topology{Threads: 2, Cores: 1}, nil) == nil {
 			b.Fatal("no sample")
 		}
 	}

@@ -76,7 +76,7 @@ func TestOffersRespectInterruptionToleranceAndZone(t *testing.T) {
 func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 	in := offerInputs(t)
 	gpuType := func(name, model string, micros int64) CatalogType {
-		return CatalogType{Name: name, VCPUs: 32, Topology: testTopology, MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
+		return CatalogType{Name: name, Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
 	}
 	in.Catalog = []CatalogType{gpuType("l40s", "L40S", 1_000_000), gpuType("l4", "L4", 300_000), gpuType("t4", "T4", 200_000), mustType(t, "m7i.large")}
 	preferred := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"L40S", "L4"}, CPUMillis: 1000, MemoryBytes: gib}, false, in)

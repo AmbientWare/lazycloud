@@ -37,7 +37,7 @@ DEFAULT_DISK = "100Gi"
 # so the pair a decorator states in Python reaches a strict model as a list once
 # it has crossed the wire, and both have to validate as the same thing.
 CpuRequest = int | float | tuple[int | float, int | float] | list[int | float]
-"""CPUs to reserve, or a `(reserve, throttle at)` pair. One CPU is one physical core (two vCPUs)."""
+"""CPUs to reserve, or a `(reserve, throttle at)` pair. One CPU is one physical core."""
 
 MemoryRequest = str | int | tuple[str | int, str | int] | list[str | int]
 """Memory to reserve, or a `(reserve, kill at)` pair."""

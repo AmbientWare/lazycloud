@@ -304,7 +304,7 @@ func (s *sim) host(id HostID) *simHost {
 // quotas known its whole class.
 func (s *sim) launch(a FleetAction, reserve bool) (HostID, bool) {
 	o := *a.Offer
-	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs > limit {
+	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
 		s.r.refusals++
 		s.in.Cooldowns = append(s.in.Cooldowns, OfferCooldown{
 			Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, RefusedAt: s.now, Until: s.now.Add(10 * time.Minute), Quota: s.knowQuota,

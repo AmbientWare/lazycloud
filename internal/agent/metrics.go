@@ -131,7 +131,7 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 // sample, with CPU time counted on cores; the first reading only primes
 // them. A container whose files are gone has exited and returns nil.
 func (s *usageSource) sample(id string, now time.Time, topology cpu.Topology, gpus map[string]*hostproto.GPUSample) *hostproto.ContainerSample {
-	cpu, ok := readKeyed(filepath.Join(s.cgroupDir, "cpu.stat"), "usage_usec")
+	usage, ok := readKeyed(filepath.Join(s.cgroupDir, "cpu.stat"), "usage_usec")
 	if !ok {
 		return nil
 	}
@@ -139,7 +139,7 @@ func (s *usageSource) sample(id string, now time.Time, topology cpu.Topology, gp
 	swap, _ := readNumber(filepath.Join(s.cgroupDir, "memory.swap.current"))
 	diskRead, diskWrite := readIOStat(filepath.Join(s.cgroupDir, "io.stat"))
 	netRx, netTx := readNetDev(filepath.Join("/proc", strconv.Itoa(s.pid), "net", "dev"))
-	current := &usageCounters{at: now, cpuUsec: cpu, diskRead: diskRead, diskWrit: diskWrite, netRx: netRx, netTx: netTx}
+	current := &usageCounters{at: now, cpuUsec: usage, diskRead: diskRead, diskWrit: diskWrite, netRx: netRx, netTx: netTx}
 	prev := s.prev
 	s.prev = current
 	if prev == nil {

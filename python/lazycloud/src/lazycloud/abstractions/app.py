@@ -236,7 +236,7 @@ class App:
             image: Image definition used to build or select the runtime image.
             name: Deployment resource name. Defaults to the callable name.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum runtime for one invocation.
             concurrency: Invocations one container serves at once.
             in_process: Serve those invocations in one interpreter rather than
@@ -444,7 +444,7 @@ class App:
             route: HTTP route mounted for this endpoint.
             methods: HTTP methods accepted by the route. Defaults to framework policy.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum request runtime.
             retries: Retry attempts for failed request handling.
             workers, concurrency: Worker count and concurrent requests per worker.
@@ -548,7 +548,7 @@ class App:
             image: Image definition used to build or select the runtime image.
             route: Route prefix mounted for the ASGI app.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum request runtime.
             workers, concurrent_requests: Worker count and requests per worker.
             keep_warm_seconds: Seconds to keep idle workers available.
@@ -643,7 +643,7 @@ class App:
             image: Image definition used to build or select the runtime image.
             route: Route prefix mounted for realtime traffic.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum connection or message handling runtime.
             workers, concurrent_requests: Worker count and concurrent connections.
             keep_warm_seconds: Seconds to keep idle workers available.
@@ -743,7 +743,7 @@ class App:
             ports: Named ports exposed by the pod.
             env: Environment variables injected into the pod.
             cpu, memory, gpu, gpu_count: Compute resources requested for the pod.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             keep_warm: Seconds to keep the pod alive when idle.
             secrets: Secret names mounted into the pod environment.
             volumes: Durable volumes mounted into the pod.
@@ -843,7 +843,7 @@ class App:
                 Defaults to all supported agents; an empty list skips installation.
                 Versions are pinned by the SDK. Authentication happens after deployment.
             cpu, memory, gpu, gpu_count: Compute resources for the container.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             keep_warm: Idle seconds before the container stops; unset uses the
                 devbox default.
             preemptible: Allow a reclaimable node; unset keeps the devbox on one
@@ -926,7 +926,7 @@ class App:
 
         Args:
             cpu, memory, gpu, gpu_count: Compute resources requested for the sandbox.
-                `cpu` counts CPUs, one physical core (two vCPUs) each.
+                `cpu` counts CPUs, one physical core each.
             image: Image definition used to build or select the sandbox image.
             keep_warm_seconds: Seconds to keep the sandbox alive when idle.
             authorized: Whether sandbox control requires authentication.

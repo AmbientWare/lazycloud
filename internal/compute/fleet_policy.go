@@ -204,9 +204,8 @@ func DefaultPolicy() Policy {
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, Largest: LargestShared}
 	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
 	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
-	smt := cpu.Topology{ThreadsPerCore: 2}
-	fits := CatalogType{VCPUs: 16, Topology: smt, MemoryBytes: 32 * gib}.Usable(0)
-	limit := CatalogType{VCPUs: 32, Topology: smt, MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
+	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
+	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
 	return Policy{
 		MarginPercent:    30,
 		Provision:        300 * time.Second,

@@ -59,7 +59,7 @@ describe("container metric chart data", () => {
     expect(latestComputeReadout([])).toBeNull();
   });
 
-  it("reads CPU above the reservation as an amount, not a capped share", () => {
+  it("reads CPU above the reservation as the amount used", () => {
     const data = buildMetricData(metrics([{ cpu_millicores: 1500 }]));
     expect(data[0].cpuUsed).toBe(1500);
     expect(latestComputeReadout(data)?.cpu).toBe("1.5 CPU");

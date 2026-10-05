@@ -9,8 +9,8 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -65,51 +65,33 @@ func detect(ctx context.Context) (detected, error) {
 	if err != nil {
 		return detected{}, err
 	}
-	topology, err := detectTopology()
+	topology, err := detectTopology(cpuRoot)
 	if err != nil {
 		return detected{}, err
 	}
-	vcpus := cpu.VCPUMillis(runtime.NumCPU()) * 1000
-	return detected{topology: topology, cpuMillis: topology.CPUs(vcpus), memoryBytes: memory, gpus: detectGPUs(ctx)}, nil
+	return detected{topology: topology, cpuMillis: topology.CPUMillis(), memoryBytes: memory, gpus: detectGPUs(ctx)}, nil
 }
 
-// threadSiblings lists the hardware threads that share cpu0's core.
-const threadSiblings = "/sys/devices/system/cpu/cpu0/topology/thread_siblings_list"
+// cpuRoot is where the kernel lists the machine's hardware threads.
+const cpuRoot = "/sys/devices/system/cpu"
 
-// detectTopology counts the hardware threads of one core, which every core
-// of a machine shares.
-func detectTopology() (cpu.Topology, error) {
-	data, err := os.ReadFile(threadSiblings)
+// detectTopology counts the online hardware threads under root and the
+// cores they run on: threads that list the same siblings share a core.
+func detectTopology(root string) (cpu.Topology, error) {
+	lists, err := filepath.Glob(filepath.Join(root, "cpu[0-9]*", "topology", "thread_siblings_list"))
 	if err != nil {
-		return cpu.Topology{}, fmt.Errorf("read the CPU topology: %w", err)
+		return cpu.Topology{}, fmt.Errorf("list the CPU topology: %w", err)
 	}
-	threads, err := countCPUList(strings.TrimSpace(string(data)))
-	if err != nil {
-		return cpu.Topology{}, fmt.Errorf("parse %s: %w", threadSiblings, err)
-	}
-	t := cpu.Topology{ThreadsPerCore: threads}
-	return t, t.Validate()
-}
-
-// countCPUList counts the CPUs of a kernel CPU list such as 0,8 or 0-1.
-func countCPUList(list string) (int, error) {
-	n := 0
-	for item := range strings.SplitSeq(list, ",") {
-		first, last, isRange := strings.Cut(item, "-")
-		if !isRange {
-			last = first
-		}
-		lo, err := strconv.Atoi(first)
+	cores := map[string]bool{}
+	for _, path := range lists {
+		siblings, err := os.ReadFile(path) //nolint:gosec // A sysfs path the glob under root found.
 		if err != nil {
-			return 0, fmt.Errorf("cpu list %q: %w", list, err)
+			return cpu.Topology{}, fmt.Errorf("read the CPU topology: %w", err)
 		}
-		hi, err := strconv.Atoi(last)
-		if err != nil || hi < lo {
-			return 0, fmt.Errorf("cpu list %q has a bad range", list)
-		}
-		n += hi - lo + 1
+		cores[strings.TrimSpace(string(siblings))] = true
 	}
-	return n, nil
+	t := cpu.Topology{Threads: len(lists), Cores: len(cores)}
+	return t, t.Validate()
 }
 
 // offer is what the host offers after its limits, with the checks that

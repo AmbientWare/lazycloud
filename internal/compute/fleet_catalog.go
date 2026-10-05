@@ -12,9 +12,8 @@ const hibernationMemoryLimit = 150 * gib
 // CatalogType is an instance type the platform fleet buys.
 type CatalogType struct {
 	Name string
-	// VCPUs is the type's hardware threads, as EC2 sells them and its
-	// quotas count them; Topology is how many run on each core.
-	VCPUs       int64
+	// Topology is the type's hardware threads, which EC2 sells and its
+	// quotas count, and the cores they run on.
 	Topology    cpu.Topology
 	MemoryBytes int64
 	GPU         string
@@ -38,9 +37,10 @@ func (t CatalogType) OnDemandMicros(region string) (int64, bool) {
 }
 
 // CPUMillis is the type's size in CPUs.
-func (t CatalogType) CPUMillis() cpu.Millis {
-	return t.Topology.CPUs(cpu.VCPUMillis(t.VCPUs * 1000))
-}
+func (t CatalogType) CPUMillis() cpu.Millis { return t.Topology.CPUMillis() }
+
+// VCPUs is what a running host of the type counts against its quota.
+func (t CatalogType) VCPUs() int64 { return int64(t.Topology.Threads) }
 
 // Usable is what a host of the type offers containers, as the agent computes
 // it (agent/capacity.go): every core, and memory less the larger of a floor
@@ -63,6 +63,9 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 	}
 	return rootVolumeGiB
 }
+
+// twoPerCore is the topology of vcpus hardware threads, two on each core.
+func twoPerCore(vcpus int) cpu.Topology { return cpu.Topology{Threads: vcpus, Cores: vcpus / 2} }
 
 // CatalogTypeNamed finds a catalog type by name.
 func CatalogTypeNamed(name string) (CatalogType, bool) {
@@ -96,12 +99,11 @@ func rootDiskMicros(region string, gib int64) int64 {
 // published 2026-09-25 has them (testdata/fleet/on_demand_prices.json).
 // Every type runs two threads per core, its DefaultThreadsPerCore.
 func FleetCatalog() []CatalogType {
-	smt := cpu.Topology{ThreadsPerCore: 2}
-	cpuType := func(name string, vcpus, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, VCPUs: vcpus, Topology: smt, MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
+	cpuType := func(name string, vcpus int, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
+		return CatalogType{Name: name, Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
 	}
-	gpu := func(name string, vcpus, memGiB int64, model string, cards int, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, VCPUs: vcpus, Topology: smt, MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
+	gpu := func(name string, vcpus int, memGiB int64, model string, cards int, prices [4]int64) CatalogType {
+		return CatalogType{Name: name, Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
 	}
 	return []CatalogType{
 		cpuType("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),

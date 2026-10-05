@@ -13,30 +13,31 @@ type Millis int64
 // VCPUMillis is thousandths of a vCPU, one hardware thread.
 type VCPUMillis int64
 
-// Topology is how many hardware threads each core of a machine runs.
+// Topology is a machine's hardware threads and the cores they run on. A
+// machine whose cores run different numbers of threads converts at its
+// average.
 type Topology struct {
-	ThreadsPerCore int
+	Threads int
+	Cores   int
 }
 
 // Validate refuses a topology no machine has.
 func (t Topology) Validate() error {
-	if t.ThreadsPerCore < 1 {
-		return fmt.Errorf("a core runs %d threads", t.ThreadsPerCore)
+	if t.Cores < 1 || t.Threads < t.Cores {
+		return fmt.Errorf("%d threads on %d cores", t.Threads, t.Cores)
 	}
 	return nil
 }
 
-// VCPUs is c as hardware threads.
-func (t Topology) VCPUs(c Millis) VCPUMillis {
-	return VCPUMillis(int64(c) * int64(t.ThreadsPerCore))
-}
+// CPUMillis is the machine's size in CPUs.
+func (t Topology) CPUMillis() Millis { return Millis(t.Cores) * 1000 }
 
-// CPUs is v as cores, rounded down.
-func (t Topology) CPUs(v VCPUMillis) Millis {
-	return Millis(int64(v) / int64(t.ThreadsPerCore))
+// VCPUs is c as hardware threads, rounded down.
+func (t Topology) VCPUs(c Millis) VCPUMillis {
+	return VCPUMillis(int64(c) * int64(t.Threads) / int64(t.Cores))
 }
 
 // CPUTime is time spent on hardware threads as time on cores.
 func (t Topology) CPUTime(vcpuUsec uint64) uint64 {
-	return vcpuUsec / uint64(t.ThreadsPerCore) //nolint:gosec // Validate keeps ThreadsPerCore positive.
+	return vcpuUsec * uint64(t.Cores) / uint64(t.Threads) //nolint:gosec // Validate keeps both positive.
 }

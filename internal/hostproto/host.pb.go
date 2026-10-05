@@ -3799,8 +3799,9 @@ func (x *Source) GetUrlExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// Resources reserve cpu_millis, in CPUs, and memory_bytes; the container may
-// use more up to the limits. The host caps cpu_limit_millis at its own size.
+// Resources reserve cpu_millis, thousandths of a CPU, and memory_bytes; the
+// container may use more up to the limits. The host caps cpu_limit_millis at
+// its own size.
 type Resources struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	CpuMillis        int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`

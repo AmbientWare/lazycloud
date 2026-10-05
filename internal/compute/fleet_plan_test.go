@@ -6,19 +6,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // The plan tests use two shapes: m.small (8 CPU, 16 GiB) and m.large
 // (32 CPU, 64 GiB, four smalls' usable capacity), in the standard quota
 // class like the M family.
-// testTopology is the two threads per core of every catalog type.
-var testTopology = cpu.Topology{ThreadsPerCore: 2}
-
 var (
-	planSmall = CatalogType{Name: "m.small", VCPUs: 16, Topology: testTopology, MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
-	planLarge = CatalogType{Name: "m.large", VCPUs: 64, Topology: testTopology, MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}
+	planSmall = CatalogType{Name: "m.small", Topology: twoPerCore(16), MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+	planLarge = CatalogType{Name: "m.large", Topology: twoPerCore(64), MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}
 	small     = planSmall.Usable(0)
 	large     = planLarge.Usable(0)
 	onDemand  = ReserveMarket{}
@@ -336,8 +331,8 @@ func TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt(t *testing.T) {
 // planFast is a small shape that hibernates; planRoomy can hibernate but
 // has more RAM than a reserve hibernates.
 var (
-	planFast  = CatalogType{Name: "fast", VCPUs: 16, Topology: testTopology, MemoryBytes: 16 * gib, Hibernates: true, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
-	planRoomy = CatalogType{Name: "roomy", VCPUs: 16, Topology: testTopology, MemoryBytes: 64 * gib, Hibernates: true, prices: [4]int64{200_000, 200_000, 200_000, 200_000}}
+	planFast  = CatalogType{Name: "fast", Topology: twoPerCore(16), MemoryBytes: 16 * gib, Hibernates: true, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+	planRoomy = CatalogType{Name: "roomy", Topology: twoPerCore(16), MemoryBytes: 64 * gib, Hibernates: true, prices: [4]int64{200_000, 200_000, 200_000, 200_000}}
 )
 
 func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {

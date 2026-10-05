@@ -117,7 +117,7 @@ func TestAgentEnrollsWithPreflightChecks(t *testing.T) {
 	for _, check := range enroll.GetPreflight() {
 		checks[check.GetName()] = check
 	}
-	for name, message := range map[string]string{"docker": "Docker is reachable", "capacity.max_cpu": "using 4000m CPU", "capacity.max_memory": "using 8192 MB memory"} {
+	for name, message := range map[string]string{"docker": "Docker is reachable", "capacity.max_cpu": "using 2000m CPU", "capacity.max_memory": "using 8192 MB memory"} {
 		if check := checks[name]; !check.GetOk() || check.GetMessage() != message {
 			t.Errorf("check %s = %v, want %q", name, check, message)
 		}
@@ -130,7 +130,7 @@ func TestAgentEnrollsWithPreflightChecks(t *testing.T) {
 		}
 		t.Logf("this host offers %d %s", capacity.GetGpuCount(), capacity.GetGpuType())
 	}
-	if hello := s.hello.GetCapacity(); hello.GetGpuCount() != enroll.GetCapacity().GetGpuCount() || hello.GetCpuMillis() != 4000 {
+	if hello := s.hello.GetCapacity(); hello.GetGpuCount() != enroll.GetCapacity().GetGpuCount() || hello.GetCpuMillis() != 2000 {
 		t.Fatalf("hello capacity %v, enrolled %v", hello, enroll.GetCapacity())
 	}
 }
@@ -162,19 +162,6 @@ func TestAgentWithAFailedPreflightEnrollsButDoesNotJoin(t *testing.T) {
 	for _, path := range []string{tokenFile, identityPath(e.stateDir)} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("%s remains after a failed join: %v", path, err)
-		}
-	}
-}
-
-func TestCountCPUList(t *testing.T) {
-	for list, want := range map[string]int{"0": 1, "0-1": 2, "0,8": 2, "0-1,64-65": 4} {
-		if got, err := countCPUList(list); err != nil || got != want {
-			t.Errorf("countCPUList(%q) = %d, %v; want %d", list, got, err, want)
-		}
-	}
-	for _, list := range []string{"", "a", "3-1"} {
-		if _, err := countCPUList(list); err == nil {
-			t.Errorf("countCPUList(%q) accepted", list)
 		}
 	}
 }

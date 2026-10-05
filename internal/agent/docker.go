@@ -392,8 +392,8 @@ func containerResources(r *hostproto.Resources, host *hostproto.Capacity, topolo
 	if hostCPU := cpu.Millis(host.GetCpuMillis()); cpuLimit <= 0 || cpuLimit > hostCPU {
 		cpuLimit = hostCPU
 	}
-	reserved := topology.VCPUs(cpu.Millis(r.GetCpuMillis()))
-	ceiling := topology.VCPUs(max(cpuLimit, cpu.Millis(r.GetCpuMillis())))
+	reservation := cpu.Millis(r.GetCpuMillis())
+	reserved, ceiling := topology.VCPUs(reservation), topology.VCPUs(max(cpuLimit, reservation))
 	memoryLimit := max(r.GetMemoryLimitBytes(), r.GetMemoryBytes())
 	return containertypes.Resources{
 		CPUShares:         max(int64(reserved)*1024/1000, 2),

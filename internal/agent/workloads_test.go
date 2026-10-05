@@ -609,15 +609,14 @@ while True:
 	if err != nil || string(pod.Container.HostConfig.NetworkMode) != "container:"+holder.Container.ID {
 		t.Fatalf("pod network %q: %v", pod.Container.HostConfig.NetworkMode, err)
 	}
-	// One reserved CPU of a 4 CPU host is every hardware thread of a core.
-	topology, err := detectTopology()
+	// The pod may burst to the host's 2 CPUs, as the machine's hardware
+	// threads count them.
+	topology, err := detectTopology(cpuRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	threads := int64(topology.ThreadsPerCore)
-	if r := pod.Container.HostConfig.Resources; r.CPUShares != 1024*threads || r.NanoCPUs != 4*threads*1_000_000_000 {
-		t.Fatalf("pod CPU shares %d and quota %d, want %d and %d for %d threads per core",
-			r.CPUShares, r.NanoCPUs, 1024*threads, 4*threads*1_000_000_000, threads)
+	if want := int64(topology.VCPUs(2000)) * 1_000_000; pod.Container.HostConfig.NanoCPUs != want {
+		t.Fatalf("pod CPU quota %d, want %d for %d threads on %d cores", pod.Container.HostConfig.NanoCPUs, want, topology.Threads, topology.Cores)
 	}
 
 	first.stop()
