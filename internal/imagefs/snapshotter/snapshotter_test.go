@@ -146,6 +146,13 @@ type service struct {
 
 func serve(t *testing.T, transport http.RoundTripper) *service {
 	t.Helper()
+	return serveFilling(t, transport, 0)
+}
+
+// serveFilling serves a snapshotter that fetches layers up to fillBytes
+// whole once mounted.
+func serveFilling(t *testing.T, transport http.RoundTripper, fillBytes int64) *service {
+	t.Helper()
 	if _, err := os.Stat("/dev/fuse"); err != nil {
 		t.Fatalf("FUSE is unavailable: %v", err)
 	}
@@ -153,7 +160,7 @@ func serve(t *testing.T, transport http.RoundTripper) *service {
 	socket := filepath.Join(root, "snapshotter.sock")
 	registry := prometheus.NewRegistry()
 	cfg := Config{
-		Root: filepath.Join(root, "state"), CacheBytes: 256 << 20, Fetches: 4, AllowOther: os.Geteuid() == 0,
+		Root: filepath.Join(root, "state"), CacheBytes: 256 << 20, Fetches: 4, FillBytes: fillBytes, AllowOther: os.Geteuid() == 0,
 		HTTP: &http.Client{Transport: transport}, Registry: registry, Logger: slog.New(slog.DiscardHandler),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -560,7 +567,7 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,6 +593,34 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	}
 }
 
+// A mounted layer within the fill bound is fetched whole in the background,
+// each frame once, so later reads wait for no store; a larger one is not.
+func TestMountedLayersFillInTheBackground(t *testing.T) {
+	ts := newTestStore(t)
+	transport := &countingTransport{}
+	s := serveFilling(t, transport, 16<<20)
+	body := random(28 << 20)
+	small := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "small", Typeflag: tar.TypeReg, Mode: 0o644}, body: body[:12<<20]}}))
+	large := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "large", Typeflag: tar.TypeReg, Mode: 0o644}, body: body}}))
+	if err := s.sources.Grant(t.Context(), []layersource.Grant{small.grant, large.grant}); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.view(t, "view", s.pull(t, small, ""))
+	s.view(t, "view-large", s.pull(t, large, ""))
+	want := int64(2 + len(small.index.Frames))
+	for deadline := time.Now().Add(30 * time.Second); transport.requests.Load() < want && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "small"))
+	if err != nil || !bytes.Equal(got, body[:12<<20]) {
+		t.Fatalf("read back %d bytes, %v", len(got), err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := transport.requests.Load(); n != want {
+		t.Fatalf("%d store requests, want two indexes and each frame of the small layer once (%d)", n, want)
+	}
+}
+
 // The cache keeps under its bound while two layers alternate, evicting the
 // unmounted layer's frames before the mounted one's.
 func TestFrameCacheStaysUnderItsBound(t *testing.T) {
@@ -597,7 +632,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	}
 	dir := t.TempDir()
 	const bound = 64 << 20
-	frames, err := newFrameCache(t.Context(), dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

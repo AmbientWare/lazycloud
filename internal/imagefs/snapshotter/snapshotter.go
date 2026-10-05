@@ -54,6 +54,10 @@ type Config struct {
 	CacheBytes int64
 	// Fetches bounds the frames read from the store at once.
 	Fetches int
+	// FillBytes is the largest layer, in uncompressed bytes, whose frames
+	// are all fetched in the background once it is mounted; zero fills
+	// none.
+	FillBytes int64
 	// AllowOther lets users other than the snapshotter's read the mounts.
 	// It needs root, which production has.
 	AllowOther bool
@@ -95,7 +99,7 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 	}
 	g := newGrants(time.Now)
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	frames, err := newFrameCache(life, filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
+	frames, err := newFrameCache(filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -116,6 +120,8 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 		mounts: &mounts{
 			root: cfg.Root, ms: ms, frames: frames, grants: g, http: cfg.HTTP, metrics: m, log: cfg.Logger,
 			allowOther: cfg.AllowOther,
+			fillBytes:  cfg.FillBytes,
+			life:       life,
 			requests:   make(chan func()),
 			done:       make(chan struct{}),
 			mounted:    make(map[string]*mountedLayer),
@@ -134,7 +140,6 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 func (s *Snapshotter) Close() error {
 	s.cancel()
 	<-s.mounts.done
-	s.mounts.frames.prefetches.Wait()
 	return s.overlay.Close() //nolint:wrapcheck // the metadata store's own error
 }
 

@@ -31,6 +31,7 @@ func run(args []string) int {
 	socket := set.String("socket", layersource.Socket, "Unix socket for containerd and the agent")
 	cacheBytes := set.Int64("cache-bytes", 20<<30, "bound of the frame cache on disk")
 	fetches := set.Int("fetches", 16, "frames read from the layer store at once")
+	fillBytes := set.Int64("fill-bytes", 256<<20, "largest layer, uncompressed, fetched whole in the background once mounted")
 	if err := set.Parse(args); err != nil {
 		return 2
 	}
@@ -60,7 +61,7 @@ func run(args []string) int {
 	metricsDone := make(chan error, 1)
 	go func() { metricsDone <- tel.ServeMetrics(ctx, logger) }()
 	cfg := snapshotter.Config{
-		Root: *root, CacheBytes: *cacheBytes, Fetches: *fetches, AllowOther: true,
+		Root: *root, CacheBytes: *cacheBytes, Fetches: *fetches, FillBytes: *fillBytes, AllowOther: true,
 		HTTP: &http.Client{}, Registry: tel.Registry, Logger: logger,
 	}
 	err = snapshotter.Serve(ctx, cfg, *socket, func() {
