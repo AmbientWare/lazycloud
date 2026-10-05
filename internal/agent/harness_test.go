@@ -81,6 +81,8 @@ type hostServer struct {
 	releases *releases
 	// completeOutage fails CompleteTask as unavailable until it passes.
 	completeOutage time.Time
+	// answerBuild answers CompleteImageBuild when set.
+	answerBuild func(*hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse
 }
 
 type serverSession struct {

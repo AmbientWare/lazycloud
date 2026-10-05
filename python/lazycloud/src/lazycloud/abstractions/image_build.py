@@ -101,21 +101,28 @@ class ImageBuildOperation:
         if verification.exists:
             self._result = verification_result(image, verification)
             self.step.done(f"python {verification.python_version} · cached")
-        elif not verification.valid or image.explicit_image_id:
+        elif not verification.valid:
             self._result = verification_result(image, verification)
             self.step.fail(self._result.error)
 
     def finish(self) -> ImageBuildResult:
         if self._result is not None:
             return self._result
-        if self._definition is None:
+        image_id = self.image.explicit_image_id
+        if self._definition is None and not image_id:
             raise RuntimeError("image build requires completed verification")
         try:
-            resolution = self.client.build_image(self.workspace, self._definition)
+            if image_id:
+                # An image by id that is not ready waits for the build that
+                # makes it ready, such as the one converting its layers.
+                resolution = self.client.prepare_image(self.workspace, image_id)
+            else:
+                assert self._definition is not None
+                resolution = self.client.build_image(self.workspace, self._definition)
         except ApiError as exc:
-            if exc.code not in _DEFINITION_ERRORS:
+            if exc.code not in _DEFINITION_ERRORS and exc.code is not ErrorCode.conflict:
                 raise
-            return self._failed(exc.message)
+            return self._failed(exc.message, image_id=image_id or "")
         image = resolution.image
         if resolution.build is None:
             if not image.ready:

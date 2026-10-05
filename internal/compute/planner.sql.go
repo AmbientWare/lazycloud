@@ -259,7 +259,8 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought
 from batch b
-join workspaces ws on ws.id = b.workspace_id
+left join image_builds ib on ib.id = b.image_build_id
+left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
 left join releases r on r.id = b.release_id
 group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 order by 4, 5, 6, 2 desc, 3 desc
@@ -282,7 +283,8 @@ type PendingDemandRow struct {
 // The oldest pending containers, up to the batch, grouped by what they need
 // from a host, each with the host bought for it (the zero id for none). The
 // batch follows the pending index alone: ordering ties by id would sort a
-// whole backlog created in one statement.
+// whole backlog created in one statement. A mirror build runs on the
+// platform, as placement puts it, whatever its workspace's connection.
 func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]PendingDemandRow, error) {
 	rows, err := q.db.Query(ctx, pendingDemand, batchSize)
 	if err != nil {

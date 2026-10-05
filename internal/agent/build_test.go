@@ -27,6 +27,12 @@ const (
 
 func (s *hostServer) CompleteImageBuild(_ context.Context, r *hostproto.CompleteImageBuildRequest) (*hostproto.CompleteImageBuildResponse, error) {
 	s.builds <- r
+	s.mu.Lock()
+	answer := s.answerBuild
+	s.mu.Unlock()
+	if answer != nil {
+		return answer(r), nil
+	}
 	return &hostproto.CompleteImageBuildResponse{}, nil
 }
 

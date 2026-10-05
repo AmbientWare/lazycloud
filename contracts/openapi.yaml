@@ -1947,6 +1947,26 @@ paths:
               schema: { $ref: "#/components/schemas/Image" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/workspaces/{workspace}/images/{image}/prepare:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ImagePath"
+    post:
+      tags: [images]
+      operationId: prepareImage
+      summary: Make an image the workspace resolved ready to deploy
+      description: >-
+        An image whose layers are not converted starts or joins the build
+        that converts them; one already building returns that build. A
+        build is absent when the image is ready.
+      responses:
+        "200":
+          description: The image and the build that makes it ready, when one runs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageResolution" }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/workspaces/{workspace}/image-builds/{build}:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"

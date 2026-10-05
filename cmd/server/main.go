@@ -360,7 +360,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	}
 	exec := execution.NewExecution(pool)
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, exec, vault, cfg.images)
+	im := images.NewImages(pool, exec, vault, store, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
 	comp := compute.NewCompute(pool, exec, cfg.compute)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
@@ -409,8 +409,8 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		return err
 	}
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
-		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		TouchInterval: 10 * time.Second,
+		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
 	}, logger)
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {

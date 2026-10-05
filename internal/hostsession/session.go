@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
@@ -51,6 +53,58 @@ type session struct {
 	// release the Hello stated.
 	reserve *reserveAttempt
 	agent   compute.AgentState
+	// builds wakes the session when an image build a start waits for
+	// changes.
+	builds buildWaits
+}
+
+// buildWaits subscribes to the image builds starts wait for and merges
+// their wake-ups into wake. Each subscription has a forwarder, which ends
+// when the subscription does; close waits for them.
+type buildWaits struct {
+	wake chan struct{}
+	subs map[uuid.UUID]func()
+	wg   sync.WaitGroup
+}
+
+// await subscribes to builds and ends the subscriptions to builds no start
+// waits for any more. A change committed before subscribing reaches the
+// session at its next touch.
+func (w *buildWaits) await(listener *database.Listener, builds map[uuid.UUID]bool) {
+	for id, stop := range w.subs {
+		if !builds[id] {
+			stop()
+			delete(w.subs, id)
+		}
+	}
+	for id := range builds {
+		if _, ok := w.subs[id]; ok {
+			continue
+		}
+		changed, cancel := listener.Subscribe(database.ChannelImageBuild, id.String())
+		done := make(chan struct{})
+		w.wg.Go(func() {
+			for {
+				select {
+				case <-changed:
+					select {
+					case w.wake <- struct{}{}:
+					default:
+					}
+				case <-done:
+					return
+				}
+			}
+		})
+		w.subs[id] = func() { cancel(); close(done) }
+	}
+}
+
+func (w *buildWaits) close() {
+	for _, stop := range w.subs {
+		stop()
+	}
+	w.wg.Wait()
 }
 
 // recordNetwork records a newly reported applied policy version.
@@ -99,7 +153,9 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
-		grants: map[identity.WorkspaceID]time.Time{}, agent: agentStateIn(hello)}
+		grants: map[identity.WorkspaceID]time.Time{}, agent: agentStateIn(hello),
+		builds: buildWaits{wake: make(chan struct{}, 1), subs: map[uuid.UUID]func(){}}}
+	defer sess.builds.close()
 	for _, r := range reports {
 		sess.observe(r)
 	}
@@ -160,6 +216,10 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			return fmt.Errorf("receive: %w", err)
 		case msg := <-inbox:
 			if err := sess.handle(ctx, msg); err != nil {
+				return err
+			}
+		case <-sess.builds.wake:
+			if err := sess.sync(ctx); err != nil {
 				return err
 			}
 		case <-wake:
@@ -254,13 +314,23 @@ func (sess *session) sync(ctx context.Context) error {
 		return sess.server.grpcError(ctx, err)
 	}
 	derived := map[string]bool{}
+	waiting := map[uuid.UUID]bool{}
+	var started []string
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
 		derived[id] = true
 		if sess.sent[id] {
 			continue
 		}
-		msg, err := sess.server.startMessage(ctx, id, start)
+		msg, err := sess.server.startMessage(ctx, sess.host, id, start)
+		var building *images.BuildWaitError
+		if errors.As(err, &building) {
+			// The start is sent once its image is published, so it does not
+			// count as sent.
+			delete(derived, id)
+			waiting[building.Build] = true
+			continue
+		}
 		if reason, permanent := permanentStartFailure(err); permanent {
 			// A container whose start can never be built fails like a failed
 			// preparation and stops being derived; the host's other
@@ -285,6 +355,11 @@ func (sess *session) sync(ctx context.Context) error {
 			return err
 		}
 		sess.live[start.Container] = true
+		started = append(started, msg.GetStart().GetImage())
+	}
+	sess.builds.await(sess.server.listener, waiting)
+	if err := sess.server.images.RecordUses(ctx, started); err != nil {
+		return sess.server.grpcError(ctx, err)
 	}
 	if err := sess.syncBuilds(ctx, derived); err != nil {
 		return err
@@ -381,7 +456,7 @@ func (sess *session) send(msg *hostproto.ServerMessage) error {
 	return nil
 }
 
-func (s *Server) startMessage(ctx context.Context, id string, start execution.StartCommand) (*hostproto.ServerMessage, error) {
+func (s *Server) startMessage(ctx context.Context, host compute.HostID, id string, start execution.StartCommand) (*hostproto.ServerMessage, error) {
 	url, expires, err := s.storage.SourceURL(ctx, start.Workspace, start.Source)
 	if err != nil {
 		return nil, err
@@ -407,7 +482,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if err != nil {
 		return nil, err
 	}
-	image, err := s.imagePull(ctx, start.Spec.Image)
+	image, err := s.imagePull(ctx, host, start.Workspace, start.Spec.Image)
 	if err != nil {
 		return nil, err
 	}
@@ -597,6 +672,7 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 func permanentStartFailure(err error) (string, bool) {
 	var missing *secrets.NotFoundError
 	var unreadable *secrets.UnreadableError
+	var unconvertible *images.ConversionError
 	switch {
 	case err == nil:
 		return "", false
@@ -606,6 +682,8 @@ func permanentStartFailure(err error) (string, bool) {
 		return "secret " + unreadable.Name + " cannot be read", true
 	case errors.Is(err, errImageUnpinned):
 		return "the release's image has no pinned reference; deploy it again", true
+	case errors.As(err, &unconvertible):
+		return unconvertible.Error(), true
 	}
 	return "", false
 }

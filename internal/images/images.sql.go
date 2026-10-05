@@ -229,17 +229,18 @@ func (q *Queries) CountBuildLogs(ctx context.Context, arg CountBuildLogsParams) 
 
 const failBuild = `-- name: FailBuild :exec
 update image_builds
-set state = 'failed', failure = $1::text, registry_auth = null, finished_at = now()
-where id = $2
+set state = 'failed', failure = $1::text, failure_transient = $2, registry_auth = null, finished_at = now()
+where id = $3
 `
 
 type FailBuildParams struct {
-	Failure string
-	ID      uuid.UUID
+	Failure   string
+	Transient bool
+	ID        uuid.UUID
 }
 
 func (q *Queries) FailBuild(ctx context.Context, arg FailBuildParams) error {
-	_, err := q.db.Exec(ctx, failBuild, arg.Failure, arg.ID)
+	_, err := q.db.Exec(ctx, failBuild, arg.Failure, arg.Transient, arg.ID)
 	return err
 }
 
@@ -293,9 +294,9 @@ func (q *Queries) ImageBuildGPU(ctx context.Context, digest []byte) (string, err
 }
 
 const insertBuild = `-- name: InsertBuild :one
-insert into image_builds (image_digest, state, workspace_id, forced, context_sha256, registry_auth, deadline_at)
-values ($1, 'building', $2, $3, $4, $5,
-        now() + make_interval(secs => $6::float8))
+insert into image_builds (image_digest, state, workspace_id, forced, mirror, context_sha256, registry_auth, deadline_at)
+values ($1, 'building', $2, $3, $4, $5, $6,
+        now() + make_interval(secs => $7::float8))
 returning id, image_digest, state, failure, created_at, finished_at
 `
 
@@ -303,6 +304,7 @@ type InsertBuildParams struct {
 	ImageDigest    []byte
 	WorkspaceID    uuid.UUID
 	Forced         bool
+	Mirror         bool
 	ContextSha256  []byte
 	RegistryAuth   []byte
 	TimeoutSeconds float64
@@ -322,6 +324,7 @@ func (q *Queries) InsertBuild(ctx context.Context, arg InsertBuildParams) (Inser
 		arg.ImageDigest,
 		arg.WorkspaceID,
 		arg.Forced,
+		arg.Mirror,
 		arg.ContextSha256,
 		arg.RegistryAuth,
 		arg.TimeoutSeconds,
@@ -361,18 +364,19 @@ func (q *Queries) InsertBuildLogs(ctx context.Context, arg InsertBuildLogsParams
 }
 
 const latestBuild = `-- name: LatestBuild :one
-select id, image_digest, state, failure, created_at, finished_at
+select id, image_digest, state, failure, failure_transient, created_at, finished_at
 from image_builds where image_digest = $1
 order by created_at desc, id desc limit 1
 `
 
 type LatestBuildRow struct {
-	ID          uuid.UUID
-	ImageDigest []byte
-	State       string
-	Failure     *string
-	CreatedAt   time.Time
-	FinishedAt  *time.Time
+	ID               uuid.UUID
+	ImageDigest      []byte
+	State            string
+	Failure          *string
+	FailureTransient bool
+	CreatedAt        time.Time
+	FinishedAt       *time.Time
 }
 
 func (q *Queries) LatestBuild(ctx context.Context, imageDigest []byte) (LatestBuildRow, error) {
@@ -383,6 +387,7 @@ func (q *Queries) LatestBuild(ctx context.Context, imageDigest []byte) (LatestBu
 		&i.ImageDigest,
 		&i.State,
 		&i.Failure,
+		&i.FailureTransient,
 		&i.CreatedAt,
 		&i.FinishedAt,
 	)
@@ -518,12 +523,9 @@ func (q *Queries) SucceedBuild(ctx context.Context, id uuid.UUID) error {
 }
 
 const upsertImage = `-- name: UpsertImage :one
-insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu, reference, ready_at)
-values ($1, $2, $3, $4, $5, $6, $7,
-        $8, case when $8::text is null then null else now() end)
-on conflict (digest) do update
-set reference = coalesce(images.reference, excluded.reference),
-    ready_at = coalesce(images.ready_at, excluded.ready_at)
+insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu)
+values ($1, $2, $3, $4, $5, $6, $7)
+on conflict (digest) do update set digest = excluded.digest
 returning digest, id, python_version, architecture, reference, created_at, ready_at
 `
 
@@ -535,7 +537,6 @@ type UpsertImageParams struct {
 	Architecture  string
 	BuildSecrets  []byte
 	BuildGpu      string
-	Reference     *string
 }
 
 type UpsertImageRow struct {
@@ -549,8 +550,7 @@ type UpsertImageRow struct {
 }
 
 // The update locks the image row, so build requests for one image run one
-// at a time. An image that needs no build is ready on insert, and becomes
-// ready when a request finds it is its public base.
+// at a time. Only a build publishes an image.
 func (q *Queries) UpsertImage(ctx context.Context, arg UpsertImageParams) (UpsertImageRow, error) {
 	row := q.db.QueryRow(ctx, upsertImage,
 		arg.Digest,
@@ -560,7 +560,6 @@ func (q *Queries) UpsertImage(ctx context.Context, arg UpsertImageParams) (Upser
 		arg.Architecture,
 		arg.BuildSecrets,
 		arg.BuildGpu,
-		arg.Reference,
 	)
 	var i UpsertImageRow
 	err := row.Scan(
@@ -617,7 +616,9 @@ func (q *Queries) WorkspaceBuild(ctx context.Context, arg WorkspaceBuildParams) 
 const workspaceImage = `-- name: WorkspaceImage :one
 select i.digest, i.id, i.python_version, i.architecture,
        coalesce(w.reference, i.reference) as reference, i.reference as global_reference,
-       i.created_at, coalesce(w.ready_at, i.ready_at) as ready_at
+       i.created_at, coalesce(w.ready_at, i.ready_at) as ready_at,
+       exists (select 1 from image_reference_layers r where r.reference = coalesce(w.reference, i.reference))::bool as converted,
+       exists (select 1 from image_reference_layers r where r.reference = i.reference)::bool as global_converted
 from images i
 join workspace_images w on w.image_digest = i.digest
 where w.workspace_id = $1 and i.id = $2
@@ -637,9 +638,12 @@ type WorkspaceImageRow struct {
 	GlobalReference *string
 	CreatedAt       time.Time
 	ReadyAt         *time.Time
+	Converted       bool
+	GlobalConverted bool
 }
 
-// The workspace's view of an image: its own rebuild, else the global one.
+// The workspace's view of an image: its own rebuild, else the global one,
+// and whether each has layer rows.
 func (q *Queries) WorkspaceImage(ctx context.Context, arg WorkspaceImageParams) (WorkspaceImageRow, error) {
 	row := q.db.QueryRow(ctx, workspaceImage, arg.WorkspaceID, arg.ID)
 	var i WorkspaceImageRow
@@ -652,6 +656,8 @@ func (q *Queries) WorkspaceImage(ctx context.Context, arg WorkspaceImageParams) 
 		&i.GlobalReference,
 		&i.CreatedAt,
 		&i.ReadyAt,
+		&i.Converted,
+		&i.GlobalConverted,
 	)
 	return i, err
 }

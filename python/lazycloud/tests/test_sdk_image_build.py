@@ -449,3 +449,41 @@ def test_builds_on_a_joined_machine_are_unsupported(fake_api: FakeApi) -> None:
         Image().build(machine="gpu-box")
 
     assert fake_api.requests == []
+
+
+def test_from_id_of_an_image_being_converted_waits_for_its_build(fake_api: FakeApi) -> None:
+    fake_api.route("GET", f"{IMAGES}/{IMAGE_ID}")(lambda _: json_reply(_image(ready=False)))
+    fake_api.route("POST", f"{IMAGES}/{IMAGE_ID}/prepare")(
+        lambda _: json_reply({"image": _image(ready=False), "build": _build()})
+    )
+    fake_api.route("GET", f"{BUILD}/logs")(
+        lambda _: (
+            200,
+            {"Content-Type": "application/x-ndjson"},
+            iter([_log(1, "converted 4 layers")]),
+        )
+    )
+    fake_api.route("GET", BUILD)(lambda _: json_reply(_build("succeeded", "finished")))
+    terminal = RecordingTerminal(default_enabled=False)
+
+    built = Image.from_id(IMAGE_ID).build(terminal=terminal)
+
+    assert (built.success, built.image_id, built.build_id) == (True, IMAGE_ID, BUILD_ID)
+    assert terminal.summaries[0] == "queued"
+    assert len(fake_api.calls("POST", f"{IMAGES}/{IMAGE_ID}/prepare")) == 1
+
+
+def test_from_id_reports_a_conversion_that_cannot_run_as_the_build_failure(
+    fake_api: FakeApi,
+) -> None:
+    fake_api.route("GET", f"{IMAGES}/{IMAGE_ID}")(lambda _: json_reply(_image(ready=False)))
+    fake_api.route("POST", f"{IMAGES}/{IMAGE_ID}/prepare")(
+        lambda _: error_reply(
+            "invalid_request", "the image cannot be converted: layer 0 is foreign", 400
+        )
+    )
+
+    result = Image.from_id(IMAGE_ID).build()
+
+    assert (result.success, result.image_id) == (False, IMAGE_ID)
+    assert result.error == "the image cannot be converted: layer 0 is foreign"

@@ -44,9 +44,6 @@ const (
 
 // Config tunes the host connection.
 type Config struct {
-	// ImageTemplate is the container image for a Python version; {version}
-	// is replaced with the release's python_version.
-	ImageTemplate string
 	// TouchInterval is how often a session records presence and checks that
 	// it is still the host's latest session.
 	TouchInterval time.Duration

@@ -44,6 +44,10 @@ service HostService {
   rpc ContainerAPI(stream APIRequest) returns (stream APIResponse);
   // CompleteImageBuild records the outcome of a build container's attempt.
   // A container that no longer runs the build returns FAILED_PRECONDITION.
+  // A pushed image publishes once every layer is converted; until then the
+  // response names the layers to convert. The host converts them and calls
+  // again with their sizes, gets upload URLs signed for those sizes, uploads,
+  // and calls again with the uploaded layers.
   rpc CompleteImageBuild(CompleteImageBuildRequest) returns (CompleteImageBuildResponse);
   // AppendImageBuildLogs stores a build container's output in order.
   rpc AppendImageBuildLogs(AppendImageBuildLogsRequest) returns (AppendImageBuildLogsResponse);
@@ -811,9 +815,50 @@ message CompleteImageBuildRequest {
     // Why the build failed, with the end of its output.
     string failure = 3;
   }
+  // Layers the host converted since an earlier response named them, with
+  // the sizes of their data and index objects.
+  repeated ConvertedLayer converted_layers = 90;
+  // Layers whose pairs the host uploaded to the URLs an earlier response
+  // gave.
+  repeated UploadedLayer uploaded_layers = 91;
+  // The failure is not the image's: a store or registry stayed unreachable.
+  bool failure_transient = 92;
 }
 
-message CompleteImageBuildResponse {}
+message CompleteImageBuildResponse {
+  // Layers of the pushed image with no converted pair. Empty once the image
+  // is published or the failure recorded.
+  repeated LayerUpload layer_uploads = 90;
+}
+
+// LayerUpload is one layer of a pushed image for the host to convert: read
+// the blob from the push repository and convert it with internal/imagefs.
+// Without URLs the host reports the converted sizes; with them it PUTs each
+// data part, data_part_bytes each but the last, then the index. Each URL is
+// signed for its exact Content-Length.
+message LayerUpload {
+  // The compressed layer, sha256:<hex>.
+  string blob_digest = 1;
+  // The uncompressed digest the image config names; the converted index must
+  // carry it.
+  string diff_id = 2;
+  string index_url = 3;
+  repeated string data_part_urls = 4;
+  int64 data_part_bytes = 5;
+  google.protobuf.Timestamp urls_expire_at = 6;
+}
+
+message ConvertedLayer {
+  string blob_digest = 1;
+  int64 data_bytes = 2;
+  int64 index_bytes = 3;
+}
+
+message UploadedLayer {
+  string blob_digest = 1;
+  // The ETag the store answered for each data part, in part order.
+  repeated string part_etags = 2;
+}
 
 message AppendImageBuildLogsRequest {
   string container_id = 1;

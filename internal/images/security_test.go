@@ -132,7 +132,7 @@ func TestRegistryLookupsNeverDialPrivateAddresses(t *testing.T) {
 	t.Cleanup(registry.Close)
 	host := strings.TrimPrefix(registry.URL, "http://")
 	pool := dbtest.New(t)
-	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), images.Config{
+	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), nil, images.Config{
 		Registry: host, Repository: "lazycloud", Insecure: true, ManagedBase: host + "/library/python:{version}-slim",
 	})
 	ws := fixture{pool: pool}.workspace(t, "a")
@@ -158,9 +158,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 	}
 	container := placeAndStart(t, f, host)
 	published := pushRandom(t, f.imageRepository(t, first.Image.ID)+":first")
-	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: published}); err != nil {
-		t.Fatal(err)
-	}
+	f.publish(t, host, container, f.imageRepository(t, first.Image.ID), published)
 	if _, err := f.images.Resolve(t.Context(), b, numpy()); err != nil {
 		t.Fatal(err)
 	}
@@ -213,9 +211,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	rebuilt := pushRandom(t, f.workspaceImageRepository(t, a, first.Image.ID)+":rebuilt")
-	if err := f.images.CompleteBuild(t.Context(), host, forcedContainer, images.BuildOutcome{Digest: rebuilt}); err != nil {
-		t.Fatal(err)
-	}
+	f.publish(t, host, forcedContainer, f.workspaceImageRepository(t, a, first.Image.ID), rebuilt)
 	refA, err := f.images.Deployable(t.Context(), a, first.Image.ID, "3.12")
 	if err != nil || !strings.HasSuffix(refA, rebuilt) {
 		t.Fatalf("the forcing workspace deploys its rebuild: %s %v", refA, err)
@@ -257,13 +253,11 @@ func TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces(t *testing.T) {
 		t.Fatalf("a customer host pushes to %s, want the workspace's repository %s", command.PushRepository, own)
 	}
 	shared := pushRandom(t, f.imageRepository(t, first.Image.ID)+":poisoned")
-	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: shared}); err == nil {
+	if _, err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: shared}); err == nil {
 		t.Fatal("a customer host completed its build with a digest in the shared repository")
 	}
 	digest := pushRandom(t, own+":built")
-	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: digest}); err != nil {
-		t.Fatal(err)
-	}
+	f.publish(t, host, container, own, digest)
 	if ref, err := f.images.Deployable(t.Context(), a, first.Image.ID, "3.12"); err != nil || ref != own+"@"+digest {
 		t.Fatalf("the building workspace deploys its own build: %s %v", ref, err)
 	}

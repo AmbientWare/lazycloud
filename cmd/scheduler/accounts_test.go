@@ -36,7 +36,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	store := storage.NewStorage(pool, storagetest.Config())
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), images.Config{}), storage: store, logger: logger,
+		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}), storage: store, logger: logger,
 	}
 
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -151,10 +151,11 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
+	store := storage.NewStorage(pool, storagetest.Config())
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), images.Config{}),
-		storage: storage.NewStorage(pool, storagetest.Config()), logger: logger,
+		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}),
+		storage: store, logger: logger,
 	}
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
 	if err != nil {

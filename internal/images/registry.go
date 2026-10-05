@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,8 +15,10 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
 const (
@@ -192,6 +195,73 @@ func (r *resolver) pin(ctx context.Context, ref string, auth *Auth, insecure boo
 		r.mu.Unlock()
 	}
 	return pinned{registry: registry, ref: display + "@" + digest}, nil
+}
+
+// maxImageLayers is the most layers an image may have; Docker refuses to
+// build deeper ones.
+const maxImageLayers = 127
+
+// registryLayer is one layer of an image: its blob in the registry and the
+// uncompressed digest the image config names for it.
+type registryLayer struct {
+	blob   string
+	diffID string
+	// size is the blob's, as the manifest names it.
+	size int64
+}
+
+// layers reads the layers of ref, an image by digest, for platform
+// (os/arch). The registry checks each blob against its digest, so the blobs
+// are the image's bytes; the diff_ids are what the config claims. An image
+// the platform cannot convert is an InvalidError saying why.
+func (r *resolver) layers(ctx context.Context, ref string, auth *Auth, insecure bool, platform string) ([]registryLayer, error) {
+	options := []name.Option{name.WeakValidation}
+	if insecure {
+		options = append(options, name.Insecure)
+	}
+	parsed, err := name.NewDigest(ref, options...)
+	if err != nil {
+		return nil, fmt.Errorf("image reference %q is invalid: %w", ref, err)
+	}
+	p, err := v1.ParsePlatform(platform)
+	if err != nil {
+		return nil, fmt.Errorf("platform %q is invalid: %w", platform, err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, registryTimeout)
+	defer cancel()
+	img, err := remote.Image(parsed, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(r.transport), remote.WithPlatform(*p))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read %s: %w", ErrRegistryUnavailable, ref, err)
+	}
+	manifest, err := img.Manifest()
+	if err != nil {
+		return nil, fmt.Errorf("%w: read the manifest of %s: %w", ErrRegistryUnavailable, ref, err)
+	}
+	config, err := img.ConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("%w: read the config of %s: %w", ErrRegistryUnavailable, ref, err)
+	}
+	if len(manifest.Layers) > maxImageLayers {
+		return nil, invalid("the image has %d layers; at most %d are supported", len(manifest.Layers), maxImageLayers)
+	}
+	if len(manifest.Layers) != len(config.RootFS.DiffIDs) {
+		return nil, invalid("the image manifest has %d layers but its config names %d", len(manifest.Layers), len(config.RootFS.DiffIDs))
+	}
+	out := make([]registryLayer, len(manifest.Layers))
+	for n, l := range manifest.Layers {
+		// Conversion reads tar layers, compressed or not; foreign and
+		// non-distributable layers are not in the registry.
+		convertible := []types.MediaType{types.DockerLayer, types.DockerUncompressedLayer, types.OCILayer, types.OCILayerZStd, types.OCIUncompressedLayer}
+		if !slices.Contains(convertible, l.MediaType) {
+			return nil, invalid("layer %d has media type %s, which cannot be converted", n, l.MediaType)
+		}
+		diffID := config.RootFS.DiffIDs[n]
+		if l.Digest.Algorithm != "sha256" || diffID.Algorithm != "sha256" {
+			return nil, invalid("layer %d is not addressed by sha256", n)
+		}
+		out[n] = registryLayer{blob: l.Digest.String(), diffID: diffID.String(), size: l.Size}
+	}
+	return out, nil
 }
 
 // splitTag returns ref without @digest and the tag it names, if any.

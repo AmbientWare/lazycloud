@@ -86,9 +86,9 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 }
 
 // runBuild prepares the build's files, runs the builder, streams its output
-// and reports the outcome, then the exit. If the agent stops first, the
-// build is abandoned: the next agent removes its container and the server
-// gives the build a new one.
+// and reports the outcome, converting the layers the server asks for, then
+// the exit. If the agent stops first, the build is abandoned: the next agent
+// removes its container and the server gives the build a new one.
 func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer) {
 	build := spec.GetBuild()
 	logs := newBuildLogs(c.a.host, c.id, c.log)
@@ -100,10 +100,10 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 	if ctx.Err() != nil {
 		return
 	}
-	logs.close()
 	if outcome != nil && !c.isStopping() {
-		c.completeBuild(ctx, outcome)
+		c.publishBuild(ctx, work, build, outcome, logs) //nolint:contextcheck // as above
 	}
+	logs.close()
 	c.exited(exit)
 }
 
@@ -594,27 +594,68 @@ func readBuildDigest(path string) (string, error) {
 	return metadata.Digest, nil
 }
 
-// completeBuild delivers the outcome, retrying transient failures until the
-// agent stops. The server's recovery covers an outcome never delivered.
-func (c *container) completeBuild(ctx context.Context, request *hostproto.CompleteImageBuildRequest) {
+// publishBuild reports the outcome. While the server answers with layers
+// of the pushed image it has no converted pair of, it converts them and
+// reports their sizes, then uploads them to the URLs signed for those sizes
+// and reports them uploaded, within the build's deadline (work). A layer
+// that cannot be converted or stored, or layers still missing after a few
+// rounds, fail the build.
+func (c *container) publishBuild(ctx, work context.Context, build *hostproto.ImageBuild, request *hostproto.CompleteImageBuildRequest, logs *buildLogs) {
+	fail := func(reason string, transient bool) {
+		logs.add(reason)
+		request := failedBuild(c.id, reason, nil)
+		request.FailureTransient = transient
+		c.completeBuild(ctx, request)
+	}
+	dir, err := os.MkdirTemp(c.dir, "layers")
+	if err != nil {
+		fail(fmt.Sprintf("create the layer directory: %v", err), true)
+		return
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	layers := &layerPublish{a: c.a, build: build, dir: dir, logs: logs, done: map[string]*convertedLayer{}}
+	for round := 1; ; round++ {
+		uploads := c.completeBuild(ctx, request).GetLayerUploads()
+		if len(uploads) == 0 {
+			return
+		}
+		if round > maxPublishRounds {
+			fail(fmt.Sprintf("%d layers were still unconverted after %d rounds", len(uploads), maxPublishRounds), true)
+			return
+		}
+		converted, uploaded, err := layers.answer(work, uploads)
+		if err != nil {
+			// Only a layer's content fails the image; a store or registry
+			// that stayed unreachable fails this build alone.
+			fail(err.Error(), !errors.Is(err, errLayerContent))
+			return
+		}
+		request.ConvertedLayers, request.UploadedLayers = converted, uploaded
+	}
+}
+
+// completeBuild delivers request, retrying transient failures until the
+// agent stops, and returns the answer, or nil when there is none to act
+// on. The server's recovery covers an outcome never delivered.
+func (c *container) completeBuild(ctx context.Context, request *hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse {
 	delay := 100 * time.Millisecond
 	for {
-		callCtx, cancel := context.WithTimeout(ctx, completeCallTimeout)
-		_, err := c.a.host.CompleteImageBuild(callCtx, request)
+		callCtx, cancel := context.WithTimeout(ctx, publishCallTimeout)
+		resp, err := c.a.host.CompleteImageBuild(callCtx, request)
 		cancel()
 		switch {
 		case err == nil:
-			return
+			return resp
 		case status.Code(err) == codes.FailedPrecondition:
 			c.log.Info("discarding outcome of a finished build")
-			return
+			return nil
 		case !retryable(err):
 			c.log.Error("completing build failed", "error", err)
-			return
+			return nil
 		}
 		c.log.Warn("completing build failed; retrying", "error", err, "retry_in", delay)
 		if !sleep(ctx, delay) {
-			return
+			return nil
 		}
 		delay = min(2*delay, maxCompleteBackoff)
 	}

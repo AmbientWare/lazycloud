@@ -168,7 +168,8 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, p.execution, vault, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"})
+	im := images.NewImages(pool, p.execution, vault, p.storage, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: managedTemplate})
+	publishManagedImage(t, pool)
 	p.secrets = vault
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
@@ -183,8 +184,8 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
-		ImageTemplate: "docker.io/library/python:{version}-slim", TouchInterval: 5 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI,
+		TouchInterval: 5 * time.Second,
+		Secrets:       vault, ContainerAPI: containerAPI,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
