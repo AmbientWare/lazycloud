@@ -45,7 +45,7 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	}
 	server := grpc.NewServer()
 	snapshotsapi.RegisterSnapshotsServer(server, snapshotservice.FromSnapshotter(s))
-	imagefsproto.RegisterLayerSourcesServer(server, layerSources{grants: s.grants})
+	imagefsproto.RegisterLayerSourcesServer(server, layerSources{grants: s.grants, frames: s.mounts.frames})
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	ready()

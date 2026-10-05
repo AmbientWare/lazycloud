@@ -46,6 +46,7 @@ type lazyRef struct {
 
 type mountedLayer struct {
 	digest imagefs.Digest
+	layer  *layer
 	dir    string
 	server *fuse.Server
 	// stopFill ends the layer's background fetch and filled closes once
@@ -255,7 +256,7 @@ func (m *mounts) mount(r lazyRef) error {
 		return fmt.Errorf("mount layer %s: %w", digest, err)
 	}
 	fillCtx, stopFill := context.WithCancel(m.life)
-	ml := &mountedLayer{digest: digest, dir: filepath.Join(dir, "fs"), server: server, stopFill: stopFill, filled: make(chan struct{})}
+	ml := &mountedLayer{digest: digest, layer: l, dir: filepath.Join(dir, "fs"), server: server, stopFill: stopFill, filled: make(chan struct{})}
 	go func() {
 		defer close(ml.filled)
 		if ix.StreamSize <= m.fillBytes {
@@ -263,7 +264,7 @@ func (m *mounts) mount(r lazyRef) error {
 		}
 	}()
 	m.mounted[r.id] = ml
-	m.frames.setMounted(digest, 1)
+	m.frames.setMounted(l, 1)
 	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
 	return nil
 }
@@ -277,7 +278,7 @@ func (m *mounts) unmount(id string) error {
 		return fmt.Errorf("unmount layer %s: %w", ml.digest, err)
 	}
 	delete(m.mounted, id)
-	m.frames.setMounted(ml.digest, -1)
+	m.frames.setMounted(ml.layer, -1)
 	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
 	m.teardowns.Go(func() {
 		ml.server.Wait()

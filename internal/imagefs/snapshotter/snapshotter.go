@@ -131,6 +131,7 @@ func (s *Snapshotter) Close() error {
 	s.cancel()
 	<-s.mounts.done
 	s.mounts.teardowns.Wait()
+	s.mounts.frames.background.Wait()
 	return s.overlay.Close() //nolint:wrapcheck // the metadata store's own error
 }
 

@@ -98,8 +98,10 @@ func (x *LayerGrant) GetExpiresAt() *timestamppb.Timestamp {
 }
 
 type GrantRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Layers        []*LayerGrant          `protobuf:"bytes,1,rep,name=layers,proto3" json:"layers,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Layers []*LayerGrant          `protobuf:"bytes,1,rep,name=layers,proto3" json:"layers,omitempty"`
+	// The container whose start the grants are for; empty for refreshes.
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -141,6 +143,13 @@ func (x *GrantRequest) GetLayers() []*LayerGrant {
 	return nil
 }
 
+func (x *GrantRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 type GrantResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -177,6 +186,429 @@ func (*GrantResponse) Descriptor() ([]byte, []int) {
 	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{2}
 }
 
+// FrameRead is one frame of a layer, in order of first read. layer indexes
+// the layers of the request or response that carries it.
+type FrameRead struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Layer         uint32                 `protobuf:"varint,1,opt,name=layer,proto3" json:"layer,omitempty"`
+	Frame         uint32                 `protobuf:"varint,2,opt,name=frame,proto3" json:"frame,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FrameRead) Reset() {
+	*x = FrameRead{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FrameRead) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FrameRead) ProtoMessage() {}
+
+func (x *FrameRead) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FrameRead.ProtoReflect.Descriptor instead.
+func (*FrameRead) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *FrameRead) GetLayer() uint32 {
+	if x != nil {
+		return x.Layer
+	}
+	return 0
+}
+
+func (x *FrameRead) GetFrame() uint32 {
+	if x != nil {
+		return x.Frame
+	}
+	return 0
+}
+
+type PrefetchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The image's layers, base first, as diff_ids. Each needs a live grant
+	// when its frames are fetched.
+	Layers []string     `protobuf:"bytes,1,rep,name=layers,proto3" json:"layers,omitempty"`
+	Reads  []*FrameRead `protobuf:"bytes,2,rep,name=reads,proto3" json:"reads,omitempty"`
+	// Names the prefetch, such as the container it starts.
+	Name          string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrefetchRequest) Reset() {
+	*x = PrefetchRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrefetchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrefetchRequest) ProtoMessage() {}
+
+func (x *PrefetchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrefetchRequest.ProtoReflect.Descriptor instead.
+func (*PrefetchRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *PrefetchRequest) GetLayers() []string {
+	if x != nil {
+		return x.Layers
+	}
+	return nil
+}
+
+func (x *PrefetchRequest) GetReads() []*FrameRead {
+	if x != nil {
+		return x.Reads
+	}
+	return nil
+}
+
+func (x *PrefetchRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type PrefetchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrefetchResponse) Reset() {
+	*x = PrefetchResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrefetchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrefetchResponse) ProtoMessage() {}
+
+func (x *PrefetchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrefetchResponse.ProtoReflect.Descriptor instead.
+func (*PrefetchResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{5}
+}
+
+type StopPrefetchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StopPrefetchRequest) Reset() {
+	*x = StopPrefetchRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopPrefetchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopPrefetchRequest) ProtoMessage() {}
+
+func (x *StopPrefetchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopPrefetchRequest.ProtoReflect.Descriptor instead.
+func (*StopPrefetchRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *StopPrefetchRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type StopPrefetchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StopPrefetchResponse) Reset() {
+	*x = StopPrefetchResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopPrefetchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopPrefetchResponse) ProtoMessage() {}
+
+func (x *StopPrefetchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopPrefetchResponse.ProtoReflect.Descriptor instead.
+func (*StopPrefetchResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{7}
+}
+
+type StartTraceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Names the trace, such as the container it covers.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The image's layers, base first, as diff_ids.
+	Layers        []string `protobuf:"bytes,2,rep,name=layers,proto3" json:"layers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartTraceRequest) Reset() {
+	*x = StartTraceRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartTraceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartTraceRequest) ProtoMessage() {}
+
+func (x *StartTraceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartTraceRequest.ProtoReflect.Descriptor instead.
+func (*StartTraceRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *StartTraceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *StartTraceRequest) GetLayers() []string {
+	if x != nil {
+		return x.Layers
+	}
+	return nil
+}
+
+type StartTraceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartTraceResponse) Reset() {
+	*x = StartTraceResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartTraceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartTraceResponse) ProtoMessage() {}
+
+func (x *StartTraceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartTraceResponse.ProtoReflect.Descriptor instead.
+func (*StartTraceResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{9}
+}
+
+type EndTraceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EndTraceRequest) Reset() {
+	*x = EndTraceRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EndTraceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EndTraceRequest) ProtoMessage() {}
+
+func (x *EndTraceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EndTraceRequest.ProtoReflect.Descriptor instead.
+func (*EndTraceRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *EndTraceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type EndTraceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The frames read, each the first time, in order; layer indexes the
+	// StartTraceRequest's layers.
+	Reads []*FrameRead `protobuf:"bytes,1,rep,name=reads,proto3" json:"reads,omitempty"`
+	// No layer was mounted when the trace started, so the page cache held
+	// none of its bytes and every read reached the trace.
+	Complete      bool `protobuf:"varint,2,opt,name=complete,proto3" json:"complete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EndTraceResponse) Reset() {
+	*x = EndTraceResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EndTraceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EndTraceResponse) ProtoMessage() {}
+
+func (x *EndTraceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EndTraceResponse.ProtoReflect.Descriptor instead.
+func (*EndTraceResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *EndTraceResponse) GetReads() []*FrameRead {
+	if x != nil {
+		return x.Reads
+	}
+	return nil
+}
+
+func (x *EndTraceResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
 var File_imagefs_v1_source_proto protoreflect.FileDescriptor
 
 const file_imagefs_v1_source_proto_rawDesc = "" +
@@ -188,12 +620,38 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\tindex_url\x18\x02 \x01(\tR\bindexUrl\x12\x19\n" +
 	"\bdata_url\x18\x03 \x01(\tR\adataUrl\x129\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"H\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\\\n" +
 	"\fGrantRequest\x128\n" +
-	"\x06layers\x18\x01 \x03(\v2 .lazycloud.imagefs.v1.LayerGrantR\x06layers\"\x0f\n" +
-	"\rGrantResponse2`\n" +
+	"\x06layers\x18\x01 \x03(\v2 .lazycloud.imagefs.v1.LayerGrantR\x06layers\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x0f\n" +
+	"\rGrantResponse\"7\n" +
+	"\tFrameRead\x12\x14\n" +
+	"\x05layer\x18\x01 \x01(\rR\x05layer\x12\x14\n" +
+	"\x05frame\x18\x02 \x01(\rR\x05frame\"t\n" +
+	"\x0fPrefetchRequest\x12\x16\n" +
+	"\x06layers\x18\x01 \x03(\tR\x06layers\x125\n" +
+	"\x05reads\x18\x02 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\x12\n" +
+	"\x10PrefetchResponse\")\n" +
+	"\x13StopPrefetchRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\x16\n" +
+	"\x14StopPrefetchResponse\"?\n" +
+	"\x11StartTraceRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06layers\x18\x02 \x03(\tR\x06layers\"\x14\n" +
+	"\x12StartTraceResponse\"%\n" +
+	"\x0fEndTraceRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"e\n" +
+	"\x10EndTraceResponse\x125\n" +
+	"\x05reads\x18\x01 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x1a\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete2\xde\x03\n" +
 	"\fLayerSources\x12P\n" +
-	"\x05Grant\x12\".lazycloud.imagefs.v1.GrantRequest\x1a#.lazycloud.imagefs.v1.GrantResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
+	"\x05Grant\x12\".lazycloud.imagefs.v1.GrantRequest\x1a#.lazycloud.imagefs.v1.GrantResponse\x12Y\n" +
+	"\bPrefetch\x12%.lazycloud.imagefs.v1.PrefetchRequest\x1a&.lazycloud.imagefs.v1.PrefetchResponse\x12e\n" +
+	"\fStopPrefetch\x12).lazycloud.imagefs.v1.StopPrefetchRequest\x1a*.lazycloud.imagefs.v1.StopPrefetchResponse\x12_\n" +
+	"\n" +
+	"StartTrace\x12'.lazycloud.imagefs.v1.StartTraceRequest\x1a(.lazycloud.imagefs.v1.StartTraceResponse\x12Y\n" +
+	"\bEndTrace\x12%.lazycloud.imagefs.v1.EndTraceRequest\x1a&.lazycloud.imagefs.v1.EndTraceResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
 
 var (
 	file_imagefs_v1_source_proto_rawDescOnce sync.Once
@@ -207,23 +665,42 @@ func file_imagefs_v1_source_proto_rawDescGZIP() []byte {
 	return file_imagefs_v1_source_proto_rawDescData
 }
 
-var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_imagefs_v1_source_proto_goTypes = []any{
 	(*LayerGrant)(nil),            // 0: lazycloud.imagefs.v1.LayerGrant
 	(*GrantRequest)(nil),          // 1: lazycloud.imagefs.v1.GrantRequest
 	(*GrantResponse)(nil),         // 2: lazycloud.imagefs.v1.GrantResponse
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*FrameRead)(nil),             // 3: lazycloud.imagefs.v1.FrameRead
+	(*PrefetchRequest)(nil),       // 4: lazycloud.imagefs.v1.PrefetchRequest
+	(*PrefetchResponse)(nil),      // 5: lazycloud.imagefs.v1.PrefetchResponse
+	(*StopPrefetchRequest)(nil),   // 6: lazycloud.imagefs.v1.StopPrefetchRequest
+	(*StopPrefetchResponse)(nil),  // 7: lazycloud.imagefs.v1.StopPrefetchResponse
+	(*StartTraceRequest)(nil),     // 8: lazycloud.imagefs.v1.StartTraceRequest
+	(*StartTraceResponse)(nil),    // 9: lazycloud.imagefs.v1.StartTraceResponse
+	(*EndTraceRequest)(nil),       // 10: lazycloud.imagefs.v1.EndTraceRequest
+	(*EndTraceResponse)(nil),      // 11: lazycloud.imagefs.v1.EndTraceResponse
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_imagefs_v1_source_proto_depIdxs = []int32{
-	3, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
-	0, // 1: lazycloud.imagefs.v1.GrantRequest.layers:type_name -> lazycloud.imagefs.v1.LayerGrant
-	1, // 2: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
-	2, // 3: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	12, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 1: lazycloud.imagefs.v1.GrantRequest.layers:type_name -> lazycloud.imagefs.v1.LayerGrant
+	3,  // 2: lazycloud.imagefs.v1.PrefetchRequest.reads:type_name -> lazycloud.imagefs.v1.FrameRead
+	3,  // 3: lazycloud.imagefs.v1.EndTraceResponse.reads:type_name -> lazycloud.imagefs.v1.FrameRead
+	1,  // 4: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
+	4,  // 5: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
+	6,  // 6: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
+	8,  // 7: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
+	10, // 8: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
+	2,  // 9: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
+	5,  // 10: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
+	7,  // 11: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
+	9,  // 12: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
+	11, // 13: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
+	9,  // [9:14] is the sub-list for method output_type
+	4,  // [4:9] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_imagefs_v1_source_proto_init() }
@@ -237,7 +714,7 @@ func file_imagefs_v1_source_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_imagefs_v1_source_proto_rawDesc), len(file_imagefs_v1_source_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

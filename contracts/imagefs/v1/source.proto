@@ -11,7 +11,26 @@ option go_package = "github.com/AmbientWare/lazycloud/internal/imagefs/imagefspr
 // every layer of an image before it pulls the image, and again before the
 // URLs expire for as long as a container on the host uses the layer.
 service LayerSources {
+  // A FUSE read cannot be told apart by container, so a Grant, Prefetch or
+  // StartTrace naming a layer of a running trace under another name, or no
+  // name, marks that trace incomplete.
   rpc Grant(GrantRequest) returns (GrantResponse);
+  // Prefetch fetches the frames an image's earlier containers read at
+  // startup into the host's frame cache, in the order they were read, as
+  // each layer mounts. It returns at once; the fetches run in the background
+  // with bounded concurrency, behind the containers' own reads, until done,
+  // StopPrefetch, or a layer not mounted soon after. A prefetch with the
+  // name of a running one replaces it.
+  rpc Prefetch(PrefetchRequest) returns (PrefetchResponse);
+  // StopPrefetch ends the named prefetch, if it runs.
+  rpc StopPrefetch(StopPrefetchRequest) returns (StopPrefetchResponse);
+  // StartTrace records which frames of the named layers are read through
+  // their mounts until EndTrace, or until it expires. A trace with the name
+  // of a running one replaces it.
+  rpc StartTrace(StartTraceRequest) returns (StartTraceResponse);
+  // EndTrace stops a trace and returns the frames it recorded. An unknown or
+  // expired name is NOT_FOUND.
+  rpc EndTrace(EndTraceRequest) returns (EndTraceResponse);
 }
 
 // LayerGrant is the presigned read URLs of one converted layer.
@@ -30,6 +49,54 @@ message LayerGrant {
 
 message GrantRequest {
   repeated LayerGrant layers = 1;
+  // The container whose start the grants are for; empty for refreshes.
+  string name = 2;
 }
 
 message GrantResponse {}
+
+// FrameRead is one frame of a layer, in order of first read. layer indexes
+// the layers of the request or response that carries it.
+message FrameRead {
+  uint32 layer = 1;
+  uint32 frame = 2;
+}
+
+message PrefetchRequest {
+  // The image's layers, base first, as diff_ids. Each needs a live grant
+  // when its frames are fetched.
+  repeated string layers = 1;
+  repeated FrameRead reads = 2;
+  // Names the prefetch, such as the container it starts.
+  string name = 3;
+}
+
+message PrefetchResponse {}
+
+message StopPrefetchRequest {
+  string name = 1;
+}
+
+message StopPrefetchResponse {}
+
+message StartTraceRequest {
+  // Names the trace, such as the container it covers.
+  string name = 1;
+  // The image's layers, base first, as diff_ids.
+  repeated string layers = 2;
+}
+
+message StartTraceResponse {}
+
+message EndTraceRequest {
+  string name = 1;
+}
+
+message EndTraceResponse {
+  // The frames read, each the first time, in order; layer indexes the
+  // StartTraceRequest's layers.
+  repeated FrameRead reads = 1;
+  // No layer was mounted when the trace started, so the page cache held
+  // none of its bytes and every read reached the trace.
+  bool complete = 2;
+}

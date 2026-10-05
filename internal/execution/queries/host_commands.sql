@@ -42,3 +42,8 @@ order by 1;
 -- name: RecordImageReference :execrows
 update containers set image_reference = @reference
 where id = @id and host_id = @host_id and state = 'starting';
+
+-- name: ContainerImage :one
+-- The workspace and image reference of a live container on the host.
+select workspace_id, image_reference::text as reference from containers
+where id = @id and host_id = @host_id and state <> 'stopped' and image_reference is not null;

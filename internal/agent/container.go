@@ -313,8 +313,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 
 	began := time.Now()
-	// The snapshotter reads the image's layers only through these grants.
-	if err := c.a.layers.grant(ctx, spec.GetLayers()); err != nil {
+	if err := c.a.layers.start(ctx, c.log, c.id, spec); err != nil {
 		return err
 	}
 	pulled, err := c.a.images.ensureLazy(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
@@ -534,6 +533,9 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 	c.running = map[string]struct{}{}
 	l := c.link
 	c.mu.Unlock()
+	if c.a.layers != nil {
+		c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })
+	}
 	c.cancelWork()
 	if l != nil {
 		l.close(0)
@@ -751,6 +753,13 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	startClaims := !c.claiming && !c.stopping && c.http == nil && c.pod == nil
 	c.claiming = c.claiming || startClaims
 	c.mu.Unlock()
+	if changed && c.a.layers != nil {
+		c.a.goOwned(func(ctx context.Context) {
+			if trace := c.a.layers.ready(ctx, c.log, c.id); trace != nil {
+				c.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: c.id, Trace: trace}}})
+			}
+		})
+	}
 	c.signalSlotFree()
 	if changed {
 		c.log.Info("container ready", "slots", ready.GetSlots(), "running", len(running))

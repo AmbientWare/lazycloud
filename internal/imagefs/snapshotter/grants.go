@@ -3,7 +3,9 @@ package snapshotter
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -73,6 +75,7 @@ func (g *grants) put(layers map[imagefs.Digest]grant) {
 type layerSources struct {
 	imagefsproto.UnimplementedLayerSourcesServer
 	grants *grants
+	frames *frameCache
 }
 
 // Grant validates every grant before it records any, so a refused call
@@ -102,6 +105,7 @@ func (s layerSources) Grant(_ context.Context, request *imagefsproto.GrantReques
 		layers[layer] = next
 	}
 	s.grants.put(layers)
+	s.frames.traces.claim(request.GetName(), slices.Collect(maps.Keys(layers)))
 	return &imagefsproto.GrantResponse{}, nil
 }
 
