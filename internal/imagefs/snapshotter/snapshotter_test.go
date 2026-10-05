@@ -560,7 +560,7 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +597,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	}
 	dir := t.TempDir()
 	const bound = 64 << 20
-	frames, err := newFrameCache(dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

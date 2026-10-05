@@ -28,6 +28,10 @@ const (
 	fetchTimeout = 2 * time.Minute
 	// minCacheBytes keeps room for the frames concurrent reads hold.
 	minCacheBytes = 64 << 20
+	// readAhead is how many frames past a read of a file are fetched in
+	// the background: a cold file read otherwise waits one store round
+	// trip per frame.
+	readAhead = 3
 )
 
 // backoff is the wait before attempt n, counting from 1.
@@ -60,6 +64,11 @@ type frameCache struct {
 	// slots bounds the fetches in flight and so the memory they hold.
 	fetches singleflight.Group
 	slots   chan struct{}
+	// ahead bounds the read-ahead fetches in flight; stop ends them and
+	// prefetches waits for them.
+	ahead      chan struct{}
+	stop       context.Context
+	prefetches sync.WaitGroup
 
 	mu      sync.Mutex
 	used    int64
@@ -68,7 +77,7 @@ type frameCache struct {
 	mounted map[imagefs.Digest]int
 }
 
-func newFrameCache(dir string, limit int64, fetches int, g *grants, m *metrics, log *slog.Logger) (*frameCache, error) {
+func newFrameCache(stop context.Context, dir string, limit int64, fetches int, g *grants, m *metrics, log *slog.Logger) (*frameCache, error) {
 	if limit < minCacheBytes {
 		return nil, fmt.Errorf("frame cache bound %d is under %d bytes", limit, minCacheBytes)
 	}
@@ -84,6 +93,8 @@ func newFrameCache(dir string, limit int64, fetches int, g *grants, m *metrics, 
 	return &frameCache{
 		dir: dir, limit: limit, grants: g, metrics: m, log: log,
 		slots:   make(chan struct{}, fetches),
+		ahead:   make(chan struct{}, max(1, fetches/2)),
+		stop:    stop,
 		lru:     list.New(),
 		frames:  make(map[frameKey]*list.Element),
 		mounted: make(map[imagefs.Digest]int),
@@ -102,7 +113,7 @@ func (c *frameCache) read(ctx context.Context, l *layer, frame int, p []byte, of
 		c.metrics.cacheHits.Inc()
 		return nil
 	}
-	data, err := c.load(ctx, l, frame)
+	data, err := c.load(context.WithoutCancel(ctx), l, frame)
 	if err != nil {
 		return err
 	}
@@ -113,12 +124,42 @@ func (c *frameCache) read(ctx context.Context, l *layer, frame int, p []byte, of
 	return nil
 }
 
+// prefetch fetches frame in the background unless it is cached or the
+// read-ahead fetches are all busy.
+func (c *frameCache) prefetch(l *layer, frame int) {
+	c.mu.Lock()
+	_, cached := c.frames[frameKey{layer: l.digest, frame: frame}]
+	c.mu.Unlock()
+	if cached {
+		return
+	}
+	select {
+	case c.ahead <- struct{}{}:
+	default:
+		return
+	}
+	c.prefetches.Go(func() {
+		defer func() { <-c.ahead }()
+		if _, err := c.load(c.stop, l, frame); err != nil {
+			c.log.Debug("read-ahead failed", "layer", l.digest, "frame", frame, "error", err)
+		}
+	})
+}
+
 // load returns frame's bytes, fetching it once however many reads wait.
-// The fetch outlives a cancelled reader, since others may share it.
-func (c *frameCache) load(ctx context.Context, l *layer, frame int) ([]byte, error) {
+// The fetch runs under fetchCtx, which readers detach from their own, so a
+// cancelled reader does not fail the others sharing it.
+func (c *frameCache) load(fetchCtx context.Context, l *layer, frame int) ([]byte, error) {
 	k := frameKey{layer: l.digest, frame: frame}
 	v, err, _ := c.fetches.Do(string(l.digest)+"/"+strconv.Itoa(frame), func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		// A read-ahead or an earlier fetch may have stored it meanwhile.
+		frameLen := min(imagefs.FrameSize, l.index.StreamSize-int64(frame)*imagefs.FrameSize)
+		if c.touch(k) {
+			if data, err := os.ReadFile(c.path(k)); err == nil && int64(len(data)) == frameLen {
+				return data, nil
+			}
+		}
+		ctx, cancel := context.WithTimeout(fetchCtx, fetchTimeout)
 		defer cancel()
 		select {
 		case c.slots <- struct{}{}:

@@ -50,6 +50,11 @@ func (l *layer) read(ctx context.Context, e *imagefs.Entry, dest []byte, off int
 		}
 		pos = end
 	}
+	next := (start+n-1)/imagefs.FrameSize + 1
+	last := (e.Offset + e.Size - 1) / imagefs.FrameSize
+	for f := next; f <= min(last, next+readAhead-1); f++ {
+		l.frames.prefetch(l, int(f))
+	}
 	return int(n), nil
 }
 

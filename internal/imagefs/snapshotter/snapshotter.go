@@ -94,20 +94,23 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 		return nil, err
 	}
 	g := newGrants(time.Now)
-	frames, err := newFrameCache(filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
+	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	frames, err := newFrameCache(life, filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	ms, err := storage.NewMetaStore(filepath.Join(cfg.Root, "metadata.db"))
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("open snapshot metadata: %w", err)
 	}
 	ov, err := overlay.NewSnapshotter(cfg.Root, overlay.WithMetaStore(ms))
 	if err != nil {
+		cancel()
 		_ = ms.Close()
 		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
-	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &Snapshotter{
 		root: cfg.Root, ms: ms, overlay: ov, grants: g, http: cfg.HTTP, log: cfg.Logger, cancel: cancel,
 		mounts: &mounts{
@@ -131,6 +134,7 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 func (s *Snapshotter) Close() error {
 	s.cancel()
 	<-s.mounts.done
+	s.mounts.frames.prefetches.Wait()
 	return s.overlay.Close() //nolint:wrapcheck // the metadata store's own error
 }
 
