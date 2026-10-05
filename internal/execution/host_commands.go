@@ -3,10 +3,12 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -166,4 +168,18 @@ func (e *Execution) RecordImageReference(ctx context.Context, host compute.HostI
 		return false, fmt.Errorf("record image reference: %w", err)
 	}
 	return n == 1, nil
+}
+
+// ContainerImage returns the workspace of a live container on host and the
+// image reference it was started with, or false when the host runs no such
+// container.
+func (e *Execution) ContainerImage(ctx context.Context, host compute.HostID, container ContainerID) (identity.WorkspaceID, string, bool, error) {
+	row, err := e.queries.ContainerImage(ctx, ContainerImageParams{ID: uuid.UUID(container), HostID: hostUUID(host)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.WorkspaceID{}, "", false, nil
+	}
+	if err != nil {
+		return identity.WorkspaceID{}, "", false, fmt.Errorf("read container image: %w", err)
+	}
+	return identity.WorkspaceID(row.WorkspaceID), row.Reference, true, nil
 }

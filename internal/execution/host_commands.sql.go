@@ -12,6 +12,29 @@ import (
 	"github.com/google/uuid"
 )
 
+const containerImage = `-- name: ContainerImage :one
+select workspace_id, image_reference::text as reference from containers
+where id = $1 and host_id = $2 and state <> 'stopped' and image_reference is not null
+`
+
+type ContainerImageParams struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+type ContainerImageRow struct {
+	WorkspaceID uuid.UUID
+	Reference   string
+}
+
+// The workspace and image reference of a live container on the host.
+func (q *Queries) ContainerImage(ctx context.Context, arg ContainerImageParams) (ContainerImageRow, error) {
+	row := q.db.QueryRow(ctx, containerImage, arg.ID, arg.HostID)
+	var i ContainerImageRow
+	err := row.Scan(&i.WorkspaceID, &i.Reference)
+	return i, err
+}
+
 const endedAttemptsOnHost = `-- name: EndedAttemptsOnHost :many
 select a.id, a.container_id, a.state
 from containers c

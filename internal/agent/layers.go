@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -127,4 +128,66 @@ func (l *layerSources) refreshLoop(ctx context.Context, a *Agent) {
 			retry = min(2*retry, maxGrantRetry)
 		}
 	}
+}
+
+func layersOf(grants []*hostproto.LayerGrant) []imagefs.Digest {
+	out := make([]imagefs.Digest, len(grants))
+	for n, g := range grants {
+		out[n] = imagefs.Digest(g.GetDiffId())
+	}
+	return out
+}
+
+// prefetch has the snapshotter fetch the frames earlier containers of the
+// start's image read before they were ready. Prefetching only speeds the
+// start up, so a refusal is logged.
+func (l *layerSources) prefetch(ctx context.Context, log *slog.Logger, spec *hostproto.StartContainer) {
+	trace := spec.GetPrefetch().GetReads()
+	if l == nil || len(trace) == 0 {
+		return
+	}
+	reads := make([]layersource.FrameRead, len(trace))
+	for n, r := range trace {
+		reads[n] = layersource.FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
+	}
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	if err := l.client.Prefetch(ctx, layersOf(spec.GetLayers()), reads); err != nil {
+		log.Warn("prefetching the image failed", "error", err)
+	}
+}
+
+// startTrace has the snapshotter record the frames the container reads
+// until endTrace, and reports whether it does.
+func (l *layerSources) startTrace(ctx context.Context, log *slog.Logger, container string, spec *hostproto.StartContainer) bool {
+	if l == nil || !spec.GetRecordTrace() || len(spec.GetLayers()) == 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	if err := l.client.StartTrace(ctx, container, layersOf(spec.GetLayers())); err != nil {
+		log.Warn("tracing the image's startup reads failed", "error", err)
+		return false
+	}
+	return true
+}
+
+// endTrace stops the container's trace and, when report is set and every
+// read reached it, reports it to the server.
+func (l *layerSources) endTrace(ctx context.Context, a *Agent, log *slog.Logger, container string, report bool) {
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	reads, complete, err := l.client.EndTrace(ctx, container)
+	if err != nil {
+		log.Warn("ending the startup read trace failed", "error", err)
+		return
+	}
+	if !report || !complete || len(reads) == 0 {
+		return
+	}
+	trace := &hostproto.ImageTrace{Reads: make([]*hostproto.FrameRead, len(reads))}
+	for n, r := range reads {
+		trace.Reads[n] = &hostproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
+	}
+	a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: container, Trace: trace}}})
 }

@@ -301,6 +301,9 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		return nil
 	case *hostproto.HostMessage_ReserveReady:
 		return sess.answerReserve(ctx, body.ReserveReady)
+	case *hostproto.HostMessage_StartupTrace:
+		sess.recordTrace(ctx, body.StartupTrace)
+		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
 		// outcome.
@@ -321,13 +324,14 @@ func (sess *session) sync(ctx context.Context) error {
 	waiting := map[uuid.UUID]bool{}
 	var started []string
 	cache := layerCache{}
+	traces := traceCache{}
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
 		derived[id] = true
 		if sess.sent[id] {
 			continue
 		}
-		msg, err := sess.server.startMessage(ctx, sess.host, id, start, cache)
+		msg, err := sess.server.startMessage(ctx, sess.host, id, start, cache, traces)
 		// The start is sent once its image is published with converted
 		// layers, so a waiting start does not count as sent. A wait with no
 		// build to follow retries at the next touch, whose pull starts or
@@ -480,7 +484,7 @@ func (sess *session) send(msg *hostproto.ServerMessage) error {
 	return nil
 }
 
-func (s *Server) startMessage(ctx context.Context, host compute.HostID, id string, start execution.StartCommand, cache layerCache) (*hostproto.ServerMessage, error) {
+func (s *Server) startMessage(ctx context.Context, host compute.HostID, id string, start execution.StartCommand, cache layerCache, traces traceCache) (*hostproto.ServerMessage, error) {
 	url, expires, err := s.storage.SourceURL(ctx, start.Workspace, start.Source)
 	if err != nil {
 		return nil, err
@@ -514,6 +518,7 @@ func (s *Server) startMessage(ctx context.Context, host compute.HostID, id strin
 	if err != nil {
 		return nil, err
 	}
+	trace := s.startTrace(ctx, traces, start.Workspace, image.Reference)
 	restore, err := s.restoreOut(ctx, start.Container)
 	if err != nil {
 		return nil, err
@@ -560,6 +565,8 @@ func (s *Server) startMessage(ctx context.Context, host compute.HostID, id strin
 		Secrets:        secretValues,
 		Workspace:      start.WorkspaceName,
 		Layers:         layers,
+		Prefetch:       trace.prefetch,
+		RecordTrace:    trace.record,
 	}}}, nil
 }
 
