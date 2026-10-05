@@ -62,6 +62,8 @@ from lazycloud.contracts.api import (
     TaskRunEvent,
     TaskStatus,
     UploadTarget,
+    WaitTasksRequest,
+    WaitTasksResponse,
     Workload,
     WorkloadDetail,
     WorkloadKind,
@@ -326,6 +328,17 @@ class ApiClient:
             Payload,
             "GET",
             _path("v1", "workspaces", workspace, "tasks", str(task_id), "result"),
+        )
+
+    def wait_tasks(
+        self, workspace: str, task_ids: Sequence[UUID], *, wait_seconds: int = 0
+    ) -> WaitTasksResponse:
+        return self._send(
+            WaitTasksResponse,
+            "POST",
+            _path("v1", "workspaces", workspace, "tasks", "wait"),
+            body=WaitTasksRequest(task_ids=list(task_ids), wait_seconds=wait_seconds),
+            read_timeout=wait_seconds + _WAIT_READ_MARGIN_SECONDS if wait_seconds else None,
         )
 
     def cancel_task(self, workspace: str, task_id: UUID) -> Task:

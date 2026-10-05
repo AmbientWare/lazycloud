@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 import pickle
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 from uuid import UUID
@@ -35,6 +36,8 @@ T = TypeVar("T")
 
 # The API holds a status read for at most this long.
 WAIT_SECONDS = 30
+# Tasks one waitTasks request reads; the API rejects more.
+MAX_WAIT_BATCH = 1000
 # Calls one input may depend on; the API rejects more.
 MAX_DEPENDENCIES = 100
 # How often a wait reads a queued task while a progress callback listens.
@@ -174,16 +177,7 @@ class Task:
 
     def outcome(self, view: TaskView) -> Any:
         """The decoded value of a finished task, or its failure raised locally."""
-        if view.status is TaskStatus.succeeded:
-            return decode_payload(
-                self._read(lambda: self.client.get_task_result(self.workspace, self._id))
-            )
-        if view.status is TaskStatus.cancelled:
-            raise TaskCancelledError(self.task_id)
-        if view.status is TaskStatus.failed:
-            raise_task_failure(view)
-        msg = f"task {self.task_id} has not finished: {view.status.value}"
-        raise RuntimeError(msg)
+        return finished_value(self._with_result(view))
 
     def logs(self, *, limit: int = 100, cursor: str | int | None = None) -> list[LogEntry]:
         """Stored log entries: the last `limit`, or the first `limit` after `cursor`.
@@ -294,10 +288,22 @@ class FunctionCall(Generic[R]):
         timeout_seconds: float | None = None,
         return_exceptions: bool = False,
     ) -> list[Any]:
+        """The calls' values in order; `timeout_seconds` bounds the whole wait."""
         results: list[Any] = []
-        for call in calls:
+        finished = wait_in_order([call.task for call in calls], timeout_seconds=timeout_seconds)
+        for _ in calls:
             try:
-                results.append(call.get(timeout_seconds=timeout_seconds))
+                result = next(finished)
+            except Exception as exc:
+                # The wait itself failed, so every call left shares the failure.
+                if not return_exceptions:
+                    raise
+                results.extend([exc] * (len(calls) - len(results)))
+                break
+            try:
+                if isinstance(result, Exception):
+                    raise result
+                results.append(finished_value(result))
             except Exception as exc:
                 if not return_exceptions:
                     raise
@@ -398,6 +404,131 @@ def retry_transient(call: Callable[[], T], *, not_found: Callable[[], Exception]
         retry_backoff(failures)
 
 
+def wait_in_order(
+    tasks: Sequence[Task], *, timeout_seconds: float | None = None
+) -> Iterator[TaskResult[Payload | None] | Exception]:
+    """Yield each task finished with its result payload, in input order.
+
+    A task comes as soon as it and every task before it have finished; one
+    request reads up to MAX_WAIT_BATCH tasks. In place of a task comes
+    TaskNotFoundError when its workspace has no such task, and TimeoutError
+    when `timeout_seconds` passed before it finished. The tasks keep running.
+    """
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    known: dict[int, TaskResult[Payload | None] | Exception] = {}
+    waiting: dict[int, UUID] = {}
+    for n, task in enumerate(tasks):
+        try:
+            waiting[n] = UUID(task.task_id)
+        except ValueError:
+            known[n] = TaskNotFoundError(task.task_id)
+    # Reports why the first unfinished task is queued, as a single wait does.
+    watched: tuple[int, PendingProgressReporter] | None = None
+    for head, task in enumerate(tasks):
+        while head not in known:
+            hold = PENDING_POLL_SECONDS if progress_observed() else WAIT_SECONDS
+            if deadline is not None:
+                hold = min(hold, max(math.ceil(deadline - time.monotonic()), 0))
+            _wait_round(tasks, waiting, known, hold)
+            if head in known:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                for n in waiting:
+                    known[n] = TimeoutError(
+                        f"task {tasks[n].task_id} did not finish within {timeout_seconds} seconds"
+                    )
+                waiting.clear()
+            elif progress_observed():
+                if watched is None or watched[0] != head:
+                    watched = (
+                        head,
+                        PendingProgressReporter(terminal=Terminal(default_enabled=False)),
+                    )
+                watched[1].update(task.task_id, task.get().pending)
+        if watched is not None and watched[0] == head:
+            watched[1].update(task.task_id, None)
+        yield known.pop(head)
+
+
+def _wait_round(
+    tasks: Sequence[Task],
+    waiting: dict[int, UUID],
+    known: dict[int, TaskResult[Payload | None] | Exception],
+    hold: int,
+) -> None:
+    """Read every waiting task once, moving each finished one to `known`.
+
+    Only the batch holding the earliest waiting task holds the request, for
+    up to `hold` seconds, and only when no other batch found a finished task.
+    """
+    sessions: dict[tuple[int, str], dict[UUID, list[int]]] = {}
+    for n, task_id in waiting.items():
+        task = tasks[n]
+        sessions.setdefault((id(task.client), task.workspace), {}).setdefault(task_id, []).append(n)
+    batches: list[dict[UUID, list[int]]] = []
+    for ids in sessions.values():
+        items = list(ids.items())
+        for start in range(0, len(items), MAX_WAIT_BATCH):
+            batches.append(dict(items[start : start + MAX_WAIT_BATCH]))
+    found = False
+    for batch in [*batches[1:], batches[0]]:
+        wait = 0 if found or batch is not batches[0] else hold
+        found = _read_batch(tasks, batch, wait, waiting, known) or found
+
+
+def _read_batch(
+    tasks: Sequence[Task],
+    batch: dict[UUID, list[int]],
+    wait: int,
+    waiting: dict[int, UUID],
+    known: dict[int, TaskResult[Payload | None] | Exception],
+) -> bool:
+    """Read one batch of a session's tasks; return whether any finished."""
+    first = tasks[next(iter(batch.values()))[0]]
+    ids = list(batch)
+    try:
+        response = retry_transient(
+            lambda: first.client.wait_tasks(first.workspace, ids, wait_seconds=wait),
+            not_found=lambda: TaskNotFoundError(str(ids[0])),
+        )
+    except TaskNotFoundError as exc:
+        # The API names the first task it does not have; the rest are read
+        # again next round.
+        cause = exc.__cause__
+        message = cause.message if isinstance(cause, ApiError) else ""
+        missing = next((task_id for task_id in ids if str(task_id) in message), None)
+        if missing is None:
+            raise
+        for n in batch[missing]:
+            known[n] = TaskNotFoundError(str(missing))
+            del waiting[n]
+        return True
+    for finished in response.tasks:
+        indices = batch[finished.task.id]
+        result = (
+            tasks[indices[0]]._with_result(finished.task)
+            if finished.result_omitted
+            else TaskResult(finished.task, finished.result)
+        )
+        for n in indices:
+            known[n] = result
+            del waiting[n]
+    return bool(response.tasks)
+
+
+def finished_value(result: TaskResult[Payload | None]) -> Any:
+    """A finished task's decoded value, or its failure raised locally."""
+    view = result.task
+    if view.status is TaskStatus.succeeded and result.value is not None:
+        return decode_payload(result.value)
+    if view.status is TaskStatus.cancelled:
+        raise TaskCancelledError(str(view.id))
+    if view.status is TaskStatus.failed:
+        raise_task_failure(view)
+    msg = f"task {view.id} has not finished with a result: {view.status.value}"
+    raise RuntimeError(msg)
+
+
 def decode_payload(payload: Payload) -> Any:
     if payload.encoding is Encoding.json:
         return payload.value
@@ -446,6 +577,7 @@ __all__ = [
     "TaskResult",
     "TaskSubscription",
     "decode_payload",
+    "finished_value",
     "follow_log_stream",
     "parent_task_id",
     "raise_task_failure",
@@ -453,4 +585,5 @@ __all__ = [
     "retry_budget_spent",
     "retry_transient",
     "task_input",
+    "wait_in_order",
 ]

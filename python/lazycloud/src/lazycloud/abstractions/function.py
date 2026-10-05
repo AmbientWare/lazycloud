@@ -548,18 +548,23 @@ class Function(Generic[P, R]):
 
         Ctrl-C while waiting cancels the tasks whose values were not yielded.
         """
-        calls = self.spawn_map(inputs)
-        for n, call in enumerate(calls):
+        from lazycloud.session.task import decode_payload, wait_in_order
+
+        tasks = [call.task for call in self.spawn_map(inputs)]
+        finished = wait_in_order(tasks)
+        for n in range(len(tasks)):
             try:
-                result = call.result(wait=True)
+                result = next(finished)
             except KeyboardInterrupt:
-                _cancel_tasks([c.task for c in calls[n:]])
+                _cancel_tasks(tasks[n:])
                 raise
+            if isinstance(result, Exception):
+                raise result
             if not result.ok:
                 self._error(f"Task failed during map: {result.error or result.status.value}")
                 yield None
                 continue
-            yield result.value
+            yield None if result.value is None else cast(R, decode_payload(result.value))
 
     def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
         """Submit one task with JSON arguments; its result comes back as JSON."""
