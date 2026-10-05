@@ -222,7 +222,7 @@ func (a *Agent) runNetfilter(ctx context.Context, c *container, policy *hostprot
 	}
 	ctx, cancel := context.WithTimeout(ctx, netfilterTimeout)
 	defer cancel()
-	if _, err := a.images.ensure(ctx, a.cfg.MountImage, nil, ""); err != nil {
+	if err := a.images.ensure(ctx, a.cfg.MountImage, ""); err != nil {
 		return err
 	}
 	rules, err := json.Marshal(netfilterRules{Block: policy.GetBlock(), Allow: append([]string{}, policy.GetAllow()...)})

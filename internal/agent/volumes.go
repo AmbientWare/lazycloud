@@ -367,7 +367,7 @@ type mountSpec struct {
 
 // runMount starts a GeeseFS mount container and returns its id.
 func (v *volumes) runMount(ctx context.Context, m mountSpec) (string, error) {
-	if _, err := v.a.images.ensure(ctx, v.a.cfg.MountImage, nil, ""); err != nil {
+	if err := v.a.images.ensure(ctx, v.a.cfg.MountImage, ""); err != nil {
 		return "", err
 	}
 	if err := v.a.removeContainer(ctx, m.name); err != nil {

@@ -121,7 +121,7 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	}
 	logs.add("preparing build container")
 	began := time.Now()
-	if _, err := c.a.images.ensure(ctx, builderImage, nil, ""); err != nil {
+	if err := c.a.images.ensure(ctx, builderImage, ""); err != nil {
 		return startFailed(err)
 	}
 	// The secrets leave the host when the build ends, whatever its outcome.

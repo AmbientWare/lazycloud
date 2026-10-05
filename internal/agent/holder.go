@@ -41,7 +41,7 @@ func (c *container) networkTarget() string {
 // startHolder creates and starts c's holder, replacing one an earlier
 // failed start left. It runs nothing but a sleep, without capabilities.
 func (a *Agent) startHolder(ctx context.Context, c *container) error {
-	if _, err := a.images.ensure(ctx, a.cfg.MountImage, nil, ""); err != nil {
+	if err := a.images.ensure(ctx, a.cfg.MountImage, ""); err != nil {
 		return err
 	}
 	labels := maps.Clone(a.cfg.Labels)

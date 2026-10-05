@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the agent release archives the install script and self-update
 # download: <out_dir>/<version>/lazycloud-agent-linux-<arch>.tar.gz, each
-# holding lazycloud-agent, supervisor, runtime/<python> and, on amd64,
+# holding lazycloud-agent, lazycloud-snapshotter, supervisor,
+# runtime/<python> and, on amd64,
 # geesefs at its root. Prints
 # one "<arch> <sha256>" line per archive.
 #
@@ -49,9 +50,11 @@ for arch in "${arch_list[@]}"; do
     -ldflags "-s -w -X main.version=$version" -o "$stage/lazycloud-agent" ./cmd/agent)
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
     -o "$stage/supervisor" ./cmd/supervisor)
+  (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
+    -o "$stage/lazycloud-snapshotter" ./cmd/snapshotter)
   # shellcheck disable=SC2086 # the Python versions are separate words
   LAZYCLOUD_RUNTIME_PLATFORM="$platform" "$root/deploy/local/build-runtime.sh" "$stage/runtime" $pythons
-  files=(lazycloud-agent supervisor runtime)
+  files=(lazycloud-agent lazycloud-snapshotter supervisor runtime)
   # GeeseFS mounts volumes; its pinned release exists for amd64.
   if [[ "$arch" == amd64 ]]; then
     "$root/deploy/local/fetch-geesefs.sh"

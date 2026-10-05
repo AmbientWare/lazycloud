@@ -144,7 +144,7 @@ type service struct {
 	registry *prometheus.Registry
 }
 
-func serve(t *testing.T, transport http.RoundTripper, cacheBytes int64) *service {
+func serve(t *testing.T, transport http.RoundTripper) *service {
 	t.Helper()
 	if _, err := os.Stat("/dev/fuse"); err != nil {
 		t.Fatalf("FUSE is unavailable: %v", err)
@@ -153,7 +153,7 @@ func serve(t *testing.T, transport http.RoundTripper, cacheBytes int64) *service
 	socket := filepath.Join(root, "snapshotter.sock")
 	registry := prometheus.NewRegistry()
 	cfg := Config{
-		Root: filepath.Join(root, "state"), CacheBytes: cacheBytes, Fetches: 4, AllowOther: os.Geteuid() == 0,
+		Root: filepath.Join(root, "state"), CacheBytes: 256 << 20, Fetches: 4, AllowOther: os.Geteuid() == 0,
 		HTTP: &http.Client{Transport: transport}, Registry: registry, Logger: slog.New(slog.DiscardHandler),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -272,7 +272,7 @@ func random(n int) []byte {
 func TestLazyLayerServesItsFiles(t *testing.T) {
 	ts := newTestStore(t)
 	transport := &countingTransport{}
-	s := serve(t, transport, 256<<20)
+	s := serve(t, transport)
 	weights := random(9 << 20)
 	tool := random(3000)
 	l := ts.layer(t, buildTar(t, []tarEntry{
@@ -393,7 +393,7 @@ func TestOpaqueDirectoriesCarryTheOverlayMarker(t *testing.T) {
 // Without a live grant a layer is not made present, and the error says so.
 func TestPullingAnUngrantedLayerFails(t *testing.T) {
 	ts := newTestStore(t)
-	s := serve(t, http.DefaultTransport, 256<<20)
+	s := serve(t, http.DefaultTransport)
 	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("a")}}))
 	_, err := s.sn.Prepare(t.Context(), "extract", "", snapshots.WithLabels(map[string]string{
 		snapshots.LabelSnapshotRef: "chain", snapshots.LabelSnapshotDiffID: string(l.index.Layer), layersource.LazyLabel: "true",
@@ -420,7 +420,7 @@ func TestUnservableReadsAreIOErrors(t *testing.T) {
 	ts := newTestStore(t)
 	var failing atomic.Bool
 	transport := &countingTransport{fail: func(*http.Request) bool { return failing.Load() }}
-	s := serve(t, transport, 256<<20)
+	s := serve(t, transport)
 	l := ts.layer(t, buildTar(t, []tarEntry{
 		{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)},
 		{hdr: tar.Header{Name: "b", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)},
@@ -469,7 +469,7 @@ func counterValue(t *testing.T, registry *prometheus.Registry, name string) floa
 // once none does; a busy mount is kept and retried.
 func TestUnusedLayersAreUnmounted(t *testing.T) {
 	ts := newTestStore(t)
-	s := serve(t, http.DefaultTransport, 256<<20)
+	s := serve(t, http.DefaultTransport)
 	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("a")}}))
 	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
 		t.Fatal(err)
@@ -513,7 +513,7 @@ func TestUnusedLayersAreUnmounted(t *testing.T) {
 // A container's overlay names its lazy layers' mounts, lowest last.
 func TestContainersStackLazyLayers(t *testing.T) {
 	ts := newTestStore(t)
-	s := serve(t, http.DefaultTransport, 256<<20)
+	s := serve(t, http.DefaultTransport)
 	base := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "base", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("base")}}))
 	top := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "top", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("top")}}))
 	if err := s.sources.Grant(t.Context(), []layersource.Grant{base.grant, top.grant}); err != nil {
@@ -658,7 +658,7 @@ func diskBytes(t *testing.T, dir string) int64 {
 // with a bad grant records none of its grants.
 func TestGrantsKeepTheLatestExpiry(t *testing.T) {
 	ts := newTestStore(t)
-	s := serve(t, http.DefaultTransport, 256<<20)
+	s := serve(t, http.DefaultTransport)
 	tarball := func(name string) []byte {
 		return buildTar(t, []tarEntry{{hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte(name)}})
 	}
