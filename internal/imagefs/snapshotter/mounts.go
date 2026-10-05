@@ -284,7 +284,8 @@ func (m *mounts) needed(ctx context.Context) (map[string]lazyRef, error) {
 			return nil
 		})
 	})
-	if err != nil {
+	// A store that never held a snapshot has no bucket yet.
+	if err != nil && !errdefs.IsNotFound(err) {
 		return nil, fmt.Errorf("read snapshots: %w", err)
 	}
 	needed := make(map[string]lazyRef)
