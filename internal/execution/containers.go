@@ -113,6 +113,9 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
 			return err
 		}
+		if err := notifyFinished(ctx, tx, failed); err != nil {
+			return err
+		}
 		if err := e.resolveDependents(ctx, tx, failed, upstreamUnsuccessful); err != nil {
 			return err
 		}

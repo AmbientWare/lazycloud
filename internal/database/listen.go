@@ -27,6 +27,9 @@ const (
 	ChannelExecution Channel = "lc_execution"
 	// ChannelTask wakes waiters on a task; payload is the task id.
 	ChannelTask Channel = "lc_task"
+	// ChannelTaskFinished wakes waiters on many tasks when one reaches a
+	// terminal status; payload is the task id.
+	ChannelTaskFinished Channel = "lc_task_finished"
 	// ChannelClaim wakes claims waiting for a release's queued tasks.
 	ChannelClaim Channel = "lc_claim"
 	// ChannelLogs wakes followers of a workload's or container's logs;
@@ -78,24 +81,30 @@ func NewListener(pool *pgxpool.Pool, logger *slog.Logger, channels ...Channel) *
 }
 
 // Subscribe returns a channel that receives a value after a notification on
-// channel with this payload, or with any payload when payload is empty. Wakes
-// coalesce: the channel holds at most one pending value. Call cancel to stop.
-func (l *Listener) Subscribe(channel Channel, payload string) (wake <-chan struct{}, cancel func()) {
+// channel with any of these payloads, an empty payload standing for any.
+// Wakes coalesce: the channel holds at most one pending value. Call cancel to
+// stop.
+func (l *Listener) Subscribe(channel Channel, payloads ...string) (wake <-chan struct{}, cancel func()) {
 	sub := &subscription{wake: make(chan struct{}, 1)}
-	key := subKey{channel: channel, payload: payload}
 	l.mu.Lock()
-	set, ok := l.subs[key]
-	if !ok {
-		set = map[*subscription]struct{}{}
-		l.subs[key] = set
+	for _, payload := range payloads {
+		key := subKey{channel: channel, payload: payload}
+		set, ok := l.subs[key]
+		if !ok {
+			set = map[*subscription]struct{}{}
+			l.subs[key] = set
+		}
+		set[sub] = struct{}{}
 	}
-	set[sub] = struct{}{}
 	l.mu.Unlock()
 	return sub.wake, func() {
 		l.mu.Lock()
-		delete(l.subs[key], sub)
-		if len(l.subs[key]) == 0 {
-			delete(l.subs, key)
+		for _, payload := range payloads {
+			key := subKey{channel: channel, payload: payload}
+			delete(l.subs[key], sub)
+			if len(l.subs[key]) == 0 {
+				delete(l.subs, key)
+			}
 		}
 		l.mu.Unlock()
 	}

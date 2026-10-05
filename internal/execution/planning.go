@@ -305,6 +305,9 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(cancelled)); err != nil {
 		return err
 	}
+	if err := notifyFinished(ctx, tx, cancelled); err != nil {
+		return err
+	}
 	if err := e.resolveDependents(ctx, tx, cancelled, upstreamUnsuccessful); err != nil {
 		return err
 	}

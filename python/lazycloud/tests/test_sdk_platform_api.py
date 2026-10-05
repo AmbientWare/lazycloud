@@ -26,6 +26,7 @@ from lazycloud.contracts.api import TaskPendingReason, TaskStatus
 from lazycloud.exceptions import (
     FunctionNotDeployedError,
     RemoteTaskError,
+    TaskNotFoundError,
     UnsupportedFeatureError,
 )
 from lazycloud.session.deployment import DeploymentOperationError
@@ -55,6 +56,7 @@ NOW = "2026-09-30T12:00:00Z"
 FUNCTION = "/v1/workspaces/team/apps/reports/workloads/function/summarize_sales"
 TASKS = f"{FUNCTION}/tasks"
 RUN = f"{FUNCTION}/run"
+WAIT = "/v1/workspaces/team/tasks/wait"
 
 REPORTS = """\
 import lazycloud
@@ -109,6 +111,14 @@ def _task_id(index: int) -> str:
 
 def _pickled(value: object) -> str:
     return base64.b64encode(cloudpickle_bytes(value)).decode()
+
+
+def _finished(task: dict[str, object], *value: object) -> dict[str, object]:
+    """A waitTasks entry for task, with value inline as its result when given."""
+    entry: dict[str, object] = {"task": task, "result_omitted": False}
+    if value:
+        entry["result"] = {"encoding": "cloudpickle", "data": _pickled(value[0])}
+    return entry
 
 
 def _inputs(request: ApiRequest) -> list[dict[str, Any]]:
@@ -866,9 +876,205 @@ def test_spawn_map_submits_in_batches_and_keeps_input_order(
     assert submitted == list(range(1001))
     assert [call.get() for call in calls[995:]] == list(range(995, 1001))
 
+    fake_api.route("POST", WAIT)(
+        lambda request: json_reply(
+            {
+                "tasks": [
+                    _finished(_task(i, "succeeded"), int(i[-12:]))
+                    for i in request.json()["task_ids"]
+                ],
+                "missing_task_ids": [],
+            }
+        )
+    )
     assert list(reports.summarize_sales.map([[1], [2]])) == [1, 2]
     assert {r.json()["release_id"] for r in fake_api.calls("POST", TASKS)} == {RELEASE_ID}
     assert len(fake_api.calls("POST", "/v1/workspaces/team/apps/reports/releases")) == 1
+
+
+def test_map_collects_results_in_few_requests_and_keeps_input_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+
+    @fake_api.route("POST", TASKS)
+    def submit(request: ApiRequest) -> Reply:
+        return json_reply({"tasks": [_task(_task_id(p["args"][0])) for p in _inputs(request)]}, 201)
+
+    failure = {"kind": "user_error", "type": "ValueError", "message": "no sales"}
+    waits: list[ApiRequest] = []
+
+    @fake_api.route("POST", WAIT)
+    def wait(request: ApiRequest) -> Reply:
+        # Odd inputs and the last finish first; every task has finished by
+        # the third request.
+        waits.append(request)
+        finished: list[dict[str, object]] = []
+        for task_id in request.json()["task_ids"]:
+            n = int(task_id[-12:])
+            if len(waits) <= 2 and n % 2 == 0 and n != 1000:
+                continue
+            if n == 3:
+                finished.append(_finished(_task(task_id, "failed", failure=failure)))
+            elif n == 4:
+                finished.append(_finished(_task(task_id, "cancelled")))
+            elif n == 5:
+                finished.append({"task": _task(task_id, "succeeded"), "result_omitted": True})
+            else:
+                finished.append(_finished(_task(task_id, "succeeded"), n))
+        return json_reply({"tasks": finished, "missing_task_ids": []})
+
+    result = f"/v1/workspaces/team/tasks/{_task_id(5)}/result"
+    fake_api.route("GET", result)(
+        lambda _: json_reply({"encoding": "cloudpickle", "data": _pickled(5)})
+    )
+
+    values = reports.summarize_sales.map([[n] for n in range(1001)])
+    assert next(values) == 0
+    # A result left out of the response is read when its task comes.
+    assert fake_api.calls("GET", result) == []
+    rest = list(values)
+
+    assert [0, *rest] == [None if n in (3, 4) else n for n in range(1001)]
+    # A round reads the batches after the first once without holding, then
+    # holds on the first, which has the earliest unfinished task, even when
+    # a later batch found finished tasks.
+    assert [(len(r.json()["task_ids"]), r.json()["wait_seconds"]) for r in waits] == [
+        (1, 0),
+        (1000, 30),
+        (500, 30),
+    ]
+    assert len(fake_api.calls("GET", result)) == 1
+    assert fake_api.calls("GET", "/v1/workspaces/team/tasks/[^/]+") == []
+
+
+def test_map_reads_only_a_queued_first_task_while_progress_listens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    ids = [_task_id(90 + n) for n in range(3)]
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(i) for i in ids]}, 201))
+    pending = {
+        "reason": "capacity_busy",
+        "message": "Waiting for an available function container.",
+        "since": NOW,
+        "pending_since": NOW,
+        "observed_at": NOW,
+    }
+    reads: list[ApiRequest] = []
+
+    @fake_api.route("GET", f"/v1/workspaces/team/tasks/{ids[0]}")
+    def read(request: ApiRequest) -> Reply:
+        # Queued on the first read, running from the second.
+        reads.append(request)
+        if len(reads) == 1:
+            return json_reply(_task(ids[0], pending=pending))
+        return json_reply(_task(ids[0], "running"))
+
+    @fake_api.route("POST", WAIT)
+    def wait(request: ApiRequest) -> Reply:
+        done = len(reads) >= 2
+        tasks = [
+            _finished(_task(i, "succeeded"), n) for n, i in enumerate(request.json()["task_ids"])
+        ]
+        return json_reply({"tasks": tasks if done else [], "missing_task_ids": []})
+
+    updates: list[tuple[str, TaskPendingReason | None]] = []
+    with lazycloud.progress(lambda task, update: updates.append((task, update and update.reason))):
+        assert list(reports.summarize_sales.map([[1], [2], [3]])) == [0, 1, 2]
+
+    assert updates == [(ids[0], TaskPendingReason.CapacityBusy), (ids[0], None)]
+    # One round, then the queued task alone each second until it runs, then
+    # a round that holds.
+    waits = [r.json()["wait_seconds"] for r in fake_api.calls("POST", WAIT)]
+    assert waits == [1, 30]
+    assert [r.query.get("wait_seconds") for r in reads] == [None, ["1"]]
+
+
+def test_map_keeps_reporting_a_running_first_task_that_queues_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    task_id = _task_id(95)
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
+    retry = {
+        "reason": "retry",
+        "message": "Waiting to retry.",
+        "since": NOW,
+        "pending_since": NOW,
+        "observed_at": NOW,
+    }
+    # Running, then queued for a retry, then running until it finishes.
+    views = [_task(task_id, "running"), _task(task_id, pending=retry), _task(task_id, "running")]
+    reads: list[ApiRequest] = []
+
+    @fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")
+    def read(request: ApiRequest) -> Reply:
+        reads.append(request)
+        return json_reply(views[min(len(reads), len(views)) - 1])
+
+    @fake_api.route("POST", WAIT)
+    def wait(request: ApiRequest) -> Reply:
+        done = len(reads) >= len(views)
+        tasks = [_finished(_task(task_id, "succeeded"), 7)] if done else []
+        return json_reply({"tasks": tasks, "missing_task_ids": []})
+
+    updates: list[tuple[str, TaskPendingReason | None]] = []
+    with lazycloud.progress(lambda task, update: updates.append((task, update and update.reason))):
+        assert list(reports.summarize_sales.map([[1]])) == [7]
+
+    # The running task is read again after the round, which finds it queued.
+    assert updates == [(task_id, TaskPendingReason.Retry), (task_id, None)]
+    assert len(reads) == len(views)
+
+
+def test_map_buffers_bounded_inline_results_behind_a_lagging_first_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    from lazycloud.session import task as task_session
+
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    monkeypatch.setattr(task_session, "MAX_WAIT_BATCH", 10)
+    value = bytes(100_000)
+    size = len(json.dumps({"encoding": "cloudpickle", "data": _pickled(value)}))
+    monkeypatch.setattr(task_session, "MAX_BUFFERED_RESULT_BYTES", 3 * size)
+    per_response = 2
+    ids = [_task_id(n) for n in range(60)]
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(i) for i in ids]}, 201))
+    returned: set[str] = set()
+    yielded: list[object] = []
+    head_reads: list[int] = []
+    most_held = 0
+
+    @fake_api.route("POST", WAIT)
+    def wait(request: ApiRequest) -> Reply:
+        nonlocal most_held
+        requested = request.json()["task_ids"]
+        if ids[0] in requested:
+            head_reads.append(len(requested))
+        finished: list[dict[str, object]] = []
+        for task_id in requested:
+            # The first task finishes only on its fourth read.
+            if task_id == ids[0] and len(head_reads) < 4:
+                continue
+            if len(finished) < per_response:
+                finished.append(_finished(_task(task_id, "succeeded"), value))
+                returned.add(task_id)
+        most_held = max(most_held, len(returned) - len(yielded))
+        return json_reply({"tasks": finished, "missing_task_ids": []})
+
+    for result in reports.summarize_sales.map([[n] for n in range(60)]):
+        yielded.append(result)
+
+    assert len(yielded) == 60
+    # Reads stop at the bound, past it by at most one response.
+    assert most_held <= 3 + per_response
+    # Past the bound, only the first task is read.
+    assert head_reads[-1] == 1
 
 
 def test_calls_inside_a_container_run_the_active_release_as_children(
@@ -998,11 +1204,11 @@ def test_ctrl_c_during_map_cancels_every_unfinished_task_despite_a_second_interr
     ids = [_task_id(70 + n) for n in range(3)]
     fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(i) for i in ids]}, 201))
 
-    @fake_api.route("GET", "/v1/workspaces/team/tasks/[^/]+")
+    @fake_api.route("POST", WAIT)
     def wait(_: ApiRequest) -> Reply:
         threading.Timer(0.05, _thread.interrupt_main).start()
         time.sleep(0.3)
-        return json_reply(_task(ids[0], "running"))
+        return json_reply({"tasks": [], "missing_task_ids": []})
 
     interrupted_once: list[bool] = []
 
@@ -1116,11 +1322,41 @@ def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:
     assert logs.query["tail"] == ["100"]
     assert [event.event for event in task.subscribe()] == ["status"]
     assert call.rerun().task_id == rerun_id
+
+    unknown_id = _task_id(83)
+
+    @fake_api.route("POST", f"{tasks}/wait")
+    def wait(request: ApiRequest) -> Reply:
+        ids = request.json()["task_ids"]
+        finished = {
+            task_id: _finished(_task(task_id, "succeeded"), {"total": 6}),
+            failed_id: _finished(_task(failed_id, "failed", failure=failure)),
+        }
+        return json_reply(
+            {
+                "tasks": [finished[i] for i in ids if i in finished],
+                "missing_task_ids": [i for i in ids if i == unknown_id],
+            }
+        )
+
     gathered = lazycloud.FunctionCall.gather(
-        call, lazycloud.FunctionCall(lazycloud.Task.from_id(failed_id)), return_exceptions=True
+        call,
+        lazycloud.FunctionCall(lazycloud.Task.from_id(unknown_id)),
+        lazycloud.FunctionCall(lazycloud.Task.from_id(failed_id)),
+        call,
+        return_exceptions=True,
     )
-    assert gathered[0] == {"total": 6}
-    assert isinstance(gathered[1], RemoteTaskError)
+    assert gathered[0] == gathered[3] == {"total": 6}
+    assert isinstance(gathered[1], TaskNotFoundError) and gathered[1].task_id == unknown_id
+    assert isinstance(gathered[2], RemoteTaskError)
+    with pytest.raises(RemoteTaskError):
+        lazycloud.FunctionCall.gather(call, failed_call)
+    # The timeout bounds the whole gather; a call still running then times out.
+    running: lazycloud.FunctionCall[int] = lazycloud.FunctionCall(
+        lazycloud.Task.from_id(_task_id(84))
+    )
+    timed = lazycloud.FunctionCall.gather(running, call, timeout_seconds=0, return_exceptions=True)
+    assert isinstance(timed[0], TimeoutError) and timed[1] == {"total": 6}
 
 
 def _me(*workspaces: str, owned: str = "") -> Reply:
