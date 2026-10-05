@@ -159,7 +159,9 @@ func (c *frameCache) prefetch(reads []prefetchRead) error {
 		defer func() { <-c.prefetching }()
 		ctx, cancel := context.WithTimeout(c.life, prefetchLife)
 		defer cancel()
+		began := time.Now()
 		c.runPrefetch(ctx, reads)
+		c.log.Info("prefetch ended", "frames", len(reads), "seconds", time.Since(began).Seconds(), "error", ctx.Err())
 	})
 	return nil
 }
