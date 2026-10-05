@@ -50,7 +50,8 @@ data object read by range with presigned URLs.
 | [publish](lazy-images/publish.md) | `perf-lazy-publish` | 0003 | host.proto fields 90-99 in each message it extends | format |
 | [snapshotter](lazy-images/snapshotter.md) | `perf-lazy-snapshotter` | none | snapshotter service, the agent's image pull, node image | format |
 | [grants](lazy-images/grants.md) | `perf-lazy-grants` | 0004 | host.proto fields 100-109 | format, publish |
-| [prefetch](lazy-images/prefetch.md) | `perf-lazy-prefetch` | 0005 if it stores traces | the snapshotter's read path | snapshotter |
+| [platform-images](lazy-images/platform-images.md) | `perf-lazy-platform-images` | 0006 if needed | host.proto fields 110-119 | snapshotter |
+| [prefetch](lazy-images/prefetch.md) | `perf-lazy-prefetch` | 0005 if it stores traces | the snapshotter's read path, host.proto fields 120-129 | snapshotter |
 | [acceptance](lazy-images/acceptance.md) | `perf-lazy-acceptance` | none | none | all |
 
 The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
