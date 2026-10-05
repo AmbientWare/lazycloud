@@ -224,7 +224,13 @@ func TestFailedStartsNeverExhaustPrefetches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c.frames.background.Wait()
+	ended := make(chan struct{})
+	go func() { c.frames.background.Wait(); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(time.Second):
+		t.Fatal("stopped prefetches kept waiting for their layers to mount")
+	}
 }
 
 // A prefetch fetches exactly its frames once their layer mounts, and the
