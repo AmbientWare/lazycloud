@@ -49,7 +49,7 @@ data object read by range with presigned URLs.
 | [format](lazy-images/format.md) | `perf-lazy-format` | none | new `internal/imagefs`, `contracts/imagefs/v1` | spike |
 | [publish](lazy-images/publish.md) | `perf-lazy-publish` | 0003 | host.proto fields 90-99 in each message it extends | format |
 | [snapshotter](lazy-images/snapshotter.md) | `perf-lazy-snapshotter` | none | snapshotter service, the agent's image pull, node image | format |
-| [grants](lazy-images/grants.md) | `perf-lazy-grants` | none | host.proto fields 100-109 | format |
+| [grants](lazy-images/grants.md) | `perf-lazy-grants` | 0004 | host.proto fields 100-109 | format, publish |
 | [acceptance](lazy-images/acceptance.md) | `perf-lazy-acceptance` | none | none | all |
 
 The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
