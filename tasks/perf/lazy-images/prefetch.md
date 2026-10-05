@@ -34,24 +34,31 @@ stored. Stay off the format's encoding unless the report proposes a change.
 Done on 2026-10-05 on `perf-lazy-prefetch`, draft PR #494 into `perf-plan`.
 
 - Snapshotter (`internal/imagefs/snapshotter/trace.go`): `LayerSources`
-  gains `StartTrace`, `EndTrace` and `Prefetch`. A trace records each frame
+  gains `StartTrace`, `EndTrace`, `Prefetch` and `StopPrefetch`. A trace records each frame
   of its layers the first time a FUSE read reaches it, in order, by layer
-  position. It is complete only if none of its layers was mounted when it
-  started, since the page cache of a mounted layer hides reads. At most 64
-  traces of 4096 frames each; one nobody ends expires after 15 minutes. A
-  prefetch fetches its frames in order as each layer mounts, through the
-  same shared fetches as reads, skipping cached frames and layers gone since.
-  It takes the background slots fills use, half of `--fetches`, so a
-  container's reads always find a fetch slot. At most 16 prefetches run, each
-  for at most 5 minutes and a quarter of the cache. Client:
-  `layersource.Client.{Prefetch,StartTrace,EndTrace}`.
+  position. A FUSE read cannot be tied to a container, so a trace is
+  complete only if none of its layers was mounted when it started and no
+  Grant, Prefetch or StartTrace under another name (or a nameless refresh)
+  named one of them before it ended. At most 64 traces of 4096 frames each;
+  one nobody ends expires after 15 minutes, dropped on the next read, start
+  or end. A prefetch, named by its container, fetches its frames in order as
+  each layer mounts, through the same shared fetches as reads, skipping
+  cached frames and layers gone since; it stops on `StopPrefetch` or when a
+  layer has not mounted 30 s after it began. It takes the background slots
+  fills use, half of `--fetches`, so a container's reads always find a
+  fetch slot. At most 16 prefetches run, each for at most 5 minutes and a
+  quarter of the cache. Client:
+  `layersource.Client.{Prefetch,StopPrefetch,StartTrace,EndTrace}`.
 - Host protocol: `StartContainer.prefetch = 120` (`ImageTrace`),
   `StartContainer.record_trace = 121`, `HostMessage.startup_trace = 120`
   (`StartupTrace`).
 - Agent: before the pull, a start hands its prefetch to the snapshotter and
   starts a trace when asked; when the container reports ready, the agent
-  ends the trace and reports it if complete. An exit before ready ends it
-  unreported. Both are best effort: a refusal is logged, the start goes on.
+  ends the trace and reports it if complete and no other start on the host
+  used one of its layers meanwhile; a start sharing a layer with another
+  records no trace. An exit or failed start stops its prefetch and ends its
+  trace unreported. Both are best effort: a refusal is logged, the start
+  goes on.
 - Server: migration 0005 `image_traces`, one trace per workspace and
   reference, its use row's child (`image_reference_uses`), so the layer
   sweep's purge drops it. Starts carry the trace and ask for a new one when
@@ -64,10 +71,12 @@ Done on 2026-10-05 on `perf-lazy-prefetch`, draft PR #494 into `perf-plan`.
 
 - Owner tests: `TestTracesRecordFirstReadsInOrder`, `TestTracesAreBounded`,
   `TestPrefetchFetchesTracedFramesOnceMounted`,
-  `TestPrefetchesLeaveSlotsForReads` (frame cache, Garage),
+  `TestPrefetchesLeaveSlotsForReads`, `TestSharedLayersLeaveNoCompleteTrace`,
+  `TestFailedStartsNeverExhaustPrefetches` (frame cache, Garage),
   `TestTracedFramesPrefetchThroughMounts` (FUSE, root: a cold start with its
   trace makes exactly two index and three frame requests, and the same reads
-  then wait for no store), `TestStartupTracesReachTheServerOnceReady`
+  then wait for no store), `TestStartupTracesReachTheServerOnceReady`,
+  `TestSharedStartsReportNoTrace`, `TestFailedStartsStopTheirPrefetch`
   (agent), `TestStartupTracesStayWithTheirWorkspace` (hostsession, Postgres:
   the next start in the workspace carries the trace, another workspace's
   start does not, invalid and foreign traces are dropped). CI on #494 green,

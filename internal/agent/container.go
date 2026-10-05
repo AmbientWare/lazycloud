@@ -111,9 +111,6 @@ type container struct {
 	claiming   bool
 	// build marks an image build container, which has no link or slots.
 	isBuild bool
-	// readTrace is set while the snapshotter records the frames the
-	// container reads before it is ready.
-	readTrace bool
 
 	// gpus are the UUIDs of the devices the container holds, guarded by the
 	// agent's mutex.
@@ -316,15 +313,8 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 
 	began := time.Now()
-	// The snapshotter reads the image's layers only through these grants.
-	if err := c.a.layers.grant(ctx, spec.GetLayers()); err != nil {
+	if err := c.a.layers.start(ctx, c.log, c.id, spec); err != nil {
 		return err
-	}
-	c.a.layers.prefetch(ctx, c.log, spec)
-	if c.a.layers.startTrace(ctx, c.log, c.id, spec) {
-		c.mu.Lock()
-		c.readTrace = true
-		c.mu.Unlock()
 	}
 	pulled, err := c.a.images.ensureLazy(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	if err != nil {
@@ -542,11 +532,9 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 	c.exitedAt = time.Now()
 	c.running = map[string]struct{}{}
 	l := c.link
-	tracing := c.readTrace
-	c.readTrace = false
 	c.mu.Unlock()
-	if tracing {
-		c.a.goOwned(func(ctx context.Context) { c.a.layers.endTrace(ctx, c.a, c.log, c.id, false) })
+	if c.a.layers != nil {
+		c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })
 	}
 	c.cancelWork()
 	if l != nil {
@@ -764,11 +752,13 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	// pods run a command.
 	startClaims := !c.claiming && !c.stopping && c.http == nil && c.pod == nil
 	c.claiming = c.claiming || startClaims
-	tracing := c.readTrace
-	c.readTrace = false
 	c.mu.Unlock()
-	if tracing {
-		c.a.goOwned(func(ctx context.Context) { c.a.layers.endTrace(ctx, c.a, c.log, c.id, true) })
+	if changed && c.a.layers != nil {
+		c.a.goOwned(func(ctx context.Context) {
+			if trace := c.a.layers.ready(ctx, c.log, c.id); trace != nil {
+				c.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: c.id, Trace: trace}}})
+			}
+		})
 	}
 	c.signalSlotFree()
 	if changed {

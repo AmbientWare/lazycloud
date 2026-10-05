@@ -311,7 +311,7 @@ func TestLazyLayerServesItsFiles(t *testing.T) {
 		{hdr: tar.Header{Name: "opaque/.wh..wh..opq", Typeflag: tar.TypeReg, Mode: 0o644}},
 		{hdr: tar.Header{Name: "opaque/kept", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("kept")},
 	}))
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{l.grant}); err != nil {
 		t.Fatal(err)
 	}
 	name := s.pull(t, l, "")
@@ -423,7 +423,7 @@ func TestPullingAnUngrantedLayerFails(t *testing.T) {
 	}
 	expired := l.grant
 	expired.ExpiresAt = time.Now().Add(-time.Second)
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{expired}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{expired}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.sn.Prepare(t.Context(), "extract", "", snapshots.WithLabels(map[string]string{
@@ -445,7 +445,7 @@ func TestUnservableReadsAreIOErrors(t *testing.T) {
 		{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)},
 		{hdr: tar.Header{Name: "b", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)},
 	}))
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{l.grant}); err != nil {
 		t.Fatal(err)
 	}
 	dir := s.view(t, "view", s.pull(t, l, ""))
@@ -491,7 +491,7 @@ func TestUnusedLayersAreUnmounted(t *testing.T) {
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("a")}}))
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{l.grant}); err != nil {
 		t.Fatal(err)
 	}
 	name := s.pull(t, l, "")
@@ -536,7 +536,7 @@ func TestContainersStackLazyLayers(t *testing.T) {
 	s := serve(t, http.DefaultTransport)
 	base := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "base", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("base")}}))
 	top := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "top", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("top")}}))
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{base.grant, top.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{base.grant, top.grant}); err != nil {
 		t.Fatal(err)
 	}
 	lower := s.pull(t, base, "")
@@ -575,7 +575,7 @@ func TestStopLeavesLayersInUseMounted(t *testing.T) {
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("a")}}))
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{l.grant}); err != nil {
 		t.Fatal(err)
 	}
 	dir := s.view(t, "view", s.pull(t, l, ""))
@@ -712,7 +712,7 @@ func TestMountedLayersFillInTheBackground(t *testing.T) {
 	body := random(28 << 20)
 	small := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "small", Typeflag: tar.TypeReg, Mode: 0o644}, body: body[:12<<20]}}))
 	large := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "large", Typeflag: tar.TypeReg, Mode: 0o644}, body: body}}))
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{small.grant, large.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{small.grant, large.grant}); err != nil {
 		t.Fatal(err)
 	}
 	dir := s.view(t, "view", s.pull(t, small, ""))
@@ -812,17 +812,17 @@ func TestGrantsKeepTheLatestExpiry(t *testing.T) {
 	sooner := layersource.Grant{
 		Layer: l.index.Layer, IndexURL: "http://127.0.0.1:1/index", DataURL: "http://127.0.0.1:1/data", ExpiresAt: time.Now().Add(time.Minute),
 	}
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{l.grant}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{sooner}); err != nil {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{sooner}); err != nil {
 		t.Fatal(err)
 	}
 	s.pull(t, l, "")
 
 	bad := other.grant
 	bad.Layer = "sha256:short"
-	if err := s.sources.Grant(t.Context(), []layersource.Grant{other.grant, bad}); status.Code(errors.Unwrap(err)) != codes.InvalidArgument {
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{other.grant, bad}); status.Code(errors.Unwrap(err)) != codes.InvalidArgument {
 		t.Fatalf("a call with a bad digest: %v", err)
 	}
 	_, err := s.sn.Prepare(t.Context(), "extract", "", snapshots.WithLabels(map[string]string{

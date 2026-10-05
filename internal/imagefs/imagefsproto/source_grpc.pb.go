@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	LayerSources_Grant_FullMethodName      = "/lazycloud.imagefs.v1.LayerSources/Grant"
-	LayerSources_Prefetch_FullMethodName   = "/lazycloud.imagefs.v1.LayerSources/Prefetch"
-	LayerSources_StartTrace_FullMethodName = "/lazycloud.imagefs.v1.LayerSources/StartTrace"
-	LayerSources_EndTrace_FullMethodName   = "/lazycloud.imagefs.v1.LayerSources/EndTrace"
+	LayerSources_Grant_FullMethodName        = "/lazycloud.imagefs.v1.LayerSources/Grant"
+	LayerSources_Prefetch_FullMethodName     = "/lazycloud.imagefs.v1.LayerSources/Prefetch"
+	LayerSources_StopPrefetch_FullMethodName = "/lazycloud.imagefs.v1.LayerSources/StopPrefetch"
+	LayerSources_StartTrace_FullMethodName   = "/lazycloud.imagefs.v1.LayerSources/StartTrace"
+	LayerSources_EndTrace_FullMethodName     = "/lazycloud.imagefs.v1.LayerSources/EndTrace"
 )
 
 // LayerSourcesClient is the client API for LayerSources service.
@@ -34,12 +35,19 @@ const (
 // every layer of an image before it pulls the image, and again before the
 // URLs expire for as long as a container on the host uses the layer.
 type LayerSourcesClient interface {
+	// A FUSE read cannot be told apart by container, so a Grant, Prefetch or
+	// StartTrace naming a layer of a running trace under another name, or no
+	// name, marks that trace incomplete.
 	Grant(ctx context.Context, in *GrantRequest, opts ...grpc.CallOption) (*GrantResponse, error)
 	// Prefetch fetches the frames an image's earlier containers read at
 	// startup into the host's frame cache, in the order they were read, as
 	// each layer mounts. It returns at once; the fetches run in the background
-	// with bounded concurrency, behind the containers' own reads.
+	// with bounded concurrency, behind the containers' own reads, until done,
+	// StopPrefetch, or a layer not mounted soon after. A prefetch with the
+	// name of a running one replaces it.
 	Prefetch(ctx context.Context, in *PrefetchRequest, opts ...grpc.CallOption) (*PrefetchResponse, error)
+	// StopPrefetch ends the named prefetch, if it runs.
+	StopPrefetch(ctx context.Context, in *StopPrefetchRequest, opts ...grpc.CallOption) (*StopPrefetchResponse, error)
 	// StartTrace records which frames of the named layers are read through
 	// their mounts until EndTrace, or until it expires. A trace with the name
 	// of a running one replaces it.
@@ -77,6 +85,16 @@ func (c *layerSourcesClient) Prefetch(ctx context.Context, in *PrefetchRequest, 
 	return out, nil
 }
 
+func (c *layerSourcesClient) StopPrefetch(ctx context.Context, in *StopPrefetchRequest, opts ...grpc.CallOption) (*StopPrefetchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopPrefetchResponse)
+	err := c.cc.Invoke(ctx, LayerSources_StopPrefetch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *layerSourcesClient) StartTrace(ctx context.Context, in *StartTraceRequest, opts ...grpc.CallOption) (*StartTraceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StartTraceResponse)
@@ -106,12 +124,19 @@ func (c *layerSourcesClient) EndTrace(ctx context.Context, in *EndTraceRequest, 
 // every layer of an image before it pulls the image, and again before the
 // URLs expire for as long as a container on the host uses the layer.
 type LayerSourcesServer interface {
+	// A FUSE read cannot be told apart by container, so a Grant, Prefetch or
+	// StartTrace naming a layer of a running trace under another name, or no
+	// name, marks that trace incomplete.
 	Grant(context.Context, *GrantRequest) (*GrantResponse, error)
 	// Prefetch fetches the frames an image's earlier containers read at
 	// startup into the host's frame cache, in the order they were read, as
 	// each layer mounts. It returns at once; the fetches run in the background
-	// with bounded concurrency, behind the containers' own reads.
+	// with bounded concurrency, behind the containers' own reads, until done,
+	// StopPrefetch, or a layer not mounted soon after. A prefetch with the
+	// name of a running one replaces it.
 	Prefetch(context.Context, *PrefetchRequest) (*PrefetchResponse, error)
+	// StopPrefetch ends the named prefetch, if it runs.
+	StopPrefetch(context.Context, *StopPrefetchRequest) (*StopPrefetchResponse, error)
 	// StartTrace records which frames of the named layers are read through
 	// their mounts until EndTrace, or until it expires. A trace with the name
 	// of a running one replaces it.
@@ -134,6 +159,9 @@ func (UnimplementedLayerSourcesServer) Grant(context.Context, *GrantRequest) (*G
 }
 func (UnimplementedLayerSourcesServer) Prefetch(context.Context, *PrefetchRequest) (*PrefetchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Prefetch not implemented")
+}
+func (UnimplementedLayerSourcesServer) StopPrefetch(context.Context, *StopPrefetchRequest) (*StopPrefetchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopPrefetch not implemented")
 }
 func (UnimplementedLayerSourcesServer) StartTrace(context.Context, *StartTraceRequest) (*StartTraceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartTrace not implemented")
@@ -198,6 +226,24 @@ func _LayerSources_Prefetch_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LayerSources_StopPrefetch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopPrefetchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LayerSourcesServer).StopPrefetch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LayerSources_StopPrefetch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LayerSourcesServer).StopPrefetch(ctx, req.(*StopPrefetchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _LayerSources_StartTrace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StartTraceRequest)
 	if err := dec(in); err != nil {
@@ -248,6 +294,10 @@ var LayerSources_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Prefetch",
 			Handler:    _LayerSources_Prefetch_Handler,
+		},
+		{
+			MethodName: "StopPrefetch",
+			Handler:    _LayerSources_StopPrefetch_Handler,
 		},
 		{
 			MethodName: "StartTrace",

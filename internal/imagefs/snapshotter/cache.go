@@ -67,10 +67,11 @@ type frameCache struct {
 	filling chan struct{}
 	// traces records the frames read through mounts for the agent.
 	traces *tracer
-	// prefetching bounds the prefetches running, and background waits for
-	// them.
-	prefetching chan struct{}
-	background  sync.WaitGroup
+	// prefetches holds the running prefetches by name, at most
+	// maxPrefetches, and background waits for them.
+	pmu        sync.Mutex
+	prefetches map[string]*prefetchRun
+	background sync.WaitGroup
 	// life bounds every fetch: a fetch is shared, so no one reader's or
 	// fill's context may end it.
 	life context.Context
@@ -104,16 +105,16 @@ func newFrameCache(life context.Context, dir string, limit int64, fetches int, g
 	}
 	return &frameCache{
 		dir: dir, limit: limit, grants: g, metrics: m, log: log,
-		slots:       make(chan struct{}, fetches),
-		filling:     make(chan struct{}, max(1, fetches/2)),
-		traces:      newTracer(time.Now),
-		prefetching: make(chan struct{}, maxPrefetches),
-		life:        life,
-		lru:         list.New(),
-		frames:      make(map[frameKey]*list.Element),
-		mounted:     make(map[imagefs.Digest]int),
-		live:        make(map[imagefs.Digest]*layer),
-		mountWake:   make(chan struct{}),
+		slots:      make(chan struct{}, fetches),
+		filling:    make(chan struct{}, max(1, fetches/2)),
+		traces:     newTracer(traceLife),
+		prefetches: make(map[string]*prefetchRun),
+		life:       life,
+		lru:        list.New(),
+		frames:     make(map[frameKey]*list.Element),
+		mounted:    make(map[imagefs.Digest]int),
+		live:       make(map[imagefs.Digest]*layer),
+		mountWake:  make(chan struct{}),
 	}, nil
 }
 

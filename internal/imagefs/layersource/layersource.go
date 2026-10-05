@@ -55,9 +55,10 @@ func Dial(socket string) (*Client, error) {
 }
 
 // Grant gives the snapshotter grants. Each replaces its layer's current
-// grant unless that expires later.
-func (c *Client) Grant(ctx context.Context, grants []Grant) error {
-	request := &imagefsproto.GrantRequest{Layers: make([]*imagefsproto.LayerGrant, len(grants))}
+// grant unless that expires later. name is the container whose start they
+// are for, empty for refreshes.
+func (c *Client) Grant(ctx context.Context, name string, grants []Grant) error {
+	request := &imagefsproto.GrantRequest{Name: name, Layers: make([]*imagefsproto.LayerGrant, len(grants))}
 	for i, g := range grants {
 		request.Layers[i] = &imagefsproto.LayerGrant{
 			DiffId:    string(g.Layer),
@@ -94,10 +95,18 @@ func digestsOut(layers []imagefs.Digest) []string {
 }
 
 // Prefetch has the snapshotter fetch reads of layers, the image's layers
-// base first, in the background as they mount.
-func (c *Client) Prefetch(ctx context.Context, layers []imagefs.Digest, reads []FrameRead) error {
-	if _, err := c.sources.Prefetch(ctx, &imagefsproto.PrefetchRequest{Layers: digestsOut(layers), Reads: readsOut(reads)}); err != nil {
+// base first, in the background as they mount, until StopPrefetch of name.
+func (c *Client) Prefetch(ctx context.Context, name string, layers []imagefs.Digest, reads []FrameRead) error {
+	if _, err := c.sources.Prefetch(ctx, &imagefsproto.PrefetchRequest{Name: name, Layers: digestsOut(layers), Reads: readsOut(reads)}); err != nil {
 		return fmt.Errorf("prefetch layers: %w", err)
+	}
+	return nil
+}
+
+// StopPrefetch ends the prefetch name, if it runs.
+func (c *Client) StopPrefetch(ctx context.Context, name string) error {
+	if _, err := c.sources.StopPrefetch(ctx, &imagefsproto.StopPrefetchRequest{Name: name}); err != nil {
+		return fmt.Errorf("stop a prefetch: %w", err)
 	}
 	return nil
 }

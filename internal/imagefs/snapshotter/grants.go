@@ -3,7 +3,9 @@ package snapshotter
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -103,6 +105,7 @@ func (s layerSources) Grant(_ context.Context, request *imagefsproto.GrantReques
 		layers[layer] = next
 	}
 	s.grants.put(layers)
+	s.frames.traces.claim(request.GetName(), slices.Collect(maps.Keys(layers)))
 	return &imagefsproto.GrantResponse{}, nil
 }
 

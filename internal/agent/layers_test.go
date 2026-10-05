@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"slices"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 // snapshotterServer is the snapshotter's side of LayerSources: it records
@@ -32,6 +34,7 @@ type snapshotterServer struct {
 	prefetches []*imagefsproto.PrefetchRequest
 	traces     map[string][]string
 	traced     []*imagefsproto.FrameRead
+	stopped    []string
 }
 
 func (s *snapshotterServer) Prefetch(_ context.Context, req *imagefsproto.PrefetchRequest) (*imagefsproto.PrefetchResponse, error) {
@@ -39,6 +42,19 @@ func (s *snapshotterServer) Prefetch(_ context.Context, req *imagefsproto.Prefet
 	defer s.mu.Unlock()
 	s.prefetches = append(s.prefetches, req)
 	return &imagefsproto.PrefetchResponse{}, nil
+}
+
+func (s *snapshotterServer) StopPrefetch(_ context.Context, req *imagefsproto.StopPrefetchRequest) (*imagefsproto.StopPrefetchResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = append(s.stopped, req.GetName())
+	return &imagefsproto.StopPrefetchResponse{}, nil
+}
+
+func (s *snapshotterServer) prefetchStopped(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.stopped, name)
 }
 
 func (s *snapshotterServer) StartTrace(_ context.Context, req *imagefsproto.StartTraceRequest) (*imagefsproto.StartTraceResponse, error) {
@@ -202,5 +218,84 @@ func TestStartupTracesReachTheServerOnceReady(t *testing.T) {
 	reported := s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
 	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) != 2 || reported.GetTrace().GetReads()[0].GetFrame() != 7 {
 		t.Fatalf("the host reported %v", reported)
+	}
+}
+
+// startingWith is a start of a container recording its trace, with grants
+// for layers.
+func startingWith(layers ...string) *hostproto.StartContainer {
+	spec := &hostproto.StartContainer{RecordTrace: true, Prefetch: &hostproto.ImageTrace{Reads: []*hostproto.FrameRead{{}}}}
+	for _, l := range layers {
+		spec.Layers = append(spec.Layers, layerGrant(l, time.Now().Add(time.Hour)))
+	}
+	return spec
+}
+
+// TestSharedStartsReportNoTrace: the snapshotter cannot tell apart the
+// reads of two starts sharing a layer, so neither reports a trace, and a
+// start that ends stops its prefetch and trace; a start alone on its
+// layers reports its trace.
+func TestSharedStartsReportNoTrace(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "snap.sock")
+	snap := serveSnapshotter(t, socket)
+	snap.traced = []*imagefsproto.FrameRead{{Layer: 0, Frame: 1}}
+	client, err := layersource.Dial(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	l := newLayerSources(client)
+	log := slog.New(slog.DiscardHandler)
+	digest := func() string { return "sha256:" + uuid.NewString() }
+	base := digest()
+
+	for _, c := range []string{"c1", "c2"} {
+		if err := l.start(t.Context(), log, c, startingWith(base, digest())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []string{"c1", "c2"} {
+		if trace := l.ready(t.Context(), log, c); trace != nil {
+			t.Fatalf("%s reported a trace though another start shared its base layer", c)
+		}
+	}
+	l.release(t.Context(), log, "c1")
+	snap.mu.Lock()
+	_, tracing := snap.traces["c1"]
+	snap.mu.Unlock()
+	if !snap.prefetchStopped("c1") || tracing {
+		t.Fatal("an ended start left its prefetch or trace running")
+	}
+
+	if err := l.start(t.Context(), log, "alone", startingWith(digest())); err != nil {
+		t.Fatal(err)
+	}
+	if trace := l.ready(t.Context(), log, "alone"); len(trace.GetReads()) != 1 {
+		t.Fatalf("a start alone on its layers reported %v", trace)
+	}
+}
+
+// TestFailedStartsStopTheirPrefetch: a start that fails after its prefetch
+// began stops it, so failed starts never hold the snapshotter's prefetches.
+func TestFailedStartsStopTheirPrefetch(t *testing.T) {
+	e := newEnv(t)
+	socket := filepath.Join(e.stateDir, "snap.sock")
+	snap := serveSnapshotter(t, socket)
+	e.startAgent(func(c *Config) { c.Snapshotter = socket })
+	s := e.session()
+
+	start := e.startCommand("app:handle", 1)
+	id := start.GetStart().GetContainerId()
+	start.GetStart().Image = "127.0.0.1:1/missing/image:latest"
+	start.GetStart().Layers = []*hostproto.LayerGrant{layerGrant("sha256:"+uuid.NewString(), time.Now().Add(time.Hour))}
+	start.GetStart().Prefetch = &hostproto.ImageTrace{Reads: []*hostproto.FrameRead{{}}}
+	s.send(t, start)
+	if report := s.phase(t, id, exited); report.GetExit().GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED {
+		t.Fatalf("the start ended %v", report.GetExit())
+	}
+	for deadline := time.Now().Add(10 * time.Second); !snap.prefetchStopped(id); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a failed start left its prefetch running")
+		}
 	}
 }

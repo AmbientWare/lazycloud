@@ -11,12 +11,19 @@ option go_package = "github.com/AmbientWare/lazycloud/internal/imagefs/imagefspr
 // every layer of an image before it pulls the image, and again before the
 // URLs expire for as long as a container on the host uses the layer.
 service LayerSources {
+  // A FUSE read cannot be told apart by container, so a Grant, Prefetch or
+  // StartTrace naming a layer of a running trace under another name, or no
+  // name, marks that trace incomplete.
   rpc Grant(GrantRequest) returns (GrantResponse);
   // Prefetch fetches the frames an image's earlier containers read at
   // startup into the host's frame cache, in the order they were read, as
   // each layer mounts. It returns at once; the fetches run in the background
-  // with bounded concurrency, behind the containers' own reads.
+  // with bounded concurrency, behind the containers' own reads, until done,
+  // StopPrefetch, or a layer not mounted soon after. A prefetch with the
+  // name of a running one replaces it.
   rpc Prefetch(PrefetchRequest) returns (PrefetchResponse);
+  // StopPrefetch ends the named prefetch, if it runs.
+  rpc StopPrefetch(StopPrefetchRequest) returns (StopPrefetchResponse);
   // StartTrace records which frames of the named layers are read through
   // their mounts until EndTrace, or until it expires. A trace with the name
   // of a running one replaces it.
@@ -42,6 +49,8 @@ message LayerGrant {
 
 message GrantRequest {
   repeated LayerGrant layers = 1;
+  // The container whose start the grants are for; empty for refreshes.
+  string name = 2;
 }
 
 message GrantResponse {}
@@ -58,9 +67,17 @@ message PrefetchRequest {
   // when its frames are fetched.
   repeated string layers = 1;
   repeated FrameRead reads = 2;
+  // Names the prefetch, such as the container it starts.
+  string name = 3;
 }
 
 message PrefetchResponse {}
+
+message StopPrefetchRequest {
+  string name = 1;
+}
+
+message StopPrefetchResponse {}
 
 message StartTraceRequest {
   // Names the trace, such as the container it covers.
