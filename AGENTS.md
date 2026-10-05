@@ -160,5 +160,6 @@ constraints. Keep task plans and progress with the task, not in the tree.
 - When delegating, agree contracts first, then assign disjoint owners and files;
   one integrator owns shared definitions and root build files. Verify returned
   work and integrated evidence.
+- Plan work that spans owners, PRs or parallel agents with PLANNING.md.
 - Finish the requested scope, then stop. No commit attribution trailers.
   Report outcomes, blockers and unverified boundaries briefly.
