@@ -114,3 +114,47 @@ select t.status, r.encoding, r.data, r.display
 from tasks t
 left join task_results r on r.task_id = t.id
 where t.id = @id and t.workspace_id = @workspace_id;
+
+-- name: FirstUnknownTask :one
+-- The first of ids, in order, that names no task in the workspace.
+select req.id::uuid as id
+from unnest(@ids::uuid[]) with ordinality as req(id, n)
+where not exists (select 1 from tasks t where t.id = req.id and t.workspace_id = @workspace_id)
+order by req.n
+limit 1;
+
+-- name: FinishedTasks :many
+-- The finished tasks among ids, in request order. A result inlines when its
+-- size as the API encodes it (base64 for cloudpickle, plus the display) is
+-- at most @result_max and the inlined sizes so far stay within @total_max;
+-- only those rows read the result bytes.
+with finished as (
+    select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts,
+           t.parent_task_id, t.root_task_id, t.available_at, t.created_at, t.started_at,
+           t.finished_at, t.failure, t.scheduled_for, res.encoding,
+           case res.encoding when 'cloudpickle' then (octet_length(res.data) + 2) / 3 * 4
+                else octet_length(res.data) end
+             + coalesce(octet_length(res.display::text), 0) as result_size
+    from unnest(@ids::uuid[]) with ordinality as req(id, n)
+    join tasks t on t.id = req.id
+    left join task_results res on res.task_id = t.id
+    where t.workspace_id = @workspace_id and t.status in ('succeeded', 'failed', 'cancelled')
+), budget as (
+    select f.*,
+           f.result_size <= @result_max::bigint
+             and sum(case when f.result_size <= @result_max::bigint then f.result_size else 0 end)
+                   over (order by f.n) <= @total_max::bigint as inline
+    from finished f
+)
+select b.id, a.name as app_name, w.name as function_name, b.release_id, r.version, b.status,
+       b.attempt_count, b.max_attempts, b.parent_task_id, b.root_task_id, b.available_at,
+       b.created_at, b.started_at, b.finished_at, b.failure, b.scheduled_for,
+       array(select at.container_id from attempts at
+             where at.task_id = b.id and at.number = b.attempt_count)::uuid[] as container_ids,
+       b.encoding, coalesce(b.inline, false)::bool as inline, d.data, d.display
+from budget b
+join workloads w on w.id = b.workload_id
+join apps a on a.id = w.app_id
+join releases r on r.id = b.release_id
+left join task_results d on b.inline and d.task_id = b.id
+order by b.n;

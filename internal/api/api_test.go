@@ -398,6 +398,53 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 	}
 }
 
+func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
+	e := newEnv(t)
+	e.deploy()
+	var submitted apitypes.SubmitTasksResponse
+	raw := json.RawMessage(`{"args": [], "kwargs": {}}`)
+	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/tasks", e.owner,
+		apitypes.SubmitTasksRequest{Inputs: []apitypes.TaskInput{{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}}},
+		&submitted); status != 201 {
+		t.Fatalf("submit: %d", status)
+	}
+	id := submitted.Tasks[0].Id
+	wait := func(token string, body any, out any) int {
+		return e.do("POST", "/v1/workspaces/acme/tasks/wait", token, body, out)
+	}
+	var apiErr apitypes.Error
+	if status := wait(e.outsider, apitypes.WaitTasksRequest{TaskIds: []uuid.UUID{id}}, &apiErr); status != 403 {
+		t.Fatalf("outsider: %d %+v", status, apiErr)
+	}
+	tooMany := make([]uuid.UUID, 1001)
+	for n := range tooMany {
+		tooMany[n] = uuid.New()
+	}
+	sixtyOne := 61
+	for name, body := range map[string]apitypes.WaitTasksRequest{
+		"no ids": {TaskIds: []uuid.UUID{}}, "1001 ids": {TaskIds: tooMany}, "repeated id": {TaskIds: []uuid.UUID{id, id}},
+		"61 seconds": {TaskIds: []uuid.UUID{id}, WaitSeconds: &sixtyOne},
+	} {
+		if status := wait(e.owner, body, &apiErr); status != 400 || apiErr.Code != apitypes.InvalidRequest {
+			t.Fatalf("%s: %d %+v", name, status, apiErr)
+		}
+	}
+	unknown := uuid.New()
+	if status := wait(e.owner, apitypes.WaitTasksRequest{TaskIds: []uuid.UUID{id, unknown}}, &apiErr); status != 404 ||
+		apiErr.Code != apitypes.NotFound || !strings.Contains(apiErr.Message, unknown.String()) {
+		t.Fatalf("unknown task: %d %+v", status, apiErr)
+	}
+
+	go e.runOnHost("5500")
+	thirty := 30
+	var got apitypes.WaitTasksResponse
+	if status := wait(e.owner, apitypes.WaitTasksRequest{TaskIds: []uuid.UUID{id}, WaitSeconds: &thirty}, &got); status != 200 ||
+		len(got.Tasks) != 1 || got.Tasks[0].Task.Status != apitypes.TaskStatusSucceeded || got.Tasks[0].ResultOmitted ||
+		got.Tasks[0].Result == nil || string(*got.Tasks[0].Result.Value) != "5500" {
+		t.Fatalf("wait: %d %+v", status, got)
+	}
+}
+
 // runEvents posts a RunTask request and returns the response's status and
 // content type with a reader of its events.
 func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (int, string, func() (apitypes.TaskRunEvent, bool)) {

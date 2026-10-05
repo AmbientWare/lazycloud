@@ -12,6 +12,142 @@ import (
 	"github.com/google/uuid"
 )
 
+const finishedTasks = `-- name: FinishedTasks :many
+with finished as (
+    select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts,
+           t.parent_task_id, t.root_task_id, t.available_at, t.created_at, t.started_at,
+           t.finished_at, t.failure, t.scheduled_for, res.encoding,
+           case res.encoding when 'cloudpickle' then (octet_length(res.data) + 2) / 3 * 4
+                else octet_length(res.data) end
+             + coalesce(octet_length(res.display::text), 0) as result_size
+    from unnest($1::uuid[]) with ordinality as req(id, n)
+    join tasks t on t.id = req.id
+    left join task_results res on res.task_id = t.id
+    where t.workspace_id = $2 and t.status in ('succeeded', 'failed', 'cancelled')
+), budget as (
+    select f.n, f.id, f.workload_id, f.release_id, f.status, f.attempt_count, f.max_attempts, f.parent_task_id, f.root_task_id, f.available_at, f.created_at, f.started_at, f.finished_at, f.failure, f.scheduled_for, f.encoding, f.result_size,
+           f.result_size <= $3::bigint
+             and sum(case when f.result_size <= $3::bigint then f.result_size else 0 end)
+                   over (order by f.n) <= $4::bigint as inline
+    from finished f
+)
+select b.id, a.name as app_name, w.name as function_name, b.release_id, r.version, b.status,
+       b.attempt_count, b.max_attempts, b.parent_task_id, b.root_task_id, b.available_at,
+       b.created_at, b.started_at, b.finished_at, b.failure, b.scheduled_for,
+       array(select at.container_id from attempts at
+             where at.task_id = b.id and at.number = b.attempt_count)::uuid[] as container_ids,
+       b.encoding, coalesce(b.inline, false)::bool as inline, d.data, d.display
+from budget b
+join workloads w on w.id = b.workload_id
+join apps a on a.id = w.app_id
+join releases r on r.id = b.release_id
+left join task_results d on b.inline and d.task_id = b.id
+order by b.n
+`
+
+type FinishedTasksParams struct {
+	Ids         []uuid.UUID
+	WorkspaceID uuid.UUID
+	ResultMax   int64
+	TotalMax    int64
+}
+
+type FinishedTasksRow struct {
+	ID           uuid.UUID
+	AppName      string
+	FunctionName string
+	ReleaseID    uuid.UUID
+	Version      *int32
+	Status       string
+	AttemptCount int32
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   *uuid.UUID
+	AvailableAt  time.Time
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+	Failure      []byte
+	ScheduledFor *time.Time
+	ContainerIds []uuid.UUID
+	Encoding     *string
+	Inline       bool
+	Data         []byte
+	Display      []byte
+}
+
+// The finished tasks among ids, in request order. A result inlines when its
+// size as the API encodes it (base64 for cloudpickle, plus the display) is
+// at most @result_max and the inlined sizes so far stay within @total_max;
+// only those rows read the result bytes.
+func (q *Queries) FinishedTasks(ctx context.Context, arg FinishedTasksParams) ([]FinishedTasksRow, error) {
+	rows, err := q.db.Query(ctx, finishedTasks,
+		arg.Ids,
+		arg.WorkspaceID,
+		arg.ResultMax,
+		arg.TotalMax,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FinishedTasksRow
+	for rows.Next() {
+		var i FinishedTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.FunctionName,
+			&i.ReleaseID,
+			&i.Version,
+			&i.Status,
+			&i.AttemptCount,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.AvailableAt,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Failure,
+			&i.ScheduledFor,
+			&i.ContainerIds,
+			&i.Encoding,
+			&i.Inline,
+			&i.Data,
+			&i.Display,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const firstUnknownTask = `-- name: FirstUnknownTask :one
+select req.id::uuid as id
+from unnest($1::uuid[]) with ordinality as req(id, n)
+where not exists (select 1 from tasks t where t.id = req.id and t.workspace_id = $2)
+order by req.n
+limit 1
+`
+
+type FirstUnknownTaskParams struct {
+	Ids         []uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+// The first of ids, in order, that names no task in the workspace.
+func (q *Queries) FirstUnknownTask(ctx context.Context, arg FirstUnknownTaskParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, firstUnknownTask, arg.Ids, arg.WorkspaceID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const listAppTasks = `-- name: ListAppTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,

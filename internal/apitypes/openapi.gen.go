@@ -3457,6 +3457,16 @@ type FindInFilesRequest struct {
 	Pattern string `json:"pattern"`
 }
 
+// FinishedTask A finished task with the value it returned. A result of at most 256 KiB comes inline while the response's results stay within 4 MiB; any other result is left out with `result_omitted` set, and getTaskResult returns it.
+type FinishedTask struct {
+	// Result A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
+	Result *Payload `json:"result,omitempty"`
+
+	// ResultOmitted The task succeeded and its result is not inline.
+	ResultOmitted bool `json:"result_omitted"`
+	Task          Task `json:"task"`
+}
+
 // FleetCapacity defines model for FleetCapacity.
 type FleetCapacity struct {
 	CpuMillicores int64 `json:"cpu_millicores"`
@@ -5278,6 +5288,19 @@ type VolumePage struct {
 // VolumeRelativePath A path below the volume root; `.` or empty is the root, `..` is refused.
 type VolumeRelativePath = string
 
+// WaitTasksRequest defines model for WaitTasksRequest.
+type WaitTasksRequest struct {
+	TaskIds []openapi_types.UUID `json:"task_ids"`
+
+	// WaitSeconds Hold the request until a listed task finishes or this many seconds pass.
+	WaitSeconds *int `json:"wait_seconds,omitempty"`
+}
+
+// WaitTasksResponse defines model for WaitTasksResponse.
+type WaitTasksResponse struct {
+	Tasks []FinishedTask `json:"tasks"`
+}
+
 // Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.
 type Workload struct {
 	App       AppName   `json:"app"`
@@ -6316,6 +6339,9 @@ type CreateSshCertificateJSONRequestBody = SshCertificateRequest
 
 // StopTasksJSONRequestBody defines body for StopTasks for application/json ContentType.
 type StopTasksJSONRequestBody = StopTasksRequest
+
+// WaitTasksJSONRequestBody defines body for WaitTasks for application/json ContentType.
+type WaitTasksJSONRequestBody = WaitTasksRequest
 
 // CreateVolumeJSONRequestBody defines body for CreateVolume for application/json ContentType.
 type CreateVolumeJSONRequestBody = CreateVolumeRequest

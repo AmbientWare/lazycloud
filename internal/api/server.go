@@ -167,6 +167,36 @@ func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObje
 	return GetTaskResult200JSONResponse(payloadOut(result)), nil
 }
 
+// WaitTasks returns the listed tasks that have finished, waiting until one
+// has when asked. The schema bounds the ids and the wait.
+func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
+	ws, err := s.workspace(ctx, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]execution.TaskID, len(req.Body.TaskIds))
+	for n, id := range req.Body.TaskIds {
+		ids[n] = execution.TaskID(id)
+	}
+	wait := time.Duration(0)
+	if req.Body.WaitSeconds != nil {
+		wait = time.Duration(*req.Body.WaitSeconds) * time.Second
+	}
+	finished, err := s.owners.Execution.WaitTasks(ctx, s.owners.Listener, ws.ID, ids, wait)
+	if err != nil {
+		return nil, err
+	}
+	out := WaitTasks200JSONResponse{Tasks: make([]apitypes.FinishedTask, len(finished))}
+	for n, f := range finished {
+		out.Tasks[n] = apitypes.FinishedTask{Task: taskOut(f.Task), ResultOmitted: f.ResultOmitted}
+		if f.Result != nil {
+			result := payloadOut(*f.Result)
+			out.Tasks[n].Result = &result
+		}
+	}
+	return out, nil
+}
+
 // CancelTask cancels a queued or running task.
 func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (CancelTaskResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)

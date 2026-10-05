@@ -314,6 +314,18 @@ class RichDisplay(APIModel):
     html: Annotated[str | None, Field(max_length=262144)] = None
 
 
+class WaitTasksRequest(APIModel):
+    task_ids: Annotated[list[UUID], Field(max_length=1000, min_length=1)]
+    wait_seconds: Annotated[
+        int,
+        Field(
+            description="Hold the request until a listed task finishes or this many seconds pass.",
+            ge=0,
+            le=60,
+        ),
+    ] = 0
+
+
 class TaskStatus(str, Enum):
     queued = "queued"
     running = "running"
@@ -3459,3 +3471,15 @@ class TaskRunEvent(APIModel):
 
 class SubmitTasksResponse(APIModel):
     tasks: list[Task]
+
+
+class FinishedTask(APIModel):
+    task: Task
+    result: Payload | None = None
+    result_omitted: Annotated[
+        bool, Field(description="The task succeeded and its result is not inline.")
+    ]
+
+
+class WaitTasksResponse(APIModel):
+    tasks: list[FinishedTask]

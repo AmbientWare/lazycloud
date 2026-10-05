@@ -83,6 +83,116 @@ func (e *Execution) GetTask(ctx context.Context, listener *database.Listener, wo
 	}
 }
 
+// TaskNotFoundError names a task the workspace does not have. It matches
+// ErrNotFound.
+type TaskNotFoundError struct {
+	Task TaskID
+}
+
+func (e *TaskNotFoundError) Error() string {
+	return fmt.Sprintf("task %s is not in the workspace", e.Task)
+}
+
+func (e *TaskNotFoundError) Unwrap() error { return ErrNotFound }
+
+// FinishedTask is a finished task with its result when the result comes
+// inline.
+type FinishedTask struct {
+	Task   Task
+	Result *Payload
+	// ResultOmitted means the task has a result that did not fit the inline
+	// budget; TaskResult reads it.
+	ResultOmitted bool
+}
+
+const (
+	// maxInlineResult bounds one result inlined by WaitTasks, as the API
+	// encodes it.
+	maxInlineResult = 256 << 10
+	// maxInlineResults bounds all results inlined by one WaitTasks call.
+	maxInlineResults = 4 << 20
+)
+
+// WaitTasks returns the finished tasks among ids, in the order of ids. With
+// wait above zero it holds until at least one has finished, wait passes or
+// ctx ends, and returns none when none finished. Every id must name a task in
+// workspace; the first that does not fails the call with a
+// *TaskNotFoundError.
+func (e *Execution) WaitTasks(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, ids []TaskID, wait time.Duration) ([]FinishedTask, error) {
+	keys := make([]uuid.UUID, len(ids))
+	for n, id := range ids {
+		keys[n] = uuid.UUID(id)
+	}
+	var wake <-chan struct{}
+	if wait > 0 {
+		// Subscribe before the first read so a finish between a read and
+		// the wait still wakes this call.
+		var cancel func()
+		wake, cancel = listener.Subscribe(database.ChannelTask, uuidStrings(keys)...)
+		defer cancel()
+	}
+	if err := e.checkTasksExist(ctx, workspace, keys); err != nil {
+		return nil, err
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		finished, err := e.finishedTasks(ctx, workspace, keys)
+		if err != nil || len(finished) > 0 || wait <= 0 {
+			return finished, err
+		}
+		select {
+		case <-wake:
+		case <-timer.C:
+			return finished, nil
+		case <-ctx.Done():
+			return finished, nil
+		}
+	}
+}
+
+func (e *Execution) checkTasksExist(ctx context.Context, workspace identity.WorkspaceID, ids []uuid.UUID) error {
+	unknown, err := e.queries.FirstUnknownTask(ctx, FirstUnknownTaskParams{Ids: ids, WorkspaceID: uuid.UUID(workspace)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check tasks: %w", err)
+	}
+	return &TaskNotFoundError{Task: TaskID(unknown)}
+}
+
+func (e *Execution) finishedTasks(ctx context.Context, workspace identity.WorkspaceID, ids []uuid.UUID) ([]FinishedTask, error) {
+	rows, err := e.queries.FinishedTasks(ctx, FinishedTasksParams{
+		Ids: ids, WorkspaceID: uuid.UUID(workspace), ResultMax: maxInlineResult, TotalMax: maxInlineResults,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read finished tasks: %w", err)
+	}
+	finished := make([]FinishedTask, len(rows))
+	for n, row := range rows {
+		task, err := taskFrom(TaskViewRow{
+			ID: row.ID, AppName: row.AppName, FunctionName: row.FunctionName, ReleaseID: row.ReleaseID,
+			Version: row.Version, Status: row.Status, AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+			ParentTaskID: row.ParentTaskID, RootTaskID: row.RootTaskID, AvailableAt: row.AvailableAt,
+			CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
+			Failure: row.Failure, ScheduledFor: row.ScheduledFor, ContainerIds: row.ContainerIds,
+		})
+		if err != nil {
+			return nil, err
+		}
+		finished[n].Task = task
+		switch {
+		case row.Encoding == nil:
+		case row.Inline:
+			finished[n].Result = &Payload{Encoding: Encoding(*row.Encoding), Data: row.Data, Display: row.Display}
+		default:
+			finished[n].ResultOmitted = true
+		}
+	}
+	return finished, nil
+}
+
 func (e *Execution) readTask(ctx context.Context, workspace identity.WorkspaceID, id TaskID) (Task, error) {
 	row, err := e.queries.TaskView(ctx, TaskViewParams{ID: uuid.UUID(id), WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
