@@ -1,6 +1,6 @@
-// Package layersource is the agent's client of the snapshotter's
-// LayerSources service: it hands the snapshotter the presigned read URLs of
-// the layers the host may mount.
+// Package layersource is the agent's side of the host's snapshotter: the
+// client of its LayerSources service, which hands it the presigned read URLs
+// of the layers the host may mount, and the names a lazy pull uses.
 package layersource
 
 import (
@@ -16,9 +16,19 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
-// Socket is where the snapshotter serves containerd's snapshotter API and
-// LayerSources on a host.
-const Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
+const (
+	// Socket is where the snapshotter serves containerd's snapshotter API
+	// and LayerSources on a host.
+	Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
+	// Snapshotter is the snapshotter's name in containerd's proxy plugins
+	// and Docker's storage driver.
+	Snapshotter = "lazycloud"
+	// LazyLabel marks a layer pulled lazily. The pull sets it on each layer
+	// descriptor; containerd passes it to the snapshotter's Prepare, which
+	// then mounts the layer from its grant and reports it present, so the
+	// layer is never downloaded. A layer without it unpacks as usual.
+	LazyLabel = "containerd.io/snapshot/lazycloud.lazy"
+)
 
 // Grant is the presigned read URLs of one converted layer.
 type Grant struct {

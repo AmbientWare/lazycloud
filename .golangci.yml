@@ -51,6 +51,7 @@ linters:
             - "**/internal/imagefs/**"
             - "**/internal/supervisor/**"
             - "**/cmd/agent/**"
+            - "**/cmd/snapshotter/**"
             - "**/cmd/supervisor/**"
           # Lax mode lets the longer allow entry win over the storage deny,
           # so tests reach the development object store's settings.
