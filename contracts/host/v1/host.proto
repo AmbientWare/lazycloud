@@ -120,7 +120,29 @@ message HostMessage {
     Interruption interruption = 70;
     // The answer to PrepareReserve.
     ReserveReady reserve_ready = 71;
+    // The frames a container read before it was ready, for a start that
+    // asked with record_trace.
+    StartupTrace startup_trace = 120;
   }
+}
+
+// StartupTrace is the frames of its image's layers a container read from
+// its start until it reported ready.
+message StartupTrace {
+  string container_id = 1;
+  ImageTrace trace = 2;
+}
+
+// ImageTrace lists frames of an image's layers in the order a container
+// first read them. layer indexes StartContainer.layers, base first; frame
+// numbers the layer's frames.
+message ImageTrace {
+  repeated FrameRead reads = 1;
+}
+
+message FrameRead {
+  uint32 layer = 1;
+  uint32 frame = 2;
 }
 
 // Interruption is a provider's notice that it reclaims the instance at
@@ -431,6 +453,12 @@ message StartContainer {
   // Reads of every layer of image, base first. The host hands them to its
   // snapshotter before it pulls the image and keeps them from containers.
   repeated LayerGrant layers = 100;
+  // The frames earlier containers of the image read before they were
+  // ready. The host fetches them ahead of the container's own reads.
+  ImageTrace prefetch = 120;
+  // Record the frames this container reads before it is ready and report
+  // them in a StartupTrace.
+  bool record_trace = 121;
 }
 
 // LayerGrant is presigned GET URLs for one image layer's index and data

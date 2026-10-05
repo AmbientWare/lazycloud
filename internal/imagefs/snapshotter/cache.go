@@ -61,8 +61,16 @@ type frameCache struct {
 	// slots bounds the fetches in flight and so the memory they hold.
 	fetches singleflight.Group
 	slots   chan struct{}
-	// filling bounds the background fetches of mounted layers in flight.
+	// filling bounds the background fetches in flight, of mounted layers
+	// and prefetches. They hold at most half of slots, so containers' reads
+	// always find a slot free.
 	filling chan struct{}
+	// traces records the frames read through mounts for the agent.
+	traces *tracer
+	// prefetching bounds the prefetches running, and background waits for
+	// them.
+	prefetching chan struct{}
+	background  sync.WaitGroup
 	// life bounds every fetch: a fetch is shared, so no one reader's or
 	// fill's context may end it.
 	life context.Context
@@ -75,6 +83,10 @@ type frameCache struct {
 	lru     *list.List // of *cachedFrame, most recent first
 	frames  map[frameKey]*list.Element
 	mounted map[imagefs.Digest]int
+	// live holds a mounted layer of each digest mounted, and mountWake
+	// closes when another mounts.
+	live      map[imagefs.Digest]*layer
+	mountWake chan struct{}
 }
 
 func newFrameCache(life context.Context, dir string, limit int64, fetches int, g *grants, m *metrics, log *slog.Logger) (*frameCache, error) {
@@ -92,12 +104,16 @@ func newFrameCache(life context.Context, dir string, limit int64, fetches int, g
 	}
 	return &frameCache{
 		dir: dir, limit: limit, grants: g, metrics: m, log: log,
-		slots:   make(chan struct{}, fetches),
-		filling: make(chan struct{}, max(1, fetches/2)),
-		life:    life,
-		lru:     list.New(),
-		frames:  make(map[frameKey]*list.Element),
-		mounted: make(map[imagefs.Digest]int),
+		slots:       make(chan struct{}, fetches),
+		filling:     make(chan struct{}, max(1, fetches/2)),
+		traces:      newTracer(time.Now),
+		prefetching: make(chan struct{}, maxPrefetches),
+		life:        life,
+		lru:         list.New(),
+		frames:      make(map[frameKey]*list.Element),
+		mounted:     make(map[imagefs.Digest]int),
+		live:        make(map[imagefs.Digest]*layer),
+		mountWake:   make(chan struct{}),
 	}, nil
 }
 
@@ -107,6 +123,7 @@ func (c *frameCache) path(k frameKey) string {
 
 // read fills p with frame's bytes from off.
 func (c *frameCache) read(l *layer, frame int, p []byte, off int64) error {
+	c.traces.record(l.digest, frame)
 	k := frameKey{layer: l.digest, frame: frame}
 	// A frame evicted since the lookup, or unreadable, is fetched again.
 	if c.touch(k) && readAt(c.path(k), p, off) == nil {
@@ -338,13 +355,20 @@ func (c *frameCache) touch(k frameKey) bool {
 	return ok
 }
 
-// setMounted counts a mount of layer up or down.
-func (c *frameCache) setMounted(layer imagefs.Digest, delta int) {
+// setMounted counts a mount of l up or down.
+func (c *frameCache) setMounted(l *layer, delta int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.mounted[layer] += delta
-	if c.mounted[layer] <= 0 {
-		delete(c.mounted, layer)
+	c.mounted[l.digest] += delta
+	if c.mounted[l.digest] <= 0 {
+		delete(c.mounted, l.digest)
+		delete(c.live, l.digest)
+		return
+	}
+	if _, ok := c.live[l.digest]; !ok {
+		c.live[l.digest] = l
+		close(c.mountWake)
+		c.mountWake = make(chan struct{})
 	}
 }
 

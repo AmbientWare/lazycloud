@@ -754,7 +754,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	}
 	mounted := layerOf(8 * imagefs.FrameSize)
 	other := layerOf(24 * imagefs.FrameSize)
-	frames.setMounted(mounted.digest, 1)
+	frames.setMounted(mounted, 1)
 	readAll := func(l *layer) {
 		for i := range l.index.Frames {
 			if err := frames.read(l, i, make([]byte, 1), 0); err != nil {

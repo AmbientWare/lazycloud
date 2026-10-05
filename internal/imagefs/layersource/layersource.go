@@ -72,6 +72,59 @@ func (c *Client) Grant(ctx context.Context, grants []Grant) error {
 	return nil
 }
 
+// FrameRead is one frame of the layer at a position in an image's layers.
+type FrameRead struct {
+	Layer, Frame uint32
+}
+
+func readsOut(reads []FrameRead) []*imagefsproto.FrameRead {
+	out := make([]*imagefsproto.FrameRead, len(reads))
+	for i, r := range reads {
+		out[i] = &imagefsproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
+	}
+	return out
+}
+
+func digestsOut(layers []imagefs.Digest) []string {
+	out := make([]string, len(layers))
+	for i, l := range layers {
+		out[i] = string(l)
+	}
+	return out
+}
+
+// Prefetch has the snapshotter fetch reads of layers, the image's layers
+// base first, in the background as they mount.
+func (c *Client) Prefetch(ctx context.Context, layers []imagefs.Digest, reads []FrameRead) error {
+	if _, err := c.sources.Prefetch(ctx, &imagefsproto.PrefetchRequest{Layers: digestsOut(layers), Reads: readsOut(reads)}); err != nil {
+		return fmt.Errorf("prefetch layers: %w", err)
+	}
+	return nil
+}
+
+// StartTrace has the snapshotter record the frames of layers read until
+// EndTrace with the same name.
+func (c *Client) StartTrace(ctx context.Context, name string, layers []imagefs.Digest) error {
+	if _, err := c.sources.StartTrace(ctx, &imagefsproto.StartTraceRequest{Name: name, Layers: digestsOut(layers)}); err != nil {
+		return fmt.Errorf("start a layer read trace: %w", err)
+	}
+	return nil
+}
+
+// EndTrace stops the trace name and returns the frames read, each the
+// first time, and whether every read reached it.
+func (c *Client) EndTrace(ctx context.Context, name string) ([]FrameRead, bool, error) {
+	ended, err := c.sources.EndTrace(ctx, &imagefsproto.EndTraceRequest{Name: name})
+	if err != nil {
+		return nil, false, fmt.Errorf("end a layer read trace: %w", err)
+	}
+	reads := make([]FrameRead, len(ended.GetReads()))
+	for i, r := range ended.GetReads() {
+		reads[i] = FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
+	}
+	return reads, ended.GetComplete(), nil
+}
+
 // Close closes the connection.
 func (c *Client) Close() error {
 	if err := c.conn.Close(); err != nil {

@@ -73,6 +73,7 @@ func (g *grants) put(layers map[imagefs.Digest]grant) {
 type layerSources struct {
 	imagefsproto.UnimplementedLayerSourcesServer
 	grants *grants
+	frames *frameCache
 }
 
 // Grant validates every grant before it records any, so a refused call
