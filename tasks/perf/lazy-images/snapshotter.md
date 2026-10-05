@@ -143,6 +143,28 @@ reading 3 frames ahead in a file, fetching a large file's frames on its
 first read (both 12.5 s, more bytes), and filling the 1 GB layers whole
 (16.8 s, 644 MB: the uncompressed frames saturate the 125 MB/s gp3 disk).
 
+### Review fixes, CI and the local host VM
+
+- Mounts a snapshot uses stay mounted at exit; an unmount is one
+  non-blocking syscall, its server stopped in the background
+  (`TestStopLeavesLayersInUseMounted`). Shared fetches run under the
+  snapshotter's life, so a cancelled fill fails no read
+  (`TestCancelledFillsFinishSharedFetches`); evictions delete a frame's file
+  under a per-frame lock only if it was not stored again
+  (`TestEvictionKeepsAFrameStoredAgain`). Indexes are read with
+  `imagefs.FetchIndex`, digests checked with `imagefs.Digest.Check`; the
+  tests run as root.
+- Start commands in the agent harness carry the grants of images converted
+  by `imagefs.Convert` into the job's Garage: `TestAgentPullsAMissingImage`
+  (grants then lazy pull, no layer blob stored) and
+  `TestAStartWithoutGrantsFails`. The Go workflow's `host-runtime` job
+  installs the snapshotter on the runner first.
+- `deploy/local/host-vm.sh`: a Lima VM from the AL2023 KVM image runs the
+  node recipe, joins the local server through the install script, and ran a
+  deployed function from the converted managed image through the
+  snapshotter (3 lazy layers, only the config fetched by containerd). The
+  VM runs kernel 6.1, the KVM image's.
+
 ## Intentional differences
 
 - Lazy layers live beside containerd's overlay snapshotter in one service;
@@ -156,11 +178,13 @@ first read (both 12.5 s, more bytes), and filling the 1 GB layers whole
 
 ## Gaps and unverified boundaries
 
-- `internal/agent`'s harness tests now fail off a snapshotter host: the
-  preflight refuses the host, and a lazy pull needs converted images and
-  grants. CI needs a job with the snapshotter installed (root) and the
-  harness must convert `testImage` and grant it; that harness is the
-  grants packet's.
+- Platform images (the mount image, the BuildKit builder) still unpack
+  plainly, so one can be served by a tenant's lazy layer of the same chain
+  ID and stop reading when that grant expires. The proposed fix, mirroring
+  them through publish, cannot convert the builder: a mirror build needs the
+  builder. Open for a decision.
+- Docker's writable-layer size limits are not enforced on the lazycloud
+  driver (the agent warns at start); overlay2 enforced them with xfs quotas.
 - The node image is not rebaked; its settings were applied by script.
 - ECR as the registry, Docker 29.9 and GPU images are untried.
 - Torch cold start stays round-trip bound; a startup prefetch list per
