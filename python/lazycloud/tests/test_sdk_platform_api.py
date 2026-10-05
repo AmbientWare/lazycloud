@@ -1213,7 +1213,9 @@ def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:
     with pytest.raises(RemoteTaskError):
         lazycloud.FunctionCall.gather(call, failed_call)
     # The timeout bounds the whole gather; a call still running then times out.
-    running = lazycloud.FunctionCall(lazycloud.Task.from_id(_task_id(84)))
+    running: lazycloud.FunctionCall[int] = lazycloud.FunctionCall(
+        lazycloud.Task.from_id(_task_id(84))
+    )
     timed = lazycloud.FunctionCall.gather(running, call, timeout_seconds=0, return_exceptions=True)
     assert isinstance(timed[0], TimeoutError) and timed[1] == {"total": 6}
 
