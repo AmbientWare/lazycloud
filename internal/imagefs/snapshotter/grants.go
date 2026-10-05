@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"regexp"
 	"sync"
 	"time"
 
@@ -14,8 +13,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
-
-var layerDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // maxGrantsPerCall bounds one Grant call; an image has at most a few hundred
 // layers.
@@ -87,8 +84,8 @@ func (s layerSources) Grant(_ context.Context, request *imagefsproto.GrantReques
 	layers := make(map[imagefs.Digest]grant, len(request.GetLayers()))
 	for _, l := range request.GetLayers() {
 		layer := imagefs.Digest(l.GetDiffId())
-		if !layerDigest.MatchString(string(layer)) {
-			return nil, status.Errorf(codes.InvalidArgument, "diff_id %q is not a sha256 digest", layer)
+		if err := layer.Check(); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		for name, raw := range map[string]string{"index_url": l.GetIndexUrl(), "data_url": l.GetDataUrl()} {
 			if err := checkURL(raw); err != nil {

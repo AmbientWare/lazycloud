@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -45,6 +46,7 @@ type lazyRef struct {
 
 type mountedLayer struct {
 	digest imagefs.Digest
+	dir    string
 	server *fuse.Server
 	// stopFill ends the layer's background fetch and filled closes once
 	// it has.
@@ -58,27 +60,30 @@ type mountedLayer struct {
 // container's Prepare and the unmount of a layer no container uses never
 // interleave.
 type mounts struct {
-	root       string
-	ms         *storage.MetaStore
-	frames     *frameCache
-	grants     *grants
-	http       *http.Client
-	metrics    *metrics
-	log        *slog.Logger
-	allowOther bool
-	fillBytes  int64
+	root      string
+	ms        *storage.MetaStore
+	frames    *frameCache
+	grants    *grants
+	http      *http.Client
+	metrics   *metrics
+	log       *slog.Logger
+	fillBytes int64
 	// life ends background fetches when the snapshotter closes.
 	life context.Context
 
 	requests chan func()
 	done     chan struct{}
+	// teardowns waits for the servers of unmounted layers to stop.
+	teardowns sync.WaitGroup
 
 	// Owned by run.
 	mounted map[string]*mountedLayer
 	holds   map[string]int
 }
 
-// run serves requests until ctx ends, then unmounts every layer it can.
+// run serves requests until ctx ends. Mounts stay in place at exit:
+// containers may still read them while the process lives, and the next
+// start detaches what is left (clearStale).
 func (m *mounts) run(ctx context.Context) {
 	defer close(m.done)
 	for {
@@ -86,11 +91,8 @@ func (m *mounts) run(ctx context.Context) {
 		case fn := <-m.requests:
 			fn()
 		case <-ctx.Done():
-			for id, ml := range m.mounted {
-				if err := m.unmount(id); err != nil {
-					m.log.Warn("layer left mounted at exit", "snapshot", id, "error", err)
-					<-ml.filled
-				}
+			for _, ml := range m.mounted {
+				<-ml.filled
 			}
 			return
 		}
@@ -149,8 +151,8 @@ func (m *mounts) unhold(id string) {
 	}
 }
 
-// reconcile mounts every layer a snapshot needs and unmounts the rest. An
-// unmount the kernel refuses as busy is retried on the next pass.
+// reconcileNow mounts every layer a snapshot needs and unmounts the rest.
+// An unmount the kernel refuses as busy is retried on the next pass.
 func (m *mounts) reconcileNow(ctx context.Context) error {
 	return m.do(ctx, func() error {
 		m.reconcile(ctx)
@@ -231,7 +233,7 @@ func (m *mounts) mount(r lazyRef) error {
 	timeout := attrTimeout
 	server, err := gofs.Mount(filepath.Join(dir, "fs"), root, &gofs.Options{
 		MountOptions: fuse.MountOptions{
-			AllowOther: m.allowOther,
+			AllowOther: true,
 			FsName:     string(digest),
 			Name:       layersource.Snapshotter,
 			Options:    []string{"ro", "default_permissions"},
@@ -253,7 +255,7 @@ func (m *mounts) mount(r lazyRef) error {
 		return fmt.Errorf("mount layer %s: %w", digest, err)
 	}
 	fillCtx, stopFill := context.WithCancel(m.life)
-	ml := &mountedLayer{digest: digest, server: server, stopFill: stopFill, filled: make(chan struct{})}
+	ml := &mountedLayer{digest: digest, dir: filepath.Join(dir, "fs"), server: server, stopFill: stopFill, filled: make(chan struct{})}
 	go func() {
 		defer close(ml.filled)
 		if ix.StreamSize <= m.fillBytes {
@@ -266,17 +268,22 @@ func (m *mounts) mount(r lazyRef) error {
 	return nil
 }
 
+// unmount detaches a layer no snapshot uses. It never waits on the FUSE
+// connection: a busy mount fails at once and stays, and the server of one
+// that went stops in the background.
 func (m *mounts) unmount(id string) error {
 	ml := m.mounted[id]
-	if err := ml.server.Unmount(); err != nil {
+	if err := unix.Unmount(ml.dir, 0); err != nil {
 		return fmt.Errorf("unmount layer %s: %w", ml.digest, err)
 	}
-	ml.server.Wait()
-	ml.stopFill()
-	<-ml.filled
 	delete(m.mounted, id)
 	m.frames.setMounted(ml.digest, -1)
 	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
+	m.teardowns.Go(func() {
+		ml.server.Wait()
+		ml.stopFill()
+		<-ml.filled
+	})
 	return nil
 }
 

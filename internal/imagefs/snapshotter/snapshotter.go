@@ -13,12 +13,9 @@ package snapshotter
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -38,9 +35,6 @@ const (
 	// indexFile is a lazy layer snapshot's stored index, beside the fs
 	// directory its FUSE filesystem mounts on.
 	indexFile = "index"
-	// maxIndexBytes bounds a stored index; the index of a 1 GiB layer is
-	// about 400 KB.
-	maxIndexBytes = 64 << 20
 	// prepareSuffix names the active snapshot a lazy layer is committed
 	// from.
 	prepareSuffix = "/lazy-prepare"
@@ -58,12 +52,9 @@ type Config struct {
 	// are all fetched in the background once it is mounted; zero fills
 	// none.
 	FillBytes int64
-	// AllowOther lets users other than the snapshotter's read the mounts.
-	// It needs root, which production has.
-	AllowOther bool
-	HTTP       *http.Client
-	Registry   prometheus.Registerer
-	Logger     *slog.Logger
+	HTTP      *http.Client
+	Registry  prometheus.Registerer
+	Logger    *slog.Logger
 }
 
 // Snapshotter is a containerd snapshotter with lazy layers.
@@ -99,7 +90,7 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 	}
 	g := newGrants(time.Now)
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	frames, err := newFrameCache(filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
+	frames, err := newFrameCache(life, filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -119,13 +110,12 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 		root: cfg.Root, ms: ms, overlay: ov, grants: g, http: cfg.HTTP, log: cfg.Logger, cancel: cancel,
 		mounts: &mounts{
 			root: cfg.Root, ms: ms, frames: frames, grants: g, http: cfg.HTTP, metrics: m, log: cfg.Logger,
-			allowOther: cfg.AllowOther,
-			fillBytes:  cfg.FillBytes,
-			life:       life,
-			requests:   make(chan func()),
-			done:       make(chan struct{}),
-			mounted:    make(map[string]*mountedLayer),
-			holds:      make(map[string]int),
+			fillBytes: cfg.FillBytes,
+			life:      life,
+			requests:  make(chan func()),
+			done:      make(chan struct{}),
+			mounted:   make(map[string]*mountedLayer),
+			holds:     make(map[string]int),
 		},
 	}
 	go s.mounts.run(life)
@@ -140,6 +130,7 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 func (s *Snapshotter) Close() error {
 	s.cancel()
 	<-s.mounts.done
+	s.mounts.teardowns.Wait()
 	return s.overlay.Close() //nolint:wrapcheck // the metadata store's own error
 }
 
@@ -248,7 +239,7 @@ func (s *Snapshotter) Cleanup(ctx context.Context) error {
 // itself with the target labels, where containerd's Walk finds it.
 func (s *Snapshotter) prepareLazy(ctx context.Context, key, parent string, labels map[string]string) error {
 	digest := imagefs.Digest(labels[snapshots.LabelSnapshotDiffID])
-	if labels[snapshots.LabelSnapshotRef] == "" || !layerDigest.MatchString(string(digest)) {
+	if labels[snapshots.LabelSnapshotRef] == "" || digest.Check() != nil {
 		return fmt.Errorf("lazy layer %q needs %s and %s labels: %w", key, snapshots.LabelSnapshotRef, snapshots.LabelSnapshotDiffID, errdefs.ErrInvalidArgument)
 	}
 	g, ok := s.grants.lookup(digest)
@@ -309,52 +300,22 @@ func (s *Snapshotter) fetchIndex(ctx context.Context, digest imagefs.Digest, g g
 				return nil, imagefs.Index{}, fmt.Errorf("layer %s: %w", digest, errNoGrant)
 			}
 		}
-		var raw []byte
-		raw, err = s.getIndex(ctx, g.indexURL)
+		var (
+			raw []byte
+			ix  imagefs.Index
+		)
+		raw, ix, err = imagefs.FetchIndex(ctx, s.http, g.indexURL)
+		if err == nil && ix.Layer != digest {
+			return nil, imagefs.Index{}, fmt.Errorf("%w: the index granted for layer %s is layer %s's", imagefs.ErrInvalidIndex, digest, ix.Layer)
+		}
 		if err == nil {
-			var ix imagefs.Index
-			if ix, err = imagefs.Unmarshal(raw); err == nil && ix.Layer != digest {
-				err = fmt.Errorf("%w: the index granted for layer %s is layer %s's", imagefs.ErrInvalidIndex, digest, ix.Layer)
-			}
-			if err == nil {
-				return raw, ix, nil
-			}
-			break
+			return raw, ix, nil
 		}
 		if !retryable(err) {
 			break
 		}
 	}
 	return nil, imagefs.Index{}, fmt.Errorf("index of layer %s: %w", digest, err)
-}
-
-func (s *Snapshotter) getIndex(ctx context.Context, rawURL string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, errors.New("read index: unusable URL")
-	}
-	response, err := s.http.Do(request)
-	if err != nil {
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			// The URL's query is its signature.
-			err = ue.Err
-		}
-		return nil, fmt.Errorf("read index: %w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return nil, &imagefs.StatusError{StatusCode: response.StatusCode, Body: string(body)}
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxIndexBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read index: %w", err)
-	}
-	if len(raw) > maxIndexBytes {
-		return nil, fmt.Errorf("%w: index exceeds %d bytes", imagefs.ErrInvalidIndex, maxIndexBytes)
-	}
-	return raw, nil
 }
 
 // lazyAncestors returns name and its ancestors that are lazy layers.

@@ -187,9 +187,17 @@ func checkRecordCounts(raw []byte) error {
 // validate checks what readers rely on: the frame table covers the stream,
 // every file's bytes lie inside it, and the tree has one entry per path
 // with each directory before its children.
+// Check reports whether d is "sha256:" and 64 lowercase hex digits.
+func (d Digest) Check() error {
+	if hexDigest, ok := strings.CutPrefix(string(d), "sha256:"); !ok || len(hexDigest) != 64 || strings.ToLower(hexDigest) != hexDigest || !isHex(hexDigest) {
+		return fmt.Errorf("layer digest %q is not sha256:<64 lowercase hex>", string(d))
+	}
+	return nil
+}
+
 func (ix Index) validate() error {
-	if hexDigest, ok := strings.CutPrefix(string(ix.Layer), "sha256:"); !ok || len(hexDigest) != 64 || strings.ToLower(hexDigest) != hexDigest || !isHex(hexDigest) {
-		return fmt.Errorf("%w: layer digest %q", ErrInvalidIndex, ix.Layer)
+	if err := ix.Layer.Check(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidIndex, err)
 	}
 	if ix.StreamSize < 0 || int64(len(ix.Frames)) != (ix.StreamSize+FrameSize-1)/FrameSize {
 		return fmt.Errorf("%w: %d frames for a %d byte stream", ErrInvalidIndex, len(ix.Frames), ix.StreamSize)

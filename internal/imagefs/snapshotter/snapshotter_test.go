@@ -142,6 +142,7 @@ type service struct {
 	sn       snapshots.Snapshotter
 	sources  *layersource.Client
 	registry *prometheus.Registry
+	stop     func()
 }
 
 func serve(t *testing.T, transport http.RoundTripper) *service {
@@ -153,14 +154,16 @@ func serve(t *testing.T, transport http.RoundTripper) *service {
 // whole once mounted.
 func serveFilling(t *testing.T, transport http.RoundTripper, fillBytes int64) *service {
 	t.Helper()
-	if _, err := os.Stat("/dev/fuse"); err != nil {
-		t.Fatalf("FUSE is unavailable: %v", err)
+	// The snapshotter mounts as root, as on hosts: the CI job and
+	// deploy/local/host-vm.sh run these tests as root.
+	if os.Geteuid() != 0 {
+		t.Fatal("the snapshotter tests mount FUSE and overlay filesystems and run as root")
 	}
 	root := t.TempDir()
 	socket := filepath.Join(root, "snapshotter.sock")
 	registry := prometheus.NewRegistry()
 	cfg := Config{
-		Root: filepath.Join(root, "state"), CacheBytes: 256 << 20, Fetches: 4, FillBytes: fillBytes, AllowOther: os.Geteuid() == 0,
+		Root: filepath.Join(root, "state"), CacheBytes: 256 << 20, Fetches: 4, FillBytes: fillBytes,
 		HTTP: &http.Client{Transport: transport}, Registry: registry, Logger: slog.New(slog.DiscardHandler),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -181,15 +184,25 @@ func serveFilling(t *testing.T, transport http.RoundTripper, fillBytes int64) *s
 	if err != nil {
 		t.Fatal(err)
 	}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			_ = sources.Close()
+			_ = conn.Close()
+			cancel()
+			if err := <-served; err != nil {
+				t.Error(err)
+			}
+		})
+	}
 	t.Cleanup(func() {
-		_ = sources.Close()
-		_ = conn.Close()
-		cancel()
-		if err := <-served; err != nil {
+		stop()
+		// The snapshotter leaves its mounts at exit for the next start.
+		if err := clearStale(cfg.Root); err != nil {
 			t.Error(err)
 		}
 	})
-	return &service{root: cfg.Root, sn: proxy.NewSnapshotter(snapshotsapi.NewSnapshotsClient(conn), layersource.Snapshotter), sources: sources, registry: registry}
+	return &service{root: cfg.Root, sn: proxy.NewSnapshotter(snapshotsapi.NewSnapshotsClient(conn), layersource.Snapshotter), sources: sources, registry: registry, stop: stop}
 }
 
 // pull makes a lazy layer present as containerd's unpacker does and
@@ -556,6 +569,103 @@ func lowerDirs(m mount.Mount) []string {
 	return nil
 }
 
+// Stopping the snapshotter leaves a layer a container uses mounted, and
+// returns at once even with a file of it open.
+func TestStopLeavesLayersInUseMounted(t *testing.T) {
+	ts := newTestStore(t)
+	s := serve(t, http.DefaultTransport)
+	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("a")}}))
+	if err := s.sources.Grant(t.Context(), []layersource.Grant{l.grant}); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.view(t, "view", s.pull(t, l, ""))
+	open, err := os.Open(filepath.Join(dir, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = open.Close() }()
+	began := time.Now()
+	s.stop()
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("stopping took %v", took)
+	}
+	if got := layerMounts(t, s.root); len(got) != 1 {
+		t.Fatalf("after stop the layer is mounted at %v, want left in place", got)
+	}
+}
+
+// Cancelling a fill never fails a read waiting on the frame it fetches.
+func TestCancelledFillsFinishSharedFetches(t *testing.T) {
+	ts := newTestStore(t)
+	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)}}))
+	g := newGrants(time.Now)
+	g.put(map[imagefs.Digest]grant{l.index.Layer: {indexURL: l.grant.IndexURL, dataURL: l.grant.DataURL, expires: l.grant.ExpiresAt}})
+	m, err := newMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	gate := gatedTransport{started: started, release: release}
+	ly := &layer{digest: l.index.Layer, index: l.index, frames: frames,
+		data: imagefs.HTTPObject(&http.Client{Transport: gate}, func() string { return l.grant.DataURL })}
+	fillCtx, stopFill := context.WithCancel(t.Context())
+	filled := make(chan struct{})
+	go func() { frames.fill(fillCtx, ly); close(filled) }()
+	<-started
+	read := make(chan error, 1)
+	go func() { read <- frames.read(ly, 0, make([]byte, 16), 0) }()
+	time.Sleep(100 * time.Millisecond)
+	stopFill()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	if err := <-read; err != nil {
+		t.Fatalf("a read sharing a cancelled fill's fetch: %v", err)
+	}
+	<-filled
+}
+
+// gatedTransport holds the first request until release closes.
+type gatedTransport struct {
+	started, release chan struct{}
+}
+
+func (g gatedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case <-g.started:
+	default:
+		close(g.started)
+	}
+	<-g.release
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// An eviction never deletes the file of a frame stored again since it was
+// chosen.
+func TestEvictionKeepsAFrameStoredAgain(t *testing.T) {
+	m, err := newMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, newGrants(time.Now), m, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := frameKey{layer: imagefs.Digest("sha256:" + strings.Repeat("c", 64)), frame: 3}
+	if err := frames.write(k, []byte("frame")); err != nil {
+		t.Fatal(err)
+	}
+	if err := frames.remove(k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(frames.path(k)); err != nil {
+		t.Fatalf("the evicted frame stored again lost its file: %v", err)
+	}
+}
+
 // Concurrent reads of one frame fetch it from the store once.
 func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	ts := newTestStore(t)
@@ -567,7 +677,7 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +688,7 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	for range 32 {
 		wg.Go(func() {
 			p := make([]byte, 4096)
-			errs <- frames.read(t.Context(), ly, 1, p, 100)
+			errs <- frames.read(ly, 1, p, 100)
 		})
 	}
 	wg.Wait()
@@ -632,7 +742,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	}
 	dir := t.TempDir()
 	const bound = 64 << 20
-	frames, err := newFrameCache(dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,7 +757,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	frames.setMounted(mounted.digest, 1)
 	readAll := func(l *layer) {
 		for i := range l.index.Frames {
-			if err := frames.read(t.Context(), l, i, make([]byte, 1), 0); err != nil {
+			if err := frames.read(l, i, make([]byte, 1), 0); err != nil {
 				t.Fatal(err)
 			}
 			if onDisk := diskBytes(t, dir); onDisk > bound {

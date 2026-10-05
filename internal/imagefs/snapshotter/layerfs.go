@@ -35,7 +35,7 @@ type layer struct {
 // read fills dest with e's bytes from off and returns how many it read. A
 // read the store cannot serve fails whole; it never returns partial or
 // zeroed bytes.
-func (l *layer) read(ctx context.Context, e *imagefs.Entry, dest []byte, off int64) (int, error) {
+func (l *layer) read(e *imagefs.Entry, dest []byte, off int64) (int, error) {
 	if off >= e.Size {
 		return 0, nil
 	}
@@ -45,7 +45,7 @@ func (l *layer) read(ctx context.Context, e *imagefs.Entry, dest []byte, off int
 		frame := pos / imagefs.FrameSize
 		frameStart := frame * imagefs.FrameSize
 		end := min(start+n, frameStart+imagefs.FrameSize)
-		if err := l.frames.read(ctx, l, int(frame), dest[pos-start:end-start], pos-frameStart); err != nil {
+		if err := l.frames.read(l, int(frame), dest[pos-start:end-start], pos-frameStart); err != nil {
 			return 0, err
 		}
 		pos = end
@@ -204,7 +204,7 @@ func (n *node) Open(_ context.Context, flags uint32) (gofs.FileHandle, uint32, s
 // Read fails with EIO when the store cannot serve the bytes, logged and
 // counted.
 func (n *node) Read(ctx context.Context, _ gofs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	got, err := n.layer.read(ctx, n.entry, dest, off)
+	got, err := n.layer.read(n.entry, dest, off) //nolint:contextcheck // a shared fetch runs under the cache's life
 	if err != nil {
 		n.layer.failed()
 		n.layer.log.ErrorContext(ctx, "layer read failed", "layer", n.layer.digest, "path", n.entry.Path, "offset", off, "error", err)
