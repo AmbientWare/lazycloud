@@ -3,8 +3,10 @@
 # instance. deploy/ami/bake.sh prepends deploy/host-pins.sh and VARIANT (cpu
 # or gpu) and passes the result as user data; it images the instance once
 # the console shows LAZYCLOUD_BAKE_OK. The image carries Docker with gVisor's
-# runsc as a runtime, the disk engine's tools and the nbd module; the agent
-# release arrives at boot through the launcher's user data.
+# runsc as a runtime and lazycloud-snapshotter as its storage driver, the
+# disk engine's tools and the nbd module; the agent release, which installs
+# and starts the snapshotter, arrives at boot through the launcher's user
+# data.
 set -Eeuo pipefail
 
 : "${VARIANT:?}" "${GVISOR_RELEASE:?}" "${QEMU_VERSION:?}" "${NBD_VERSION:?}"
@@ -114,12 +116,29 @@ with open(path) as f:
     config = json.load(f)
 config.setdefault("runtimes", {})["runsc"] = {"path": runsc, "runtimeArgs": args}
 config["cgroup-parent"] = "lazycloud-workloads.slice"
+# Images are read lazily through lazycloud-snapshotter, which the agent
+# installs from its release at boot (cmd/agent/snapshotter.go, which sets
+# the same keys and leaves Docker running when they are already set).
+# Docker keeps images in containerd, on the snapshotter, and keeps
+# containers running across its own restarts.
+config.setdefault("features", {})["containerd-snapshotter"] = True
+config["storage-driver"] = "lazycloud"
+config["live-restore"] = True
 with open(path, "w") as f:
     json.dump(config, f, indent=4)
     f.write("\n")
 PY
-systemctl restart docker
+cat >>/etc/containerd/config.toml <<'TOML'
+
+[proxy_plugins.lazycloud]
+  type = "snapshot"
+  address = "/run/lazycloud-snapshotter/snapshotter.sock"
+  [proxy_plugins.lazycloud.exports]
+    root = "/var/lib/lazycloud-snapshotter"
+TOML
+systemctl restart containerd docker
 docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'
+docker info --format '{{.Driver}}' | grep -qx lazycloud
 systemctl show -p CPUWeight system.slice | grep -qx 'CPUWeight=1000'
 
 # The agent's unit (written by its install-service) runs workloads under

@@ -89,9 +89,15 @@ func TestLazyPullDownloadsNoLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// containerd shares content across namespaces, so a blob another
+	// pull stored may be present; none may arrive with this one.
 	for _, layer := range manifest.Layers {
-		if _, err := ctrd.ContentStore().Info(ctx, layer.Digest); !cerrdefs.IsNotFound(err) {
-			t.Fatalf("layer blob %s is in the content store: %v", layer.Digest, err)
+		info, err := ctrd.ContentStore().Info(ctx, layer.Digest)
+		if err == nil && !info.CreatedAt.Before(began) {
+			t.Fatalf("the pull downloaded layer blob %s", layer.Digest)
+		}
+		if err != nil && !cerrdefs.IsNotFound(err) {
+			t.Fatal(err)
 		}
 	}
 	if again, err := cache.ensureLazy(ctx, image, nil, ""); err != nil || again {
@@ -108,8 +114,7 @@ func TestLazyPullDownloadsNoLayer(t *testing.T) {
 	}
 	began = time.Now()
 	created, err := docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Image:      image,
-		Config:     &containertypes.Config{Image: image, Cmd: []string{"sh", "-c", command}},
+		Config:     &containertypes.Config{Image: image, Entrypoint: []string{"sh", "-c", command}, User: "0"},
 		HostConfig: &containertypes.HostConfig{Runtime: runtime},
 	})
 	if err != nil {
