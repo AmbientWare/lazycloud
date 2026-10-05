@@ -45,4 +45,27 @@ settings. The cold start numbers as a table. What did not work and why.
 
 ## Progress
 
+- Local step skipped: no passwordless sudo, so no second dockerd here.
+- EC2 host: m7i.large on demand, us-east-2a, fleet CPU image
+  ami-0e3303f49502924b3 (lazycloud-node-cpu-d0afedf4e47c63ba), 40 GiB gp3,
+  instance profile lazycloud-prod-fleet-node (SSM only), no agent user data.
+  The default VPC in us-east-2 has no internet route, so the spike runs in a
+  scratch VPC it creates and deletes.
+- The node image carries Docker 25.0.16 (Amazon Linux package) on the
+  overlay2 graphdriver, containerd 2.2.7, runc 1.3.6, runsc release-20260928.0,
+  kernel 6.18.51, /dev/fuse present. It is not Docker 29.
+- Installed on the instance only: stargz-snapshotter v0.18.2 (sha256
+  515a3c3a... matches the release's .sha256sum), Docker static 29.8.2 and
+  29.9.0-rc.1 (download.docker.com publishes no checksums; pinned by the
+  sha256 of an independent download: 995d1ef2..., 408e3702...). Docker 29
+  runs against the image's containerd 2.2.7.
+- Images: python:3.12-slim (index sha256:02108f5d...) and
+  pytorch/torchserve:0.12.0-cpu (index sha256:50e18949..., torch 2.4.0+cpu),
+  linux/amd64. The originals are copied byte for byte into a scratch
+  registry:3 on the instance (`-org`), and converted with
+  `ctr-remote i convert --oci --estargz` (`-esgz`, 14 s and 166 s). Registry
+  storage is a tmpfs, so the registry never competes for the root volume.
+- Done: baselines on Docker 25 and Docker 29, lazy pulls, gVisor file checks,
+  cold-start table.
+
 ## Gaps and unverified boundaries
