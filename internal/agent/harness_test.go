@@ -48,6 +48,9 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(fmt.Sprintf("build supervisor: %v", err))
 	}
+	if err := grantLazyImages(context.Background()); err != nil {
+		panic(fmt.Sprintf("grant the test images to the snapshotter: %v", err))
+	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
