@@ -10,7 +10,7 @@ function fleetRate(gpuType: string | undefined, gpuCardHour: number): Schemas["C
     billing_owner: "platform_fleet",
     gpu_type: gpuType,
     nanos_per_container_hour: 0,
-    nanos_per_cpu_core_hour: 22_000_000,
+    nanos_per_cpu_hour: 44_000_000,
     nanos_per_memory_gib_hour: 7_500_000,
     nanos_per_gpu_card_hour: gpuCardHour,
   };
@@ -51,4 +51,5 @@ it("prices a model that is not offered yet and marks it coming soon", () => {
   const t4 = screen.getByText("T4").parentElement;
   expect(t4).toHaveTextContent("$0.35");
   expect(t4).not.toHaveTextContent("Coming soon");
+  expect(screen.getByText("CPU").parentElement).toHaveTextContent("$0.044 / CPU / hr");
 });

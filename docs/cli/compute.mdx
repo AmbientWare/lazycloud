@@ -57,7 +57,7 @@ its decorator runs on that machine or fails.
 | `--name <name>` | Machine name workloads pin to. Lowercase letters, digits, and hyphens. Required. |
 | `--workspaces <a,b>` | Workspace names whose workloads may run here, comma-separated or repeated. Required. |
 | `--gpu <model>` | GPU model this machine contributes. |
-| `--max-cpu`, `--max-memory`, `--max-gpus` | Capacity to advertise, for example `--max-memory 32Gi`. |
+| `--max-cpu`, `--max-memory`, `--max-gpus` | Capacity to advertise, for example `--max-cpu 4` (physical cores) or `--max-memory 32Gi`. |
 | `--gpu-ids <ids>` | Comma-separated GPU device ids to expose, instead of `--max-gpus`. |
 | `--background`, `--foreground` | Install the agent as a service, or run it in the terminal. Default is `--foreground`. |
 | `--service-manager`, `--service-name`, `--state-dir` | Service installation details. |

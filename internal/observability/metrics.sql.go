@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -35,7 +36,7 @@ type ContainerMetricsScopeParams struct {
 }
 
 type ContainerMetricsScopeRow struct {
-	CpuMillis     int64
+	CpuMillis     cpu.Millis
 	MemoryBytes   int64
 	CreatedAt     time.Time
 	StoppedAt     *time.Time

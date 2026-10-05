@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -30,7 +31,7 @@ type Machine struct {
 	PhaseAt        time.Time
 	Failure        *Failure
 	Connected      bool
-	CPUMillis      int64
+	CPUMillis      cpu.Millis
 	MemoryBytes    int64
 	GPUType        string
 	GPUCount       int

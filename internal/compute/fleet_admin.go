@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // FleetState is a platform host's place in the fleet, as administrators see
@@ -25,9 +27,9 @@ const (
 
 // FleetCapacity is CPU, memory and GPUs.
 type FleetCapacity struct {
-	CPUMillis   int64 `json:"cpu_millis"`
-	MemoryBytes int64 `json:"memory_bytes"`
-	GPUs        int   `json:"gpus"`
+	CPUMillis   cpu.Millis `json:"cpu_millis"`
+	MemoryBytes int64      `json:"memory_bytes"`
+	GPUs        int        `json:"gpus"`
 }
 
 // FleetNode is one platform host with an instance.
@@ -105,7 +107,7 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 			ID: HostID(r.ID), Enrolled: r.Enrolled, InstanceID: r.InstanceID, Provider: Provider(r.Provider),
 			Region: r.Region, InstanceType: r.InstanceType, Preemptible: deref(r.Market) == string(MarketSpot),
 			GPUType: r.GpuType, Capacity: FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.GpuCount)},
-			Allocated:  FleetCapacity{CPUMillis: r.UsedCpu, MemoryBytes: r.UsedMemory, GPUs: int(r.UsedGpus)},
+			Allocated:  FleetCapacity{CPUMillis: cpu.Millis(r.UsedCpu), MemoryBytes: r.UsedMemory, GPUs: int(r.UsedGpus)},
 			Containers: int(r.Containers),
 			State: fleetStateOf(hostStanding{
 				Phase: r.Phase, State: r.State, CapacityState: r.CapacityState, ImageEvidence: r.ImageEvidence,

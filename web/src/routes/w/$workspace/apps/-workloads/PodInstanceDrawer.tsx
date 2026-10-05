@@ -141,7 +141,7 @@ function PodInstanceDrawerBody({
             <Fact label="Uptime" value={podInstanceUptime(record)} mono />
             <Fact
               label="CPU allocation"
-              value={resourceAllocation(cpuRequest(resources), "vCPU")}
+              value={resourceAllocation(cpuRequest(resources), "CPU")}
               mono
             />
             <Fact

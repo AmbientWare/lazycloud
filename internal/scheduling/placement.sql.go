@@ -8,6 +8,7 @@ package scheduling
 import (
 	"context"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -98,7 +99,7 @@ limit $4
 `
 
 type PendingContainersParams struct {
-	MaxFreeCpuMillis   int64
+	MaxFreeCpuMillis   cpu.Millis
 	MaxFreeMemoryBytes int64
 	Targets            []string
 	BatchSize          int32
@@ -108,7 +109,7 @@ type PendingContainersRow struct {
 	ID           uuid.UUID
 	WorkspaceID  uuid.UUID
 	ReleaseID    *uuid.UUID
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	ConnectionID *uuid.UUID
 	Machine      string

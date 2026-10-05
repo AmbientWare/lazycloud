@@ -16,6 +16,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -196,7 +197,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	}
 	params := InsertInstanceParams{
 		WorkspaceID: uuid.UUID(workspace), ReleaseID: &row.ID,
-		CpuMillis: int64(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
+		CpuMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
 		GpuCount:  int32(gpuCount(spec.Resources)), //nolint:gosec // The schema caps gpu_count at 8.
 		RateClass: string(billing.RateClassFor(pinned(spec), preemptible(spec))),
 		Purpose:   string(PurposeInstance), Command: req.Command, SnapshotID: req.Snapshot,

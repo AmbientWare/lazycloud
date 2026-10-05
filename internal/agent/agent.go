@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -137,6 +138,9 @@ type Agent struct {
 	docker   *client.Client
 	identity identity
 	capacity *hostproto.Capacity
+	// topology converts the CPUs the platform speaks to this machine's
+	// hardware threads.
+	topology cpu.Topology
 	bootID   string
 	sources  *sourceCache
 	images   *imageCache
@@ -292,6 +296,7 @@ func Run(ctx context.Context, cfg Config) error {
 		docker:          docker,
 		identity:        id,
 		capacity:        offered.capacity,
+		topology:        machine.topology,
 		gpus:            offered.gpus,
 		bootID:          bootID(),
 		sources:         &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: httpClient},

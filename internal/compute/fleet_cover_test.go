@@ -85,9 +85,9 @@ func TestCoverStopsAtItsNodeBoundAndReturnsTheBestPartial(t *testing.T) {
 	}
 }
 
-func TestCoverPacksTwoSixCPURequestsOntoOneLargerHost(t *testing.T) {
-	// An 8 vCPU host offers 7.2 vCPU, so a 6 vCPU request takes one alone;
-	// two share a 16 vCPU host, which costs no more and keeps one host.
+func TestCoverPacksTwoThreeCPURequestsOntoOneLargerHost(t *testing.T) {
+	// A 3 CPU request takes a 4 CPU host alone; two share an 8 CPU host,
+	// which costs no more and keeps one host.
 	eight := mustType(t, "c6a.2xlarge")
 	sixteen := mustType(t, "c6a.4xlarge")
 	offers := []FleetOffer{
@@ -101,7 +101,7 @@ func TestCoverPacksTwoSixCPURequestsOntoOneLargerHost(t *testing.T) {
 		{1, []string{"c6a.2xlarge"}},
 		{2, []string{"c6a.4xlarge"}},
 	} {
-		need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(6000, 4), Count: c.count}}}
+		need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(3000, 4), Count: c.count}}}
 		if r := Cover(offers, need, hourlyCost, CoverLimits{Nodes: 16}); !slices.Equal(boughtNames(r), c.want) {
 			t.Errorf("%d requests bought %v", c.count, boughtNames(r))
 		}

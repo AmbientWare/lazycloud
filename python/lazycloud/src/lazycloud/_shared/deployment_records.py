@@ -37,17 +37,17 @@ DEFAULT_DISK = "100Gi"
 # so the pair a decorator states in Python reaches a strict model as a list once
 # it has crossed the wire, and both have to validate as the same thing.
 CpuRequest = int | float | tuple[int | float, int | float] | list[int | float]
-"""Cores to reserve, or a `(reserve, throttle at)` pair."""
+"""CPUs to reserve, or a `(reserve, throttle at)` pair. One CPU is one physical core."""
 
 MemoryRequest = str | int | tuple[str | int, str | int] | list[str | int]
 """Memory to reserve, or a `(reserve, kill at)` pair."""
 
-DEFAULT_FUNCTION_CPU = 0.125
+DEFAULT_CPU = 0.125
 DEFAULT_FUNCTION_AUTHORIZED = True
 DEFAULT_FUNCTION_MEMORY = "128Mi"
 DEFAULT_FUNCTION_RETRIES = 3
 DEFAULT_FUNCTION_TIMEOUT_SECONDS = 3600
-DEFAULT_HTTP_CPU = 1.0
+DEFAULT_POD_CPU = 1.0
 DEFAULT_HTTP_MEMORY = "128Mi"
 DEFAULT_WORKLOAD_PREEMPTIBLE = True
 
@@ -361,14 +361,14 @@ class Deployment(ContractModel):
 
 
 __all__ = [
+    "DEFAULT_CPU",
     "DEFAULT_DISK",
     "DEFAULT_FUNCTION_AUTHORIZED",
-    "DEFAULT_FUNCTION_CPU",
     "DEFAULT_FUNCTION_MEMORY",
     "DEFAULT_FUNCTION_RETRIES",
     "DEFAULT_FUNCTION_TIMEOUT_SECONDS",
-    "DEFAULT_HTTP_CPU",
     "DEFAULT_HTTP_MEMORY",
+    "DEFAULT_POD_CPU",
     "DEFAULT_WORKLOAD_PREEMPTIBLE",
     "CpuRequest",
     "Deployment",

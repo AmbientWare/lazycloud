@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // periodKey is one container's metering period.
@@ -75,7 +77,7 @@ func (b *Billing) applyMeasuredUse(p *sourcePlan, used map[periodKey]MeasuredCon
 		share := float64(length) / float64(covered[period])
 		seconds := length.Seconds()
 		billed := p.src.shape
-		billed.CPUMillis = max(billed.CPUMillis, int64(math.Ceil(use.CoreSeconds*share*float64(millicoresPerCore)/seconds)))
+		billed.CPUMillis = max(billed.CPUMillis, cpu.Millis(math.Ceil(use.CoreSeconds*share*float64(millisPerCPU)/seconds)))
 		billed.MemoryBytes = max(billed.MemoryBytes, int64(math.Ceil(use.MemoryByteSeconds*share/seconds)))
 		if billed == p.src.shape {
 			continue

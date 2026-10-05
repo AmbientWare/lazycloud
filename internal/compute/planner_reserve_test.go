@@ -26,7 +26,7 @@ func fleetHost(t *testing.T, o owners, phase compute.Phase, typ, instance string
 	usable := ct.Usable(0)
 	host := newHost(t, o.pool, hostSpec{
 		Provider: compute.ProviderAWS, Phase: phase, Market: compute.MarketOnDemand, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1",
-		InstanceID: instance, CPU: usable.CPUMillis, Memory: usable.MemoryBytes,
+		InstanceID: instance, CPU: int64(usable.CPUMillis), Memory: usable.MemoryBytes,
 	})
 	price, _ := ct.OnDemandMicros("us-east-2")
 	run(t, o.pool, "update hosts set instance_type = $2, hourly_micros = $3 where id = $1",
@@ -182,7 +182,7 @@ func TestGrowthStopsAtSixteenActionsPerMarketAndPass(t *testing.T) {
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
 	for range 20 {
-		pendingContainer(t, o.pool, dev, release, 40_000, 64*gib)
+		pendingContainer(t, o.pool, dev, release, 20_000, 64*gib)
 	}
 	if r := planCapacity(t, o); r.Requested != 16 {
 		t.Fatalf("first pass %+v, want 16 hosts", r)
@@ -338,8 +338,8 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 		if d := m.ExpiresAt.Sub(m.GeneratedAt); d != 5*time.Minute {
 			t.Errorf("market %+v expires %s after it was generated", m, d)
 		}
-		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 2000 || m.Reason != compute.ReasonNoOffer) {
-			t.Errorf("CPU market %+v, want the 2 vCPU warm floor short for want of an offer", m)
+		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.ReasonNoOffer) {
+			t.Errorf("CPU market %+v, want the 1 CPU warm floor short for want of an offer", m)
 		}
 	}
 	logs.Reset()
@@ -377,9 +377,9 @@ select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate
 	plan(t, o)
 	if spot := publishedMarket(t, o, true, ""); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 12_000 ||
 		spot.StoppedTarget.CPUMillis != 24_000 {
-		t.Fatalf("Spot market %+v, want 25%% and 50%% of 16 running and 32 pending vCPU", spot)
+		t.Fatalf("Spot market %+v, want 25%% and 50%% of 16 running and 32 pending CPU", spot)
 	}
-	if od := publishedMarket(t, o, false, ""); od.WarmTarget.CPUMillis != 2000 || od.StoppedTarget.CPUMillis != 6000 {
+	if od := publishedMarket(t, o, false, ""); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
 	}
 }
@@ -554,10 +554,10 @@ where reserve_mode is not null and market = 'on_demand'`)
 	return compute.HostID(ids[0]), compute.HostID(ids[1])
 }
 
-// largeBought counts the on-demand hosts requested that fit 16 vCPU.
+// largeBought counts the on-demand hosts requested that fit 8 CPU.
 func largeBought(t *testing.T, o owners) int {
 	t.Helper()
-	return scan[int](t, o.pool, "select count(*)::int from hosts where phase = 'requested' and market = 'on_demand' and cpu_millis >= 16000")
+	return scan[int](t, o.pool, "select count(*)::int from hosts where phase = 'requested' and market = 'on_demand' and cpu_millis >= 8000")
 }
 
 // serveFromReserve brings a resumed reserve up ready now.
@@ -575,7 +575,7 @@ func placeOn(t *testing.T, o owners, container uuid.UUID, host compute.HostID) {
 }
 
 // At zero load each CPU market keeps a reserve sized for the stopped floor
-// and one beside it that fits the default 16 vCPU largest shape, and the
+// and one beside it that fits the default 8 CPU largest shape, and the
 // next pass changes nothing.
 func TestAtZeroLoadEachCPUMarketHoldsAFloorReserveAndALargeShapeReserve(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
@@ -584,8 +584,8 @@ func TestAtZeroLoadEachCPUMarketHoldsAFloorReserveAndALargeShapeReserve(t *testi
 	for _, market := range []compute.Market{compute.MarketSpot, compute.MarketOnDemand} {
 		cpus := scan[[]int64](t, o.pool, `select coalesce(array_agg(cpu_millis order by cpu_millis), '{}') from hosts
 where reserve_mode is not null and market = $1`, string(market))
-		if len(cpus) != 2 || cpus[0] < 6000 || cpus[0] >= 16_000 || cpus[1] < 16_000 {
-			t.Errorf("%s reserves of %v millicpus, want one for the 6 vCPU floor and one of 16 vCPU", market, cpus)
+		if len(cpus) != 2 || cpus[0] < 3000 || cpus[0] >= 8000 || cpus[1] < 8000 {
+			t.Errorf("%s reserves of %v millicpus, want one for the 3 CPU floor and one of 8 CPU", market, cpus)
 		}
 	}
 	if r := plan(t, o); r != (compute.PlanResult{}) {
@@ -593,7 +593,7 @@ where reserve_mode is not null and market = $1`, string(market))
 	}
 }
 
-// A burst of 1 vCPU work beyond the warm room resumes the floor reserve; the
+// A burst of 1 CPU work beyond the warm room resumes the floor reserve; the
 // large-shape reserve stays stopped and nothing of its size is bought.
 func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
@@ -616,15 +616,15 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 	}
 }
 
-// A 16 vCPU request resumes the large-shape reserve, and the pass replaces
+// An 8 CPU request resumes the large-shape reserve, and the pass replaces
 // it once the host has served past the idle timeout.
-func TestASixteenVCPURequestResumesTheLargeShapeReserve(t *testing.T) {
+func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, large := onDemandReserves(t, o)
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
-	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 16_000, 16*gib)
+	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 8000, 16*gib)
 
 	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, large).Phase != string(compute.PhaseResuming) ||
 		hostRowOf(t, o, floor).Phase != string(compute.PhaseStopped) {

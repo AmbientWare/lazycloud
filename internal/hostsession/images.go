@@ -102,11 +102,11 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 		}
 		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)}
 	}
-	cpu, memory, memoryLimit := images.BuildResources()
+	reserved, memory, memoryLimit := images.BuildResources()
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId: start.Container.String(),
 		Resources: &hostproto.Resources{
-			CpuMillis: cpu, MemoryBytes: memory, MemoryLimitBytes: memoryLimit,
+			CpuMillis: int64(reserved), MemoryBytes: memory, MemoryLimitBytes: memoryLimit,
 			GpuCount: int32(command.GPUs), //nolint:gosec // A build holds at most one GPU.
 		},
 		Build: build,

@@ -13,6 +13,12 @@ sql:
         output_db_file_name: queries_db.go
         output_models_file_name: queries_models.go
         overrides:
+          - column: "hosts.cpu_millis"
+            go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
+          - column: "containers.cpu_millis"
+            go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
+          - column: "ledger_entries.cpu_millis"
+            go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
           - db_type: uuid
             go_type: github.com/google/uuid.UUID
           - db_type: uuid

@@ -105,7 +105,7 @@ select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); er
 		t.Fatalf("markets start %+v, %+v; want Spot CPU, then on-demand CPU", first, second)
 	}
 	capacity := func(c compute.FleetCapacity) apitypes.FleetCapacity {
-		return apitypes.FleetCapacity{CpuMillicores: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
+		return apitypes.FleetCapacity{CpuMillicores: int64(c.CPUMillis), MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
 	}
 	host := apitypes.FleetCapacity{CpuMillicores: 4000, MemoryMib: 16 << 10}
 	for _, want := range published {

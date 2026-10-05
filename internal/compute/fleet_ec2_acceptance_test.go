@@ -528,6 +528,7 @@ func checkCatalog(t *testing.T, client *ec2.Client, region string) {
 			continue
 		}
 		vcpus := int64(aws.ToInt32(it.VCpuInfo.DefaultVCpus))
+		threads := int64(aws.ToInt32(it.VCpuInfo.DefaultThreadsPerCore))
 		memory := aws.ToInt64(it.MemoryInfo.SizeInMiB) << 20
 		model, cards := "", 0
 		if it.GpuInfo != nil {
@@ -537,10 +538,11 @@ func checkCatalog(t *testing.T, client *ec2.Client, region string) {
 		}
 		// The catalog names an A100 by its memory (A100-40, A100-80); EC2
 		// names the card alone.
-		if vcpus*1000 != typ.CPUMillis || memory != typ.MemoryBytes || !strings.HasPrefix(strings.ToLower(typ.GPU), strings.ToLower(model)) ||
-			cards != typ.GPUCount {
-			t.Errorf("%s in %s: EC2 has %d vCPU, %d MiB, %d %s; the catalog %d vCPU, %d MiB, %d %s", typ.Name, region,
-				vcpus, memory>>20, cards, model, typ.VCPUs(), typ.MemoryBytes>>20, typ.GPUCount, typ.GPU)
+		if vcpus != typ.VCPUs() || int64(typ.Topology.Cores)*threads != vcpus || memory != typ.MemoryBytes ||
+			!strings.HasPrefix(strings.ToLower(typ.GPU), strings.ToLower(model)) || cards != typ.GPUCount {
+			t.Errorf("%s in %s: EC2 has %d vCPU at %d per core, %d MiB, %d %s; the catalog %d vCPU on %d cores, %d MiB, %d %s",
+				typ.Name, region, vcpus, threads, memory>>20, cards, model,
+				typ.VCPUs(), typ.Topology.Cores, typ.MemoryBytes>>20, typ.GPUCount, typ.GPU)
 		}
 		if typ.Hibernates && !aws.ToBool(it.HibernationSupported) {
 			t.Errorf("%s does not hibernate in %s", typ.Name, region)

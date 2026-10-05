@@ -302,7 +302,7 @@ type ComputeRate struct {
 	Class         RateClass
 	GPU           GPUType
 	ContainerHour int64
-	CPUCoreHour   int64
+	CPUHour       int64
 	MemoryGiBHour int64
 	GPUCardHour   int64
 }
@@ -340,8 +340,8 @@ type rateChange struct {
 // shapeRate is what a container on one kind of capacity costs before its
 // GPU; gpuRate is one model's fleet rate.
 type shapeRate struct {
-	owner                                 BillingOwner
-	containerHour, cpuCoreHour, memoryGiB int64
+	owner                             BillingOwner
+	containerHour, cpuHour, memoryGiB int64
 }
 
 type gpuRate struct {
@@ -371,7 +371,7 @@ func cardRate(g gpuRate, owner BillingOwner) int64 {
 func shapesFrom(fleet shapeRate) []shapeRate {
 	return []shapeRate{
 		fleet,
-		{OwnerConnectedCloud, managementFee(fleet.containerHour), managementFee(fleet.cpuCoreHour), managementFee(fleet.memoryGiB)},
+		{OwnerConnectedCloud, managementFee(fleet.containerHour), managementFee(fleet.cpuHour), managementFee(fleet.memoryGiB)},
 		{OwnerSelfHosted, 0, 0, 0},
 	}
 }
@@ -381,7 +381,7 @@ func shapesFrom(fleet shapeRate) []shapeRate {
 func computeRates(shapes []shapeRate, gpus []gpuRate) []ComputeRate {
 	var out []ComputeRate
 	for _, s := range shapes {
-		base := ComputeRate{Owner: s.owner, Class: ClassAuto, ContainerHour: s.containerHour, CPUCoreHour: s.cpuCoreHour, MemoryGiBHour: s.memoryGiB}
+		base := ComputeRate{Owner: s.owner, Class: ClassAuto, ContainerHour: s.containerHour, CPUHour: s.cpuHour, MemoryGiBHour: s.memoryGiB}
 		out = append(out, base)
 		for _, g := range gpus {
 			r := base
@@ -449,7 +449,7 @@ func placementRates(auto []ComputeRate, keep func(RateClass) bool) []ComputeRate
 		for _, r := range auto {
 			r.Class = p.Class
 			if r.Owner == OwnerPlatformFleet {
-				r.CPUCoreHour = multiplied(r.CPUCoreHour, p.CPUMemoryTenths)
+				r.CPUHour = multiplied(r.CPUHour, p.CPUMemoryTenths)
 				r.MemoryGiBHour = multiplied(r.MemoryGiBHour, p.CPUMemoryTenths)
 				r.GPUCardHour = multiplied(r.GPUCardHour, p.GPUTenths)
 			}
@@ -484,7 +484,7 @@ func rateHistory() []rateChange {
 		{GPUA10040, 1_500_000_000}, {GPUA10080, 2_925_626_400}, {GPUH100, 2_250_000_000}, {GPUH200, 3_250_000_000},
 	}
 	initial := computeRates(shapesFrom(shapeRate{OwnerPlatformFleet, 0, 55_126_800, 7_560_000}), initialGPUs)
-	september := shapesFrom(shapeRate{OwnerPlatformFleet, 0, 22_000_000, 7_500_000})
+	september := shapesFrom(shapeRate{OwnerPlatformFleet, 0, 44_000_000, 7_500_000})
 	all := func(RateClass) bool { return true }
 	gpuOnly := func(rates []ComputeRate) []ComputeRate {
 		return slices.DeleteFunc(rates, func(r ComputeRate) bool { return r.GPU == noGPU })

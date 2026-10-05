@@ -11,12 +11,13 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 func capacityIn(c *hostproto.Capacity) compute.Capacity {
 	return compute.Capacity{
-		CPUMillis: c.GetCpuMillis(), MemoryBytes: c.GetMemoryBytes(),
+		CPUMillis: cpu.Millis(c.GetCpuMillis()), MemoryBytes: c.GetMemoryBytes(),
 		GPUType: c.GetGpuType(), GPUCount: int(c.GetGpuCount()),
 	}
 }

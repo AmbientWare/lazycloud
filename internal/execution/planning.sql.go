@@ -8,6 +8,7 @@ package execution
 import (
 	"context"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -50,7 +51,7 @@ type CreatePendingContainersParams struct {
 	WorkspaceID uuid.UUID
 	ReleaseID   uuid.UUID
 	Slots       int32
-	CpuMillis   int64
+	CpuMillis   cpu.Millis
 	MemoryBytes int64
 	GpuCount    int32
 	RateClass   string

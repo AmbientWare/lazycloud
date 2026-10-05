@@ -4530,22 +4530,25 @@ components:
 
     Resources:
       description: >-
-        Reservations the container always keeps. CPU above the reservation is
-        shared up to `cpu_limit_millis`, by default the reservation plus 16
-        cores. Memory above the reservation is allowed up to
+        Reservations the container always keeps. CPU counts physical cores,
+        two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the
+        reservation is shared up to `cpu_limit_millis`, by default the
+        reservation plus 8 CPUs. Memory above the reservation is allowed up to
         `memory_limit_mib`, by default four times the reservation, at least
         1 GiB and at most 8 GiB above it; the container is killed beyond it.
       type: object
       required: [cpu_millis, memory_mib]
       properties:
         cpu_millis:
+          description: Thousandths of a CPU.
           type: integer
           minimum: 125
-          maximum: 192000
+          maximum: 32000
         cpu_limit_millis:
+          description: Thousandths of a CPU.
           type: integer
           minimum: 125
-          maximum: 192000
+          maximum: 32000
         memory_mib:
           type: integer
           minimum: 128
@@ -7262,11 +7265,11 @@ components:
 
     ShapeRate:
       type: object
-      required: [billing_owner, nanos_per_container_hour, nanos_per_cpu_core_hour, nanos_per_memory_gib_hour]
+      required: [billing_owner, nanos_per_container_hour, nanos_per_cpu_hour, nanos_per_memory_gib_hour]
       properties:
         billing_owner: { $ref: "#/components/schemas/BillingOwner" }
         nanos_per_container_hour: { type: integer, format: int64 }
-        nanos_per_cpu_core_hour: { type: integer, format: int64 }
+        nanos_per_cpu_hour: { type: integer, format: int64 }
         nanos_per_memory_gib_hour: { type: integer, format: int64 }
 
     GpuRate:
@@ -7293,7 +7296,7 @@ components:
       required:
         - billing_owner
         - nanos_per_container_hour
-        - nanos_per_cpu_core_hour
+        - nanos_per_cpu_hour
         - nanos_per_memory_gib_hour
         - nanos_per_gpu_card_hour
       properties:
@@ -7302,7 +7305,7 @@ components:
           description: Absent for containers without a GPU.
           type: string
         nanos_per_container_hour: { type: integer, format: int64 }
-        nanos_per_cpu_core_hour: { type: integer, format: int64 }
+        nanos_per_cpu_hour: { type: integer, format: int64 }
         nanos_per_memory_gib_hour: { type: integer, format: int64 }
         nanos_per_gpu_card_hour: { type: integer, format: int64 }
 

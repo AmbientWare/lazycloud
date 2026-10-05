@@ -118,6 +118,11 @@ function isTimestamp(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T/.test(value);
 }
 
+/** Thousandths of a CPU as CPUs, such as `0.25 CPU` or `2 CPU`. One CPU is one physical core. */
+export function formatCpu(millicores: number): string {
+  return `${Number((millicores / 1000).toFixed(3))} CPU`;
+}
+
 /**
  * A resource a workload stated, with its ceiling when the author named one.
  *

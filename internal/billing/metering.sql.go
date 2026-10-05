@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -274,7 +275,7 @@ type LiveMeteredContainersRow struct {
 	WorkspaceID   uuid.UUID
 	ReleaseID     *uuid.UUID
 	ImageBuildID  *uuid.UUID
-	CpuMillis     int64
+	CpuMillis     cpu.Millis
 	MemoryBytes   int64
 	GpuCount      int32
 	GpuType       string
@@ -712,7 +713,7 @@ type StoppedMeteredContainersRow struct {
 	WorkspaceID   uuid.UUID
 	ReleaseID     *uuid.UUID
 	ImageBuildID  *uuid.UUID
-	CpuMillis     int64
+	CpuMillis     cpu.Millis
 	MemoryBytes   int64
 	GpuCount      int32
 	GpuType       string

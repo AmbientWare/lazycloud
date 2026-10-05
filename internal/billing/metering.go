@@ -531,7 +531,7 @@ func ledgerParams(batch []sourcePlan) ([]uuid.UUID, InsertLedgerEntriesParams, A
 			p.RateClasses = append(p.RateClasses, string(class))
 			p.GpuTypes = append(p.GpuTypes, string(shape.GPU))
 			p.GpuCounts = append(p.GpuCounts, int32(shape.GPUCount)) //nolint:gosec // GPU counts are small.
-			p.CpuMillis = append(p.CpuMillis, shape.CPUMillis)
+			p.CpuMillis = append(p.CpuMillis, int64(shape.CPUMillis))
 			p.MemoryBytes = append(p.MemoryBytes, shape.MemoryBytes)
 			p.PricingVersions = append(p.PricingVersions, e.charge.Version)
 			p.ContainerNanos = append(p.ContainerNanos, e.charge.ContainerNanos)

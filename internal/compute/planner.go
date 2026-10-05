@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -156,7 +157,7 @@ type requestedHost struct {
 	ID                 uuid.UUID    `json:"id"`
 	Kind               HostKind     `json:"kind"`
 	ConnectionID       *uuid.UUID   `json:"connection_id"`
-	CPUMillis          int64        `json:"cpu_millis"`
+	CPUMillis          cpu.Millis   `json:"cpu_millis"`
 	MemoryBytes        int64        `json:"memory_bytes"`
 	GPUType            string       `json:"gpu_type"`
 	GPUCount           int          `json:"gpu_count"`

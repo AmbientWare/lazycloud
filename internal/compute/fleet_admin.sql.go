@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -102,7 +103,7 @@ type PlatformHostsRow struct {
 	Market               *string
 	GpuType              string
 	GpuCount             int32
-	CpuMillis            int64
+	CpuMillis            cpu.Millis
 	MemoryBytes          int64
 	AgentVersion         string
 	ReserveMode          *string

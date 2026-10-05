@@ -101,7 +101,7 @@ func (o *Observability) ContainerMetrics(ctx context.Context, ws identity.Worksp
 		points = mergePoints(points)
 	}
 	out := apitypes.ContainerMetrics{
-		ContainerId: uuid.UUID(id), CpuTotalMillicores: scope.CpuMillis, MemoryTotalBytes: scope.MemoryBytes,
+		ContainerId: uuid.UUID(id), CpuTotalMillicores: int64(scope.CpuMillis), MemoryTotalBytes: scope.MemoryBytes,
 		StepSeconds: int(step / time.Second), Points: make([]apitypes.ContainerMetricPoint, 0, len(points)),
 	}
 	for _, p := range points {

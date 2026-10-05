@@ -27,6 +27,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -41,7 +42,7 @@ const (
 	maxAttempts = 2
 	// Build containers reserve this much and may use the host's CPU and up
 	// to buildMemoryLimit.
-	buildCPUMillis   = 1000
+	buildCPUMillis   = cpu.Millis(500)
 	buildMemoryBytes = 2 << 30
 	buildMemoryLimit = 8 << 30
 	maxFailureBytes  = 64 << 10
@@ -773,7 +774,7 @@ func (i *Images) failLocked(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason
 }
 
 // BuildResources are the reservations and ceilings of a build container.
-func BuildResources() (cpuMillis, memoryBytes, memoryLimitBytes int64) {
+func BuildResources() (cpuMillis cpu.Millis, memoryBytes, memoryLimitBytes int64) {
 	return buildCPUMillis, buildMemoryBytes, buildMemoryLimit
 }
 

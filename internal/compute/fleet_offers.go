@@ -159,7 +159,7 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, preemptible bool) 
 	if !ok || o.Usable.CPUMillis <= 0 || o.Usable.MemoryBytes <= 0 {
 		return rejectUnpricedCapacity, true
 	}
-	revenue := o.Usable.CPUMillis*rate.CPUCoreHour/1000 +
+	revenue := int64(o.Usable.CPUMillis)*rate.CPUHour/1000 +
 		o.Usable.MemoryBytes/gib*rate.MemoryGiBHour + o.Usable.MemoryBytes%gib*rate.MemoryGiBHour/gib +
 		int64(o.Usable.GPUs)*rate.GPUCardHour
 	if revenue <= 0 {

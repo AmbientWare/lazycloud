@@ -57,7 +57,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 }
 
 func describe(c FleetCapacity) string {
-	s := fmt.Sprintf("%gvCPU/%gGiB", float64(c.CPUMillis)/1000, float64(c.MemoryBytes)/float64(gib))
+	s := fmt.Sprintf("%gCPU/%gGiB", float64(c.CPUMillis)/1000, float64(c.MemoryBytes)/float64(gib))
 	if c.GPUs > 0 {
 		s += fmt.Sprintf("/%dGPU", c.GPUs)
 	}

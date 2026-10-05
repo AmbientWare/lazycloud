@@ -16,6 +16,7 @@ from typing_extensions import Never, Self
 
 from lazycloud._shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
 from lazycloud._shared.deployment_records import (
+    DEFAULT_CPU,
     DEFAULT_DISK,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
@@ -1490,7 +1491,7 @@ class Sandbox(ControlClientConfigMixin):
         self,
         *,
         _app_slug: str,
-        cpu: CpuRequest | str = 1.0,
+        cpu: CpuRequest | str = DEFAULT_CPU,
         memory: MemoryRequest = 128,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -1929,7 +1930,7 @@ def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
 
 
 def _cpu_value(value: CpuRequest | str) -> CpuRequest:
-    """Cores as a number, keeping a `(reserve, throttle at)` pair as a pair."""
+    """CPUs as a number, keeping a `(reserve, throttle at)` pair as a pair."""
     request, limit = request_and_limit(value)
     if limit is None:
         return _cores(request)

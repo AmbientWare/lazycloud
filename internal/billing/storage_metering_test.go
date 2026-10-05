@@ -57,8 +57,8 @@ func TestContainersPriceTheirGPUPlacementAndMachine(t *testing.T) {
 	auto, _ := card.computeRate(OwnerPlatformFleet, ClassAuto, noGPU)
 	firm, _ := card.computeRate(OwnerPlatformFleet, ClassNonPreemptible, noGPU)
 	pinned, _ := card.computeRate(OwnerPlatformFleet, ClassPinnedNonPreemptible, noGPU)
-	if firm.CPUCoreHour != 3*auto.CPUCoreHour || pinned.CPUCoreHour*2 != 9*auto.CPUCoreHour {
-		t.Fatalf("multipliers: auto %d, non-preemptible %d, pinned non-preemptible %d", auto.CPUCoreHour, firm.CPUCoreHour, pinned.CPUCoreHour)
+	if firm.CPUHour != 3*auto.CPUHour || pinned.CPUHour*2 != 9*auto.CPUHour {
+		t.Fatalf("multipliers: auto %d, non-preemptible %d, pinned non-preemptible %d", auto.CPUHour, firm.CPUHour, pinned.CPUHour)
 	}
 	// A GPU container whose model placement never recorded is not priced
 	// as free; it waits.

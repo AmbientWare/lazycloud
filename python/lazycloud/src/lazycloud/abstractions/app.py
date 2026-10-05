@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, cast, overl
 from lazycloud._shared.app_slug import validate_app_slug
 from lazycloud._shared.autoscaling import Autoscaler
 from lazycloud._shared.deployment_records import (
+    DEFAULT_CPU,
     DEFAULT_FUNCTION_AUTHORIZED,
-    DEFAULT_FUNCTION_CPU,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
-    DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
+    DEFAULT_POD_CPU,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
     DeploymentSpec,
@@ -98,7 +98,7 @@ class App:
         *,
         image: Image | None = None,
         name: str | None = None,
-        cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -143,7 +143,7 @@ class App:
         *,
         image: Image | None = None,
         name: str | None = None,
-        cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -187,7 +187,7 @@ class App:
         *,
         image: Image | None = None,
         name: str | None = None,
-        cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -236,6 +236,7 @@ class App:
             image: Image definition used to build or select the runtime image.
             name: Deployment resource name. Defaults to the callable name.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum runtime for one invocation.
             concurrency: Invocations one container serves at once.
             in_process: Serve those invocations in one interpreter rather than
@@ -316,7 +317,7 @@ class App:
         route: str = "/",
         domain: str | None = None,
         methods: list[str] | None = None,
-        cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -358,7 +359,7 @@ class App:
         route: str = "/",
         domain: str | None = None,
         methods: list[str] | None = None,
-        cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -399,7 +400,7 @@ class App:
         route: str = "/",
         domain: str | None = None,
         methods: list[str] | None = None,
-        cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -443,6 +444,7 @@ class App:
             route: HTTP route mounted for this endpoint.
             methods: HTTP methods accepted by the route. Defaults to framework policy.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum request runtime.
             retries: Retry attempts for failed request handling.
             workers, concurrency: Worker count and concurrent requests per worker.
@@ -511,7 +513,7 @@ class App:
         image: Image | None = None,
         route: str = "/",
         domain: str | None = None,
-        cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -546,6 +548,7 @@ class App:
             image: Image definition used to build or select the runtime image.
             route: Route prefix mounted for the ASGI app.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum request runtime.
             workers, concurrent_requests: Worker count and requests per worker.
             keep_warm_seconds: Seconds to keep idle workers available.
@@ -606,7 +609,7 @@ class App:
         image: Image | None = None,
         route: str = "/",
         domain: str | None = None,
-        cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+        cpu: CpuRequest | None = DEFAULT_CPU,
         memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -640,6 +643,7 @@ class App:
             image: Image definition used to build or select the runtime image.
             route: Route prefix mounted for realtime traffic.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
+                `cpu` counts CPUs, one physical core each.
             timeout_seconds: Maximum connection or message handling runtime.
             workers, concurrent_requests: Worker count and concurrent connections.
             keep_warm_seconds: Seconds to keep idle workers available.
@@ -699,7 +703,7 @@ class App:
         command: Iterable[str] | None = None,
         ports: Mapping[str, int] | None = None,
         env: Mapping[str, str] | None = None,
-        cpu: CpuRequest | None = 1.0,
+        cpu: CpuRequest | None = DEFAULT_POD_CPU,
         memory: MemoryRequest | None = "128Mi",
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -739,6 +743,7 @@ class App:
             ports: Named ports exposed by the pod.
             env: Environment variables injected into the pod.
             cpu, memory, gpu, gpu_count: Compute resources requested for the pod.
+                `cpu` counts CPUs, one physical core each.
             keep_warm: Seconds to keep the pod alive when idle.
             secrets: Secret names mounted into the pod environment.
             volumes: Durable volumes mounted into the pod.
@@ -802,7 +807,7 @@ class App:
         *,
         image: Image,
         disk: str | int,
-        cpu: CpuRequest,
+        cpu: CpuRequest = DEFAULT_POD_CPU,
         memory: MemoryRequest,
         agent_harnesses: Iterable[AgentHarness] = tuple(AgentHarness),
         gpu: GpuInput = None,
@@ -838,6 +843,7 @@ class App:
                 Defaults to all supported agents; an empty list skips installation.
                 Versions are pinned by the SDK. Authentication happens after deployment.
             cpu, memory, gpu, gpu_count: Compute resources for the container.
+                `cpu` counts CPUs, one physical core each.
             keep_warm: Idle seconds before the container stops; unset uses the
                 devbox default.
             preemptible: Allow a reclaimable node; unset keeps the devbox on one
@@ -888,7 +894,7 @@ class App:
     def sandbox(
         self,
         *,
-        cpu: CpuRequest | str = 1.0,
+        cpu: CpuRequest | str = DEFAULT_CPU,
         memory: MemoryRequest = 128,
         disk: str | None = None,
         gpu: GpuInput = None,
@@ -920,6 +926,7 @@ class App:
 
         Args:
             cpu, memory, gpu, gpu_count: Compute resources requested for the sandbox.
+                `cpu` counts CPUs, one physical core each.
             image: Image definition used to build or select the sandbox image.
             keep_warm_seconds: Seconds to keep the sandbox alive when idle.
             authorized: Whether sandbox control requires authentication.

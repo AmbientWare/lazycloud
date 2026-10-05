@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -84,7 +85,7 @@ func TestOfferAppliesLimits(t *testing.T) {
 }
 
 func TestParseCapacityLimits(t *testing.T) {
-	for value, want := range map[string]int64{"2": 2000, "1.5": 1500, "0.25": 250} {
+	for value, want := range map[string]cpu.Millis{"2": 2000, "1.5": 1500, "0.25": 250} {
 		if got, err := ParseCPU(value); err != nil || got != want {
 			t.Errorf("ParseCPU(%q) = %d, %v; want %d", value, got, err, want)
 		}
@@ -116,7 +117,7 @@ func TestAgentEnrollsWithPreflightChecks(t *testing.T) {
 	for _, check := range enroll.GetPreflight() {
 		checks[check.GetName()] = check
 	}
-	for name, message := range map[string]string{"docker": "Docker is reachable", "capacity.max_cpu": "using 4000m CPU", "capacity.max_memory": "using 8192 MB memory"} {
+	for name, message := range map[string]string{"docker": "Docker is reachable", "capacity.max_cpu": "using 2000m CPU", "capacity.max_memory": "using 8192 MB memory"} {
 		if check := checks[name]; !check.GetOk() || check.GetMessage() != message {
 			t.Errorf("check %s = %v, want %q", name, check, message)
 		}
@@ -129,7 +130,7 @@ func TestAgentEnrollsWithPreflightChecks(t *testing.T) {
 		}
 		t.Logf("this host offers %d %s", capacity.GetGpuCount(), capacity.GetGpuType())
 	}
-	if hello := s.hello.GetCapacity(); hello.GetGpuCount() != enroll.GetCapacity().GetGpuCount() || hello.GetCpuMillis() != 4000 {
+	if hello := s.hello.GetCapacity(); hello.GetGpuCount() != enroll.GetCapacity().GetGpuCount() || hello.GetCpuMillis() != 2000 {
 		t.Fatalf("hello capacity %v, enrolled %v", hello, enroll.GetCapacity())
 	}
 }
