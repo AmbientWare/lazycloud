@@ -53,14 +53,6 @@ func newCachedLayers(t *testing.T, transport http.RoundTripper, fetches int, siz
 	return out
 }
 
-func (c cachedLayers) digests() []imagefs.Digest {
-	out := make([]imagefs.Digest, len(c.layers))
-	for i, l := range c.layers {
-		out[i] = l.digest
-	}
-	return out
-}
-
 // A trace lists the frames of its layers read since it started, each the
 // first time, by the layer's position; a trace started while one of its
 // layers was mounted is not complete.

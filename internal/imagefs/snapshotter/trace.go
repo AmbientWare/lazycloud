@@ -254,7 +254,7 @@ func (s layerSources) Prefetch(_ context.Context, request *imagefsproto.Prefetch
 		}
 		reads[i] = prefetchRead{layer: layers[r.GetLayer()], frame: int(r.GetFrame())}
 	}
-	if err := s.frames.prefetch(reads); err != nil {
+	if err := s.frames.prefetch(reads); err != nil { //nolint:contextcheck // a prefetch lives with the cache, not the call
 		return nil, err
 	}
 	return &imagefsproto.PrefetchResponse{}, nil
