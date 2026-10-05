@@ -43,6 +43,9 @@ T = TypeVar("T")
 WAIT_SECONDS = 30
 # Tasks one waitTasks request reads; the API rejects more.
 MAX_WAIT_BATCH = 1000
+# Inline results a wait holds for tasks it has not yielded yet; past this it
+# reads only the first unfinished task, so a lagging task bounds memory.
+MAX_BUFFERED_RESULT_BYTES = 64 << 20
 # Calls one input may depend on; the API rejects more.
 MAX_DEPENDENCIES = 100
 # How often a wait reads a queued task while a progress callback listens.
@@ -424,6 +427,8 @@ def wait_in_order(
     known: dict[int, TaskResult[Payload | None] | Exception] = {}
     # Finished tasks whose result is read when they come.
     unread: set[int] = set()
+    # The encoded size of each inline result in `known`.
+    buffered: dict[int, int] = {}
     waiting: dict[int, UUID] = {}
     for n, task in enumerate(tasks):
         try:
@@ -432,8 +437,8 @@ def wait_in_order(
             known[n] = TaskNotFoundError(task.task_id)
     for head, task in enumerate(tasks):
         # With a progress callback, the first unfinished task is read after
-        # a round leaves it unfinished, and alone each second while queued,
-        # as a single wait does.
+        # each round that leaves it unfinished, and alone each second while
+        # queued, as a single wait does.
         reporter = PendingProgressReporter(terminal=Terminal(default_enabled=False))
         view: TaskView | None = None
         while head not in known:
@@ -445,9 +450,9 @@ def wait_in_order(
             if observed and view is not None and queued:
                 watched = _watch_head(task, hold, reporter)
             else:
-                _wait_round(tasks, waiting, known, unread, hold)
+                _wait_round(tasks, waiting, known, unread, buffered, hold)
                 watched = None
-                if observed and view is None and head not in known:
+                if observed and head not in known:
                     watched = _watch_head(task, 0, reporter)
             if isinstance(watched, Exception):
                 known[head] = watched
@@ -463,6 +468,7 @@ def wait_in_order(
         if view is not None:
             reporter.update(task.task_id, None)
         result = known.pop(head)
+        buffered.pop(head, None)
         if head in unread and isinstance(result, TaskResult):
             unread.discard(head)
             yield task._with_result(result.task)
@@ -487,12 +493,15 @@ def _wait_round(
     waiting: dict[int, UUID],
     known: dict[int, TaskResult[Payload | None] | Exception],
     unread: set[int],
+    buffered: dict[int, int],
     hold: int,
 ) -> None:
     """Read every waiting task once, moving each finished or missing one to `known`.
 
     The batches after the first are read without holding; the first, which
     holds the earliest waiting task, then holds for up to `hold` seconds.
+    Once the buffered results reach MAX_BUFFERED_RESULT_BYTES, only the
+    earliest waiting task is read.
     """
     sessions: dict[tuple[int, str], dict[UUID, list[int]]] = {}
     for n, task_id in waiting.items():
@@ -503,8 +512,15 @@ def _wait_round(
         items = list(ids.items())
         for start in range(0, len(items), MAX_WAIT_BATCH):
             batches.append(dict(items[start : start + MAX_WAIT_BATCH]))
-    for batch in [*batches[1:], batches[0]]:
-        _read_batch(tasks, batch, hold if batch is batches[0] else 0, waiting, known, unread)
+    for batch in batches[1:]:
+        if sum(buffered.values()) >= MAX_BUFFERED_RESULT_BYTES:
+            break
+        _read_batch(tasks, batch, 0, waiting, known, unread, buffered)
+    first = batches[0]
+    if sum(buffered.values()) >= MAX_BUFFERED_RESULT_BYTES:
+        earliest = next(iter(first))
+        first = {earliest: first[earliest]}
+    _read_batch(tasks, first, hold, waiting, known, unread, buffered)
 
 
 def _read_batch(
@@ -514,6 +530,7 @@ def _read_batch(
     waiting: dict[int, UUID],
     known: dict[int, TaskResult[Payload | None] | Exception],
     unread: set[int],
+    buffered: dict[int, int],
 ) -> None:
     """Read one batch of a session's tasks."""
     first = tasks[next(iter(batch.values()))[0]]
@@ -529,6 +546,8 @@ def _read_batch(
     for finished in response.tasks:
         for n in batch[finished.task.id]:
             known[n] = TaskResult(finished.task, finished.result)
+            if finished.result is not None:
+                buffered[n] = len(finished.result.model_dump_json())
             if finished.result_omitted:
                 unread.add(n)
             del waiting[n]
