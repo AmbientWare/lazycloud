@@ -15,10 +15,7 @@ export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] 
     <div className="@container min-w-0 space-y-5 p-4">
       <div className="grid min-w-0 gap-x-8 gap-y-5 @xl:grid-cols-2">
         <ConfigurationGroup title="Runtime">
-          <ConfigurationFact
-            label="CPU"
-            value={resourceAllocation(cpuRequest(resources), "vCPUs")}
-          />
+          <ConfigurationFact label="CPU" value={resourceAllocation(cpuRequest(resources), "CPU")} />
           <ConfigurationFact label="Memory" value={resourceAllocation(memoryRequest(resources))} />
           {gpu.length > 0 ? (
             <ConfigurationFact
@@ -52,7 +49,7 @@ export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] 
   );
 }
 
-/** vCPUs requested, with the ceiling when one is set. */
+/** CPUs requested, with the ceiling when one is set. */
 export function cpuRequest(resources: Schemas["Resources"]): number | [number, number] {
   const cpu = resources.cpu_millis / 1000;
   return resources.cpu_limit_millis ? [cpu, resources.cpu_limit_millis / 1000] : cpu;

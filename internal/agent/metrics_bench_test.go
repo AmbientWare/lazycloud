@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // BenchmarkSampleContainer reads one container's counters, using this
@@ -15,10 +17,10 @@ func BenchmarkSampleContainer(b *testing.B) {
 	}
 	source := &usageSource{cgroupDir: dir, pid: os.Getpid()}
 	now := time.Now()
-	source.sample("c", now, nil)
+	source.sample("c", now, cpu.Topology{ThreadsPerCore: 2}, nil)
 	b.ResetTimer()
 	for i := range b.N {
-		if source.sample("c", now.Add(time.Duration(i+1)*time.Second), nil) == nil {
+		if source.sample("c", now.Add(time.Duration(i+1)*time.Second), cpu.Topology{ThreadsPerCore: 2}, nil) == nil {
 			b.Fatal("no sample")
 		}
 	}

@@ -3725,9 +3725,11 @@ export interface components {
             /** @description The image by digest the release runs, set by the server. */
             readonly reference?: string;
         };
-        /** @description Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it. */
+        /** @description Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it. */
         Resources: {
+            /** @description Thousandths of a CPU. */
             cpu_millis: number;
+            /** @description Thousandths of a CPU. */
             cpu_limit_millis?: number;
             memory_mib: number;
             memory_limit_mib?: number;
@@ -5524,7 +5526,7 @@ export interface components {
             /** Format: int64 */
             nanos_per_container_hour: number;
             /** Format: int64 */
-            nanos_per_cpu_core_hour: number;
+            nanos_per_cpu_hour: number;
             /** Format: int64 */
             nanos_per_memory_gib_hour: number;
         };
@@ -5550,7 +5552,7 @@ export interface components {
             /** Format: int64 */
             nanos_per_container_hour: number;
             /** Format: int64 */
-            nanos_per_cpu_core_hour: number;
+            nanos_per_cpu_hour: number;
             /** Format: int64 */
             nanos_per_memory_gib_hour: number;
             /** Format: int64 */

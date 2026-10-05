@@ -8,6 +8,7 @@ package execution
 import (
 	"context"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -62,7 +63,7 @@ returning id
 type CreateBuildContainerParams struct {
 	WorkspaceID  uuid.UUID
 	ImageBuildID *uuid.UUID
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	GpuCount     int32
 }
@@ -149,7 +150,7 @@ order by c.id
 type StartingBuildContainersOnHostRow struct {
 	ID           uuid.UUID
 	ImageBuildID uuid.UUID
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	Attempt      int32
 }

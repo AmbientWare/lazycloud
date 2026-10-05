@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -36,7 +37,7 @@ const (
 
 // Limits caps what the host offers. Zero values offer what was detected.
 type Limits struct {
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 	// GPUs offers the first GPUs detected, none when zero; nil offers all.
 	// GPUIDs names them instead.
@@ -53,7 +54,8 @@ type gpuDevice struct {
 
 // detected is the machine before limits.
 type detected struct {
-	cpuMillis   int64
+	topology    cpu.Topology
+	cpuMillis   cpu.Millis
 	memoryBytes int64
 	gpus        []gpuDevice
 }
@@ -63,7 +65,51 @@ func detect(ctx context.Context) (detected, error) {
 	if err != nil {
 		return detected{}, err
 	}
-	return detected{cpuMillis: int64(runtime.NumCPU()) * 1000, memoryBytes: memory, gpus: detectGPUs(ctx)}, nil
+	topology, err := detectTopology()
+	if err != nil {
+		return detected{}, err
+	}
+	vcpus := cpu.VCPUMillis(runtime.NumCPU()) * 1000
+	return detected{topology: topology, cpuMillis: topology.CPUs(vcpus), memoryBytes: memory, gpus: detectGPUs(ctx)}, nil
+}
+
+// threadSiblings lists the hardware threads that share cpu0's core.
+const threadSiblings = "/sys/devices/system/cpu/cpu0/topology/thread_siblings_list"
+
+// detectTopology counts the hardware threads of one core, which every core
+// of a machine shares.
+func detectTopology() (cpu.Topology, error) {
+	data, err := os.ReadFile(threadSiblings)
+	if err != nil {
+		return cpu.Topology{}, fmt.Errorf("read the CPU topology: %w", err)
+	}
+	threads, err := countCPUList(strings.TrimSpace(string(data)))
+	if err != nil {
+		return cpu.Topology{}, fmt.Errorf("parse %s: %w", threadSiblings, err)
+	}
+	t := cpu.Topology{ThreadsPerCore: threads}
+	return t, t.Validate()
+}
+
+// countCPUList counts the CPUs of a kernel CPU list such as 0,8 or 0-1.
+func countCPUList(list string) (int, error) {
+	n := 0
+	for item := range strings.SplitSeq(list, ",") {
+		first, last, isRange := strings.Cut(item, "-")
+		if !isRange {
+			last = first
+		}
+		lo, err := strconv.Atoi(first)
+		if err != nil {
+			return 0, fmt.Errorf("cpu list %q: %w", list, err)
+		}
+		hi, err := strconv.Atoi(last)
+		if err != nil || hi < lo {
+			return 0, fmt.Errorf("cpu list %q has a bad range", list)
+		}
+		n += hi - lo + 1
+	}
+	return n, nil
 }
 
 // offer is what the host offers after its limits, with the checks that
@@ -90,14 +136,14 @@ func (o offer) failed() []*hostproto.PreflightCheck {
 // join.
 func resolveOffer(machine detected, limits Limits) offer {
 	o := offer{capacity: &hostproto.Capacity{
-		CpuMillis:   machine.cpuMillis,
+		CpuMillis:   int64(machine.cpuMillis),
 		MemoryBytes: max(0, machine.memoryBytes-max(reserveMemoryBytes, machine.memoryBytes/10)),
 	}}
 	if limits.CPUMillis > 0 {
 		ok := limits.CPUMillis <= machine.cpuMillis
 		message := "requested CPU exceeds detected CPU"
 		if ok {
-			o.capacity.CpuMillis = limits.CPUMillis
+			o.capacity.CpuMillis = int64(limits.CPUMillis)
 			message = fmt.Sprintf("using %dm CPU", limits.CPUMillis)
 		}
 		o.checks = append(o.checks, check("capacity.max_cpu", ok, message, "lower --max-cpu to at most the host's cores"))
@@ -255,13 +301,13 @@ func gpuModel(name string) string {
 	return key
 }
 
-// ParseCPU reads a core count such as 2 or 1.5 as millicores.
-func ParseCPU(value string) (int64, error) {
+// ParseCPU reads a CPU count such as 2 or 1.5.
+func ParseCPU(value string) (cpu.Millis, error) {
 	cores, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 	if err != nil || cores <= 0 || math.IsInf(cores, 0) {
 		return 0, errors.New("max cpu must be a positive number of cores")
 	}
-	return int64(math.Floor(cores*1000 + 0.5)), nil
+	return cpu.Millis(math.Floor(cores*1000 + 0.5)), nil
 }
 
 // memoryUnits are suffixes and their size in MB (MiB), longest first.

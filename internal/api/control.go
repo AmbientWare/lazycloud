@@ -424,7 +424,7 @@ func containerOut(c execution.Container) apitypes.Container {
 	out := apitypes.Container{
 		Id: uuid.UUID(c.ID), App: c.App, Function: c.Function, ReleaseId: c.Release, Version: c.Version,
 		State: apitypes.ContainerState(c.State), ExitMessage: c.ExitMessage, Slots: c.Slots, RunningTasks: c.RunningTasks,
-		CpuMillis: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20,
+		CpuMillis: int64(c.CPUMillis), MemoryMib: c.MemoryBytes >> 20,
 		CreatedAt: c.CreatedAt, ReadyAt: c.ReadyAt, StoppedAt: c.StoppedAt,
 		Kind: &c.Kind, ExitCode: c.ExitCode, Host: c.Host, GpuCount: &c.GPUCount, ExpiresAt: c.ExpiresAt,
 	}

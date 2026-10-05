@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 const (
 	bytesPerGiB        = int64(1) << 30
 	microsPerHour      = int64(3_600_000_000)
-	millicoresPerCore  = int64(1_000)
+	millisPerCPU       = int64(1_000)
 	microsecondsPerSec = int64(1_000_000)
 )
 
@@ -20,7 +22,7 @@ type Shape struct {
 	Class       RateClass
 	GPU         GPUType
 	GPUCount    int
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 }
 
@@ -68,7 +70,7 @@ func (c RateCard) price(shape Shape, d time.Duration) (Charge, error) {
 	return Charge{
 		Version:        c.Version,
 		ContainerNanos: cost(rate.ContainerHour, 1, 1, micros),
-		CPUNanos:       cost(rate.CPUCoreHour, shape.CPUMillis, millicoresPerCore, micros),
+		CPUNanos:       cost(rate.CPUHour, int64(shape.CPUMillis), millisPerCPU, micros),
 		MemoryNanos:    cost(rate.MemoryGiBHour, shape.MemoryBytes, bytesPerGiB, micros),
 		GPUNanos:       cost(rate.GPUCardHour, int64(shape.GPUCount), 1, micros),
 	}, nil

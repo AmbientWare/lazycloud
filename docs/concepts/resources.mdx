@@ -18,7 +18,8 @@ def render(scene: dict[str, float]) -> bytes:
 
 `cpu` and `memory` are reservations the container always keeps. A pair adds a
 ceiling, so this function reserves 1 CPU and 2 GiB, is throttled at 4 CPUs, and
-is killed above 8 GiB. Smaller reservations start faster. One CPU is one vCPU.
+is killed above 8 GiB. Smaller reservations start faster. One CPU is one
+physical core, two vCPUs.
 
 `disk` is scratch space, 100 GiB by default, gone when the container stops.
 Files that must last go in a [volume](/concepts/volumes).
@@ -71,9 +72,9 @@ Two options narrow that:
 
 ## Defaults
 
-| | Function | Endpoint | ASGI and realtime | Pod | Sandbox |
+| | Function | Endpoint | ASGI and realtime | Pod and dev box | Sandbox |
 | --- | --- | --- | --- | --- | --- |
-| `cpu` | `0.125` | `1.0` | `1.0` | `1.0` | `1.0` |
+| `cpu` | `0.125` | `0.125` | `0.125` | `1.0` | `0.125` |
 | `memory` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `128` MiB |
 | `timeout_seconds` | `3600` per call | `180` per request | `180` per request | | |
 | `retries` | `3` | `0` | | | |

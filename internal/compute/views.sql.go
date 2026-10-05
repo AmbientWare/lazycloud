@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -109,7 +110,7 @@ type ConnectionInstancesRow struct {
 	CapacityReason   string
 	GpuType          string
 	GpuCount         int32
-	CpuMillis        int64
+	CpuMillis        cpu.Millis
 	MemoryBytes      int64
 	LaunchAttempts   int32
 	AgentVersion     string

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // The scenarios run PlanFleet against a small fleet simulation with fixed
@@ -302,7 +304,7 @@ func (s *sim) host(id HostID) *simHost {
 // quotas known its whole class.
 func (s *sim) launch(a FleetAction, reserve bool) (HostID, bool) {
 	o := *a.Offer
-	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
+	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs > limit {
 		s.r.refusals++
 		s.in.Cooldowns = append(s.in.Cooldowns, OfferCooldown{
 			Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, RefusedAt: s.now, Until: s.now.Add(10 * time.Minute), Quota: s.knowQuota,
@@ -416,8 +418,8 @@ func demandOnly() Policy {
 	return p
 }
 
-func cpuNeed(cpu int64, memGiB int64) Requirement {
-	return Requirement{CPUMillis: cpu, MemoryBytes: memGiB * gib}
+func cpuNeed(millis cpu.Millis, memGiB int64) Requirement {
+	return Requirement{CPUMillis: millis, MemoryBytes: memGiB * gib}
 }
 
 func TestFleetScenarios(t *testing.T) {
@@ -439,7 +441,7 @@ func TestFleetScenarios(t *testing.T) {
 		{"reserve depletion", 3 * time.Hour, append(append(burst(time.Hour, cpuNeed(2000, 4), 12),
 			burst(time.Hour+15*time.Minute, cpuNeed(2000, 4), 12)...), burst(time.Hour+30*time.Minute, cpuNeed(2000, 4), 12)...)},
 		{"GPU burst", 2 * time.Hour, burst(time.Hour, gpu, 4)},
-		{"8-16 vCPU burst", 2 * time.Hour, append(burst(time.Hour, cpuNeed(8000, 16), 5), burst(time.Hour, cpuNeed(16_000, 32), 3)...)},
+		{"4-8 CPU burst", 2 * time.Hour, append(burst(time.Hour, cpuNeed(4000, 16), 5), burst(time.Hour, cpuNeed(8000, 32), 3)...)},
 	}
 	for _, sc := range scenarios {
 		for _, policy := range []struct {
@@ -516,15 +518,15 @@ func TestFleetQuotaScenario(t *testing.T) {
 
 // Each CPU market keeps a floor reserve and one beside it that fits its
 // largest recent shape, and each GPU model work used keeps one, through a
-// burst of 16 vCPU work and the quiet hours after; a model nobody used keeps
+// burst of 8 CPU work and the quiet hours after; a model nobody used keeps
 // none.
 func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 	s := newSim(t, DefaultPolicy())
 	s.recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
-	sixteen := cpuNeed(16_000, 16)
+	eight := cpuNeed(8_000, 16)
 	var arrivals []simArrival
 	for _, preemptible := range []bool{false, true} {
-		need := sixteen
+		need := eight
 		need.Preemptible = preemptible
 		arrivals = append(arrivals, simArrival{at: time.Hour, need: need, count: 2, runs: 10 * time.Minute})
 	}
@@ -540,13 +542,13 @@ func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 			continue
 		}
 		held[h.market()] = append(held[h.market()], h.InstanceType)
-		large[h.market()] = large[h.market()] || h.Usable.Covers(reservedShape(sixteen))
+		large[h.market()] = large[h.market()] || h.Usable.Covers(reservedShape(eight))
 	}
 	for m, n := range want {
 		// A host returning from the burst may briefly sit beside the
 		// reserves it replaces before the surplus retires.
 		if len(held[m]) != n || s.mostReserves[m] > n+1 || (m.GPU == "" && !large[m]) {
-			t.Errorf("%s holds %v and held up to %d; want %d, one that fits 16 vCPU", m, held[m], s.mostReserves[m], n)
+			t.Errorf("%s holds %v and held up to %d; want %d, one that fits 8 CPU", m, held[m], s.mostReserves[m], n)
 		}
 	}
 	if len(held) != len(want) {

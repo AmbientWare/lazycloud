@@ -13,7 +13,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { StopCause } from "@/components/shared/StopCause";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
-import { formatBytes, shortId } from "@/lib/format";
+import { formatBytes, formatCpu, shortId } from "@/lib/format";
 import {
   containerLifecycleQueryOptions,
   containerMetricsQueryOptions,
@@ -151,7 +151,10 @@ function ContainerCapacity({ metrics }: { metrics: Schemas["ContainerMetrics"] }
   const capacity = [
     {
       label: "CPU allocation",
-      value: sample ? formatCpu(metrics.cpu_total_millicores) : "Not reported",
+      value:
+        sample && metrics.cpu_total_millicores > 0
+          ? formatCpu(metrics.cpu_total_millicores)
+          : "Not reported",
     },
     {
       label: "Memory allocation",
@@ -196,10 +199,4 @@ function latestSample(
     if (!latest || point.timestamp > latest.timestamp) return point;
     return latest;
   }, undefined);
-}
-
-function formatCpu(millicores: number): string {
-  if (millicores <= 0) return "Not reported";
-  const vcpus = Number((millicores / 1_000).toFixed(2));
-  return `${vcpus} vCPU`;
 }

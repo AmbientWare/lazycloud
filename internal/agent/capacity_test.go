@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -84,7 +85,7 @@ func TestOfferAppliesLimits(t *testing.T) {
 }
 
 func TestParseCapacityLimits(t *testing.T) {
-	for value, want := range map[string]int64{"2": 2000, "1.5": 1500, "0.25": 250} {
+	for value, want := range map[string]cpu.Millis{"2": 2000, "1.5": 1500, "0.25": 250} {
 		if got, err := ParseCPU(value); err != nil || got != want {
 			t.Errorf("ParseCPU(%q) = %d, %v; want %d", value, got, err, want)
 		}
@@ -161,6 +162,19 @@ func TestAgentWithAFailedPreflightEnrollsButDoesNotJoin(t *testing.T) {
 	for _, path := range []string{tokenFile, identityPath(e.stateDir)} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("%s remains after a failed join: %v", path, err)
+		}
+	}
+}
+
+func TestCountCPUList(t *testing.T) {
+	for list, want := range map[string]int{"0": 1, "0-1": 2, "0,8": 2, "0-1,64-65": 4} {
+		if got, err := countCPUList(list); err != nil || got != want {
+			t.Errorf("countCPUList(%q) = %d, %v; want %d", list, got, err, want)
+		}
+	}
+	for _, list := range []string{"", "a", "3-1"} {
+		if _, err := countCPUList(list); err == nil {
+			t.Errorf("countCPUList(%q) accepted", list)
 		}
 	}
 }

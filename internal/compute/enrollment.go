@@ -11,12 +11,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 // Capacity is what a host offers to containers.
 type Capacity struct {
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 	GPUType     string
 	GPUCount    int

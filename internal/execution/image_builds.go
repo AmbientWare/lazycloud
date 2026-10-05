@@ -11,6 +11,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -52,7 +53,7 @@ func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspa
 		return ContainerID{}, &billing.PaymentRequiredError{Message: "this account may not use " + gpu}
 	}
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
-		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
+		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpu.Millis(cpuMillis), MemoryBytes: memoryBytes,
 		GpuCount: int32(len(req.GPUModels)), //nolint:gosec // At most one GPU.
 	})
 	if err != nil {
@@ -112,7 +113,7 @@ type BuildStart struct {
 	Container   ContainerID
 	Build       uuid.UUID
 	Attempt     int
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 }
 

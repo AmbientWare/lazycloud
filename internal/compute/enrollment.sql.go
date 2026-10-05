@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -70,7 +71,7 @@ returning id
 
 type EnrollCloudHostParams struct {
 	TokenHash    []byte
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	GpuType      string
 	GpuCount     int32
@@ -123,7 +124,7 @@ type EnrollMachineParams struct {
 	Phase        string
 	PhaseMessage string
 	Failure      *string
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	GpuType      string
 	GpuCount     int32
@@ -194,7 +195,7 @@ returning id
 type InsertPlatformHostParams struct {
 	Name         string
 	TokenHash    []byte
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	GpuType      string
 	GpuCount     int32
@@ -239,7 +240,7 @@ returning session_epoch
 `
 
 type OpenHostSessionParams struct {
-	CpuMillis    int64
+	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	GpuType      string
 	GpuCount     int32

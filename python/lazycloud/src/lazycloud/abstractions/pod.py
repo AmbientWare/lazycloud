@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from lazycloud._shared.deployment_records import (
     DEFAULT_DISK,
+    DEFAULT_POD_CPU,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
     DeploymentSpec,
@@ -241,7 +242,7 @@ class Pod:
     command: list[str] = field(default_factory=list)
     ports: dict[str, int] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
-    cpu: CpuRequest | None = 1.0
+    cpu: CpuRequest | None = DEFAULT_POD_CPU
     memory: MemoryRequest | None = "128Mi"
     disk: str | None = None
     gpu: GpuInput = None

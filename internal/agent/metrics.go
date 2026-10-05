@@ -14,6 +14,7 @@ import (
 
 	"github.com/moby/moby/client"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -114,7 +115,7 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 			if len(source.gpus) > 0 && gpus == nil {
 				gpus = a.readGPUs(ctx)
 			}
-			if s := source.sample(c.id, time.Now(), gpus); s != nil {
+			if s := source.sample(c.id, time.Now(), a.topology, gpus); s != nil {
 				samples = append(samples, s)
 			}
 		}
@@ -127,9 +128,9 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 }
 
 // sample reads the counters and returns their change since the previous
-// sample; the first reading only primes them. A container whose files are
-// gone has exited and returns nil.
-func (s *usageSource) sample(id string, now time.Time, gpus map[string]*hostproto.GPUSample) *hostproto.ContainerSample {
+// sample, with CPU time counted on cores; the first reading only primes
+// them. A container whose files are gone has exited and returns nil.
+func (s *usageSource) sample(id string, now time.Time, topology cpu.Topology, gpus map[string]*hostproto.GPUSample) *hostproto.ContainerSample {
 	cpu, ok := readKeyed(filepath.Join(s.cgroupDir, "cpu.stat"), "usage_usec")
 	if !ok {
 		return nil
@@ -151,7 +152,7 @@ func (s *usageSource) sample(id string, now time.Time, gpus map[string]*hostprot
 	out := &hostproto.ContainerSample{
 		ContainerId:     id,
 		IntervalMs:      uint32(min(elapsed, 1<<31)), //nolint:gosec // Bounded above.
-		CpuUsageUsec:    delta(current.cpuUsec, prev.cpuUsec),
+		CpuUsageUsec:    topology.CPUTime(delta(current.cpuUsec, prev.cpuUsec)),
 		MemoryRssBytes:  mem["anon"] + mem["file_mapped"],
 		MemorySwapBytes: swap,
 		NetworkRxBytes:  delta(current.netRx, prev.netRx),

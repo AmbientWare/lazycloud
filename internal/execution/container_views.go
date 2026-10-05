@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -28,7 +29,7 @@ type Container struct {
 	ExitMessage  *string
 	Slots        int
 	RunningTasks int
-	CPUMillis    int64
+	CPUMillis    cpu.Millis
 	MemoryBytes  int64
 	CreatedAt    time.Time
 	ReadyAt      *time.Time

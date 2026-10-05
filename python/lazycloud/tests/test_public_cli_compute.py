@@ -68,7 +68,7 @@ def _instance(index: int, **extra: object) -> dict[str, object]:
         "capacity_state": "available",
         "capacity_reason": "",
         "gpu_count": 1,
-        "cpu_millicores": 4000,
+        "cpu_millicores": 2000,
         "memory_mb": 16384,
         "launch_attempt": 1,
         "booted_template_version": "1.0.0",

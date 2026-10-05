@@ -8,6 +8,7 @@ package compute
 import (
 	"context"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -56,7 +57,7 @@ type AvailableCapacityRow struct {
 	Market           *string
 	GpuType          string
 	GpuCount         int32
-	CpuMillis        int64
+	CpuMillis        cpu.Millis
 	MemoryBytes      int64
 	FreeCpuMillis    int64
 	FreeMemoryBytes  int64

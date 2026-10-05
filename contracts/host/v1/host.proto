@@ -93,6 +93,8 @@ message EnrollResponse {
   string host_token = 2;
 }
 
+// Capacity counts CPUs, one physical core each; the agent converts from
+// the machine's hardware threads.
 message Capacity {
   int64 cpu_millis = 1;
   int64 memory_bytes = 2;
@@ -222,7 +224,7 @@ message ContainerSample {
   string container_id = 1;
   // Time covered since the previous sample.
   uint32 interval_ms = 2;
-  // CPU time used in the interval.
+  // CPU time used in the interval, counted on cores.
   uint64 cpu_usage_usec = 3;
   // Anonymous and mapped file memory, and swap, when sampled.
   uint64 memory_rss_bytes = 4;
@@ -561,8 +563,8 @@ message Source {
   google.protobuf.Timestamp url_expires_at = 3;
 }
 
-// Resources reserve cpu_millis and memory_bytes; the container may use more
-// up to the limits. The host caps cpu_limit_millis at its own size.
+// Resources reserve cpu_millis, in CPUs, and memory_bytes; the container may
+// use more up to the limits. The host caps cpu_limit_millis at its own size.
 message Resources {
   int64 cpu_millis = 1;
   int64 memory_bytes = 2;

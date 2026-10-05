@@ -419,7 +419,7 @@ func (ps *pass) limits(nodes int) CoverLimits {
 func (ps *pass) quotaOf(region, instanceType string, market Market) (QuotaKey, int64) {
 	t, _ := ps.typeNamed(instanceType)
 	class, _ := QuotaClassOf(instanceType)
-	return QuotaKey{Region: region, Class: class, Market: market}, t.VCPUs()
+	return QuotaKey{Region: region, Class: class, Market: market}, t.VCPUs
 }
 
 // startable reports whether a stopped host's quota has room to start it.

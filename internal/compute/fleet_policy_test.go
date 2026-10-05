@@ -3,10 +3,12 @@ package compute
 import (
 	"slices"
 	"testing"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
-func cpuGiB(cpu int64, memGiB int64) FleetCapacity {
-	return FleetCapacity{CPUMillis: cpu, MemoryBytes: memGiB * gib}
+func cpuGiB(millis cpu.Millis, memGiB int64) FleetCapacity {
+	return FleetCapacity{CPUMillis: millis, MemoryBytes: memGiB * gib}
 }
 
 func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
@@ -17,10 +19,10 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 		load          FleetCapacity
 		warm, stopped FleetCapacity
 	}{
-		{"quiet on-demand keeps its floors", ReserveMarket{}, FleetCapacity{}, cpuGiB(2000, 4), cpuGiB(6000, 12)},
-		{"quiet Spot keeps its floors", ReserveMarket{Preemptible: true}, FleetCapacity{}, cpuGiB(2000, 4), cpuGiB(6000, 12)},
+		{"quiet on-demand keeps its floors", ReserveMarket{}, FleetCapacity{}, cpuGiB(1000, 4), cpuGiB(3000, 12)},
+		{"quiet Spot keeps its floors", ReserveMarket{Preemptible: true}, FleetCapacity{}, cpuGiB(1000, 4), cpuGiB(3000, 12)},
 		{"loaded market keeps a share", ReserveMarket{}, cpuGiB(40_000, 80), cpuGiB(10_000, 20), cpuGiB(20_000, 40)},
-		{"a share rounds up", ReserveMarket{}, FleetCapacity{CPUMillis: 10_001}, cpuGiB(2501, 4), cpuGiB(6000, 12)},
+		{"a share rounds up", ReserveMarket{}, FleetCapacity{CPUMillis: 10_001}, cpuGiB(2501, 4), cpuGiB(5001, 12)},
 		{"GPU markets keep a share without a floor", ReserveMarket{GPU: "T4"}, FleetCapacity{}, FleetCapacity{}, FleetCapacity{}},
 		{"loaded GPU market", ReserveMarket{GPU: "L4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{CPUMillis: 1000, GPUs: 1}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 		{"other cards keep none", ReserveMarket{GPU: "H100"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
@@ -42,7 +44,7 @@ func TestFleetMarketsAreSpotOnDemandAndTheReservedCards(t *testing.T) {
 }
 
 // A CPU market's large-shape reserve fits at least the default, so small
-// recent work can't shrink it below what a 16 vCPU request needs; recent
+// recent work can't shrink it below what an 8 CPU request needs; recent
 // work only raises it, up to the cap.
 func TestLargeShapeReserveFitsAtLeastTheDefault(t *testing.T) {
 	s := DefaultPolicy().LargestShape
@@ -54,8 +56,8 @@ func TestLargeShapeReserveFitsAtLeastTheDefault(t *testing.T) {
 	}{
 		{"no recent work", FleetCapacity{}, s.Default},
 		{"small recent work", cpuGiB(1000, 1), s.Default},
-		{"larger recent work", cpuGiB(24000, 48), cpuGiB(24000, 48).Upper(s.Default).Lower(s.Cap)},
-		{"beyond the cap", cpuGiB(64000, 256), cpuGiB(64000, 256).Lower(s.Cap)},
+		{"larger recent work", cpuGiB(12000, 48), cpuGiB(12000, 48).Upper(s.Default).Lower(s.Cap)},
+		{"beyond the cap", cpuGiB(32000, 256), cpuGiB(32000, 256).Lower(s.Cap)},
 	}
 	for _, c := range cases {
 		if got := s.of(spot, c.recent); got != c.want {

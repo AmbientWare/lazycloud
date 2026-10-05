@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Schemas } from "@/lib/api/client";
+import { formatCpu } from "@/lib/format";
 import {
   awsConnectionQueryOptions,
   computeSummaryQueryOptions,
@@ -489,12 +490,6 @@ function connectionActionLabel(connection: AwsConnection): string | null {
     return "Review";
   }
   return "Manage";
-}
-
-function formatCpu(millicores: number): string {
-  if (millicores < 1000) return `${millicores}m`;
-  const cores = millicores / 1000;
-  return `${Number.isInteger(cores) ? cores.toFixed(0) : cores.toFixed(1)} cores`;
 }
 
 function formatMemory(mebibytes: number): string {

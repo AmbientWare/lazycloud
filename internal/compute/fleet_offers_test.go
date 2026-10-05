@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 var offerNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -30,13 +31,13 @@ func offerInputs(t *testing.T) OfferInputs {
 	}
 }
 
-// A request of every vCPU of an AWS size buys that size, not the next one up.
-func TestARequestOfEveryVCPUBuysThatSize(t *testing.T) {
+// A request of every CPU of an AWS size buys that size, not the next one up.
+func TestARequestOfEveryCPUBuysThatSize(t *testing.T) {
 	in := offerInputs(t)
-	for _, vcpus := range []int64{8, 16} {
-		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: vcpus * 1000, MemoryBytes: 8 * gib}, false, in)
-		if len(offers) == 0 || offers[0].Type.CPUMillis != vcpus*1000 {
-			t.Fatalf("%d vCPU request: offers %v", vcpus, offerKeys(offers))
+	for _, cpus := range []cpu.Millis{4000, 8000} {
+		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: cpus, MemoryBytes: 8 * gib}, false, in)
+		if len(offers) == 0 || offers[0].Type.CPUMillis() != cpus {
+			t.Fatalf("%d CPU request: offers %v", cpus/1000, offerKeys(offers))
 		}
 	}
 }
@@ -75,7 +76,7 @@ func TestOffersRespectInterruptionToleranceAndZone(t *testing.T) {
 func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 	in := offerInputs(t)
 	gpuType := func(name, model string, micros int64) CatalogType {
-		return CatalogType{Name: name, CPUMillis: 16_000, MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
+		return CatalogType{Name: name, VCPUs: 32, Topology: testTopology, MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
 	}
 	in.Catalog = []CatalogType{gpuType("l40s", "L40S", 1_000_000), gpuType("l4", "L4", 300_000), gpuType("t4", "T4", 200_000), mustType(t, "m7i.large")}
 	preferred := RankOffers(DefaultPolicy(), Requirement{GPUs: []string{"L40S", "L4"}, CPUMillis: 1000, MemoryBytes: gib}, false, in)
@@ -141,7 +142,7 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 	usable := mustType(t, "m6a.8xlarge").Usable(0)
 	revenue := func(class billing.RateClass, gpu billing.GPUType, cards int) int64 {
 		r := rates[class][gpu]
-		return usable.CPUMillis*r.CPUCoreHour/1000 + usable.MemoryBytes/gib*r.MemoryGiBHour +
+		return int64(usable.CPUMillis)*r.CPUHour/1000 + usable.MemoryBytes/gib*r.MemoryGiBHour +
 			usable.MemoryBytes%gib*r.MemoryGiBHour/gib + int64(cards)*r.GPUCardHour
 	}
 	ceiling := func(revenue int64) int64 { return revenue * 70 / 100_000 }
@@ -173,7 +174,7 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 	}
 	nonPreemptible := rates[billing.ClassNonPreemptible][""]
 	auto := rates[billing.ClassAuto][""]
-	if nonPreemptible.CPUCoreHour != 3*auto.CPUCoreHour || rates[billing.ClassNonPreemptible]["L4"].GPUCardHour != rates[billing.ClassAuto]["L4"].GPUCardHour {
+	if nonPreemptible.CPUHour != 3*auto.CPUHour || rates[billing.ClassNonPreemptible]["L4"].GPUCardHour != rates[billing.ClassAuto]["L4"].GPUCardHour {
 		t.Fatalf("non-preemptible CPU and memory are three times automatic; GPUs are not")
 	}
 	unpriced := FleetOffer{Type: CatalogType{GPU: "unpriced", GPUCount: 1}, Market: MarketOnDemand, Usable: usable, HourlyMicros: 1}

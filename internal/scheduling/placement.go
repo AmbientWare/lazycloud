@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -93,7 +94,8 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 		if len(hosts) == 0 {
 			return nil
 		}
-		var maxCPU, maxMemory int64
+		var maxCPU cpu.Millis
+		var maxMemory int64
 		for _, h := range hosts {
 			maxCPU, maxMemory = max(maxCPU, h.FreeCPUMillis), max(maxMemory, h.FreeMemoryBytes)
 		}

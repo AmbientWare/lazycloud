@@ -93,12 +93,12 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, lim
 		for _, s := range states {
 			for c, o := range candidates {
 				q := slices.Index(quotas, o.Quota)
-				if q >= 0 && s.quota[q]+o.Type.VCPUs() > limits.VCPUs[o.Quota] {
+				if q >= 0 && s.quota[q]+o.Type.VCPUs > limits.VCPUs[o.Quota] {
 					continue
 				}
 				next, moved := s.add(c, o, cost(o), need, order, total)
 				if q >= 0 {
-					next.quota[q] += o.Type.VCPUs()
+					next.quota[q] += o.Type.VCPUs
 				}
 				if !moved || (best != nil && next.cost >= best.cost) {
 					continue
@@ -189,7 +189,7 @@ func (s coverState) coverage(need CoverNeed, total int) float64 {
 	}
 	progress := float64(total - left)
 	for _, d := range [][2]int64{
-		{s.supplied.CPUMillis, need.Aggregate.CPUMillis},
+		{int64(s.supplied.CPUMillis), int64(need.Aggregate.CPUMillis)},
 		{s.supplied.MemoryBytes, need.Aggregate.MemoryBytes},
 		{int64(s.supplied.GPUs), int64(need.Aggregate.GPUs)},
 	} {
@@ -211,7 +211,7 @@ func (s coverState) key() string {
 	for _, n := range s.remaining {
 		b = strconv.AppendInt(append(b, ','), int64(n), 10)
 	}
-	b = strconv.AppendInt(append(b, '|'), s.supplied.CPUMillis, 10)
+	b = strconv.AppendInt(append(b, '|'), int64(s.supplied.CPUMillis), 10)
 	b = strconv.AppendInt(append(b, ','), s.supplied.MemoryBytes, 10)
 	b = strconv.AppendInt(append(b, ','), int64(s.supplied.GPUs), 10)
 	for _, v := range s.quota {

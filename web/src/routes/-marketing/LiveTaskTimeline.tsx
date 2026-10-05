@@ -30,7 +30,7 @@ const TASKS: TimelineTask[] = [
     depth: 0,
     start: 0,
     duration: 4,
-    resource: "2 vCPU",
+    resource: "1 CPU",
     volume: true,
   },
   {
@@ -39,7 +39,7 @@ const TASKS: TimelineTask[] = [
     depth: 1,
     start: 4,
     duration: 6,
-    resource: "8 vCPU",
+    resource: "4 CPU",
   },
   {
     name: "evaluate",
@@ -65,7 +65,7 @@ const TASKS: TimelineTask[] = [
     depth: 4,
     start: 27,
     duration: 3,
-    resource: "1 vCPU",
+    resource: "0.5 CPU",
     volume: true,
   },
 ];

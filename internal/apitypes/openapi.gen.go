@@ -2808,7 +2808,7 @@ type ComputeRate struct {
 	// GpuType Absent for containers without a GPU.
 	GpuType               *string `json:"gpu_type,omitempty"`
 	NanosPerContainerHour int64   `json:"nanos_per_container_hour"`
-	NanosPerCpuCoreHour   int64   `json:"nanos_per_cpu_core_hour"`
+	NanosPerCpuHour       int64   `json:"nanos_per_cpu_hour"`
 	NanosPerGpuCardHour   int64   `json:"nanos_per_gpu_card_hour"`
 	NanosPerMemoryGibHour int64   `json:"nanos_per_memory_gib_hour"`
 }
@@ -3229,7 +3229,7 @@ type Devbox struct {
 	// PhaseReason Why the last start failed.
 	PhaseReason *string `json:"phase_reason,omitempty"`
 
-	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	// Resources Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 	Resources *Resources `json:"resources,omitempty"`
 
 	// SshCommand The CLI command that connects, with --app when the name is shared.
@@ -4511,10 +4511,13 @@ type ResourceChange struct {
 	Topic ChangeTopic `json:"topic"`
 }
 
-// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+// Resources Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 type Resources struct {
+	// CpuLimitMillis Thousandths of a CPU.
 	CpuLimitMillis *int `json:"cpu_limit_millis,omitempty"`
-	CpuMillis      int  `json:"cpu_millis"`
+
+	// CpuMillis Thousandths of a CPU.
+	CpuMillis int `json:"cpu_millis"`
 
 	// DiskMib Writable layer limit; enforced where Docker has project quotas.
 	DiskMib *int `json:"disk_mib,omitempty"`
@@ -4724,7 +4727,7 @@ type ShapeRate struct {
 	// BillingOwner Who pays for the machine a container ran on: the platform's fleet bills catalog rates, a connected cloud account a management fee, and self-hosted machines nothing.
 	BillingOwner          BillingOwner `json:"billing_owner"`
 	NanosPerContainerHour int64        `json:"nanos_per_container_hour"`
-	NanosPerCpuCoreHour   int64        `json:"nanos_per_cpu_core_hour"`
+	NanosPerCpuHour       int64        `json:"nanos_per_cpu_hour"`
 	NanosPerMemoryGibHour int64        `json:"nanos_per_memory_gib_hour"`
 }
 
@@ -5419,7 +5422,7 @@ type WorkloadSpec struct {
 	// Pod Makes the workload run a command instead of a handler: a pod, a devbox or a sandbox. keep_warm_seconds is the idle time before a container stops; deploy fills 600 for pods and sandboxes and 1800 for devboxes.
 	Pod *PodSpec `json:"pod,omitempty"`
 
-	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	// Resources Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 	Resources   Resources    `json:"resources"`
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
 

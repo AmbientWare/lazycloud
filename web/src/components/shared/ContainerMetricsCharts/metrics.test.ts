@@ -48,15 +48,20 @@ describe("container metric chart data", () => {
     const [datum] = buildMetricData(series);
     expect(datum.networkRecvRate).toBeNull();
     expect(datum.diskWriteRate).toBeNull();
-    expect(datum.cpuPercent).toBe(25);
   });
 
   it("keeps the network readout null until interval-bearing samples arrive", () => {
     expect(latestComputeReadout(buildMetricData(metrics([{}])))).toEqual({
-      cpu: "25.0%",
+      cpu: "0.25 CPU",
       memory: "100.0 MiB",
       network: null,
     });
     expect(latestComputeReadout([])).toBeNull();
+  });
+
+  it("reads CPU above the reservation as an amount, not a capped share", () => {
+    const data = buildMetricData(metrics([{ cpu_millicores: 1500 }]));
+    expect(data[0].cpuUsed).toBe(1500);
+    expect(latestComputeReadout(data)?.cpu).toBe("1.5 CPU");
   });
 });

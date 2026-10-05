@@ -1,14 +1,21 @@
 package compute
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
+)
 
 // hibernationMemoryLimit is the RAM EC2 hibernates instances under.
 const hibernationMemoryLimit = 150 * gib
 
 // CatalogType is an instance type the platform fleet buys.
 type CatalogType struct {
-	Name        string
-	CPUMillis   int64
+	Name string
+	// VCPUs is the type's hardware threads, as EC2 sells them and its
+	// quotas count them; Topology is how many run on each core.
+	VCPUs       int64
+	Topology    cpu.Topology
 	MemoryBytes int64
 	GPU         string
 	GPUCount    int
@@ -30,8 +37,13 @@ func (t CatalogType) OnDemandMicros(region string) (int64, bool) {
 	return t.prices[n], true
 }
 
+// CPUMillis is the type's size in CPUs.
+func (t CatalogType) CPUMillis() cpu.Millis {
+	return t.Topology.CPUs(cpu.VCPUMillis(t.VCPUs * 1000))
+}
+
 // Usable is what a host of the type offers containers, as the agent computes
-// it (agent/capacity.go): every vCPU, and memory less the larger of a floor
+// it (agent/capacity.go): every core, and memory less the larger of a floor
 // and a tenth. Memory is 94% of nominal until a host of the type has
 // reported, then what it reported.
 func (t CatalogType) Usable(reportedMemory int64) FleetCapacity {
@@ -40,7 +52,7 @@ func (t CatalogType) Usable(reportedMemory int64) FleetCapacity {
 		nominal := t.MemoryBytes * 94 / 100
 		memory = nominal - max(512<<20, nominal/10)
 	}
-	return FleetCapacity{CPUMillis: t.CPUMillis, MemoryBytes: memory, GPUs: t.GPUCount}
+	return FleetCapacity{CPUMillis: t.CPUMillis(), MemoryBytes: memory, GPUs: t.GPUCount}
 }
 
 // RootGiB is the root volume a host of the type launches with: a
@@ -51,9 +63,6 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 	}
 	return rootVolumeGiB
 }
-
-// VCPUs is what a running host of the type counts against its quota.
-func (t CatalogType) VCPUs() int64 { return t.CPUMillis / 1000 }
 
 // CatalogTypeNamed finds a catalog type by name.
 func CatalogTypeNamed(name string) (CatalogType, bool) {
@@ -85,33 +94,35 @@ func rootDiskMicros(region string, gib int64) int64 {
 // FleetCatalog is what the platform fleet buys, with on-demand prices in
 // us-east-2, us-west-1, us-east-1 and us-west-2 as the AWS price list
 // published 2026-09-25 has them (testdata/fleet/on_demand_prices.json).
+// Every type runs two threads per core, its DefaultThreadsPerCore.
 func FleetCatalog() []CatalogType {
-	cpu := func(name string, vcpus, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, CPUMillis: vcpus * 1000, MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
+	smt := cpu.Topology{ThreadsPerCore: 2}
+	cpuType := func(name string, vcpus, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
+		return CatalogType{Name: name, VCPUs: vcpus, Topology: smt, MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
 	}
 	gpu := func(name string, vcpus, memGiB int64, model string, cards int, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, CPUMillis: vcpus * 1000, MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
+		return CatalogType{Name: name, VCPUs: vcpus, Topology: smt, MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
 	}
 	return []CatalogType{
-		cpu("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),
-		cpu("m7i.xlarge", 4, 16, true, [4]int64{201600, 235200, 201600, 201600}),
-		cpu("c6a.2xlarge", 8, 16, true, [4]int64{306000, 381600, 306000, 306000}),
-		cpu("c7i.2xlarge", 8, 16, true, [4]int64{357000, 445200, 357000, 357000}),
-		cpu("m6a.2xlarge", 8, 32, true, [4]int64{345600, 403200, 345600, 345600}),
-		cpu("m7i.2xlarge", 8, 32, true, [4]int64{403200, 470400, 403200, 403200}),
-		cpu("r6a.2xlarge", 8, 64, true, [4]int64{453600, 504000, 453600, 453600}),
-		cpu("r7i.2xlarge", 8, 64, true, [4]int64{529200, 588000, 529200, 529200}),
-		cpu("c6a.4xlarge", 16, 32, true, [4]int64{612000, 763200, 612000, 612000}),
-		cpu("m6a.4xlarge", 16, 64, true, [4]int64{691200, 806400, 691200, 691200}),
-		cpu("m7i.4xlarge", 16, 64, true, [4]int64{806400, 940800, 806400, 806400}),
-		cpu("r6a.4xlarge", 16, 128, true, [4]int64{907200, 1008000, 907200, 907200}),
-		cpu("c6a.8xlarge", 32, 64, true, [4]int64{1224000, 1526400, 1224000, 1224000}),
-		cpu("c6i.8xlarge", 32, 64, true, [4]int64{1360000, 1696000, 1360000, 1360000}),
-		cpu("m6a.8xlarge", 32, 128, true, [4]int64{1382400, 1612800, 1382400, 1382400}),
-		cpu("m7i.8xlarge", 32, 128, true, [4]int64{1612800, 1881600, 1612800, 1612800}),
-		cpu("r6a.8xlarge", 32, 256, false, [4]int64{1814400, 2016000, 1814400, 1814400}),
-		cpu("m7i.12xlarge", 48, 192, false, [4]int64{2419200, 2822400, 2419200, 2419200}),
-		cpu("m7i.16xlarge", 64, 256, false, [4]int64{3225600, 3763200, 3225600, 3225600}),
+		cpuType("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),
+		cpuType("m7i.xlarge", 4, 16, true, [4]int64{201600, 235200, 201600, 201600}),
+		cpuType("c6a.2xlarge", 8, 16, true, [4]int64{306000, 381600, 306000, 306000}),
+		cpuType("c7i.2xlarge", 8, 16, true, [4]int64{357000, 445200, 357000, 357000}),
+		cpuType("m6a.2xlarge", 8, 32, true, [4]int64{345600, 403200, 345600, 345600}),
+		cpuType("m7i.2xlarge", 8, 32, true, [4]int64{403200, 470400, 403200, 403200}),
+		cpuType("r6a.2xlarge", 8, 64, true, [4]int64{453600, 504000, 453600, 453600}),
+		cpuType("r7i.2xlarge", 8, 64, true, [4]int64{529200, 588000, 529200, 529200}),
+		cpuType("c6a.4xlarge", 16, 32, true, [4]int64{612000, 763200, 612000, 612000}),
+		cpuType("m6a.4xlarge", 16, 64, true, [4]int64{691200, 806400, 691200, 691200}),
+		cpuType("m7i.4xlarge", 16, 64, true, [4]int64{806400, 940800, 806400, 806400}),
+		cpuType("r6a.4xlarge", 16, 128, true, [4]int64{907200, 1008000, 907200, 907200}),
+		cpuType("c6a.8xlarge", 32, 64, true, [4]int64{1224000, 1526400, 1224000, 1224000}),
+		cpuType("c6i.8xlarge", 32, 64, true, [4]int64{1360000, 1696000, 1360000, 1360000}),
+		cpuType("m6a.8xlarge", 32, 128, true, [4]int64{1382400, 1612800, 1382400, 1382400}),
+		cpuType("m7i.8xlarge", 32, 128, true, [4]int64{1612800, 1881600, 1612800, 1612800}),
+		cpuType("r6a.8xlarge", 32, 256, false, [4]int64{1814400, 2016000, 1814400, 1814400}),
+		cpuType("m7i.12xlarge", 48, 192, false, [4]int64{2419200, 2822400, 2419200, 2419200}),
+		cpuType("m7i.16xlarge", 64, 256, false, [4]int64{3225600, 3763200, 3225600, 3225600}),
 		gpu("g4dn.xlarge", 4, 16, "T4", 1, [4]int64{526000, 631000, 526000, 526000}),
 		gpu("g4dn.2xlarge", 8, 32, "T4", 1, [4]int64{752000, 902000, 752000, 752000}),
 		gpu("g4dn.4xlarge", 16, 64, "T4", 1, [4]int64{1204000, 1445000, 1204000, 1204000}),

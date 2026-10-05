@@ -27,9 +27,9 @@ from lazycloud._shared import tasks as policies
 from lazycloud._shared.autoscaling import Autoscaler
 from lazycloud._shared.callbacks import normalize_callback_url
 from lazycloud._shared.deployment_records import (
+    DEFAULT_CPU,
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
-    DEFAULT_FUNCTION_CPU,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -166,7 +166,7 @@ class Function(Generic[P, R]):
     _app_slug: str
     image: Image = field(default_factory=Image)
     name: str | None = None
-    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU
+    cpu: CpuRequest | None = DEFAULT_CPU
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY
     disk: str | None = None
     gpu: GpuInput = None
@@ -1022,7 +1022,7 @@ def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
 
     `disk` limits the container's writable layer, such as "10Gi".
     """
-    cpu = DEFAULT_FUNCTION_CPU if cpu is None else cpu
+    cpu = DEFAULT_CPU if cpu is None else cpu
     memory = DEFAULT_FUNCTION_MEMORY if memory is None else memory
     resources: dict[str, int] = {}
     if isinstance(cpu, tuple | list):
@@ -1058,7 +1058,7 @@ def _function(
     _app_slug: str,
     image: Image | None = None,
     name: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,
@@ -1104,7 +1104,7 @@ def _function(
     _app_slug: str,
     image: Image | None = None,
     name: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,
@@ -1149,7 +1149,7 @@ def _function(
     _app_slug: str,
     image: Image | None = None,
     name: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,

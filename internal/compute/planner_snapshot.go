@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // fleetRead is what one planning pass reads, all in its transaction.
@@ -146,7 +148,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
-		Load:       FleetCapacity{CPUMillis: h.UsedCpu, MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
+		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
 		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
 		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
@@ -199,7 +201,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		}
 		g := pendingGroup{connection: r.ConnectionID, group: DemandGroup{Need: Requirement{
 			Region: r.Region, Zone: r.Zone, Preemptible: r.Preemptible, GPUs: gpus, GPUCount: int(r.GpuCount),
-			CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
+			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes,
 		}}}
 		for n, id := range r.Ids {
 			c := PendingContainer{ID: id}
@@ -229,7 +231,7 @@ func largestShapes(rows []RecentShapesRow) map[ReserveMarket]FleetCapacity {
 		default:
 			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
-		out[m] = out[m].Upper(FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)})
+		out[m] = out[m].Upper(FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)})
 	}
 	return out
 }

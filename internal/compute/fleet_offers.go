@@ -46,7 +46,7 @@ func QuotaUse(hosts []FleetHost, catalog []CatalogType) map[QuotaKey]int64 {
 		}
 		if i := slices.IndexFunc(catalog, func(t CatalogType) bool { return t.Name == h.InstanceType }); i >= 0 {
 			class, _ := QuotaClassOf(h.InstanceType)
-			used[QuotaKey{Region: h.Region, Class: class, Market: h.Market}] += catalog[i].VCPUs()
+			used[QuotaKey{Region: h.Region, Class: class, Market: h.Market}] += catalog[i].VCPUs
 		}
 	}
 	return used
@@ -159,7 +159,7 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, preemptible bool) 
 	if !ok || o.Usable.CPUMillis <= 0 || o.Usable.MemoryBytes <= 0 {
 		return rejectUnpricedCapacity, true
 	}
-	revenue := o.Usable.CPUMillis*rate.CPUCoreHour/1000 +
+	revenue := int64(o.Usable.CPUMillis)*rate.CPUHour/1000 +
 		o.Usable.MemoryBytes/gib*rate.MemoryGiBHour + o.Usable.MemoryBytes%gib*rate.MemoryGiBHour/gib +
 		int64(o.Usable.GPUs)*rate.GPUCardHour
 	if revenue <= 0 {
@@ -274,7 +274,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					}
 					class, _ := QuotaClassOf(t.Name)
 					quota := QuotaKey{Region: region, Class: class, Market: market}
-					if left, known := room[quota]; cooled(in.Cooldowns, in.Now, region, t.Name, market) || (known && left < t.VCPUs()) {
+					if left, known := room[quota]; cooled(in.Cooldowns, in.Now, region, t.Name, market) || (known && left < t.VCPUs) {
 						continue
 					}
 					o := FleetOffer{
