@@ -7,8 +7,6 @@ import (
 	"maps"
 	"path"
 	"slices"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,10 +30,6 @@ type layer struct {
 	frames *frameCache
 	log    *slog.Logger
 	failed func()
-	// fetches is the context of the mount's background fetches, which
-	// background waits for.
-	fetches    context.Context
-	background sync.WaitGroup
 }
 
 // read fills dest with e's bytes from off and returns how many it read. A
@@ -66,9 +60,6 @@ type node struct {
 	entry *imagefs.Entry
 	ino   uint64
 	nlink uint32
-	// spanned is set once a read of the file has started the background
-	// fetch of all its frames.
-	spanned atomic.Bool
 }
 
 var (
@@ -212,16 +203,7 @@ func (n *node) Open(_ context.Context, flags uint32) (gofs.FileHandle, uint32, s
 
 // Read fails with EIO when the store cannot serve the bytes, logged and
 // counted.
-//
-// The first read of a file larger than a frame fetches all its frames in
-// the background: programs read libraries and models through page faults
-// all over the file, one store round trip each otherwise.
 func (n *node) Read(ctx context.Context, _ gofs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	if e := n.entry; e.Size > imagefs.FrameSize && n.spanned.CompareAndSwap(false, true) {
-		l := n.layer
-		first, last := l.index.FrameSpan(*e, 0, e.Size)
-		l.background.Go(func() { l.frames.fill(l.fetches, l, first, last) })
-	}
 	got, err := n.layer.read(ctx, n.entry, dest, off)
 	if err != nil {
 		n.layer.failed()

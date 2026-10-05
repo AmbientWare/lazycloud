@@ -46,9 +46,10 @@ type lazyRef struct {
 type mountedLayer struct {
 	digest imagefs.Digest
 	server *fuse.Server
-	layer  *layer
-	// stopFetches ends the layer's background fetches.
-	stopFetches context.CancelFunc
+	// stopFill ends the layer's background fetch and filled closes once
+	// it has.
+	stopFill context.CancelFunc
+	filled   chan struct{}
 }
 
 // mounts owns the FUSE servers of mounted lazy layers. A layer stays
@@ -88,8 +89,7 @@ func (m *mounts) run(ctx context.Context) {
 			for id, ml := range m.mounted {
 				if err := m.unmount(id); err != nil {
 					m.log.Warn("layer left mounted at exit", "snapshot", id, "error", err)
-					ml.stopFetches()
-					ml.layer.background.Wait()
+					<-ml.filled
 				}
 			}
 			return
@@ -216,11 +216,9 @@ func (m *mounts) mount(r lazyRef) error {
 		return fmt.Errorf("%w: snapshot %s holds layer %s, labelled %s", imagefs.ErrInvalidIndex, r.id, ix.Layer, r.digest)
 	}
 	digest := r.digest
-	fetchCtx, stopFetches := context.WithCancel(m.life)
 	l := &layer{
-		fetches: fetchCtx,
-		digest:  digest,
-		index:   ix,
+		digest: digest,
+		index:  ix,
 		data: imagefs.HTTPObject(m.http, func() string {
 			g, _ := m.grants.lookup(digest)
 			return g.dataURL
@@ -252,13 +250,17 @@ func (m *mounts) mount(r lazyRef) error {
 		OnAdd:           root.build,
 	})
 	if err != nil {
-		stopFetches()
 		return fmt.Errorf("mount layer %s: %w", digest, err)
 	}
-	if ix.StreamSize <= m.fillBytes && len(ix.Frames) > 0 {
-		l.background.Go(func() { m.frames.fill(fetchCtx, l, 0, len(ix.Frames)-1) })
-	}
-	m.mounted[r.id] = &mountedLayer{digest: digest, server: server, layer: l, stopFetches: stopFetches}
+	fillCtx, stopFill := context.WithCancel(m.life)
+	ml := &mountedLayer{digest: digest, server: server, stopFill: stopFill, filled: make(chan struct{})}
+	go func() {
+		defer close(ml.filled)
+		if ix.StreamSize <= m.fillBytes {
+			m.frames.fill(fillCtx, l)
+		}
+	}()
+	m.mounted[r.id] = ml
 	m.frames.setMounted(digest, 1)
 	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
 	return nil
@@ -270,8 +272,8 @@ func (m *mounts) unmount(id string) error {
 		return fmt.Errorf("unmount layer %s: %w", ml.digest, err)
 	}
 	ml.server.Wait()
-	ml.stopFetches()
-	ml.layer.background.Wait()
+	ml.stopFill()
+	<-ml.filled
 	delete(m.mounted, id)
 	m.frames.setMounted(ml.digest, -1)
 	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
