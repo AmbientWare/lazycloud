@@ -2,4 +2,4 @@
 // bindings from contracts/host.
 package hostproto
 
-//go:generate sh -c "cd ../.. && go tool buf generate"
+//go:generate sh -c "cd ../.. && go tool buf generate --path contracts/host"

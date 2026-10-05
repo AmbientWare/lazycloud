@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package lazycloud.imagefs.v1;
+
+option go_package = "github.com/AmbientWare/lazycloud/internal/imagefs/indexproto";
+
+// Index is one OCI layer's file tree and the frame table of its data object.
+//
+// A stored index is the 4 bytes "LCIX", the format version as a 4-byte
+// big-endian unsigned integer, then this message encoded and compressed as
+// one zstd frame. Readers refuse a version they do not know; a format change
+// takes a new version and is never read by an older reader.
+//
+// The data object holds every regular file's bytes in one uncompressed
+// stream, cut into frames of 4 MiB (4194304 bytes) and each frame compressed
+// as its own zstd frame, stored back to back. Frame i holds the stream's bytes
+// [i*4 MiB, (i+1)*4 MiB); only the last frame is shorter. A file of 4 MiB or
+// less never spans two frames: the stream is padded with zeros to the next
+// frame boundary when it would.
+message Index {
+  // The layer's uncompressed digest (diff_id), "sha256:<hex>".
+  string layer = 1;
+  // Bytes of the uncompressed data stream.
+  int64 stream_size = 2;
+  // Compressed bytes of each frame, in stream order. A frame's offset in the
+  // data object is the sum of the sizes before it.
+  repeated int64 frame_sizes = 3;
+  // In tar order, a directory before its children, each path once.
+  repeated Entry entries = 4;
+}
+
+enum EntryType {
+  ENTRY_TYPE_UNSPECIFIED = 0;
+  ENTRY_TYPE_REGULAR = 1;
+  ENTRY_TYPE_DIRECTORY = 2;
+  ENTRY_TYPE_SYMLINK = 3;
+  // A second name for an earlier entry: link_target names that entry, and
+  // offset and size repeat its bytes.
+  ENTRY_TYPE_HARD_LINK = 4;
+  ENTRY_TYPE_CHAR_DEVICE = 5;
+  ENTRY_TYPE_BLOCK_DEVICE = 6;
+  ENTRY_TYPE_FIFO = 7;
+}
+
+message Entry {
+  // Clean and relative to the layer root, which is ".".
+  string path = 1;
+  EntryType type = 2;
+  // Permission bits with setuid (04000), setgid (02000) and sticky (01000),
+  // as in st_mode & 07777. The file type is in type.
+  uint32 mode = 3;
+  uint32 uid = 4;
+  uint32 gid = 5;
+  int64 mod_time_seconds = 6;
+  int32 mod_time_nanos = 7;
+  // A symlink's target as written, or the path of a hard link's entry.
+  string link_target = 8;
+  uint32 dev_major = 9;
+  uint32 dev_minor = 10;
+  map<string, bytes> xattrs = 11;
+  // An OCI whiteout: path is the removed name, and the entry is a character
+  // device 0:0 as overlayfs expects.
+  bool whiteout = 12;
+  // A directory that hides the lower layers' contents of the same path.
+  bool opaque = 13;
+  // A regular file's bytes in the uncompressed data stream.
+  int64 offset = 14;
+  int64 size = 15;
+}

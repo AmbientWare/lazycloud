@@ -26,6 +26,13 @@ go vet ./...
 go tool golangci-lint run ./...
 go tool buf format -d --exit-code
 go tool buf lint
+# The protobuf bindings match their contracts.
+gen=$(mktemp -d)
+trap 'rm -rf "$gen"' EXIT
+go tool buf generate -o "$gen"
+(cd "$gen" && find . -type f) | while read -r f; do
+  cmp -s "$gen/$f" "$f" || { echo "stale generated code: $f; run go generate"; exit 1; }
+done
 echo "== python"
 "$uv" run --group dev ruff format --check python
 "$uv" run --group dev ruff check python

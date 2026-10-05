@@ -48,9 +48,15 @@ linters:
           files:
             - "**/internal/agent/**"
             - "**/internal/diskengine/**"
+            - "**/internal/imagefs/**"
             - "**/internal/supervisor/**"
             - "**/cmd/agent/**"
             - "**/cmd/supervisor/**"
+          # Lax mode lets the longer allow entry win over the storage deny,
+          # so tests reach the development object store's settings.
+          list-mode: lax
+          allow:
+            - github.com/AmbientWare/lazycloud/internal/storage/storagetest
           deny:
             - pkg: github.com/jackc/pgx
               desc: host runtime has no database access
