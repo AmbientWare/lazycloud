@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,38 @@ type snapshotterServer struct {
 	mu     sync.Mutex
 	grants []*imagefsproto.LayerGrant
 	refuse bool
+	// prefetches and traces are the Prefetch and StartTrace calls held;
+	// EndTrace answers with traced.
+	prefetches []*imagefsproto.PrefetchRequest
+	traces     map[string][]string
+	traced     []*imagefsproto.FrameRead
+}
+
+func (s *snapshotterServer) Prefetch(_ context.Context, req *imagefsproto.PrefetchRequest) (*imagefsproto.PrefetchResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prefetches = append(s.prefetches, req)
+	return &imagefsproto.PrefetchResponse{}, nil
+}
+
+func (s *snapshotterServer) StartTrace(_ context.Context, req *imagefsproto.StartTraceRequest) (*imagefsproto.StartTraceResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.traces == nil {
+		s.traces = map[string][]string{}
+	}
+	s.traces[req.GetName()] = req.GetLayers()
+	return &imagefsproto.StartTraceResponse{}, nil
+}
+
+func (s *snapshotterServer) EndTrace(_ context.Context, req *imagefsproto.EndTraceRequest) (*imagefsproto.EndTraceResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.traces[req.GetName()]; !ok {
+		return nil, status.Error(codes.NotFound, "no trace")
+	}
+	delete(s.traces, req.GetName())
+	return &imagefsproto.EndTraceResponse{Reads: s.traced, Complete: true}, nil
 }
 
 func (s *snapshotterServer) Grant(_ context.Context, req *imagefsproto.GrantRequest) (*imagefsproto.GrantResponse, error) {
@@ -136,5 +169,38 @@ func TestLayerGrantsReachTheSnapshotterBeforeThePull(t *testing.T) {
 	}
 	if e.containers() != before {
 		t.Fatal("a start whose grants were refused created a container")
+	}
+}
+
+// TestStartupTracesReachTheServerOnceReady: a start's prefetch reaches the
+// snapshotter before the container runs, and a start that records its trace
+// reports what the snapshotter traced once the container is ready.
+func TestStartupTracesReachTheServerOnceReady(t *testing.T) {
+	e := newEnv(t)
+	socket := filepath.Join(e.stateDir, "snap.sock")
+	snap := serveSnapshotter(t, socket)
+	snap.traced = []*imagefsproto.FrameRead{{Layer: 0, Frame: 7}, {Layer: 0, Frame: 2}}
+	e.startAgent(func(c *Config) { c.Snapshotter = socket })
+	s := e.session()
+
+	diffID := "sha256:" + uuid.NewString()
+	start := e.startCommand("app:handle", 1)
+	id := start.GetStart().GetContainerId()
+	start.GetStart().Layers = []*hostproto.LayerGrant{layerGrant(diffID, time.Now().Add(time.Hour))}
+	start.GetStart().Prefetch = &hostproto.ImageTrace{Reads: []*hostproto.FrameRead{{Layer: 0, Frame: 3}}}
+	start.GetStart().RecordTrace = true
+	s.send(t, start)
+	s.phase(t, id, starting)
+	snap.mu.Lock()
+	prefetched := len(snap.prefetches) == 1 && slices.Equal(snap.prefetches[0].GetLayers(), []string{diffID}) &&
+		snap.prefetches[0].GetReads()[0].GetFrame() == 3
+	tracing := slices.Equal(snap.traces[id], []string{diffID})
+	snap.mu.Unlock()
+	if !prefetched || !tracing {
+		t.Fatalf("before the container ran the snapshotter had the prefetch %v and the trace %v", prefetched, tracing)
+	}
+	reported := s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) != 2 || reported.GetTrace().GetReads()[0].GetFrame() != 7 {
+		t.Fatalf("the host reported %v", reported)
 	}
 }
