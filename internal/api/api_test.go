@@ -71,7 +71,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	t.Helper()
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelTask, database.ChannelClaim, database.ChannelLogs)
+	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelTask, database.ChannelTaskFinished, database.ChannelClaim, database.ChannelLogs)
 	runCtx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })

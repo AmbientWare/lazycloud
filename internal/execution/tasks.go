@@ -128,7 +128,7 @@ func (e *Execution) WaitTasks(ctx context.Context, listener *database.Listener, 
 		// Subscribe before the first read so a finish between a read and
 		// the wait still wakes this call.
 		var cancel func()
-		wake, cancel = listener.Subscribe(database.ChannelTask, uuidStrings(keys)...)
+		wake, cancel = listener.Subscribe(database.ChannelTaskFinished, uuidStrings(keys)...)
 		defer cancel()
 	}
 	if err := e.checkTasksExist(ctx, workspace, keys); err != nil {

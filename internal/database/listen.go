@@ -27,6 +27,9 @@ const (
 	ChannelExecution Channel = "lc_execution"
 	// ChannelTask wakes waiters on a task; payload is the task id.
 	ChannelTask Channel = "lc_task"
+	// ChannelTaskFinished wakes waiters on many tasks when one reaches a
+	// terminal status; payload is the task id.
+	ChannelTaskFinished Channel = "lc_task_finished"
 	// ChannelClaim wakes claims waiting for a release's queued tasks.
 	ChannelClaim Channel = "lc_claim"
 	// ChannelLogs wakes followers of a workload's or container's logs;

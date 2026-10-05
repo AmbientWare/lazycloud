@@ -2,12 +2,15 @@ package execution
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -163,4 +166,109 @@ func TestWaitTasksInlinesResultsWithinTheBudget(t *testing.T) {
 	if len(got[2].Result.Data) != 250_000 {
 		t.Fatalf("inline result has %d bytes", len(got[2].Result.Data))
 	}
+}
+
+// finishedIDs reads the task ids committed on ChannelTaskFinished since the
+// last read.
+func finishedIDs(t *testing.T, pool *pgxpool.Pool) func() map[uuid.UUID]bool {
+	t.Helper()
+	read := notifications(t, pool, database.ChannelTaskFinished)
+	return func() map[uuid.UUID]bool {
+		ids := map[uuid.UUID]bool{}
+		for _, payload := range read() {
+			for id := range strings.SplitSeq(payload, "\n") {
+				ids[uuid.MustParse(id)] = true
+			}
+		}
+		return ids
+	}
+}
+
+func TestOnlyTerminalTransitionsNotifyFinishedTasks(t *testing.T) {
+	const spec = `{"max_pending_tasks": 10}`
+	t.Run("logs then success or failure", func(t *testing.T) {
+		pool := dbtest.New(t)
+		e := NewExecution(pool)
+		l := listen(t, pool)
+		f := deployedFunction(t, pool, spec)
+		tasks := submit(t, e, f, 2)
+		finished := finishedIDs(t, pool)
+		host, container := placedContainer(t, pool, f, ContainerReady, 2)
+		claimed, err := e.ClaimTasks(t.Context(), l, host, container, 2, 0)
+		if err != nil || len(claimed) != 2 {
+			t.Fatalf("claim: %v, %v", claimed, err)
+		}
+		if err := e.AppendLogs(t.Context(), host, container, []LogLine{
+			{Attempt: claimed[0].Attempt, Stream: LogStdout, Data: "working\n", Time: time.Now()},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got := finished(); len(got) != 0 {
+			t.Fatalf("a claim and a log line notified %v", got)
+		}
+		if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+			Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+			Attempt: claimed[1].Attempt, State: AttemptFailed, Failure: &Failure{Kind: FailureUserError, Message: "no"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got := finished(); len(got) != 2 || !got[uuid.UUID(tasks[0].ID)] || !got[uuid.UUID(tasks[1].ID)] {
+			t.Fatalf("finished %v, want both tasks", got)
+		}
+	})
+	t.Run("cancel and dependents failing", func(t *testing.T) {
+		pool := dbtest.New(t)
+		e := NewExecution(pool)
+		f := deployedFunction(t, pool, spec)
+		upstream := submit(t, e, f, 1)[0]
+		dependent := submitInputs(t, e, f, dependentInput(upstream.ID))[0]
+		finished := finishedIDs(t, pool)
+		if _, err := e.CancelTask(t.Context(), f.workspace, upstream.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := finished(); len(got) != 2 || !got[uuid.UUID(upstream.ID)] || !got[uuid.UUID(dependent.ID)] {
+			t.Fatalf("finished %v, want the cancelled task and its dependent", got)
+		}
+	})
+	t.Run("planning cancels a stopped workload's queue", func(t *testing.T) {
+		pool := dbtest.New(t)
+		e := NewExecution(pool)
+		f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "resources": {"cpu_millis": 1000, "memory_mib": 256}}`)
+		task := submit(t, e, f, 1)[0]
+		finished := finishedIDs(t, pool)
+		exec(t, pool, `update workloads set desired_state = 'stopped'`)
+		if _, err := e.Plan(t.Context(), discardLogger()); err != nil {
+			t.Fatal(err)
+		}
+		if got := finished(); len(got) != 1 || !got[uuid.UUID(task.ID)] {
+			t.Fatalf("finished %v, want the cancelled task", got)
+		}
+	})
+	t.Run("a load error fails the release's queue", func(t *testing.T) {
+		pool := dbtest.New(t)
+		e := NewExecution(pool)
+		f := runningAttempt(t, pool, `{}`, 1)
+		exec(t, pool, "update attempts set state = 'succeeded', finished_at = now() where id = $1", uuid.UUID(f.attempt))
+		exec(t, pool, "update tasks set status = 'queued', current_attempt_id = null where id = $1", f.task)
+		var container uuid.UUID
+		if err := pool.QueryRow(t.Context(), "select container_id from attempts where id = $1", uuid.UUID(f.attempt)).Scan(&container); err != nil {
+			t.Fatal(err)
+		}
+		finished := finishedIDs(t, pool)
+		err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+			return e.containerExited(t.Context(), tx, ContainerID(container), ContainerExit{
+				Reason: StopLoadError, LoadError: &Failure{Kind: FailureLoadError, Message: "no module"},
+			})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := finished(); len(got) != 1 || !got[f.task] {
+			t.Fatalf("finished %v, want the failed task", got)
+		}
+	})
 }
