@@ -120,6 +120,9 @@ func (e *Execution) failQueued(ctx context.Context, tx pgx.Tx, ids, releases []u
 	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(ids)); err != nil {
 		return err
 	}
+	if err := notifyFinished(ctx, tx, ids); err != nil {
+		return err
+	}
 	if err := database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases)); err != nil {
 		return err
 	}
@@ -144,6 +147,12 @@ func (e *Execution) lockQueuedWithDependents(ctx context.Context, q *Queries, re
 		}
 	}
 	return own, nil
+}
+
+// notifyFinished wakes WaitTasks callers waiting on tasks that reached a
+// terminal status. Every terminal transition calls it.
+func notifyFinished(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) error {
+	return database.NotifyAll(ctx, tx, database.ChannelTaskFinished, uuidStrings(ids))
 }
 
 func uuidStrings(ids []uuid.UUID) []string {

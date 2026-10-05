@@ -78,6 +78,9 @@ func (e *Execution) cancelTask(ctx context.Context, tx pgx.Tx, workspace *identi
 	if err := database.Notify(ctx, tx, database.ChannelTask, task.ID.String()); err != nil {
 		return false, err
 	}
+	if err := notifyFinished(ctx, tx, []uuid.UUID{task.ID}); err != nil {
+		return false, err
+	}
 	return true, database.Notify(ctx, tx, database.ChannelExecution, task.ReleaseID.String())
 }
 

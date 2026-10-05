@@ -227,6 +227,9 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 	if err := database.NotifyAll(ctx, tx, database.ChannelTask, ids); err != nil {
 		return err
 	}
+	if err := notifyFinished(ctx, tx, slices.Concat(results.TaskIds, failed.Ids)); err != nil {
+		return err
+	}
 	return database.NotifyAll(ctx, tx, database.ChannelExecution, releases)
 }
 
