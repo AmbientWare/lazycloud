@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -70,6 +71,10 @@ func (a *Agent) sessions(ctx context.Context) error {
 func (a *Agent) runSession(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	running, err := a.runningPlatformImages(ctx)
+	if err != nil {
+		return err
+	}
 	stream, err := a.control.Session(ctx)
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
@@ -90,12 +95,13 @@ func (a *Agent) runSession(ctx context.Context) error {
 	// A failure the last session sent may be stale; waiters take this
 	// session's answer.
 	a.platform.forgetFailures()
-	running, err := a.runningPlatformImages(ctx)
-	if err != nil {
-		return err
-	}
 	hello, exited := a.hello(running)
 	if err := stream.Send(hello); err != nil {
+		// A stream the server refused ends sends with io.EOF; its status
+		// comes with the next receive.
+		if errors.Is(err, io.EOF) {
+			_, err = stream.Recv()
+		}
 		return fmt.Errorf("send hello: %w", err)
 	}
 	a.mu.Lock()
