@@ -30,9 +30,6 @@ export LIMA_HOME="${LAZYCLOUD_LIMA_HOME:-$state/lima}"
 limactl=$lima/bin/limactl
 # Lima's host address in the VM, which reaches this machine's loopback.
 host_ip=192.168.5.2
-# Ports the VM forwards to this machine: the gateway (install script and
-# agent releases), the agent's gRPC endpoint, the registry and Garage.
-forwards="8080 8081 25000 23900"
 
 fetch() { # file url sha256
   [ -f "$1" ] && echo "$3  $1" | sha256sum -c --status - && return 0
@@ -67,21 +64,24 @@ mounts: []
 containerd:
   system: false
   user: false
-ssh:
-  loadDotSSHPubKey: false
 YAML
   "$limactl" create --tty=false --name "$vm" "$state/vm/$vm.yaml"
 }
 
 shell() { "$limactl" shell --workdir / "$vm" sudo "$@"; }
 
-# setup runs the node image recipe once, then the forwards.
+# setup runs the node image recipe once, then forwards the ports of the
+# stack run.sh configures: the gateway (install script and agent releases),
+# the agent's gRPC endpoint, the registry and Garage.
 setup() {
+  : "${LAZYCLOUD_IMAGE_REGISTRY:?run by deploy/local/run.sh}" "${LAZYCLOUD_OBJECT_STORE_ENDPOINT:?}" "${LAZYCLOUD_DOCKER_BRIDGE_IP:?}"
+  store=${LAZYCLOUD_OBJECT_STORE_ENDPOINT##*:}
+  forwards="${LAZYCLOUD_HTTP_ADDR##*:} ${LAZYCLOUD_GRPC_ADDR##*:} ${LAZYCLOUD_IMAGE_REGISTRY##*:} ${store%/}"
   if ! shell test -f /etc/lazycloud-node-image.json; then
     { echo "#!/bin/bash"; sed '/^#/d' deploy/host-pins.sh; echo VARIANT=cpu; sed 1d deploy/ami/node-setup.sh; } |
       shell bash -s
   fi
-  bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+  bridge=$LAZYCLOUD_DOCKER_BRIDGE_IP
   units=""
   for port in $forwards; do
     units="$units lazycloud-forward-$port.service"
@@ -89,28 +89,34 @@ setup() {
       "$port" "$port" "$host_ip" "$port" | shell tee "/etc/systemd/system/lazycloud-forward-$port.service" >/dev/null
   done
   shell sh -c "command -v socat >/dev/null || dnf install -y -q socat"
-  # Presigned URLs name the developer machine's Docker bridge address; it
-  # is the VM's own, so the Garage forward answers it.
+  # Presigned URLs name the developer machine's Docker bridge address;
+  # made the VM's own, the Garage forward answers it.
   printf '[Unit]\nDescription=Answer the developer machine'"'"'s Docker bridge address\nAfter=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sh -c "ip -4 addr show | grep -q \\" %s/\\" || ip addr add %s/32 dev lo"\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$bridge" "$bridge" | shell tee /etc/systemd/system/lazycloud-bridge-address.service >/dev/null
+  # Builds push to the registry forward on the VM's loopback.
+  printf '[Service]\nEnvironment=LAZYCLOUD_BUILD_NETWORK=host\n' |
+    shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-agent.service.d && cat >/etc/systemd/system/lazycloud-agent.service.d/local-host.conf'
   # shellcheck disable=SC2086 # unit names are separate words
   shell systemctl daemon-reload && shell systemctl enable --now lazycloud-bridge-address.service $units
 }
 
-# install_agent installs the release the local server publishes, the way
-# hosts join, and leaves it running.
+# install_agent joins the VM the way hosts join, installing the release the
+# local server publishes. A joined VM restarts its agent, which then
+# updates itself to the server's current release.
 install_agent() {
-  set -- --gateway http://127.0.0.1:8080 --server 127.0.0.1:8081 --server-plaintext --background
-  if ! shell test -s /var/lib/lazycloud/agent/identity.json; then
-    set -- "$@" --join-token "$(bin/server admin create-join-token)"
+  if shell test -s /var/lib/lazycloud/agent/identity.json; then
+    shell systemctl restart lazycloud-agent
+    return
   fi
-  shell sh -c "curl -fsSL http://127.0.0.1:8080/install/agent | sh -s -- $*"
+  gateway="http://127.0.0.1:${LAZYCLOUD_HTTP_ADDR##*:}"
+  token=$(bin/server admin create-join-token)
+  shell sh -c "curl -fsSL $gateway/install/agent | sh -s -- --gateway $gateway --server 127.0.0.1:${LAZYCLOUD_GRPC_ADDR##*:} --server-plaintext --background --join-token $token"
 }
 
 up() {
   install_lima
   exists || create
-  "$limactl" start --tty=false "$vm"
+  [ "$("$limactl" list --format '{{.Status}}' "$vm")" = Running ] || "$limactl" start --tty=false "$vm"
   setup
   install_agent
 }

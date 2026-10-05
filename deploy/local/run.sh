@@ -1,11 +1,13 @@
 #!/bin/sh
-# Builds and runs the server, scheduler and agent against compose.yaml.
+# Builds and runs the server and scheduler against compose.yaml, with the
+# agent on the host VM (deploy/local/host-vm.sh).
 # Usage: deploy/local/run.sh start|stop. State, logs and credentials live in
 # .lazycloud/.
 set -eu
 cd "$(dirname "$0")/../.."
 state=.lazycloud
 export GOTOOLCHAIN=go1.27.1
+export LAZYCLOUD_HTTP_ADDR=127.0.0.1:8080 LAZYCLOUD_GRPC_ADDR=127.0.0.1:8081
 export LAZYCLOUD_DATABASE_URL="postgres://lazycloud:lazycloud@127.0.0.1:25432/lazycloud?sslmode=disable"
 # Presigned URLs name this endpoint, and workload containers send artifact and
 # volume bytes to them, so it is the Docker bridge gateway rather than
@@ -29,13 +31,19 @@ export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 # Agent release archives `lazycloud machine join` installs from.
 export LAZYCLOUD_AGENT_DIST_DIR="$PWD/$state/agent-dist"
 
-stop() {
-  for name in agent scheduler server; do
+# stop_services leaves the host VM running for the next start.
+stop_services() {
+  for name in scheduler server; do
     if [ -f "$state/$name.pid" ]; then
       kill "$(cat "$state/$name.pid")" 2>/dev/null || true
       rm -f "$state/$name.pid"
     fi
   done
+}
+
+stop() {
+  stop_services
+  deploy/local/host-vm.sh down
 }
 
 start() {
@@ -45,23 +53,20 @@ start() {
   fi
   docker compose up -d --wait postgres object-store registry >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
-  CGO_ENABLED=0 go build -o bin/supervisor ./cmd/supervisor
   go build -o bin/server ./cmd/server
   go build -o bin/scheduler ./cmd/scheduler
   go build -o bin/agent ./cmd/agent
-  deploy/local/fetch-geesefs.sh
-  # Rebuild the managed runtime whenever the Python it bundles changes; a stale
-  # runtime silently lacks newer runner features.
-  digest=$(find python/lazycloud/src python/runner/src uv.lock -type f \
-    -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
-  if [ ! -d "$state/runtime/3.12" ] || [ "$(cat "$state/runtime/.source-digest" 2>/dev/null)" != "$digest" ]; then
-    deploy/local/build-runtime.sh "$state/runtime"
-    echo "$digest" >"$state/runtime/.source-digest"
-  fi
+  go build -o bin/lazycloud-snapshotter ./cmd/snapshotter
 
   bin/server migrate
-  # This tree's agent is the release joined machines install and update to.
-  release="local-$(sha256sum bin/agent | cut -c1-12)"
+  # This tree's agent, snapshotter and managed runtime are the release the
+  # host VM and joined machines install and update to; a stale runtime
+  # silently lacks newer runner features.
+  digest=$({
+    sha256sum bin/agent bin/lazycloud-snapshotter
+    find python/lazycloud/src python/runner/src uv.lock -type f -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum
+  } | sha256sum | cut -c1-12)
+  release="local-$digest"
   [ -f "$LAZYCLOUD_AGENT_DIST_DIR/$release/lazycloud-agent-linux-amd64.tar.gz" ] ||
     deploy/agent/build-bundle.sh --python 3.12 "$LAZYCLOUD_AGENT_DIST_DIR" "$release" >/dev/null
   bin/server admin publish-agent-release -version "$release" -dist "$LAZYCLOUD_AGENT_DIST_DIR" >/dev/null
@@ -72,35 +77,18 @@ start() {
   fi
   # The local stack takes no payments, so its development account is waived.
   bin/server admin set-complimentary --email dev@lazycloud.local
-  [ -f "$state/agent/identity.json" ] || bin/server admin create-join-token >"$state/join-token"
 
   bin/server serve >"$state/logs/server.log" 2>&1 &
   echo $! >"$state/server.pid"
   bin/scheduler >"$state/logs/scheduler.log" 2>&1 &
   echo $! >"$state/scheduler.pid"
-  join=""
-  [ -f "$state/join-token" ] && join=$(cat "$state/join-token")
-  # LAZYCLOUD_OCI_RUNTIME=runsc uses gVisor (deploy/local/host-setup.sh installs
-  # it). Devbox disks and snapshots need a root agent: with
-  # LAZYCLOUD_AGENT_AS_ROOT=1 the agent is not started here, and the command to
-  # start it with sudo in another terminal is printed instead.
-  runtime="${LAZYCLOUD_OCI_RUNTIME:-runc}"
-  if [ "${LAZYCLOUD_AGENT_AS_ROOT:-}" = 1 ]; then
-    echo "start the agent as root in another terminal:"
-    echo "  sudo $PWD/bin/agent join -server 127.0.0.1:8081 -server-plaintext -join-token '$join' -state-dir '$PWD/$state/agent' -runtime-dir '$PWD/$state/runtime' -supervisor '$PWD/bin/supervisor' -geesefs '$PWD/bin/geesefs' -oci-runtime '$runtime' -build-network host"
-  else
-    bin/agent join -server 127.0.0.1:8081 -server-plaintext -join-token "$join" -state-dir "$PWD/$state/agent" \
-    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime "$runtime" -build-network host \
-      >"$state/logs/agent.log" 2>&1 &
-    echo $! >"$state/agent.pid"
-  fi
-
+  deploy/local/host-vm.sh up
   echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082"
   echo "export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8080 LAZYCLOUD_WORKSPACE=dev LAZYCLOUD_TOKEN=$(cat "$state/token")"
 }
 
 case "${1:-}" in
-  start) stop; start ;;
+  start) stop_services; start ;;
   stop) stop ;;
   *) echo "usage: $0 start|stop" >&2; exit 2 ;;
 esac

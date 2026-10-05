@@ -1,7 +1,8 @@
 # shellcheck shell=sh
-# Releases and digests of what hosts carry beside the agent bundle. Sourced
-# by deploy/local/host-setup.sh and prepended to the node image recipe by
-# deploy/ami/bake.sh, so local hosts and fleet images run the same gVisor.
+# Releases and digests of what hosts carry beside the agent bundle.
+# deploy/ami/bake.sh prepends them to the node image recipe, and
+# deploy/local/host-vm.sh runs that recipe, so the local host VM and fleet
+# images run the same gVisor.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 
 # gVisor: runsc, its containerd shim and gvisor-bin/, as one tarball per
