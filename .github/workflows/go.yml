@@ -66,7 +66,7 @@ jobs:
       - run: go tool golangci-lint run ./...
       # The host runtime tests run in the host-runtime job, on a runner set
       # up as a host.
-      - run: go test -race $(go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs/snapshotter$)
+      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs/snapshotter$ | xargs go test -race
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up
