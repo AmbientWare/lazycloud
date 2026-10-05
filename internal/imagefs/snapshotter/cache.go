@@ -116,13 +116,13 @@ func (c *frameCache) read(ctx context.Context, l *layer, frame int, p []byte, of
 	return nil
 }
 
-// fill fetches every frame of l the cache lacks, a few at a time and
-// sharing fetches with reads, until all are cached or ctx ends. A cold read
-// otherwise waits one store round trip per frame it touches.
-func (c *frameCache) fill(ctx context.Context, l *layer) {
+// fill fetches frames first to last of l that the cache lacks, a few at a
+// time and sharing fetches with reads, until all are cached or ctx ends. A
+// cold read otherwise waits one store round trip per frame it touches.
+func (c *frameCache) fill(ctx context.Context, l *layer, first, last int) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	for i := range l.index.Frames {
+	for i := first; i <= last; i++ {
 		c.mu.Lock()
 		_, cached := c.frames[frameKey{layer: l.digest, frame: i}]
 		c.mu.Unlock()
