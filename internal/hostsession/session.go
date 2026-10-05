@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
@@ -57,35 +59,39 @@ type session struct {
 	// release the Hello stated.
 	reserve *reserveAttempt
 	agent   compute.AgentState
-	// builds wakes the session when an image build a start waits for
-	// changes.
+	// builds wakes the session when an image build a start waits for, or
+	// a platform image conversion, changes.
 	builds buildWaits
+	// platform is what the session sent for the platform images the Hello
+	// named.
+	platform platformState
 }
 
-// buildWaits subscribes to the image builds starts wait for and merges
-// their wake-ups into wake. Each subscription has a forwarder, which ends
-// when the subscription does; close waits for them.
+// buildWaits subscribes to the ChannelImageBuild keys the session waits
+// for, image builds by id and images.PlatformConverted, and merges their
+// wake-ups into wake. Each subscription has a forwarder, which ends when
+// the subscription does; close waits for them.
 type buildWaits struct {
 	wake chan struct{}
-	subs map[uuid.UUID]func()
+	subs map[string]func()
 	wg   sync.WaitGroup
 }
 
-// await subscribes to builds and ends the subscriptions to builds no start
-// waits for any more. A change committed before subscribing reaches the
+// await subscribes to keys and ends the subscriptions to keys the session
+// no longer waits for. A change committed before subscribing reaches the
 // session at its next touch.
-func (w *buildWaits) await(listener *database.Listener, builds map[uuid.UUID]bool) {
-	for id, stop := range w.subs {
-		if !builds[id] {
+func (w *buildWaits) await(listener *database.Listener, keys map[string]bool) {
+	for key, stop := range w.subs {
+		if !keys[key] {
 			stop()
-			delete(w.subs, id)
+			delete(w.subs, key)
 		}
 	}
-	for id := range builds {
-		if _, ok := w.subs[id]; ok {
+	for key := range keys {
+		if _, ok := w.subs[key]; ok {
 			continue
 		}
-		changed, cancel := listener.Subscribe(database.ChannelImageBuild, id.String())
+		changed, cancel := listener.Subscribe(database.ChannelImageBuild, key)
 		done := make(chan struct{})
 		w.wg.Go(func() {
 			for {
@@ -100,7 +106,7 @@ func (w *buildWaits) await(listener *database.Listener, builds map[uuid.UUID]boo
 				}
 			}
 		})
-		w.subs[id] = func() { cancel(); close(done) }
+		w.subs[key] = func() { cancel(); close(done) }
 	}
 }
 
@@ -140,6 +146,17 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if hello == nil {
 		return status.Error(codes.InvalidArgument, "the first message must be Hello")
 	}
+	// The server converts only the platform images it knows.
+	for _, reference := range hello.GetPlatformImages() {
+		if !platformimages.Known(reference) {
+			return status.Errorf(codes.InvalidArgument, "%s is not a platform image", reference)
+		}
+	}
+	// Grants go only to copies the server recorded, so this bounds the
+	// work, not what a host may read.
+	if len(hello.GetRunningPlatformImages()) > maxRunningPlatformImages {
+		return status.Errorf(codes.InvalidArgument, "a host names at most %d running platform images", maxRunningPlatformImages)
+	}
 	reports := make([]execution.ContainerReport, 0, len(hello.GetContainers()))
 	for _, c := range hello.GetContainers() {
 		report, err := reportIn(c)
@@ -158,7 +175,12 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	}
 	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
 		grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
-		builds: buildWaits{wake: make(chan struct{}, 1), subs: map[uuid.UUID]func(){}}}
+		builds: buildWaits{wake: make(chan struct{}, 1), subs: map[string]func(){}},
+		platform: platformState{
+			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
+			running: slices.Compact(slices.Sorted(slices.Values(hello.GetRunningPlatformImages()))),
+			sent:    map[string]layerGrant{}, failed: map[string]platformFailure{},
+		}}
 	defer sess.builds.close()
 	for _, r := range reports {
 		sess.observe(r)
@@ -321,10 +343,15 @@ func (sess *session) sync(ctx context.Context) error {
 		return sess.server.grpcError(ctx, err)
 	}
 	derived := map[string]bool{}
-	waiting := map[uuid.UUID]bool{}
+	waiting := map[string]bool{}
 	var started []string
 	cache := layerCache{}
 	traces := traceCache{}
+	// Builds, volume mounts and network holders run the platform images,
+	// so they go first.
+	if err := sess.syncPlatform(ctx, cache, waiting); err != nil {
+		return err
+	}
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
 		derived[id] = true
@@ -339,7 +366,7 @@ func (sess *session) sync(ctx context.Context) error {
 		var building *images.BuildWaitError
 		if errors.As(err, &building) {
 			delete(derived, id)
-			waiting[building.Build] = true
+			waiting[building.Build.String()] = true
 			continue
 		}
 		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {

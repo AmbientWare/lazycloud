@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -87,12 +88,23 @@ type hostServer struct {
 	completeOutage time.Time
 	// answerBuild answers CompleteImageBuild when set.
 	answerBuild func(*hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse
+	// answerPlatform, when set, gives the platform images a session sends
+	// at open, none when it returns none.
+	answerPlatform func(named []string) []*hostproto.PlatformImage
 }
 
 type serverSession struct {
 	hello  *hostproto.Hello
 	stream hostproto.HostService_SessionServer
 	msgs   chan *hostproto.HostMessage
+	// end ends the session from the server's side.
+	end chan struct{}
+}
+
+// platformImage is how the server answers a platform image the tests
+// converted: hosts here pull it as named.
+func platformImage(reference string) *hostproto.PlatformImage {
+	return &hostproto.PlatformImage{Reference: reference, Image: reference, Platform: "linux/" + runtime.GOARCH, Layers: imageLayers[reference]}
 }
 
 func newHostServer() *hostServer {
@@ -174,15 +186,45 @@ func (s *hostServer) Session(stream hostproto.HostService_SessionServer) error {
 	if err != nil {
 		return err
 	}
-	session := &serverSession{hello: first.GetHello(), stream: stream, msgs: make(chan *hostproto.HostMessage, 1024)}
-	s.sessions <- session
-	for {
-		m, err := stream.Recv()
-		if err != nil {
-			close(session.msgs)
+	session := &serverSession{hello: first.GetHello(), stream: stream, msgs: make(chan *hostproto.HostMessage, 1024), end: make(chan struct{})}
+	// As the server does once it converted them, the session answers the
+	// platform images the Hello names with their grants.
+	s.mu.Lock()
+	answer := s.answerPlatform
+	s.mu.Unlock()
+	var platform []*hostproto.PlatformImage
+	if answer != nil {
+		platform = answer(session.hello.GetPlatformImages())
+	} else {
+		for _, ref := range session.hello.GetPlatformImages() {
+			platform = append(platform, platformImage(ref))
+		}
+	}
+	if len(platform) > 0 {
+		if err := stream.Send(&hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_PlatformImages{
+			PlatformImages: &hostproto.PlatformImages{Images: platform},
+		}}); err != nil {
 			return err
 		}
-		session.msgs <- m
+	}
+	s.sessions <- session
+	received := make(chan error, 1)
+	go func() {
+		for {
+			m, err := stream.Recv()
+			if err != nil {
+				close(session.msgs)
+				received <- err
+				return
+			}
+			session.msgs <- m
+		}
+	}()
+	select {
+	case err := <-received:
+		return err
+	case <-session.end:
+		return status.Error(codes.Unavailable, "the test ended the session")
 	}
 }
 
@@ -352,7 +394,6 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		SupervisorPath:  supervisorBinary,
 		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
-		MountImage:      DefaultMountImage,
 		Snapshotter:     layersource.Socket,
 		BuildNetwork:    "host",
 		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},

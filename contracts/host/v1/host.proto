@@ -169,6 +169,14 @@ message Hello {
   // The last PrepareReserve attempt the host answered ready, kept across
   // boots, so a resumed or rebooted reserve names the stop it came back from.
   string sleep_attempt_id = 73;
+  // The images the agent runs on its own, such as its image builder and
+  // volume mount image, by digest. The server answers with PlatformImages.
+  repeated string platform_images = 110;
+  // The platform image copies (PlatformImage.image) that the host's
+  // containers still run, such as a mount container started from an image
+  // a newer agent no longer names. Their grants keep coming while the
+  // session lasts.
+  repeated string running_platform_images = 111;
 }
 
 enum ContainerPhase {
@@ -305,6 +313,7 @@ message ServerMessage {
     SnapshotContainer snapshot = 91;
     PublishFilesystem publish_filesystem = 92;
     LayerGrants layer_grants = 100;
+    PlatformImages platform_images = 110;
   }
 }
 
@@ -477,6 +486,27 @@ message LayerGrant {
 // expires_at wins.
 message LayerGrants {
   repeated LayerGrant layers = 1;
+}
+
+// PlatformImages answers the platform images a Hello named, once each is
+// converted or cannot be, and again with fresh grants before the earlier
+// ones expire.
+message PlatformImages {
+  repeated PlatformImage images = 1;
+}
+
+// PlatformImage is how the host runs one image it named: image, a copy in
+// the platform registry, pulled with auth for platform and read through
+// layers, base first. failure is set instead when the image cannot be
+// converted.
+message PlatformImage {
+  // The reference as the Hello named it.
+  string reference = 1;
+  string image = 2;
+  RegistryAuth auth = 3;
+  string platform = 4;
+  repeated LayerGrant layers = 5;
+  string failure = 6;
 }
 
 message PodWorkload {

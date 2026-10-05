@@ -31,6 +31,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -112,8 +113,6 @@ type Config struct {
 	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
 	// buckets; empty means the host mounts no volumes.
 	GeeseFSPath string
-	// MountImage is the image volume mount containers run GeeseFS in.
-	MountImage string
 	// Snapshotter is the socket the snapshotter serves LayerSources on. A
 	// host without one cannot start containers of images with layer grants.
 	Snapshotter string
@@ -152,6 +151,9 @@ type Agent struct {
 	bootID   string
 	sources  *sourceCache
 	images   *imageCache
+	// platform holds the images the agent runs on its own, as the server
+	// sent them.
+	platform *platformImages
 	volumes  *volumes
 	// layers hands layer grants to the snapshotter; nil without one.
 	layers *layerSources
@@ -316,7 +318,8 @@ func Run(ctx context.Context, cfg Config) error {
 		gpus:            offered.gpus,
 		bootID:          bootID(),
 		sources:         &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: httpClient},
-		images:          &imageCache{docker: docker, containerd: ctrd},
+		images:          &imageCache{containerd: ctrd},
+		platform:        newPlatformImages(platformimages.All()...),
 		host:            hostproto.NewHostServiceClient(payload),
 		control:         hostproto.NewHostServiceClient(control),
 		serverConns:     []*grpc.ClientConn{control, payload, traffic},

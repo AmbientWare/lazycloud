@@ -27,6 +27,7 @@ resource "aws_eks_pod_identity_association" "control_plane" {
 locals {
   objects_arn  = aws_s3_bucket.storage["objects"].arn
   workload_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/*"
+  platform_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/platform/*"
   ec2_arn      = "${local.arn_prefix}:ec2:*:${local.account_id}"
 }
 
@@ -78,6 +79,17 @@ data "aws_iam_policy_document" "control_plane" {
     sid       = "ReadWorkloadImages"
     actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
     resources = [local.workload_arn]
+  }
+
+  # The server copies the images agents run on their own (the builder, the
+  # mount image) into platform/ under the workload repositories, which ECR
+  # creates on the first push from the workload images template.
+  statement {
+    sid = "CopyPlatformImages"
+    actions = [
+      "ecr:CreateRepository", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+    ]
+    resources = [local.platform_arn]
   }
 
   # Fleet hosts: RunInstances with the host id as client token. The

@@ -23,10 +23,10 @@ func TestBuildWaitsWakeOnlyForTheirBuilds(t *testing.T) {
 	wg.Go(func() { _ = listener.Run(ctx) })
 	t.Cleanup(func() { cancel(); wg.Wait() })
 
-	waits := buildWaits{wake: make(chan struct{}, 1), subs: map[uuid.UUID]func(){}}
+	waits := buildWaits{wake: make(chan struct{}, 1), subs: map[string]func(){}}
 	defer waits.close()
 	awaited, other := uuid.New(), uuid.New()
-	waits.await(listener, map[uuid.UUID]bool{awaited: true})
+	waits.await(listener, map[string]bool{awaited.String(): true})
 	// The listener wakes everyone once it starts listening.
 	time.Sleep(200 * time.Millisecond)
 	select {
@@ -50,7 +50,7 @@ func TestBuildWaitsWakeOnlyForTheirBuilds(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the awaited build's change did not wake the session")
 	}
-	waits.await(listener, map[uuid.UUID]bool{})
+	waits.await(listener, map[string]bool{})
 	if len(waits.subs) != 0 {
 		t.Fatal("a build no start waits for stays subscribed")
 	}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -178,13 +179,18 @@ type Images struct {
 	config   Config
 	login    *platformLogin
 	ecr      ecrToken
+	// transfer stores the layer pairs of platform images.
+	transfer *http.Client
+	// platformLease is platformLease; tests shorten it.
+	platformLease time.Duration
 }
 
 // NewImages returns the images owner.
 func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) *Images {
 	return &Images{
 		pool: pool, queries: New(pool), execution: exec, secrets: vault, storage: store, resolver: newResolver(config.Registry), config: config,
-		login: newPlatformLogin(config), ecr: exchangeECR,
+		login: newPlatformLogin(config), ecr: exchangeECR, transfer: &http.Client{},
+		platformLease: platformLease,
 	}
 }
 

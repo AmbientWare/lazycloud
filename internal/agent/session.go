@@ -87,7 +87,14 @@ func (a *Agent) runSession(ctx context.Context) error {
 	}()
 
 	a.metrics.sessions.Inc()
-	hello, exited := a.hello()
+	// A failure the last session sent may be stale; waiters take this
+	// session's answer.
+	a.platform.forgetFailures()
+	running, err := a.runningPlatformImages(ctx)
+	if err != nil {
+		return err
+	}
+	hello, exited := a.hello(running)
 	if err := stream.Send(hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
@@ -153,8 +160,9 @@ func (a *Agent) runSession(ctx context.Context) error {
 }
 
 // hello describes every container, including exited ones within their
-// retention, and returns the exited ones.
-func (a *Agent) hello() (*hostproto.HostMessage, []*container) {
+// retention, and the platform image copies running ones run, and returns
+// the exited ones.
+func (a *Agent) hello(running []string) (*hostproto.HostMessage, []*container) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	reports := make([]*hostproto.ContainerReport, 0, len(a.containers))
@@ -167,14 +175,16 @@ func (a *Agent) hello() (*hostproto.HostMessage, []*container) {
 		}
 	}
 	return &hostproto.HostMessage{Body: &hostproto.HostMessage_Hello{Hello: &hostproto.Hello{
-		BootId:          a.bootID,
-		Capacity:        a.capacity,
-		Containers:      reports,
-		AgentVersion:    a.cfg.Version,
-		Updatable:       a.updatable,
-		RejectedVersion: readMarker(a.cfg.StateDir, RejectedFile),
-		SleptSeconds:    sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
-		SleepAttemptId:  a.sleep.ID,
+		BootId:                a.bootID,
+		Capacity:              a.capacity,
+		Containers:            reports,
+		AgentVersion:          a.cfg.Version,
+		Updatable:             a.updatable,
+		RejectedVersion:       readMarker(a.cfg.StateDir, RejectedFile),
+		SleptSeconds:          sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
+		SleepAttemptId:        a.sleep.ID,
+		PlatformImages:        a.platform.named,
+		RunningPlatformImages: running,
 	}}}, exited
 }
 
@@ -236,6 +246,12 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		a.publishFilesystem(body.PublishFilesystem)
 	case *hostproto.ServerMessage_LayerGrants:
 		a.layers.refresh(body.LayerGrants.GetLayers())
+	case *hostproto.ServerMessage_PlatformImages:
+		// Mount and builder containers keep reading their images' layers.
+		for _, image := range body.PlatformImages.GetImages() {
+			a.layers.refresh(image.GetLayers())
+		}
+		a.platform.update(body.PlatformImages.GetImages())
 	case *hostproto.ServerMessage_StorageGrant:
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
 			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
