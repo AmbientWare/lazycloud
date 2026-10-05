@@ -2,33 +2,48 @@
 
 ## Scope
 
-The host service that gives Docker lazily filled layers. Owns:
+The host service that gives Docker lazily read layers, and the agent's pull
+through it. Owns:
 
-- a `cmd/agent` subcommand that runs the service, and its systemd unit,
-  separate from the agent's so agent restarts and updates leave it running;
-- new package `internal/imagefs/snapshotter` (or the layout the format packet
-  settles): the containerd snapshotter API, one FUSE filesystem per mounted
-  layer, the local chunk cache with a disk bound and LRU eviction that never
-  evicts chunks a running container holds open;
-- `deploy/ami/node-setup.sh` and `deploy/local/host-setup.sh`: the Docker and
-  containerd settings the spike proved.
+- the service: a binary or `cmd/agent` subcommand run as its own systemd unit
+  with `KillMode=process`, never restarted by agent updates, serving
+  containerd's snapshotter API on a local socket;
+- `internal/imagefs/snapshotter` (or the layout format settles): the
+  snapshotter API, one FUSE filesystem per mounted layer over its index, the
+  frame cache on local disk with a size bound and LRU eviction that keeps
+  frames of mounted layers, cleanup of mounts no container uses;
+- the agent's image pull (`imageCache.ensure` in `internal/agent/source.go`):
+  pull through containerd's API into Docker's namespace with the labels that
+  make the snapshotter report converted layers as present, then run with
+  Docker as today;
+- `deploy/ami/node-setup.sh`: Docker with the containerd image store, our
+  snapshotter as storage driver, `live-restore`; containerd's proxy plugin
+  entry; the unit. Keep the node image's Docker 25 unless the report shows a
+  reason.
+- `deploy/local/host-setup.sh`: propose the local setup in the report first
+  (it changes the developer's whole Docker); change it only after the
+  integrator confirms with the user.
 
-Stay off images, the build path, compute and the host protocol.
+Stay off images, the build path, `contracts/imagefs` and the server.
 
 ## Plan
 
-Refined from the spike's report before work starts. It covers mount
-lifetimes, cleanup of mounts whose container is gone, the cache bound, and
-what a read sees when a chunk cannot be fetched (an I/O error to the
-container, logged and counted, never a silent empty file).
+- The snapshotter gets each layer's presigned URLs from the agent over the
+  local interface grants and this packet agree in their first commits; until
+  grants lands, read them from that interface fed by a test, never from a
+  store credential.
+- A read the store cannot serve returns an I/O error to the container,
+  logged and counted, never an empty file. Retries are bounded.
+- Concurrent reads of one frame fetch it once.
 
 ## Evidence to record
 
-- A container on a local stack runs from an indexed image with no layer blob
-  downloaded, under runc and under runsc.
-- The service keeps serving a running container's reads across an agent
-  restart.
+- On an EC2 host from a node image built with these settings: a container
+  runs from a converted image with no layer blob downloaded, under runsc;
+  `import torch` works; file contents match the original image.
+- A running container keeps reading across an agent restart and update.
 - The cache stays under its bound while two large images alternate.
+- Cold start table against today's full pull for python and torch.
 
 ## Progress
 

@@ -7,9 +7,15 @@ downloading the whole image. The host fetches only the bytes the container
 reads, keeps them in a local cache, and later shares them with nearby hosts.
 The same code runs locally (registry, Garage) and in prod (ECR, S3).
 
-Today the agent runs `docker pull` and waits for every layer. The first
-container on a fresh host spent 2.45 s of a 5.1 s first call pulling a plain
-Python image; torch and CUDA images take tens of seconds.
+Today the agent runs `docker pull` and waits for every layer. The spike
+(spike.md) measured a fresh host, median of three, under runsc:
+
+| Image | Full pull today | Lazy (stargz stand-in) | Bytes read |
+| --- | --- | --- | --- |
+| python:3.12-slim | 2.79 s | 2.51 s | 11 of 50 MB |
+| torch CPU | 25.15 s | 8.45 s | 105 of 728 MB |
+
+The registry in those runs was local, so a remote store should widen the gap.
 
 ## How beta9 does it
 
@@ -20,90 +26,95 @@ content-addressed pages, picks the owner of each page by rendezvous hashing,
 prefetches and refills recently used images. beta9 runs containers without
 Docker, so the FUSE mount is simply the root filesystem.
 
-We keep Docker. The difference is only how the files reach the container: a
-containerd snapshotter that answers Docker's request for each layer with our
-lazily filled filesystem. stargz, SOCI and nydus plug into Docker the same
-way, each with its own format; we use ours.
+We keep Docker and plug in through containerd's snapshotter API, which the
+spike proved under gVisor.
 
 ## Design
 
-**Format.** Each OCI layer, after a build pushes it, becomes:
+**Format.** Each OCI layer becomes two objects, keyed by the layer's
+uncompressed digest (`diff_id`), so a base layer shared by many images is
+stored once:
 
-- an index: the layer's file tree with each entry's metadata (path, type,
-  mode, owner, times, link target, xattrs, whiteouts) and, for regular files,
-  the ordered list of chunks holding its bytes;
-- content-defined chunks, named by their SHA-256, compressed, stored once
-  however many layers or images contain them.
+- `index`: the layer's file tree. Each entry has its path, type, mode, owner,
+  times, link target, device numbers, xattrs, whiteout or opaque marker and,
+  for a regular file, the offset and length of its bytes in `data`. A header
+  carries the format version; a format change is a hard cut, never a second
+  reader.
+- `data`: every regular file's bytes, concatenated, compressed in independent
+  frames of a fixed size (4 MiB uncompressed), with the frame table in the
+  index so any byte range is read with one or a few HTTP range requests.
 
-The index is keyed by the layer's uncompressed digest (`diff_id`), so a base
-layer shared by many images is indexed once. Reuse the disk engine's
-content-defined chunker (`internal/diskengine/chunker.go`) by moving it to the
-shared package rather than writing a second one.
+One object pair per layer keeps uploads, signing and deletes cheap, and the
+4 MiB frame is the unit the host cache and the later peer cache hold.
 
-**Store.** Chunks and indexes live under one prefix of the platform object
-store: S3 in prod, Garage locally. PostgreSQL records which layers of which
-image are indexed; it is the authority for what exists and what is live.
+**Store.** The pair lives under one prefix of the platform object store: S3
+in prod, Garage locally. PostgreSQL records which layers are converted and
+which image uses which layer; it is the authority for what exists and what
+is live.
 
 **Publish.** The build already runs on a host and holds the layers it
-pushed. After the push, the agent indexes each new layer, uploads missing
-chunks and the index, and reports them; images records the layer indexes and
-publishes the image only when every layer is indexed. A base layer already
-indexed is skipped.
+pushed. After the push, the agent converts each layer the store does not
+already have, uploads the pair through URLs the server presigns, and reports
+it. Images publishes an image only when every layer is converted. Every image
+a host runs is converted; the spike showed an unconverted image on the lazy
+driver is as slow as a full pull, so there is no unconverted path.
 
-**Run.** A snapshotter process on each host serves containerd's snapshotter
-API. When Docker pulls an image, it reports each indexed layer as already
-present (a remote snapshot), so no layer blob downloads. Mounting a layer
-starts a FUSE filesystem over its index; reads fetch chunks into a local
-disk cache. The container's root is the usual overlay of those lower layers
-plus a writable upper layer. The process runs as its own service and
-outlives agent restarts and updates, so running containers keep their files.
+**Pull.** The agent pulls through containerd's API into Docker's namespace,
+with the labels that let our snapshotter report each layer as already
+present, then runs the container with Docker as today. This works on the
+node image's Docker 25 and on Docker 29.9, whose own `docker pull` now always
+downloads layers (moby#49784). The registry still serves manifests and
+configs; no layer blob downloads.
 
-**Access.** A host may read only the chunks of images it was told to run.
-The server issues those reads (signed URLs or an equivalent scoped grant)
-with the start command, never a credential for the whole store. This holds
-for connected-account and self-hosted hosts too.
+**Mount.** A snapshotter service on each host serves containerd's snapshotter
+API. Mounting a layer starts a FUSE filesystem over its index; reads fetch
+frames into a local disk cache. The container's root is the usual overlay of
+those lower layers plus a writable upper layer. Docker runs with the
+containerd image store, our snapshotter as its storage driver and
+`live-restore`.
 
-**Cache.** Each host keeps a bounded chunk cache on local disk with LRU
-eviction; chunks in use by running containers stay. The peer cache, where
-hosts of a region serve each other's chunks, is a later decision.
+**Lifetime.** A FUSE mount dies with the process that serves it: the spike
+broke a running container by restarting that process. The service that
+holds FUSE therefore never restarts while containers run. Agent updates
+leave it alone; it changes only with the node image, which the fleet
+replaces, or on a drained host. Its unit uses `KillMode=process`.
 
-**Garbage.** Chunks and indexes that no live image references are swept, the
-way the disk engine collects unreachable objects, by reading live
+**Access.** A host reads only the layers of images it was told to run. The
+server sends presigned GET URLs for each layer's `index` and `data` with the
+start command, and fresh ones before they expire, the way `StorageGrant`
+refreshes. Range requests work on presigned URLs in S3 and Garage alike. No
+host, including a connected account's, holds a credential for the store.
+
+**Cache.** Each host keeps a bounded frame cache on local disk with LRU
+eviction; frames of layers mounted by running containers stay until those
+mounts go. The peer cache, where hosts of a region serve each other's frames,
+is decided from the acceptance numbers.
+
+**Garbage.** Layer pairs no live image references are swept by reading live
 references, not history.
 
-## Open questions the spike answers
+## Local development
 
-1. Does Docker 29 with the containerd image store use a proxy snapshotter
-   for `docker pull` and `docker run`, skipping layer downloads for layers the
-   snapshotter reports as remote? Which daemon and containerd settings?
-2. Does gVisor (`runsc`, its containerd shim) run a container whose lower
-   layers are FUSE mounts, with the overlay and file reads behaving?
-3. Does a FUSE mount held by a separate service survive an agent restart
-   with the container still reading files?
-4. What does a cold start on a fresh host gain, measured with an existing
-   remote snapshotter (stargz) on a converted image, as an upper bound before
-   we build ours?
-
-A no on 1 or 2 stops the plan and comes back to the user with the options.
+Docker uses one storage driver for every container. Making our snapshotter
+the local Docker's driver changes the developer's whole Docker, and switching
+on the containerd image store hides images pulled under overlay2 until it is
+switched back. The snapshotter packet proposes the local setup and the
+integrator asks the user before `deploy/local/host-setup.sh` changes it.
 
 ## Packets
 
 See tasks/perf/README.md for branches, waves and the gate.
 
-- **spike**: the four answers above, on a local machine and on one EC2 host
-  from the node image. Scratch code only.
-- **format**: `internal/imagefs`, the index encoding and reading, the moved
-  chunker, chunk naming and compression, the object store client for chunks
-  and indexes. A library with no database access; agent and snapshotter
-  import it.
-- **publish**: migration 0003 (indexed layers per image), images' publish
-  rule, the build path in the agent that indexes and uploads, and the host
+- **format**: `internal/imagefs`: index encoding, layer conversion from an
+  OCI tar stream, frame compression, range reads. A library with no database
+  access.
+- **publish**: migration 0003, images' publish rule and live references, the
+  build path that converts and uploads, presigned upload URLs, the host
   protocol report.
-- **snapshotter**: the host service (a `cmd/agent` subcommand run as its own
-  unit), the containerd snapshotter API, the FUSE filesystem, the chunk cache
-  and its bounds, node image and `deploy/local/host-setup.sh` configuration.
-- **grants**: the scoped read path from server to snapshotter and its
-  tests for tenant isolation.
-- **acceptance**: before and after on a fresh EC2 host for a plain Python
-  image and a torch image, warm-host cold starts unchanged or better, and
-  the sweep of everything the old full pull did.
+- **snapshotter**: the host service, the containerd snapshotter API, FUSE,
+  the frame cache, the agent's containerd pull, node image and local
+  configuration.
+- **grants**: presigned read URLs per started container, their refresh, and
+  the tenant isolation tests.
+- **acceptance**: before and after on fresh EC2 hosts with S3, prod after
+  Ship.

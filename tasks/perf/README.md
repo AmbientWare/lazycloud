@@ -19,7 +19,7 @@ The user decided on 2026-10-05:
 
 - Build the batch task wait and CLIP-style lazy images now. The runtime
   start profile, the workload edge path and new CPU types wait.
-- Lazy images keep Docker. Our own chunk store serves layers through a
+- Lazy images keep Docker. Our own layer store serves layers through a
   containerd snapshotter, so the work also runs under plain containerd later.
   No dependency on SOCI or ECR-specific features; it runs the same locally
   (registry, Garage) and in prod (ECR, S3).
@@ -28,11 +28,17 @@ The user decided on 2026-10-05:
 
 Integrator defaults, taken unless the user objects:
 
-- A host reads only the chunks of images it was told to run. The server
+- A host reads only the layers of images it was told to run. The server
   signs those reads; no host, including a connected account's, holds a
-  credential for the whole chunk store.
-- The peer-to-peer chunk cache is planned but waits for the acceptance
-  numbers of wave 2.
+  credential for the whole layer store.
+- The peer-to-peer frame cache is planned but waits for the acceptance
+  numbers.
+
+The spike answered yes to all four questions on 2026-10-05 (spike.md).
+Its findings set the design in lazy-images/plan.md: pull through
+containerd's API, never restart the process holding FUSE while containers
+run, convert every image, and store each layer as an index plus one framed
+data object read by range with presigned URLs.
 
 ## Packets
 
@@ -40,10 +46,10 @@ Integrator defaults, taken unless the user objects:
 | --- | --- | --- | --- | --- |
 | [batch-wait](batch-wait.md) | `perf-batch-wait` | none | OpenAPI `/v1/workspaces/{workspace}/tasks/wait` | none |
 | [spike](lazy-images/spike.md) | `perf-lazy-spike` | none | none (scratch only) | none |
-| [format](lazy-images/format.md) | `perf-lazy-format` | none | new `internal/imagefs` | spike |
+| [format](lazy-images/format.md) | `perf-lazy-format` | none | new `internal/imagefs`, `contracts/imagefs/v1` | spike |
 | [publish](lazy-images/publish.md) | `perf-lazy-publish` | 0003 | host.proto fields 90-99 in each message it extends | format |
-| [snapshotter](lazy-images/snapshotter.md) | `perf-lazy-snapshotter` | none | `cmd/agent` subcommand, node image, `deploy/local/host-setup.sh` | format |
-| [grants](lazy-images/grants.md) | `perf-lazy-grants` | none | host.proto fields 100-109 | publish, snapshotter |
+| [snapshotter](lazy-images/snapshotter.md) | `perf-lazy-snapshotter` | none | snapshotter service, the agent's image pull, node image | format |
+| [grants](lazy-images/grants.md) | `perf-lazy-grants` | none | host.proto fields 100-109 | format |
 | [acceptance](lazy-images/acceptance.md) | `perf-lazy-acceptance` | none | none | all |
 
 The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
@@ -52,8 +58,11 @@ The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
 
 1. Wave 1, in parallel: batch-wait and spike. Batch wait merges to main on
    its own once it passes the gate; it does not wait for lazy images.
-2. Wave 2, after the spike's go: format first, then publish and snapshotter
-   in parallel on top of it, then grants.
+2. Wave 2: format first. Then publish, snapshotter and grants in parallel
+   on top of it, each against format's contract and the host protocol
+   ranges above. Grants and snapshotter agree the local interface between
+   agent and snapshotter in their first commits (grants proposes, the
+   integrator settles it).
 3. Wave 3: acceptance, then the integrator decides on the peer cache from
    its numbers.
 4. Final: one integration review of `perf-plan` against main, remove
@@ -85,7 +94,7 @@ batch-wait, into main):
 1. `./check.sh` and focused `go test -race` on the touched packages pass with
    visible output; generated code is current and the tree is clean after.
 2. A separate read-only reviewer gets the diff and this focus list:
-   authorization and tenant isolation (who may read which chunks, which
+   authorization and tenant isolation (who may read which layers, which
    tasks); data integrity and idempotency on retry; goroutine, FUSE server
    and mount lifetimes across agent restarts; queries that scan history or
    the backlog; bounded queues, caches and disk use; dead code and contract
