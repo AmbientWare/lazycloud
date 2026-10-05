@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -40,7 +41,7 @@ type AccountMachinesRow struct {
 	Failure        *string
 	State          string
 	LastSeenAt     *time.Time
-	CpuMillis      int64
+	CpuMillis      cpu.Millis
 	MemoryBytes    int64
 	GpuType        string
 	GpuCount       int32
@@ -199,7 +200,7 @@ type MachineByIDRow struct {
 	Failure        *string
 	State          string
 	LastSeenAt     *time.Time
-	CpuMillis      int64
+	CpuMillis      cpu.Millis
 	MemoryBytes    int64
 	GpuType        string
 	GpuCount       int32
@@ -457,7 +458,7 @@ type WorkspaceMachinesRow struct {
 	Failure        *string
 	State          string
 	LastSeenAt     *time.Time
-	CpuMillis      int64
+	CpuMillis      cpu.Millis
 	MemoryBytes    int64
 	GpuType        string
 	GpuCount       int32

@@ -67,17 +67,17 @@ func TestCoverStaysWithinTheQuotaRoomAcrossNodes(t *testing.T) {
 func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) {
 	key := QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketOnDemand}
 	s := planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetStopped))
-	s.Offers.Quotas = []VCPUQuota{{Key: key, VCPUs: 24}}
+	s.Offers.Quotas = []VCPUQuota{{Key: key, VCPUs: 48}}
 	s.Hosts[0].Load = small
 	plan := PlanFleet(planPolicy(small.Times(3), FleetCapacity{}), s)
-	// 8 vCPUs run; the stopped reserve resumes into 8 more and one host
-	// is bought with the last 8.
+	// 16 vCPUs run; the stopped reserve resumes into 16 more and one host
+	// is bought with the last 16.
 	if len(actionsOf(plan, ActionResume)) != 1 || len(actionsOf(plan, ActionBuy)) != 1 {
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 	g, _ := pendingOne(Requirement{CPUMillis: 1000, MemoryBytes: gib}, nil)
 	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New()}}}}
-	s.Offers.Quotas[0].VCPUs = 8
+	s.Offers.Quotas[0].VCPUs = 16
 	s.Hosts = s.Hosts[:1]
 	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); len(plan.Actions) > 0 {
 		t.Fatalf("a full quota still buys: %+v", plan.Actions)

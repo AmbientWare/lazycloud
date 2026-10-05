@@ -1,11 +1,12 @@
 import { format, parseISO } from "date-fns";
 
 import type { Schemas } from "@/lib/api/client";
+import { formatCpu } from "@/lib/format";
 
 export type MetricDatum = {
   timestamp: string;
   label: string;
-  cpuPercent: number;
+  /** Thousandths of a CPU used and reserved. */
   cpuUsed: number;
   cpuTotal: number;
   memoryUsed: number;
@@ -33,7 +34,6 @@ export function buildMetricData(metrics: Schemas["ContainerMetrics"]): MetricDat
       return {
         timestamp: point.timestamp,
         label: formatSampleTime(point.timestamp),
-        cpuPercent: cpuPercent(point.cpu_millicores, metrics.cpu_total_millicores),
         cpuUsed: point.cpu_millicores,
         cpuTotal: metrics.cpu_total_millicores,
         memoryUsed: point.memory_rss_bytes,
@@ -68,15 +68,10 @@ export function latestComputeReadout(data: MetricDatum[]): ComputeReadout | null
       ? `↓ ${formatBytesPerSecond(latest.networkRecvRate)} ↑ ${formatBytesPerSecond(latest.networkSentRate)}`
       : null;
   return {
-    cpu: `${latest.cpuPercent.toFixed(1)}%`,
+    cpu: formatCpu(latest.cpuUsed),
     memory: formatBytes(latest.memoryUsed),
     network,
   };
-}
-
-function cpuPercent(usedMillicores: number, totalMillicores: number): number {
-  if (totalMillicores <= 0) return 0;
-  return Math.min(100, (usedMillicores / totalMillicores) * 100);
 }
 
 export function formatBytes(value: number): string {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -34,7 +35,7 @@ type BuildContainer struct {
 // build. workspace is charged for its capacity, so billing admits it first
 // and refuses it when the account cannot pay, may not use the model, or runs
 // the most containers or GPUs its plan allows.
-func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis, memoryBytes int64, gpu string) (ContainerID, error) {
+func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis cpu.Millis, memoryBytes int64, gpu string) (ContainerID, error) {
 	req := billing.Request{Workspace: uuid.UUID(workspace), Start: 1, Cold: true}
 	if gpu != "" {
 		req.GPUs, req.GPUModels = 1, []billing.GPUType{billing.GPUType(gpu)}
@@ -112,7 +113,7 @@ type BuildStart struct {
 	Container   ContainerID
 	Build       uuid.UUID
 	Attempt     int
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 }
 

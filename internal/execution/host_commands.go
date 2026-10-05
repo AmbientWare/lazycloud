@@ -10,6 +10,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -27,11 +28,11 @@ type StartCommand struct {
 	Source        storage.Digest
 	Spec          apitypes.WorkloadSpec
 	Slots         int
-	CPUMillis     int64
+	CPUMillis     cpu.Millis
 	MemoryBytes   int64
 	// CPULimitMillis and MemoryLimitBytes are the ceilings above the
 	// reservations.
-	CPULimitMillis   int64
+	CPULimitMillis   cpu.Millis
 	MemoryLimitBytes int64
 	Purpose          ContainerPurpose
 	Workload         uuid.UUID
@@ -121,21 +122,21 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 }
 
 // Default ceilings above a reservation. CPU is compressible, so a container
-// may use its reservation plus 16 cores when the host has them free. Memory is
+// may use its reservation plus 8 CPUs when the host has them free. Memory is
 // not: without a stated limit a container may reach four times its
 // reservation, at least 1 GiB and at most 8 GiB above it, before it is killed.
 const (
-	cpuBurstMillis     = 16_000
+	cpuBurstMillis     = cpu.Millis(8_000)
 	memoryBurstFactor  = 4
 	memoryBurstFloorMi = 1024
 	memoryBurstCapMi   = 8192
 )
 
-func cpuLimitMillis(r apitypes.Resources) int64 {
+func cpuLimitMillis(r apitypes.Resources) cpu.Millis {
 	if r.CpuLimitMillis != nil {
-		return int64(*r.CpuLimitMillis)
+		return cpu.Millis(*r.CpuLimitMillis)
 	}
-	return int64(r.CpuMillis) + cpuBurstMillis
+	return cpu.Millis(r.CpuMillis) + cpuBurstMillis
 }
 
 func memoryLimitMiB(r apitypes.Resources) int64 {

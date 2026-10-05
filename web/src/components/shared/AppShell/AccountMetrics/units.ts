@@ -22,7 +22,7 @@ export const MEASURE_GROUPS: readonly {
 export const measureLabels = {
   containers: "Containers",
   tasks: "Tasks",
-  cpu: "CPU cores",
+  cpu: "CPU",
   memory: "Memory",
   gpu: "GPUs",
 } as const satisfies Record<AccountActivityMeasure, string>;
@@ -30,7 +30,7 @@ export const measureLabels = {
 /** What the vertical scale counts, written once above it rather than on every tick. */
 export const unitAxisLabels = {
   starts: "starts",
-  cores: "cores",
+  cores: "CPU",
   gibibytes: "GiB",
   gpus: "GPUs",
 } as const satisfies Record<AccountActivityUnit, string>;
@@ -39,7 +39,7 @@ export const unitAxisLabels = {
  * A figure at the precision its unit is read at.
  *
  * A start is a whole thing and never carries a decimal. A level is a fraction of
- * capacity, and a hundredth of a core printed as `0` is the one thing this must
+ * capacity, and a hundredth of a CPU printed as `0` is the one thing this must
  * not say: the row beside it claims three percent of the account, and a reader
  * given both concludes the panel is broken. Under the last digit it can print,
  * the figure says so rather than rounding to the answer a resource nothing used

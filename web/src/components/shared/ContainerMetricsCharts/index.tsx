@@ -11,6 +11,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import type { Schemas } from "@/lib/api/client";
+import { formatCpu } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import {
@@ -124,7 +125,8 @@ export function ContainerMetricsCharts({
   );
 }
 
-/** Charts with no samples draw 0 to 1 GiB and 0 to 1 MiB/s. */
+/** Charts with no samples draw 0 to 1 CPU, 0 to 1 GiB and 0 to 1 MiB/s. */
+const EMPTY_CPU_TICKS = [0, 250, 500, 750, 1000];
 const EMPTY_BYTE_TICKS = [0, 256, 512, 768, 1024].map((mebibytes) => mebibytes * 1024 ** 2);
 const EMPTY_RATE_TICKS = [0, 256, 512, 768, 1024].map((kibibytes) => kibibytes * 1024);
 
@@ -138,7 +140,7 @@ function ChartHeader({ title, readout }: { title: string; readout?: string }) {
   );
 }
 
-/** CPU utilization as a percentage of the container allocation on a fixed 0-100% axis. */
+/** CPU used against a dashed reservation line on one CPU axis; bursts above the reservation show. */
 function CpuChart({
   data,
   readout,
@@ -149,14 +151,15 @@ function CpuChart({
   empty?: string;
 }) {
   const config: ChartConfig = {
-    cpuPercent: { label: "Used", color: "var(--chart-1)" },
+    cpuUsed: { label: "Used", color: "var(--chart-1)" },
+    cpuTotal: { label: "Reserved", color: "var(--muted-foreground)" },
   };
 
   return (
     <section className="space-y-2" aria-label="CPU">
       <ChartHeader title="CPU" readout={readout} />
       <ChartContainer config={config} className="h-44 w-full" empty={empty}>
-        <LineChart
+        <ComposedChart
           data={data}
           syncId={METRICS_SYNC_ID}
           margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
@@ -175,37 +178,35 @@ function CpuChart({
             stroke="var(--muted-foreground)"
             tickLine={false}
             axisLine={false}
-            width={44}
-            domain={[0, 100]}
-            allowDataOverflow={data.length === 0}
-            ticks={[0, 25, 50, 75, 100]}
-            tickFormatter={(value: number | string) => `${value}%`}
+            width={76}
+            {...emptyAxis(data.length === 0, EMPTY_CPU_TICKS)}
+            tickFormatter={(value: number | string) => formatAxisValue(value, formatCpu)}
             tick={{ fontSize: 10 }}
           />
-          <ChartTooltip
-            content={
-              <ChartTooltipContent
-                formatter={(value, name, item) => (
-                  <div className="flex flex-1 items-center justify-between gap-2 leading-none">
-                    <span className="text-muted-foreground">{name}</span>
-                    <span className="font-mono font-medium tabular-nums text-foreground">
-                      {formatCpuValue(value, item.payload as MetricDatum | undefined)}
-                    </span>
-                  </div>
-                )}
-              />
-            }
-          />
-          <Line
+          <ChartTooltip content={<ChartTooltipContent formatter={cpuTooltipFormatter} />} />
+          <Area
             type="monotone"
-            dataKey="cpuPercent"
+            dataKey="cpuUsed"
             name="Used"
-            stroke="var(--color-cpuPercent)"
+            stroke="var(--color-cpuUsed)"
+            fill="var(--color-cpuUsed)"
+            fillOpacity={0.18}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
           />
-        </LineChart>
+          <Line
+            type="monotone"
+            dataKey="cpuTotal"
+            name="Reserved"
+            stroke="var(--color-cpuTotal)"
+            strokeWidth={1.5}
+            dot={false}
+            strokeDasharray="4 3"
+            isAnimationActive={false}
+          />
+          <ChartLegend content={<ChartLegendContent />} />
+        </ComposedChart>
       </ChartContainer>
     </section>
   );
@@ -381,15 +382,11 @@ function RatePairChart({
   );
 }
 
-function formatCpuValue(
+function cpuTooltipFormatter(
   value: TooltipValueType | undefined,
-  point: MetricDatum | undefined,
-): string {
-  const numberValue = toNumber(value);
-  if (numberValue === null) return String(value ?? "");
-  const percent = `${numberValue.toFixed(1)}%`;
-  if (!point || point.cpuTotal <= 0) return percent;
-  return `${percent} (${Math.round(point.cpuUsed)}m / ${Math.round(point.cpuTotal)}m)`;
+  name: number | string | undefined,
+) {
+  return tooltipRow(name, formatTooltipValue(value, formatCpu));
 }
 
 function bytesTooltipFormatter(

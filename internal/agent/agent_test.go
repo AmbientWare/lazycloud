@@ -60,7 +60,7 @@ func TestAgentRunsTasksThenStops(t *testing.T) {
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
-	if len(s.hello.GetContainers()) != 0 || s.hello.GetCapacity().GetCpuMillis() != 4000 {
+	if len(s.hello.GetContainers()) != 0 || s.hello.GetCapacity().GetCpuMillis() != 2000 {
 		t.Fatalf("hello %v", s.hello)
 	}
 	id := e.startReady(s, 2)

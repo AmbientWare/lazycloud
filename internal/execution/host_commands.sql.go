@@ -8,6 +8,7 @@ package execution
 import (
 	"context"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -109,7 +110,7 @@ type StartingContainersOnHostRow struct {
 	WorkspaceID   uuid.UUID
 	WorkspaceName string
 	Slots         int32
-	CpuMillis     int64
+	CpuMillis     cpu.Millis
 	MemoryBytes   int64
 	Spec          []byte
 	SourceSha256  []byte

@@ -18,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/supervisor"
 )
@@ -170,7 +171,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			CapAdd:      capAdd,
 			SecurityOpt: securityOpt,
 			Mounts:      append(mounts, binds...),
-			Resources:   containerResources(resources, a.capacity, limit, gpus),
+			Resources:   containerResources(resources, a.capacity, a.topology, limit, gpus),
 			StorageOpt:  a.diskLimit(resources),
 		},
 	}
@@ -380,21 +381,23 @@ func containerUser() string {
 	return ""
 }
 
-// containerResources turns reservations into cgroup settings. CPU shares are
-// proportional to the reservation, so under contention a container keeps what
-// it reserved; the CPU quota is the burst ceiling, capped at the host. Memory
-// reserves the request (memory.low) and kills at the limit, with swap the size
-// of the reservation so reclaim can slow a container before the wall.
-func containerResources(r *hostproto.Resources, host *hostproto.Capacity, pids int64, gpus []string) containertypes.Resources {
-	cpuLimit := r.GetCpuLimitMillis()
-	if cpuLimit <= 0 || cpuLimit > host.GetCpuMillis() {
-		cpuLimit = host.GetCpuMillis()
+// containerResources turns reservations into cgroup settings, which count
+// hardware threads. CPU shares are proportional to the reservation, so under
+// contention a container keeps what it reserved; the CPU quota is the burst
+// ceiling, capped at the host. Memory reserves the request (memory.low) and
+// kills at the limit, with swap the size of the reservation so reclaim can
+// slow a container before the wall.
+func containerResources(r *hostproto.Resources, host *hostproto.Capacity, topology cpu.Topology, pids int64, gpus []string) containertypes.Resources {
+	cpuLimit := cpu.Millis(r.GetCpuLimitMillis())
+	if hostCPU := cpu.Millis(host.GetCpuMillis()); cpuLimit <= 0 || cpuLimit > hostCPU {
+		cpuLimit = hostCPU
 	}
-	cpuLimit = max(cpuLimit, r.GetCpuMillis())
+	reservation := cpu.Millis(r.GetCpuMillis())
+	reserved, ceiling := topology.VCPUs(reservation), topology.VCPUs(max(cpuLimit, reservation))
 	memoryLimit := max(r.GetMemoryLimitBytes(), r.GetMemoryBytes())
 	return containertypes.Resources{
-		CPUShares:         max(r.GetCpuMillis()*1024/1000, 2),
-		NanoCPUs:          cpuLimit * 1_000_000,
+		CPUShares:         max(int64(reserved)*1024/1000, 2),
+		NanoCPUs:          int64(ceiling) * 1_000_000,
 		MemoryReservation: r.GetMemoryBytes(),
 		Memory:            memoryLimit,
 		MemorySwap:        memoryLimit + r.GetMemoryBytes(),

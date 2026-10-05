@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -194,7 +195,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 			WorkspaceID: release.WorkspaceID,
 			ReleaseID:   release.ReleaseID,
 			Slots:       release.Slots,
-			CpuMillis:   release.CpuMillis,
+			CpuMillis:   cpu.Millis(release.CpuMillis),
 			MemoryBytes: release.MemoryBytes,
 			GpuCount:    release.GpuCount,
 			RateClass:   string(billing.RateClassFor(release.Pinned, release.Preemptible)),

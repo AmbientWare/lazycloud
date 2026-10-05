@@ -479,7 +479,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 		}
 	}
 	env := []string{"DOCKER_CONFIG=" + buildDockerConfig}
-	resources := containerResources(spec.GetResources(), a.capacity, int64(pidsLimit), nil)
+	resources := containerResources(spec.GetResources(), a.capacity, a.topology, int64(pidsLimit), nil)
 	if gpu != nil {
 		// The held GPUs reach the builder as the devices and files of their
 		// CDI spec, which BuildKit then applies to the steps.

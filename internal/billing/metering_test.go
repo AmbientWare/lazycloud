@@ -32,7 +32,7 @@ func TestMeteringBillsReadyToStoppedOnTheGrid(t *testing.T) {
 		}
 		total += e.cost
 	}
-	// 2 cores at $0.022/h and 4 GiB at $0.0075/h for 29m40s.
+	// 2 CPUs at $0.044/h and 4 GiB at $0.0075/h for 29m40s.
 	if wantTotal := f.expected(ready, shape, stopped.Sub(ready)); abs(total-wantTotal) > 3 {
 		t.Errorf("total %d, want about %d", total, wantTotal)
 	}
@@ -115,7 +115,7 @@ func TestMeteringSplitsAtPublishedRateChanges(t *testing.T) {
 	if len(entries) != 2 || !entries[0].end.Equal(change) || entries[0].version != "2026-09-09.a" || entries[1].version != "2026-09-10.a" {
 		t.Fatalf("entries across the September change: %+v", entries)
 	}
-	// The earlier card's CPU rate is higher: $0.0551268 against $0.022.
+	// The earlier card's CPU rate is higher: $0.0551268 against $0.044.
 	perSecond := func(e ledgerRow) float64 { return float64(e.cost) / e.end.Sub(e.start).Seconds() }
 	if perSecond(entries[0]) <= perSecond(entries[1]) {
 		t.Fatalf("rates did not change at the publication: %+v", entries)

@@ -39,7 +39,7 @@ function node(id: string, state: Schemas["FleetState"]): Schemas["FleetNode"] {
     preemptible: false,
     gpu_type: "",
     state,
-    capacity: capacity(4, 16),
+    capacity: capacity(2, 16),
     allocated: capacity(0, 0),
     containers: 0,
     ready: false,

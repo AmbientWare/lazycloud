@@ -112,7 +112,7 @@ func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorklo
 		}
 		out.Workloads = append(out.Workloads, apitypes.ComputeWorkload{
 			DeploymentId: w.ID, App: w.App, Name: w.Name, Kind: apitypes.WorkloadKind(w.Kind), Machine: w.Machine,
-			CpuMillicores: w.CPUMillis, MemoryMb: w.MemoryBytes >> 20, Gpu: gpus, GpuCount: w.GPUCount,
+			CpuMillicores: int64(w.CPUMillis), MemoryMb: w.MemoryBytes >> 20, Gpu: gpus, GpuCount: w.GPUCount,
 		})
 	}
 	return out, nil
@@ -122,7 +122,7 @@ func machineOut(m compute.Machine) apitypes.Machine {
 	out := apitypes.Machine{
 		Id: uuid.UUID(m.ID), Name: m.Name, Workspaces: m.Workspaces, Placement: "machine:" + m.ID.String(),
 		Provider: apitypes.MachineAgent, Lifecycle: apitypes.MachineLifecycle(m.Phase),
-		LifecycleMessage: m.PhaseMessage, LifecycleAt: m.PhaseAt, Cpu: m.CPUMillis, Memory: m.MemoryBytes >> 20,
+		LifecycleMessage: m.PhaseMessage, LifecycleAt: m.PhaseAt, Cpu: int64(m.CPUMillis), Memory: m.MemoryBytes >> 20,
 		Gpu: m.GPUType, GpuCount: m.GPUCount, Connected: m.Connected, Schedulable: m.Schedulable(),
 		CapacityState: apitypes.CapacityState(m.CapacityState), CapacityReason: m.CapacityReason,
 		PreflightChecks: []apitypes.PreflightCheck{}, Remediation: m.Remediation(), AgentVersion: m.AgentVersion,
@@ -305,7 +305,7 @@ func (s *Server) ListComputeInstances(ctx context.Context, req ListComputeInstan
 			Region: i.Region, AvailabilityZone: i.Zone, InstanceId: i.InstanceID, InstanceType: i.InstanceType,
 			Lifecycle: apitypes.MachineLifecycle(i.Phase), LifecycleMessage: i.PhaseMessage, LifecycleAt: i.PhaseAt,
 			Connected: i.Connected, CapacityState: apitypes.CapacityState(i.CapacityState), CapacityReason: i.CapacityReason,
-			GpuCount: i.GPUCount, CpuMillicores: i.CPUMillis, MemoryMb: i.MemoryBytes >> 20, LaunchAttempt: i.LaunchAttempts,
+			GpuCount: i.GPUCount, CpuMillicores: int64(i.CPUMillis), MemoryMb: i.MemoryBytes >> 20, LaunchAttempt: i.LaunchAttempts,
 			BootedTemplateVersion: i.AgentVersion, LaunchedAt: i.LaunchedAt, CreatedAt: i.CreatedAt,
 		}
 		if i.GPUType != "" {

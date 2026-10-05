@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -43,7 +44,7 @@ type ContainerViewRow struct {
 	StopReason      *string
 	ExitMessage     *string
 	Slots           int32
-	CpuMillis       int64
+	CpuMillis       cpu.Millis
 	MemoryBytes     int64
 	CreatedAt       time.Time
 	ReadyAt         *time.Time
@@ -139,7 +140,7 @@ type ListContainersRow struct {
 	StopReason      *string
 	ExitMessage     *string
 	Slots           int32
-	CpuMillis       int64
+	CpuMillis       cpu.Millis
 	MemoryBytes     int64
 	CreatedAt       time.Time
 	ReadyAt         *time.Time
@@ -246,7 +247,7 @@ type ListLiveContainersRow struct {
 	StopReason      *string
 	ExitMessage     *string
 	Slots           int32
-	CpuMillis       int64
+	CpuMillis       cpu.Millis
 	MemoryBytes     int64
 	CreatedAt       time.Time
 	ReadyAt         *time.Time

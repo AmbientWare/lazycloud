@@ -8,12 +8,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// The plan tests use two shapes: m.small (8 vCPU, 16 GiB) and m.large
-// (32 vCPU, 64 GiB, four smalls' usable capacity), in the standard quota
+// The plan tests use two shapes: m.small (8 CPU, 16 GiB) and m.large
+// (32 CPU, 64 GiB, four smalls' usable capacity), in the standard quota
 // class like the M family.
 var (
-	planSmall = CatalogType{Name: "m.small", CPUMillis: 8000, MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
-	planLarge = CatalogType{Name: "m.large", CPUMillis: 32_000, MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}
+	planSmall = CatalogType{Name: "m.small", Topology: twoPerCore(16), MemoryBytes: 16 * gib, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+	planLarge = CatalogType{Name: "m.large", Topology: twoPerCore(64), MemoryBytes: 64 * gib, prices: [4]int64{300_000, 300_000, 300_000, 300_000}}
 	small     = planSmall.Usable(0)
 	large     = planLarge.Usable(0)
 	onDemand  = ReserveMarket{}
@@ -242,11 +242,11 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 func TestPlanCoversABatchOfContainersTogether(t *testing.T) {
 	s := planSnapshot(t)
 	s.Offers.Catalog = FleetCatalog()
-	need := Requirement{CPUMillis: 6000, MemoryBytes: 4 * gib}
+	need := Requirement{CPUMillis: 3000, MemoryBytes: 4 * gib}
 	s.Pending = []DemandGroup{{Need: need, Containers: []PendingContainer{{ID: uuid.New()}, {ID: uuid.New()}}}}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
 	if got := boughtTypes(plan); !slices.Equal(got, []string{"c6a.4xlarge"}) || len(plan.Actions[0].Containers) != 2 {
-		t.Fatalf("two 6 vCPU containers: %+v", plan.Actions)
+		t.Fatalf("two 3 CPU containers: %+v", plan.Actions)
 	}
 }
 
@@ -331,8 +331,8 @@ func TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt(t *testing.T) {
 // planFast is a small shape that hibernates; planRoomy can hibernate but
 // has more RAM than a reserve hibernates.
 var (
-	planFast  = CatalogType{Name: "fast", CPUMillis: 8000, MemoryBytes: 16 * gib, Hibernates: true, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
-	planRoomy = CatalogType{Name: "roomy", CPUMillis: 8000, MemoryBytes: 64 * gib, Hibernates: true, prices: [4]int64{200_000, 200_000, 200_000, 200_000}}
+	planFast  = CatalogType{Name: "fast", Topology: twoPerCore(16), MemoryBytes: 16 * gib, Hibernates: true, prices: [4]int64{100_000, 100_000, 100_000, 100_000}}
+	planRoomy = CatalogType{Name: "roomy", Topology: twoPerCore(16), MemoryBytes: 64 * gib, Hibernates: true, prices: [4]int64{200_000, 200_000, 200_000, 200_000}}
 )
 
 func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {

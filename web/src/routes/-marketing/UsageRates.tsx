@@ -59,7 +59,7 @@ export function computeGroups(
       lines: [
         {
           label: "CPU",
-          figure: metered(shape.nanos_per_cpu_core_hour, meter),
+          figure: metered(shape.nanos_per_cpu_hour, meter),
           unit: `/ CPU / ${per}`,
           fractionDigits: meter === "hour" ? 4 : 8,
         },

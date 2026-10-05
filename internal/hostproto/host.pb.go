@@ -815,6 +815,8 @@ func (x *EnrollResponse) GetHostToken() string {
 	return ""
 }
 
+// Capacity counts CPUs, one physical core each; the agent converts from
+// the machine's hardware threads.
 type Capacity struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	CpuMillis   int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
@@ -1433,7 +1435,7 @@ type ContainerSample struct {
 	ContainerId string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
 	// Time covered since the previous sample.
 	IntervalMs uint32 `protobuf:"varint,2,opt,name=interval_ms,json=intervalMs,proto3" json:"interval_ms,omitempty"`
-	// CPU time used in the interval.
+	// CPU time used in the interval, counted on cores.
 	CpuUsageUsec uint64 `protobuf:"varint,3,opt,name=cpu_usage_usec,json=cpuUsageUsec,proto3" json:"cpu_usage_usec,omitempty"`
 	// Anonymous and mapped file memory, and swap, when sampled.
 	MemoryRssBytes  uint64 `protobuf:"varint,4,opt,name=memory_rss_bytes,json=memoryRssBytes,proto3" json:"memory_rss_bytes,omitempty"`
@@ -3797,8 +3799,9 @@ func (x *Source) GetUrlExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// Resources reserve cpu_millis and memory_bytes; the container may use more
-// up to the limits. The host caps cpu_limit_millis at its own size.
+// Resources reserve cpu_millis, thousandths of a CPU, and memory_bytes; the
+// container may use more up to the limits. The host caps cpu_limit_millis at
+// its own size.
 type Resources struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	CpuMillis        int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`

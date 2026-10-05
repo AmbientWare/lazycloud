@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // GPUAny in a preference accepts any model.
@@ -30,7 +32,7 @@ type Requirement struct {
 	// GPUs are accepted models in preference order; GPUAny takes any.
 	GPUs        []string
 	GPUCount    int
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 }
 
@@ -61,9 +63,9 @@ type HostCapacity struct {
 	GPUType    string
 	GPUCount   int
 
-	CPUMillis       int64
+	CPUMillis       cpu.Millis
 	MemoryBytes     int64
-	FreeCPUMillis   int64
+	FreeCPUMillis   cpu.Millis
 	FreeMemoryBytes int64
 	FreeGPUs        int
 }
@@ -183,7 +185,7 @@ func AvailableCapacity(ctx context.Context, tx pgx.Tx) ([]HostCapacity, error) {
 			GPUCount:        int(row.GpuCount),
 			CPUMillis:       row.CpuMillis,
 			MemoryBytes:     row.MemoryBytes,
-			FreeCPUMillis:   row.FreeCpuMillis,
+			FreeCPUMillis:   cpu.Millis(row.FreeCpuMillis),
 			FreeMemoryBytes: row.FreeMemoryBytes,
 			FreeGPUs:        int(row.FreeGpus),
 		})

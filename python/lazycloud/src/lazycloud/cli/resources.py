@@ -634,7 +634,10 @@ def machine_join(
     ] = None,
     max_cpu: Annotated[
         str,
-        typer.Option("--max-cpu", help="Maximum CPU cores to advertise."),
+        typer.Option(
+            "--max-cpu",
+            help="Maximum CPUs to advertise, such as 2 or 1.5; one CPU is one physical core.",
+        ),
     ] = "",
     max_memory: Annotated[
         str,

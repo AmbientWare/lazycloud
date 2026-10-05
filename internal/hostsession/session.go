@@ -440,8 +440,8 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 		PythonVersion: version,
 		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)},
 		Resources: &hostproto.Resources{
-			CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes,
-			CpuLimitMillis: start.CPULimitMillis, MemoryLimitBytes: start.MemoryLimitBytes,
+			CpuMillis: int64(start.CPUMillis), MemoryBytes: start.MemoryBytes,
+			CpuLimitMillis: int64(start.CPULimitMillis), MemoryLimitBytes: start.MemoryLimitBytes,
 			DiskLimitBytes: diskLimit,
 			GpuCount:       gpusOf(start.Spec.Resources),
 		},

@@ -25,8 +25,8 @@ from pydantic import JsonValue
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
 from lazycloud._shared.autoscaling import Autoscaler
 from lazycloud._shared.deployment_records import (
+    DEFAULT_CPU,
     DEFAULT_DISK,
-    DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
@@ -183,7 +183,7 @@ class Endpoint(Generic[P, R]):
     route: str = "/"
     domain: str | None = None
     methods: list[str] = field(default_factory=lambda: list(DEFAULT_ENDPOINT_METHODS))
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU
+    cpu: CpuRequest | None = DEFAULT_CPU
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
     gpu: GpuInput = None
@@ -484,7 +484,7 @@ def _endpoint(
     route: str = "/",
     domain: str | None = None,
     methods: list[str] | None = None,
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,
@@ -527,7 +527,7 @@ def _endpoint(
     route: str = "/",
     domain: str | None = None,
     methods: list[str] | None = None,
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,
@@ -569,7 +569,7 @@ def _endpoint(
     route: str = "/",
     domain: str | None = None,
     methods: list[str] | None = None,
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,
@@ -654,7 +654,7 @@ class ASGI:
     image: Image = field(default_factory=Image)
     route: str = "/"
     domain: str | None = None
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU
+    cpu: CpuRequest | None = DEFAULT_CPU
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
     gpu: GpuInput = None
@@ -876,7 +876,7 @@ def _asgi(
     image: Image | None = None,
     route: str = "/",
     domain: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    cpu: CpuRequest | None = DEFAULT_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: GpuInput = None,

@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
 
@@ -124,7 +125,7 @@ returning id
 type CreatePendingPodContainersParams struct {
 	WorkspaceID     uuid.UUID
 	ReleaseID       uuid.UUID
-	CpuMillis       int64
+	CpuMillis       cpu.Millis
 	MemoryBytes     int64
 	GpuCount        int32
 	RateClass       string
@@ -401,7 +402,7 @@ returning id, created_at
 type InsertInstanceParams struct {
 	WorkspaceID        uuid.UUID
 	ReleaseID          *uuid.UUID
-	CpuMillis          int64
+	CpuMillis          cpu.Millis
 	MemoryBytes        int64
 	GpuCount           int32
 	RateClass          string

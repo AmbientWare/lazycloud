@@ -2012,7 +2012,7 @@ class PublishedPlan(APIModel):
 class ShapeRate(APIModel):
     billing_owner: BillingOwner
     nanos_per_container_hour: int
-    nanos_per_cpu_core_hour: int
+    nanos_per_cpu_hour: int
     nanos_per_memory_gib_hour: int
 
 
@@ -2028,7 +2028,7 @@ class ComputeRate(APIModel):
         None
     )
     nanos_per_container_hour: int
-    nanos_per_cpu_core_hour: int
+    nanos_per_cpu_hour: int
     nanos_per_memory_gib_hour: int
     nanos_per_gpu_card_hour: int
 
@@ -2748,8 +2748,10 @@ class ImageSpec(APIModel):
 
 
 class Resources(APIModel):
-    cpu_millis: Annotated[int, Field(ge=125, le=192000)]
-    cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
+    cpu_millis: Annotated[int, Field(description="Thousandths of a CPU.", ge=125, le=32000)]
+    cpu_limit_millis: Annotated[
+        int | None, Field(description="Thousandths of a CPU.", ge=125, le=32000)
+    ] = None
     memory_mib: Annotated[int, Field(ge=128, le=1572864)]
     memory_limit_mib: Annotated[int | None, Field(ge=128, le=1572864)] = None
     disk_mib: Annotated[

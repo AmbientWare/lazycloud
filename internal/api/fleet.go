@@ -23,7 +23,7 @@ func (s *Server) administrator(ctx context.Context) error {
 }
 
 func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
-	return apitypes.FleetCapacity{CpuMillicores: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
+	return apitypes.FleetCapacity{CpuMillicores: int64(c.CPUMillis), MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
 }
 
 // GetFleet returns the platform fleet's published plan and agent rollout

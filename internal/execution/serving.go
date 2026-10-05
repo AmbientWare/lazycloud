@@ -13,6 +13,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -237,7 +238,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 			WorkspaceID: row.WorkspaceID,
 			ReleaseID:   row.ReleaseID,
 			Slots:       row.Slots,
-			CpuMillis:   row.CpuMillis,
+			CpuMillis:   cpu.Millis(row.CpuMillis),
 			MemoryBytes: row.MemoryBytes,
 			GpuCount:    row.GpuCount,
 			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),

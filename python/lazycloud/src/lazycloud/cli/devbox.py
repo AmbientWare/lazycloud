@@ -154,7 +154,7 @@ def status(
         view=result_card(
             {
                 "phase": box.phase.value,
-                "cpu": _cores(resources),
+                "cpu": _cpus(resources),
                 "memory": _mebibytes(resources.memory_mib),
                 "disk": (
                     humanize_bytes(box.disk.size_bytes)
@@ -171,9 +171,9 @@ def status(
     )
 
 
-def _cores(resources: Resources) -> float | int:
-    cores = resources.cpu_millis / 1000
-    return int(cores) if cores.is_integer() else cores
+def _cpus(resources: Resources) -> str:
+    cpus = resources.cpu_millis / 1000
+    return f"{int(cpus) if cpus.is_integer() else cpus} CPU"
 
 
 def _mebibytes(value: int) -> str:

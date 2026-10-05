@@ -348,7 +348,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		GeeseFSPath:     e.geesefs,
 		MountImage:      DefaultMountImage,
 		BuildNetwork:    "host",
-		Limits:          Limits{CPUMillis: 4000, MemoryBytes: 8 << 30},
+		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},
 		Labels:          map[string]string{"lazycloud.agent": e.id},
 		Version:         "test",
 		MetricsInterval: e.metricsInterval,

@@ -47,7 +47,7 @@ func (b *Billing) Catalog(t time.Time) (apitypes.PricingCatalog, error) {
 		}
 		out.ShapeRates = append(out.ShapeRates, apitypes.ShapeRate{
 			BillingOwner: apitypes.BillingOwner(owner), NanosPerContainerHour: rate.ContainerHour,
-			NanosPerCpuCoreHour: rate.CPUCoreHour, NanosPerMemoryGibHour: rate.MemoryGiBHour,
+			NanosPerCpuHour: rate.CPUHour, NanosPerMemoryGibHour: rate.MemoryGiBHour,
 		})
 	}
 	for _, model := range GPUModels() {
@@ -86,7 +86,7 @@ func (b *Billing) Catalog(t time.Time) (apitypes.PricingCatalog, error) {
 				}
 				row := apitypes.ComputeRate{
 					BillingOwner: apitypes.BillingOwner(owner), NanosPerContainerHour: rate.ContainerHour,
-					NanosPerCpuCoreHour: rate.CPUCoreHour, NanosPerMemoryGibHour: rate.MemoryGiBHour,
+					NanosPerCpuHour: rate.CPUHour, NanosPerMemoryGibHour: rate.MemoryGiBHour,
 					NanosPerGpuCardHour: rate.GPUCardHour,
 				}
 				if model != noGPU {

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -55,7 +56,7 @@ type Workload struct {
 	Name        string
 	Kind        string
 	Machine     string
-	CPUMillis   int64
+	CPUMillis   cpu.Millis
 	MemoryBytes int64
 	GPUs        []string
 	GPUCount    int
@@ -84,7 +85,7 @@ func (c *Compute) Workloads(ctx context.Context, workspace identity.WorkspaceID,
 		}
 		w := Workload{
 			ID: row.ID, App: row.App, Name: row.Name, Kind: row.Kind,
-			CPUMillis: int64(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
+			CPUMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
 			GPUs: []string{},
 		}
 		if spec.Placement != nil && spec.Placement.Machine != nil {
@@ -121,7 +122,7 @@ type Instance struct {
 	CapacityReason string
 	GPUType        string
 	GPUCount       int
-	CPUMillis      int64
+	CPUMillis      cpu.Millis
 	MemoryBytes    int64
 	LaunchAttempts int
 	AgentVersion   string

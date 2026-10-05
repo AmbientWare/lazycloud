@@ -609,6 +609,15 @@ while True:
 	if err != nil || string(pod.Container.HostConfig.NetworkMode) != "container:"+holder.Container.ID {
 		t.Fatalf("pod network %q: %v", pod.Container.HostConfig.NetworkMode, err)
 	}
+	// The pod may burst to the host's 2 CPUs, as the machine's hardware
+	// threads count them.
+	topology, err := detectTopology(cpuRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(topology.VCPUs(2000)) * 1_000_000; pod.Container.HostConfig.NanoCPUs != want {
+		t.Fatalf("pod CPU quota %d, want %d for %d threads on %d cores", pod.Container.HostConfig.NanoCPUs, want, topology.Threads, topology.Cores)
+	}
 
 	first.stop()
 	e.startAgent()

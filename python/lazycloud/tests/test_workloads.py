@@ -736,7 +736,7 @@ def test_devbox_list_pages_and_status_reports_the_devbox(fake_api: FakeApi) -> N
         "limit": ["1"],
     }
     assert status.exit_code == 0, status.output
-    for text in ("team/tools/box", "failed", "4Gi", "10.7 GB", "image pull failed"):
+    for text in ("team/tools/box", "failed", "2 CPU", "4Gi", "10.7 GB", "image pull failed"):
         assert text in status.output, status.output
 
 

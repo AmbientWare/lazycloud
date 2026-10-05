@@ -3,6 +3,8 @@ package compute
 import (
 	"slices"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // The fleet policy is how much spare capacity the platform fleet keeps per
@@ -22,7 +24,7 @@ func (a FleetCapacity) Minus(b FleetCapacity) FleetCapacity {
 
 // Times is n copies of a.
 func (a FleetCapacity) Times(n int) FleetCapacity {
-	return FleetCapacity{CPUMillis: a.CPUMillis * int64(n), MemoryBytes: a.MemoryBytes * int64(n), GPUs: a.GPUs * n}
+	return FleetCapacity{CPUMillis: a.CPUMillis * cpu.Millis(n), MemoryBytes: a.MemoryBytes * int64(n), GPUs: a.GPUs * n}
 }
 
 // Covers reports whether a is at least b in every dimension.
@@ -46,7 +48,7 @@ func (a FleetCapacity) Clamp() FleetCapacity { return a.Upper(FleetCapacity{}) }
 // Percent is p percent of a, each dimension rounded up.
 func (a FleetCapacity) Percent(p int64) FleetCapacity {
 	up := func(v int64) int64 { return (v*p + 99) / 100 }
-	return FleetCapacity{CPUMillis: up(a.CPUMillis), MemoryBytes: up(a.MemoryBytes), GPUs: int(up(int64(a.GPUs)))}
+	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(up(int64(a.GPUs)))}
 }
 
 // Empty reports whether a has nothing positive in any dimension.
@@ -55,7 +57,7 @@ func (a FleetCapacity) Empty() bool { return FleetCapacity{}.Covers(a) }
 // fits reports how many copies of shape fit in a, bounded by limit.
 func (a FleetCapacity) fits(shape FleetCapacity, limit int) int {
 	n := int64(limit)
-	for _, d := range [][2]int64{{a.CPUMillis, shape.CPUMillis}, {a.MemoryBytes, shape.MemoryBytes}, {int64(a.GPUs), int64(shape.GPUs)}} {
+	for _, d := range [][2]int64{{int64(a.CPUMillis), int64(shape.CPUMillis)}, {a.MemoryBytes, shape.MemoryBytes}, {int64(a.GPUs), int64(shape.GPUs)}} {
 		if d[1] > 0 {
 			n = min(n, max(d[0], 0)/d[1])
 		}
@@ -194,22 +196,22 @@ type Policy struct {
 
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
-	cpu := MarketReserve{
-		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 2000, MemoryBytes: 4 * gib}, LoadPercent: 25},
-		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 6000, MemoryBytes: 12 * gib}, LoadPercent: 50},
+	cpuMarket := MarketReserve{
+		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, LoadPercent: 25},
+		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}, LoadPercent: 50},
 		Largest: LargestApart,
 	}
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, Largest: LargestShared}
-	// What a host of 16 vCPU and 32 GiB, a size that hibernates, offers;
-	// and the cap, what one of 32 vCPU and 64 GiB offers, with one card.
-	fits := CatalogType{CPUMillis: 16_000, MemoryBytes: 32 * gib}.Usable(0)
-	limit := CatalogType{CPUMillis: 32_000, MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
+	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
+	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
+	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
+	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
 	return Policy{
 		MarginPercent:    30,
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
-		Spot:             cpu, OnDemand: cpu,
+		Spot:             cpuMarket, OnDemand: cpuMarket,
 		GPU:            map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
 		LargestShape:   LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
 		IdleTimeout:    5 * time.Minute,
