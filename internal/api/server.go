@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,8 +168,9 @@ func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObje
 	return GetTaskResult200JSONResponse(payloadOut(result)), nil
 }
 
-// WaitTasks returns the listed tasks that have finished, waiting until one
-// has when asked. The schema bounds the ids and the wait.
+// WaitTasks returns the listed tasks that have finished and those the
+// workspace does not have, waiting for either when asked. The schema bounds
+// the ids and the wait.
 func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
@@ -182,12 +184,14 @@ func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (Wai
 	if req.Body.WaitSeconds != nil {
 		wait = time.Duration(*req.Body.WaitSeconds) * time.Second
 	}
-	finished, err := s.owners.Execution.WaitTasks(ctx, s.owners.Listener, ws.ID, ids, wait)
+	found, err := s.owners.Execution.WaitTasks(ctx, s.owners.Listener, ws.ID, ids, wait)
 	if err != nil {
 		return nil, err
 	}
-	out := WaitTasks200JSONResponse{Tasks: make([]apitypes.FinishedTask, len(finished))}
-	for n, f := range finished {
+	out := waitTasksResponse{
+		Tasks: make([]apitypes.FinishedTask, len(found.Finished)), MissingTaskIds: taskUUIDs(found.Missing),
+	}
+	for n, f := range found.Finished {
 		out.Tasks[n] = apitypes.FinishedTask{Task: taskOut(f.Task), ResultOmitted: f.ResultOmitted}
 		if f.Result != nil {
 			result := payloadOut(*f.Result)
@@ -195,6 +199,24 @@ func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (Wai
 		}
 	}
 	return out, nil
+}
+
+// waitTasksResponse writes its JSON without HTML escaping, which would grow
+// a <, > or & to six bytes, so the inline budget execution counts in raw
+// bytes bounds the response.
+type waitTasksResponse apitypes.WaitTasksResponse
+
+func (r waitTasksResponse) VisitWaitTasksResponse(w http.ResponseWriter) error {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(r); err != nil {
+		return fmt.Errorf("encode finished tasks: %w", err)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, err := buf.WriteTo(w)
+	return err //nolint:wrapcheck // The client went away.
 }
 
 // CancelTask cancels a queued or running task.

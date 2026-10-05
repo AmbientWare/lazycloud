@@ -83,18 +83,6 @@ func (e *Execution) GetTask(ctx context.Context, listener *database.Listener, wo
 	}
 }
 
-// TaskNotFoundError names a task the workspace does not have. It matches
-// ErrNotFound.
-type TaskNotFoundError struct {
-	Task TaskID
-}
-
-func (e *TaskNotFoundError) Error() string {
-	return fmt.Sprintf("task %s is not in the workspace", e.Task)
-}
-
-func (e *TaskNotFoundError) Unwrap() error { return ErrNotFound }
-
 // FinishedTask is a finished task with its result when the result comes
 // inline.
 type FinishedTask struct {
@@ -105,6 +93,13 @@ type FinishedTask struct {
 	ResultOmitted bool
 }
 
+// TaskWait is what WaitTasks found among the requested tasks.
+type TaskWait struct {
+	Finished []FinishedTask
+	// Missing are the requested ids the workspace has no task for.
+	Missing []TaskID
+}
+
 const (
 	// maxInlineResult bounds one result inlined by WaitTasks, as the API
 	// encodes it.
@@ -113,12 +108,10 @@ const (
 	maxInlineResults = 4 << 20
 )
 
-// WaitTasks returns the finished tasks among ids, in the order of ids. With
-// wait above zero it holds until at least one has finished, wait passes or
-// ctx ends, and returns none when none finished. Every id must name a task in
-// workspace; the first that does not fails the call with a
-// *TaskNotFoundError.
-func (e *Execution) WaitTasks(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, ids []TaskID, wait time.Duration) ([]FinishedTask, error) {
+// WaitTasks returns the finished tasks among ids and the ids the workspace
+// has no task for, each in the order of ids. With wait above zero it holds
+// until it finds either, wait passes or ctx ends.
+func (e *Execution) WaitTasks(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, ids []TaskID, wait time.Duration) (TaskWait, error) {
 	keys := make([]uuid.UUID, len(ids))
 	for n, id := range ids {
 		keys[n] = uuid.UUID(id)
@@ -131,35 +124,29 @@ func (e *Execution) WaitTasks(ctx context.Context, listener *database.Listener, 
 		wake, cancel = listener.Subscribe(database.ChannelTaskFinished, uuidStrings(keys)...)
 		defer cancel()
 	}
-	if err := e.checkTasksExist(ctx, workspace, keys); err != nil {
-		return nil, err
+	missing, err := e.queries.MissingTasks(ctx, MissingTasksParams{Ids: keys, WorkspaceID: uuid.UUID(workspace)})
+	if err != nil {
+		return TaskWait{}, fmt.Errorf("find missing tasks: %w", err)
+	}
+	result := TaskWait{Missing: make([]TaskID, len(missing))}
+	for n, id := range missing {
+		result.Missing[n] = TaskID(id)
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
-		finished, err := e.finishedTasks(ctx, workspace, keys)
-		if err != nil || len(finished) > 0 || wait <= 0 {
-			return finished, err
+		result.Finished, err = e.finishedTasks(ctx, workspace, keys)
+		if err != nil || len(result.Finished) > 0 || len(result.Missing) > 0 || wait <= 0 {
+			return result, err
 		}
 		select {
 		case <-wake:
 		case <-timer.C:
-			return finished, nil
+			return result, nil
 		case <-ctx.Done():
-			return finished, nil
+			return result, nil
 		}
 	}
-}
-
-func (e *Execution) checkTasksExist(ctx context.Context, workspace identity.WorkspaceID, ids []uuid.UUID) error {
-	unknown, err := e.queries.FirstUnknownTask(ctx, FirstUnknownTaskParams{Ids: ids, WorkspaceID: uuid.UUID(workspace)})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("check tasks: %w", err)
-	}
-	return &TaskNotFoundError{Task: TaskID(unknown)}
 }
 
 func (e *Execution) finishedTasks(ctx context.Context, workspace identity.WorkspaceID, ids []uuid.UUID) ([]FinishedTask, error) {

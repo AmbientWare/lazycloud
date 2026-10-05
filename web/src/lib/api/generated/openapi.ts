@@ -541,7 +541,7 @@ export interface paths {
         put?: never;
         /**
          * Read the listed tasks that have finished, waiting until one has
-         * @description Answers as soon as at least one listed task has finished, or with an empty list once `wait_seconds` pass. Tasks still queued or running are left out. Every listed task must be in the workspace; otherwise the call fails with `not_found` naming the first unknown one.
+         * @description Answers as soon as at least one listed task has finished or is not in the workspace, or with empty lists once `wait_seconds` pass. Tasks still queued or running are left out.
          */
         post: operations["waitTasks"];
         delete?: never;
@@ -3870,6 +3870,8 @@ export interface components {
         };
         WaitTasksResponse: {
             tasks: components["schemas"]["FinishedTask"][];
+            /** @description The listed tasks the workspace does not have, in request order. */
+            missing_task_ids: string[];
         };
         /** @description A finished task with the value it returned. A result of at most 256 KiB comes inline while the response's results stay within 4 MiB; any other result is left out with `result_omitted` set, and getTaskResult returns it. */
         FinishedTask: {

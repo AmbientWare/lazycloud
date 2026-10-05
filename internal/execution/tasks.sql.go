@@ -19,10 +19,13 @@ with finished as (
            t.finished_at, t.failure, t.scheduled_for, res.encoding,
            case res.encoding when 'cloudpickle' then (octet_length(res.data) + 2) / 3 * 4
                 else octet_length(res.data) end
-             + coalesce(octet_length(res.display::text), 0) as result_size
+             + coalesce(octet_length(shown.text)
+                        + 3 * (char_length(shown.text) - char_length(translate(shown.text, U&'\2028\2029', ''))),
+                        0) as result_size
     from unnest($1::uuid[]) with ordinality as req(id, n)
     join tasks t on t.id = req.id
     left join task_results res on res.task_id = t.id
+    left join lateral (select res.display::text as text) shown on true
     where t.workspace_id = $2 and t.status in ('succeeded', 'failed', 'cancelled')
 ), budget as (
     select f.n, f.id, f.workload_id, f.release_id, f.status, f.attempt_count, f.max_attempts, f.parent_task_id, f.root_task_id, f.available_at, f.created_at, f.started_at, f.finished_at, f.failure, f.scheduled_for, f.encoding, f.result_size,
@@ -77,9 +80,10 @@ type FinishedTasksRow struct {
 }
 
 // The finished tasks among ids, in request order. A result inlines when its
-// size as the API encodes it (base64 for cloudpickle, plus the display) is
-// at most @result_max and the inlined sizes so far stay within @total_max;
-// only those rows read the result bytes.
+// size as the API encodes it without HTML escaping (base64 for cloudpickle,
+// plus the display, whose U+2028 and U+2029 take three bytes more) is at
+// most @result_max and the inlined sizes so far stay within @total_max; only
+// those rows read the result bytes.
 func (q *Queries) FinishedTasks(ctx context.Context, arg FinishedTasksParams) ([]FinishedTasksRow, error) {
 	rows, err := q.db.Query(ctx, finishedTasks,
 		arg.Ids,
@@ -125,27 +129,6 @@ func (q *Queries) FinishedTasks(ctx context.Context, arg FinishedTasksParams) ([
 		return nil, err
 	}
 	return items, nil
-}
-
-const firstUnknownTask = `-- name: FirstUnknownTask :one
-select req.id::uuid as id
-from unnest($1::uuid[]) with ordinality as req(id, n)
-where not exists (select 1 from tasks t where t.id = req.id and t.workspace_id = $2)
-order by req.n
-limit 1
-`
-
-type FirstUnknownTaskParams struct {
-	Ids         []uuid.UUID
-	WorkspaceID uuid.UUID
-}
-
-// The first of ids, in order, that names no task in the workspace.
-func (q *Queries) FirstUnknownTask(ctx context.Context, arg FirstUnknownTaskParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, firstUnknownTask, arg.Ids, arg.WorkspaceID)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
 }
 
 const listAppTasks = `-- name: ListAppTasks :many
@@ -374,6 +357,39 @@ func (q *Queries) LiveAppID(ctx context.Context, arg LiveAppIDParams) (uuid.UUID
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const missingTasks = `-- name: MissingTasks :many
+select req.id::uuid as id
+from unnest($1::uuid[]) with ordinality as req(id, n)
+where not exists (select 1 from tasks t where t.id = req.id and t.workspace_id = $2)
+order by req.n
+`
+
+type MissingTasksParams struct {
+	Ids         []uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+// The ids, in order, that name no task in the workspace.
+func (q *Queries) MissingTasks(ctx context.Context, arg MissingTasksParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, missingTasks, arg.Ids, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const pendingFacts = `-- name: PendingFacts :many

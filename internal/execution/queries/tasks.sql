@@ -115,29 +115,32 @@ from tasks t
 left join task_results r on r.task_id = t.id
 where t.id = @id and t.workspace_id = @workspace_id;
 
--- name: FirstUnknownTask :one
--- The first of ids, in order, that names no task in the workspace.
+-- name: MissingTasks :many
+-- The ids, in order, that name no task in the workspace.
 select req.id::uuid as id
 from unnest(@ids::uuid[]) with ordinality as req(id, n)
 where not exists (select 1 from tasks t where t.id = req.id and t.workspace_id = @workspace_id)
-order by req.n
-limit 1;
+order by req.n;
 
 -- name: FinishedTasks :many
 -- The finished tasks among ids, in request order. A result inlines when its
--- size as the API encodes it (base64 for cloudpickle, plus the display) is
--- at most @result_max and the inlined sizes so far stay within @total_max;
--- only those rows read the result bytes.
+-- size as the API encodes it without HTML escaping (base64 for cloudpickle,
+-- plus the display, whose U+2028 and U+2029 take three bytes more) is at
+-- most @result_max and the inlined sizes so far stay within @total_max; only
+-- those rows read the result bytes.
 with finished as (
     select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts,
            t.parent_task_id, t.root_task_id, t.available_at, t.created_at, t.started_at,
            t.finished_at, t.failure, t.scheduled_for, res.encoding,
            case res.encoding when 'cloudpickle' then (octet_length(res.data) + 2) / 3 * 4
                 else octet_length(res.data) end
-             + coalesce(octet_length(res.display::text), 0) as result_size
+             + coalesce(octet_length(shown.text)
+                        + 3 * (char_length(shown.text) - char_length(translate(shown.text, U&'\2028\2029', ''))),
+                        0) as result_size
     from unnest(@ids::uuid[]) with ordinality as req(id, n)
     join tasks t on t.id = req.id
     left join task_results res on res.task_id = t.id
+    left join lateral (select res.display::text as text) shown on true
     where t.workspace_id = @workspace_id and t.status in ('succeeded', 'failed', 'cancelled')
 ), budget as (
     select f.*,

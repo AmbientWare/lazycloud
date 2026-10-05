@@ -5298,7 +5298,9 @@ type WaitTasksRequest struct {
 
 // WaitTasksResponse defines model for WaitTasksResponse.
 type WaitTasksResponse struct {
-	Tasks []FinishedTask `json:"tasks"`
+	// MissingTaskIds The listed tasks the workspace does not have, in request order.
+	MissingTaskIds []openapi_types.UUID `json:"missing_task_ids"`
+	Tasks          []FinishedTask       `json:"tasks"`
 }
 
 // Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.

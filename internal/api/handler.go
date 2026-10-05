@@ -309,7 +309,6 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooMany         *execution.TooManyPendingError
 		unknownTask     *execution.UnknownTaskError
-		missingTask     *execution.TaskNotFoundError
 		invalidSpec     *control.InvalidSpecError
 		sourceMissing   *control.SourceMissingError
 		routeConflict   *control.RouteConflictError
@@ -351,8 +350,6 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
 	case errors.Is(err, identity.ErrExists):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
-	case errors.As(err, &missingTask):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, missingTask.Error())
 	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),
 		errors.Is(err, images.ErrNotFound), errors.Is(err, observability.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")

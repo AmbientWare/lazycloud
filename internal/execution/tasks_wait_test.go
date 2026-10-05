@@ -1,7 +1,7 @@
 package execution
 
 import (
-	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,10 +50,11 @@ func TestWaitTasksReturnsOnlyFinishedTasksInRequestOrder(t *testing.T) {
 	finishTasks(t, pool, 3, tasks[3], tasks[1])
 	finishTasks(t, pool, -1, tasks[2])
 
-	got, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 0)
-	if err != nil {
-		t.Fatal(err)
+	found, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 0)
+	if err != nil || len(found.Missing) != 0 {
+		t.Fatalf("missing %v, %v", found.Missing, err)
 	}
+	got := found.Finished
 	if len(got) != 3 || got[0].Task.ID != tasks[1].ID || got[1].Task.ID != tasks[2].ID || got[2].Task.ID != tasks[3].ID {
 		t.Fatalf("finished %+v, want tasks 1, 2 and 3", got)
 	}
@@ -86,7 +87,8 @@ func TestWaitTasksWakesOnAFinishDuringTheWait(t *testing.T) {
 	}()
 
 	start := time.Now()
-	got, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 30*time.Second)
+	found, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 30*time.Second)
+	got := found.Finished
 	if err != nil || time.Since(start) > 5*time.Second {
 		t.Fatalf("wait returned after %v: %v", time.Since(start), err)
 	}
@@ -107,35 +109,37 @@ func TestWaitTasksReturnsNoneAtTheDeadline(t *testing.T) {
 
 	start := time.Now()
 	got, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 300*time.Millisecond)
-	if err != nil || got == nil || len(got) != 0 {
-		t.Fatalf("got %+v, %v; want an empty list", got, err)
+	if err != nil || got.Finished == nil || len(got.Finished) != 0 || got.Missing == nil || len(got.Missing) != 0 {
+		t.Fatalf("got %+v, %v; want empty lists", got, err)
 	}
 	if waited := time.Since(start); waited < 300*time.Millisecond || waited > 5*time.Second {
 		t.Fatalf("returned after %v, want the 300ms wait", waited)
 	}
 }
 
-func TestWaitTasksRefusesTasksOutsideTheWorkspace(t *testing.T) {
+func TestWaitTasksReportsTasksOutsideTheWorkspaceAsMissing(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
-	tasks := submit(t, e, f, 2)
-	finishTasks(t, pool, 3, tasks...)
+	tasks := submit(t, e, f, 3)
+	finishTasks(t, pool, 3, tasks[1])
 	var other uuid.UUID
 	if err := pool.QueryRow(t.Context(), "insert into workspaces (name) values ('other') returning id").Scan(&other); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := e.WaitTasks(t.Context(), l, identity.WorkspaceID(other), taskIDs(tasks), 0)
-	var missing *TaskNotFoundError
-	if !errors.As(err, &missing) || missing.Task != tasks[0].ID || !errors.Is(err, ErrNotFound) {
-		t.Fatalf("other workspace: got %v, want task %s not found", err, tasks[0].ID)
+	got, err := e.WaitTasks(t.Context(), l, identity.WorkspaceID(other), taskIDs(tasks), 0)
+	if err != nil || len(got.Finished) != 0 || !slices.Equal(got.Missing, taskIDs(tasks)) {
+		t.Fatalf("other workspace: %+v, %v; want every task missing", got, err)
 	}
+	// A missing task ends the wait at once, with the finished ones.
 	unknown := TaskID(uuid.New())
-	_, err = e.WaitTasks(t.Context(), l, f.workspace, []TaskID{tasks[0].ID, unknown, tasks[1].ID}, time.Minute)
-	if !errors.As(err, &missing) || missing.Task != unknown {
-		t.Fatalf("unknown id: got %v, want task %s not found", err, unknown)
+	start := time.Now()
+	got, err = e.WaitTasks(t.Context(), l, f.workspace, []TaskID{tasks[0].ID, unknown, tasks[1].ID}, time.Minute)
+	if err != nil || time.Since(start) > 5*time.Second || !slices.Equal(got.Missing, []TaskID{unknown}) ||
+		len(got.Finished) != 1 || got.Finished[0].Task.ID != tasks[1].ID {
+		t.Fatalf("unknown id: %+v, %v after %v", got, err, time.Since(start))
 	}
 }
 
@@ -153,7 +157,8 @@ func TestWaitTasksInlinesResultsWithinTheBudget(t *testing.T) {
 	// Sixteen of these fit the 4 MiB of results; the seventeenth does not.
 	finishTasks(t, pool, 250_000, tasks[2:]...)
 
-	got, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 0)
+	found, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 0)
+	got := found.Finished
 	if err != nil || len(got) != len(tasks) {
 		t.Fatalf("got %d tasks, %v", len(got), err)
 	}

@@ -3483,3 +3483,7 @@ class FinishedTask(APIModel):
 
 class WaitTasksResponse(APIModel):
     tasks: list[FinishedTask]
+    missing_task_ids: Annotated[
+        list[UUID],
+        Field(description="The listed tasks the workspace does not have, in request order."),
+    ]

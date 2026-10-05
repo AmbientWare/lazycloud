@@ -430,9 +430,10 @@ func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
 		}
 	}
 	unknown := uuid.New()
-	if status := wait(e.owner, apitypes.WaitTasksRequest{TaskIds: []uuid.UUID{id, unknown}}, &apiErr); status != 404 ||
-		apiErr.Code != apitypes.NotFound || !strings.Contains(apiErr.Message, unknown.String()) {
-		t.Fatalf("unknown task: %d %+v", status, apiErr)
+	var missing apitypes.WaitTasksResponse
+	if status := wait(e.owner, apitypes.WaitTasksRequest{TaskIds: []uuid.UUID{id, unknown}}, &missing); status != 200 ||
+		len(missing.Tasks) != 0 || len(missing.MissingTaskIds) != 1 || missing.MissingTaskIds[0] != unknown {
+		t.Fatalf("unknown task: %d %+v", status, missing)
 	}
 
 	go e.runOnHost("5500")
@@ -442,6 +443,67 @@ func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
 		len(got.Tasks) != 1 || got.Tasks[0].Task.Status != apitypes.TaskStatusSucceeded || got.Tasks[0].ResultOmitted ||
 		got.Tasks[0].Result == nil || string(*got.Tasks[0].Result.Value) != "5500" {
 		t.Fatalf("wait: %d %+v", status, got)
+	}
+}
+
+func TestWaitTasksResponseStaysWithinTheInlineBudget(t *testing.T) {
+	e := newEnv(t)
+	e.deploy()
+	inputs := make([]apitypes.TaskInput, 30)
+	raw := json.RawMessage(`{"args": [], "kwargs": {}}`)
+	for n := range inputs {
+		inputs[n] = apitypes.TaskInput{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}
+	}
+	var submitted apitypes.SubmitTasksResponse
+	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/tasks", e.owner,
+		apitypes.SubmitTasksRequest{Inputs: inputs}, &submitted); status != 201 {
+		t.Fatalf("submit: %d", status)
+	}
+	ids := make([]uuid.UUID, len(submitted.Tasks))
+	for n, task := range submitted.Tasks {
+		ids[n] = task.Id
+	}
+	// Each display is about 200 KB of HTML that escaping would grow sixfold.
+	if _, err := e.pool.Exec(t.Context(), `
+with done as (update tasks set status = 'succeeded', finished_at = now() where id = any($1) returning id)
+insert into task_results (task_id, encoding, data, display)
+select id, 'cloudpickle', '\x80', jsonb_build_object('text', 'page',
+       'rich', jsonb_build_object('kind', 'html', 'html', repeat('<&>', 66000)))
+from done`, ids); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(apitypes.WaitTasksRequest{TaskIds: ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), "POST", e.url+"/v1/workspaces/acme/tasks/wait", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+e.owner)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("wait: %d %v", resp.StatusCode, err)
+	}
+	var got apitypes.WaitTasksResponse
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	inline := 0
+	for _, task := range got.Tasks {
+		if task.Result != nil {
+			inline++
+		}
+	}
+	// The task views come on top of the 4 MiB of results.
+	if len(got.Tasks) != len(ids) || inline == 0 || inline == len(ids) || len(data) > 4<<20+64<<10 {
+		t.Fatalf("%d of %d tasks inline in %d bytes", inline, len(got.Tasks), len(data))
 	}
 }
 

@@ -562,10 +562,9 @@ paths:
       operationId: waitTasks
       summary: Read the listed tasks that have finished, waiting until one has
       description: >-
-        Answers as soon as at least one listed task has finished, or with an
-        empty list once `wait_seconds` pass. Tasks still queued or running
-        are left out. Every listed task must be in the workspace; otherwise
-        the call fails with `not_found` naming the first unknown one.
+        Answers as soon as at least one listed task has finished or is not
+        in the workspace, or with empty lists once `wait_seconds` pass.
+        Tasks still queued or running are left out.
       requestBody:
         required: true
         content:
@@ -4797,11 +4796,15 @@ components:
 
     WaitTasksResponse:
       type: object
-      required: [tasks]
+      required: [tasks, missing_task_ids]
       properties:
         tasks:
           type: array
           items: { $ref: "#/components/schemas/FinishedTask" }
+        missing_task_ids:
+          description: The listed tasks the workspace does not have, in request order.
+          type: array
+          items: { type: string, format: uuid }
 
     FinishedTask:
       description: >-
