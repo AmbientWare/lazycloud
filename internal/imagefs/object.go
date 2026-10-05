@@ -73,6 +73,38 @@ func (o httpObject) ReadRange(ctx context.Context, off, n int64) (io.ReadCloser,
 	return &exactBody{body: resp.Body, left: n}, nil
 }
 
+// FetchIndex reads and decodes a stored index through a presigned URL. Like
+// HTTPObject it keeps the URL's signature out of its errors.
+func FetchIndex(ctx context.Context, client *http.Client, url string) ([]byte, Index, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, Index{}, fmt.Errorf("read index: %w", redact(err))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, Index{}, fmt.Errorf("read index: %w", redact(err))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, Index{}, &StatusError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	// A stored index is compressed, so it is no larger than its decoded
+	// bound.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexSize+1))
+	if err != nil {
+		return nil, Index{}, fmt.Errorf("read index: %w", err)
+	}
+	if len(raw) > maxIndexSize {
+		return nil, Index{}, fmt.Errorf("%w: stored index exceeds %d bytes", ErrInvalidIndex, maxIndexSize)
+	}
+	ix, err := Unmarshal(raw)
+	if err != nil {
+		return nil, Index{}, err
+	}
+	return raw, ix, nil
+}
+
 // redact drops the query, which holds a presigned URL's signature, from a
 // request error.
 func redact(err error) error {

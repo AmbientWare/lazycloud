@@ -64,4 +64,39 @@ jobs:
       - run: go tool buf lint
       - run: go vet ./...
       - run: go tool golangci-lint run ./...
-      - run: go test -race ./...
+      # The host runtime tests run in the host-runtime job, on a runner set
+      # up as a host.
+      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs/snapshotter$ | xargs go test -race
+
+  # The agent pulls workload images lazily through lazycloud-snapshotter,
+  # which needs root and Docker reconfigured, so this job sets the runner up
+  # as a host before anything else runs in Docker.
+  host-runtime:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install the snapshotter as hosts do
+        run: |
+          go build -o "$RUNNER_TEMP/host/lazycloud-agent" ./cmd/agent
+          go build -o "$RUNNER_TEMP/host/lazycloud-snapshotter" ./cmd/snapshotter
+          sudo "$RUNNER_TEMP/host/lazycloud-agent" install-snapshotter
+          # Hosts run the agent as root; the tests run as the runner user,
+          # who is in the docker group.
+          sudo chmod 0755 /run/lazycloud-snapshotter
+          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
+          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
+          docker info --format 'storage driver {{.Driver}}'
+      - name: Object store for layers and volumes
+        run: |
+          docker compose up -d --wait object-store
+          docker compose run --rm object-store-bootstrap
+      - name: GeeseFS for volume mount tests
+        run: deploy/local/fetch-geesefs.sh
+      - run: go test -race ./internal/agent/... ./internal/imagefs ./internal/imagefs/layersource
+      # The snapshotter mounts FUSE and overlay filesystems as root, as on hosts.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/imagefs/snapshotter

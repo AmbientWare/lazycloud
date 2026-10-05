@@ -123,7 +123,7 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	reference := registry + "/lazycloud/images@" + digest
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
 	images := &imageCache{docker: e.docker}
-	if _, err := images.ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
+	if err := images.ensure(t.Context(), reference, "linux/amd64"); err != nil {
 		t.Fatal(err)
 	}
 	proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
@@ -187,7 +187,7 @@ func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
 
 	reference := registry + "/lazycloud/images@" + outcome.GetDigest()
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
-	if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
+	if err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, "linux/amd64"); err != nil {
 		t.Fatal(err)
 	}
 	proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
@@ -253,7 +253,7 @@ func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 		session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
 		reference := registry + "/lazycloud/images@" + outcome.GetDigest()
 		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
-		if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
+		if err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, "linux/amd64"); err != nil {
 			t.Fatalf("%v\noutput:\n%s", err, e.server.buildOutput())
 		}
 		proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()

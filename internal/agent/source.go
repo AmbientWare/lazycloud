@@ -9,17 +9,26 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"time"
 
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/platforms"
+	"github.com/distribution/reference"
 	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 const (
@@ -189,30 +198,53 @@ func extractFile(root *os.Root, name string, entry *zip.File, budget int64) (int
 // imageCache pulls each image reference once at a time.
 type imageCache struct {
 	docker *client.Client
-	group  singleflight.Group
+	// containerd is Docker's containerd, which lazy pulls go through.
+	containerd *containerd.Client
+	group      singleflight.Group
 }
 
-// ensure makes image present and reports whether it had to be pulled. auth
-// and platform go to the pull only; nothing stores the credentials.
-func (c *imageCache) ensure(ctx context.Context, image string, auth *hostproto.RegistryAuth, platform string) (bool, error) {
-	options, err := pullOptions(auth, platform)
+// ensureLazy makes a converted image present through containerd in
+// Docker's namespace and reports whether it had to pull. Every layer is
+// marked lazy, so the snapshotter mounts it from the layer grants the agent
+// gave it and the registry serves only the manifest and config. A layer
+// without a live grant fails the pull. Docker then runs the image as any
+// other.
+func (c *imageCache) ensureLazy(ctx context.Context, image string, auth *hostproto.RegistryAuth, platform string) (bool, error) {
+	named, err := reference.ParseDockerRef(image)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("image reference %q: %w", image, err)
+	}
+	ref := named.String()
+	matcher := platforms.Default()
+	opts := []containerd.RemoteOpt{
+		containerd.WithPullUnpack,
+		containerd.WithPullSnapshotter(layersource.Snapshotter),
+		containerd.WithResolver(registryResolver(reference.Domain(named), auth)),
+		containerd.WithImageHandlerWrapper(markLayersLazy),
+	}
+	if platform != "" {
+		p, err := platforms.Parse(platform)
+		if err != nil {
+			return false, fmt.Errorf("image platform %q: %w", platform, err)
+		}
+		matcher = platforms.Only(p)
+		opts = append(opts, containerd.WithPlatform(platform))
 	}
 	for {
-		pulled, err, _ := c.group.Do(image, func() (any, error) {
-			if _, err := c.docker.ImageInspect(ctx, image); err == nil {
-				return false, nil
+		pulled, err, _ := c.group.Do("lazy "+ref, func() (any, error) {
+			if img, err := c.containerd.GetImage(ctx, ref); err == nil {
+				unpacked, err := containerd.NewImageWithPlatform(c.containerd, img.Metadata(), matcher).IsUnpacked(ctx, layersource.Snapshotter)
+				if err != nil {
+					return false, fmt.Errorf("inspect image %s: %w", ref, err)
+				}
+				if unpacked {
+					return false, nil
+				}
 			} else if !cerrdefs.IsNotFound(err) {
-				return false, fmt.Errorf("inspect image %s: %w", image, err)
+				return false, fmt.Errorf("inspect image %s: %w", ref, err)
 			}
-			response, err := c.docker.ImagePull(ctx, image, options)
-			if err != nil {
-				return false, fmt.Errorf("pull image %s: %w", image, err)
-			}
-			defer func() { _ = response.Close() }()
-			if err := response.Wait(ctx); err != nil {
-				return false, fmt.Errorf("pull image %s: %w", image, err)
+			if _, err := c.containerd.Pull(ctx, ref, opts...); err != nil {
+				return false, fmt.Errorf("pull image %s: %w", ref, err)
 			}
 			return true, nil
 		})
@@ -223,5 +255,79 @@ func (c *imageCache) ensure(ctx context.Context, image string, auth *hostproto.R
 			return false, err //nolint:wrapcheck // wrapped inside the call
 		}
 		return pulled.(bool), nil //nolint:forcetypeassert // the function returns bool
+	}
+}
+
+// markLayersLazy labels each layer of a manifest for the snapshotter.
+func markLayersLazy(h images.Handler) images.Handler {
+	return images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+		children, err := h.Handle(ctx, desc)
+		if err != nil || !images.IsManifestType(desc.MediaType) {
+			return children, err //nolint:wrapcheck // containerd's handler error
+		}
+		for i := range children {
+			if images.IsLayerType(children[i].MediaType) {
+				annotations := maps.Clone(children[i].Annotations)
+				if annotations == nil {
+					annotations = make(map[string]string, 1)
+				}
+				annotations[layersource.LazyLabel] = "true"
+				children[i].Annotations = annotations
+			}
+		}
+		return children, nil
+	})
+}
+
+// registryResolver resolves through the image's registry with its login,
+// sent to that registry only; loopback registries are plain HTTP.
+func registryResolver(domain string, auth *hostproto.RegistryAuth) remotes.Resolver {
+	hosts := map[string]bool{domain: true}
+	if domain == "docker.io" {
+		hosts["registry-1.docker.io"] = true
+	}
+	creds := func(host string) (string, string, error) {
+		if auth == nil || !hosts[host] {
+			return "", "", nil
+		}
+		if token := auth.GetIdentityToken(); token != "" {
+			return "", token, nil
+		}
+		return auth.GetUsername(), auth.GetPassword(), nil
+	}
+	return docker.NewResolver(docker.ResolverOptions{Hosts: docker.ConfigureDefaultRegistries(
+		docker.WithAuthorizer(docker.NewDockerAuthorizer(docker.WithAuthCreds(creds))),
+		docker.WithPlainHTTP(docker.MatchLocalhost),
+	)})
+}
+
+// ensure pulls a platform image through Docker, which unpacks it on the
+// snapshotter as a plain overlay image.
+func (c *imageCache) ensure(ctx context.Context, image, platform string) error {
+	options, err := pullOptions(nil, platform)
+	if err != nil {
+		return err
+	}
+	for {
+		_, err, _ := c.group.Do(image, func() (any, error) {
+			if _, err := c.docker.ImageInspect(ctx, image); err == nil {
+				return nil, nil
+			} else if !cerrdefs.IsNotFound(err) {
+				return nil, fmt.Errorf("inspect image %s: %w", image, err)
+			}
+			response, err := c.docker.ImagePull(ctx, image, options)
+			if err != nil {
+				return nil, fmt.Errorf("pull image %s: %w", image, err)
+			}
+			defer func() { _ = response.Close() }()
+			if err := response.Wait(ctx); err != nil {
+				return nil, fmt.Errorf("pull image %s: %w", image, err)
+			}
+			return nil, nil
+		})
+		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+			continue
+		}
+		return err //nolint:wrapcheck // wrapped inside the call
 	}
 }

@@ -1,10 +1,29 @@
 # Local stack
 
 `deploy/local/run.sh start` starts the services below, builds the binaries
-and the managed Python runtime, migrates, creates the `dev` user, workspace
-and token, and runs the server, scheduler and agent as host processes. It
-prints the SDK environment to export; `deploy/local/run.sh stop` ends them.
-State, logs and credentials live in `.lazycloud/`.
+and the agent release with the managed Python runtime, migrates, creates
+the `dev` user, workspace and token, runs the server and scheduler on this
+machine and the agent on the host VM. It prints the SDK environment to
+export; `deploy/local/run.sh stop` ends them and stops the VM. State, logs
+and credentials live in `.lazycloud/`.
+
+## Host VM
+
+Workloads run in a Lima VM from Amazon Linux 2023 that
+`deploy/local/host-vm.sh` sets up with the node image recipe
+(`deploy/ami/node-setup.sh`): Docker on the containerd image store with
+lazycloud-snapshotter as its storage driver, gVisor, the disk engine's
+tools. This machine's Docker is left as it is. The first `up` downloads the
+pinned Lima release and image into `.lazycloud/` and builds the host, which
+takes several minutes; later ones start it and install the current agent
+release the way hosts join. It needs KVM (the `kvm` group) and
+`qemu-system-x86_64`, not root. `host-vm.sh down` stops the VM and `reset`
+deletes it. Lima's socket paths must stay short: a checkout with a long
+path sets `LAZYCLOUD_LIMA_HOME` to a short directory.
+
+The VM reaches the server, registry and Garage on this machine through
+forwards to Lima's host address; presigned URLs name the Docker bridge
+address, which the VM answers too.
 
 With that environment exported, `lazycloud deploy` and the SDK work against
 the stack, and `lazycloud machine join --name m1 --workspaces dev` enrolls
@@ -30,10 +49,3 @@ Each binary serves Prometheus metrics at `/metrics` on `LAZYCLOUD_METRICS_ADDR`
 when it is set, and exports traces over OTLP/gRPC to `LAZYCLOUD_OTLP_ENDPOINT`
 (`LAZYCLOUD_OTLP_INSECURE=true` for a local collector). Both are off by
 default. `LAZYCLOUD_LOG_FORMAT` picks `text` or `json` logs.
-
-gVisor, devbox disks and memory snapshots need host pieces that only root
-can install: `sudo deploy/local/host-setup.sh` installs gVisor's runsc as the
-Docker runtime `runsc`, nbd-client and the nbd module. Then
-`LAZYCLOUD_OCI_RUNTIME=runsc deploy/local/run.sh start` runs workloads under
-gVisor, and `LAZYCLOUD_AGENT_AS_ROOT=1` leaves the agent for you to start with
-sudo, which disks and snapshots need.

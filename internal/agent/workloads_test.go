@@ -387,6 +387,7 @@ func (e *env) podCommand(pod *hostproto.PodWorkload) *hostproto.ServerMessage {
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId: uuid.NewString(),
 		Image:       testImage,
+		Layers:      imageLayers[testImage],
 		Source:      e.source,
 		Resources:   &hostproto.Resources{CpuMillis: 1000, MemoryBytes: 256 << 20},
 		Pod:         pod,
@@ -701,7 +702,7 @@ func TestDockerPodRunsADaemon(t *testing.T) {
 	e.startAgent(func(c *Config) { c.AllowPrivilegedDocker = true })
 	session := e.session()
 	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"docker", "info", "--format", "daemon {{.ServerVersion}}"}})
-	start.GetStart().Image = testDockerImage
+	withImage(start, testDockerImage)
 	start.GetStart().Docker = true
 	start.GetStart().Source = nil
 	id := start.GetStart().GetContainerId()

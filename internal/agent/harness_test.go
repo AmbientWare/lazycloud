@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 const testImage = "python:3.12-slim"
@@ -47,6 +48,9 @@ func TestMain(m *testing.M) {
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {
 		panic(fmt.Sprintf("build supervisor: %v", err))
+	}
+	if err := convertLazyImages(context.Background()); err != nil {
+		panic(fmt.Sprintf("convert the test images: %v", err))
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
@@ -349,6 +353,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
 		MountImage:      DefaultMountImage,
+		Snapshotter:     layersource.Socket,
 		BuildNetwork:    "host",
 		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},
 		Labels:          map[string]string{"lazycloud.agent": e.id},
@@ -461,6 +466,7 @@ func (e *env) startCommand(handler string, slots int32) *hostproto.ServerMessage
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   uuid.NewString(),
 		Image:         testImage,
+		Layers:        imageLayers[testImage],
 		PythonVersion: "3.12",
 		Source:        e.source,
 		Resources:     &hostproto.Resources{CpuMillis: 1000, MemoryBytes: 256 << 20},
