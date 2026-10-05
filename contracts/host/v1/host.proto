@@ -282,6 +282,7 @@ message ServerMessage {
     UpdateNetwork network = 90;
     SnapshotContainer snapshot = 91;
     PublishFilesystem publish_filesystem = 92;
+    LayerGrants layer_grants = 100;
   }
 }
 
@@ -427,6 +428,27 @@ message StartContainer {
   // devbox, or a function with checkpoints. Its network is set up so a
   // restored copy gets one the same way.
   bool checkpointable = 93;
+  // Reads of every layer of image, base first. The host hands them to its
+  // snapshotter before it pulls the image and keeps them from containers.
+  repeated LayerGrant layers = 100;
+}
+
+// LayerGrant is presigned GET URLs for one image layer's index and data
+// objects, keyed by the layer's uncompressed digest. Each URL reads only
+// its own object, until expires_at.
+message LayerGrant {
+  // sha256:<hex>
+  string diff_id = 1;
+  string index_url = 2;
+  string data_url = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// LayerGrants are fresh reads of layers the host's containers use, sent
+// before the earlier ones expire. Of two grants for one layer the later
+// expires_at wins.
+message LayerGrants {
+  repeated LayerGrant layers = 1;
 }
 
 message PodWorkload {

@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: imagefs/v1/index.proto
 
-package indexproto
+package imagefsproto
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -378,7 +378,7 @@ const file_imagefs_v1_index_proto_rawDesc = "" +
 	"\x14ENTRY_TYPE_HARD_LINK\x10\x04\x12\x1a\n" +
 	"\x16ENTRY_TYPE_CHAR_DEVICE\x10\x05\x12\x1b\n" +
 	"\x17ENTRY_TYPE_BLOCK_DEVICE\x10\x06\x12\x13\n" +
-	"\x0fENTRY_TYPE_FIFO\x10\aB>Z<github.com/AmbientWare/lazycloud/internal/imagefs/indexprotob\x06proto3"
+	"\x0fENTRY_TYPE_FIFO\x10\aB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
 
 var (
 	file_imagefs_v1_index_proto_rawDescOnce sync.Once

@@ -2,10 +2,12 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -101,6 +103,52 @@ func TestConfigValidation(t *testing.T) {
 	for _, c := range bad {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%+v passed validation", c)
+		}
+	}
+}
+
+// TestSignedURLsOutlastCredentialRotation: when the chain's credentials are
+// in their last minute, a presigned URL gets most of the window from renewed
+// credentials, not a refusal, and never outlives the credentials that sign
+// it.
+func TestSignedURLsOutlastCredentialRotation(t *testing.T) {
+	isolate(t)
+	var mu sync.Mutex
+	expiry := map[string]time.Time{}
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		key := fmt.Sprintf("key-%d", len(expiry))
+		left := time.Hour
+		if len(expiry) == 0 {
+			left = 30 * time.Second
+		}
+		at := time.Now().Add(left).UTC().Truncate(time.Second)
+		expiry[key] = at
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"AccessKeyId": key, "SecretAccessKey": "pod-secret", "Token": "pod-session", "Expiration": at.Format(time.RFC3339),
+		})
+	}))
+	t.Cleanup(endpoint.Close)
+	t.Setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", endpoint.URL+"/v1/credentials")
+	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"})
+	for range 2 {
+		lifetime, err := s.signedLifetime(t.Context(), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lifetime < credentialWindow-2*time.Minute {
+			t.Fatalf("a URL signed during rotation lasts %s", lifetime)
+		}
+		current, err := s.client.Options().Credentials.Retrieve(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		expires := expiry[current.AccessKeyID]
+		mu.Unlock()
+		if time.Now().Add(lifetime).After(expires) {
+			t.Fatalf("a URL lasting %s outlives its credentials, which expire %s", lifetime, expires)
 		}
 	}
 }

@@ -141,16 +141,26 @@ func (s *Storage) objectETag(ctx context.Context, bucket, key string) (string, e
 }
 
 // signedLifetime is want, capped at how long the credentials that sign a
-// presigned URL now stay valid, a minute spared.
+// presigned URL now stay valid, a minute spared. Expiring credentials come
+// from the default chain's cache, which reports them credentialWindow
+// before they expire and renews them then, so a URL lasts at least the
+// window less that minute.
 func (s *Storage) signedLifetime(ctx context.Context, want time.Duration) (time.Duration, error) {
-	creds, err := s.client.Options().Credentials.Retrieve(ctx)
+	provider := s.client.Options().Credentials
+	creds, err := provider.Retrieve(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("object store credentials: %w", err)
 	}
 	if !creds.CanExpire {
 		return want, nil
 	}
-	left := time.Until(creds.Expires) - time.Minute
+	if creds.Expired() {
+		// The cache renews them on the next call.
+		if creds, err = provider.Retrieve(ctx); err != nil {
+			return 0, fmt.Errorf("object store credentials: %w", err)
+		}
+	}
+	left := time.Until(creds.Expires) + credentialWindow - time.Minute
 	if left < time.Second {
 		return 0, errors.New("the object store credentials are about to expire")
 	}

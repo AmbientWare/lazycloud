@@ -103,7 +103,7 @@ Done on 2026-10-05 on `perf-lazy-format`.
   `ErrInvalidLayer`, `ErrUnsupportedVersion`, `ErrInvalidIndex` and
   `*StatusError` for a store's refusal.
 - `contracts/imagefs/v1/index.proto`, generated into
-  `internal/imagefs/indexproto`. Each binding package now runs
+  `internal/imagefs/imagefsproto`. Each binding package now runs
   `buf generate --path` for its own contract directory (`hostproto` for
   `contracts/host`). `check.sh` regenerates every protobuf binding into a
   temporary directory and fails on any difference; I checked it fails on a

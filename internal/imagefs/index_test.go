@@ -13,7 +13,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/encoding/protowire"
 
-	"github.com/AmbientWare/lazycloud/internal/imagefs/indexproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 func testIndex() Index {
@@ -77,7 +77,7 @@ func TestUnmarshalRefusesUnknownVersionsAndBrokenIndexes(t *testing.T) {
 // An index of millions of empty records is refused before any of them is
 // allocated, so a few kilobytes cannot take gigabytes to decode.
 func TestUnmarshalCountsRecordsBeforeDecoding(t *testing.T) {
-	fields := (&indexproto.Index{}).ProtoReflect().Descriptor().Fields()
+	fields := (&imagefsproto.Index{}).ProtoReflect().Descriptor().Fields()
 	entries := protowire.AppendTag(nil, fields.ByName("entries").Number(), protowire.BytesType)
 	entries = protowire.AppendBytes(entries, nil)
 	frames := bytes.Repeat([]byte{1}, 32<<20) // one-byte varints

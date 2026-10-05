@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package lazycloud.imagefs.v1;
 
-option go_package = "github.com/AmbientWare/lazycloud/internal/imagefs/indexproto";
+option go_package = "github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto";
 
 // Index is one OCI layer's file tree and the frame table of its data object.
 //

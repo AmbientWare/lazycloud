@@ -313,6 +313,10 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 
 	began := time.Now()
+	// The snapshotter reads the image's layers only through these grants.
+	if err := c.a.layers.grant(ctx, spec.GetLayers()); err != nil {
+		return err
+	}
 	pulled, err := c.a.images.ensure(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	if err != nil {
 		return err

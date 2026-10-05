@@ -81,6 +81,8 @@ type harness struct {
 	secrets   *secrets.Secrets
 	obs       *observability.Observability
 	listener  *database.Listener
+	server    *hostsession.Server
+	store     *storage.Storage
 }
 
 // start serves the host service on a random local port against real
@@ -147,7 +149,10 @@ func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 		stop()
 		wg.Wait()
 	})
-	return &harness{t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault, obs: obs, listener: listener}
+	return &harness{
+		t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault, obs: obs, listener: listener,
+		server: srv, store: store,
+	}
 }
 
 func (h *harness) enroll() (compute.HostID, context.Context) {

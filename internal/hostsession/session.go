@@ -42,6 +42,10 @@ type session struct {
 	sent map[string]bool
 	// grants holds the expiry of the storage grant sent per workspace.
 	grants map[identity.WorkspaceID]time.Time
+	// layers holds the life of the layer grants sent per image reference,
+	// and layersListed whether the host's live references were listed yet.
+	layers       map[string]layerGrant
+	layersListed bool
 	// live holds the containers the host runs as far as this session knows:
 	// reported and not exited, or started. A stop decided elsewhere, such as
 	// a machine removal or a preemption, reaches the host through it.
@@ -153,7 +157,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
-		grants: map[identity.WorkspaceID]time.Time{}, agent: agentStateIn(hello),
+		grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
 		builds: buildWaits{wake: make(chan struct{}, 1), subs: map[uuid.UUID]func(){}}}
 	defer sess.builds.close()
 	for _, r := range reports {
@@ -316,19 +320,26 @@ func (sess *session) sync(ctx context.Context) error {
 	derived := map[string]bool{}
 	waiting := map[uuid.UUID]bool{}
 	var started []string
+	cache := layerCache{}
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
 		derived[id] = true
 		if sess.sent[id] {
 			continue
 		}
-		msg, err := sess.server.startMessage(ctx, sess.host, id, start)
+		msg, err := sess.server.startMessage(ctx, sess.host, id, start, cache)
+		// The start is sent once its image is published with converted
+		// layers, so a waiting start does not count as sent. A wait with no
+		// build to follow retries at the next touch, whose pull starts or
+		// joins the conversion.
 		var building *images.BuildWaitError
 		if errors.As(err, &building) {
-			// The start is sent once its image is published, so it does not
-			// count as sent.
 			delete(derived, id)
 			waiting[building.Build] = true
+			continue
+		}
+		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {
+			delete(derived, id)
 			continue
 		}
 		if reason, permanent := permanentStartFailure(err); permanent {
@@ -346,16 +357,26 @@ func (sess *session) sync(ctx context.Context) error {
 			// Transient: the session ends and the start is built again.
 			return sess.server.grpcError(ctx, err)
 		}
+		// The host may read the image's layers while the container is live.
+		starting, err := sess.server.execution.RecordImageReference(ctx, sess.host, start.Container, msg.GetStart().GetImage())
+		if err != nil {
+			return sess.server.grpcError(ctx, err)
+		}
+		if !starting {
+			continue
+		}
 		if usesWorkspaceBucket(msg.GetStart()) {
 			if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
 				return err
 			}
 		}
+		issued := time.Now()
 		if err := sess.send(msg); err != nil {
 			return err
 		}
 		sess.live[start.Container] = true
 		started = append(started, msg.GetStart().GetImage())
+		sess.layers[msg.GetStart().GetImage()] = sess.server.grantOf(msg.GetStart().GetLayers(), issued)
 	}
 	sess.builds.await(sess.server.listener, waiting)
 	if err := sess.server.images.RecordUses(ctx, started); err != nil {
@@ -397,7 +418,10 @@ func (sess *session) sync(ctx context.Context) error {
 	if err := sess.syncReserve(ctx); err != nil {
 		return err
 	}
-	return sess.refreshGrants(ctx)
+	if err := sess.refreshGrants(ctx); err != nil {
+		return err
+	}
+	return sess.refreshLayers(ctx, cache)
 }
 
 // observe tracks whether the host still runs a reported container.
@@ -456,7 +480,7 @@ func (sess *session) send(msg *hostproto.ServerMessage) error {
 	return nil
 }
 
-func (s *Server) startMessage(ctx context.Context, host compute.HostID, id string, start execution.StartCommand) (*hostproto.ServerMessage, error) {
+func (s *Server) startMessage(ctx context.Context, host compute.HostID, id string, start execution.StartCommand, cache layerCache) (*hostproto.ServerMessage, error) {
 	url, expires, err := s.storage.SourceURL(ctx, start.Workspace, start.Source)
 	if err != nil {
 		return nil, err
@@ -483,6 +507,10 @@ func (s *Server) startMessage(ctx context.Context, host compute.HostID, id strin
 		return nil, err
 	}
 	image, err := s.imagePull(ctx, host, start.Workspace, start.Spec.Image)
+	if err != nil {
+		return nil, err
+	}
+	layers, err := s.layers(ctx, cache, image.Reference)
 	if err != nil {
 		return nil, err
 	}
@@ -531,6 +559,7 @@ func (s *Server) startMessage(ctx context.Context, host compute.HostID, id strin
 		Volumes:        volumes,
 		Secrets:        secretValues,
 		Workspace:      start.WorkspaceName,
+		Layers:         layers,
 	}}}, nil
 }
 

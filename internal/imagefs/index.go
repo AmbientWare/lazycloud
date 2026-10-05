@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/AmbientWare/lazycloud/internal/imagefs/indexproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 const (
@@ -34,11 +34,11 @@ const (
 // the protobuf encoding compressed as one zstd frame. Equal indexes encode
 // to equal bytes.
 func (ix Index) Marshal() ([]byte, error) {
-	msg := &indexproto.Index{
+	msg := &imagefsproto.Index{
 		Layer:      string(ix.Layer),
 		StreamSize: ix.StreamSize,
 		FrameSizes: make([]int64, len(ix.Frames)),
-		Entries:    make([]*indexproto.Entry, len(ix.Entries)),
+		Entries:    make([]*imagefsproto.Entry, len(ix.Entries)),
 	}
 	for i, f := range ix.Frames {
 		msg.FrameSizes[i] = f.Size
@@ -48,7 +48,7 @@ func (ix Index) Marshal() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		msg.Entries[i] = &indexproto.Entry{
+		msg.Entries[i] = &imagefsproto.Entry{
 			Path:           e.Path,
 			Type:           t,
 			Mode:           posixMode(e.Mode),
@@ -103,7 +103,7 @@ func Unmarshal(b []byte) (Index, error) {
 	if err := checkRecordCounts(raw); err != nil {
 		return Index{}, err
 	}
-	var msg indexproto.Index
+	var msg imagefsproto.Index
 	if err := proto.Unmarshal(raw, &msg); err != nil {
 		return Index{}, fmt.Errorf("%w: decode: %w", ErrInvalidIndex, err)
 	}
@@ -149,7 +149,7 @@ func Unmarshal(b []byte) (Index, error) {
 // checkRecordCounts counts the entries and frames of an encoded index
 // before it is decoded.
 func checkRecordCounts(raw []byte) error {
-	fields := (&indexproto.Index{}).ProtoReflect().Descriptor().Fields()
+	fields := (&imagefsproto.Index{}).ProtoReflect().Descriptor().Fields()
 	entriesField := fields.ByName("entries").Number()
 	framesField := fields.ByName("frame_sizes").Number()
 	var entries, frames int
@@ -250,43 +250,43 @@ func (ix Index) validateEntry(e Entry, seen map[string]int) error {
 	return nil
 }
 
-func entryTypeProto(t EntryType) (indexproto.EntryType, error) {
+func entryTypeProto(t EntryType) (imagefsproto.EntryType, error) {
 	switch t {
 	case TypeRegular:
-		return indexproto.EntryType_ENTRY_TYPE_REGULAR, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_REGULAR, nil
 	case TypeDirectory:
-		return indexproto.EntryType_ENTRY_TYPE_DIRECTORY, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_DIRECTORY, nil
 	case TypeSymlink:
-		return indexproto.EntryType_ENTRY_TYPE_SYMLINK, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_SYMLINK, nil
 	case TypeHardLink:
-		return indexproto.EntryType_ENTRY_TYPE_HARD_LINK, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_HARD_LINK, nil
 	case TypeCharDevice:
-		return indexproto.EntryType_ENTRY_TYPE_CHAR_DEVICE, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_CHAR_DEVICE, nil
 	case TypeBlockDevice:
-		return indexproto.EntryType_ENTRY_TYPE_BLOCK_DEVICE, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_BLOCK_DEVICE, nil
 	case TypeFIFO:
-		return indexproto.EntryType_ENTRY_TYPE_FIFO, nil
+		return imagefsproto.EntryType_ENTRY_TYPE_FIFO, nil
 	}
 	return 0, fmt.Errorf("%w: entry type %q", ErrInvalidIndex, t)
 }
 
-func entryType(t indexproto.EntryType) (EntryType, error) {
+func entryType(t imagefsproto.EntryType) (EntryType, error) {
 	switch t {
-	case indexproto.EntryType_ENTRY_TYPE_REGULAR:
+	case imagefsproto.EntryType_ENTRY_TYPE_REGULAR:
 		return TypeRegular, nil
-	case indexproto.EntryType_ENTRY_TYPE_DIRECTORY:
+	case imagefsproto.EntryType_ENTRY_TYPE_DIRECTORY:
 		return TypeDirectory, nil
-	case indexproto.EntryType_ENTRY_TYPE_SYMLINK:
+	case imagefsproto.EntryType_ENTRY_TYPE_SYMLINK:
 		return TypeSymlink, nil
-	case indexproto.EntryType_ENTRY_TYPE_HARD_LINK:
+	case imagefsproto.EntryType_ENTRY_TYPE_HARD_LINK:
 		return TypeHardLink, nil
-	case indexproto.EntryType_ENTRY_TYPE_CHAR_DEVICE:
+	case imagefsproto.EntryType_ENTRY_TYPE_CHAR_DEVICE:
 		return TypeCharDevice, nil
-	case indexproto.EntryType_ENTRY_TYPE_BLOCK_DEVICE:
+	case imagefsproto.EntryType_ENTRY_TYPE_BLOCK_DEVICE:
 		return TypeBlockDevice, nil
-	case indexproto.EntryType_ENTRY_TYPE_FIFO:
+	case imagefsproto.EntryType_ENTRY_TYPE_FIFO:
 		return TypeFIFO, nil
-	case indexproto.EntryType_ENTRY_TYPE_UNSPECIFIED:
+	case imagefsproto.EntryType_ENTRY_TYPE_UNSPECIFIED:
 	}
 	return "", fmt.Errorf("entry type %d", t)
 }

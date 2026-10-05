@@ -93,6 +93,53 @@ func (q *Queries) IdleDrainingContainersOnHost(ctx context.Context, hostID *uuid
 	return items, nil
 }
 
+const liveImagesOnHost = `-- name: LiveImagesOnHost :many
+select distinct image_reference::text
+from containers
+where host_id = $1 and state <> 'stopped' and image_reference is not null
+order by 1
+`
+
+// The image references the host's live containers were started with.
+func (q *Queries) LiveImagesOnHost(ctx context.Context, hostID *uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, liveImagesOnHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var image_reference string
+		if err := rows.Scan(&image_reference); err != nil {
+			return nil, err
+		}
+		items = append(items, image_reference)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordImageReference = `-- name: RecordImageReference :execrows
+update containers set image_reference = $1
+where id = $2 and host_id = $3 and state = 'starting'
+`
+
+type RecordImageReferenceParams struct {
+	Reference *string
+	ID        uuid.UUID
+	HostID    *uuid.UUID
+}
+
+func (q *Queries) RecordImageReference(ctx context.Context, arg RecordImageReferenceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordImageReference, arg.Reference, arg.ID, arg.HostID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const startingContainersOnHost = `-- name: StartingContainersOnHost :many
 select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
        r.spec, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,

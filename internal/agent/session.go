@@ -234,6 +234,8 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		a.snapshot(body.Snapshot)
 	case *hostproto.ServerMessage_PublishFilesystem:
 		a.publishFilesystem(body.PublishFilesystem)
+	case *hostproto.ServerMessage_LayerGrants:
+		a.layers.refresh(body.LayerGrants.GetLayers())
 	case *hostproto.ServerMessage_StorageGrant:
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
 			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
@@ -267,7 +269,10 @@ func (a *Agent) start(spec *hostproto.StartContainer) {
 	c.report()
 	if !known {
 		a.goOwned(func(ctx context.Context) { c.launch(ctx, spec) })
+		return
 	}
+	// A start sent again, as after a reconnect, carries fresh grants.
+	a.layers.refresh(spec.GetLayers())
 }
 
 // stop drains a known container. An unknown one is reported stopped, since

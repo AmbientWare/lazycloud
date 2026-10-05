@@ -69,6 +69,8 @@ type Server struct {
 	listener  *database.Listener
 	config    Config
 	logger    *slog.Logger
+	// layerLifetime is layerLifetime; tests shorten it.
+	layerLifetime time.Duration
 
 	// lifetime ends sessions and long polls when the server shuts down.
 	lifetime context.Context //nolint:containedctx // The server's own lifetime, cancelled by Shutdown.
@@ -85,7 +87,7 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 	lifetime, shutdown := context.WithCancel(context.Background())
 	return &Server{
 		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger,
-		lifetime: lifetime, shutdown: shutdown,
+		layerLifetime: layerLifetime, lifetime: lifetime, shutdown: shutdown,
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
 	}
 }

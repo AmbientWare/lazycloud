@@ -24,6 +24,7 @@ import (
 	"syscall"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -170,6 +171,7 @@ func newJoinFlags(name string) *joinFlags {
 		"run docker_enabled containers privileged without runsc, which lets them escape to the host; only for trusted tenants")
 	f.StringVar(&cfg.GeeseFSPath, "geesefs", envOr("LAZYCLOUD_GEESEFS", filepath.Join(release, "geesefs")), "pinned GeeseFS binary that mounts volumes; volumes are unavailable without it")
 	f.StringVar(&cfg.MountImage, "mount-image", envOr("LAZYCLOUD_MOUNT_IMAGE", agent.DefaultMountImage), "image that runs GeeseFS for volume mounts")
+	f.StringVar(&cfg.Snapshotter, "snapshotter", envOr("LAZYCLOUD_SNAPSHOTTER", layersource.Socket), "socket the image layer snapshotter serves")
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	f.StringVar(&j.maxCPU, "max-cpu", os.Getenv("LAZYCLOUD_MAX_CPU"), "CPU cores to offer, such as 2 or 1.5; default detects")
 	f.StringVar(&j.maxMemory, "max-memory", os.Getenv("LAZYCLOUD_MAX_MEMORY"), "memory to offer, such as 16gib or 4096 (MB); default detects")

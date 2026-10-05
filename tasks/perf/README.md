@@ -50,6 +50,7 @@ data object read by range with presigned URLs.
 | [publish](lazy-images/publish.md) | `perf-lazy-publish` | 0003 | host.proto fields 90-99 in each message it extends | format |
 | [snapshotter](lazy-images/snapshotter.md) | `perf-lazy-snapshotter` | none | snapshotter service, the agent's image pull, node image | format |
 | [grants](lazy-images/grants.md) | `perf-lazy-grants` | 0004 | host.proto fields 100-109 | format, publish |
+| [prefetch](lazy-images/prefetch.md) | `perf-lazy-prefetch` | 0005 if it stores traces | the snapshotter's read path | snapshotter |
 | [acceptance](lazy-images/acceptance.md) | `perf-lazy-acceptance` | none | none | all |
 
 The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
@@ -63,8 +64,8 @@ The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
    ranges above. Grants and snapshotter agree the local interface between
    agent and snapshotter in their first commits (grants proposes, the
    integrator settles it).
-3. Wave 3: acceptance, then the integrator decides on the peer cache from
-   its numbers.
+3. Wave 3: prefetch, then acceptance, then the integrator decides on the
+   peer cache from their numbers.
 4. Final: one integration review of `perf-plan` against main, remove
    `tasks/perf`, one PR, one Ship with the user's go-ahead, then the
    acceptance packet's prod steps.

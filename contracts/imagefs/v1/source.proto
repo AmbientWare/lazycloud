@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package lazycloud.imagefs.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto";
+
+// LayerSources tells a host's snapshotter where to read the layers it may
+// mount. It is served on the snapshotter's local socket. The agent grants
+// every layer of an image before it pulls the image, and again before the
+// URLs expire for as long as a container on the host uses the layer.
+service LayerSources {
+  rpc Grant(GrantRequest) returns (GrantResponse);
+}
+
+// LayerGrant is the presigned read URLs of one converted layer.
+message LayerGrant {
+  // The layer's uncompressed digest, "sha256:<hex>".
+  string diff_id = 1;
+  // GET URLs of the layer's stored index and data objects. Data reads send
+  // Range headers.
+  string index_url = 2;
+  string data_url = 3;
+  // When the URLs stop working. A grant replaces the diff_id's current one
+  // unless that expires later, and reads use the current one from their next
+  // request on. Mounting a layer without an unexpired grant fails.
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message GrantRequest {
+  repeated LayerGrant layers = 1;
+}
+
+message GrantResponse {}

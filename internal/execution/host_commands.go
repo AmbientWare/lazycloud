@@ -146,3 +146,24 @@ func memoryLimitMiB(r apitypes.Resources) int64 {
 	reserved := int64(r.MemoryMib)
 	return min(max(reserved*memoryBurstFactor, reserved+memoryBurstFloorMi), reserved+memoryBurstCapMi)
 }
+
+// LiveImagesOnHost lists the image references the host's live containers
+// were started with.
+func (e *Execution) LiveImagesOnHost(ctx context.Context, host compute.HostID) ([]string, error) {
+	ids, err := e.queries.LiveImagesOnHost(ctx, hostUUID(host))
+	if err != nil {
+		return nil, fmt.Errorf("list live images on host: %w", err)
+	}
+	return ids, nil
+}
+
+// RecordImageReference records the image reference container is started
+// with on host, before its start is sent. It reports false when the
+// container no longer starts there.
+func (e *Execution) RecordImageReference(ctx context.Context, host compute.HostID, container ContainerID, reference string) (bool, error) {
+	n, err := e.queries.RecordImageReference(ctx, RecordImageReferenceParams{ID: uuid.UUID(container), HostID: hostUUID(host), Reference: &reference})
+	if err != nil {
+		return false, fmt.Errorf("record image reference: %w", err)
+	}
+	return n == 1, nil
+}

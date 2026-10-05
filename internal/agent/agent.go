@@ -29,6 +29,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -109,6 +110,9 @@ type Config struct {
 	GeeseFSPath string
 	// MountImage is the image volume mount containers run GeeseFS in.
 	MountImage string
+	// Snapshotter is the socket the snapshotter serves LayerSources on. A
+	// host without one cannot start containers of images with layer grants.
+	Snapshotter string
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
@@ -145,6 +149,8 @@ type Agent struct {
 	sources  *sourceCache
 	images   *imageCache
 	volumes  *volumes
+	// layers hands layer grants to the snapshotter; nil without one.
+	layers *layerSources
 	// diskQuota is whether Docker enforces writable layer limits here.
 	diskQuota bool
 	// diskEngine attaches durable disks; diskErr says why it cannot here.
@@ -324,6 +330,14 @@ func Run(ctx context.Context, cfg Config) error {
 		operations:      make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
+	if cfg.Snapshotter != "" {
+		client, err := layersource.Dial(cfg.Snapshotter)
+		if err != nil {
+			return err //nolint:wrapcheck // The client names the call.
+		}
+		defer func() { _ = client.Close() }()
+		a.layers = newLayerSources(client)
+	}
 	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
 	if a.diskErr = a.diskEngine.Check(); a.diskErr != nil {
 		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
@@ -362,6 +376,9 @@ func Run(ctx context.Context, cfg Config) error {
 		a.goOwned(a.watchInterruptions)
 	}
 	a.goOwned(a.pruneExited)
+	if a.layers != nil {
+		a.goOwned(func(ctx context.Context) { a.layers.refreshLoop(ctx, a) })
+	}
 	data := &dataLink{a: a, client: hostproto.NewHostDataClient(traffic)}
 	a.goOwned(data.run)
 	a.goOwned(a.sampleUsage)
