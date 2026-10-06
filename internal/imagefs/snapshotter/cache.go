@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -152,8 +153,10 @@ func (c *frameCache) read(l *layer, frame int, p []byte, off int64) error {
 // fill fetches every frame of l the cache lacks, a few at a time and
 // sharing fetches with reads. Once ctx ends it starts no more; the fetches
 // under way finish, since reads may be waiting on them. A cold read
-// otherwise waits one store round trip per frame it touches.
-func (c *frameCache) fill(ctx context.Context, l *layer) {
+// otherwise waits one store round trip per frame it touches. It returns
+// how many frames it loaded.
+func (c *frameCache) fill(ctx context.Context, l *layer) int64 {
+	var loaded atomic.Int64
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for i := range l.index.Frames {
@@ -166,15 +169,20 @@ func (c *frameCache) fill(ctx context.Context, l *layer) {
 		select {
 		case c.filling <- struct{}{}:
 		case <-ctx.Done():
-			return
+			wg.Wait()
+			return loaded.Load()
 		}
 		wg.Go(func() { //nolint:contextcheck // a shared fetch runs under the cache's life
 			defer func() { <-c.filling }()
 			if _, err := c.load(l, i); err != nil {
 				c.log.Debug("background fetch failed", "layer", l.digest, "frame", i, "error", err)
+				return
 			}
+			loaded.Add(1)
 		})
 	}
+	wg.Wait()
+	return loaded.Load()
 }
 
 // load returns frame's bytes, fetching it once however many reads wait.

@@ -123,7 +123,7 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 		if count = grant.Start; count == 0 {
 			return nil
 		}
-		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, active+int(row.Draining))
+		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, active+int(row.Draining) == 0)
 		if err != nil {
 			return err
 		}

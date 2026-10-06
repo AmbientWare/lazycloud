@@ -239,7 +239,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if count = grant.Start; count == 0 {
 			return nil
 		}
-		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, live)
+		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, live == 0 && row.Demand == 0 && row.Peak == 0)
 		if err != nil {
 			return err
 		}

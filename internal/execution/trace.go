@@ -28,11 +28,12 @@ func traceparent(ctx context.Context) *string {
 
 // scaleUp starts the span of a planning decision to create count
 // containers of release, in the trace of the demand that asked for them:
-// the longest-waiting queued task, else the release's deploy while it rolls
-// out with no live container (live is zero). It links to the pass. The
-// containers store the span's traceparent.
-func (e *Execution) scaleUp(ctx context.Context, q *Queries, release uuid.UUID, count, live int) (context.Context, trace.Span, error) {
-	parent, err := q.ScaleUpTrace(ctx, ScaleUpTraceParams{ReleaseID: release, Rollout: live == 0, RolloutSeconds: rolloutTrace.Seconds()})
+// the longest-waiting queued task, else the release's deploy when rollout
+// says the release has no live container and no demand, so its warm
+// minimum alone asks for them. It links to the pass. The containers store
+// the span's traceparent.
+func (e *Execution) scaleUp(ctx context.Context, q *Queries, release uuid.UUID, count int, rollout bool) (context.Context, trace.Span, error) {
+	parent, err := q.ScaleUpTrace(ctx, ScaleUpTraceParams{ReleaseID: release, Rollout: rollout, RolloutSeconds: rolloutTrace.Seconds()})
 	if err != nil {
 		return ctx, nil, fmt.Errorf("read the scale-up's trace: %w", err)
 	}

@@ -191,7 +191,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		if count = grant.Start; count == 0 {
 			return nil
 		}
-		ctx, span, err := e.scaleUp(ctx, q, release.ReleaseID, count, live)
+		ctx, span, err := e.scaleUp(ctx, q, release.ReleaseID, count, live == 0 && release.QueuedAvailable+release.Running == 0)
 		if err != nil {
 			return err
 		}
