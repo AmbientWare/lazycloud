@@ -110,14 +110,8 @@ jobs:
     runs-on: ubuntu-26.04
     # The tests and the snapshotter trace into Jaeger; the job keeps the
     # trace of the slowest container start.
-    services:
-      jaeger:
-        image: jaegertracing/jaeger:2.21.0@sha256:3d0ac795ff98aa04d1be04311d2dac6c25b4bfc8322dc02e53bc5b170c5018c3
-        ports:
-          - 16686:16686
-          - 4317:4317
     env:
-      LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:4317
+      LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:24317
       LAZYCLOUD_OTLP_INSECURE: "true"
     steps:
       - uses: actions/checkout@v7
@@ -148,9 +142,10 @@ jobs:
           sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock
           sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock
       # Started after the snapshotter install, which restarts Docker.
-      - name: PostgreSQL and the object store
+      - name: PostgreSQL, the object store and Jaeger
         run: |
           docker compose -f compose.test.yaml up -d --wait postgres
+          docker compose up -d --wait jaeger
           docker compose up -d --wait object-store
           docker compose run --rm object-store-bootstrap
       - name: GeeseFS and the managed runtime

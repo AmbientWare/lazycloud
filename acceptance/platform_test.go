@@ -68,12 +68,6 @@ const (
 // platform registry every test's server shares.
 var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
 
-// tel traces every test's platform to LAZYCLOUD_OTLP_ENDPOINT when it is
-// set, and httpMetrics are its API metrics.
-var (
-	tel         *telemetry.Telemetry   //nolint:gochecknoglobals // Set once in TestMain.
-	httpMetrics *telemetry.HTTPMetrics //nolint:gochecknoglobals // Set once in TestMain.
-)
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
@@ -92,16 +86,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	registry = address
-	cfg, err := telemetry.ConfigFromEnv("acceptance", "test")
-	if err != nil {
-		panic(err)
-	}
-	if tel, err = telemetry.New(context.Background(), cfg); err != nil {
-		panic(err)
-	}
-	httpMetrics = tel.NewHTTPMetrics()
 	code := m.Run()
-	_ = tel.Shutdown(context.Background())
 	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
@@ -231,6 +216,17 @@ func startPlatform(t *testing.T) *platform {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// Each platform traces to LAZYCLOUD_OTLP_ENDPOINT when it is set, with
+	// its own registry for the agent's and the API's metrics.
+	telemetryConfig, err := telemetry.ConfigFromEnv("acceptance", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tel, err := telemetry.New(ctx, telemetryConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
@@ -312,7 +308,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	p.api = "http://" + apiListener.Addr().String()
-	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler, httpMetrics), ReadHeaderTimeout: 10 * time.Second}
+	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
