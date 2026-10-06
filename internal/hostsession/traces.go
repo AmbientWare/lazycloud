@@ -56,11 +56,6 @@ func (sess *session) recordTrace(ctx context.Context, report *hostproto.StartupT
 	if err != nil || len(report.GetTrace().GetReads()) == 0 {
 		return
 	}
-	if n := len(report.GetTrace().GetReads()); n > images.MaxTraceReads {
-		sess.server.logger.WarnContext(ctx, "the host reported a startup trace past the bound", "host", sess.host.String(),
-			"container", id.String(), "frames", n)
-		return
-	}
 	workspace, reference, ok, err := sess.server.execution.ContainerImage(ctx, sess.host, execution.ContainerID(id))
 	if err == nil && ok {
 		reads := make([]images.FrameRead, len(report.GetTrace().GetReads()))
@@ -72,7 +67,7 @@ func (sess *session) recordTrace(ctx context.Context, report *hostproto.StartupT
 	if err != nil && ctx.Err() == nil {
 		msg := "storing a startup trace failed"
 		if errors.Is(err, images.ErrInvalidTrace) {
-			msg = "the host reported a startup trace that does not fit its image"
+			msg = "the host reported a startup trace that does not fit its image or the bound"
 		}
 		sess.server.logger.WarnContext(ctx, msg, "host", sess.host.String(), "container", id.String(), "error", err)
 	}
