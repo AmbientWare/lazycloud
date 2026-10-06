@@ -59,9 +59,7 @@ import (
 const (
 	pythonVersion = "3.12"
 	testLabel     = "lazycloud.acceptance"
-	// managedTemplate is the platform's image template in these tests.
-	managedTemplate = "docker.io/library/python:{version}-slim"
-	registryImage   = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
+	registryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 )
 
 // supervisorBinary is built once per test binary, and registry is the
@@ -89,6 +87,10 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	registry = address
+	if err := pushPythonBase(); err != nil {
+		stop()
+		panic(err)
+	}
 	store, removeStore, err := storagetest.Open(context.Background())
 	if err != nil {
 		stop()
@@ -174,10 +176,27 @@ func startRegistry() (string, func(), error) {
 	}
 }
 
-// newImages is the images owner every test's server runs over pool.
+// pushPythonBase builds the platform's Python base of pythonVersion with
+// deploy/images/python and pushes it to the registry, as Ship pushes the
+// bases beside a release.
+func pushPythonBase() error {
+	target := "python-" + strings.ReplaceAll(pythonVersion, ".", "")
+	bake := exec.CommandContext(context.Background(), "docker", "buildx", "bake", "--progress", "quiet",
+		"-f", "deploy/images/docker-bake.hcl", target, "--push")
+	bake.Dir = ".."
+	bake.Env = append(os.Environ(), "REGISTRY="+registry+"/release", "VERSION=acceptance")
+	bake.Stdout, bake.Stderr = os.Stdout, os.Stderr
+	if err := bake.Run(); err != nil {
+		return fmt.Errorf("build the Python base: %w", err)
+	}
+	return nil
+}
+
+// newImages is the images owner every test's server runs over pool. Its
+// managed template names the bases pushPythonBase pushed.
 func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
 	return images.NewImages(pool, exec, vault, store, images.Config{
-		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: managedTemplate,
+		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
 	})
 }
 
