@@ -68,6 +68,10 @@ const (
 // platform registry every test's server shares.
 var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
 
+// objectStore holds the buckets every test's server shares: the converted
+// images of the template database live in its layer bucket.
+var objectStore storage.Config //nolint:gochecknoglobals // Set once in TestMain.
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
 	if err != nil {
@@ -85,7 +89,17 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	registry = address
+	store, removeStore, err := storagetest.Open(context.Background())
+	if err != nil {
+		stop()
+		panic(err)
+	}
+	objectStore = store
 	code := m.Run()
+	if err := removeStore(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
+		code = max(code, 1)
+	}
 	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
@@ -178,7 +192,7 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	exec := execution.NewExecution(pool)
-	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, storagetest.Config()))
+	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore))
 	source, err := im.ManagedSource(ctx, pythonVersion)
 	if err != nil {
 		return err
@@ -228,7 +242,7 @@ func startPlatform(t *testing.T) *platform {
 	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
-		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
+		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore),
 		execution: execution.NewExecution(pool),
 	}
 	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})

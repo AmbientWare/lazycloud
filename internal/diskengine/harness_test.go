@@ -11,51 +11,22 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// The local Garage object store from compose.yaml with its development key.
-// LAZYCLOUD_TEST_OBJECT_STORE_ENDPOINT points at another one.
-const (
-	testBucket    = "lazycloud"
-	testAccessKey = "GK1a2b3c4d5e6f708192a3b4c5"
-	testSecretKey = "6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31" //nolint:gosec // Development key.
-)
-
-func testEndpoint() string {
-	if endpoint := os.Getenv("LAZYCLOUD_TEST_OBJECT_STORE_ENDPOINT"); endpoint != "" {
-		return endpoint
-	}
-	return "http://127.0.0.1:23900"
-}
-
-// testStore is a fresh prefix in the local Garage bucket. Everything written
-// under it is deleted when the test ends.
+// testStore is a prefix in a bucket of the test object store, deleted with
+// everything in it when the test ends.
 func testStore(t *testing.T) Store {
 	t.Helper()
-	store := Store{
-		Endpoint: testEndpoint(), Region: "garage", Bucket: testBucket, ForcePathStyle: true,
+	cfg := storagetest.Config(t)
+	return Store{
+		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
 		Prefix: "test-diskengine/" + uuid.NewString() + "/",
 		Credentials: func(context.Context) (Credentials, error) {
-			return Credentials{AccessKeyID: testAccessKey, SecretAccessKey: testSecretKey}, nil
+			return Credentials{AccessKeyID: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey}, nil
 		},
 	}
-	t.Cleanup(func() {
-		objects, err := openStore(store)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		ctx := context.Background()
-		var keys []string
-		if err := objects.list(ctx, store.Prefix, func(object storedObject) { keys = append(keys, object.Key) }); err != nil {
-			t.Error(err)
-			return
-		}
-		if err := objects.deleteKeys(ctx, keys); err != nil {
-			t.Error(err)
-		}
-	})
-	return store
 }
 
 func mustOpenStore(t *testing.T, store Store) *objectStore {

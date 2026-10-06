@@ -20,7 +20,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
-	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // startingWith inserts a starting container of a release with spec.
@@ -83,9 +82,8 @@ func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
 		t.Fatalf("write with the grant: %v", err)
 	}
 
-	store := storage.NewStorage(h.pool, storagetest.Config())
 	var inUse *storage.ConflictError
-	if err := store.DeleteVolume(t.Context(), ws, "data"); !errors.As(err, &inUse) {
+	if err := h.store.DeleteVolume(t.Context(), ws, "data"); !errors.As(err, &inUse) {
 		t.Fatalf("delete of a mounted volume: %v", err)
 	}
 }

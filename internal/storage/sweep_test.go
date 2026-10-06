@@ -20,7 +20,7 @@ import (
 func countObjects(t *testing.T, bucket, prefix string) int {
 	t.Helper()
 	n := 0
-	pages := s3.NewListObjectsV2Paginator(platformS3(), &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)})
+	pages := s3.NewListObjectsV2Paginator(storagetest.Client(), &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)})
 	for pages.HasMorePages() {
 		page, err := pages.NextPage(t.Context())
 		if err != nil {
@@ -33,7 +33,7 @@ func countObjects(t *testing.T, bucket, prefix string) int {
 
 func putObjects(t *testing.T, bucket, prefix string, n int) {
 	t.Helper()
-	client := platformS3()
+	client := storagetest.Client()
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 32)
 	for i := range n {
@@ -103,8 +103,8 @@ func TestSweepRemovesObjectsWithoutOwners(t *testing.T) {
 	putObjects(t, bucket, orphanVolume, 3)
 	putObjects(t, bucket, orphanDisk, 2)
 	orphanArtifact := fmt.Sprintf("workspaces/%s/artifacts/%s", f.ws, uuid.NewString())
-	if _, err := platformS3().PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(storagetest.Config().Bucket), Key: aws.String(orphanArtifact), Body: strings.NewReader("x"),
+	if _, err := storagetest.Client().PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(f.bucket), Key: aws.String(orphanArtifact), Body: strings.NewReader("x"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSweepRemovesObjectsWithoutOwners(t *testing.T) {
 			t.Fatalf("%s holds %d objects after the sweep", p, n)
 		}
 	}
-	if n := countObjects(t, storagetest.Config().Bucket, orphanArtifact); n != 0 {
+	if n := countObjects(t, f.bucket, orphanArtifact); n != 0 {
 		t.Fatalf("orphaned artifact remains")
 	}
 	listing, err := s.ListVolumeFiles(ctx, f.ws, "data", "", "", 10)
