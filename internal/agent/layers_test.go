@@ -185,7 +185,9 @@ func TestStartupTracesEndWithinTheWindow(t *testing.T) {
 		t.Fatalf("the start traces %v: %v", tracing, err)
 	}
 	const left = 300 * time.Millisecond
-	l.mark("idle", func(s *startup) { s.traced = time.Now().Add(left - traceWindow) })
+	l.smu.Lock()
+	l.startups["idle"].began = time.Now().Add(left - traceWindow)
+	l.smu.Unlock()
 	began := time.Now()
 	l.await(t.Context(), log, "idle", never)
 	if waited := time.Since(began); waited < left-50*time.Millisecond || waited > left+5*time.Second {

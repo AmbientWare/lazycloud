@@ -160,8 +160,9 @@ type startup struct {
 	layers      []imagefs.Digest
 	prefetching bool
 	tracing     bool
-	// traced is when the trace began.
-	traced time.Time
+	// began is when the start began; its trace runs at most traceWindow
+	// from then.
+	began time.Time
 	// shared is set once another start or a platform image on the host
 	// names one of its layers.
 	shared bool
@@ -187,7 +188,7 @@ func (l *layerSources) begin(container string, layers []imagefs.Digest) bool {
 	l.smu.Lock()
 	defer l.smu.Unlock()
 	shared := l.shareLocked(container, layers)
-	l.startups[container] = &startup{layers: layers, shared: shared, released: make(chan struct{})}
+	l.startups[container] = &startup{layers: layers, began: time.Now(), shared: shared, released: make(chan struct{})}
 	return shared
 }
 
@@ -218,6 +219,7 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 		telemetry.Fail(span, err)
 		return false, err //nolint:wrapcheck // The client names the call.
 	}
+	prefetching := false
 	if trace := spec.GetPrefetch().GetReads(); len(trace) > 0 {
 		reads := make([]layersource.FrameRead, len(trace))
 		for n, r := range trace {
@@ -226,31 +228,26 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 		if err := l.client.Prefetch(ctx, container, layers, reads); err != nil {
 			log.Warn("prefetching the image failed", "error", err)
 		} else {
-			l.mark(container, func(s *startup) { s.prefetching = true })
+			prefetching = true
 		}
 	}
-	if !spec.GetRecordTrace() || shared {
-		return false, nil
+	tracing := spec.GetRecordTrace() && !shared
+	if tracing {
+		if err := l.client.StartTrace(ctx, container, layers); err != nil {
+			log.Warn("tracing the image's startup reads failed", "error", err)
+			tracing = false
+		}
 	}
-	traced := time.Now()
-	if err := l.client.StartTrace(ctx, container, layers); err != nil {
-		log.Warn("tracing the image's startup reads failed", "error", err)
-		return false, nil
-	}
-	l.mark(container, func(s *startup) { s.tracing, s.traced = true, traced })
-	return true, nil
-}
-
-func (l *layerSources) mark(container string, change func(*startup)) {
 	l.smu.Lock()
-	defer l.smu.Unlock()
 	if s, ok := l.startups[container]; ok {
-		change(s)
+		s.prefetching, s.tracing = prefetching, tracing
 	}
+	l.smu.Unlock()
+	return tracing, nil
 }
 
-// await waits until served closes, at most traceWindow from the start of
-// container's trace, then ends the trace as end does. It returns nil at
+// await waits until served closes, at most traceWindow from container's
+// start, then ends its trace as end does. It returns nil at
 // once if the container does not trace, exits or ctx ends.
 func (l *layerSources) await(ctx context.Context, log *slog.Logger, container string, served <-chan struct{}) *hostproto.ImageTrace {
 	l.smu.Lock()
@@ -259,9 +256,9 @@ func (l *layerSources) await(ctx context.Context, log *slog.Logger, container st
 		l.smu.Unlock()
 		return nil
 	}
-	traced, released := s.traced, s.released
+	began, released := s.began, s.released
 	l.smu.Unlock()
-	timer := time.NewTimer(time.Until(traced.Add(traceWindow)))
+	timer := time.NewTimer(time.Until(began.Add(traceWindow)))
 	defer timer.Stop()
 	select {
 	case <-served:
