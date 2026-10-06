@@ -153,11 +153,12 @@ printf '[Service]\nEnvironment=LAZYCLOUD_OCI_RUNTIME=runsc\n' \
 # finds the root partition whatever order the disks probe in; a release that
 # named it by device would resume from whichever disk came first, so the
 # bake refuses one. acpid hands EC2's hibernate request to it. The kernel
-# writes the smallest image it can, freeing its page cache first.
+# keeps its default image size: a smaller image swaps out dockerd and
+# containerd, and the first container after a resume then pages them back
+# from EBS for seconds.
 dnf install -y ec2-hibinit-agent acpid
 grep -q PARTUUID /usr/bin/hibinit-agent
 systemctl enable hibinit-agent.service acpid.service
-printf 'w /sys/power/image_size - - - - 0\n' >/etc/tmpfiles.d/lazycloud-hibernate.conf
 
 # Every boot pays for every boot service.
 systemctl mask update-motd.service update-motd.timer systemd-boot-update.service
