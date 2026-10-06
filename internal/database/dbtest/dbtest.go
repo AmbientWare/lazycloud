@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,6 +32,14 @@ type template struct {
 }
 
 var shared template //nolint:gochecknoglobals // One migrated template per test binary.
+
+// staleAfter is how long a database outlives the binary that made it. A
+// binary drops its clones as its tests end but never its templates, and a
+// killed binary leaves both, so the first connection of each binary drops
+// what earlier ones left.
+const staleAfter = 6 * time.Hour
+
+var swept sync.Once //nolint:gochecknoglobals // One sweep per test binary.
 
 // New creates an empty migrated database, returns a pool on it and drops it
 // when the test ends. Set LAZYCLOUD_TEST_DATABASE_URL to use another server.
@@ -97,7 +108,31 @@ func connect(t testing.TB) (string, *pgx.Conn) {
 	if err != nil {
 		t.Fatalf("connect to test postgres (docker compose -f compose.test.yaml up -d --wait): %v", err)
 	}
+	swept.Do(func() { sweep(t, admin) })
 	return base, admin
+}
+
+// sweep drops the databases earlier binaries made more than staleAfter ago.
+func sweep(t testing.TB, admin *pgx.Conn) {
+	t.Helper()
+	rows, err := admin.Query(t.Context(), "select datname from pg_database where datname ~ '^(template|test)_[0-9]+_'")
+	if err != nil {
+		t.Fatalf("list test databases: %v", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("list test databases: %v", err)
+	}
+	cutoff := time.Now().Add(-staleAfter).Unix()
+	for _, name := range names {
+		made, err := strconv.ParseInt(strings.Split(name, "_")[1], 10, 64)
+		if err != nil || made >= cutoff {
+			continue
+		}
+		if _, err := admin.Exec(t.Context(), fmt.Sprintf("drop database if exists %s with (force)", name)); err != nil {
+			t.Fatalf("drop stale test database %s: %v", name, err)
+		}
+	}
 }
 
 // clone creates a database from template, returns a pool on it and drops
@@ -154,8 +189,9 @@ func withDatabase(base, name string) string {
 	return u.String()
 }
 
+// randomSuffix names a database by when it was made, for sweep.
 func randomSuffix() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	return strconv.FormatInt(time.Now().Unix(), 10) + "_" + hex.EncodeToString(b[:])
 }
