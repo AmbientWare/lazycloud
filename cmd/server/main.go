@@ -446,7 +446,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	relayServer := grpc.NewServer()
 	hostproto.RegisterEdgeRelayServer(relayServer, edges.RelayServer())
 	probes := &health{}
-	httpServer := &http.Server{Handler: tel.HTTPHandler(handler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Handler: tel.HTTPHandler(handler), ReadHeaderTimeout: 10 * time.Second}
 	logger.InfoContext(ctx, "serving", "version", version, "http", ls.http.Addr().String(), "grpc", ls.grpc.Addr().String(),
 		"edge", ls.edge.Addr().String(), "edge_url", cfg.edgeURL, "edge_relay", ls.relay.Addr().String())
 

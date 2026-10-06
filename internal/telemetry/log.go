@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -29,20 +30,9 @@ func With(ctx context.Context, fields ...slog.Attr) context.Context {
 	if len(fields) == 0 {
 		return ctx
 	}
-	prev, _ := ctx.Value(fieldsKey{}).([]slog.Attr)
-	merged := make([]slog.Attr, 0, len(prev)+len(fields))
-	for _, p := range prev {
-		replaced := false
-		for _, f := range fields {
-			if f.Key == p.Key {
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			merged = append(merged, p)
-		}
-	}
+	merged := slices.DeleteFunc(slices.Clone(Fields(ctx)), func(p slog.Attr) bool {
+		return slices.ContainsFunc(fields, func(f slog.Attr) bool { return f.Key == p.Key })
+	})
 	merged = append(merged, fields...)
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		attrs := make([]attribute.KeyValue, 0, len(fields))
@@ -71,14 +61,9 @@ const (
 // NewLogger writes records in format to w. Records logged with a context
 // carry its correlation fields and, inside a span, trace_id and span_id.
 func NewLogger(w io.Writer, format LogFormat, service string) *slog.Logger {
-	var base slog.Handler
-	switch format {
-	case LogJSON:
+	var base slog.Handler = slog.NewTextHandler(w, nil)
+	if format == LogJSON {
 		base = slog.NewJSONHandler(w, nil)
-	case LogText:
-		base = slog.NewTextHandler(w, nil)
-	default:
-		base = slog.NewTextHandler(w, nil)
 	}
 	return slog.New(correlated{next: base}).With("service", service)
 }

@@ -104,12 +104,10 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 	return pass.result, nil
 }
 
-// trace records each decision in its container's trace, linked to the pass.
+// trace records each decision in its container's trace.
 func (ps *fleetPass) trace(ctx context.Context) {
-	pass := telemetry.TraceParentOf(ctx)
 	for _, d := range ps.decisions {
-		_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), d.traceparent, "compute.capacity", telemetry.LinkTo(pass),
-			trace.WithAttributes(telemetry.Container(d.container.String()), attribute.String("lazycloud.wait", d.wait.wait)))
+		_, span := telemetry.StartFor(ctx, d.traceparent, "compute.capacity", trace.WithAttributes(telemetry.Container(d.container.String()), attribute.String("lazycloud.wait", d.wait.wait)))
 		if d.wait.host != uuid.Nil {
 			span.SetAttributes(telemetry.Host(d.wait.host.String()))
 		}

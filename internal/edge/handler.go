@@ -339,7 +339,7 @@ func (e *Edge) tracedAcquire(ctx context.Context, t target, deadline time.Time) 
 	if err == nil {
 		span.SetAttributes(telemetry.Container(l.slot.id.String()), attribute.Bool("lazycloud.cold", l.cold))
 		if l.cold {
-			span.AddLink(telemetry.Link(l.slot.traceparent))
+			span.AddLink(trace.Link{SpanContext: telemetry.SpanContextOf(l.slot.traceparent)})
 		}
 	}
 	telemetry.Fail(span, err)

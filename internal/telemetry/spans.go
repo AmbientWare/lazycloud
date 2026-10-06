@@ -2,11 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/hex"
-	"errors"
-	"net/url"
-	"regexp"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -25,7 +20,6 @@ const scope = "github.com/AmbientWare/lazycloud"
 
 // TracerOf is the tracer of ctx's span. Owners trace under the provider of
 // the request, RPC or pass that called them and hold none of their own.
-// Without a recording span in ctx it records nothing.
 func TracerOf(ctx context.Context) trace.Tracer {
 	return trace.SpanFromContext(ctx).TracerProvider().Tracer(scope)
 }
@@ -47,6 +41,12 @@ func StartIn(ctx context.Context, tracer trace.Tracer, traceparent, name string,
 	return tracer.Start(ctx, name, opts...) //nolint:spancheck // The caller ends it.
 }
 
+// StartFor is StartIn with the tracer of ctx's span, for a step of a pass
+// or request on work that carries its own trace.
+func StartFor(ctx context.Context, traceparent, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	return StartIn(ctx, TracerOf(ctx), traceparent, name, opts...) //nolint:spancheck // The caller ends it.
+}
+
 // Record records a finished step from began to now as a child of ctx's
 // span, for steps timed before their span could start.
 func Record(ctx context.Context, name string, began time.Time, attrs ...attribute.KeyValue) {
@@ -62,79 +62,22 @@ func Step(ctx context.Context, name string, fn func(context.Context) error, attr
 	return err
 }
 
-// LinkTo links a span to the one traceparent names; empty or malformed
-// adds nothing.
-func LinkTo(traceparent string) trace.SpanStartOption {
-	if sc := SpanContextOf(traceparent); sc.IsValid() {
-		return trace.WithLinks(trace.Link{SpanContext: sc})
-	}
-	return trace.WithLinks()
-}
-
-// Link is a link to the span traceparent names; an empty or malformed one
-// is invalid, and spans drop it.
-func Link(traceparent string) trace.Link {
-	return trace.Link{SpanContext: SpanContextOf(traceparent)}
-}
-
 // Fail marks span failed with err, when err is not nil, and ends it. The
-// message keeps no URL query.
+// exporter redacts the message.
 func Fail(span trace.Span, err error) {
 	if err != nil {
-		message := Redact(err.Error())
-		span.RecordError(errors.New(message))
-		span.SetStatus(codes.Error, message)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 	}
 	span.End()
 }
 
-// urlQuery matches the query of a URL in a message.
-var urlQuery = regexp.MustCompile(`(https?://[^\s?"]*)\?[^\s"]*`) //nolint:gochecknoglobals // A compiled constant.
-
-// Redact removes the query of every URL in message, where presigned URLs
-// carry their signature. Span statuses and events take only redacted
-// messages.
-func Redact(message string) string {
-	return urlQuery.ReplaceAllString(message, "$1?<redacted>")
-}
-
-// RedactURL is err with the query of the URL it names removed when it is a
-// *url.Error, as a failed request to a presigned URL returns.
-func RedactURL(err error) error {
-	var failed *url.Error
-	if !errors.As(err, &failed) {
-		return err
-	}
-	stripped := Redact(failed.URL)
-	if u, parseErr := url.Parse(failed.URL); parseErr == nil {
-		u.RawQuery, u.Fragment = "", ""
-		stripped = u.String()
-	}
-	return &url.Error{Op: failed.Op, URL: stripped, Err: failed.Err}
-}
-
-// SpanContextOf is the remote span a W3C traceparent of version 00 names;
-// invalid when it is empty or malformed.
+// SpanContextOf is the remote span a W3C traceparent names; invalid when
+// it is empty or malformed.
+//
+//nolint:contextcheck // Parsing a string needs no caller context.
 func SpanContextOf(traceparent string) trace.SpanContext {
-	parts := strings.Split(traceparent, "-")
-	if len(parts) != 4 || parts[0] != "00" || len(parts[3]) != 2 {
-		return trace.SpanContext{}
-	}
-	traceID, err := trace.TraceIDFromHex(parts[1])
-	if err != nil {
-		return trace.SpanContext{}
-	}
-	spanID, err := trace.SpanIDFromHex(parts[2])
-	if err != nil {
-		return trace.SpanContext{}
-	}
-	flags, err := hex.DecodeString(parts[3])
-	if err != nil {
-		return trace.SpanContext{}
-	}
-	return trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID: traceID, SpanID: spanID, TraceFlags: trace.TraceFlags(flags[0]) & trace.FlagsSampled, Remote: true,
-	})
+	return trace.SpanContextFromContext(WithTraceParent(context.Background(), traceparent))
 }
 
 // Attribute keys of span attributes beside the correlation keys.

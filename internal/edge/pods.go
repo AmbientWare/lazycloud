@@ -148,7 +148,7 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 	if err == nil {
 		span.SetAttributes(telemetry.Container(uuid.UUID(c.Container).String()))
 		if woken {
-			span.AddLink(telemetry.Link(c.Traceparent))
+			span.AddLink(trace.Link{SpanContext: telemetry.SpanContextOf(c.Traceparent)})
 		}
 	}
 	telemetry.Fail(span, err)

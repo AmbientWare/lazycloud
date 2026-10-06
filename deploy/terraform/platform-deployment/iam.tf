@@ -13,11 +13,17 @@ resource "aws_iam_role" "control_plane" {
   })
 }
 
+# The chart's service account names, which the Pod Identity associations
+# and the secrets reader's trust name.
+locals {
+  service_accounts = yamldecode(file("${path.module}/../../helm/lazycloud/values.yaml")).serviceAccounts
+}
+
 # Session tags off: tags on a Pod Identity session are transitive, so every
 # role assumed onward would have to allow sts:TagSession, and customer
 # connection roles allow sts:AssumeRole alone.
 resource "aws_eks_pod_identity_association" "control_plane" {
-  for_each             = toset(["lazycloud-server", "lazycloud-scheduler"])
+  for_each             = toset([local.service_accounts.server, local.service_accounts.scheduler])
   cluster_name         = local.core.cluster_name
   namespace            = var.deployment
   service_account      = each.value
@@ -47,7 +53,7 @@ resource "aws_iam_role_policy" "traces" {
 resource "aws_eks_pod_identity_association" "traces" {
   cluster_name         = local.core.cluster_name
   namespace            = var.deployment
-  service_account      = "lazycloud-otel-collector"
+  service_account      = local.service_accounts.otelCollector
   role_arn             = aws_iam_role.traces.arn
   disable_session_tags = true
 }
@@ -341,7 +347,7 @@ resource "aws_iam_role" "secrets_reader" {
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = { StringEquals = {
         "${local.core.oidc_issuer_host}:aud" = "sts.amazonaws.com"
-        "${local.core.oidc_issuer_host}:sub" = "system:serviceaccount:${var.deployment}:secrets-reader"
+        "${local.core.oidc_issuer_host}:sub" = "system:serviceaccount:${var.deployment}:${local.service_accounts.secretsReader}"
       } }
     }]
   })

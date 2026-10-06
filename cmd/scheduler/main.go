@@ -330,16 +330,16 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, timed("fleet_plan", func(ctx context.Context) bool {
 			result, err := comp.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "fleet planning pass", "error", err)
 			}
 			return result.Skipped
-		})
+		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, timed("fleet_launch", func(ctx context.Context) bool {
 			if _, err := comp.Launch(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "launch pass", "error", err)
 			}
@@ -356,7 +356,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 				logger.ErrorContext(ctx, "connection pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: compute.SpotPriceInterval}, nil, nil, every("spot_prices", compute.SpotPriceInterval, func(ctx context.Context) bool {

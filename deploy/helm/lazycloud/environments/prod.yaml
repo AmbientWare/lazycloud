@@ -20,4 +20,3 @@ config:
 # Traces go to AWS X-Ray through the collector.
 telemetry:
   enabled: true
-  sampleRatio: "1"

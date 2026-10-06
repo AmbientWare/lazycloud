@@ -44,9 +44,7 @@ spec:
             # The launcher writes these into each instance's user data.
             {{- include "lazycloud.hostEnv" . | nindent 12 }}
             {{- include "lazycloud.awsEnv" . | nindent 12 }}
-            {{- if .Values.telemetry.enabled }}
             {{- include "lazycloud.telemetryEnv" . | nindent 12 }}
-            {{- end }}
             {{- include "lazycloud.env" (list . "scheduler") | trim | nindent 12 }}
           ports:
             - name: health
