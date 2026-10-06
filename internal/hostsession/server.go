@@ -65,6 +65,8 @@ type Config struct {
 	// Tracer traces the work sessions and the server's own goroutines do;
 	// nil records nothing.
 	Tracer trace.Tracer
+	// Traces forwards the spans hosts send; nil drops them.
+	Traces *telemetry.HostTraces
 }
 
 // Server implements hostproto.HostService.

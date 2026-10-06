@@ -31,7 +31,8 @@ export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
 export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 # Agent release archives `lazycloud machine join` installs from.
 export LAZYCLOUD_AGENT_DIST_DIR="$PWD/$state/agent-dist"
-# Every process, the VM's agent and snapshotter too, traces into Jaeger.
+# The server and scheduler trace into Jaeger; the VM's agent and
+# snapshotter send their spans through the server.
 export LAZYCLOUD_OTLP_ENDPOINT=127.0.0.1:24317 LAZYCLOUD_OTLP_INSECURE=true
 
 # stop_services leaves the host VM running for the next start.

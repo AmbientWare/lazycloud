@@ -1,8 +1,9 @@
 {{- if .Values.telemetry.enabled }}
 {{/*
-Receives OTLP/gRPC traces from the server and scheduler and sends them to
-AWS X-Ray in the deployment's region, as its service account's EKS Pod
-Identity, which may only put trace segments and telemetry records.
+Receives OTLP/gRPC traces from the scheduler and the server, which forwards
+the spans fleet hosts send over their sessions, and sends them to AWS X-Ray
+in the deployment's region, as its service account's EKS Pod Identity, which
+may only put trace segments and telemetry records.
 Metrics stay on each process's /metrics for scraping.
 */}}
 apiVersion: v1

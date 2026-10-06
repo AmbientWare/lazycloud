@@ -418,10 +418,14 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	if err != nil {
 		return err
 	}
+	hostTraces, err := tel.HostTraces(logger)
+	if err != nil {
+		return err
+	}
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		TouchInterval: 10 * time.Second,
 		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
-		Registerer: tel.Registry, Tracer: tel.Tracer(),
+		Registerer: tel.Registry, Tracer: tel.Tracer(), Traces: hostTraces,
 	}, logger)
 	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures()) //nolint:contextcheck // Conversions run under the host service's lifetime.
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
@@ -454,6 +458,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	g.Go(func() error { return obs.RunIngest(background) })
 	g.Go(func() error { return obs.RunStartedPublisher(background) })
 	g.Go(func() error { return tel.ServeMetrics(background, logger) })
+	g.Go(func() error { return hostTraces.Run(background) })
 	g.Go(func() error { return ident.RunTokenUse(background, logger) })
 	// The edge's route table, demand and request records keep running until
 	// its requests are done; then it forgets its registration and writes the

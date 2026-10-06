@@ -343,6 +343,9 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 	case *hostproto.HostMessage_StartupTrace:
 		sess.recordTrace(ctx, body.StartupTrace)
 		return nil
+	case *hostproto.HostMessage_Traces:
+		sess.server.config.Traces.Offer(sess.host.String(), body.Traces.GetOtlp())
+		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
 		// outcome.

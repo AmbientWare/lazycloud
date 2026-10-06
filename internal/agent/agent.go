@@ -134,6 +134,10 @@ type Config struct {
 	// Telemetry traces calls to the server and attempts; nil traces
 	// nothing.
 	Telemetry *telemetry.Telemetry
+	// TraceSocket is where the agent receives OTLP spans from its own
+	// tracer and the snapshotter and sends them to the server; empty serves
+	// none.
+	TraceSocket string
 	// MetricsInterval paces container metric samples; zero means 5 s.
 	MetricsInterval time.Duration
 	// clock reports sleeps; nil uses the kernel's.
@@ -398,6 +402,9 @@ func Run(ctx context.Context, cfg Config) error {
 	a.goOwned(data.run)
 	a.goOwned(a.sampleUsage)
 	a.goOwned(a.releaseLoop)
+	if cfg.TraceSocket != "" {
+		a.goOwned(a.serveTraces)
+	}
 	err = a.sessions(ctx)
 	if errors.Is(err, ErrCredentialRevoked) {
 		// The machine was removed: nothing it runs belongs to anyone now.

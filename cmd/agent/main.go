@@ -112,6 +112,11 @@ func join(cfg agent.Config) int {
 		cfg.Logger.Error("invalid configuration", "error", err)
 		return exitUsage
 	}
+	if telemetryConfig.OTLPEndpoint == "" && cfg.TraceSocket != "" {
+		// The agent's spans reach the server's collector through the
+		// session, and only in traces the server sampled.
+		telemetryConfig.OTLPEndpoint, telemetryConfig.OTLPInsecure, telemetryConfig.SampleRatio = "unix://"+cfg.TraceSocket, true, 0
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	tel, err := telemetry.New(ctx, telemetryConfig)
@@ -180,6 +185,7 @@ func newJoinFlags(name string) *joinFlags {
 		"run docker_enabled containers privileged without runsc, which lets them escape to the host; only for trusted tenants")
 	f.StringVar(&cfg.GeeseFSPath, "geesefs", envOr("LAZYCLOUD_GEESEFS", filepath.Join(release, "geesefs")), "pinned GeeseFS binary that mounts volumes; volumes are unavailable without it")
 	f.StringVar(&cfg.Snapshotter, "snapshotter", envOr("LAZYCLOUD_SNAPSHOTTER", layersource.Socket), "socket the image layer snapshotter serves")
+	f.StringVar(&cfg.TraceSocket, "trace-socket", envOr("LAZYCLOUD_AGENT_TRACE_SOCKET", defaultTraceSocket()), "socket where the agent receives the host's spans for the server; empty serves none")
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	f.StringVar(&j.maxCPU, "max-cpu", os.Getenv("LAZYCLOUD_MAX_CPU"), "CPU cores to offer, such as 2 or 1.5; default detects")
 	f.StringVar(&j.maxMemory, "max-memory", os.Getenv("LAZYCLOUD_MAX_MEMORY"), "memory to offer, such as 16gib or 4096 (MB); default detects")
@@ -286,6 +292,15 @@ func agentVersion() string {
 		}
 	}
 	return info.Main.Version
+}
+
+// defaultTraceSocket is telemetry.HostTraceSocket for root, where the
+// snapshotter sends its spans, and none otherwise.
+func defaultTraceSocket() string {
+	if os.Geteuid() == 0 {
+		return telemetry.HostTraceSocket
+	}
+	return ""
 }
 
 // defaultSocketDir is /run/lazycloud-agent for root and the user's runtime

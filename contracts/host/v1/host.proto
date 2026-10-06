@@ -123,7 +123,17 @@ message HostMessage {
     // The frames a container read before it was ready, for a start that
     // asked with record_trace.
     StartupTrace startup_trace = 120;
+    // Spans the host recorded in traces the server sampled. The agent sends
+    // them while the session's queue has room and drops them otherwise.
+    Traces traces = 130;
   }
+}
+
+// Traces is spans of the host's agent and snapshotter: one OTLP
+// ExportTraceServiceRequest, protobuf-encoded. The server marks each
+// resource with the host and forwards it to its collector.
+message Traces {
+  bytes otlp = 1;
 }
 
 // StartupTrace is the frames of its image's layers a container read from

@@ -52,6 +52,11 @@ func run(args []string) int {
 		logger.Error("invalid configuration", "error", err)
 		return 2
 	}
+	if telemetryConfig.OTLPEndpoint == "" {
+		// The agent sends the snapshotter's spans, all in traces the server
+		// sampled, to the server over its session.
+		telemetryConfig.OTLPEndpoint, telemetryConfig.OTLPInsecure = "unix://"+telemetry.HostTraceSocket, true
+	}
 	tel, err := telemetry.New(ctx, telemetryConfig)
 	if err != nil {
 		logger.Error("telemetry failed", "error", err)

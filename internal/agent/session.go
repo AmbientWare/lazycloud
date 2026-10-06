@@ -216,9 +216,9 @@ func (a *Agent) report(m *hostproto.HostMessage) {
 	}
 }
 
-// reportMetrics queues a metrics message only while the session queue is
-// at most half full, so samples never crowd out reports and acks.
-func (a *Agent) reportMetrics(m *hostproto.HostMessage) {
+// reportIfRoom queues a metrics or traces message only while the session
+// queue is at most half full, so they never crowd out reports and acks.
+func (a *Agent) reportIfRoom(m *hostproto.HostMessage) {
 	a.mu.Lock()
 	out := a.session
 	a.mu.Unlock()

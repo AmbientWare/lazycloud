@@ -74,11 +74,11 @@ shell() { "$limactl" shell --workdir / "$vm" sudo "$@"; }
 
 # setup runs the node image recipe once, then forwards the ports of the
 # stack run.sh configures: the gateway (install script and agent releases),
-# the agent's gRPC endpoint, the registry, Garage and the trace collector.
+# the agent's gRPC endpoint, the registry and Garage.
 setup() {
   : "${LAZYCLOUD_IMAGE_REGISTRY:?run by deploy/local/run.sh}" "${LAZYCLOUD_OBJECT_STORE_ENDPOINT:?}" "${LAZYCLOUD_DOCKER_BRIDGE_IP:?}"
   store=${LAZYCLOUD_OBJECT_STORE_ENDPOINT##*:}
-  forwards="${LAZYCLOUD_HTTP_ADDR##*:} ${LAZYCLOUD_GRPC_ADDR##*:} ${LAZYCLOUD_IMAGE_REGISTRY##*:} ${store%/} ${LAZYCLOUD_OTLP_ENDPOINT##*:}"
+  forwards="${LAZYCLOUD_HTTP_ADDR##*:} ${LAZYCLOUD_GRPC_ADDR##*:} ${LAZYCLOUD_IMAGE_REGISTRY##*:} ${store%/}"
   if ! shell test -f /etc/lazycloud-node-image.json; then
     { echo "#!/bin/bash"; sed '/^#/d' deploy/host-pins.sh; echo VARIANT=cpu; sed 1d deploy/ami/node-setup.sh; } |
       shell bash -s
@@ -95,13 +95,9 @@ setup() {
   # made the VM's own, the Garage forward answers it.
   printf '[Unit]\nDescription=Answer the developer machine'"'"'s Docker bridge address\nAfter=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sh -c "ip -4 addr show | grep -q \\" %s/\\" || ip addr add %s/32 dev lo"\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$bridge" "$bridge" | shell tee /etc/systemd/system/lazycloud-bridge-address.service >/dev/null
-  # Builds push to the registry forward on the VM's loopback; the agent and
-  # snapshotter trace to the collector forward.
-  traces="Environment=LAZYCLOUD_OTLP_ENDPOINT=$LAZYCLOUD_OTLP_ENDPOINT LAZYCLOUD_OTLP_INSECURE=true"
-  printf '[Service]\nEnvironment=LAZYCLOUD_BUILD_NETWORK=host\n%s\n' "$traces" |
+  # Builds push to the registry forward on the VM's loopback.
+  printf '[Service]\nEnvironment=LAZYCLOUD_BUILD_NETWORK=host\n' |
     shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-agent.service.d && cat >/etc/systemd/system/lazycloud-agent.service.d/local-host.conf'
-  printf '[Service]\n%s\n' "$traces" |
-    shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-snapshotter.service.d && cat >/etc/systemd/system/lazycloud-snapshotter.service.d/local-host.conf'
   # shellcheck disable=SC2086 # unit names are separate words
   shell systemctl daemon-reload && shell systemctl enable --now lazycloud-bridge-address.service $units
 }
