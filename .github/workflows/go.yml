@@ -15,6 +15,10 @@ on:
       - "buf.gen.yaml"
       - ".golangci.yml"
       - "**/sqlc.yaml"
+      # The test services.
+      - "compose.test.yaml"
+      - "deploy/local/garage.toml"
+      - "deploy/local/garage-bootstrap.sh"
   push:
     branches: [main]
 
