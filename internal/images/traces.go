@@ -43,9 +43,11 @@ func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceI
 	if err != nil {
 		return nil, false, fmt.Errorf("read startup trace: %w", err)
 	}
-	reads := make([]FrameRead, min(len(row.Layers), len(row.Frames)))
+	// The table keeps the arrays of one length, and the record keeps them
+	// non-negative.
+	reads := make([]FrameRead, len(row.Layers))
 	for n := range reads {
-		reads[n] = FrameRead{Layer: uint32(row.Layers[n]), Frame: uint32(row.Frames[n])} //nolint:gosec // stored checked non-negative
+		reads[n] = FrameRead{Layer: uint32(row.Layers[n]), Frame: uint32(row.Frames[n])} //nolint:gosec // See above.
 	}
 	return reads, time.Since(row.RecordedAt) >= traceAge, nil
 }
@@ -67,7 +69,7 @@ func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID
 	}
 	for n, r := range reads {
 		// A read past the int32 range turns negative, which the query refuses.
-		params.Layers[n], params.Frames[n] = int32(r.Layer), int32(r.Frame) //nolint:gosec // See above.
+		params.Layers[n], params.Frames[n] = int32(r.Layer), int32(r.Frame) //nolint:gosec // Checked by the query.
 	}
 	fits, err := i.queries.RecordTrace(ctx, params)
 	if err != nil {

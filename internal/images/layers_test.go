@@ -87,20 +87,25 @@ func putPair(ctx context.Context, t *testing.T, index string, parts []string, pa
 	return etags
 }
 
+// convertLayer converts the uncompressed layer into its pair's data and
+// encoded index. It reports a failure without stopping the goroutine.
+func convertLayer(t *testing.T, layer io.Reader) (imagefs.Index, []byte, []byte) {
+	t.Helper()
+	var data bytes.Buffer
+	ix, err := imagefs.Convert(t.Context(), layer, &data)
+	encoded, marshalErr := ix.Marshal()
+	if err = errors.Join(err, marshalErr); err != nil {
+		t.Error(err)
+	}
+	return ix, data.Bytes(), encoded
+}
+
 // storeLayer converts layer and stores its pair under id through the
 // presigned uploads a host gets, and returns its index.
 func storeLayer(t *testing.T, store *storage.Storage, id uuid.UUID, layer []byte) imagefs.Index {
 	t.Helper()
-	var data bytes.Buffer
-	ix, err := imagefs.Convert(t.Context(), bytes.NewReader(layer), &data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := ix.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	storePair(t.Context(), t, store, id, data.Bytes(), encoded)
+	ix, data, encoded := convertLayer(t, bytes.NewReader(layer))
+	storePair(t.Context(), t, store, id, data, encoded)
 	return ix
 }
 
@@ -178,17 +183,11 @@ func (h *fakeHost) convertLayer(t *testing.T, u images.LayerUpload) [2][]byte {
 		return [2][]byte{}
 	}
 	defer func() { _ = tarball.Close() }()
-	var data bytes.Buffer
-	ix, err := imagefs.Convert(t.Context(), tarball, &data)
-	if err != nil || string(ix.Layer) != u.DiffID {
-		t.Errorf("convert %s: %s %v", u.Blob, ix.Layer, err)
-		return [2][]byte{}
+	ix, data, encoded := convertLayer(t, tarball)
+	if string(ix.Layer) != u.DiffID {
+		t.Errorf("convert %s: %s", u.Blob, ix.Layer)
 	}
-	encoded, err := ix.Marshal()
-	if err != nil {
-		t.Error(err)
-	}
-	return [2][]byte{data.Bytes(), encoded}
+	return [2][]byte{data, encoded}
 }
 
 // report sends one completion with what the host answered to uploads.
@@ -583,16 +582,8 @@ func TestCustomerHostLayersServeOnlyTheirWorkspace(t *testing.T) {
 	// The host converts another layer for the base blob.
 	h := newFakeHost(repository)
 	h.convert = func(images.LayerUpload) ([]byte, []byte) {
-		var data bytes.Buffer
-		ix, err := imagefs.Convert(t.Context(), bytes.NewReader(layerTar(t, "other", []byte("not the base"))), &data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, err := ix.Marshal()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data.Bytes(), encoded
+		_, data, encoded := convertLayer(t, bytes.NewReader(layerTar(t, "other", []byte("not the base"))))
+		return data, encoded
 	}
 	uploads, err := h.report(t, f, platform, container, digest, named[:1])
 	if err != nil {
