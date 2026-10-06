@@ -264,18 +264,19 @@ func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*
 	}
 	start := time.Now()
 	layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, u.GetDiffId())))
-	defer span.End()
 	var l *imagefs.ConvertedFile
 	err = retryTransfer(layerCtx, func() error {
 		var err error
 		l, err = p.convertLayer(layerCtx, ref, u.GetDiffId())
 		return err
 	})
+	if err == nil {
+		span.SetAttributes(attribute.Int64("lazycloud.bytes", l.DataBytes), attribute.Int("lazycloud.files", l.Entries))
+	}
 	telemetry.Fail(span, err)
 	if err != nil {
 		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
 	}
-	span.SetAttributes(attribute.Int64("lazycloud.bytes", l.DataBytes), attribute.Int("lazycloud.files", l.Entries))
 	p.logs.add(ctx, fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
 		u.GetBlobDigest(), l.Entries, l.DataBytes>>20, time.Since(start).Round(time.Millisecond)))
 	return l, nil
@@ -331,7 +332,6 @@ func (p *layerPublish) upload(ctx context.Context, l *imagefs.ConvertedFile, u *
 	start := time.Now()
 	uploadCtx, span := telemetry.Start(ctx, "agent.upload_layer", trace.WithAttributes(
 		attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.DataBytes+int64(len(l.Index)))))
-	defer span.End()
 	etags, err := l.Upload(uploadCtx, p.c.a.http, u.GetDataPartUrls(), u.GetDataPartBytes(), u.GetIndexUrl(), retryTransfer)
 	telemetry.Fail(span, err)
 	if err != nil {
