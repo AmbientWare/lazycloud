@@ -18,7 +18,7 @@ ARG VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    for binary in server scheduler agent supervisor; do \
+    for binary in server scheduler agent supervisor snapshotter; do \
       GOOS=$TARGETOS GOARCH=$TARGETARCH go build -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION}" -o /out/$binary ./cmd/$binary || exit 1; \
     done
@@ -52,12 +52,13 @@ ARG VERSION=dev
 ARG SOURCE_DATE_EPOCH=0
 COPY --from=go /out/agent /stage/lazycloud-agent
 COPY --from=go /out/supervisor /stage/supervisor
+COPY --from=go /out/snapshotter /stage/lazycloud-snapshotter
 COPY --from=geesefs /src/bin/geesefs /stage/geesefs
 COPY --from=runtimes /out/runtimes /stage/runtime
 RUN mkdir -p /out/${VERSION} && \
     tar -C /stage --sort=name --mtime=@${SOURCE_DATE_EPOCH} --owner=0 --group=0 --numeric-owner \
       --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
-      -cf - lazycloud-agent supervisor runtime geesefs | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
+      -cf - lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
 
 # The server serves the agent archive of its own version at /install/agent;
 # the chart's post-sync Job publishes it as the hosts' target release.
@@ -97,14 +98,15 @@ COPY --from=web-build /src/web/dist/client /usr/share/nginx/html
 EXPOSE 8080
 
 # The agent's release bundle. Hosts install /opt/lazycloud from it; the agent
-# finds the supervisor and GeeseFS beside its executable and the runtimes in
-# /opt/lazycloud/runtimes. It needs root and the host's Docker socket, and it
+# finds the supervisor, the snapshotter and GeeseFS beside its executable and
+# the runtimes in /opt/lazycloud/runtimes. It needs root and the host's Docker socket, and it
 # passes these paths to Docker, so a containerized agent must see them at the
 # same paths as the host.
 FROM gcr.io/distroless/static-debian13@sha256:58133991db06659feaabe0f4e97a35cebf15ef4ea08f8a4c6d2ee5f75e4aa6a0 AS agent
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="lazycloud-agent" org.opencontainers.image.version="${VERSION}"
 COPY --from=go /out/agent /out/supervisor /opt/lazycloud/bin/
+COPY --from=go /out/snapshotter /opt/lazycloud/bin/lazycloud-snapshotter
 COPY --from=geesefs /src/bin/geesefs /opt/lazycloud/bin/geesefs
 COPY --from=runtimes /out/runtimes /opt/lazycloud/runtimes
 ENTRYPOINT ["/opt/lazycloud/bin/agent"]
