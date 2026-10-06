@@ -19,6 +19,20 @@ variable "SOURCE_DATE_EPOCH" {
   default = "0"
 }
 
+# The Python versions the platform serves, with the exact release of each
+# base image. The Dockerfile's runtimes take the minors as PYTHON_VERSIONS;
+# deploy/images/python-versions.sh prints them for the workflows and
+# build-runtime.sh.
+variable "PYTHON" {
+  default = [
+    { minor = "3.10", release = "3.10.20" },
+    { minor = "3.11", release = "3.11.15" },
+    { minor = "3.12", release = "3.12.13" },
+    { minor = "3.13", release = "3.13.14" },
+    { minor = "3.14", release = "3.14.6" },
+  ]
+}
+
 group "default" {
   targets = ["server", "scheduler", "web", "agent", "python"]
 }
@@ -28,16 +42,26 @@ group "release" {
   targets = ["server", "scheduler", "web", "python"]
 }
 
+target "_labels" {
+  labels = {
+    "org.opencontainers.image.source" = "https://github.com/AmbientWare/lazycloud"
+  }
+}
+
+target "_python" {
+  args = {
+    PYTHON_VERSIONS = join(" ", [for p in PYTHON : p.minor])
+  }
+}
+
 target "_common" {
+  inherits   = ["_labels", "_python"]
   context    = "."
   dockerfile = "deploy/images/Dockerfile"
   platforms  = ["linux/amd64"]
   args = {
     VERSION           = VERSION
     SOURCE_DATE_EPOCH = SOURCE_DATE_EPOCH
-  }
-  labels = {
-    "org.opencontainers.image.source" = "https://github.com/AmbientWare/lazycloud"
   }
   output = ["type=image,rewrite-timestamp=true"]
 }
@@ -74,24 +98,14 @@ target "agent" {
 # identities stay. A Docker Engine with the containerd image store would
 # otherwise unpack the image, which rewritten timestamps rule out.
 target "python" {
-  name = "python-${replace(item.minor, ".", "")}"
-  matrix = {
-    item = [
-      { minor = "3.10", release = "3.10.20" },
-      { minor = "3.11", release = "3.11.15" },
-      { minor = "3.12", release = "3.12.13" },
-      { minor = "3.13", release = "3.13.14" },
-      { minor = "3.14", release = "3.14.6" },
-    ]
-  }
+  name      = "python-${replace(item.minor, ".", "")}"
+  matrix    = { item = PYTHON }
+  inherits  = ["_labels"]
   context   = "deploy/images/python"
   platforms = ["linux/amd64"]
   args = {
     PYTHON_VERSION    = item.release
     SOURCE_DATE_EPOCH = "0"
-  }
-  labels = {
-    "org.opencontainers.image.source" = "https://github.com/AmbientWare/lazycloud"
   }
   attest = ["type=provenance,disabled=true"]
   output = ["type=image,rewrite-timestamp=true,unpack=false"]

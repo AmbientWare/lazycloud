@@ -205,7 +205,7 @@ jobs:
       - name: Install the wheel into an empty environment
         run: |
           set -euo pipefail
-          for python in 3.10 3.11 3.12 3.13 3.14; do
+          for python in $(deploy/images/python-versions.sh); do
             uv run --isolated --no-project --python "$python" \
               --with dist/pypi/lazycloud_client-*.whl -- lazycloud --help >/dev/null
             uv run --isolated --no-project --python "$python" \

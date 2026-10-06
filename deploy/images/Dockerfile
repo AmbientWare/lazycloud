@@ -29,8 +29,8 @@ WORKDIR /src
 COPY deploy/local/fetch-geesefs.sh deploy/local/fetch-geesefs.sh
 RUN deploy/local/fetch-geesefs.sh
 
-# Managed Python runtimes 3.10 to 3.14, which the agent bind-mounts into
-# workload containers. Dependency versions come from uv.lock.
+# Managed Python runtimes of PYTHON_VERSIONS, which the agent bind-mounts
+# into workload containers. Dependency versions come from uv.lock.
 FROM --platform=$BUILDPLATFORM docker.io/library/python:3.12-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS runtimes
 COPY --from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c /uv /usr/local/bin/uv
 WORKDIR /src
@@ -38,11 +38,12 @@ COPY pyproject.toml uv.lock ./
 COPY python python
 COPY deploy/local/build-runtime.sh deploy/local/build-runtime.sh
 ARG SOURCE_DATE_EPOCH
+ARG PYTHON_VERSIONS
 # Each runtime's bytecode is compiled by its own interpreter. The pinned uv
 # release pins the managed builds it installs.
-RUN /usr/local/bin/uv python install 3.10 3.11 3.13 3.14
+RUN /usr/local/bin/uv python install ${PYTHON_VERSIONS:?}
 ENV UV=/usr/local/bin/uv UV_PYTHON_DOWNLOADS=never
-RUN --mount=type=cache,target=/root/.cache/uv deploy/local/build-runtime.sh /out/runtimes
+RUN --mount=type=cache,target=/root/.cache/uv deploy/local/build-runtime.sh /out/runtimes ${PYTHON_VERSIONS}
 
 # The agent release archive hosts install, laid out as
 # deploy/agent/build-bundle.sh lays it out, with fixed owners, order and
