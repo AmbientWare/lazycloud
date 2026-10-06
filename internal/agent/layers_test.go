@@ -188,10 +188,11 @@ func TestLayerGrantsReachTheSnapshotterBeforeThePull(t *testing.T) {
 	}
 }
 
-// TestStartupTracesReachTheServerOnceReady: a start's prefetch reaches the
+// TestStartupTracesEndWithTheFirstTask: a start's prefetch reaches the
 // snapshotter before the container runs, and a start that records its trace
-// reports what the snapshotter traced once the container is ready.
-func TestStartupTracesReachTheServerOnceReady(t *testing.T) {
+// keeps it running once ready, so a handler's imports are traced, and
+// reports what the snapshotter traced when its first task ends.
+func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
 	e := newEnv(t)
 	socket := filepath.Join(e.stateDir, "snap.sock")
 	snap := serveSnapshotter(t, socket)
@@ -215,7 +216,16 @@ func TestStartupTracesReachTheServerOnceReady(t *testing.T) {
 	if !prefetched || !tracing {
 		t.Fatalf("before the container ran the snapshotter had the prefetch %v and the trace %v", prefetched, tracing)
 	}
-	reported := s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	s.phase(t, id, ready)
+	time.Sleep(500 * time.Millisecond)
+	snap.mu.Lock()
+	_, tracing = snap.traces[id]
+	snap.mu.Unlock()
+	if !tracing {
+		t.Fatal("the trace ended when the container was ready, before its first task")
+	}
+	e.completion(e.task(id, `{"args": ["total", [1, 2]]}`))
+	reported := s.until(t, 10*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
 	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) != 2 || reported.GetTrace().GetReads()[0].GetFrame() != 7 {
 		t.Fatalf("the host reported %v", reported)
 	}
@@ -250,12 +260,12 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 	base := digest()
 
 	for _, c := range []string{"c1", "c2"} {
-		if err := l.start(t.Context(), log, c, startingWith(base, digest())); err != nil {
+		if _, err := l.start(t.Context(), log, c, startingWith(base, digest())); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, c := range []string{"c1", "c2"} {
-		if trace := l.ready(t.Context(), log, c); trace != nil {
+		if trace := l.end(t.Context(), log, c); trace != nil {
 			t.Fatalf("%s reported a trace though another start shared its base layer", c)
 		}
 	}
@@ -267,11 +277,46 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 		t.Fatal("an ended start left its prefetch or trace running")
 	}
 
-	if err := l.start(t.Context(), log, "alone", startingWith(digest())); err != nil {
+	if _, err := l.start(t.Context(), log, "alone", startingWith(digest())); err != nil {
 		t.Fatal(err)
 	}
-	if trace := l.ready(t.Context(), log, "alone"); len(trace.GetReads()) != 1 {
+	if trace := l.end(t.Context(), log, "alone"); len(trace.GetReads()) != 1 {
 		t.Fatalf("a start alone on its layers reported %v", trace)
+	}
+}
+
+// TestStartupTracesEndWithinTheWindow: a container that serves nothing
+// ends its trace and reports it a window after the trace began, and one
+// that exits first ends the wait at once and reports none.
+func TestStartupTracesEndWithinTheWindow(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "snap.sock")
+	snap := serveSnapshotter(t, socket)
+	snap.traced = []*imagefsproto.FrameRead{{Layer: 0, Frame: 1}}
+	client, err := layersource.Dial(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	l := newLayerSources(client)
+	log := slog.New(slog.DiscardHandler)
+	const window = 300 * time.Millisecond
+
+	began := time.Now()
+	if tracing, err := l.start(t.Context(), log, "idle", startingWith("sha256:"+uuid.NewString())); err != nil || !tracing {
+		t.Fatalf("the start traces %v: %v", tracing, err)
+	}
+	trace := l.await(t.Context(), log, "idle", window)
+	if waited := time.Since(began); len(trace.GetReads()) != 1 || waited < window || waited > window+5*time.Second {
+		t.Fatalf("an idle container reported %v after %s of a %s window", trace, waited, window)
+	}
+
+	if _, err := l.start(t.Context(), log, "exits", startingWith("sha256:"+uuid.NewString())); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(50*time.Millisecond, func() { l.release(context.Background(), log, "exits") })
+	began = time.Now()
+	if trace := l.await(t.Context(), log, "exits", time.Hour); trace != nil || time.Since(began) > 5*time.Second {
+		t.Fatalf("an exited container reported %v after %s", trace, time.Since(began))
 	}
 }
 
