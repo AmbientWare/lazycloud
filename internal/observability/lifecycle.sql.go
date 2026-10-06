@@ -88,7 +88,8 @@ from (
            unnest($3::timestamptz[]) as finished_at, unnest($4::bool[]) as cached
 ) s
 join containers c on c.id = $5 and c.host_id = $6
-on conflict (container_id, stage) do nothing
+on conflict (container_id, stage) do update set finished_at = excluded.finished_at
+where container_startup_stages.stage = 'conversion' and excluded.finished_at > container_startup_stages.finished_at
 `
 
 type InsertStartupStagesParams struct {
@@ -101,7 +102,10 @@ type InsertStartupStagesParams struct {
 }
 
 // Stages count only for a container assigned to the reporting host; the
-// first report of a stage wins, so restated reports change nothing.
+// first report of a stage wins, so restated reports change nothing. The
+// conversion stage, which the server stores from the container's
+// assignment, keeps its latest end, so the session that sends a start
+// extends what an earlier one stored as it ended.
 func (q *Queries) InsertStartupStages(ctx context.Context, arg InsertStartupStagesParams) error {
 	_, err := q.db.Exec(ctx, insertStartupStages,
 		arg.Stages,
