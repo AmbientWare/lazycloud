@@ -24,16 +24,12 @@ type startTrace struct {
 	record   bool
 }
 
-// traceCache holds the traces read during one sync, so the replicas of one
-// image cost one query.
-type traceCache map[traceKey]startTrace
-
-// startTrace returns the startup trace of workspace's starts of reference.
-// A start is sent without one when it cannot be read: prefetching only
-// speeds the start up.
-func (s *Server) startTrace(ctx context.Context, cache traceCache, workspace identity.WorkspaceID, reference string) startTrace {
+// startTrace returns the startup trace of workspace's starts of reference,
+// once per sync. A start is sent without one when it cannot be read:
+// prefetching only speeds the start up.
+func (s *Server) startTrace(ctx context.Context, cache *syncCache, workspace identity.WorkspaceID, reference string) startTrace {
 	key := traceKey{workspace: workspace, reference: reference}
-	if t, ok := cache[key]; ok {
+	if t, ok := cache.traces[key]; ok {
 		return t
 	}
 	reads, record, err := s.images.StartupTrace(ctx, workspace, reference)
@@ -48,7 +44,7 @@ func (s *Server) startTrace(ctx context.Context, cache traceCache, workspace ide
 			t.prefetch.Reads[n] = &hostproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
 		}
 	}
-	cache[key] = t
+	cache.traces[key] = t
 	return t
 }
 

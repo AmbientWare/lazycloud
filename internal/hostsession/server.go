@@ -50,6 +50,12 @@ type Config struct {
 	// TouchInterval is how often a session records presence and checks that
 	// it is still the host's latest session.
 	TouchInterval time.Duration
+	// LayerLifetime is how long layer grants last; LayerLifetime in
+	// production.
+	LayerLifetime time.Duration
+	// ReplicaRecheck is how often a check of a regional layer copy looks
+	// again; ReplicaRecheck in production.
+	ReplicaRecheck time.Duration
 	// Secrets resolves the secrets each start carries.
 	Secrets *secrets.Secrets
 	// ContainerAPI serves container API requests; see api.NewContainerHandler.
@@ -81,8 +87,6 @@ type Server struct {
 	config    Config
 	logger    *slog.Logger
 	tracer    trace.Tracer
-	// layerLifetime is layerLifetime; tests shorten it.
-	layerLifetime time.Duration
 
 	// lifetime ends sessions and long polls when the server shuts down.
 	lifetime context.Context //nolint:containedctx // The server's own lifetime, cancelled by Shutdown.
@@ -112,10 +116,10 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 	}
 	return &Server{
 		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger, tracer: tracer,
-		layerLifetime: layerLifetime, lifetime: lifetime, shutdown: shutdown,
+		lifetime: lifetime, shutdown: shutdown,
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
 		platform:    platformConversions{running: map[string]bool{}, slots: make(chan struct{}, maxPlatformConversions), failures: failures},
-		replicas:    replicaChecks{running: map[string]bool{}, recheck: replicaRecheck},
+		replicas:    replicaChecks{running: map[string]bool{}},
 	}
 }
 

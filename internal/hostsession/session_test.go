@@ -113,10 +113,15 @@ type harness struct {
 }
 
 // start serves the host service on a random local port against real
-// PostgreSQL.
-func start(t *testing.T) *harness {
+// PostgreSQL, its config changed by configure.
+func start(t *testing.T, configure ...func(*hostsession.Config)) *harness {
 	t.Helper()
-	return serve(t, dbtest.New(t))
+	return serveWith(t, dbtest.New(t), storagetest.Config(t), configure...)
+}
+
+// grantsLasting gives layer grants life d.
+func grantsLasting(d time.Duration) func(*hostsession.Config) {
+	return func(c *hostsession.Config) { c.LayerLifetime = d }
 }
 
 // serve serves the host service on a random local port over pool.
@@ -126,7 +131,7 @@ func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 }
 
 // serveWith serves the host service over pool and the object store cfg.
-func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
+func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure ...func(*hostsession.Config)) *harness {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp, database.ChannelImageBuild)
@@ -152,12 +157,18 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
 	im := images.NewImages(pool, e, vault, store, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate})
 	publishManagedImage(t, pool, "3.12")
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
-	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
-		TouchInterval: 100 * time.Millisecond,
-		Secrets:       vault,
-		ContainerAPI:  containerAPI,
-		Observability: obs,
-	}, logger)
+	config := hostsession.Config{
+		TouchInterval:  100 * time.Millisecond,
+		LayerLifetime:  hostsession.LayerLifetime,
+		ReplicaRecheck: hostsession.ReplicaRecheck,
+		Secrets:        vault,
+		ContainerAPI:   containerAPI,
+		Observability:  obs,
+	}
+	for _, c := range configure {
+		c(&config)
+	}
+	srv := hostsession.NewServer(c, e, store, im, listener, config, logger)
 	spans := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())))
 	g := grpc.NewServer(append(srv.ServerOptions(), grpc.StatsHandler(otelgrpc.NewServerHandler(

@@ -75,9 +75,10 @@ func (s *Server) recordStartup(ctx context.Context, host compute.HostID, report 
 
 // recordConversion stores the conversion stage of container's start if it
 // waited for its image: from the container's assignment until ended, when
-// the start was sent or failed. The stage starts at the durable assignment,
-// so a start whose wait spans sessions is stored whole by the session that
-// ends it.
+// the start was sent or failed, or the session ended. The stage starts at
+// the durable assignment and keeps its latest end, so a wait that spans
+// sessions is stored whole when the last one waits too, and up to the end
+// of the one before when the image is ready by the time the last reads it.
 func (sess *session) recordConversion(ctx context.Context, container execution.ContainerID, ended time.Time) {
 	p := sess.starts[container]
 	if p == nil || p.wait == nil || p.assigned == nil || sess.server.config.Observability == nil {
@@ -88,6 +89,20 @@ func (sess *session) recordConversion(ctx context.Context, container execution.C
 		sess.server.logger.WarnContext(ctx, "recording the conversion stage failed", "container_id", container.String(), "error", err)
 	}
 }
+
+// recordWaits stores the conversion stage so far of each start still
+// waiting for its image as the session ends.
+func (sess *session) recordWaits(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordWaitsTimeout)
+	defer cancel()
+	ended := time.Now()
+	for container := range sess.starts {
+		sess.recordConversion(ctx, container, ended)
+	}
+}
+
+// recordWaitsTimeout bounds the writes of recordWaits.
+const recordWaitsTimeout = 5 * time.Second
 
 func stageKind(k hostproto.StartupStageKind) (observability.StartupStageKind, bool) {
 	switch k {
