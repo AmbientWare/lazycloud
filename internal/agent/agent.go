@@ -70,6 +70,14 @@ const containerdSocket = "/run/containerd/containerd.sock"
 // dockerWait bounds how long the preflight waits for Docker to answer.
 const dockerWait = 30 * time.Second
 
+// StopTimeout is how long the agent has to exit once told to stop: its
+// service unit kills it after that. Outcome calls in flight at the stop get
+// drainTimeout of it, which leaves the rest for shutdown and telemetry.
+const (
+	StopTimeout  = 30 * time.Second
+	drainTimeout = StopTimeout - 10*time.Second
+)
+
 // exitRetention is how long an exited container's report stays in every
 // Hello, so a server that missed it learns the exit after reconnecting.
 const exitRetention = 10 * time.Minute
@@ -115,9 +123,6 @@ type Config struct {
 	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
 	// buckets; empty means the host mounts no volumes.
 	GeeseFSPath string
-	// Snapshotter is the socket the snapshotter serves LayerSources on. A
-	// host without one cannot start containers of images with layer grants.
-	Snapshotter string
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
@@ -161,7 +166,7 @@ type Agent struct {
 	// sent them.
 	platform *platformImages
 	volumes  *volumes
-	// layers hands layer grants to the snapshotter; nil without one.
+	// layers hands layer grants to the snapshotter.
 	layers *layerSources
 	// diskQuota is whether Docker enforces writable layer limits here.
 	diskQuota bool
@@ -205,6 +210,9 @@ type Agent struct {
 	// work tracks every goroutine the agent starts; Run waits for them.
 	work sync.WaitGroup
 	ctx  context.Context
+	// drain ends drainTimeout after ctx, and with it the outcome calls in
+	// flight.
+	drain context.Context
 	// restart ends Run with a cause, as after installing an update.
 	restart func(error)
 
@@ -272,7 +280,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	offered := resolveOffer(machine, cfg.Limits)
-	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker), snapshotterCheck(ctx, docker, cfg.Snapshotter)}, offered.checks...)
+	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker), snapshotterCheck(ctx, docker)}, offered.checks...)
 	var metadata *imds.Client
 	if cfg.IMDSEndpoint != "" {
 		metadata = newIMDS(cfg.IMDSEndpoint)
@@ -313,6 +321,10 @@ func Run(ctx context.Context, cfg Config) error {
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	drain, endDrain := context.WithCancel(context.WithoutCancel(ctx))
+	defer endDrain()
+	drainAfterStop := context.AfterFunc(ctx, func() { time.AfterFunc(drainTimeout, endDrain) })
+	defer drainAfterStop()
 	httpClient := &http.Client{}
 	a := &Agent{
 		cfg:             cfg,
@@ -340,6 +352,7 @@ func Run(ctx context.Context, cfg Config) error {
 		reserveSlot:     make(chan struct{}, 1),
 		sleep:           attempt,
 		ctx:             ctx,
+		drain:           drain,
 		restart:         cancel,
 		containers:      make(map[string]*container),
 		releaseNow:      make(chan struct{}, 1),
@@ -349,14 +362,12 @@ func Run(ctx context.Context, cfg Config) error {
 		operations:      make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
-	if cfg.Snapshotter != "" {
-		client, err := layersource.Dial(cfg.Snapshotter)
-		if err != nil {
-			return err //nolint:wrapcheck // The client names the call.
-		}
-		defer func() { _ = client.Close() }()
-		a.layers = newLayerSources(client)
+	snapshotter, err := layersource.Dial(layersource.Socket)
+	if err != nil {
+		return err //nolint:wrapcheck // The client names the call.
 	}
+	defer func() { _ = snapshotter.Close() }()
+	a.layers = newLayerSources(snapshotter)
 	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
 	if a.diskErr = a.diskEngine.Check(); a.diskErr != nil {
 		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
@@ -395,9 +406,7 @@ func Run(ctx context.Context, cfg Config) error {
 		a.goOwned(a.watchInterruptions)
 	}
 	a.goOwned(a.pruneExited)
-	if a.layers != nil {
-		a.goOwned(func(ctx context.Context) { a.layers.refreshLoop(ctx, a) })
-	}
+	a.goOwned(func(ctx context.Context) { a.layers.refreshLoop(ctx, a.log) })
 	data := &dataLink{a: a, client: hostproto.NewHostDataClient(traffic)}
 	a.goOwned(data.run)
 	a.goOwned(a.sampleUsage)
@@ -447,7 +456,8 @@ func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.Prefligh
 
 // snapshotterCheck fails unless the host's snapshotter serves its socket
 // and Docker stores images on it: every image a host runs is read lazily.
-func snapshotterCheck(ctx context.Context, docker *client.Client, socket string) *hostproto.PreflightCheck {
+func snapshotterCheck(ctx context.Context, docker *client.Client) *hostproto.PreflightCheck {
+	const socket = layersource.Socket
 	const remediation = "run lazycloud-agent install-service as root, which installs lazycloud-snapshotter and sets Docker's storage driver"
 	if info, err := os.Stat(socket); err != nil || info.Mode()&os.ModeSocket == 0 {
 		return check("snapshotter", false, "lazycloud-snapshotter is not serving "+socket, remediation)
@@ -618,8 +628,6 @@ func sleep(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
-
-var errStopped = errors.New("container stopped")
 
 // Errors that end Run for good: restarting the agent cannot fix them, so its
 // service does not restart it.

@@ -161,12 +161,15 @@ func newForwardingAgent(t *testing.T) (*dataServer, *container) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	layers, _ := testLayerSources(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
 		cfg:        Config{StateDir: dir, SocketDir: filepath.Join(dir, "s")},
 		log:        slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		host:       hostproto.NewHostServiceClient(conn),
+		layers:     layers,
 		ctx:        ctx,
+		drain:      ctx,
 		containers: map[string]*container{},
 	}
 	c := a.newContainer(uuid.NewString(), "", 1, nil, hostproto.ContainerPhase_CONTAINER_PHASE_READY)

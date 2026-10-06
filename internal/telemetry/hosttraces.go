@@ -24,9 +24,9 @@ import (
 const HostTraceSocket = "/run/lazycloud-traces.sock"
 
 const (
-	// maxHostTraceBytes bounds one batch a host sends; an exporter batch
+	// MaxHostTraceBytes bounds one batch a host sends; an exporter batch
 	// holds at most 512 spans.
-	maxHostTraceBytes = 4 << 20
+	MaxHostTraceBytes = 4 << 20
 	// hostSpansPerSecond and hostSpanBurst bound the spans each host may
 	// send. A start records a few dozen.
 	hostSpansPerSecond = 200
@@ -162,7 +162,7 @@ func (h *HostTraces) Run(ctx context.Context) error {
 // backend reads as identity or AWS metadata; and both name host. It returns
 // the span count, and false for a batch that is malformed or too large.
 func hostRequest(host string, otlp []byte) (*collector.ExportTraceServiceRequest, int, bool) {
-	if len(otlp) > maxHostTraceBytes {
+	if len(otlp) > MaxHostTraceBytes {
 		return nil, 0, false
 	}
 	var request collector.ExportTraceServiceRequest

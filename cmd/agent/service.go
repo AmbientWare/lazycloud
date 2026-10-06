@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
 )
@@ -160,7 +162,7 @@ func renderUnit(root, state, wrapper string, args []string) string {
 		"RestartPreventExitStatus=78",
 		"RestartSec=15",
 		"KillSignal=SIGINT",
-		"TimeoutStopSec=30",
+		"TimeoutStopSec=" + strconv.Itoa(int(agent.StopTimeout/time.Second)),
 		"LimitNOFILE=1048576",
 		// Containers get every core. On a joined machine Docker puts them
 		// beside the agent in system.slice, each weighing about 40 per

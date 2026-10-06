@@ -55,7 +55,7 @@ type container struct {
 	// runtime is how the supervisor runs the slots: in one process, with
 	// which hooks, and which environment variables hold secrets.
 	runtime containerRuntime
-	logs    *logBatcher
+	logs    *logBatcher[*hostproto.LogLine]
 	// http is set for HTTP workloads, whose slots serve requests forwarded
 	// over the data connection instead of claiming tasks.
 	http *hostproto.HttpServing
@@ -88,6 +88,10 @@ type container struct {
 	// gone is closed once the Docker container is observed to have exited.
 	gone        chan struct{}
 	completions sync.WaitGroup
+	// firstServed is closed by served when the container's first task,
+	// request or pod command ends, which ends its startup trace.
+	firstServed chan struct{}
+	served      func()
 
 	mu       sync.Mutex
 	phase    hostproto.ContainerPhase
@@ -155,6 +159,8 @@ func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostpro
 		apiCalls:   make(chan struct{}, maxContainerAPICalls),
 		detached:   make(chan struct{}, 1),
 	}
+	c.firstServed = make(chan struct{})
+	c.served = sync.OnceFunc(func() { close(c.firstServed) })
 	if httpServing != nil {
 		c.requests = socketTransport(filepath.Join(c.linkDir(), httpSocketName))
 	}
@@ -163,7 +169,7 @@ func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostpro
 	c.ports = portTransport(control)
 	c.work, c.cancelWork = context.WithCancel(a.ctx)
 	c.claims, c.cancelClaims = context.WithCancel(c.work)
-	c.logs = newLogBatcher(id, a.host, c.log)
+	c.logs = containerLogs(a.host, id, c.log)
 	if phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
 		c.cancelWork()
 		close(c.gone)
@@ -337,7 +343,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 	if tracing {
 		c.a.goOwned(func(ctx context.Context) {
-			if trace := c.a.layers.await(ctx, c.log, c.id, traceWindow); trace != nil {
+			if trace := c.a.layers.await(ctx, c.log, c.id, c.firstServed); trace != nil {
 				c.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: c.id, Trace: trace}}})
 			}
 		})
@@ -596,9 +602,7 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 		span.SetStatus(otelcodes.Error, telemetry.Redact("exited before it was ready: "+exit.GetMessage()))
 		span.End()
 	}
-	if c.a.layers != nil {
-		c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })
-	}
+	c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })
 	c.cancelWork()
 	if l != nil {
 		l.close(0)
@@ -772,7 +776,7 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		// Output outside an attempt, such as import-time prints and HTTP
 		// requests, goes to the container's own log.
 		o := body.Output
-		_ = c.logs.append(ctx, &hostproto.LogLine{
+		c.logs.append(ctx, &hostproto.LogLine{
 			AttemptId: o.GetAttemptId(), RequestId: o.GetRequestId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime(),
 		})
 	default:
@@ -820,7 +824,8 @@ func (c *container) onReady(ctx context.Context, ready *hostproto.SlotsReady) {
 	created := c.created
 	c.mu.Unlock()
 	if span != nil {
-		telemetry.Record(trace.ContextWithSpan(ctx, span), "agent.runtime", created)
+		_, runtime := telemetry.Start(trace.ContextWithSpan(ctx, span), "agent.runtime", trace.WithTimestamp(created))
+		runtime.End()
 		span.End()
 	}
 	c.signalSlotFree()
@@ -961,7 +966,7 @@ func (c *container) onFinished(finished *hostproto.AttemptFinished) {
 	}
 	c.completing[attempt] = struct{}{}
 	c.mu.Unlock()
-	c.a.layers.served(c.id)
+	c.served()
 	seq := c.logs.mark()
 	c.completions.Add(1)
 	c.a.goOwned(func(context.Context) {
@@ -993,23 +998,36 @@ func (c *container) complete(ctx context.Context, seq uint64, finished *hostprot
 	}
 	ctx, span := c.attemptSpan(ctx, finished.GetAttemptId())
 	defer span.End()
+	deliverOutcome(ctx, c.a.drain, c.log.With("attempt_id", finished.GetAttemptId()), "task", completeCallTimeout, func(ctx context.Context) error {
+		_, err := c.a.host.CompleteTask(ctx, request)
+		return err //nolint:wrapcheck // deliverOutcome reads the call's status.
+	})
+}
+
+// deliverOutcome calls send until the server takes the outcome or refuses
+// it, retrying transient failures with backoff until ctx ends. Calls run
+// until timeout or until ends, which may be later than ctx: with the
+// agent's drain as until, the call in flight when the container or agent
+// stops still lands, and a stop during a backoff leaves one last call.
+func deliverOutcome(ctx, until context.Context, log *slog.Logger, what string, timeout time.Duration, send func(context.Context) error) {
 	delay := 100 * time.Millisecond
-	for {
-		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeCallTimeout)
-		_, err := c.a.host.CompleteTask(callCtx, request)
+	for until.Err() == nil {
+		call, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		stop := context.AfterFunc(until, cancel)
+		err := send(call)
+		stop()
 		cancel()
 		switch {
 		case err == nil:
 			return
 		case status.Code(err) == codes.FailedPrecondition:
-			c.log.Info("discarding stale attempt outcome", "attempt_id", finished.GetAttemptId())
+			log.Info("the server no longer wants this outcome", "outcome", what, "error", err)
 			return
 		case !retryable(err) || ctx.Err() != nil:
-			c.log.Error("completing attempt failed", "attempt_id", finished.GetAttemptId(), "error", err)
+			log.Error("delivering an outcome failed", "outcome", what, "error", err)
 			return
 		}
-		c.log.Warn("completing attempt failed; retrying", "attempt_id", finished.GetAttemptId(), "error", err, "retry_in", delay)
-		// A stop during the wait leaves one last call.
+		log.Warn("delivering an outcome failed; retrying", "outcome", what, "error", err, "retry_in", delay)
 		sleep(ctx, delay)
 		delay = min(2*delay, maxCompleteBackoff)
 	}

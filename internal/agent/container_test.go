@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
@@ -32,12 +35,16 @@ func newTestContainer(t *testing.T, server *hostServer) *container {
 	if err != nil {
 		t.Fatal(err)
 	}
+	layers, _ := testLayerSources(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
-		cfg:  Config{StateDir: dir, SocketDir: filepath.Join(dir, "s")},
-		log:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		host: hostproto.NewHostServiceClient(conn),
-		ctx:  ctx,
+		cfg:    Config{StateDir: dir, SocketDir: filepath.Join(dir, "s")},
+		log:    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		host:   hostproto.NewHostServiceClient(conn),
+		http:   http.DefaultClient,
+		layers: layers,
+		ctx:    ctx,
+		drain:  ctx,
 	}
 	t.Cleanup(func() {
 		cancel()
@@ -90,6 +97,56 @@ func TestCompletionOutlastsAServerOutage(t *testing.T) {
 		t.Fatal("outcome was not delivered after the outage")
 	}
 	t.Logf("delivered %s after a %s outage", time.Since(began), outage)
+}
+
+// An outcome call in flight when the agent stops keeps going, so the
+// outcome still lands, until the drain ends it, so the agent exits inside
+// its stop timeout; an outcome whose window ends makes no call past it.
+func TestOutcomeCallsEndWithTheirBound(t *testing.T) {
+	calls := 0
+	deliver := func(ctx, until context.Context) chan struct{} {
+		calling, delivered := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(delivered)
+			deliverOutcome(ctx, until, slog.New(slog.DiscardHandler), "task", time.Hour, func(ctx context.Context) error {
+				if calls++; calls == 1 {
+					close(calling)
+				}
+				<-ctx.Done()
+				return status.Error(codes.Unavailable, ctx.Err().Error())
+			})
+		}()
+		<-calling
+		return delivered
+	}
+	ended := func(delivered chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the outcome call outlived %s", what)
+		}
+	}
+
+	stopped, stop := context.WithCancel(t.Context())
+	drain, endDrain := context.WithCancel(t.Context())
+	delivered := deliver(stopped, drain)
+	stop()
+	select {
+	case <-delivered:
+		t.Fatal("the agent's stop cut the outcome call in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+	endDrain()
+	ended(delivered, "the drain")
+
+	calls = 0
+	window, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	ended(deliver(window, window), "its window")
+	if calls != 1 {
+		t.Fatalf("an outcome made %d calls in a window one call outlasted", calls)
+	}
 }
 
 // The supervisor is untrusted: an outcome counts once, and only for an

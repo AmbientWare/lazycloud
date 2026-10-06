@@ -3,38 +3,67 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 
-	collector "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/grpc/mem"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// maxTraceBatchBytes bounds one batch the receiver takes, as the server
-// bounds what it forwards.
-const maxTraceBatchBytes = 4 << 20
-
-// traceReceiver takes OTLP spans from the agent's own exporter and the
-// snapshotter's, and sends each batch to the server over the session while
-// its queue has room. Batches that arrive with no session open are dropped,
-// since spans only explain latency.
-type traceReceiver struct {
-	collector.UnimplementedTraceServiceServer
-	a *Agent
-}
-
-func (r traceReceiver) Export(_ context.Context, request *collector.ExportTraceServiceRequest) (*collector.ExportTraceServiceResponse, error) {
-	raw, err := proto.Marshal(request)
-	if err == nil {
-		r.a.reportIfRoom(&hostproto.HostMessage{Body: &hostproto.HostMessage_Traces{Traces: &hostproto.Traces{Otlp: raw}}})
+// traceService takes OTLP span batches from the agent's own exporter and
+// the snapshotter's, and sends each to the server over the session while
+// its queue has room. A batch travels as the bytes that arrived: the server
+// decodes, bounds and rewrites every batch a host sends. Batches that
+// arrive with no session open are dropped, since spans only explain
+// latency.
+func traceService() *grpc.ServiceDesc {
+	return &grpc.ServiceDesc{
+		ServiceName: "opentelemetry.proto.collector.trace.v1.TraceService",
+		HandlerType: (*any)(nil),
+		Methods: []grpc.MethodDesc{{
+			MethodName: "Export",
+			Handler: func(srv any, _ context.Context, decode func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				var batch []byte
+				if err := decode(&batch); err != nil {
+					return nil, err
+				}
+				if a, ok := srv.(*Agent); ok {
+					a.reportIfRoom(&hostproto.HostMessage{Body: &hostproto.HostMessage_Traces{Traces: &hostproto.Traces{Otlp: batch}}})
+				}
+				// The empty bytes are an empty ExportTraceServiceResponse.
+				return []byte(nil), nil
+			},
+		}},
 	}
-	return &collector.ExportTraceServiceResponse{}, nil
 }
 
-// serveTraces serves the receiver on cfg.TraceSocket until ctx ends. A
+// rawCodec passes messages through as their encoded bytes.
+type rawCodec struct{}
+
+func (rawCodec) Marshal(v any) (mem.BufferSlice, error) {
+	b, ok := v.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("trace socket: cannot send %T", v)
+	}
+	return mem.BufferSlice{mem.SliceBuffer(b)}, nil
+}
+
+func (rawCodec) Unmarshal(data mem.BufferSlice, v any) error {
+	b, ok := v.(*[]byte)
+	if !ok {
+		return fmt.Errorf("trace socket: cannot decode into %T", v)
+	}
+	*b = data.Materialize()
+	return nil
+}
+
+func (rawCodec) Name() string { return "proto" }
+
+// serveTraces serves traceService on cfg.TraceSocket until ctx ends. A
 // socket that cannot be served is logged; the host runs without traces.
 func (a *Agent) serveTraces(ctx context.Context) {
 	socket := a.cfg.TraceSocket
@@ -52,8 +81,8 @@ func (a *Agent) serveTraces(ctx context.Context) {
 		a.log.Warn("restricting the trace socket failed", "socket", socket, "error", err)
 		return
 	}
-	server := grpc.NewServer(grpc.MaxRecvMsgSize(maxTraceBatchBytes))
-	collector.RegisterTraceServiceServer(server, traceReceiver{a: a})
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(telemetry.MaxHostTraceBytes), grpc.ForceServerCodecV2(rawCodec{}))
+	server.RegisterService(traceService(), a)
 	stop := context.AfterFunc(ctx, server.Stop)
 	defer stop()
 	if err := server.Serve(listener); err != nil && ctx.Err() == nil {
