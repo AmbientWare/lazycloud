@@ -656,3 +656,70 @@ update billing_balances set balance_nanos = 0`); err != nil {
 		t.Fatalf("%d retry containers, want 1", n)
 	}
 }
+
+// Only the newest converted managed image of each Python version and
+// architecture stays live without a release: a superseded template's copy
+// starts its grace period once its successor is converted for the same
+// architecture, and stays live on one its successor is not converted for.
+func TestOnlyTheNewestManagedImagesStayLive(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	layer := func(mirror string) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := f.pool.Exec(ctx, `
+with layer as (insert into image_layers (id, blob_digest, diff_id, frames) values ($1, $2, $2, 0) returning id)
+insert into image_reference_layers (reference, position, layer_id) select $3, 0, id from layer`,
+			id, "sha256:"+strings.Repeat(strings.ReplaceAll(id.String(), "-", ""), 2), mirror); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	if _, err := f.pool.Exec(ctx, `
+insert into managed_images (python_version, template, source, created_at)
+values ('3.12', 'old/{version}', 'old-source', now() - interval '1 hour'), ('3.12', 'new/{version}', 'new-source', now());
+insert into platform_images (reference, architecture, mirror)
+values ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'),
+       ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
+		t.Fatal(err)
+	}
+	superseded, live, onlyArm := layer("old-amd64"), layer("new-amd64"), layer("old-arm64")
+	if err := f.images.SweepLayers(ctx, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null and id = $1", superseded); n != 1 {
+		t.Fatal("a superseded managed image stayed live")
+	}
+	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is null and id = any($1)", []uuid.UUID{live, onlyArm}); n != 2 {
+		t.Fatal("the newest managed image of an architecture started its grace period")
+	}
+}
+
+// Adopting a mirror's layers for a reference takes them out of their grace
+// period in the same transaction, so a sweep that marked them before the
+// adoption cannot retire them after it.
+func TestAdoptedLayersLeaveTheirGracePeriod(t *testing.T) {
+	f := newFixture(t)
+	ws := f.workspace(t, "a")
+	host := f.host(t)
+	r, err := f.images.Resolve(t.Context(), ws, numpy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:adopt")
+	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); !errors.Is(err, images.ErrNotReady) {
+		t.Fatalf("want a wait, got %v", err)
+	}
+	repository := f.imageRepository(t, mirrorOf(t, f))
+	f.publish(t, host, placeAndStart(t, f, host), repository, pushImage(t, repository+":mirror", pullImage(t, reference)))
+	if _, err := f.pool.Exec(t.Context(), "update image_layers set unreferenced_since = now() - interval '25 hours'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, `select count(*) from image_layers l join image_reference_layers r on r.layer_id = l.id
+		where r.reference = $1 and l.unreferenced_since is not null`, reference); n != 0 {
+		t.Fatalf("%d adopted layers are still in their grace period", n)
+	}
+}
