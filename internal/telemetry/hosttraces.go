@@ -118,11 +118,6 @@ func (h *HostTraces) Offer(host string, otlp []byte) {
 func (h *HostTraces) take(host string, spans int, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for id, b := range h.buckets {
-		if now.Sub(b.last) > hostBucketIdle {
-			delete(h.buckets, id)
-		}
-	}
 	b := h.buckets[host]
 	if b == nil {
 		b = &spanBucket{tokens: hostSpanBurst, last: now}
@@ -137,16 +132,32 @@ func (h *HostTraces) take(host string, spans int, now time.Time) bool {
 	return true
 }
 
-// Run forwards queued batches until ctx ends, then closes the connection.
+// sweep drops the budgets of hosts idle past hostBucketIdle.
+func (h *HostTraces) sweep(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, b := range h.buckets {
+		if now.Sub(b.last) > hostBucketIdle {
+			delete(h.buckets, id)
+		}
+	}
+}
+
+// Run forwards queued batches and sweeps idle budgets until ctx ends, then
+// closes the connection.
 func (h *HostTraces) Run(ctx context.Context) error {
 	if h == nil {
 		return nil
 	}
 	defer func() { _ = h.conn.Close() }()
+	idle := time.NewTicker(hostBucketIdle)
+	defer idle.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case now := <-idle.C:
+			h.sweep(now)
 		case request := <-h.queue:
 			call, cancel := context.WithTimeout(ctx, hostTraceTimeout)
 			_, err := h.client.Export(call, request)
