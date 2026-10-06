@@ -126,10 +126,11 @@ data "aws_iam_policy_document" "control_plane" {
     resources = ["*"]
   }
 
+  # The Python bases are read to pin and convert them.
   statement {
     sid       = "ReadWorkloadImages"
     actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
-    resources = [local.workload_arn]
+    resources = [local.workload_arn, local.core.release_repositories["python"]]
   }
 
   # The server copies the images agents run on their own (the builder, the
@@ -289,6 +290,12 @@ resource "aws_iam_role_policy" "registry_hosts" {
           "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
         ]
         Resource = local.workload_arn
+      },
+      {
+        # Builds without a base of their own start from the Python bases.
+        Effect   = "Allow"
+        Action   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        Resource = local.core.release_repositories["python"]
       },
     ]
   })
