@@ -209,11 +209,13 @@ func (s *Server) authenticateStream(srv any, ss grpc.ServerStream, _ *grpc.Strea
 	return handler(srv, authenticatedStream{ServerStream: ss, ctx: ctx})
 }
 
-// grpcError maps owner errors to status codes. Unexpected errors are logged
-// and reported without detail.
+// grpcError maps owner errors to status codes, and nil to nil. Unexpected
+// errors are logged and reported without detail.
 func (s *Server) grpcError(ctx context.Context, err error) error {
 	var refused *compute.IdentityError
 	switch {
+	case err == nil:
+		return nil
 	case errors.Is(err, compute.ErrUnknownHost):
 		return status.Error(codes.Unauthenticated, "unknown host")
 	case errors.Is(err, compute.ErrInvalidJoinToken):

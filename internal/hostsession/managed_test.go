@@ -10,15 +10,14 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
-	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 // A start that needs the managed image waits while another server converts
 // it, its syncs writing nothing and building nothing, and is sent with the
-// converted copy once that server records it. The wait, across the session
-// that ended during it, is the start's conversion stage from the
-// container's assignment until the start is sent.
+// converted copy once that server records it. The wait is the start's
+// conversion stage from the container's assignment: stored up to the end of
+// the session that ended during it, then until the start is sent.
 func TestStartWaitsForTheManagedImageConversion(t *testing.T) {
 	h := start(t)
 	host, ctx := h.enroll()
@@ -68,6 +67,9 @@ union all select string_agg(xmin::text, ',') from managed_images`).Scan(&v); err
 	}
 
 	endFirst()
+	if waited := h.conversionStage(ws, container, func(apitypes.LifecycleStage) bool { return true }); *waited.DurationMs < 900 {
+		t.Fatalf("the ended session stored %d ms of a wait of over a second", *waited.DurationMs)
+	}
 	reopened := time.Now()
 	got = sent(open(t, ctx, h.client))
 	select {
@@ -118,32 +120,5 @@ func (h *harness) conversionStage(ws identity.WorkspaceID, container execution.C
 			h.t.Fatalf("no conversion stage: %+v", lifecycle.Stages)
 		}
 		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-// A start that waited in a session that ended keeps that wait as its
-// conversion stage when the next session finds the image converted.
-func TestAWaitThatEndedWithItsSessionIsStored(t *testing.T) {
-	h := start(t)
-	host, ctx := h.enroll()
-	recordManagedSource(t, h.pool, "3.11")
-	h.exec(`insert into platform_images (reference, architecture, lease_token, leased_until)
-		values ($1, 'amd64', gen_random_uuid(), now() + interval '1 hour')`, managedSource("3.11"))
-	ws, container := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.11"}}`)
-	first, endFirst := context.WithCancel(ctx)
-	defer endFirst()
-	open(t, first, h.client)
-	time.Sleep(time.Second)
-	endFirst()
-	waited := h.conversionStage(ws, container, func(apitypes.LifecycleStage) bool { return true })
-	if *waited.DurationMs < 900 {
-		t.Fatalf("the stored wait lasted %d ms of over a second", *waited.DurationMs)
-	}
-
-	convertManagedImage(t, h.pool, "3.11")
-	in := commands(t, open(t, ctx, h.client))
-	next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart().GetContainerId() == container.String() })
-	if stage := h.conversionStage(ws, container, func(apitypes.LifecycleStage) bool { return true }); *stage.DurationMs != *waited.DurationMs {
-		t.Fatalf("the stage changed from %d ms to %d ms though the next session did not wait", *waited.DurationMs, *stage.DurationMs)
 	}
 }

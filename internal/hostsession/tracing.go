@@ -9,14 +9,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // pendingStart is the span of one container's start on this session, from
 // the first sync that derived it to the start sent, in the container's
 // trace. A start that waits for its image keeps the span open across syncs,
-// with a wait span open until the image is ready. Only the session goroutine
-// uses it.
+// with a wait span open until it ends. Only the session goroutine uses it.
 type pendingStart struct {
 	span trace.Span
 	// assigned is when placement gave the container this host.
@@ -45,12 +45,8 @@ func (sess *session) startContext(ctx context.Context, start execution.StartComm
 // began it.
 func (sess *session) waiting(ctx context.Context, container execution.ContainerID, kind, traceparent string) {
 	p := sess.starts[container]
-	if p == nil {
-		return
-	}
 	if p.wait == nil {
-		_, p.wait = sess.server.tracer.Start(trace.ContextWithSpan(ctx, p.span), "hostsession.image_wait",
-			trace.WithAttributes(attribute.String("lazycloud.wait", kind)))
+		_, p.wait = sess.server.tracer.Start(ctx, "hostsession.image_wait", trace.WithAttributes(attribute.String("lazycloud.wait", kind)))
 	}
 	work := telemetry.SpanContextOf(traceparent)
 	if work.IsValid() && !p.linked[traceparent] && work.TraceID() != p.span.SpanContext().TraceID() {
@@ -60,13 +56,23 @@ func (sess *session) waiting(ctx context.Context, container execution.ContainerI
 }
 
 // endStart ends container's start span; a non-empty failure marks it
-// failed.
-func (sess *session) endStart(container execution.ContainerID, failure string) {
+// failed. With record set, a start that waited for its image stores the
+// wait as its conversion stage, from the container's assignment until now.
+// The stage keeps its latest end, so a wait that spans sessions is stored
+// whole when the last one waits too, and up to the end of the one before
+// when the image is ready by the time the last reads it.
+func (sess *session) endStart(ctx context.Context, container execution.ContainerID, failure string, record bool) {
 	p := sess.starts[container]
 	if p == nil {
 		return
 	}
 	delete(sess.starts, container)
+	if obs := sess.server.config.Observability; record && p.wait != nil && p.assigned != nil && obs != nil {
+		stage := observability.StartupStage{Kind: observability.StageConversion, StartedAt: *p.assigned, FinishedAt: time.Now()}
+		if err := obs.RecordStartup(ctx, sess.host, container, []observability.StartupStage{stage}); err != nil {
+			sess.server.logger.WarnContext(ctx, "recording the conversion stage failed", "container_id", container.String(), "error", err)
+		}
+	}
 	if p.wait != nil {
 		p.wait.End()
 	}
@@ -76,12 +82,13 @@ func (sess *session) endStart(container execution.ContainerID, failure string) {
 	p.span.End()
 }
 
-// endStarts ends the start spans of containers no longer derived, and all
-// of them when derived is nil, as when the session ends.
-func (sess *session) endStarts(derived map[execution.ContainerID]bool) {
+// endStarts ends the starts of containers no longer derived. With derived
+// nil, as when the session ends, it ends all of them and records their
+// waits so far.
+func (sess *session) endStarts(ctx context.Context, derived map[execution.ContainerID]bool) {
 	for container := range sess.starts {
 		if !derived[container] {
-			sess.endStart(container, "")
+			sess.endStart(ctx, container, "", derived == nil)
 		}
 	}
 }

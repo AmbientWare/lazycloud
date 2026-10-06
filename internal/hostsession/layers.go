@@ -94,7 +94,7 @@ func (sess *session) refreshLayers(ctx context.Context, cache *syncCache) error 
 	if sess.layersListed && !anyDue(sess.layers, now) {
 		return nil
 	}
-	ctx, span := telemetry.StartIn(ctx, sess.server.tracer, "", "hostsession.refresh_grants", trace.WithAttributes(telemetry.Host(sess.host.String())))
+	ctx, span := telemetry.Start(ctx, "hostsession.refresh_grants", trace.WithAttributes(telemetry.Host(sess.host.String())))
 	defer span.End()
 	references, err := sess.server.execution.LiveImagesOnHost(ctx, sess.host)
 	if err != nil {
@@ -139,10 +139,10 @@ func anyDue(grants map[string]layerGrant, now time.Time) bool {
 
 // outdateUnconfirmed makes every grant that waits for a regional copy due,
 // after a confirmation in that region. It reports whether any was not due
-// already, which only a sync renews.
+// already; only those need a sync.
 func (sess *session) outdateUnconfirmed() bool {
 	now, changed := time.Now(), false
-	for _, grants := range []map[string]layerGrant{sess.layers, sess.platform.sent} {
+	for _, grants := range []map[string]layerGrant{sess.layers, sess.platform.answers} {
 		for key, g := range grants {
 			if g.unconfirmed != "" && !g.due(now) {
 				grants[key] = layerGrant{unconfirmed: g.unconfirmed}
@@ -151,19 +151,6 @@ func (sess *session) outdateUnconfirmed() bool {
 		}
 	}
 	return changed
-}
-
-// unwatchConfirmed ends the watch of confirmations once no grant waits for a
-// regional copy.
-func (sess *session) unwatchConfirmed() {
-	for _, grants := range []map[string]layerGrant{sess.layers, sess.platform.sent} {
-		for _, g := range grants {
-			if g.unconfirmed != "" {
-				return
-			}
-		}
-	}
-	sess.replicas.set(sess.server.listener)
 }
 
 const (

@@ -150,66 +150,62 @@ func (s *Server) runPlatform(key, reference, architecture, traceparent string) {
 	log(s.lifetime, msg, "image", reference, "architecture", architecture, "error", err)
 }
 
-// platformState is what a session sent for the platform images its Hello
-// named and the copies it said its containers run: the grants sent per
-// named reference or copy, and the failure sent for each named image that
-// cannot be converted. running keeps only the copies that need grants of
-// their own once the first answer showed which.
+// platformState is what a session answered for the platform images its
+// Hello named and the copies it said its containers run. answers holds,
+// per named reference or copy, when to look at it again: the renewal of
+// the grants sent or the retry of the failure sent. One not answered, such
+// as an image still converting or grants that could not be issued, is
+// due. failed holds the failure last sent per named reference. running
+// keeps only the copies that need grants of their own once the first
+// answer showed which.
 type platformState struct {
 	named   []string
 	running []string
-	sent    map[string]layerGrant
-	failed  map[string]platformFailure
+	answers map[string]layerGrant
+	failed  map[string]string
 }
 
-// platformFailure is a failure sent for a platform image and when it may
-// be converted again; zero for never.
-type platformFailure struct {
-	reason  string
-	retryAt time.Time
-}
-
-// due reports whether a named image or a copy was not answered yet, a
-// failure's retry period passed, or any grants sent are due.
 func (p *platformState) due(now time.Time) bool {
-	for _, reference := range p.named {
-		failed, isFailed := p.failed[reference]
-		_, isSent := p.sent[reference]
-		if !isSent && (!isFailed || (!failed.retryAt.IsZero() && !now.Before(failed.retryAt))) {
+	for _, key := range slices.Concat(p.named, p.running) {
+		if _, ok := p.answers[key]; !ok {
 			return true
 		}
 	}
-	for _, mirror := range p.running {
-		if _, ok := p.sent[mirror]; !ok {
-			return true
-		}
-	}
-	return anyDue(p.sent, now)
+	return anyDue(p.answers, now)
 }
 
 // syncPlatform sends the platform images the host named once each is
 // converted, with grants and a pull login, and again before the grants
 // are due; and the reason of each that cannot be converted. It starts the
-// conversion of each still waiting and records in waits the wake-up of its
-// outcome. The copies the host's containers run get their grants renewed
-// the same way. It reads the images only while one is due.
-func (sess *session) syncPlatform(ctx context.Context, cache *syncCache, waits map[string]bool) error {
+// conversion of each still converting and waits for its outcome. The
+// copies the host's containers run get their grants renewed the same way,
+// under the reference each copies.
+func (sess *session) syncPlatform(ctx context.Context, cache *syncCache) error {
 	p := &sess.platform
 	now := time.Now()
 	if !p.due(now) {
 		return nil
 	}
-	ctx, span := telemetry.StartIn(ctx, sess.server.tracer, "", "hostsession.platform_images", trace.WithAttributes(telemetry.Host(sess.host.String())))
+	ctx, span := telemetry.Start(ctx, "hostsession.platform_images", trace.WithAttributes(telemetry.Host(sess.host.String())))
 	defer span.End()
 	var out []*hostproto.PlatformImage
+	fail := func(reference, reason string, retryAt time.Time) {
+		if p.failed[reference] != reason {
+			out = append(out, &hostproto.PlatformImage{Reference: reference, Failure: reason})
+		}
+		p.failed[reference] = reason
+		if retryAt.IsZero() {
+			// No conversion accepts it.
+			retryAt = now.AddDate(100, 0, 0)
+		}
+		p.answers[reference] = layerGrant{renewAt: retryAt}
+	}
 	var known []string
 	for _, reference := range p.named {
-		switch {
-		case platformimages.Known(reference):
+		if platformimages.Known(reference) {
 			known = append(known, reference)
-		case p.failed[reference].reason == "":
-			p.failed[reference] = platformFailure{reason: unknownPlatformImage}
-			out = append(out, &hostproto.PlatformImage{Reference: reference, Failure: unknownPlatformImage})
+		} else {
+			fail(reference, unknownPlatformImage, time.Time{})
 		}
 	}
 	var pulls []images.PlatformPull
@@ -223,55 +219,59 @@ func (sess *session) syncPlatform(ctx context.Context, cache *syncCache, waits m
 	if err != nil {
 		return sess.server.grpcError(ctx, err)
 	}
-	var used []string
-	waiting := false
+	// A copy that is a named image's current pull is answered under that
+	// name, and one the server never recorded gets nothing.
 	current := map[string]bool{}
 	for _, pull := range pulls {
-		if pull.Failure != "" {
-			delete(p.sent, pull.Reference)
-			if p.failed[pull.Reference].reason != pull.Failure {
-				out = append(out, &hostproto.PlatformImage{Reference: pull.Reference, Failure: pull.Failure})
-			}
-			p.failed[pull.Reference] = platformFailure{reason: pull.Failure, retryAt: pull.RetryAt}
-			continue
-		}
 		if pull.Pull != nil {
 			current[pull.Pull.Reference] = true
 		}
-		image, converting, err := sess.platformImage(ctx, cache, pull.Reference, pull, now)
-		if err != nil {
-			return err
-		}
-		if converting {
-			waiting = true
-			sess.server.convertPlatform(pull.Reference, pull.Architecture, "") //nolint:contextcheck // Conversions run under the server's lifetime.
-			continue
-		}
-		if image != nil {
-			delete(p.failed, pull.Reference)
-			used = append(used, image.GetImage())
-			out = append(out, image)
-		}
 	}
-	// A copy that is a named image's current pull is granted under that
-	// name, and one the server never recorded gets nothing.
+	named := len(pulls)
 	p.running = p.running[:0]
 	for _, c := range copies {
-		if current[c.Pull.Reference] {
-			continue
-		}
-		p.running = append(p.running, c.Pull.Reference)
-		image, _, err := sess.platformImage(ctx, cache, c.Pull.Reference, c, now)
-		if err != nil {
-			return err
-		}
-		if image != nil {
-			used = append(used, image.GetImage())
-			out = append(out, image)
+		if !current[c.Pull.Reference] {
+			p.running = append(p.running, c.Pull.Reference)
+			pulls = append(pulls, c)
 		}
 	}
-	if waiting {
-		waits[images.PlatformConverted] = true
+	var used []string
+	for n, pull := range pulls {
+		key := pull.Reference
+		if n >= named {
+			key = pull.Pull.Reference
+		}
+		if pull.Failure != "" {
+			fail(key, pull.Failure, pull.RetryAt)
+			continue
+		}
+		// A failure may be converted elsewhere before its retry.
+		if g, ok := p.answers[key]; ok && !g.due(now) && p.failed[key] == "" {
+			continue
+		}
+		var layers []*hostproto.LayerGrant
+		var grant layerGrant
+		err := images.ErrNotConverted
+		if pull.Pull != nil {
+			layers, grant, err = sess.grantLayers(ctx, cache, pull.Pull.Reference)
+		}
+		if errors.Is(err, images.ErrNotConverted) {
+			sess.server.convertPlatform(pull.Reference, pull.Architecture, "") //nolint:contextcheck // Conversions run under the server's lifetime.
+			cache.waits[images.PlatformConverted] = true
+			continue
+		}
+		if err != nil {
+			if err := sess.grantFailed(ctx, pull.Pull.Reference, err); err != nil {
+				return err
+			}
+			continue
+		}
+		p.answers[key] = grant
+		delete(p.failed, key)
+		used = append(used, pull.Pull.Reference)
+		out = append(out, &hostproto.PlatformImage{
+			Reference: pull.Reference, Image: pull.Pull.Reference, Auth: registryAuthOut(pull.Pull.Auth), Platform: pull.Pull.Platform, Layers: layers,
+		})
 	}
 	// Grants keep the copies live through the layer sweep while hosts run.
 	if err := sess.server.images.RecordUses(ctx, used); err != nil {
@@ -284,31 +284,5 @@ func (sess *session) syncPlatform(ctx context.Context, cache *syncCache, waits m
 		CommandId: "platform-images:" + now.Format(time.RFC3339Nano),
 		Body:      &hostproto.ServerMessage_PlatformImages{PlatformImages: &hostproto.PlatformImages{Images: out}},
 	}
-	if err := sess.stream.Send(msg); err != nil {
-		return err //nolint:wrapcheck // The stream's status ends the session.
-	}
-	return nil
-}
-
-// platformImage is the answer for pull, sent under key: nil while its
-// grants are not due or cannot be issued, converting while it is not
-// converted.
-func (sess *session) platformImage(ctx context.Context, cache *syncCache, key string, pull images.PlatformPull, now time.Time) (*hostproto.PlatformImage, bool, error) {
-	if g, ok := sess.platform.sent[key]; ok && !g.due(now) {
-		return nil, false, nil
-	}
-	if pull.Pull == nil {
-		return nil, true, nil
-	}
-	layers, grant, err := sess.grantLayers(ctx, cache, pull.Pull.Reference)
-	if errors.Is(err, images.ErrNotConverted) {
-		return nil, true, nil
-	}
-	if err != nil {
-		return nil, false, sess.grantFailed(ctx, pull.Pull.Reference, err)
-	}
-	sess.platform.sent[key] = grant
-	return &hostproto.PlatformImage{
-		Reference: pull.Reference, Image: pull.Pull.Reference, Auth: registryAuthOut(pull.Pull.Auth), Platform: pull.Pull.Platform, Layers: layers,
-	}, false, nil
+	return sess.stream.Send(msg) //nolint:wrapcheck // The stream's status ends the session.
 }
