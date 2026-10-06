@@ -6,7 +6,6 @@ import (
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // PassPrefix starts the name of a scheduler pass's span. A pass never
@@ -24,37 +23,32 @@ const PassPrefix = "scheduler."
 type rootSampler struct{ ratio, edge sdktrace.Sampler }
 
 func (s rootSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
-	if strings.HasPrefix(p.Name, PassPrefix) {
-		return s.drop(p)
+	return s.pick(p).ShouldSample(p)
+}
+
+func (s rootSampler) pick(p sdktrace.SamplingParameters) sdktrace.Sampler {
+	switch {
+	case strings.HasPrefix(p.Name, PassPrefix):
+		return sdktrace.NeverSample()
+	case strings.HasPrefix(p.Name, "edge"):
+		return s.edge
 	}
-	if strings.HasPrefix(p.Name, "edge") {
-		return s.edge.ShouldSample(p)
-	}
-	var method, path string
 	for _, a := range p.Attributes {
-		switch a.Key {
+		switch v := a.Value.AsString(); a.Key {
 		case semconv.RPCSystemNameKey:
-			return s.drop(p)
+			return sdktrace.NeverSample()
 		case semconv.HTTPRequestMethodKey:
-			method = a.Value.AsString()
+			if v == http.MethodGet || v == http.MethodHead {
+				return s.edge
+			}
 		case semconv.URLPathKey:
-			path = a.Value.AsString()
+			// waitTasks, the long poll for task results.
+			if strings.HasSuffix(v, "/tasks/wait") {
+				return s.edge
+			}
 		}
 	}
-	if polled(method, path) {
-		return s.edge.ShouldSample(p)
-	}
-	return s.ratio.ShouldSample(p)
-}
-
-func (rootSampler) drop(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
-	return sdktrace.SamplingResult{Decision: sdktrace.Drop, Tracestate: trace.SpanContextFromContext(p.ParentContext).TraceState()}
-}
-
-// polled reports whether an API request reads: a GET or HEAD, or waitTasks,
-// the long poll for task results.
-func polled(method, path string) bool {
-	return method == http.MethodGet || method == http.MethodHead || strings.HasSuffix(path, "/tasks/wait")
+	return s.ratio
 }
 
 func (s rootSampler) Description() string {
