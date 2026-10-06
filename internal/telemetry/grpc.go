@@ -12,13 +12,13 @@ import (
 // GRPCServerOption traces host calls and continues the trace an agent sent.
 func (t *Telemetry) GRPCServerOption() grpc.ServerOption {
 	return grpc.StatsHandler(otelgrpc.NewServerHandler(
-		otelgrpc.WithTracerProvider(t.provider), otelgrpc.WithPropagators(t.propagator)))
+		otelgrpc.WithTracerProvider(t.provider), otelgrpc.WithPropagators(propagation.TraceContext{})))
 }
 
 // GRPCDialOption traces calls to the server and sends their trace context.
 func (t *Telemetry) GRPCDialOption() grpc.DialOption {
 	return grpc.WithStatsHandler(otelgrpc.NewClientHandler(
-		otelgrpc.WithTracerProvider(t.provider), otelgrpc.WithPropagators(t.propagator)))
+		otelgrpc.WithTracerProvider(t.provider), otelgrpc.WithPropagators(propagation.TraceContext{})))
 }
 
 // TraceParentOf is the W3C traceparent of ctx's span, or "" outside a

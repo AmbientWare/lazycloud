@@ -17,7 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -47,12 +46,10 @@ type Config struct {
 	MetricsAddr string
 }
 
-// Telemetry is one binary's tracer provider, propagator and metrics.
+// Telemetry is one binary's tracer provider and metrics.
 type Telemetry struct {
-	cfg        Config
-	provider   trace.TracerProvider
-	shutdown   func(context.Context) error
-	propagator propagation.TextMapPropagator
+	cfg      Config
+	provider trace.TracerProvider
 	// Registry holds the binary's Prometheus collectors.
 	Registry *prometheus.Registry
 }
@@ -62,13 +59,7 @@ type Telemetry struct {
 func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	t := &Telemetry{
-		cfg:        cfg,
-		provider:   noop.NewTracerProvider(),
-		shutdown:   func(context.Context) error { return nil },
-		propagator: propagation.TraceContext{},
-		Registry:   registry,
-	}
+	t := &Telemetry{cfg: cfg, provider: noop.NewTracerProvider(), Registry: registry}
 	if cfg.OTLPEndpoint == "" {
 		return t, nil
 	}
@@ -85,15 +76,13 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("describe telemetry resource: %w", err)
 	}
-	provider := sdktrace.NewTracerProvider(
+	t.provider = sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(redacting{exporter}),
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(rootSampler{
 			ratio: sdktrace.TraceIDRatioBased(cfg.SampleRatio), edge: sdktrace.TraceIDRatioBased(cfg.EdgeSampleRatio),
 		})),
 	)
-	t.provider = provider
-	t.shutdown = provider.Shutdown
 	return t, nil
 }
 
@@ -104,8 +93,10 @@ func (t *Telemetry) Tracer() trace.Tracer {
 
 // Shutdown flushes buffered spans.
 func (t *Telemetry) Shutdown(ctx context.Context) error {
-	if err := t.shutdown(ctx); err != nil {
-		return fmt.Errorf("flush spans: %w", err)
+	if sdk, ok := t.provider.(*sdktrace.TracerProvider); ok {
+		if err := sdk.Shutdown(ctx); err != nil {
+			return fmt.Errorf("flush spans: %w", err)
+		}
 	}
 	return nil
 }
