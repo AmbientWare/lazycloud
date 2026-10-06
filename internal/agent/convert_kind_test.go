@@ -213,12 +213,12 @@ func TestHostErrorsAreNotLayerContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	missing := &layerPublish{dir: filepath.Join(t.TempDir(), "gone")}
-	if _, _, err := missing.convertLayer(t.Context(), ref, authn.Anonymous, diffID.String()); err == nil || errors.Is(err, errLayerContent) {
+	missing := &layerPublish{dir: filepath.Join(t.TempDir(), "gone"), auth: authn.Anonymous}
+	if _, err := missing.convertLayer(t.Context(), ref, diffID.String()); err == nil || errors.Is(err, errLayerContent) {
 		t.Fatalf("an unwritable data directory gave %v, want a host error", err)
 	}
-	mismatched := &layerPublish{dir: t.TempDir()}
-	if _, _, err := mismatched.convertLayer(t.Context(), ref, authn.Anonymous, "sha256:"+strings.Repeat("0", 64)); !errors.Is(err, errLayerContent) {
+	mismatched := &layerPublish{dir: t.TempDir(), auth: authn.Anonymous}
+	if _, err := mismatched.convertLayer(t.Context(), ref, "sha256:"+strings.Repeat("0", 64)); !errors.Is(err, errLayerContent) {
 		t.Fatalf("a layer that is not its config's diff_id gave %v, want its content refused", err)
 	}
 }
