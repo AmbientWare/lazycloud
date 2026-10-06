@@ -3,12 +3,11 @@
 // unit, which agent updates never restart: the FUSE mounts it serves die
 // with it.
 //
-//	lazycloud-snapshotter [flags]
+//	lazycloud-snapshotter
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -21,18 +20,23 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
+const (
+	// cacheBytes bounds the frame cache on disk.
+	cacheBytes = 20 << 30
+	// fetches bounds the frames read from the layer store at once.
+	fetches = 16
+	// fillBytes is the largest layer, uncompressed, fetched whole in the
+	// background once mounted.
+	fillBytes = 256 << 20
+)
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
-	set := flag.NewFlagSet("lazycloud-snapshotter", flag.ContinueOnError)
-	root := set.String("root", "/var/lib/lazycloud-snapshotter", "snapshot metadata, snapshots and the frame cache")
-	socket := set.String("socket", layersource.Socket, "Unix socket for containerd and the agent")
-	cacheBytes := set.Int64("cache-bytes", 20<<30, "bound of the frame cache on disk")
-	fetches := set.Int("fetches", 16, "frames read from the layer store at once")
-	fillBytes := set.Int64("fill-bytes", 256<<20, "largest layer, uncompressed, fetched whole in the background once mounted")
-	if err := set.Parse(args); err != nil {
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "usage: lazycloud-snapshotter")
 		return 2
 	}
 	format, err := telemetry.LogFormatFromEnv(telemetry.LogText)
@@ -63,22 +67,19 @@ func run(args []string) int {
 		return 1
 	}
 	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
-	metricsDone := make(chan error, 1)
-	go func() { metricsDone <- tel.ServeMetrics(ctx, logger) }()
+	// Every fetch slot keeps its connection to the store between frames.
+	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
+	transport.MaxIdleConnsPerHost = fetches
 	cfg := snapshotter.Config{
-		Root: *root, CacheBytes: *cacheBytes, Fetches: *fetches, FillBytes: *fillBytes,
-		HTTP: &http.Client{}, Registry: tel.Registry, Logger: logger, Tracer: tel.Tracer(),
+		Root: layersource.Root, CacheBytes: cacheBytes, Fetches: fetches, FillBytes: fillBytes,
+		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
-	err = snapshotter.Serve(ctx, cfg, *socket, func() {
-		logger.Info("serving", "socket", *socket)
+	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {
+		logger.Info("serving", "socket", layersource.Socket)
 		if err := notifyReady(); err != nil {
 			logger.Warn("telling systemd the snapshotter is ready failed", "error", err)
 		}
 	})
-	stop()
-	if metricsErr := <-metricsDone; metricsErr != nil {
-		logger.Error("metrics listener failed", "error", metricsErr)
-	}
 	if err != nil {
 		logger.Error("snapshotter failed", "error", err)
 		return 1

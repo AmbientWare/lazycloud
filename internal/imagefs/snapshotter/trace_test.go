@@ -3,7 +3,6 @@ package snapshotter
 import (
 	"archive/tar"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,9 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -28,30 +25,17 @@ import (
 // cachedLayers is a frame cache over layers in the test store, without
 // mounts.
 type cachedLayers struct {
-	frames *frameCache
+	cache  *frameCache
 	layers []*layer
 }
 
 func newCachedLayers(t *testing.T, transport http.RoundTripper, sizes ...int) cachedLayers {
 	t.Helper()
 	ts := newTestStore(t)
-	g := newGrants(time.Now)
-	m, err := newMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 256<<20, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(frames.background.Wait)
-	out := cachedLayers{frames: frames}
+	out := cachedLayers{cache: newTestCache(t, transport, 256<<20)}
 	for _, size := range sizes {
 		l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(size)}}))
-		g.put(map[imagefs.Digest]grant{l.index.Layer: {indexURL: l.grant.IndexURL, dataURL: l.grant.DataURL, expires: l.grant.ExpiresAt}})
-		url := l.grant.DataURL
-		out.layers = append(out.layers, &layer{digest: l.index.Layer, index: l.index, frames: frames,
-			data: imagefs.HTTPObject(&http.Client{Transport: transport}, func() string { return url })})
+		out.layers = append(out.layers, l.grantTo(out.cache))
 	}
 	return out
 }
@@ -62,10 +46,10 @@ func newCachedLayers(t *testing.T, transport http.RoundTripper, sizes ...int) ca
 func TestTracesRecordFirstReadsInOrder(t *testing.T) {
 	c := newCachedLayers(t, http.DefaultTransport, 3*imagefs.FrameSize, 2*imagefs.FrameSize, imagefs.FrameSize)
 	base, app, other := c.layers[0], c.layers[1], c.layers[2]
-	sources := layerSources{frames: c.frames}
+	sources := layerSources{cache: c.cache}
 	read := func(l *layer, frame int) {
 		t.Helper()
-		if err := c.frames.read(l, frame, make([]byte, 8), 0); err != nil {
+		if err := c.cache.read(l, frame, make([]byte, 8), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -95,7 +79,7 @@ func TestTracesRecordFirstReadsInOrder(t *testing.T) {
 		t.Fatalf("ending an ended trace: %v", err)
 	}
 
-	c.frames.setMounted(app, 1)
+	c.cache.mount(app.index)
 	if _, err := sources.StartTrace(t.Context(), start); err != nil {
 		t.Fatal(err)
 	}
@@ -109,42 +93,31 @@ func digestOf(c byte) imagefs.Digest {
 	return imagefs.Digest("sha256:" + strings.Repeat(string(c), 64))
 }
 
-// Traces are bounded in number and size, and ones nobody ends expire: a
-// read or an end drops them, so reads stop taking the lock.
+// Traces are bounded in number and size, and ones nobody ends expire.
 func TestTracesAreBounded(t *testing.T) {
-	layer := digestOf('0')
-	bounded := newTracer(traceLife)
+	l := &layer{digest: digestOf('0'), traced: make([]atomic.Uint32, maxTraceReads+10)}
+	layers := []imagefs.Digest{l.digest}
+	tr := &tracer{traces: map[string]*trace{}}
 	for i := range maxTraces {
-		if err := bounded.start(fmt.Sprint(i), []imagefs.Digest{layer}, true); err != nil {
+		if err := tr.start(fmt.Sprint(i), layers, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := bounded.start("one more", []imagefs.Digest{layer}, true); status.Code(err) != codes.ResourceExhausted {
+	if err := tr.start("one more", layers, true); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("trace %d started: %v", maxTraces+1, err)
 	}
-	for frame := range maxTraceReads + 10 {
-		bounded.record(layer, frame)
+	for frame := range l.traced {
+		tr.record(l, frame)
 	}
-	if got, ok := bounded.end("0"); !ok || len(got.reads) != maxTraceReads {
+	if got, ok := tr.end("0"); !ok || len(got.reads) != maxTraceReads {
 		t.Fatalf("a trace past its bound ended %v, %+v", ok, got)
 	}
-
-	const life = 200 * time.Millisecond
-	tr := newTracer(life)
-	if err := tr.start("first", []imagefs.Digest{layer}, true); err != nil {
-		t.Fatal(err)
+	tr.traces["1"].expires = time.Now()
+	if _, ok := tr.end("1"); ok {
+		t.Fatal("an expired trace ended with its reads")
 	}
-	time.Sleep(life)
-	tr.record(layer, 0)
-	if n := tr.running.Load(); n != 0 {
-		t.Fatalf("after a read %d expired traces still run", n)
-	}
-	if err := tr.start("again", []imagefs.Digest{layer}, true); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(life)
-	if _, ok := tr.end("again"); ok || tr.running.Load() != 0 {
-		t.Fatalf("an expired trace ended with its reads, or %d still run", tr.running.Load())
+	if err := tr.start("one more", layers, true); err != nil {
+		t.Fatalf("a trace in an expired one's place: %v", err)
 	}
 }
 
@@ -154,7 +127,7 @@ func TestTracesAreBounded(t *testing.T) {
 // keep it complete.
 func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
 	c := newCachedLayers(t, http.DefaultTransport)
-	sources := layerSources{grants: newGrants(time.Now), frames: c.frames}
+	sources := layerSources{cache: c.cache}
 	base, appA, appB := string(digestOf('a')), string(digestOf('b')), string(digestOf('c'))
 	grant := func(name string, layers ...string) {
 		t.Helper()
@@ -215,7 +188,7 @@ func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
 // would otherwise hold its place for its whole life.
 func TestFailedStartsNeverExhaustPrefetches(t *testing.T) {
 	c := newCachedLayers(t, http.DefaultTransport)
-	sources := layerSources{frames: c.frames}
+	sources := layerSources{cache: c.cache}
 	for i := range 3 * maxPrefetches {
 		name := fmt.Sprint("start-", i)
 		request := &imagefsproto.PrefetchRequest{Name: name, Layers: []string{string(digestOf('d'))}, Reads: []*imagefsproto.FrameRead{{}}}
@@ -227,7 +200,7 @@ func TestFailedStartsNeverExhaustPrefetches(t *testing.T) {
 		}
 	}
 	ended := make(chan struct{})
-	go func() { c.frames.background.Wait(); close(ended) }()
+	go func() { c.cache.background.Wait(); close(ended) }()
 	select {
 	case <-ended:
 	case <-time.After(time.Second):
@@ -241,7 +214,7 @@ func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
 	transport := &countingTransport{}
 	c := newCachedLayers(t, transport, 4*imagefs.FrameSize, 2*imagefs.FrameSize)
 	base, app := c.layers[0], c.layers[1]
-	sources := layerSources{frames: c.frames}
+	sources := layerSources{cache: c.cache}
 	request := &imagefsproto.PrefetchRequest{
 		Name:   "container",
 		Layers: []string{string(base.digest), string(app.digest)},
@@ -254,14 +227,14 @@ func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
 	if n := transport.requests.Load(); n != 0 {
 		t.Fatalf("a prefetch made %d requests before its layers mounted", n)
 	}
-	c.frames.setMounted(app, 1)
-	c.frames.setMounted(base, 1)
-	c.frames.background.Wait()
+	c.cache.mount(app.index)
+	c.cache.mount(base.index)
+	c.cache.background.Wait()
 	if n := transport.requests.Load(); n != 3 {
 		t.Fatalf("a prefetch of three frames made %d requests", n)
 	}
 	for _, r := range [][2]int{{1, 1}, {0, 3}, {0, 0}} {
-		if err := c.frames.read(c.layers[r[0]], r[1], make([]byte, 8), 0); err != nil {
+		if err := c.cache.read(c.layers[r[0]], r[1], make([]byte, 8), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -280,24 +253,24 @@ func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
 	held := &holdingTransport{release: make(chan struct{})}
 	c := newCachedLayers(t, held, 12*imagefs.FrameSize)
 	l := c.layers[0]
-	c.frames.setMounted(l, 1)
-	reads := make([]prefetchRead, 10)
+	l = c.cache.mount(l.index)
+	reads := make([]frameKey, 10)
 	for i := range reads {
-		reads[i] = prefetchRead{layer: l.digest, frame: i}
+		reads[i] = frameKey{layer: l.digest, frame: i}
 	}
-	if err := c.frames.prefetch("container", reads, oteltrace.SpanContext{}); err != nil {
+	if err := c.cache.prefetch("container", reads, oteltrace.SpanContext{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return held.waiting.Load() == 2 })
 	held.pass.Store(true)
-	if err := c.frames.read(l, 11, make([]byte, 8), 0); err != nil {
+	if err := c.cache.read(l, 11, make([]byte, 8), 0); err != nil {
 		t.Fatalf("a read while prefetches hold their slots: %v", err)
 	}
 	if n := held.waiting.Load(); n != 2 {
 		t.Fatalf("%d prefetch fetches in flight, want half of 4 slots", n)
 	}
 	close(held.release)
-	c.frames.background.Wait()
+	c.cache.background.Wait()
 }
 
 // holdingTransport holds requests until release closes, and lets them

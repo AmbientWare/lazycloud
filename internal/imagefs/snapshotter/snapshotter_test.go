@@ -26,7 +26,6 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots/proxy"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -125,8 +124,30 @@ type service struct {
 	root     string
 	sn       snapshots.Snapshotter
 	sources  *layersource.Client
-	registry *prometheus.Registry
+	failures *failedReads
 	stop     func()
+}
+
+// failedReads counts the container reads the snapshotter logs as failed.
+type failedReads struct{ n atomic.Int64 }
+
+func (f *failedReads) Enabled(context.Context, slog.Level) bool { return true }
+func (f *failedReads) WithAttrs([]slog.Attr) slog.Handler       { return f }
+func (f *failedReads) WithGroup(string) slog.Handler            { return f }
+
+func (f *failedReads) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == "layer read failed" {
+		f.n.Add(1)
+	}
+	return nil
+}
+
+// testConfig is a snapshotter's configuration for a test under dir.
+func testConfig(dir string, transport http.RoundTripper, logger *slog.Logger) Config {
+	return Config{
+		Root: dir, CacheBytes: 256 << 20, Fetches: 4,
+		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: noop.NewTracerProvider().Tracer(""),
+	}
 }
 
 func serve(t *testing.T, transport http.RoundTripper) *service {
@@ -145,11 +166,9 @@ func serveFilling(t *testing.T, transport http.RoundTripper, fillBytes int64) *s
 	}
 	root := t.TempDir()
 	socket := filepath.Join(root, "snapshotter.sock")
-	registry := prometheus.NewRegistry()
-	cfg := Config{
-		Root: filepath.Join(root, "state"), CacheBytes: 256 << 20, Fetches: 4, FillBytes: fillBytes,
-		HTTP: &http.Client{Transport: transport}, Registry: registry, Logger: slog.New(slog.DiscardHandler),
-	}
+	failures := &failedReads{}
+	cfg := testConfig(filepath.Join(root, "state"), transport, slog.New(failures))
+	cfg.FillBytes = fillBytes
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
 	served := make(chan error, 1)
@@ -186,7 +205,7 @@ func serveFilling(t *testing.T, transport http.RoundTripper, fillBytes int64) *s
 			t.Error(err)
 		}
 	})
-	return &service{root: cfg.Root, sn: proxy.NewSnapshotter(snapshotsapi.NewSnapshotsClient(conn), layersource.Snapshotter), sources: sources, registry: registry, stop: stop}
+	return &service{root: cfg.Root, sn: proxy.NewSnapshotter(snapshotsapi.NewSnapshotsClient(conn), layersource.Snapshotter), sources: sources, failures: failures, stop: stop}
 }
 
 // pull makes a lazy layer present as containerd's unpacker does and
@@ -417,7 +436,7 @@ func TestPullingAnUngrantedLayerFails(t *testing.T) {
 	}
 }
 
-// A read the store cannot serve reaches the container as EIO, counted,
+// A read the store cannot serve reaches the container as EIO, logged,
 // after a bounded number of attempts; it never reads as wrong or empty
 // bytes.
 func TestUnservableReadsAreIOErrors(t *testing.T) {
@@ -449,24 +468,9 @@ func TestUnservableReadsAreIOErrors(t *testing.T) {
 	if _, err := os.ReadFile(filepath.Join(dir, "b")); !errors.Is(err, syscall.EIO) {
 		t.Fatalf("a read of a deleted object returns %v", err)
 	}
-	if got := counterValue(t, s.registry, "lazycloud_snapshotter_read_failures_total"); got < 2 {
-		t.Fatalf("%v read failures counted, want at least 2", got)
+	if got := s.failures.n.Load(); got < 2 {
+		t.Fatalf("%d read failures logged, want at least 2", got)
 	}
-}
-
-func counterValue(t *testing.T, registry *prometheus.Registry, name string) float64 {
-	t.Helper()
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range families {
-		if f.GetName() == name {
-			return f.GetMetric()[0].GetCounter().GetValue()
-		}
-	}
-	t.Fatalf("no metric %s", name)
-	return 0
 }
 
 // A layer stays mounted while a view or container uses it and is unmounted
@@ -544,6 +548,40 @@ func TestContainersStackLazyLayers(t *testing.T) {
 	}
 }
 
+// A container whose layers fail to mount leaves none of them mounted.
+func TestFailedMountsLeaveNoLayerMounted(t *testing.T) {
+	ts := newTestStore(t)
+	s := serve(t, http.DefaultTransport)
+	base := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "base", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("base")}}))
+	top := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "top", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("top")}}))
+	if err := s.sources.Grant(t.Context(), "", []layersource.Grant{base.grant, top.grant}); err != nil {
+		t.Fatal(err)
+	}
+	upper := s.pull(t, top, s.pull(t, base, ""))
+	// The base mounts after the top, and its stored index no longer reads.
+	indexes, err := filepath.Glob(filepath.Join(s.root, "snapshots", "*", indexFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range indexes {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ix, err := imagefs.Unmarshal(raw); err == nil && ix.Layer == base.index.Layer {
+			if err := os.WriteFile(path, []byte("broken"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := s.sn.Prepare(t.Context(), "container", upper); err == nil {
+		t.Fatal("a container over a layer that cannot mount was prepared")
+	}
+	if got := layerMounts(t, s.root); len(got) != 0 {
+		t.Fatalf("after the failed prepare layers are mounted at %v", got)
+	}
+}
+
 func lowerDirs(m mount.Mount) []string {
 	for _, o := range m.Options {
 		if v, ok := strings.CutPrefix(o, "lowerdir="); ok {
@@ -578,30 +616,39 @@ func TestStopLeavesLayersInUseMounted(t *testing.T) {
 	}
 }
 
+// newTestCache is a frame cache in a test directory, reading through
+// transport.
+func newTestCache(t *testing.T, transport http.RoundTripper, bound int64) *frameCache {
+	t.Helper()
+	cfg := testConfig("", transport, slog.New(slog.DiscardHandler))
+	cfg.CacheBytes = bound
+	c, err := newFrameCache(t.Context(), t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.background.Wait)
+	return c
+}
+
+// grantTo grants the stored layer to c and returns an unmounted layer of it.
+func (l storedLayer) grantTo(c *frameCache) *layer {
+	c.grants.put([]grant{{layer: l.index.Layer, indexURL: l.grant.IndexURL, dataURL: l.grant.DataURL, expires: l.grant.ExpiresAt}})
+	return c.newLayer(l.index)
+}
+
 // Cancelling a fill never fails a read waiting on the frame it fetches.
 func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 	ts := newTestStore(t)
-	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)}}))
-	g := newGrants(time.Now)
-	g.put(map[imagefs.Digest]grant{l.index.Layer: {indexURL: l.grant.IndexURL, dataURL: l.grant.DataURL, expires: l.grant.ExpiresAt}})
-	m, err := newMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
-	if err != nil {
-		t.Fatal(err)
-	}
 	started, release := make(chan struct{}), make(chan struct{})
-	gate := gatedTransport{started: started, release: release}
-	ly := &layer{digest: l.index.Layer, index: l.index, frames: frames,
-		data: imagefs.HTTPObject(&http.Client{Transport: gate}, func() string { return l.grant.DataURL })}
+	c := newTestCache(t, gatedTransport{started: started, release: release}, 64<<20)
+	c.fillBytes = 64 << 20
+	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)}})).grantTo(c)
 	fillCtx, stopFill := context.WithCancel(t.Context())
 	filled := make(chan struct{})
-	go func() { frames.fill(fillCtx, ly); close(filled) }()
+	go func() { c.fillLayer(fillCtx, l); close(filled) }()
 	<-started
 	read := make(chan error, 1)
-	go func() { read <- frames.read(ly, 0, make([]byte, 16), 0) }()
+	go func() { read <- c.read(l, 0, make([]byte, 16), 0) }()
 	time.Sleep(100 * time.Millisecond)
 	stopFill()
 	time.Sleep(100 * time.Millisecond)
@@ -630,23 +677,63 @@ func (g gatedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // An eviction never deletes the file of a frame stored again since it was
 // chosen.
 func TestEvictionKeepsAFrameStoredAgain(t *testing.T) {
-	m, err := newMetrics(prometheus.NewRegistry())
-	if err != nil {
+	c := newTestCache(t, http.DefaultTransport, 64<<20)
+	k := frameKey{layer: digestOf('c'), frame: 3}
+	if err := c.write(k, []byte("frame")); err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, newGrants(time.Now), m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
-	if err != nil {
+	if err := c.remove(&cachedFrame{key: k, size: 5}); err != nil {
 		t.Fatal(err)
 	}
-	k := frameKey{layer: imagefs.Digest("sha256:" + strings.Repeat("c", 64)), frame: 3}
-	if err := frames.write(k, []byte("frame")); err != nil {
-		t.Fatal(err)
-	}
-	if err := frames.remove(k); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(frames.path(k)); err != nil {
+	if _, err := os.Stat(c.path(k)); err != nil {
 		t.Fatalf("the evicted frame stored again lost its file: %v", err)
+	}
+}
+
+// An eviction that cannot delete a frame's file keeps the frame counted, so
+// the cache never holds more on disk than it counts, and the next eviction
+// tries the frame again.
+func TestFailedEvictionsKeepTheirFramesCounted(t *testing.T) {
+	c := newTestCache(t, http.DefaultTransport, 8)
+	key := func(frame int) frameKey { return frameKey{layer: digestOf('e'), frame: frame} }
+	counted := func(step string) {
+		t.Helper()
+		c.mu.Lock()
+		used := c.used
+		c.mu.Unlock()
+		if onDisk := diskBytes(t, c.dir); used != onDisk {
+			t.Fatalf("%s the cache counts %d bytes and holds %d on disk", step, used, onDisk)
+		}
+	}
+	if err := c.write(key(0), []byte("aaaaa")); err != nil {
+		t.Fatal(err)
+	}
+	// A frame's path that holds a directory is not removed as a file.
+	stuck := c.path(key(0))
+	if err := os.Remove(stuck); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "held"), []byte("aaaaa"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.write(key(1), []byte("bbbbb")); err != nil {
+		t.Fatal(err)
+	}
+	c.evict()
+	counted("after a failed eviction")
+	if err := os.RemoveAll(stuck); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.write(key(2), []byte("ccccc")); err != nil {
+		t.Fatal(err)
+	}
+	c.evict()
+	counted("after the next eviction")
+	if c.cached(key(0)) || !c.cached(key(2)) {
+		t.Fatal("the next eviction kept the frame it failed to remove, or dropped the newest")
 	}
 }
 
@@ -654,25 +741,14 @@ func TestEvictionKeepsAFrameStoredAgain(t *testing.T) {
 func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	ts := newTestStore(t)
 	transport := &countingTransport{}
-	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(6 << 20)}}))
-	g := newGrants(time.Now)
-	g.put(map[imagefs.Digest]grant{l.index.Layer: {indexURL: l.grant.IndexURL, dataURL: l.grant.DataURL, expires: l.grant.ExpiresAt}})
-	m, err := newMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ly := &layer{digest: l.index.Layer, index: l.index, frames: frames,
-		data: imagefs.HTTPObject(&http.Client{Transport: transport}, func() string { return l.grant.DataURL })}
+	c := newTestCache(t, transport, 64<<20)
+	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(6 << 20)}})).grantTo(c)
 	var wg sync.WaitGroup
 	errs := make(chan error, 32)
 	for range 32 {
 		wg.Go(func() {
 			p := make([]byte, 4096)
-			errs <- frames.read(ly, 1, p, 100)
+			errs <- c.read(l, 1, p, 100)
 		})
 	}
 	wg.Wait()
@@ -719,32 +795,19 @@ func TestMountedLayersFillInTheBackground(t *testing.T) {
 // unmounted layer's frames before the mounted one's.
 func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	ts := newTestStore(t)
-	g := newGrants(time.Now)
-	m, err := newMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
 	const bound = 64 << 20
-	frames, err := newFrameCache(t.Context(), dir, bound, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newTestCache(t, http.DefaultTransport, bound)
 	layerOf := func(size int) *layer {
-		l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(size)}}))
-		g.put(map[imagefs.Digest]grant{l.index.Layer: {indexURL: l.grant.IndexURL, dataURL: l.grant.DataURL, expires: l.grant.ExpiresAt}})
-		url := l.grant.DataURL
-		return &layer{digest: l.index.Layer, index: l.index, frames: frames, data: imagefs.HTTPObject(http.DefaultClient, func() string { return url })}
+		return ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(size)}})).grantTo(c)
 	}
-	mounted := layerOf(8 * imagefs.FrameSize)
+	mounted := c.mount(layerOf(8 * imagefs.FrameSize).index)
 	other := layerOf(24 * imagefs.FrameSize)
-	frames.setMounted(mounted, 1)
 	readAll := func(l *layer) {
 		for i := range l.index.Frames {
-			if err := frames.read(l, i, make([]byte, 1), 0); err != nil {
+			if err := c.read(l, i, make([]byte, 1), 0); err != nil {
 				t.Fatal(err)
 			}
-			if onDisk := diskBytes(t, dir); onDisk > bound {
+			if onDisk := diskBytes(t, c.dir); onDisk > bound {
 				t.Fatalf("the cache holds %d bytes on disk, bound %d", onDisk, bound)
 			}
 		}
@@ -754,12 +817,12 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 		readAll(other)
 	}
 	for i := range mounted.index.Frames {
-		if !frames.touch(frameKey{layer: mounted.digest, frame: i}) {
+		if !c.cached(frameKey{layer: mounted.digest, frame: i}) {
 			t.Fatalf("frame %d of the mounted layer was evicted before the unmounted layer's", i)
 		}
 	}
-	if frames.used > bound {
-		t.Fatalf("the cache counts %d bytes, bound %d", frames.used, bound)
+	if c.used > bound {
+		t.Fatalf("the cache counts %d bytes, bound %d", c.used, bound)
 	}
 }
 

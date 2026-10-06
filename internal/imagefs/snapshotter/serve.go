@@ -23,7 +23,7 @@ const stopGrace = 10 * time.Second
 // containerd's snapshotter API and LayerSources, until ctx ends. ready
 // runs once the socket accepts calls.
 func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
-	s, err := New(ctx, cfg)
+	s, err := newSnapshotter(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -45,7 +45,7 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	}
 	server := grpc.NewServer()
 	snapshotsapi.RegisterSnapshotsServer(server, snapshotservice.FromSnapshotter(s))
-	imagefsproto.RegisterLayerSourcesServer(server, layerSources{grants: s.grants, frames: s.mounts.frames})
+	imagefsproto.RegisterLayerSourcesServer(server, layerSources{cache: s.cache})
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	ready()
