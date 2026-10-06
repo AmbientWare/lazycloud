@@ -1,6 +1,7 @@
 // Package platformimages names the images agents run on their own, outside
 // any workload: the image builder and the volume mount image. Agents name
-// them at session open, and the server converts only these. It has no
+// them at session open, and the server converts them, as it does the
+// managed Python images, but no other image an agent names. It has no
 // database access, so host runtime code may import it.
 package platformimages
 
