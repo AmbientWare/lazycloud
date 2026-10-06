@@ -834,7 +834,8 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	values, err := i.secrets.Resolve(ctx, identity.WorkspaceID(row.WorkspaceID), slices.Sorted(maps.Keys(versions)))
 	var missing *secrets.NotFoundError
 	if errors.As(err, &missing) {
-		if err := i.failBuild(ctx, start.Build, row.Digest, fmt.Sprintf("secret %s was deleted before the build started", missing.Name)); err != nil {
+		reason := fmt.Sprintf("secret %s was deleted before the build started", missing.Name)
+		if err := i.failBuild(ctx, start.Build, row.Digest, buildEnd{failure: reason, stop: true}); err != nil && !errors.Is(err, ErrStaleBuild) {
 			return BuildCommand{}, err
 		}
 		return BuildCommand{}, ErrStaleBuild
@@ -916,7 +917,10 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 		return nil, fmt.Errorf("read build: %w", err)
 	}
 	fail := func(reason string, transient bool) error {
-		return i.failReported(ctx, build, uuid.UUID(container), started.Digest, reason, transient)
+		if err := i.failBuild(ctx, build, started.Digest, buildEnd{failure: reason, transient: transient}); err != nil {
+			return err
+		}
+		return i.endUploads(ctx, uuid.UUID(container))
 	}
 	if outcome.Failure != "" {
 		return nil, fail(outcome.Failure, outcome.Transient)
@@ -948,18 +952,15 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 		return nil, fail(failure, false)
 	}
 	var offered []offer
-	err = i.endBuild(ctx, build, started.Digest, func(_ pgx.Tx, q *Queries, row LockBuildRow) (bool, string, error) {
+	err = i.endBuild(ctx, build, started.Digest, func(_ pgx.Tx, q *Queries, row LockBuildRow) (*buildEnd, error) {
 		var failure string
 		var err error
 		offered, failure, err = i.recordLayers(ctx, q, pushed, converted, outcome.Converted)
 		switch {
-		case err != nil:
-			return false, "", err
+		case err != nil || len(offered) > 0:
+			return nil, err
 		case failure != "":
-			offered = nil
-			return true, failure, failIn(ctx, q, build, failure, false)
-		case len(offered) > 0:
-			return false, "", nil
+			return &buildEnd{failure: failure}, nil
 		}
 		// A workspace-scoped build, or one a customer's host ran, is that
 		// workspace's image only; other workspaces that joined it build again.
@@ -971,12 +972,9 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 			err = q.PublishImage(ctx, PublishImageParams{Digest: started.Digest, Reference: &pushed.reference})
 		}
 		if err != nil {
-			return false, "", fmt.Errorf("publish image: %w", err)
+			return nil, fmt.Errorf("publish image: %w", err)
 		}
-		if err := q.SucceedBuild(ctx, build); err != nil {
-			return false, "", fmt.Errorf("finish build: %w", err)
-		}
-		return true, "", nil
+		return &buildEnd{}, nil
 	})
 	if err != nil {
 		return nil, err
@@ -987,39 +985,27 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 	return i.presignUploads(ctx, offered)
 }
 
-// failReported fails build for a reason its host reported or its pushed
-// image showed, and ends the uploads of its container. transient says the
-// reason is not the image's content.
-func (i *Images) failReported(ctx context.Context, build, container uuid.UUID, digest []byte, reason string, transient bool) error {
-	err := i.endBuild(ctx, build, digest, func(_ pgx.Tx, q *Queries, _ LockBuildRow) (bool, string, error) {
-		return true, reason, failIn(ctx, q, build, reason, transient)
-	})
-	if err != nil {
-		return err
-	}
-	return i.endUploads(ctx, container)
+// buildEnd is how a build ends: with failure, or as a success when it is
+// empty. transient says the failure is not the image's content; stop stops
+// the build's containers, which have not reported an outcome.
+type buildEnd struct {
+	failure         string
+	transient, stop bool
 }
 
-// failBuild fails a running build with reason and stops its containers. A
-// build that already finished is left as it is.
-func (i *Images) failBuild(ctx context.Context, build uuid.UUID, digest []byte, reason string) error {
-	err := i.endBuild(ctx, build, digest, func(tx pgx.Tx, q *Queries, _ LockBuildRow) (bool, string, error) {
-		return true, reason, i.stopAndFail(ctx, tx, q, build, reason, false)
-	})
-	if errors.Is(err, ErrStaleBuild) {
-		return nil
-	}
-	return err
+// failBuild ends a running build as end says. A build that already
+// finished is ErrStaleBuild.
+func (i *Images) failBuild(ctx context.Context, build uuid.UUID, digest []byte, end buildEnd) error {
+	return i.endBuild(ctx, build, digest, func(pgx.Tx, *Queries, LockBuildRow) (*buildEnd, error) { return &end, nil })
 }
 
-// endBuild runs fn on the locked image and build rows of a building build.
-// fn reports whether it ended the build, and the failure it ended it with;
-// an ended build is announced and recorded as a span in the trace that
-// asked for it. A build that already finished is ErrStaleBuild.
-func (i *Images) endBuild(ctx context.Context, build uuid.UUID, digest []byte, fn func(pgx.Tx, *Queries, LockBuildRow) (bool, string, error)) error {
+// endBuild runs fn on the locked image and build rows of a building build
+// and ends the build as fn returns, if it does. An ended build is announced
+// and recorded as a span in the trace that asked for it. A build that
+// already finished is ErrStaleBuild.
+func (i *Images) endBuild(ctx context.Context, build uuid.UUID, digest []byte, fn func(pgx.Tx, *Queries, LockBuildRow) (*buildEnd, error)) error {
 	var row LockBuildRow
-	var ended bool
-	var failure string
+	var end *buildEnd
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		// Lock order: image, then build.
@@ -1033,34 +1019,31 @@ func (i *Images) endBuild(ctx context.Context, build uuid.UUID, digest []byte, f
 		if BuildStatus(row.State) != BuildBuilding {
 			return ErrStaleBuild
 		}
-		if ended, failure, err = fn(tx, q, row); err != nil || !ended {
+		if end, err = fn(tx, q, row); err != nil || end == nil {
 			return err
+		}
+		if end.stop {
+			if err := i.execution.StopBuildContainers(ctx, tx, build); err != nil {
+				return err
+			}
+		}
+		if end.failure == "" {
+			err = q.SucceedBuild(ctx, build)
+		} else {
+			err = q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(end.failure), Transient: end.transient})
+		}
+		if err != nil {
+			return fmt.Errorf("end build: %w", err)
 		}
 		return database.Notify(ctx, tx, database.ChannelImageBuild, build.String())
 	})
 	if err != nil {
 		return fmt.Errorf("build %s: %w", build, err)
 	}
-	if ended {
-		traceBuild(ctx, row, failure)
+	if end != nil {
+		traceBuild(ctx, row, end.failure)
 	}
 	return nil
-}
-
-// failIn fails build, whose rows q's transaction locked.
-func failIn(ctx context.Context, q *Queries, build uuid.UUID, reason string, transient bool) error {
-	if err := q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(reason), Transient: transient}); err != nil {
-		return fmt.Errorf("fail build: %w", err)
-	}
-	return nil
-}
-
-// stopAndFail fails build, whose rows tx locked, and stops its containers.
-func (i *Images) stopAndFail(ctx context.Context, tx pgx.Tx, q *Queries, build uuid.UUID, reason string, transient bool) error {
-	if err := i.execution.StopBuildContainers(ctx, tx, build); err != nil {
-		return err
-	}
-	return failIn(ctx, q, build, reason, transient)
 }
 
 // LogLine is one line of build output from a host.
@@ -1159,13 +1142,13 @@ func (i *Images) Recover(ctx context.Context, logger *slog.Logger) error {
 }
 
 func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) error {
-	return i.endBuild(ctx, id, digest, func(tx pgx.Tx, q *Queries, build LockBuildRow) (bool, string, error) {
+	return i.endBuild(ctx, id, digest, func(tx pgx.Tx, q *Queries, build LockBuildRow) (*buildEnd, error) {
 		containers, err := i.execution.BuildContainers(ctx, tx, id)
 		if err != nil {
-			return false, "", err
+			return nil, err
 		}
-		fail := func(reason string, transient bool) (bool, string, error) {
-			return true, reason, i.stopAndFail(ctx, tx, q, id, reason, transient)
+		fail := func(reason string, transient bool) (*buildEnd, error) {
+			return &buildEnd{failure: reason, transient: transient, stop: true}, nil
 		}
 		// A build that ran out of time or of attempts may fail the same way
 		// every time, so its failure is the image's; one that never reached
@@ -1179,7 +1162,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		last := containers[len(containers)-1]
 		if last.State != execution.ContainerStopped {
-			return false, "", nil
+			return nil, nil
 		}
 		reason := fmt.Sprintf("build container stopped (%s)", last.StopReason)
 		if last.ExitMessage != "" {
@@ -1189,20 +1172,20 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			return fail(reason, false)
 		}
 		if err := insertLogs(ctx, tx, q, id, len(containers), []LogLine{{Data: reason + "; retrying", Time: time.Now()}}); err != nil {
-			return false, "", err
+			return nil, err
 		}
 		if err := q.ResetBuildLogCount(ctx, id); err != nil {
-			return false, "", fmt.Errorf("reset build log count: %w", err)
+			return nil, fmt.Errorf("reset build log count: %w", err)
 		}
 		// The next attempt's container joins the build's trace.
 		ctx := telemetry.WithTraceParent(ctx, deref(build.Traceparent))
 		if build.Mirror {
 			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
-			return false, "", err
+			return nil, err
 		}
 		gpu, err := q.ImageBuildGPU(ctx, digest)
 		if err != nil {
-			return false, "", fmt.Errorf("read build GPU: %w", err)
+			return nil, fmt.Errorf("read build GPU: %w", err)
 		}
 		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes, gpu)
 		var unpaid *billing.PaymentRequiredError
@@ -1211,7 +1194,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		if errors.As(err, &unpaid) || errors.As(err, &limit) || errors.As(err, &unoffered) {
 			return fail(reason+"; "+err.Error(), false)
 		}
-		return false, "", err
+		return nil, err
 	})
 }
 

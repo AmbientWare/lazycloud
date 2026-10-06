@@ -2,6 +2,7 @@ package images
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -20,7 +21,8 @@ func (i *Images) ReleaseWorkspace(ctx context.Context, workspace identity.Worksp
 		return fmt.Errorf("list running builds: %w", err)
 	}
 	for _, build := range running {
-		if err := i.failBuild(ctx, build.ID, build.ImageDigest, "the workspace that started the build was deleted"); err != nil {
+		end := buildEnd{failure: "the workspace that started the build was deleted", stop: true}
+		if err := i.failBuild(ctx, build.ID, build.ImageDigest, end); err != nil && !errors.Is(err, ErrStaleBuild) {
 			return err
 		}
 	}
