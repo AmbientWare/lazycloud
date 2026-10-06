@@ -43,4 +43,34 @@ hashes. Same outcome, implemented in the current renderer.
 
 ## Progress
 
+2026-10-06, PR #506:
+
+- `deploy/images/python/Dockerfile` and the bake `python` target (in
+  Ship's `release` group): 3.10.20, 3.11.15, 3.12.13, 3.13.14, 3.14.6,
+  tagged `<minor>-<version>` in `<release registry>/python`. Two no-cache
+  builds give the same digest. Each base: exact version, ssl (HTTPS to
+  PyPI), sqlite3, ctypes, pip install, unchecked-hash stdlib bytecode.
+  174 to 202 MB.
+- The chart sets `LAZYCLOUD_IMAGE_TEMPLATE`; the server requires it.
+  Terraform adds the `python` release repository, server read and build
+  host pull on it; Deploy checks the five tags.
+- Renderer: every pip-style step is `uv pip install --python <path>
+  --compile-bytecode` without a cache; the managed base is chosen by minor
+  version, a patch release installs over it unless the base already is it.
+  Real builds passed for the managed base, a patch release, a user Python
+  base, a base without Python, a Dockerfile, micromamba and a pyproject.
+- Torch CPU 2.9.1 + numpy, install step, no cache, two runs: uv on the
+  base 18.2 s / 14.7 s; pip on the base 22.6 s / 24.0 s; pip on
+  `python:3.12-slim` (before) 25.3 s / 26.4 s.
+
 ## Gaps and unverified boundaries
+
+- Not built on a running local stack: its fixed ports belong to the user's
+  `lazycloud-local`, so conversion reuse of the base's layers by a custom
+  image is unverified.
+- Prod needs `platform-core`, `github` and `platform-deployment` applied
+  before the Ship that first pushes the bases.
+- `acceptance/` still names `docker.io/library/python:{version}-slim` as
+  its managed template.
+- uv rejects some pip-only flags (`--prefer-binary`,
+  `--ignore-requires-python`); such steps now fail at build.
