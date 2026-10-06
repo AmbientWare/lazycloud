@@ -168,10 +168,36 @@ content store only manifests and configs (largest 5.9 kB), and the
 registry served containerd only manifests and configs; layer blobs went
 only to the server's conversion.
 
+### Managed image on the server (integration, 2026-10-06)
+
+CI acceptance timeline of the first no-image start (2 vCPU runner, the
+whole test binary under `-race`): host joins and the mirror build is
+placed at 1.2 s; the build container then waits for the server's builder
+conversion until 73.0 s (download, convert and upload of BuildKit's 122
+MB); builder start 0.4 s; BuildKit pull and push of python:3.12-slim
+0.5 s; agent conversion of its 4 layers 19.2 s; publish 0.3 s; the
+harness's 1 s poll noticed at 95.4 s. Every step is work, but the managed
+image waited for the builder although it runs no steps.
+
+The managed image is now a platform image: `ManagedSource` pins the
+template per Python version once (migration 0008, `managed_images` holds
+the source), `ConvertPlatformImage` converts it on the server per host
+architecture, and a start waits with `PlatformWaitError` on
+`PlatformConverted`, which also starts the conversion. No host, build or
+builder takes part. `Server.ConvertAtStart` converts the platform images
+and every version's managed image for amd64 and arm64 when the server
+starts, one at a time within `maxPlatformConversions`. In the same CI
+run the server converted python:3.12-slim in 38.3 s beside the builder's
+85.1 s. Acceptance clones every test's database from a template the
+suite converts once (`dbtest.NewPrepared`), with one registry: the suite
+went from 36 min 37 s (21 tests at about 100 s each) to 183 s, the first
+test 88 s and the others 3 to 14 s.
+
 ## Intentional differences
 
 - The agent's platform images come from the platform registry's copy, not
   Docker Hub.
+- The managed image is converted by the server, not by a mirror build.
 
 ## Gaps and unverified boundaries
 
