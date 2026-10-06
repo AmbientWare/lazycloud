@@ -68,7 +68,6 @@ const (
 // platform registry every test's server shares.
 var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
 
-
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
 	if err != nil {
