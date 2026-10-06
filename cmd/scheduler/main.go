@@ -395,7 +395,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: layerSweepTick}, nil, nil, every("image_layer_sweep", layerSweepTick, func(ctx context.Context) bool {
-			if _, err := im.SweepLayers(ctx, logger); err != nil && ctx.Err() == nil {
+			if err := im.SweepLayers(ctx, logger); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, "image layer sweep incomplete", "error", err)
 			}
 			return false
@@ -403,7 +403,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: buildRecoveryTick}, buildWake, nil, every("build_recovery", buildRecoveryTick, func(ctx context.Context) bool {
-			if _, err := im.Recover(ctx, logger); err != nil {
+			if err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false

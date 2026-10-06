@@ -130,34 +130,24 @@ func checkRegistryHost(host string) error {
 	return nil
 }
 
-// pinned is a reference with its digest, written registry/repository:tag@digest.
-type pinned struct {
-	registry string
-	ref      string
-}
-
-// pin resolves ref to its manifest digest. A reference that already names a
+// pin resolves ref to its manifest digest and returns it written
+// registry/repository[:tag]@digest. A reference that already names a
 // digest is checked too, so a caller cannot use an image it cannot read.
-func (r *resolver) pin(ctx context.Context, ref string, auth *Auth, insecure bool) (pinned, error) {
+func (r *resolver) pin(ctx context.Context, ref string, auth *Auth, insecure bool) (string, error) {
 	options := []name.Option{name.WeakValidation}
 	if insecure {
 		options = append(options, name.Insecure)
 	}
 	parsed, err := name.ParseReference(ref, options...)
 	if err != nil {
-		return pinned{}, invalid("image reference %q is invalid: %v", ref, err)
+		return "", invalid("image reference %q is invalid: %v", ref, err)
 	}
-	repo := parsed.Context()
-	registry := repo.RegistryStr()
-	if registry == name.DefaultRegistry {
-		registry = "docker.io"
-	}
-	display := registry + "/" + repo.RepositoryStr()
+	display := hostOf(parsed.Context()) + "/" + parsed.Context().RepositoryStr()
 	tag := ""
 	if t, ok := parsed.(name.Tag); ok {
 		tag = t.TagStr()
-	} else if _, explicit := splitTag(ref); explicit != "" {
-		tag = explicit
+	} else {
+		_, tag, _ = splitReference(ref)
 	}
 	if tag != "" {
 		display += ":" + tag
@@ -169,18 +159,18 @@ func (r *resolver) pin(ctx context.Context, ref string, auth *Auth, insecure boo
 		hit, ok := r.cache[key]
 		r.mu.Unlock()
 		if ok && time.Now().Before(hit.expires) {
-			return pinned{registry: registry, ref: display + "@" + hit.digest}, nil
+			return display + "@" + hit.digest, nil
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, registryTimeout)
 	defer cancel()
 	desc, err := remote.Head(parsed, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(r.transport))
 	if err != nil {
-		return pinned{}, registryError(display, err)
+		return "", registryError(display, err)
 	}
 	digest := desc.Digest.String()
 	if d, ok := parsed.(name.Digest); ok && d.DigestStr() != digest {
-		return pinned{}, invalid("image %s has digest %s, not %s", display, digest, d.DigestStr())
+		return "", invalid("image %s has digest %s, not %s", display, digest, d.DigestStr())
 	}
 	if auth == nil {
 		r.mu.Lock()
@@ -194,7 +184,7 @@ func (r *resolver) pin(ctx context.Context, ref string, auth *Auth, insecure boo
 		r.cache[key] = cachedDigest{digest: digest, expires: time.Now().Add(digestTTL)}
 		r.mu.Unlock()
 	}
-	return pinned{registry: registry, ref: display + "@" + digest}, nil
+	return display + "@" + digest, nil
 }
 
 // maxImageLayers is the most layers an image may have; Docker refuses to
@@ -210,11 +200,9 @@ type registryLayer struct {
 	size int64
 }
 
-// layers reads the layers of ref, an image by digest, for platform
-// (os/arch). The registry checks each blob against its digest, so the blobs
-// are the image's bytes; the diff_ids are what the config claims. An image
-// the platform cannot convert is an InvalidError saying why.
-func (r *resolver) layers(ctx context.Context, ref string, auth *Auth, insecure bool, platform string) ([]registryLayer, error) {
+// layers reads the layers of ref, an image by digest, for linux on
+// architecture.
+func (r *resolver) layers(ctx context.Context, ref string, auth *Auth, insecure bool, architecture string) ([]registryLayer, error) {
 	options := []name.Option{name.WeakValidation}
 	if insecure {
 		options = append(options, name.Insecure)
@@ -223,16 +211,21 @@ func (r *resolver) layers(ctx context.Context, ref string, auth *Auth, insecure 
 	if err != nil {
 		return nil, fmt.Errorf("image reference %q is invalid: %w", ref, err)
 	}
-	p, err := v1.ParsePlatform(platform)
-	if err != nil {
-		return nil, fmt.Errorf("platform %q is invalid: %w", platform, err)
-	}
 	ctx, cancel := context.WithTimeout(ctx, registryTimeout)
 	defer cancel()
-	img, err := remote.Image(parsed, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(r.transport), remote.WithPlatform(*p))
+	img, err := remote.Image(parsed, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(r.transport),
+		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: architecture}))
 	if err != nil {
 		return nil, fmt.Errorf("%w: read %s: %w", ErrRegistryUnavailable, ref, err)
 	}
+	return imageLayers(ref, img)
+}
+
+// imageLayers reads the layers of img, the image ref names. The registry
+// checks each blob against its digest, so the blobs are the image's bytes;
+// the diff_ids are what the config claims. An image the platform cannot
+// convert is an InvalidError saying why.
+func imageLayers(ref string, img v1.Image) ([]registryLayer, error) {
 	manifest, err := img.Manifest()
 	if err != nil {
 		return nil, fmt.Errorf("%w: read the manifest of %s: %w", ErrRegistryUnavailable, ref, err)
@@ -272,16 +265,6 @@ func untagged(ref string) string {
 	return repository + "@" + digest
 }
 
-// splitTag returns ref without @digest and the tag it names, if any.
-func splitTag(ref string) (string, string) {
-	repository, _, _ := strings.Cut(ref, "@")
-	slash := strings.LastIndex(repository, "/")
-	if colon := strings.LastIndex(repository, ":"); colon > slash {
-		return repository, repository[colon+1:]
-	}
-	return repository, ""
-}
-
 // registryHost is the registry an image reference names, docker.io for
 // Docker Hub.
 func registryHost(ref string) (string, error) {
@@ -289,11 +272,15 @@ func registryHost(ref string) (string, error) {
 	if err != nil {
 		return "", invalid("image reference %q is invalid: %v", ref, err)
 	}
-	host := parsed.Context().RegistryStr()
-	if host == name.DefaultRegistry {
-		host = "docker.io"
+	return hostOf(parsed.Context()), nil
+}
+
+// hostOf is the registry of repo, docker.io for Docker Hub.
+func hostOf(repo name.Repository) string {
+	if host := repo.RegistryStr(); host != name.DefaultRegistry {
+		return host
 	}
-	return host, nil
+	return "docker.io"
 }
 
 // ErrRegistryUnavailable means a registry could not be reached or failed.

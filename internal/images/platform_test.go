@@ -289,18 +289,17 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 	ctx := t.Context()
 	registry := hangingRegistry(t)
 	replica := func() *images.Images {
-		im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
-		images.SetPlatformLease(im, 2*time.Second)
-		return im
+		return images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
 	}
 	owner, other := replica(), replica()
+	const lease = 2 * time.Second
 	reference := registry + "/tools/builder@sha256:" + strings.Repeat("c", 64)
 	// A replica that claims the lease converts until its attempt ends, and
 	// fails; one that finds the lease held returns at once.
 	try := func() error {
 		attempt, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
-		return other.ConvertPlatformImage(attempt, reference, "amd64")
+		return images.ConvertPlatformImageLeased(attempt, other, reference, "amd64", lease)
 	}
 	token := func() string {
 		var token *string
@@ -315,7 +314,7 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 	}
 
 	ended := make(chan error, 1)
-	go func() { ended <- owner.ConvertPlatformImage(ctx, reference, "amd64") }()
+	go func() { ended <- images.ConvertPlatformImageLeased(ctx, owner, reference, "amd64", lease) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for token() == "" {
 		if time.Now().After(deadline) {

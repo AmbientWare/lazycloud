@@ -376,7 +376,7 @@ func TestLostBuildContainerRetriesOnceThenFails(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.images.Recover(t.Context(), logger); err != nil {
+		if err := f.images.Recover(t.Context(), logger); err != nil {
 			t.Fatal(err)
 		}
 		build, err := f.images.GetBuild(t.Context(), f.listener, ws, r.Build.ID, 0)
@@ -413,8 +413,8 @@ func TestBuildPastItsDeadlineFailsAndStopsItsContainer(t *testing.T) {
 	if _, err := f.pool.Exec(t.Context(), "update image_builds set deadline_at = now() - interval '1 second' where id = $1", r.Build.ID); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil || n != 1 {
-		t.Fatalf("recover: %d %v", n, err)
+	if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
 	}
 	build, err := f.images.GetBuild(t.Context(), f.listener, ws, r.Build.ID, 0)
 	if err != nil || build.Status != images.BuildFailed {

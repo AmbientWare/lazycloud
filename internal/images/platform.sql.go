@@ -20,7 +20,8 @@ set lease_token = excluded.lease_token, leased_until = excluded.leased_until, tr
 where (platform_images.leased_until is null or platform_images.leased_until < now())
   and (platform_images.failed_at is null or platform_images.failed_at < now() - make_interval(secs => case
       when platform_images.failure_transient then $6::float8 else $7::float8 end))
-returning mirror
+returning mirror,
+    (mirror is not null and exists (select 1 from image_reference_layers r where r.reference = mirror))::bool as converted
 `
 
 type ClaimPlatformImageParams struct {
@@ -33,10 +34,16 @@ type ClaimPlatformImageParams struct {
 	FailureRetrySeconds   float64
 }
 
+type ClaimPlatformImageRow struct {
+	Mirror    *string
+	Converted bool
+}
+
 // Takes the conversion lease of a platform image unless another owner
 // holds it or its last attempt failed within its retry period, and
-// returns the mirror recorded before. No row means not claimed.
-func (q *Queries) ClaimPlatformImage(ctx context.Context, arg ClaimPlatformImageParams) (*string, error) {
+// returns the mirror recorded before and whether it has layer rows. No row
+// means not claimed.
+func (q *Queries) ClaimPlatformImage(ctx context.Context, arg ClaimPlatformImageParams) (ClaimPlatformImageRow, error) {
 	row := q.db.QueryRow(ctx, claimPlatformImage,
 		arg.Reference,
 		arg.Architecture,
@@ -46,9 +53,9 @@ func (q *Queries) ClaimPlatformImage(ctx context.Context, arg ClaimPlatformImage
 		arg.TransientRetrySeconds,
 		arg.FailureRetrySeconds,
 	)
-	var mirror *string
-	err := row.Scan(&mirror)
-	return mirror, err
+	var i ClaimPlatformImageRow
+	err := row.Scan(&i.Mirror, &i.Converted)
+	return i, err
 }
 
 const failPlatformImage = `-- name: FailPlatformImage :exec
@@ -77,7 +84,7 @@ func (q *Queries) FailPlatformImage(ctx context.Context, arg FailPlatformImagePa
 	return err
 }
 
-const finishPlatformImage = `-- name: FinishPlatformImage :execrows
+const finishPlatformImage = `-- name: FinishPlatformImage :exec
 update platform_images
 set mirror = $1::text, lease_token = null, leased_until = null, failure = null, failure_transient = false, failed_at = null
 where reference = $2 and architecture = $3 and lease_token = $4::uuid
@@ -91,87 +98,61 @@ type FinishPlatformImageParams struct {
 }
 
 // Records the converted mirror of the lease token's conversion.
-func (q *Queries) FinishPlatformImage(ctx context.Context, arg FinishPlatformImageParams) (int64, error) {
-	result, err := q.db.Exec(ctx, finishPlatformImage,
+func (q *Queries) FinishPlatformImage(ctx context.Context, arg FinishPlatformImageParams) error {
+	_, err := q.db.Exec(ctx, finishPlatformImage,
 		arg.Mirror,
 		arg.Reference,
 		arg.Architecture,
 		arg.Token,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	return err
 }
 
-const platformCopiesOf = `-- name: PlatformCopiesOf :many
-select p.reference, p.architecture, p.mirror::text as mirror from platform_images p
-where p.mirror = any($1::text[]) and exists (select 1 from image_reference_layers r where r.reference = p.mirror)
-`
-
-type PlatformCopiesOfRow struct {
-	Reference    string
-	Architecture string
-	Mirror       string
-}
-
-// The converted copies among mirrors, the images a host's containers run.
-// The table holds a row per platform image and architecture.
-func (q *Queries) PlatformCopiesOf(ctx context.Context, mirrors []string) ([]PlatformCopiesOfRow, error) {
-	rows, err := q.db.Query(ctx, platformCopiesOf, mirrors)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PlatformCopiesOfRow
-	for rows.Next() {
-		var i PlatformCopiesOfRow
-		if err := rows.Scan(&i.Reference, &i.Architecture, &i.Mirror); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const platformImagesOf = `-- name: PlatformImagesOf :many
-select p.reference, p.mirror, p.failure, p.failure_transient, p.failed_at, p.traceparent,
+const platformImages = `-- name: PlatformImages :many
+select h.architecture as host_architecture, p.reference, p.architecture, p.mirror, p.failure,
+       p.failure_transient, p.failed_at, p.traceparent,
        (p.mirror is not null and exists (select 1 from image_reference_layers r where r.reference = p.mirror))::bool as converted
-from platform_images p
-where p.reference = any($1::text[]) and p.architecture = $2
+from (select $1::uuid as id) q
+left join hosts h on h.id = q.id
+left join platform_images p
+    on (p.reference = any($2::text[]) and p.architecture = h.architecture) or p.mirror = any($3::text[])
 `
 
-type PlatformImagesOfParams struct {
-	Refs         []string
-	Architecture string
+type PlatformImagesParams struct {
+	Host    uuid.UUID
+	Refs    []string
+	Mirrors []string
 }
 
-type PlatformImagesOfRow struct {
-	Reference        string
+type PlatformImagesRow struct {
+	HostArchitecture *string
+	Reference        *string
+	Architecture     *string
 	Mirror           *string
 	Failure          *string
-	FailureTransient bool
+	FailureTransient *bool
 	FailedAt         *time.Time
 	Traceparent      *string
 	Converted        bool
 }
 
-// The recorded state of platform images for one architecture: converted
-// once the mirror has layer rows.
-func (q *Queries) PlatformImagesOf(ctx context.Context, arg PlatformImagesOfParams) ([]PlatformImagesOfRow, error) {
-	rows, err := q.db.Query(ctx, platformImagesOf, arg.Refs, arg.Architecture)
+// The architecture of host, if any, with the recorded state of each of refs
+// for it and of each platform image whose mirror is among mirrors:
+// converted once the mirror has layer rows. The first row carries the
+// architecture even when no image matches.
+func (q *Queries) PlatformImages(ctx context.Context, arg PlatformImagesParams) ([]PlatformImagesRow, error) {
+	rows, err := q.db.Query(ctx, platformImages, arg.Host, arg.Refs, arg.Mirrors)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlatformImagesOfRow
+	var items []PlatformImagesRow
 	for rows.Next() {
-		var i PlatformImagesOfRow
+		var i PlatformImagesRow
 		if err := rows.Scan(
+			&i.HostArchitecture,
 			&i.Reference,
+			&i.Architecture,
 			&i.Mirror,
 			&i.Failure,
 			&i.FailureTransient,

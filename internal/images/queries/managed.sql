@@ -14,12 +14,3 @@ select source from recorded
 union all
 select source from managed_images where python_version = @python_version and template = @template
 limit 1;
-
--- name: HostArchitecture :one
-select architecture from hosts where id = @id;
-
--- name: ImageDigestOf :one
-select digest from images where id = @id;
-
--- name: ImageRuntime :one
-select python_version, architecture from images where id = @id;

@@ -52,8 +52,8 @@ func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceI
 
 // RecordTrace stores the frames a container of the workspace read from
 // reference through its first task or request, unless a trace younger than
-// traceAge is stored. A trace that does not fit the reference's layers is
-// ErrInvalidTrace.
+// traceAge is stored. The trace lasts as long as the reference's converted
+// layers. A trace that does not fit them is ErrInvalidTrace.
 func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID, reference string, reads []FrameRead) error {
 	if len(reads) == 0 {
 		return nil
@@ -61,22 +61,20 @@ func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID
 	if len(reads) > MaxTraceReads {
 		return fmt.Errorf("%w: %d frames, at most %d", ErrInvalidTrace, len(reads), MaxTraceReads)
 	}
-	frames, err := i.queries.ReferenceFrames(ctx, reference)
-	if err != nil {
-		return fmt.Errorf("read image layers: %w", err)
-	}
 	params := RecordTraceParams{
 		Reference: reference, WorkspaceID: uuid.UUID(workspace), MaxAgeSeconds: traceAge.Seconds(),
 		Layers: make([]int32, len(reads)), Frames: make([]int32, len(reads)),
 	}
 	for n, r := range reads {
-		if int(r.Layer) >= len(frames) || int64(r.Frame) >= int64(frames[r.Layer]) {
-			return fmt.Errorf("%w: frame %d of layer %d", ErrInvalidTrace, r.Frame, r.Layer)
-		}
-		params.Layers[n], params.Frames[n] = int32(r.Layer), int32(r.Frame) //nolint:gosec // checked against the layer counts
+		// A read past the int32 range turns negative, which the query refuses.
+		params.Layers[n], params.Frames[n] = int32(r.Layer), int32(r.Frame) //nolint:gosec // See above.
 	}
-	if _, err := i.queries.RecordTrace(ctx, params); err != nil {
+	fits, err := i.queries.RecordTrace(ctx, params)
+	if err != nil {
 		return fmt.Errorf("record startup trace: %w", err)
+	}
+	if !fits {
+		return fmt.Errorf("%w: %s", ErrInvalidTrace, reference)
 	}
 	return nil
 }

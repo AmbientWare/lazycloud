@@ -7,47 +7,7 @@ package images
 
 import (
 	"context"
-
-	"github.com/google/uuid"
 )
-
-const hostArchitecture = `-- name: HostArchitecture :one
-select architecture from hosts where id = $1
-`
-
-func (q *Queries) HostArchitecture(ctx context.Context, id uuid.UUID) (string, error) {
-	row := q.db.QueryRow(ctx, hostArchitecture, id)
-	var architecture string
-	err := row.Scan(&architecture)
-	return architecture, err
-}
-
-const imageDigestOf = `-- name: ImageDigestOf :one
-select digest from images where id = $1
-`
-
-func (q *Queries) ImageDigestOf(ctx context.Context, id string) ([]byte, error) {
-	row := q.db.QueryRow(ctx, imageDigestOf, id)
-	var digest []byte
-	err := row.Scan(&digest)
-	return digest, err
-}
-
-const imageRuntime = `-- name: ImageRuntime :one
-select python_version, architecture from images where id = $1
-`
-
-type ImageRuntimeRow struct {
-	PythonVersion string
-	Architecture  string
-}
-
-func (q *Queries) ImageRuntime(ctx context.Context, id string) (ImageRuntimeRow, error) {
-	row := q.db.QueryRow(ctx, imageRuntime, id)
-	var i ImageRuntimeRow
-	err := row.Scan(&i.PythonVersion, &i.Architecture)
-	return i, err
-}
 
 const managedSource = `-- name: ManagedSource :one
 select source from managed_images where python_version = $1 and template = $2

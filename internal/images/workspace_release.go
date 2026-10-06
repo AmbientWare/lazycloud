@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -27,29 +26,6 @@ func (i *Images) ReleaseWorkspace(ctx context.Context, workspace identity.Worksp
 	}
 	if err := i.queries.HandOffWorkspaceBuilds(ctx, uuid.UUID(workspace)); err != nil {
 		return fmt.Errorf("hand off builds: %w", err)
-	}
-	return nil
-}
-
-// failBuild ends a running build with reason and stops its containers.
-func (i *Images) failBuild(ctx context.Context, id uuid.UUID, digest []byte, reason string) error {
-	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
-		q := i.queries.WithTx(tx)
-		// Lock order: image, then build.
-		if _, err := q.LockImage(ctx, digest); err != nil {
-			return fmt.Errorf("lock image: %w", err)
-		}
-		build, err := q.LockBuild(ctx, id)
-		if err != nil {
-			return fmt.Errorf("lock build: %w", err)
-		}
-		if BuildStatus(build.State) != BuildBuilding {
-			return nil
-		}
-		return i.failLocked(ctx, tx, id, reason, false)
-	})
-	if err != nil {
-		return fmt.Errorf("fail build %s: %w", id, err)
 	}
 	return nil
 }

@@ -52,17 +52,6 @@ func (q *Queries) ActiveBuild(ctx context.Context, arg ActiveBuildParams) (Activ
 	return i, err
 }
 
-const buildImageDigest = `-- name: BuildImageDigest :one
-select image_digest from image_builds where id = $1
-`
-
-func (q *Queries) BuildImageDigest(ctx context.Context, id uuid.UUID) ([]byte, error) {
-	row := q.db.QueryRow(ctx, buildImageDigest, id)
-	var image_digest []byte
-	err := row.Scan(&image_digest)
-	return image_digest, err
-}
-
 const buildLogsAfter = `-- name: BuildLogsAfter :many
 select id, attempt, data, logged_at
 from image_build_logs
@@ -129,11 +118,17 @@ func (q *Queries) BuildPhase(ctx context.Context, id *uuid.UUID) (BuildPhaseRow,
 
 const buildToStart = `-- name: BuildToStart :one
 select b.id, b.state, b.workspace_id, b.forced, b.context_sha256, b.registry_auth, b.deadline_at,
-       i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu
+       i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu,
+       exists (select 1 from hosts h where h.id = $1 and h.kind = 'platform')::bool as platform_host
 from image_builds b
 join images i on i.digest = b.image_digest
-where b.id = $1
+where b.id = $2
 `
+
+type BuildToStartParams struct {
+	Host uuid.UUID
+	ID   uuid.UUID
+}
 
 type BuildToStartRow struct {
 	ID            uuid.UUID
@@ -148,10 +143,12 @@ type BuildToStartRow struct {
 	Architecture  string
 	BuildSecrets  []byte
 	BuildGpu      string
+	PlatformHost  bool
 }
 
-func (q *Queries) BuildToStart(ctx context.Context, id uuid.UUID) (BuildToStartRow, error) {
-	row := q.db.QueryRow(ctx, buildToStart, id)
+// A build and whether host, which runs it, is a platform host.
+func (q *Queries) BuildToStart(ctx context.Context, arg BuildToStartParams) (BuildToStartRow, error) {
+	row := q.db.QueryRow(ctx, buildToStart, arg.Host, arg.ID)
 	var i BuildToStartRow
 	err := row.Scan(
 		&i.ID,
@@ -166,6 +163,7 @@ func (q *Queries) BuildToStart(ctx context.Context, id uuid.UUID) (BuildToStartR
 		&i.Architecture,
 		&i.BuildSecrets,
 		&i.BuildGpu,
+		&i.PlatformHost,
 	)
 	return i, err
 }
@@ -262,28 +260,6 @@ func (q *Queries) GrantImage(ctx context.Context, arg GrantImageParams) error {
 	return err
 }
 
-const hostKind = `-- name: HostKind :one
-select kind from hosts where id = $1
-`
-
-func (q *Queries) HostKind(ctx context.Context, id uuid.UUID) (string, error) {
-	row := q.db.QueryRow(ctx, hostKind, id)
-	var kind string
-	err := row.Scan(&kind)
-	return kind, err
-}
-
-const imageArchitecture = `-- name: ImageArchitecture :one
-select architecture from images where id = $1
-`
-
-func (q *Queries) ImageArchitecture(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRow(ctx, imageArchitecture, id)
-	var architecture string
-	err := row.Scan(&architecture)
-	return architecture, err
-}
-
 const imageBuildGPU = `-- name: ImageBuildGPU :one
 select build_gpu from images where digest = $1
 `
@@ -293,6 +269,37 @@ func (q *Queries) ImageBuildGPU(ctx context.Context, digest []byte) (string, err
 	var build_gpu string
 	err := row.Scan(&build_gpu)
 	return build_gpu, err
+}
+
+const imageOf = `-- name: ImageOf :one
+select digest, python_version, architecture,
+       exists (select 1 from image_reference_layers r where r.reference = $1)::bool as converted
+from images where id = $2
+`
+
+type ImageOfParams struct {
+	Reference string
+	ID        string
+}
+
+type ImageOfRow struct {
+	Digest        []byte
+	PythonVersion string
+	Architecture  string
+	Converted     bool
+}
+
+// An image and whether reference, a reference of it, has layer rows.
+func (q *Queries) ImageOf(ctx context.Context, arg ImageOfParams) (ImageOfRow, error) {
+	row := q.db.QueryRow(ctx, imageOf, arg.Reference, arg.ID)
+	var i ImageOfRow
+	err := row.Scan(
+		&i.Digest,
+		&i.PythonVersion,
+		&i.Architecture,
+		&i.Converted,
+	)
+	return i, err
 }
 
 const insertBuild = `-- name: InsertBuild :one

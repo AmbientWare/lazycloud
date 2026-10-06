@@ -1,6 +1,11 @@
 package images
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
-// SetPlatformLease shortens the lease of i's platform image conversions.
-func SetPlatformLease(i *Images, d time.Duration) { i.platformLease = d }
+// ConvertPlatformImageLeased is ConvertPlatformImage with a lease of lease.
+func ConvertPlatformImageLeased(ctx context.Context, i *Images, reference, architecture string, lease time.Duration) error {
+	return i.convertPlatformImage(ctx, reference, architecture, lease)
+}

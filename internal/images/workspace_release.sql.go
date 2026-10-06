@@ -51,7 +51,8 @@ from (
     select distinct on (wi.image_digest) wi.image_digest, wi.workspace_id
     from workspace_images wi
     join workspaces w on w.id = wi.workspace_id
-    where wi.workspace_id <> $1 and w.state = 'active'
+    where wi.image_digest in (select image_digest from image_builds where workspace_id = $1 and state <> 'building')
+      and wi.workspace_id <> $1 and w.state = 'active'
     order by wi.image_digest, wi.created_at, wi.workspace_id
 ) heir
 where b.workspace_id = $1 and b.state <> 'building' and b.image_digest = heir.image_digest

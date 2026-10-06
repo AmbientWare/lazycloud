@@ -42,16 +42,6 @@ type ConversionError struct{ Reason string }
 
 func (e *ConversionError) Error() string { return "the image cannot be converted: " + e.Reason }
 
-// A container starts only from a converted reference. An image without
-// one gets it from a mirror build, a build with no steps that copies the
-// image into the platform registry and converts its layers: a reference
-// published or pinned without layer rows (ConvertedPull, Deployable,
-// Prepare). The managed Python image is the server's to convert instead
-// (ManagedPull). A public or platform-global image mirrors on a platform
-// host for every workspace; a workspace's own image mirrors where its
-// builds run, for it alone. The first request that needs one starts it and
-// the others join it; each gets a BuildWaitError until it publishes.
-
 // Prepare makes image id of workspace ready to deploy. An image ready
 // returns no build. A stored reference without layer rows starts or joins
 // its mirror build, and an image building returns that build; the build
@@ -62,77 +52,66 @@ func (i *Images) Prepare(ctx context.Context, workspace identity.WorkspaceID, id
 	if err != nil || image.Reference != nil {
 		return Resolution{Image: image}, err
 	}
-	var building uuid.UUID
-	if image.unconverted != nil {
-		err := i.convertReference(ctx, workspace, id, *image.unconverted)
-		var waiting *BuildWaitError
-		switch {
-		case errors.As(err, &waiting):
-			building = waiting.Build
-		case err != nil:
+	if image.unconverted == nil {
+		alone, err := i.buildsAlone(ctx, i.queries, workspace, image, false, buildDefinition)
+		if err != nil {
 			return Resolution{}, err
-		default:
-			image, err = i.Get(ctx, workspace, id)
-			return Resolution{Image: image}, err
 		}
-	} else {
-		digest, err := i.queries.ImageDigestOf(ctx, id)
+		build, err := i.activeBuild(ctx, i.queries, image, workspace, alone)
 		if err != nil {
-			return Resolution{}, fmt.Errorf("read image %s: %w", id, err)
+			return Resolution{}, err
 		}
-		// The build this workspace's request would join, by build's rule: a
-		// workspace on its connected account's hosts builds for itself.
-		customer, err := i.queries.WorkspaceOnCustomerHosts(ctx, uuid.UUID(workspace))
-		if err != nil {
-			return Resolution{}, fmt.Errorf("read workspace hosts: %w", err)
-		}
-		active, err := i.queries.ActiveBuild(ctx, ActiveBuildParams{ImageDigest: digest, Forced: customer, WorkspaceID: uuid.UUID(workspace)})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if build == nil {
 			return Resolution{}, ErrNotReady
 		}
-		if err != nil {
-			return Resolution{}, fmt.Errorf("read active build: %w", err)
-		}
-		building = active.ID
+		return Resolution{Image: image, Build: build}, nil
 	}
-	build, err := i.GetBuild(ctx, nil, workspace, building, 0)
+	err = i.convertReference(ctx, workspace, image.PythonVersion, image.Architecture, *image.unconverted)
+	var waiting *BuildWaitError
+	if errors.As(err, &waiting) {
+		build, err := i.GetBuild(ctx, nil, workspace, waiting.Build, 0)
+		if err != nil {
+			return Resolution{}, err
+		}
+		return Resolution{Image: image, Build: &build}, nil
+	}
 	if err != nil {
 		return Resolution{}, err
 	}
-	return Resolution{Image: image, Build: &build}, nil
+	image, err = i.Get(ctx, workspace, id)
+	return Resolution{Image: image}, err
 }
 
 // ConvertedPull is how a container of workspace pulls reference, the image
-// a release pinned when it deployed image id, once it is converted.
+// a release pinned when it deployed image id, once it is converted. A
+// reference without layer rows gets them from a mirror build, a build with
+// no steps that copies exactly that image into the platform registry and
+// converts it: on a platform host for every workspace, or for a
+// workspace's own image where its builds run, for it alone. Every start
+// waits on the one build with a BuildWaitError until it publishes.
 func (i *Images) ConvertedPull(ctx context.Context, workspace identity.WorkspaceID, id, reference string) (Pull, error) {
-	if err := i.convertReference(ctx, workspace, id, reference); err != nil {
-		return Pull{}, err
+	image, err := i.queries.ImageOf(ctx, ImageOfParams{ID: id, Reference: reference})
+	if err != nil {
+		return Pull{}, fmt.Errorf("read image %s: %w", id, err)
 	}
-	return i.PullOf(ctx, id, reference)
+	if !image.Converted {
+		if err := i.convertReference(ctx, workspace, image.PythonVersion, image.Architecture, reference); err != nil {
+			return Pull{}, err
+		}
+	}
+	return i.pull(ctx, reference, image.Architecture, pullWindow)
 }
 
-// convertReference gives reference, an image of image id, its layer rows: a
-// mirror build converts exactly that image, and the mirror's layers become
-// the reference's.
-func (i *Images) convertReference(ctx context.Context, workspace identity.WorkspaceID, id, reference string) error {
-	rows, err := i.queries.ReferenceLayers(ctx, reference)
-	if err != nil {
-		return fmt.Errorf("read image layers: %w", err)
-	}
-	if len(rows) > 0 {
-		return nil
-	}
-	runtime, err := i.queries.ImageRuntime(ctx, id)
-	if err != nil {
-		return fmt.Errorf("read image %s: %w", id, err)
-	}
+// convertReference gives reference, which has no layer rows, those of its
+// mirror: a mirror build converts exactly that image for architecture.
+func (i *Images) convertReference(ctx context.Context, workspace identity.WorkspaceID, python, architecture, reference string) error {
 	if !manifestDigest.MatchString(digestOf(reference)) {
 		return &ConversionError{Reason: reference + " is not pinned by digest"}
 	}
 	dockerfile := "FROM " + reference + "\n"
-	digest := imageDigest(dockerfile, runtime.Architecture, nil, buildInputs{})
+	digest := imageDigest(dockerfile, architecture, nil, buildInputs{})
 	p := prepared{
-		spec: spec{python: runtime.PythonVersion, architecture: runtime.Architecture}, dockerfile: dockerfile, digest: digest,
+		spec: spec{python: python, architecture: architecture}, dockerfile: dockerfile, digest: digest,
 		id: imageID(digest), secretVersions: map[string]string{},
 	}
 	kind := buildSharedMirror
@@ -143,7 +122,7 @@ func (i *Images) convertReference(ctx context.Context, workspace identity.Worksp
 	if err != nil {
 		return err
 	}
-	return i.adoptLayers(ctx, workspace, kind, reference, runtime.Architecture, *mirror.Reference)
+	return i.adoptLayers(ctx, workspace, kind, reference, architecture, *mirror.Reference)
 }
 
 func imageID(digest []byte) string { return "img_" + hex.EncodeToString(digest)[:24] }
@@ -156,26 +135,10 @@ func digestOf(reference string) string {
 
 // adoptLayers records the converted layers of mirror, the platform's copy
 // of reference, as reference's, once the registry shows both name the
-// same blobs.
+// same blobs. A mirror whose layers were retired meanwhile is
+// ErrNotConverted.
 func (i *Images) adoptLayers(ctx context.Context, workspace identity.WorkspaceID, kind buildKind, reference, architecture, mirror string) error {
-	converted, err := i.queries.ReferenceLayers(ctx, mirror)
-	if err != nil {
-		return fmt.Errorf("read image layers: %w", err)
-	}
-	for _, l := range converted {
-		// A shared reference uses shared pairs only; the workspace's own
-		// may use its own too.
-		if l.WorkspaceID != nil && (kind != buildOwnMirror || *l.WorkspaceID != uuid.UUID(workspace)) {
-			return &ConversionError{Reason: "the mirror of " + reference + " holds layers of one workspace alone"}
-		}
-	}
-	var auth *Auth
-	if _, platform := i.config.repositoryOf(reference); platform {
-		if auth, err = i.login.auth(ctx); err != nil {
-			return err
-		}
-	}
-	layers, err := i.resolver.layers(ctx, reference, auth, i.config.Insecure, "linux/"+architecture)
+	layers, err := i.layersOf(ctx, reference, architecture)
 	var rejected *InvalidError
 	if errors.As(err, &rejected) {
 		return &ConversionError{Reason: rejected.Reason}
@@ -183,21 +146,36 @@ func (i *Images) adoptLayers(ctx context.Context, workspace identity.WorkspaceID
 	if err != nil {
 		return fmt.Errorf("read %s: %w", reference, err)
 	}
-	if len(layers) != len(converted) {
-		return &ConversionError{Reason: fmt.Sprintf("%s has %d layers, its mirror %d", reference, len(layers), len(converted))}
-	}
-	ids := make([]uuid.UUID, len(layers))
-	positions := make([]int32, len(layers))
-	for n, l := range layers {
-		if l.blob != converted[n].BlobDigest || l.diffID != converted[n].DiffID {
-			return &ConversionError{Reason: fmt.Sprintf("layer %d of %s differs from its mirror", n, reference)}
+	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
+		q := i.queries.WithTx(tx)
+		converted, err := q.ReferenceLayers(ctx, mirror)
+		if err != nil {
+			return fmt.Errorf("read image layers: %w", err)
 		}
-		ids[n], positions[n] = converted[n].ID, int32(n) //nolint:gosec // At most maxImageLayers.
+		if len(converted) == 0 {
+			return fmt.Errorf("%s: %w", mirror, ErrNotConverted)
+		}
+		if len(layers) != len(converted) {
+			return &ConversionError{Reason: fmt.Sprintf("%s has %d layers, its mirror %d", reference, len(layers), len(converted))}
+		}
+		ids := make([]uuid.UUID, len(layers))
+		for n, l := range converted {
+			// A shared reference uses shared pairs only; the workspace's own
+			// may use its own too.
+			if l.WorkspaceID != nil && (kind != buildOwnMirror || *l.WorkspaceID != uuid.UUID(workspace)) {
+				return &ConversionError{Reason: "the mirror of " + reference + " holds layers of one workspace alone"}
+			}
+			if layers[n].blob != l.BlobDigest || layers[n].diffID != l.DiffID {
+				return &ConversionError{Reason: fmt.Sprintf("layer %d of %s differs from its mirror", n, reference)}
+			}
+			ids[n] = l.ID
+		}
+		return q.RecordReference(ctx, RecordReferenceParams{Reference: reference, LayerIds: ids}) //nolint:wrapcheck // Wrapped below.
+	})
+	if err != nil {
+		return fmt.Errorf("adopt the layers of %s: %w", mirror, err)
 	}
-	if err := i.queries.RecordReferenceLayers(ctx, RecordReferenceLayersParams{Reference: reference, Positions: positions, LayerIds: ids}); err != nil {
-		return fmt.Errorf("record image layers: %w", err)
-	}
-	return i.RecordUses(ctx, []string{reference})
+	return nil
 }
 
 // PlatformWaitError means a start needs a platform image, such as the
@@ -237,13 +215,6 @@ func (i *Images) ManagedPull(ctx context.Context, host compute.HostID, python st
 	}
 }
 
-// PythonVersions are the Python versions a managed image serves.
-func PythonVersions() []string {
-	return []string{
-		string(apitypes.N310), string(apitypes.N311), string(apitypes.N312), string(apitypes.N313), string(apitypes.N314),
-	}
-}
-
 // ManagedSource is the template's image for python by digest: pinned the
 // first time any server asks, and the same image from then on until the
 // template changes. It names no tag, so a release whose base is unchanged
@@ -252,6 +223,23 @@ func (i *Images) ManagedSource(ctx context.Context, python string) (string, erro
 	if !apitypes.ImageSpecPythonVersion(python).Valid() {
 		return "", &ConversionError{Reason: fmt.Sprintf("Python %q has no managed image", python)}
 	}
+	i.managedMu.Lock()
+	source, ok := i.managed[python]
+	i.managedMu.Unlock()
+	if ok {
+		return source, nil
+	}
+	source, err := i.recordManagedSource(ctx, python)
+	if err != nil {
+		return "", err
+	}
+	i.managedMu.Lock()
+	i.managed[python] = source
+	i.managedMu.Unlock()
+	return source, nil
+}
+
+func (i *Images) recordManagedSource(ctx context.Context, python string) (string, error) {
 	key := ManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase}
 	source, err := i.queries.ManagedSource(ctx, key)
 	if err == nil {
@@ -265,18 +253,11 @@ func (i *Images) ManagedSource(ctx context.Context, python string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	var auth *Auth
-	platform := host == i.config.registryHost()
-	if platform {
-		if auth, err = i.login.auth(ctx); err != nil {
-			return "", err
-		}
-	}
-	pinned, err := i.resolver.pin(ctx, ref, auth, platform && i.config.Insecure)
+	pinned, err := i.pin(ctx, ref, host, nil)
 	if err != nil {
 		return "", err
 	}
-	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: untagged(pinned.ref)})
+	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: untagged(pinned)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Another server's insert committed while this one waited on it,
 		// after this statement's snapshot.

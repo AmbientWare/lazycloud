@@ -1,22 +1,25 @@
 -- name: ReferenceLayers :many
--- The converted layers of a published reference, in the image's order.
+-- The converted layers of a reference, in the image's order. The rows stay
+-- locked until the caller records them for another reference, so the sweep
+-- cannot retire them in between.
 select l.id, l.blob_digest, l.diff_id, l.workspace_id
 from image_reference_layers r
 join image_layers l on l.id = r.layer_id
 where r.reference = @reference
-order by r.position;
+order by r.position
+for key share of l;
 
 -- name: LayerReadsFor :many
--- The converted layers of a published reference, in the image's order,
--- with the host's region and whether that region's copy is confirmed to
--- hold each.
-select l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
+-- The converted layers of each of refs, in each image's order, with
+-- the host's region and whether that region's copy is confirmed to hold
+-- each.
+select r.reference, l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
 from image_reference_layers r
 join image_layers l on l.id = r.layer_id
 left join hosts h on h.id = @host
 left join image_layer_replicas c on c.layer_id = l.id and c.region = h.region
-where r.reference = @reference
-order by r.position;
+where r.reference = any(@refs::text[])
+order by r.reference, r.position;
 
 -- name: ClaimReplicaChecks :many
 -- Claims the check of every layer of a reference in region's copy that is
@@ -65,8 +68,8 @@ returning id, upload_id;
 -- name: RecordLayer :execrows
 -- Records an uploaded pair, unless a pair of the blob already serves the
 -- same scope: then the first one stays and this one counts no rows.
-insert into image_layers (id, blob_digest, diff_id, workspace_id, index_bytes, data_bytes, entries, frames)
-values (@id, @blob_digest, @diff_id, sqlc.narg(workspace_id), @index_bytes, @data_bytes, @entries, @frames)
+insert into image_layers (id, blob_digest, diff_id, workspace_id, frames)
+values (@id, @blob_digest, @diff_id, sqlc.narg(workspace_id), @frames)
 on conflict do nothing;
 
 -- name: ClaimUpload :exec
@@ -98,23 +101,32 @@ on conflict (container_id, blob_digest) do update
 set expires_at = greatest(image_layer_uploads.expires_at, excluded.expires_at)
 returning id, upload_id, data_bytes, index_bytes;
 
--- name: RecordReferenceLayers :exec
-insert into image_reference_layers (reference, position, layer_id)
-select @reference::text, unnest(@positions::int[]), unnest(@layer_ids::uuid[])
-on conflict do nothing;
+-- name: RecordReference :exec
+-- Records layer_ids as reference's layers, in order, ends their grace
+-- period and records the reference's use. The caller holds the layer rows
+-- locked, so the sweep cannot retire one in between.
+with recorded as (
+    insert into image_reference_layers (reference, position, layer_id)
+    select @reference::text, l.n - 1, l.id
+    from unnest(@layer_ids::uuid[]) with ordinality as l (id, n)
+    on conflict do nothing
+), touched as (
+    update image_layers set unreferenced_since = null
+    where id = any(@layer_ids::uuid[]) and unreferenced_since is not null
+)
+insert into image_reference_uses (reference, used_at)
+values (@reference::text, now())
+on conflict (reference) do update set used_at = excluded.used_at;
 
--- name: TouchLayers :exec
-update image_layers set unreferenced_since = null
-where id = any(@ids::uuid[]) and unreferenced_since is not null;
-
--- name: MarkUnreferencedLayers :execrows
+-- name: MarkUnreferencedLayers :exec
 -- Starts the grace period of pairs no live reference uses and ends it for
 -- pairs one uses again. Live references are those pinned by releases that
 -- can still start containers (active releases of workloads and apps not
--- deleted, live previews, releases with containers or tasks under way), the
--- managed images, and references published or started within the grace
--- period.
--- Each part reads live rows by an index; image history is not read.
+-- deleted, live previews, releases with containers or tasks under way),
+-- the newest converted managed image of each Python version and
+-- architecture, and references published or started within the grace
+-- period. Each part reads live rows by an index; image history is not
+-- read.
 with live_releases as (
     select w.active_release_id as id from workloads w
     join apps a on a.id = w.app_id
@@ -128,7 +140,10 @@ with live_releases as (
 ), live as (
     select r.spec -> 'image' ->> 'reference' as reference from releases r join live_releases l on l.id = r.id
     union
-    select p.mirror from managed_images m join platform_images p on p.reference = m.source where p.mirror is not null
+    (select distinct on (m.python_version, p.architecture) p.mirror
+     from managed_images m join platform_images p on p.reference = m.source
+     where p.mirror is not null
+     order by m.python_version, p.architecture, m.created_at desc)
     union
     select u.reference from image_reference_uses u
     where u.used_at > now() - make_interval(secs => @grace_seconds::float8)
@@ -147,7 +162,7 @@ select unnest(@refs::text[]), now()
 on conflict (reference) do update set used_at = excluded.used_at
 where image_reference_uses.used_at < now() - interval '1 minute';
 
--- name: PurgeUses :execrows
+-- name: PurgeUses :exec
 delete from image_reference_uses where used_at < now() - make_interval(secs => @grace_seconds::float8);
 
 -- name: UnreferencedLayers :many
@@ -156,12 +171,12 @@ where unreferenced_since < now() - make_interval(secs => @grace_seconds::float8)
 order by unreferenced_since
 limit @batch_size;
 
--- name: RetireLayer :execrows
+-- name: RetireLayer :exec
 -- Moves a pair unused through the grace period to image_layer_uploads for
--- deletion, and unconverts every reference that used it: a reference is
--- converted as a whole or not at all. A reference recorded with it
--- meanwhile fails the statement's foreign key check, and a publish that
--- touched it ends the grace period first.
+-- deletion, and unconverts every reference that used it, dropping their
+-- startup traces: a reference is converted as a whole or not at all. A
+-- reference recorded with it meanwhile fails the statement's foreign key
+-- check, and a publish that touched it ends the grace period first.
 with gone as (
     delete from image_layers
     where image_layers.id = @id and unreferenced_since < now() - make_interval(secs => @grace_seconds::float8)
@@ -169,6 +184,9 @@ with gone as (
 ), refs as (
     delete from image_reference_layers
     where reference in (select r.reference from image_reference_layers r join gone g on g.id = r.layer_id)
+    returning reference
+), traces as (
+    delete from image_traces where reference in (select reference from refs)
 )
 insert into image_layer_uploads (id, blob_digest, expires_at)
 select g.id, g.blob_digest, now() from gone g;

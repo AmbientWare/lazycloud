@@ -93,8 +93,8 @@ func (h *harness) storeLayer(contents string) storedLayer {
 	if err := h.store.CompleteLayerUpload(h.t.Context(), l.id, upload, etags); err != nil {
 		h.t.Fatal(err)
 	}
-	if _, err := h.pool.Exec(h.t.Context(), `insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-		values ($1, $2, $3, $4, $5, $6, $7)`, l.id, randomDigest(), ix.Layer, len(index), ix.DataSize, len(ix.Entries), len(ix.Frames)); err != nil {
+	if _, err := h.pool.Exec(h.t.Context(), `insert into image_layers (id, blob_digest, diff_id, frames)
+		values ($1, $2, $3, $4)`, l.id, randomDigest(), ix.Layer, len(ix.Frames)); err != nil {
 		h.t.Fatal(err)
 	}
 	return l

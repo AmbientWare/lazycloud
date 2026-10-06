@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,51 +62,67 @@ type LayerReads struct {
 // grants that read those layers from the layer bucket may read the copy.
 func ReplicasConfirmed(region string) string { return "layer-replicas:" + region }
 
-// LayerReadURLs presigns GET URLs, valid for up to ttl, for every layer of
-// reference, the image by digest a release pinned, in layer order, for
-// host: from its region's copy of the layer bucket where that copy is
-// confirmed to hold the layer, and from the layer bucket otherwise. A
-// reference is converted as a whole or not at all, so an image with an
-// unconverted layer is ErrNotConverted.
+// LayerReadURLs is LayerReadURLsOf for one reference: a reference without
+// converted layers is ErrNotConverted.
+func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compute.HostID, ttl time.Duration) (LayerReads, error) {
+	reads, err := i.LayerReadURLsOf(ctx, []string{reference}, host, ttl)
+	if err != nil {
+		return LayerReads{}, err
+	}
+	out, ok := reads[reference]
+	if !ok {
+		return LayerReads{}, fmt.Errorf("%s: %w", reference, ErrNotConverted)
+	}
+	return out, nil
+}
+
+// LayerReadURLsOf presigns GET URLs, valid for up to ttl, for every layer of
+// each of references, images by digest, in layer order, for host: from its
+// region's copy of the layer bucket where that copy is confirmed to hold
+// the layer, and from the layer bucket otherwise. A reference is converted
+// as a whole or not at all, so a reference with an unconverted layer is
+// left out. It reads every reference's layers in one query.
 //
 // Layers belong to the reference rather than the image id: a workspace's
 // rebuild gives an image a new reference while releases that pinned the old
 // one keep running it.
-func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compute.HostID, ttl time.Duration) (out LayerReads, err error) {
-	ctx, span := telemetry.Start(ctx, "images.grant_layers", trace.WithAttributes(attribute.String(telemetry.AttrImage, reference)))
+func (i *Images) LayerReadURLsOf(ctx context.Context, references []string, host compute.HostID, ttl time.Duration) (out map[string]LayerReads, err error) {
+	ctx, span := telemetry.Start(ctx, "images.grant_layers", trace.WithAttributes(attribute.String(telemetry.AttrImage, strings.Join(references, " "))))
+	layers := 0
 	defer func() {
-		span.SetAttributes(attribute.Int("lazycloud.layers", len(out.Layers)), attribute.String("lazycloud.unconfirmed_region", out.Unconfirmed))
+		span.SetAttributes(attribute.Int("lazycloud.layers", layers))
 		telemetry.Fail(span, err)
 	}()
-	rows, err := i.queries.LayerReadsFor(ctx, LayerReadsForParams{Reference: reference, Host: uuid.UUID(host)})
+	rows, err := i.queries.LayerReadsFor(ctx, LayerReadsForParams{Refs: references, Host: uuid.UUID(host)})
 	if err != nil {
-		return LayerReads{}, fmt.Errorf("read image layers: %w", err)
+		return nil, fmt.Errorf("read image layers: %w", err)
 	}
-	if len(rows) == 0 {
-		return LayerReads{}, fmt.Errorf("%s: %w", reference, ErrNotConverted)
-	}
-	out = LayerReads{Layers: make([]LayerURLs, len(rows))}
-	for n, row := range rows {
+	out = make(map[string]LayerReads, len(references))
+	for _, row := range rows {
+		reads := out[row.Reference]
 		region := ""
 		if i.storage.HasLayerReplica(row.Region) {
 			if row.Replicated {
 				region = row.Region
 			} else {
-				out.Unconfirmed = row.Region
+				reads.Unconfirmed = row.Region
+				span.SetAttributes(attribute.String("lazycloud.unconfirmed_region", row.Region))
 			}
 		}
 		index, expires, err := i.storage.LayerReadURL(ctx, row.ID, storage.LayerIndex, region, ttl)
 		if err != nil {
-			return LayerReads{}, err
+			return nil, err
 		}
 		data, dataExpires, err := i.storage.LayerReadURL(ctx, row.ID, storage.LayerData, region, ttl)
 		if err != nil {
-			return LayerReads{}, err
+			return nil, err
 		}
 		if dataExpires.Before(expires) {
 			expires = dataExpires
 		}
-		out.Layers[n] = LayerURLs{DiffID: imagefs.Digest(row.DiffID), Index: index, Data: data, ExpiresAt: expires}
+		reads.Layers = append(reads.Layers, LayerURLs{DiffID: imagefs.Digest(row.DiffID), Index: index, Data: data, ExpiresAt: expires})
+		out[row.Reference] = reads
+		layers++
 	}
 	return out, nil
 }
@@ -219,13 +236,10 @@ type publication struct {
 
 // conversion is a pair a host reported uploaded, as the store holds it.
 type conversion struct {
-	upload     uuid.UUID
-	blob       string
-	diffID     string
-	indexBytes int64
-	dataBytes  int64
-	entries    int
-	frames     int
+	upload uuid.UUID
+	blob   string
+	diffID string
+	frames int
 }
 
 // offer is an upload a completion hands its host. uploadID is set once the
@@ -307,10 +321,7 @@ func (i *Images) checkConversions(ctx context.Context, pushed publication, repor
 		if size != dataBytes || size != ix.DataSize {
 			return nil, fmt.Sprintf("the converted data of layer %s has %d bytes, its index %d", u.BlobDigest, size, ix.DataSize), nil
 		}
-		out = append(out, conversion{
-			upload: u.ID, blob: u.BlobDigest, diffID: string(ix.Layer), indexBytes: int64(len(raw)), dataBytes: size,
-			entries: len(ix.Entries), frames: len(ix.Frames),
-		})
+		out = append(out, conversion{upload: u.ID, blob: u.BlobDigest, diffID: string(ix.Layer), frames: len(ix.Frames)})
 	}
 	return out, "", nil
 }
@@ -339,8 +350,8 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 	slices.SortFunc(converted, func(a, b conversion) int { return cmp.Compare(a.blob, b.blob) })
 	for _, c := range converted {
 		n, err := q.RecordLayer(ctx, RecordLayerParams{
-			ID: c.upload, BlobDigest: c.blob, DiffID: c.diffID, WorkspaceID: scope, IndexBytes: c.indexBytes, DataBytes: c.dataBytes,
-			Entries: int32(c.entries), Frames: int32(c.frames), //nolint:gosec // imagefs bounds both below 2^31.
+			ID: c.upload, BlobDigest: c.blob, DiffID: c.diffID, WorkspaceID: scope,
+			Frames: int32(c.frames), //nolint:gosec // imagefs bounds it below 2^31.
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("record layer: %w", err)
@@ -369,7 +380,6 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 		}
 	}
 	ids := make([]uuid.UUID, len(pushed.layers))
-	positions := make([]int32, len(pushed.layers))
 	var offers []offer
 	for n, l := range pushed.layers {
 		row, ok := usable[l.blob]
@@ -382,7 +392,7 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 		if row.DiffID != l.diffID {
 			return nil, fmt.Sprintf("layer %d (%s) holds %s, but the image config names %s", n, l.blob, row.DiffID, l.diffID), nil
 		}
-		ids[n], positions[n] = row.ID, int32(n) //nolint:gosec // At most maxImageLayers.
+		ids[n] = row.ID
 	}
 	if len(offers) > 0 {
 		blobBytes := map[string]int64{}
@@ -417,14 +427,8 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 		}
 		return offers, "", nil
 	}
-	if err := q.RecordReferenceLayers(ctx, RecordReferenceLayersParams{Reference: pushed.reference, Positions: positions, LayerIds: ids}); err != nil {
+	if err := q.RecordReference(ctx, RecordReferenceParams{Reference: pushed.reference, LayerIds: ids}); err != nil {
 		return nil, "", fmt.Errorf("record image layers: %w", err)
-	}
-	if err := q.TouchLayers(ctx, ids); err != nil {
-		return nil, "", fmt.Errorf("touch image layers: %w", err)
-	}
-	if err := q.RecordUses(ctx, []string{pushed.reference}); err != nil {
-		return nil, "", fmt.Errorf("record image use: %w", err)
 	}
 	return nil, "", nil
 }
@@ -488,44 +492,31 @@ func (i *Images) endUploads(ctx context.Context, container uuid.UUID) error {
 	return errors.Join(errs...)
 }
 
-// LayerSweep counts what one layer sweep did.
-type LayerSweep struct {
-	// Retired pairs had no live image through the grace period.
-	Retired int
-	// Deleted pairs left the store: retired ones, lost races and abandoned
-	// uploads.
-	Deleted int
-}
-
 // SweepLayers runs one bounded pass over converted layers. It starts the
 // grace period of pairs no live reference uses, retires those unused
 // through it, and deletes the objects of retired pairs and expired uploads.
 // Each pair commits on its own, so one failure keeps the others' progress;
 // replicas may sweep at once, since every step is conditional on the row.
-func (i *Images) SweepLayers(ctx context.Context, logger *slog.Logger) (LayerSweep, error) {
-	var out LayerSweep
-	if _, err := i.queries.PurgeUses(ctx, layerGrace.Seconds()); err != nil {
-		return out, fmt.Errorf("purge image uses: %w", err)
-	}
-	if _, err := i.queries.MarkUnreferencedLayers(ctx, layerGrace.Seconds()); err != nil {
-		return out, fmt.Errorf("mark unreferenced layers: %w", err)
-	}
+func (i *Images) SweepLayers(ctx context.Context, logger *slog.Logger) error {
 	grace := layerGrace.Seconds()
+	if err := i.queries.PurgeUses(ctx, grace); err != nil {
+		return fmt.Errorf("purge image uses: %w", err)
+	}
+	if err := i.queries.MarkUnreferencedLayers(ctx, grace); err != nil {
+		return fmt.Errorf("mark unreferenced layers: %w", err)
+	}
 	ids, err := i.queries.UnreferencedLayers(ctx, UnreferencedLayersParams{GraceSeconds: grace, BatchSize: layerSweepBatch})
 	if err != nil {
-		return out, fmt.Errorf("read unreferenced layers: %w", err)
+		return fmt.Errorf("read unreferenced layers: %w", err)
 	}
 	for _, id := range ids {
-		n, err := i.queries.RetireLayer(ctx, RetireLayerParams{ID: id, GraceSeconds: grace})
-		if err != nil {
+		if err := i.queries.RetireLayer(ctx, RetireLayerParams{ID: id, GraceSeconds: grace}); err != nil {
 			logger.WarnContext(ctx, "retiring an unreferenced layer failed", "layer", id.String(), "error", err)
-			continue
 		}
-		out.Retired += int(n)
 	}
 	rows, err := i.queries.ExpiredUploads(ctx, layerSweepBatch)
 	if err != nil {
-		return out, fmt.Errorf("read expired layer uploads: %w", err)
+		return fmt.Errorf("read expired layer uploads: %w", err)
 	}
 	expired := make([]uuid.UUID, 0, len(rows))
 	for _, row := range rows {
@@ -538,20 +529,19 @@ func (i *Images) SweepLayers(ctx context.Context, logger *slog.Logger) (LayerSwe
 		expired = append(expired, row.ID)
 	}
 	if len(expired) == 0 {
-		return out, nil
+		return nil
 	}
 	gone, err := i.storage.DeleteLayers(ctx, expired)
 	if err != nil {
-		return out, err
+		return err
 	}
 	if len(gone) < len(expired) {
 		logger.WarnContext(ctx, "deleting layer pairs failed", "failed", len(expired)-len(gone))
 	}
 	if err := i.queries.DeleteUploads(ctx, gone); err != nil {
-		return out, fmt.Errorf("delete layer upload rows: %w", err)
+		return fmt.Errorf("delete layer upload rows: %w", err)
 	}
-	out.Deleted = len(gone)
-	return out, nil
+	return nil
 }
 
 // traceparent is the trace of ctx's span, stored with a build or a

@@ -28,9 +28,6 @@ where w.workspace_id = @workspace_id and i.id = @id;
 -- A workspace bound to a connected AWS account runs its builds there.
 select (connection_id is not null)::bool from workspaces where id = @id;
 
--- name: HostKind :one
-select kind from hosts where id = @id;
-
 -- name: LockImage :one
 select digest, id, python_version, architecture, reference, created_at, ready_at
 from images where digest = @digest for update;
@@ -68,8 +65,10 @@ select coalesce((select c.state from containers c where c.image_build_id = @id o
        (select count(*) from containers c where c.image_build_id = @id)::int as attempts;
 
 -- name: BuildToStart :one
+-- A build and whether host, which runs it, is a platform host.
 select b.id, b.state, b.workspace_id, b.forced, b.context_sha256, b.registry_auth, b.deadline_at,
-       i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu
+       i.digest, i.dockerfile, i.architecture, i.build_secrets, i.build_gpu,
+       exists (select 1 from hosts h where h.id = @host and h.kind = 'platform')::bool as platform_host
 from image_builds b
 join images i on i.digest = b.image_digest
 where b.id = @id;
@@ -125,14 +124,15 @@ where build_id = @build_id and id > @after
 order by id
 limit @max_entries;
 
--- name: BuildImageDigest :one
-select image_digest from image_builds where id = @id;
-
 -- name: ImageBuildGPU :one
 select build_gpu from images where digest = @digest;
 
 -- name: SourceRegistered :one
 select exists (select 1 from source_objects where workspace_id = @workspace_id and sha256 = @sha256)::bool;
 
--- name: ImageArchitecture :one
-select architecture from images where id = @id;
+-- name: ImageOf :one
+-- An image and whether reference, a reference of it, has layer rows.
+select digest, python_version, architecture,
+       exists (select 1 from image_reference_layers r where r.reference = @reference)::bool as converted
+from images where id = @id;
+

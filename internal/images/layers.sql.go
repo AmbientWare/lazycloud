@@ -172,32 +172,33 @@ func (q *Queries) ExpiredUploads(ctx context.Context, batchSize int32) ([]Expire
 }
 
 const layerReadsFor = `-- name: LayerReadsFor :many
-select l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
+select r.reference, l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
 from image_reference_layers r
 join image_layers l on l.id = r.layer_id
 left join hosts h on h.id = $1
 left join image_layer_replicas c on c.layer_id = l.id and c.region = h.region
-where r.reference = $2
-order by r.position
+where r.reference = any($2::text[])
+order by r.reference, r.position
 `
 
 type LayerReadsForParams struct {
-	Host      uuid.UUID
-	Reference string
+	Host uuid.UUID
+	Refs []string
 }
 
 type LayerReadsForRow struct {
+	Reference  string
 	ID         uuid.UUID
 	DiffID     string
 	Region     string
 	Replicated bool
 }
 
-// The converted layers of a published reference, in the image's order,
-// with the host's region and whether that region's copy is confirmed to
-// hold each.
+// The converted layers of each of refs, in each image's order, with
+// the host's region and whether that region's copy is confirmed to hold
+// each.
 func (q *Queries) LayerReadsFor(ctx context.Context, arg LayerReadsForParams) ([]LayerReadsForRow, error) {
-	rows, err := q.db.Query(ctx, layerReadsFor, arg.Host, arg.Reference)
+	rows, err := q.db.Query(ctx, layerReadsFor, arg.Host, arg.Refs)
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +207,7 @@ func (q *Queries) LayerReadsFor(ctx context.Context, arg LayerReadsForParams) ([
 	for rows.Next() {
 		var i LayerReadsForRow
 		if err := rows.Scan(
+			&i.Reference,
 			&i.ID,
 			&i.DiffID,
 			&i.Region,
@@ -221,7 +223,7 @@ func (q *Queries) LayerReadsFor(ctx context.Context, arg LayerReadsForParams) ([
 	return items, nil
 }
 
-const markUnreferencedLayers = `-- name: MarkUnreferencedLayers :execrows
+const markUnreferencedLayers = `-- name: MarkUnreferencedLayers :exec
 with live_releases as (
     select w.active_release_id as id from workloads w
     join apps a on a.id = w.app_id
@@ -235,7 +237,10 @@ with live_releases as (
 ), live as (
     select r.spec -> 'image' ->> 'reference' as reference from releases r join live_releases l on l.id = r.id
     union
-    select p.mirror from managed_images m join platform_images p on p.reference = m.source where p.mirror is not null
+    (select distinct on (m.python_version, p.architecture) p.mirror
+     from managed_images m join platform_images p on p.reference = m.source
+     where p.mirror is not null
+     order by m.python_version, p.architecture, m.created_at desc)
     union
     select u.reference from image_reference_uses u
     where u.used_at > now() - make_interval(secs => $1::float8)
@@ -250,16 +255,14 @@ where (id in (select layer_id from used)) = (unreferenced_since is not null)
 // Starts the grace period of pairs no live reference uses and ends it for
 // pairs one uses again. Live references are those pinned by releases that
 // can still start containers (active releases of workloads and apps not
-// deleted, live previews, releases with containers or tasks under way), the
-// managed images, and references published or started within the grace
-// period.
-// Each part reads live rows by an index; image history is not read.
-func (q *Queries) MarkUnreferencedLayers(ctx context.Context, graceSeconds float64) (int64, error) {
-	result, err := q.db.Exec(ctx, markUnreferencedLayers, graceSeconds)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// deleted, live previews, releases with containers or tasks under way),
+// the newest converted managed image of each Python version and
+// architecture, and references published or started within the grace
+// period. Each part reads live rows by an index; image history is not
+// read.
+func (q *Queries) MarkUnreferencedLayers(ctx context.Context, graceSeconds float64) error {
+	_, err := q.db.Exec(ctx, markUnreferencedLayers, graceSeconds)
+	return err
 }
 
 const offerUpload = `-- name: OfferUpload :one
@@ -297,21 +300,18 @@ func (q *Queries) OfferUpload(ctx context.Context, arg OfferUploadParams) (Offer
 	return i, err
 }
 
-const purgeUses = `-- name: PurgeUses :execrows
+const purgeUses = `-- name: PurgeUses :exec
 delete from image_reference_uses where used_at < now() - make_interval(secs => $1::float8)
 `
 
-func (q *Queries) PurgeUses(ctx context.Context, graceSeconds float64) (int64, error) {
-	result, err := q.db.Exec(ctx, purgeUses, graceSeconds)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+func (q *Queries) PurgeUses(ctx context.Context, graceSeconds float64) error {
+	_, err := q.db.Exec(ctx, purgeUses, graceSeconds)
+	return err
 }
 
 const recordLayer = `-- name: RecordLayer :execrows
-insert into image_layers (id, blob_digest, diff_id, workspace_id, index_bytes, data_bytes, entries, frames)
-values ($1, $2, $3, $4, $5, $6, $7, $8)
+insert into image_layers (id, blob_digest, diff_id, workspace_id, frames)
+values ($1, $2, $3, $4, $5)
 on conflict do nothing
 `
 
@@ -320,9 +320,6 @@ type RecordLayerParams struct {
 	BlobDigest  string
 	DiffID      string
 	WorkspaceID *uuid.UUID
-	IndexBytes  int64
-	DataBytes   int64
-	Entries     int32
 	Frames      int32
 }
 
@@ -334,9 +331,6 @@ func (q *Queries) RecordLayer(ctx context.Context, arg RecordLayerParams) (int64
 		arg.BlobDigest,
 		arg.DiffID,
 		arg.WorkspaceID,
-		arg.IndexBytes,
-		arg.DataBytes,
-		arg.Entries,
 		arg.Frames,
 	)
 	if err != nil {
@@ -345,20 +339,31 @@ func (q *Queries) RecordLayer(ctx context.Context, arg RecordLayerParams) (int64
 	return result.RowsAffected(), nil
 }
 
-const recordReferenceLayers = `-- name: RecordReferenceLayers :exec
-insert into image_reference_layers (reference, position, layer_id)
-select $1::text, unnest($2::int[]), unnest($3::uuid[])
-on conflict do nothing
+const recordReference = `-- name: RecordReference :exec
+with recorded as (
+    insert into image_reference_layers (reference, position, layer_id)
+    select $1::text, l.n - 1, l.id
+    from unnest($2::uuid[]) with ordinality as l (id, n)
+    on conflict do nothing
+), touched as (
+    update image_layers set unreferenced_since = null
+    where id = any($2::uuid[]) and unreferenced_since is not null
+)
+insert into image_reference_uses (reference, used_at)
+values ($1::text, now())
+on conflict (reference) do update set used_at = excluded.used_at
 `
 
-type RecordReferenceLayersParams struct {
+type RecordReferenceParams struct {
 	Reference string
-	Positions []int32
 	LayerIds  []uuid.UUID
 }
 
-func (q *Queries) RecordReferenceLayers(ctx context.Context, arg RecordReferenceLayersParams) error {
-	_, err := q.db.Exec(ctx, recordReferenceLayers, arg.Reference, arg.Positions, arg.LayerIds)
+// Records layer_ids as reference's layers, in order, ends their grace
+// period and records the reference's use. The caller holds the layer rows
+// locked, so the sweep cannot retire one in between.
+func (q *Queries) RecordReference(ctx context.Context, arg RecordReferenceParams) error {
+	_, err := q.db.Exec(ctx, recordReference, arg.Reference, arg.LayerIds)
 	return err
 }
 
@@ -382,6 +387,7 @@ from image_reference_layers r
 join image_layers l on l.id = r.layer_id
 where r.reference = $1
 order by r.position
+for key share of l
 `
 
 type ReferenceLayersRow struct {
@@ -391,7 +397,9 @@ type ReferenceLayersRow struct {
 	WorkspaceID *uuid.UUID
 }
 
-// The converted layers of a published reference, in the image's order.
+// The converted layers of a reference, in the image's order. The rows stay
+// locked until the caller records them for another reference, so the sweep
+// cannot retire them in between.
 func (q *Queries) ReferenceLayers(ctx context.Context, reference string) ([]ReferenceLayersRow, error) {
 	rows, err := q.db.Query(ctx, referenceLayers, reference)
 	if err != nil {
@@ -438,7 +446,7 @@ func (q *Queries) ReplicasPending(ctx context.Context, arg ReplicasPendingParams
 	return column_1, err
 }
 
-const retireLayer = `-- name: RetireLayer :execrows
+const retireLayer = `-- name: RetireLayer :exec
 with gone as (
     delete from image_layers
     where image_layers.id = $1 and unreferenced_since < now() - make_interval(secs => $2::float8)
@@ -446,6 +454,9 @@ with gone as (
 ), refs as (
     delete from image_reference_layers
     where reference in (select r.reference from image_reference_layers r join gone g on g.id = r.layer_id)
+    returning reference
+), traces as (
+    delete from image_traces where reference in (select reference from refs)
 )
 insert into image_layer_uploads (id, blob_digest, expires_at)
 select g.id, g.blob_digest, now() from gone g
@@ -457,16 +468,13 @@ type RetireLayerParams struct {
 }
 
 // Moves a pair unused through the grace period to image_layer_uploads for
-// deletion, and unconverts every reference that used it: a reference is
-// converted as a whole or not at all. A reference recorded with it
-// meanwhile fails the statement's foreign key check, and a publish that
-// touched it ends the grace period first.
-func (q *Queries) RetireLayer(ctx context.Context, arg RetireLayerParams) (int64, error) {
-	result, err := q.db.Exec(ctx, retireLayer, arg.ID, arg.GraceSeconds)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// deletion, and unconverts every reference that used it, dropping their
+// startup traces: a reference is converted as a whole or not at all. A
+// reference recorded with it meanwhile fails the statement's foreign key
+// check, and a publish that touched it ends the grace period first.
+func (q *Queries) RetireLayer(ctx context.Context, arg RetireLayerParams) error {
+	_, err := q.db.Exec(ctx, retireLayer, arg.ID, arg.GraceSeconds)
+	return err
 }
 
 const startUpload = `-- name: StartUpload :execrows
@@ -497,16 +505,6 @@ func (q *Queries) StartUpload(ctx context.Context, arg StartUploadParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const touchLayers = `-- name: TouchLayers :exec
-update image_layers set unreferenced_since = null
-where id = any($1::uuid[]) and unreferenced_since is not null
-`
-
-func (q *Queries) TouchLayers(ctx context.Context, ids []uuid.UUID) error {
-	_, err := q.db.Exec(ctx, touchLayers, ids)
-	return err
 }
 
 const unreferencedLayers = `-- name: UnreferencedLayers :many

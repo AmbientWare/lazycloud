@@ -145,7 +145,7 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 	if _, err := pool.Exec(ctx, "update image_layers set unreferenced_since = now() - interval '25 hours'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := im.SweepLayers(ctx, slog.New(slog.DiscardHandler)); err != nil {
+	if err := im.SweepLayers(ctx, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	var left int

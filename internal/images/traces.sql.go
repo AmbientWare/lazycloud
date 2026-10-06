@@ -12,66 +12,48 @@ import (
 	"github.com/google/uuid"
 )
 
-const recordTrace = `-- name: RecordTrace :execrows
-insert into image_traces (reference, workspace_id, layers, frames)
-select u.reference, $1, $2::int[], $3::int[]
-from image_reference_uses u where u.reference = $4
-on conflict (reference, workspace_id) do update
-set layers = excluded.layers, frames = excluded.frames, recorded_at = now()
-where image_traces.recorded_at < now() - make_interval(secs => $5::float8)
+const recordTrace = `-- name: RecordTrace :one
+with layers as (
+    select array_agg(l.frames order by r.position) as frames
+    from image_reference_layers r
+    join image_layers l on l.id = r.layer_id
+    where r.reference = $1
+), fits as (
+    select coalesce(bool_and(t.layer >= 0 and t.layer < cardinality(layers.frames)
+                             and f.frame >= 0 and f.frame < layers.frames[t.layer + 1]), false) as ok
+    from layers, unnest($2::int[]) with ordinality as t (layer, n)
+    join unnest($3::int[]) with ordinality as f (frame, n) using (n)
+), stored as (
+    insert into image_traces (reference, workspace_id, layers, frames)
+    select $1, $4, $2::int[], $3::int[] from fits where fits.ok
+    on conflict (reference, workspace_id) do update
+    set layers = excluded.layers, frames = excluded.frames, recorded_at = now()
+    where image_traces.recorded_at < now() - make_interval(secs => $5::float8)
+)
+select ok::bool from fits
 `
 
 type RecordTraceParams struct {
-	WorkspaceID   uuid.UUID
+	Reference     string
 	Layers        []int32
 	Frames        []int32
-	Reference     string
+	WorkspaceID   uuid.UUID
 	MaxAgeSeconds float64
 }
 
-// Stores a trace unless a newer one than max_age_seconds is stored. A
-// reference with no recorded use has started nowhere; its trace is
-// dropped.
-func (q *Queries) RecordTrace(ctx context.Context, arg RecordTraceParams) (int64, error) {
-	result, err := q.db.Exec(ctx, recordTrace,
-		arg.WorkspaceID,
+// Whether every read names a frame of reference's layer rows. A trace that
+// fits is stored unless one younger than max_age_seconds is.
+func (q *Queries) RecordTrace(ctx context.Context, arg RecordTraceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, recordTrace,
+		arg.Reference,
 		arg.Layers,
 		arg.Frames,
-		arg.Reference,
+		arg.WorkspaceID,
 		arg.MaxAgeSeconds,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const referenceFrames = `-- name: ReferenceFrames :many
-select l.frames from image_reference_layers r
-join image_layers l on l.id = r.layer_id
-where r.reference = $1
-order by r.position
-`
-
-// The frame count of each layer of a reference, in the image's order.
-func (q *Queries) ReferenceFrames(ctx context.Context, reference string) ([]int32, error) {
-	rows, err := q.db.Query(ctx, referenceFrames, reference)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int32
-	for rows.Next() {
-		var frames int32
-		if err := rows.Scan(&frames); err != nil {
-			return nil, err
-		}
-		items = append(items, frames)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	var ok bool
+	err := row.Scan(&ok)
+	return ok, err
 }
 
 const startupTrace = `-- name: StartupTrace :one

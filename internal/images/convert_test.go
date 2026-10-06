@@ -77,7 +77,7 @@ func TestManagedImageIsConvertedByTheServer(t *testing.T) {
 	if _, err := f.images.LayerReadURLs(t.Context(), pull.Reference, host, time.Minute); err != nil {
 		t.Fatalf("the managed image is readable: %v", err)
 	}
-	if _, err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+	if err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null"); n != 0 {
@@ -509,7 +509,7 @@ func TestAMirrorThatExhaustsItsAttemptsFailsTheImage(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -566,7 +566,7 @@ func TestADeadlineFailsTheImageOnlyIfTheBuildRan(t *testing.T) {
 		if _, err := f.pool.Exec(t.Context(), "update image_builds set deadline_at = now() - interval '1 second' where id = $1", build); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -646,7 +646,7 @@ update billing_balances set balance_nanos = 0`); err != nil {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.images.Recover(ctx, slog.New(slog.DiscardHandler)); err != nil {
+	if err := f.images.Recover(ctx, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if wait(b) != build {
