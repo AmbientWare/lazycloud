@@ -102,8 +102,9 @@ func traceRunning(t *testing.T, client *layersource.Client, name string) (runnin
 
 // TestSharedStartsReportNoTrace: the snapshotter cannot tell apart the
 // reads of two starts sharing a layer. A start sharing one with a live start
-// records no trace, the earlier start's trace is left incomplete, a start
-// that ends stops its trace, and a start alone on its layers traces.
+// records no trace, the earlier start's trace is left incomplete or marked
+// shared, a start that ends stops its trace, and a start alone on its
+// layers traces.
 func TestSharedStartsReportNoTrace(t *testing.T) {
 	l, client := testLayerSources(t)
 	log := slog.New(slog.DiscardHandler)
@@ -133,6 +134,43 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 	}
 	if running, complete := traceRunning(t, client, "alone"); !running || !complete {
 		t.Fatalf("a start alone on its layers traced %v, complete %v", running, complete)
+	}
+
+	// The snapshotter leaves complete a trace whose layers another start or
+	// a platform image was granted, unmounted, before it began.
+	l.release(t.Context(), log, "c1")
+	traced := startingWith(base, testDigest())
+
+	l.begin("a", layersOf(traced.GetLayers()))
+	if err := client.Grant(t.Context(), "a", grantsIn(traced.GetLayers())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.start(t.Context(), log, "b", startingWith(base)); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.StartTrace(t.Context(), "a", layersOf(traced.GetLayers())); err != nil {
+		t.Fatal(err)
+	}
+	if running, complete := traceRunning(t, client, "a"); !running || !complete {
+		t.Fatalf("the snapshotter's trace runs %v, complete %v", running, complete)
+	}
+	shared := func(container string) bool {
+		l.smu.Lock()
+		defer l.smu.Unlock()
+		return l.startups[container].shared
+	}
+	if !shared("a") {
+		t.Fatal("a start a later start shared before its trace began is not marked shared")
+	}
+
+	l.release(t.Context(), log, "a")
+	l.release(t.Context(), log, "b")
+	l.begin("c", []imagefs.Digest{imagefs.Digest(base)})
+	if err := l.grant(t.Context(), "platform:builder", []*hostproto.LayerGrant{layerGrant(base, time.Now().Add(time.Hour))}); err != nil {
+		t.Fatal(err)
+	}
+	if !shared("c") {
+		t.Fatal("a start whose layer a platform image was granted is not marked shared")
 	}
 }
 
@@ -227,47 +265,6 @@ func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
 	refused.Layers[0].IndexUrl = "ftp://store/index"
 	if _, err := l.start(t.Context(), slog.New(slog.DiscardHandler), "refused", refused); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("a start with grants the snapshotter refuses gave %v", err)
-	}
-}
-
-// TestStartsGrantedBeforeATraceShareIt: the snapshotter leaves complete a
-// trace whose layers another start or a platform image was granted, not
-// yet mounted, before the trace began, so the agent marks the traced start
-// shared and drops its trace.
-func TestStartsGrantedBeforeATraceShareIt(t *testing.T) {
-	l, client := testLayerSources(t)
-	log := slog.New(slog.DiscardHandler)
-	base := testDigest()
-	traced := startingWith(base, testDigest())
-
-	l.begin("a", layersOf(traced.GetLayers()))
-	if err := client.Grant(t.Context(), "a", grantsIn(traced.GetLayers())); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.start(t.Context(), log, "b", startingWith(base)); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.StartTrace(t.Context(), "a", layersOf(traced.GetLayers())); err != nil {
-		t.Fatal(err)
-	}
-	if running, complete := traceRunning(t, client, "a"); !running || !complete {
-		t.Fatalf("the snapshotter's trace runs %v, complete %v", running, complete)
-	}
-	shared := func(container string) bool {
-		l.smu.Lock()
-		defer l.smu.Unlock()
-		return l.startups[container].shared
-	}
-	if !shared("a") {
-		t.Fatal("a start a later start shared before its trace began is not marked shared")
-	}
-
-	l.begin("c", []imagefs.Digest{imagefs.Digest(base)})
-	if err := l.grant(t.Context(), "platform:builder", []*hostproto.LayerGrant{layerGrant(base, time.Now().Add(time.Hour))}); err != nil {
-		t.Fatal(err)
-	}
-	if !shared("c") {
-		t.Fatal("a start whose layer a platform image was granted is not marked shared")
 	}
 }
 
