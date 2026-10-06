@@ -60,15 +60,16 @@ type Config struct {
 	Tracer    oteltrace.Tracer
 }
 
-// snapshotter is a containerd snapshotter with lazy layers. One goroutine,
-// run, owns the mounts (mounts.go).
+// snapshotter is a containerd snapshotter with lazy layers: the overlay
+// snapshotter answers every call it does not override. One goroutine, run,
+// owns the mounts (mounts.go).
 type snapshotter struct {
-	root    string
-	ms      *storage.MetaStore
-	overlay snapshots.Snapshotter
-	cache   *frameCache
-	log     *slog.Logger
-	cancel  context.CancelFunc
+	snapshots.Snapshotter
+	root   string
+	ms     *storage.MetaStore
+	cache  *frameCache
+	log    *slog.Logger
+	cancel context.CancelFunc
 
 	requests chan func()
 	done     chan struct{}
@@ -113,7 +114,7 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
 	s := &snapshotter{
-		root: cfg.Root, ms: ms, overlay: ov, cache: cache, log: cfg.Logger, cancel: cancel,
+		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, log: cfg.Logger, cancel: cancel,
 		requests: make(chan func()),
 		done:     make(chan struct{}),
 		mounted:  make(map[string]*mountedLayer),
@@ -136,27 +137,7 @@ func (s *snapshotter) Close() error {
 	<-s.done
 	s.teardowns.Wait()
 	s.cache.background.Wait()
-	return s.overlay.Close() //nolint:wrapcheck // the metadata store's own error
-}
-
-func (s *snapshotter) Stat(ctx context.Context, key string) (snapshots.Info, error) {
-	return s.overlay.Stat(ctx, key) //nolint:wrapcheck // containerd's typed errors pass through
-}
-
-func (s *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (snapshots.Info, error) {
-	return s.overlay.Update(ctx, info, fieldpaths...) //nolint:wrapcheck // containerd's typed errors pass through
-}
-
-func (s *snapshotter) Usage(ctx context.Context, key string) (snapshots.Usage, error) {
-	return s.overlay.Usage(ctx, key) //nolint:wrapcheck // containerd's typed errors pass through
-}
-
-func (s *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, filters ...string) error {
-	return s.overlay.Walk(ctx, fn, filters...) //nolint:wrapcheck // containerd's typed errors pass through
-}
-
-func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
-	return s.overlay.Commit(ctx, name, key, opts...) //nolint:wrapcheck // containerd's typed errors pass through
+	return s.Snapshotter.Close() //nolint:wrapcheck // the metadata store's own error
 }
 
 // Prepare makes a layer present lazily when the pull marked it, and
@@ -172,19 +153,19 @@ func (s *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 		return nil, s.prepareLazy(ctx, key, parent, info.Labels)
 	}
 	return s.withLayers(ctx, parent, func() ([]mount.Mount, error) {
-		return s.overlay.Prepare(ctx, key, parent, opts...)
+		return s.Snapshotter.Prepare(ctx, key, parent, opts...)
 	})
 }
 
 func (s *snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
 	return s.withLayers(ctx, parent, func() ([]mount.Mount, error) {
-		return s.overlay.View(ctx, key, parent, opts...)
+		return s.Snapshotter.View(ctx, key, parent, opts...)
 	})
 }
 
 func (s *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, error) {
 	return s.withLayers(ctx, key, func() ([]mount.Mount, error) {
-		return s.overlay.Mounts(ctx, key)
+		return s.Snapshotter.Mounts(ctx, key)
 	})
 }
 
@@ -218,9 +199,9 @@ func (s *snapshotter) Remove(ctx context.Context, key string) error {
 		return err //nolint:wrapcheck // containerd's typed errors pass through
 	}
 	if lazy {
-		return s.removeLazy(ctx, ref.id, func() error { return s.overlay.Remove(ctx, key) })
+		return s.removeLazy(ctx, ref.id, func() error { return s.Snapshotter.Remove(ctx, key) })
 	}
-	if err := s.overlay.Remove(ctx, key); err != nil {
+	if err := s.Snapshotter.Remove(ctx, key); err != nil {
 		return err //nolint:wrapcheck // containerd's typed errors pass through
 	}
 	if err := s.reconcileNow(ctx); err != nil {
@@ -232,7 +213,7 @@ func (s *snapshotter) Remove(ctx context.Context, key string) error {
 // Cleanup removes abandoned snapshot directories and unmounts layers no
 // snapshot needs.
 func (s *snapshotter) Cleanup(ctx context.Context) error {
-	if err := s.overlay.(snapshots.Cleaner).Cleanup(ctx); err != nil { //nolint:forcetypeassert // overlay cleans up
+	if err := s.Snapshotter.(snapshots.Cleaner).Cleanup(ctx); err != nil { //nolint:forcetypeassert // overlay cleans up
 		return err //nolint:wrapcheck // containerd's typed errors pass through
 	}
 	return s.reconcileNow(ctx)
@@ -248,7 +229,21 @@ func (s *snapshotter) prepareLazy(ctx context.Context, key, parent string, label
 		return fmt.Errorf("lazy layer %q needs %s and %s labels: %w", key, snapshots.LabelSnapshotRef, snapshots.LabelSnapshotDiffID, errdefs.ErrInvalidArgument)
 	}
 	span, traced := s.cache.starts.start(digest, "snapshotter.prepare_layer")
-	raw, ix, err := s.cache.fetchIndex(ctx, digest)
+	var (
+		raw []byte
+		ix  imagefs.Index
+	)
+	err := retry(ctx, func() (err error) {
+		g, ok := s.cache.grants.lookup(digest)
+		if !ok {
+			return errNoGrant
+		}
+		raw, ix, err = imagefs.FetchIndex(ctx, s.cache.http, g.indexURL)
+		if err == nil && ix.Layer != digest {
+			err = fmt.Errorf("%w: the index granted for layer %s is layer %s's", imagefs.ErrInvalidIndex, digest, ix.Layer)
+		}
+		return err //nolint:wrapcheck // wrapped below
+	})
 	if traced {
 		span.SetAttributes(attribute.Int("lazycloud.index_bytes", len(raw)), attribute.Int("lazycloud.frames", len(ix.Frames)))
 		telemetry.Fail(span, err)
@@ -257,39 +252,32 @@ func (s *snapshotter) prepareLazy(ctx context.Context, key, parent string, label
 		return fmt.Errorf("layer %s cannot be mounted: %w: %w", digest, err, errdefs.ErrFailedPrecondition)
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("index of layer %s: %w", digest, err)
 	}
-	usage := snapshots.Usage{Size: ix.StreamSize, Inodes: int64(len(ix.Entries))}
-	dirs := filepath.Join(s.root, "snapshots")
-	var tmp, final string
+	var dir string
 	err = s.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
-		var err error
-		if tmp, err = os.MkdirTemp(dirs, "new-"); err != nil {
-			return fmt.Errorf("create snapshot directory: %w", err)
-		}
-		if err := os.Mkdir(filepath.Join(tmp, "fs"), 0o755); err != nil { //nolint:gosec // the mount point overlayfs reads
-			return fmt.Errorf("create snapshot directory: %w", err)
-		}
-		if err := os.WriteFile(filepath.Join(tmp, indexFile), raw, 0o600); err != nil {
-			return fmt.Errorf("store layer index: %w", err)
-		}
 		active, err := storage.CreateSnapshot(ctx, snapshots.KindActive, key+prepareSuffix, parent, snapshots.WithLabels(labels))
 		if err != nil {
 			return err //nolint:wrapcheck // containerd's typed errors pass through
 		}
-		final = filepath.Join(dirs, active.ID)
-		if err := os.Rename(tmp, final); err != nil {
-			return fmt.Errorf("place snapshot directory: %w", err)
+		// A directory a crashed start left under a reused id holds nothing.
+		dir = filepath.Join(s.root, "snapshots", active.ID)
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("clear snapshot directory: %w", err)
 		}
-		tmp = ""
+		if err := os.MkdirAll(filepath.Join(dir, "fs"), 0o755); err != nil { //nolint:gosec // the mount point overlayfs reads
+			return fmt.Errorf("create snapshot directory: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, indexFile), raw, 0o600); err != nil {
+			return fmt.Errorf("store layer index: %w", err)
+		}
+		usage := snapshots.Usage{Size: ix.StreamSize, Inodes: int64(len(ix.Entries))}
 		_, err = storage.CommitActive(ctx, key+prepareSuffix, key, usage, snapshots.WithLabels(labels))
 		return err //nolint:wrapcheck // containerd's typed errors pass through
 	})
 	if err != nil {
-		for _, dir := range []string{tmp, final} {
-			if dir != "" {
-				_ = os.RemoveAll(dir)
-			}
+		if dir != "" {
+			_ = os.RemoveAll(dir)
 		}
 		return fmt.Errorf("record lazy layer %s: %w", digest, err)
 	}

@@ -674,30 +674,17 @@ func (g gatedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// An eviction never deletes the file of a frame stored again since it was
-// chosen.
-func TestEvictionKeepsAFrameStoredAgain(t *testing.T) {
-	c := newTestCache(t, http.DefaultTransport, 64<<20)
-	k := frameKey{layer: digestOf('c'), frame: 3}
-	if err := c.write(k, []byte("frame")); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.remove(&cachedFrame{key: k, size: 5}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(c.path(k)); err != nil {
-		t.Fatalf("the evicted frame stored again lost its file: %v", err)
-	}
-}
-
 // An eviction that cannot delete a frame's file keeps the frame counted, so
 // the cache never holds more on disk than it counts, and the next eviction
 // tries the frame again.
 func TestFailedEvictionsKeepTheirFramesCounted(t *testing.T) {
 	c := newTestCache(t, http.DefaultTransport, 8)
 	key := func(frame int) frameKey { return frameKey{layer: digestOf('e'), frame: frame} }
-	counted := func(step string) {
+	store := func(frame int, step string) {
 		t.Helper()
+		if err := c.store(key(frame), []byte("12345")); err != nil {
+			t.Fatal(err)
+		}
 		c.mu.Lock()
 		used := c.used
 		c.mu.Unlock()
@@ -705,34 +692,24 @@ func TestFailedEvictionsKeepTheirFramesCounted(t *testing.T) {
 			t.Fatalf("%s the cache counts %d bytes and holds %d on disk", step, used, onDisk)
 		}
 	}
-	if err := c.write(key(0), []byte("aaaaa")); err != nil {
-		t.Fatal(err)
-	}
-	// A frame's path that holds a directory is not removed as a file.
-	stuck := c.path(key(0))
+	store(0, "after a store")
+	// A frame's file that became a directory is not removed as a file.
+	stuck := c.touch(key(0)).path
 	if err := os.Remove(stuck); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(stuck, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stuck, "held"), []byte("aaaaa"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stuck, "held"), []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.write(key(1), []byte("bbbbb")); err != nil {
-		t.Fatal(err)
-	}
-	c.evict()
-	counted("after a failed eviction")
+	store(1, "after a failed eviction")
 	if err := os.RemoveAll(stuck); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.write(key(2), []byte("ccccc")); err != nil {
-		t.Fatal(err)
-	}
-	c.evict()
-	counted("after the next eviction")
-	if c.cached(key(0)) || !c.cached(key(2)) {
+	store(2, "after the next eviction")
+	if c.touch(key(0)) != nil || c.touch(key(2)) == nil {
 		t.Fatal("the next eviction kept the frame it failed to remove, or dropped the newest")
 	}
 }
@@ -817,7 +794,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 		readAll(other)
 	}
 	for i := range mounted.index.Frames {
-		if !c.cached(frameKey{layer: mounted.digest, frame: i}) {
+		if c.touch(frameKey{layer: mounted.digest, frame: i}) == nil {
 			t.Fatalf("frame %d of the mounted layer was evicted before the unmounted layer's", i)
 		}
 	}

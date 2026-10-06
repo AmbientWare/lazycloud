@@ -5,16 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"io/fs"
 	"iter"
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,15 +23,11 @@ import (
 )
 
 const (
-	// fetchAttempts bounds the reads of one frame or index from the store;
-	// the backoff runs between them.
+	// fetchAttempts bounds the reads of one frame or index from the store.
 	fetchAttempts = 3
 	// fetchTimeout bounds all attempts at one frame together.
 	fetchTimeout = 2 * time.Minute
 )
-
-// backoff is the wait before attempt n, counting from 1.
-func backoff(n int) time.Duration { return 200 * time.Millisecond * time.Duration(n*n) }
 
 // errNoGrant marks a read of a layer the agent has not granted, or whose
 // grant expired.
@@ -45,8 +38,11 @@ type frameKey struct {
 	frame int
 }
 
+// cachedFrame is one stored frame. Every store writes a new file, so an
+// eviction deletes only the file it chose.
 type cachedFrame struct {
 	key  frameKey
+	path string
 	size int64
 	// held says the frame is on the list of mounted layers' frames.
 	held bool
@@ -76,27 +72,25 @@ type frameCache struct {
 	// and prefetches. They hold at most half of slots, so containers' reads
 	// always find a slot free.
 	filling chan struct{}
-	// prefetches holds the running prefetches by name, at most
+	// prefetches holds the stops of the running prefetches by name, at most
 	// maxPrefetches. background waits for prefetches, fills and the start
 	// traces' flushes.
 	pmu        sync.Mutex
-	prefetches map[string]*prefetchRun
+	prefetches map[string]*context.CancelFunc
 	background sync.WaitGroup
 	// life bounds every fetch: a fetch is shared, so no one reader's or
 	// fill's context may end it.
 	life context.Context
-	// keys serialises writing and evicting the file of one frame, so an
-	// eviction never deletes a frame stored again since.
-	keys [64]sync.Mutex
 
 	mu   sync.Mutex
 	used int64
 	// idle and held list the stored frames of unmounted and of mounted
-	// layers, most recently used first.
+	// layers, most recently used first. A frame whose file an eviction
+	// failed to delete stays listed, and counted, without a key in frames.
 	idle, held list.List
 	frames     map[frameKey]*list.Element
-	// live is the mounts' view the cache keeps: the layer the mounts of
-	// each mounted digest share. mountWake closes when a digest mounts.
+	// live is the cache's view of the mounts: the layer the mounts of each
+	// mounted digest share. mountWake closes when a digest mounts.
 	live      map[imagefs.Digest]*layer
 	mountWake chan struct{}
 }
@@ -115,7 +109,7 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 		starts:     &startTraces{tracer: cfg.Tracer, byName: map[string]*startTrace{}, byLayer: map[imagefs.Digest]*startTrace{}},
 		slots:      make(chan struct{}, cfg.Fetches),
 		filling:    make(chan struct{}, max(1, cfg.Fetches/2)),
-		prefetches: make(map[string]*prefetchRun),
+		prefetches: make(map[string]*context.CancelFunc),
 		life:       life,
 		frames:     make(map[frameKey]*list.Element),
 		live:       make(map[imagefs.Digest]*layer),
@@ -123,50 +117,38 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 	}, nil
 }
 
-func (c *frameCache) path(k frameKey) string {
-	return filepath.Join(c.dir, strings.TrimPrefix(string(k.layer), "sha256:"), strconv.Itoa(k.frame))
-}
-
 // newLayer returns a layer ix describes, read through its current grant.
 func (c *frameCache) newLayer(ix imagefs.Index) *layer {
-	digest := ix.Layer
-	l := &layer{
-		digest: digest,
+	return &layer{
+		digest: ix.Layer,
 		index:  ix,
 		data: imagefs.HTTPObject(c.http, func() string {
-			g, _ := c.grants.lookup(digest)
+			g, _ := c.grants.lookup(ix.Layer)
 			return g.dataURL
 		}),
 		cache:  c,
-		paths:  make([]string, len(ix.Frames)),
 		traced: make([]atomic.Uint32, len(ix.Frames)),
 	}
-	for i := range l.paths {
-		l.paths[i] = c.path(frameKey{layer: digest, frame: i})
-	}
-	return l
 }
 
 // mount counts a mount of the layer ix describes and returns the layer the
 // mounts of its digest share. The first mount of a digest starts its fill.
 func (c *frameCache) mount(ix imagefs.Index) *layer {
 	c.mu.Lock()
-	l := c.live[ix.Layer]
-	first := l == nil
-	var fillCtx context.Context
-	if first {
-		l = c.newLayer(ix)
-		fillCtx, l.stopFill = context.WithCancel(c.life)
-		c.live[l.digest] = l
-		c.moveFramesLocked(l, true)
-		close(c.mountWake)
-		c.mountWake = make(chan struct{})
+	defer c.mu.Unlock()
+	if l := c.live[ix.Layer]; l != nil {
+		l.mounts++
+		return l
 	}
-	l.mounts++
-	c.mu.Unlock()
-	if first {
-		c.background.Go(func() { c.fillLayer(fillCtx, l) })
-	}
+	l := c.newLayer(ix)
+	l.mounts = 1
+	var fill context.Context
+	fill, l.stopFill = context.WithCancel(c.life)
+	c.live[l.digest] = l
+	c.moveFramesLocked(l, true)
+	close(c.mountWake)
+	c.mountWake = make(chan struct{})
+	c.background.Go(func() { c.fillLayer(fill, l) })
 	return l
 }
 
@@ -185,13 +167,12 @@ func (c *frameCache) unmount(l *layer) {
 // moveFramesLocked moves l's stored frames to the front of the list of
 // mounted layers' frames, or of the others'.
 func (c *frameCache) moveFramesLocked(l *layer, held bool) {
-	from, to := c.list(!held), c.list(held)
 	for i := range l.index.Frames {
 		k := frameKey{layer: l.digest, frame: i}
 		if e, ok := c.frames[k]; ok {
-			f := from.Remove(e).(*cachedFrame) //nolint:forcetypeassert // the lists hold *cachedFrame
+			f := c.list(!held).Remove(e).(*cachedFrame) //nolint:forcetypeassert // the lists hold *cachedFrame
 			f.held = held
-			c.frames[k] = to.PushFront(f)
+			c.frames[k] = c.list(held).PushFront(f)
 		}
 	}
 }
@@ -207,7 +188,7 @@ func (c *frameCache) list(held bool) *list.List {
 func (c *frameCache) read(l *layer, frame int, p []byte, off int64) error {
 	c.traces.record(l, frame)
 	// A frame evicted since the lookup, or unreadable, is fetched again.
-	if _, ok := c.touch(frameKey{layer: l.digest, frame: frame}); ok && readAt(l.paths[frame], p, off) == nil {
+	if f := c.touch(frameKey{layer: l.digest, frame: frame}); f != nil && readAt(f.path, p, off) == nil {
 		c.starts.read(l.digest, true, 0, 0)
 		return nil
 	}
@@ -254,7 +235,10 @@ func (c *frameCache) loadEach(ctx context.Context, frames iter.Seq2[*layer, int]
 	var wg sync.WaitGroup
 next:
 	for l, i := range frames {
-		if c.cached(frameKey{layer: l.digest, frame: i}) {
+		c.mu.Lock()
+		_, cached := c.frames[frameKey{layer: l.digest, frame: i}]
+		c.mu.Unlock()
+		if cached {
 			continue
 		}
 		select {
@@ -281,8 +265,8 @@ func (c *frameCache) load(l *layer, frame int) ([]byte, error) {
 	k := frameKey{layer: l.digest, frame: frame}
 	v, err, _ := c.fetches.Do(string(l.digest)+"/"+strconv.Itoa(frame), func() (any, error) {
 		// A fetch that just finished may have stored it.
-		if size, ok := c.touch(k); ok {
-			if data, err := os.ReadFile(l.paths[frame]); err == nil && int64(len(data)) == size { //nolint:gosec // a path under the cache directory
+		if f := c.touch(k); f != nil {
+			if data, err := os.ReadFile(f.path); err == nil && int64(len(data)) == f.size {
 				return data, nil
 			}
 		}
@@ -294,19 +278,20 @@ func (c *frameCache) load(l *layer, frame int) ([]byte, error) {
 			return nil, fmt.Errorf("wait for a fetch slot: %w", ctx.Err())
 		}
 		defer func() { <-c.slots }()
-		data, err := retry(ctx, func() ([]byte, error) {
+		var data []byte
+		err := retry(ctx, func() (err error) {
 			if _, ok := c.grants.lookup(l.digest); !ok {
-				return nil, errNoGrant
+				return errNoGrant
 			}
-			return l.index.ReadFrame(ctx, l.data, frame) //nolint:wrapcheck // wrapped below
+			data, err = l.index.ReadFrame(ctx, l.data, frame)
+			return err //nolint:wrapcheck // wrapped below
 		})
 		if err != nil {
 			return nil, fmt.Errorf("read frame %d of layer %s: %w", frame, l.digest, err)
 		}
-		if err := c.write(k, data); err != nil {
+		if err := c.store(k, data); err != nil {
 			c.log.WarnContext(ctx, "frame cache write failed", "layer", l.digest, "frame", frame, "error", err)
 		}
-		c.evict()
 		return data, nil
 	})
 	if err != nil {
@@ -315,46 +300,24 @@ func (c *frameCache) load(l *layer, frame int) ([]byte, error) {
 	return v.([]byte), nil //nolint:forcetypeassert // the function returns []byte
 }
 
-// fetchIndex reads and checks a layer's stored index through its grant.
-func (c *frameCache) fetchIndex(ctx context.Context, digest imagefs.Digest) ([]byte, imagefs.Index, error) {
-	type fetched struct {
-		raw []byte
-		ix  imagefs.Index
-	}
-	got, err := retry(ctx, func() (fetched, error) {
-		g, ok := c.grants.lookup(digest)
-		if !ok {
-			return fetched{}, errNoGrant
-		}
-		raw, ix, err := imagefs.FetchIndex(ctx, c.http, g.indexURL)
-		if err == nil && ix.Layer != digest {
-			err = fmt.Errorf("%w: the index granted for layer %s is layer %s's", imagefs.ErrInvalidIndex, digest, ix.Layer)
-		}
-		return fetched{raw: raw, ix: ix}, err //nolint:wrapcheck // wrapped below
-	})
-	if err != nil {
-		return nil, imagefs.Index{}, fmt.Errorf("index of layer %s: %w", digest, err)
-	}
-	return got.raw, got.ix, nil
-}
-
 // retry runs attempt until it succeeds, fails for good or has run
-// fetchAttempts times, with the backoff between attempts. Each attempt
-// takes the layer's grant anew, so a refreshed URL applies at once.
-func retry[T any](ctx context.Context, attempt func() (T, error)) (T, error) {
-	var (
-		v   T
-		err error
-	)
+// fetchAttempts times, backing off between attempts. Each attempt takes the
+// layer's grant anew, so a refreshed URL applies at once.
+func retry(ctx context.Context, attempt func() error) error {
+	var err error
 	for n := range fetchAttempts {
-		if n > 0 && sleep(ctx, backoff(n)) != nil {
-			break
+		if n > 0 {
+			select {
+			case <-time.After(200 * time.Millisecond * time.Duration(n*n)):
+			case <-ctx.Done():
+				return err
+			}
 		}
-		if v, err = attempt(); err == nil || !retryable(err) {
-			break
+		if err = attempt(); err == nil || !retryable(err) {
+			return err
 		}
 	}
-	return v, err
+	return err
 }
 
 // retryable reports whether another attempt may succeed: a transport
@@ -370,74 +333,28 @@ func retryable(err error) bool {
 	return true
 }
 
-func (c *frameCache) keyLock(k frameKey) *sync.Mutex {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(k.layer))
-	return &c.keys[(h.Sum32()+uint32(k.frame))%uint32(len(c.keys))] //nolint:gosec // frame numbers are small and non-negative
-}
-
-// write stores k's file and counts it.
-func (c *frameCache) write(k frameKey, data []byte) error {
-	lock := c.keyLock(k)
-	lock.Lock()
-	defer lock.Unlock()
-	path := c.path(k)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("store frame: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "*.tmp")
+// store writes a fetched frame to a new file, lists it in place of any
+// copy, and evicts down to the bound. The frame's bytes reach their readers
+// whether or not it is stored.
+func (c *frameCache) store(k frameKey, data []byte) error {
+	file, err := os.CreateTemp(c.dir, "frame-")
 	if err != nil {
 		return fmt.Errorf("store frame: %w", err)
 	}
-	_, err = tmp.Write(data)
-	if cerr := tmp.Close(); err == nil {
+	_, err = file.Write(data)
+	if cerr := file.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
 	if err != nil {
-		_ = os.Remove(tmp.Name())
+		_ = os.Remove(file.Name())
 		return fmt.Errorf("store frame: %w", err)
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.frames[k]; ok {
-		c.list(e.Value.(*cachedFrame).held).MoveToFront(e) //nolint:forcetypeassert // the lists hold *cachedFrame
-	} else {
-		c.linkLocked(&cachedFrame{key: k, size: int64(len(data))}, true)
-	}
-	return nil
-}
-
-// linkLocked counts f and lists it as the most recently used frame, or the
-// least.
-func (c *frameCache) linkLocked(f *cachedFrame, recent bool) {
-	f.held = c.live[f.key.layer] != nil
-	if recent {
-		c.frames[f.key] = c.list(f.held).PushFront(f)
-	} else {
-		c.frames[f.key] = c.list(f.held).PushBack(f)
-	}
-	c.used += f.size
-}
-
-// evict drops frames until the cache fits its bound: unmounted layers'
-// frames first, then mounted layers', least recently used first.
-func (c *frameCache) evict() {
-	c.mu.Lock()
-	victims := c.evictLocked()
-	c.mu.Unlock()
-	for _, f := range victims {
-		if err := c.remove(f); err != nil {
-			c.log.Warn("evicting a cached frame failed", "layer", f.key.layer, "frame", f.key.frame, "error", err)
-		}
-	}
-}
-
-// evictLocked unlinks the frames evict removes.
-func (c *frameCache) evictLocked() []*cachedFrame {
 	var victims []*cachedFrame
+	if e, ok := c.frames[k]; ok {
+		victims = append(victims, c.unlinkLocked(e))
+	}
+	c.linkLocked(&cachedFrame{key: k, path: file.Name(), size: int64(len(data))}, true)
 	for c.used > c.limit {
 		from := &c.idle
 		if from.Len() == 0 {
@@ -446,60 +363,63 @@ func (c *frameCache) evictLocked() []*cachedFrame {
 		if from.Len() == 0 {
 			break
 		}
-		f := from.Remove(from.Back()).(*cachedFrame) //nolint:forcetypeassert // the lists hold *cachedFrame
+		victims = append(victims, c.unlinkLocked(from.Back()))
+	}
+	c.mu.Unlock()
+	c.remove(victims)
+	return nil
+}
+
+// remove deletes the files of unlisted frames. A file it cannot delete is
+// listed and counted again, oldest, so the next eviction tries it first.
+func (c *frameCache) remove(frames []*cachedFrame) {
+	for _, f := range frames {
+		if err := os.Remove(f.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			c.log.Warn("evicting a cached frame failed", "layer", f.key.layer, "frame", f.key.frame, "error", err)
+			c.mu.Lock()
+			c.linkLocked(f, false)
+			c.mu.Unlock()
+		}
+	}
+}
+
+// linkLocked counts f and lists it as the most recently used frame, or the
+// least. It is found by key unless another copy is.
+func (c *frameCache) linkLocked(f *cachedFrame, recent bool) {
+	f.held = c.live[f.key.layer] != nil
+	if recent {
+		c.frames[f.key] = c.list(f.held).PushFront(f)
+	} else if e := c.list(f.held).PushBack(f); c.frames[f.key] == nil {
+		c.frames[f.key] = e
+	}
+	c.used += f.size
+}
+
+func (c *frameCache) unlinkLocked(e *list.Element) *cachedFrame {
+	f := e.Value.(*cachedFrame) //nolint:forcetypeassert // the lists hold *cachedFrame
+	c.list(f.held).Remove(e)
+	if c.frames[f.key] == e {
 		delete(c.frames, f.key)
-		c.used -= f.size
-		victims = append(victims, f)
 	}
-	return victims
+	c.used -= f.size
+	return f
 }
 
-// remove deletes an evicted frame's file unless it was stored again since.
-// A file it cannot delete stays counted, first in line for the next
-// eviction.
-func (c *frameCache) remove(f *cachedFrame) error {
-	lock := c.keyLock(f.key)
-	lock.Lock()
-	defer lock.Unlock()
-	c.mu.Lock()
-	_, back := c.frames[f.key]
-	c.mu.Unlock()
-	if back {
-		return nil
-	}
-	err := os.Remove(c.path(f.key))
-	if err == nil || errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	c.mu.Lock()
-	c.linkLocked(f, false)
-	c.mu.Unlock()
-	return fmt.Errorf("evict frame: %w", err)
-}
-
-// touch marks k used and returns its size if it is cached.
-func (c *frameCache) touch(k frameKey) (int64, bool) {
+// touch marks k used and returns it if it is stored.
+func (c *frameCache) touch(k frameKey) *cachedFrame {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.frames[k]
 	if !ok {
-		return 0, false
+		return nil
 	}
 	f := e.Value.(*cachedFrame) //nolint:forcetypeassert // the lists hold *cachedFrame
 	c.list(f.held).MoveToFront(e)
-	return f.size, true
-}
-
-// cached reports whether k is cached without marking it used.
-func (c *frameCache) cached(k frameKey) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.frames[k]
-	return ok
+	return f
 }
 
 func readAt(path string, p []byte, off int64) error {
-	f, err := os.Open(path) //nolint:gosec // a path under the cache directory
+	f, err := os.Open(path) //nolint:gosec // a file of the cache
 	if err != nil {
 		return fmt.Errorf("open cached frame: %w", err)
 	}
@@ -511,15 +431,4 @@ func readAt(path string, p []byte, off int64) error {
 		return fmt.Errorf("read cached frame: %w", err)
 	}
 	return nil
-}
-
-func sleep(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err() //nolint:wrapcheck // the caller's own context error
-	}
 }

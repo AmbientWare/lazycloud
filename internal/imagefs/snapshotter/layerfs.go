@@ -29,34 +29,11 @@ type layer struct {
 	// data reads the data object through the layer's current grant.
 	data  imagefs.RangeReader
 	cache *frameCache
-	// paths are the frames' files in the cache.
-	paths []string
 	// traced holds the tracer generation each frame was last recorded in.
 	traced []atomic.Uint32
 	// Guarded by cache.mu.
 	mounts   int
 	stopFill context.CancelFunc
-}
-
-// read fills dest with e's bytes from off and returns how many it read. A
-// read the store cannot serve fails whole; it never returns partial or
-// zeroed bytes.
-func (l *layer) read(e *imagefs.Entry, dest []byte, off int64) (int, error) {
-	if off >= e.Size {
-		return 0, nil
-	}
-	n := min(int64(len(dest)), e.Size-off)
-	start := e.Offset + off
-	for pos := start; pos < start+n; {
-		frame := pos / imagefs.FrameSize
-		frameStart := frame * imagefs.FrameSize
-		end := min(start+n, frameStart+imagefs.FrameSize)
-		if err := l.cache.read(l, int(frame), dest[pos-start:end-start], pos-frameStart); err != nil {
-			return 0, err
-		}
-		pos = end
-	}
-	return int(n), nil
 }
 
 // node is one inode of a mounted layer. Hard links share one node.
@@ -198,14 +175,23 @@ func (n *node) Open(_ context.Context, flags uint32) (gofs.FileHandle, uint32, s
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }
 
-// Read fails with EIO, logged, when the store cannot serve the bytes.
+// Read fills dest with the file's bytes from off, frame by frame. A read
+// the store cannot serve fails whole with EIO, logged; it never returns
+// partial or zeroed bytes.
 func (n *node) Read(ctx context.Context, _ gofs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	got, err := n.layer.read(n.entry, dest, off) //nolint:contextcheck // a shared fetch runs under the cache's life
-	if err != nil {
-		n.layer.cache.log.ErrorContext(ctx, "layer read failed", "layer", n.layer.digest, "path", n.entry.Path, "offset", off, "error", err)
-		return nil, syscall.EIO
+	l, e := n.layer, n.entry
+	dest = dest[:max(0, min(int64(len(dest)), e.Size-off))]
+	for done := 0; done < len(dest); {
+		pos := e.Offset + off + int64(done)
+		within := pos % imagefs.FrameSize
+		part := dest[done:min(len(dest), done+int(imagefs.FrameSize-within))]
+		if err := l.cache.read(l, int(pos/imagefs.FrameSize), part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
+			l.cache.log.ErrorContext(ctx, "layer read failed", "layer", l.digest, "path", e.Path, "offset", off, "error", err)
+			return nil, syscall.EIO
+		}
+		done += len(part)
 	}
-	return fuse.ReadResultData(dest[:got]), 0
+	return fuse.ReadResultData(dest), 0
 }
 
 func fileType(t imagefs.EntryType) uint32 {

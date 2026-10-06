@@ -162,11 +162,6 @@ func (c *frameCache) startTrace(name string, layers []imagefs.Digest) error {
 	return c.traces.start(name, layers, complete)
 }
 
-// prefetchRun is a running prefetch; stop ends it.
-type prefetchRun struct {
-	stop context.CancelFunc
-}
-
 // prefetch fetches reads in order in the background, each once its layer
 // is mounted, sharing fetches with reads and fills, until stopPrefetch of
 // name. It holds at most a quarter of the cache, so it never evicts most of
@@ -174,35 +169,42 @@ type prefetchRun struct {
 func (c *frameCache) prefetch(name string, reads []frameKey, parent oteltrace.SpanContext) error {
 	reads = reads[:min(len(reads), int(c.limit/imagefs.FrameSize/4))]
 	ctx, cancel := context.WithTimeout(c.life, prefetchLife)
-	run := &prefetchRun{stop: cancel}
+	stop := &cancel
 	c.pmu.Lock()
 	if old, ok := c.prefetches[name]; ok {
-		old.stop()
+		(*old)()
 	} else if len(c.prefetches) >= maxPrefetches {
 		c.pmu.Unlock()
 		cancel()
 		return status.Errorf(codes.ResourceExhausted, "%d prefetches are running", maxPrefetches)
 	}
-	c.prefetches[name] = run
+	c.prefetches[name] = stop
 	c.pmu.Unlock()
 	c.background.Go(func() { //nolint:contextcheck // a prefetch lives with the cache, not the call
 		defer func() {
 			cancel()
 			c.pmu.Lock()
-			if c.prefetches[name] == run {
+			if c.prefetches[name] == stop {
 				delete(c.prefetches, name)
 			}
 			c.pmu.Unlock()
 		}()
 		began := time.Now()
-		var span oteltrace.Span
+		mounting, stopWaiting := context.WithTimeout(ctx, prefetchMountWait)
+		defer stopWaiting()
+		// seen holds the layers found mounted; one gone since is skipped.
+		seen := make(map[imagefs.Digest]bool)
+		fetched := c.loadEach(ctx, func(yield func(*layer, int) bool) {
+			for _, r := range reads {
+				l := c.awaitMount(mounting, r.layer, seen)
+				if ctx.Err() != nil || (l != nil && r.frame < len(l.index.Frames) && !yield(l, r.frame)) {
+					return
+				}
+			}
+		})
 		if parent.IsSampled() {
-			span = c.starts.span(parent, "snapshotter.prefetch", oteltrace.WithAttributes(attribute.Int("lazycloud.frames", len(reads))))
-		}
-		fetched := c.runPrefetch(ctx, reads)
-		if span != nil {
-			span.SetAttributes(attribute.Int64("lazycloud.fetches", fetched), attribute.Bool("lazycloud.stopped", ctx.Err() != nil))
-			span.End()
+			c.starts.span(parent, "snapshotter.prefetch", oteltrace.WithTimestamp(began), oteltrace.WithAttributes(attribute.Int("lazycloud.frames", len(reads)),
+				attribute.Int64("lazycloud.fetches", fetched), attribute.Bool("lazycloud.stopped", ctx.Err() != nil))).End()
 		}
 		c.log.Info("prefetch ended", "frames", len(reads), "fetched", fetched, "seconds", time.Since(began).Seconds(), "error", ctx.Err())
 	})
@@ -213,30 +215,10 @@ func (c *frameCache) prefetch(name string, reads []frameKey, parent oteltrace.Sp
 func (c *frameCache) stopPrefetch(name string) {
 	c.pmu.Lock()
 	defer c.pmu.Unlock()
-	if run, ok := c.prefetches[name]; ok {
-		run.stop()
+	if stop, ok := c.prefetches[name]; ok {
+		(*stop)()
 		delete(c.prefetches, name)
 	}
-}
-
-// runPrefetch loads reads as their layers mount and returns how many
-// frames it fetched.
-func (c *frameCache) runPrefetch(ctx context.Context, reads []frameKey) int64 {
-	mounting, stopWaiting := context.WithTimeout(ctx, prefetchMountWait)
-	defer stopWaiting()
-	// seen holds the layers found mounted; one gone since is skipped.
-	seen := make(map[imagefs.Digest]bool)
-	return c.loadEach(ctx, func(yield func(*layer, int) bool) {
-		for _, r := range reads {
-			l := c.awaitMount(mounting, r.layer, seen)
-			if ctx.Err() != nil {
-				return
-			}
-			if l != nil && r.frame < len(l.index.Frames) && !yield(l, r.frame) {
-				return
-			}
-		}
-	})
 }
 
 // awaitMount returns the mounted layer of digest, waiting for it to mount
