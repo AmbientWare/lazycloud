@@ -129,7 +129,7 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 		}
 	}()
 
-	options, err := pullOptions(request.GetRegistryAuth(), "")
+	options, err := pullOptions(request.GetRegistryAuth())
 	if err != nil {
 		return "", "", err
 	}

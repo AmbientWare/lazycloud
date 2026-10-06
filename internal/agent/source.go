@@ -201,13 +201,13 @@ type imageCache struct {
 	group      singleflight.Group
 }
 
-// ensureLazy makes a converted image present through containerd in
+// ensure makes a converted image present through containerd in
 // Docker's namespace and reports whether it had to pull. Every layer is
 // marked lazy, so the snapshotter mounts it from the layer grants the agent
 // gave it and the registry serves only the manifest and config. A layer
 // without a live grant fails the pull. Docker then runs the image as any
 // other.
-func (c *imageCache) ensureLazy(ctx context.Context, image string, auth *hostproto.RegistryAuth, platform string) (bool, error) {
+func (c *imageCache) ensure(ctx context.Context, image string, auth *hostproto.RegistryAuth, platform string) (bool, error) {
 	named, err := reference.ParseDockerRef(image)
 	if err != nil {
 		return false, fmt.Errorf("image reference %q: %w", image, err)
@@ -229,7 +229,7 @@ func (c *imageCache) ensureLazy(ctx context.Context, image string, auth *hostpro
 		opts = append(opts, containerd.WithPlatform(platform))
 	}
 	for {
-		pulled, err, _ := c.group.Do("lazy "+ref, func() (any, error) {
+		pulled, err, _ := c.group.Do(ref, func() (any, error) {
 			if img, err := c.containerd.GetImage(ctx, ref); err == nil {
 				unpacked, err := containerd.NewImageWithPlatform(c.containerd, img.Metadata(), matcher).IsUnpacked(ctx, layersource.Snapshotter)
 				if err != nil {

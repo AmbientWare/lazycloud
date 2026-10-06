@@ -154,7 +154,6 @@ func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.Complete
 		upload := &hostproto.LayerUpload{BlobDigest: u.Blob, DiffId: u.DiffID}
 		if u.Index != "" {
 			upload.IndexUrl, upload.DataPartUrls, upload.DataPartBytes = u.Index, u.DataParts, u.PartBytes
-			upload.UrlsExpireAt = timestamppb.New(u.ExpiresAt)
 		}
 		resp.LayerUploads = append(resp.LayerUploads, upload)
 	}

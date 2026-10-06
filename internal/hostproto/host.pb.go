@@ -6396,11 +6396,10 @@ type LayerUpload struct {
 	BlobDigest string `protobuf:"bytes,1,opt,name=blob_digest,json=blobDigest,proto3" json:"blob_digest,omitempty"`
 	// The uncompressed digest the image config names; the converted index must
 	// carry it.
-	DiffId        string                 `protobuf:"bytes,2,opt,name=diff_id,json=diffId,proto3" json:"diff_id,omitempty"`
-	IndexUrl      string                 `protobuf:"bytes,3,opt,name=index_url,json=indexUrl,proto3" json:"index_url,omitempty"`
-	DataPartUrls  []string               `protobuf:"bytes,4,rep,name=data_part_urls,json=dataPartUrls,proto3" json:"data_part_urls,omitempty"`
-	DataPartBytes int64                  `protobuf:"varint,5,opt,name=data_part_bytes,json=dataPartBytes,proto3" json:"data_part_bytes,omitempty"`
-	UrlsExpireAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=urls_expire_at,json=urlsExpireAt,proto3" json:"urls_expire_at,omitempty"`
+	DiffId        string   `protobuf:"bytes,2,opt,name=diff_id,json=diffId,proto3" json:"diff_id,omitempty"`
+	IndexUrl      string   `protobuf:"bytes,3,opt,name=index_url,json=indexUrl,proto3" json:"index_url,omitempty"`
+	DataPartUrls  []string `protobuf:"bytes,4,rep,name=data_part_urls,json=dataPartUrls,proto3" json:"data_part_urls,omitempty"`
+	DataPartBytes int64    `protobuf:"varint,5,opt,name=data_part_bytes,json=dataPartBytes,proto3" json:"data_part_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6468,13 +6467,6 @@ func (x *LayerUpload) GetDataPartBytes() int64 {
 		return x.DataPartBytes
 	}
 	return 0
-}
-
-func (x *LayerUpload) GetUrlsExpireAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.UrlsExpireAt
-	}
-	return nil
 }
 
 type ConvertedLayer struct {
@@ -7450,15 +7442,14 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x11failure_transient\x18\\ \x01(\bR\x10failureTransientB\t\n" +
 	"\aoutcome\"a\n" +
 	"\x1aCompleteImageBuildResponse\x12C\n" +
-	"\rlayer_uploads\x18Z \x03(\v2\x1e.lazycloud.host.v1.LayerUploadR\flayerUploads\"\xf4\x01\n" +
+	"\rlayer_uploads\x18Z \x03(\v2\x1e.lazycloud.host.v1.LayerUploadR\flayerUploads\"\xb2\x01\n" +
 	"\vLayerUpload\x12\x1f\n" +
 	"\vblob_digest\x18\x01 \x01(\tR\n" +
 	"blobDigest\x12\x17\n" +
 	"\adiff_id\x18\x02 \x01(\tR\x06diffId\x12\x1b\n" +
 	"\tindex_url\x18\x03 \x01(\tR\bindexUrl\x12$\n" +
 	"\x0edata_part_urls\x18\x04 \x03(\tR\fdataPartUrls\x12&\n" +
-	"\x0fdata_part_bytes\x18\x05 \x01(\x03R\rdataPartBytes\x12@\n" +
-	"\x0eurls_expire_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\furlsExpireAt\"q\n" +
+	"\x0fdata_part_bytes\x18\x05 \x01(\x03R\rdataPartBytes\"q\n" +
 	"\x0eConvertedLayer\x12\x1f\n" +
 	"\vblob_digest\x18\x01 \x01(\tR\n" +
 	"blobDigest\x12\x1d\n" +
@@ -7780,43 +7771,42 @@ var file_host_v1_host_proto_depIdxs = []int32{
 	88,  // 95: lazycloud.host.v1.CompleteImageBuildRequest.converted_layers:type_name -> lazycloud.host.v1.ConvertedLayer
 	89,  // 96: lazycloud.host.v1.CompleteImageBuildRequest.uploaded_layers:type_name -> lazycloud.host.v1.UploadedLayer
 	87,  // 97: lazycloud.host.v1.CompleteImageBuildResponse.layer_uploads:type_name -> lazycloud.host.v1.LayerUpload
-	102, // 98: lazycloud.host.v1.LayerUpload.urls_expire_at:type_name -> google.protobuf.Timestamp
-	91,  // 99: lazycloud.host.v1.AppendImageBuildLogsRequest.lines:type_name -> lazycloud.host.v1.BuildLogLine
-	102, // 100: lazycloud.host.v1.BuildLogLine.time:type_name -> google.protobuf.Timestamp
-	52,  // 101: lazycloud.host.v1.ImageBuild.RegistryAuthEntry.value:type_name -> lazycloud.host.v1.RegistryAuth
-	9,   // 102: lazycloud.host.v1.HostService.Enroll:input_type -> lazycloud.host.v1.EnrollRequest
-	14,  // 103: lazycloud.host.v1.HostService.Session:input_type -> lazycloud.host.v1.HostMessage
-	60,  // 104: lazycloud.host.v1.HostService.ClaimTasks:input_type -> lazycloud.host.v1.ClaimTasksRequest
-	64,  // 105: lazycloud.host.v1.HostService.CompleteTask:input_type -> lazycloud.host.v1.CompleteTaskRequest
-	68,  // 106: lazycloud.host.v1.HostService.AppendLogs:input_type -> lazycloud.host.v1.AppendLogsRequest
-	71,  // 107: lazycloud.host.v1.HostService.AcquireDisk:input_type -> lazycloud.host.v1.AcquireDiskRequest
-	74,  // 108: lazycloud.host.v1.HostService.RecordDiskGeneration:input_type -> lazycloud.host.v1.RecordDiskGenerationRequest
-	76,  // 109: lazycloud.host.v1.HostService.RecordDiskCollection:input_type -> lazycloud.host.v1.RecordDiskCollectionRequest
-	78,  // 110: lazycloud.host.v1.HostService.ReleaseDisk:input_type -> lazycloud.host.v1.ReleaseDiskRequest
-	80,  // 111: lazycloud.host.v1.HostService.ContainerAPI:input_type -> lazycloud.host.v1.APIRequest
-	85,  // 112: lazycloud.host.v1.HostService.CompleteImageBuild:input_type -> lazycloud.host.v1.CompleteImageBuildRequest
-	90,  // 113: lazycloud.host.v1.HostService.AppendImageBuildLogs:input_type -> lazycloud.host.v1.AppendImageBuildLogsRequest
-	93,  // 114: lazycloud.host.v1.HostService.CompleteSnapshot:input_type -> lazycloud.host.v1.CompleteSnapshotRequest
-	95,  // 115: lazycloud.host.v1.HostService.CompleteFilesystemImage:input_type -> lazycloud.host.v1.CompleteFilesystemImageRequest
-	12,  // 116: lazycloud.host.v1.HostService.Enroll:output_type -> lazycloud.host.v1.EnrollResponse
-	28,  // 117: lazycloud.host.v1.HostService.Session:output_type -> lazycloud.host.v1.ServerMessage
-	61,  // 118: lazycloud.host.v1.HostService.ClaimTasks:output_type -> lazycloud.host.v1.ClaimTasksResponse
-	67,  // 119: lazycloud.host.v1.HostService.CompleteTask:output_type -> lazycloud.host.v1.CompleteTaskResponse
-	70,  // 120: lazycloud.host.v1.HostService.AppendLogs:output_type -> lazycloud.host.v1.AppendLogsResponse
-	72,  // 121: lazycloud.host.v1.HostService.AcquireDisk:output_type -> lazycloud.host.v1.AcquireDiskResponse
-	75,  // 122: lazycloud.host.v1.HostService.RecordDiskGeneration:output_type -> lazycloud.host.v1.RecordDiskGenerationResponse
-	77,  // 123: lazycloud.host.v1.HostService.RecordDiskCollection:output_type -> lazycloud.host.v1.RecordDiskCollectionResponse
-	79,  // 124: lazycloud.host.v1.HostService.ReleaseDisk:output_type -> lazycloud.host.v1.ReleaseDiskResponse
-	83,  // 125: lazycloud.host.v1.HostService.ContainerAPI:output_type -> lazycloud.host.v1.APIResponse
-	86,  // 126: lazycloud.host.v1.HostService.CompleteImageBuild:output_type -> lazycloud.host.v1.CompleteImageBuildResponse
-	92,  // 127: lazycloud.host.v1.HostService.AppendImageBuildLogs:output_type -> lazycloud.host.v1.AppendImageBuildLogsResponse
-	94,  // 128: lazycloud.host.v1.HostService.CompleteSnapshot:output_type -> lazycloud.host.v1.CompleteSnapshotResponse
-	96,  // 129: lazycloud.host.v1.HostService.CompleteFilesystemImage:output_type -> lazycloud.host.v1.CompleteFilesystemImageResponse
-	116, // [116:130] is the sub-list for method output_type
-	102, // [102:116] is the sub-list for method input_type
-	102, // [102:102] is the sub-list for extension type_name
-	102, // [102:102] is the sub-list for extension extendee
-	0,   // [0:102] is the sub-list for field type_name
+	91,  // 98: lazycloud.host.v1.AppendImageBuildLogsRequest.lines:type_name -> lazycloud.host.v1.BuildLogLine
+	102, // 99: lazycloud.host.v1.BuildLogLine.time:type_name -> google.protobuf.Timestamp
+	52,  // 100: lazycloud.host.v1.ImageBuild.RegistryAuthEntry.value:type_name -> lazycloud.host.v1.RegistryAuth
+	9,   // 101: lazycloud.host.v1.HostService.Enroll:input_type -> lazycloud.host.v1.EnrollRequest
+	14,  // 102: lazycloud.host.v1.HostService.Session:input_type -> lazycloud.host.v1.HostMessage
+	60,  // 103: lazycloud.host.v1.HostService.ClaimTasks:input_type -> lazycloud.host.v1.ClaimTasksRequest
+	64,  // 104: lazycloud.host.v1.HostService.CompleteTask:input_type -> lazycloud.host.v1.CompleteTaskRequest
+	68,  // 105: lazycloud.host.v1.HostService.AppendLogs:input_type -> lazycloud.host.v1.AppendLogsRequest
+	71,  // 106: lazycloud.host.v1.HostService.AcquireDisk:input_type -> lazycloud.host.v1.AcquireDiskRequest
+	74,  // 107: lazycloud.host.v1.HostService.RecordDiskGeneration:input_type -> lazycloud.host.v1.RecordDiskGenerationRequest
+	76,  // 108: lazycloud.host.v1.HostService.RecordDiskCollection:input_type -> lazycloud.host.v1.RecordDiskCollectionRequest
+	78,  // 109: lazycloud.host.v1.HostService.ReleaseDisk:input_type -> lazycloud.host.v1.ReleaseDiskRequest
+	80,  // 110: lazycloud.host.v1.HostService.ContainerAPI:input_type -> lazycloud.host.v1.APIRequest
+	85,  // 111: lazycloud.host.v1.HostService.CompleteImageBuild:input_type -> lazycloud.host.v1.CompleteImageBuildRequest
+	90,  // 112: lazycloud.host.v1.HostService.AppendImageBuildLogs:input_type -> lazycloud.host.v1.AppendImageBuildLogsRequest
+	93,  // 113: lazycloud.host.v1.HostService.CompleteSnapshot:input_type -> lazycloud.host.v1.CompleteSnapshotRequest
+	95,  // 114: lazycloud.host.v1.HostService.CompleteFilesystemImage:input_type -> lazycloud.host.v1.CompleteFilesystemImageRequest
+	12,  // 115: lazycloud.host.v1.HostService.Enroll:output_type -> lazycloud.host.v1.EnrollResponse
+	28,  // 116: lazycloud.host.v1.HostService.Session:output_type -> lazycloud.host.v1.ServerMessage
+	61,  // 117: lazycloud.host.v1.HostService.ClaimTasks:output_type -> lazycloud.host.v1.ClaimTasksResponse
+	67,  // 118: lazycloud.host.v1.HostService.CompleteTask:output_type -> lazycloud.host.v1.CompleteTaskResponse
+	70,  // 119: lazycloud.host.v1.HostService.AppendLogs:output_type -> lazycloud.host.v1.AppendLogsResponse
+	72,  // 120: lazycloud.host.v1.HostService.AcquireDisk:output_type -> lazycloud.host.v1.AcquireDiskResponse
+	75,  // 121: lazycloud.host.v1.HostService.RecordDiskGeneration:output_type -> lazycloud.host.v1.RecordDiskGenerationResponse
+	77,  // 122: lazycloud.host.v1.HostService.RecordDiskCollection:output_type -> lazycloud.host.v1.RecordDiskCollectionResponse
+	79,  // 123: lazycloud.host.v1.HostService.ReleaseDisk:output_type -> lazycloud.host.v1.ReleaseDiskResponse
+	83,  // 124: lazycloud.host.v1.HostService.ContainerAPI:output_type -> lazycloud.host.v1.APIResponse
+	86,  // 125: lazycloud.host.v1.HostService.CompleteImageBuild:output_type -> lazycloud.host.v1.CompleteImageBuildResponse
+	92,  // 126: lazycloud.host.v1.HostService.AppendImageBuildLogs:output_type -> lazycloud.host.v1.AppendImageBuildLogsResponse
+	94,  // 127: lazycloud.host.v1.HostService.CompleteSnapshot:output_type -> lazycloud.host.v1.CompleteSnapshotResponse
+	96,  // 128: lazycloud.host.v1.HostService.CompleteFilesystemImage:output_type -> lazycloud.host.v1.CompleteFilesystemImageResponse
+	115, // [115:129] is the sub-list for method output_type
+	101, // [101:115] is the sub-list for method input_type
+	101, // [101:101] is the sub-list for extension type_name
+	101, // [101:101] is the sub-list for extension extendee
+	0,   // [0:101] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_host_proto_init() }

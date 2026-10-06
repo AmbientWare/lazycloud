@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -44,24 +42,11 @@ const (
 // does not help.
 var errLayerContent = errors.New("the layer cannot be converted")
 
-// errStoreRefused marks a request the store refused for itself, such as a
-// signature that does not match.
-var errStoreRefused = errors.New("the store refused the request")
-
 // retryTransfer runs fn until it succeeds, fails for the layer's content or
 // the store's refusal, or uses its attempts.
 func retryTransfer(ctx context.Context, fn func() error) error {
-	delay := transferBackoff
-	for attempt := 1; ; attempt++ {
-		err := fn()
-		if err == nil || errors.Is(err, errLayerContent) || errors.Is(err, errStoreRefused) || attempt == transferAttempts || ctx.Err() != nil {
-			return err
-		}
-		if !sleep(ctx, delay) {
-			return err
-		}
-		delay *= 2
-	}
+	content := func(err error) bool { return errors.Is(err, errLayerContent) }
+	return imagefs.Retry(ctx, transferAttempts, transferBackoff, content, fn) //nolint:wrapcheck // fn's error.
 }
 
 // convertedLayer is a layer converted to a data file under the build's
@@ -264,7 +249,7 @@ func (a *Agent) uploadLayer(ctx context.Context, l *convertedLayer, upload *host
 		length := min(size, l.dataBytes-offset)
 		err := retryTransfer(ctx, func() error {
 			var err error
-			etags[n], err = a.putObject(ctx, part, io.NewSectionReader(data, offset, length), length)
+			etags[n], err = imagefs.PutObject(ctx, a.http, part, io.NewSectionReader(data, offset, length), length)
 			return err
 		})
 		if err != nil {
@@ -272,48 +257,11 @@ func (a *Agent) uploadLayer(ctx context.Context, l *convertedLayer, upload *host
 		}
 	}
 	err = retryTransfer(ctx, func() error {
-		_, err := a.putObject(ctx, upload.GetIndexUrl(), bytes.NewReader(l.index), int64(len(l.index)))
+		_, err := imagefs.PutObject(ctx, a.http, upload.GetIndexUrl(), bytes.NewReader(l.index), int64(len(l.index)))
 		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("upload index: %w", err)
 	}
 	return etags, nil
-}
-
-// redactURL drops the URL, whose query is a signature, from a request
-// error; build failures are stored and shown.
-func redactURL(err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
-	}
-	return err
-}
-
-// putObject PUTs size bytes of body to a presigned URL and returns the
-// object's ETag.
-func (a *Agent) putObject(ctx context.Context, url string, body io.Reader, size int64) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
-	if err != nil {
-		return "", fmt.Errorf("build upload request: %w", err)
-	}
-	req.ContentLength = size
-	if size == 0 {
-		req.Body = http.NoBody
-	}
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return "", redactURL(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		err := fmt.Errorf("the store answered %s: %s", resp.Status, strings.TrimSpace(string(detail)))
-		if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusRequestTimeout {
-			err = fmt.Errorf("%w: %w", errStoreRefused, err)
-		}
-		return "", err
-	}
-	return resp.Header.Get("ETag"), nil
 }

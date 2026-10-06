@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -596,7 +594,7 @@ func (i *Images) uploadPlatformLayer(ctx context.Context, u LayerUpload, l *plat
 		length := min(u.PartBytes, l.dataBytes-offset)
 		err := retryPlatform(ctx, func() error {
 			var err error
-			etags[n], err = i.putPlatformObject(ctx, part, io.NewSectionReader(data, offset, length), length)
+			etags[n], err = imagefs.PutObject(ctx, i.transfer, part, io.NewSectionReader(data, offset, length), length)
 			return err
 		})
 		if err != nil {
@@ -604,7 +602,7 @@ func (i *Images) uploadPlatformLayer(ctx context.Context, u LayerUpload, l *plat
 		}
 	}
 	err = retryPlatform(ctx, func() error {
-		_, err := i.putPlatformObject(ctx, u.Index, bytes.NewReader(l.index), int64(len(l.index)))
+		_, err := imagefs.PutObject(ctx, i.transfer, u.Index, bytes.NewReader(l.index), int64(len(l.index)))
 		return err
 	})
 	if err != nil {
@@ -613,59 +611,12 @@ func (i *Images) uploadPlatformLayer(ctx context.Context, u LayerUpload, l *plat
 	return etags, nil
 }
 
-// errStoreRefused marks a request the store refused, such as a signature
-// that does not match; trying again does not help.
-var errStoreRefused = errors.New("the store refused the request")
-
-// putPlatformObject PUTs size bytes of body to a presigned URL and returns
-// the object's ETag.
-func (i *Images) putPlatformObject(ctx context.Context, target string, body io.Reader, size int64) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, body)
-	if err != nil {
-		return "", fmt.Errorf("build upload request: %w", err)
-	}
-	req.ContentLength = size
-	if size == 0 {
-		req.Body = http.NoBody
-	}
-	resp, err := i.transfer.Do(req)
-	if err != nil {
-		// The URL's query is a signature; failures are stored and logged.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			return "", fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
-		}
-		return "", err //nolint:wrapcheck // Not a URL error.
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		err := fmt.Errorf("the store answered %s: %s", resp.Status, strings.TrimSpace(string(detail)))
-		if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusRequestTimeout {
-			err = fmt.Errorf("%w: %w", errStoreRefused, err)
-		}
-		return "", err
-	}
-	return resp.Header.Get("ETag"), nil
-}
-
 // retryPlatform runs fn until it succeeds, fails for the image, the
 // server's disk or the store's refusal, or uses its attempts.
 func retryPlatform(ctx context.Context, fn func() error) error {
-	delay := platformTransferBackoff
-	for attempt := 1; ; attempt++ {
-		err := fn()
+	final := func(err error) bool {
 		var unconvertible *ConversionError
-		if err == nil || errors.As(err, &unconvertible) || errors.Is(err, ErrServerDisk) || errors.Is(err, errStoreRefused) || attempt == platformTransferAttempts {
-			return err
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return err
-		case <-timer.C:
-		}
-		delay *= 2
+		return errors.As(err, &unconvertible) || errors.Is(err, ErrServerDisk)
 	}
+	return imagefs.Retry(ctx, platformTransferAttempts, platformTransferBackoff, final, fn) //nolint:wrapcheck // fn's error.
 }

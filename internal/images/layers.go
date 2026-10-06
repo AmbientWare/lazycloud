@@ -100,7 +100,6 @@ type LayerUpload struct {
 	Index        string
 	DataParts    []string
 	PartBytes    int64
-	ExpiresAt    time.Time
 }
 
 // ConvertedLayer is a layer a host converted, with the sizes of its pair.
@@ -376,7 +375,7 @@ func (i *Images) presignUploads(ctx context.Context, offers []offer) ([]LayerUpl
 		if err != nil {
 			return nil, err
 		}
-		out[n].Index, out[n].DataParts, out[n].PartBytes, out[n].ExpiresAt = urls.Index, urls.DataParts, storage.LayerPartBytes, urls.ExpiresAt
+		out[n].Index, out[n].DataParts, out[n].PartBytes = urls.Index, urls.DataParts, storage.LayerPartBytes
 	}
 	return out, nil
 }
