@@ -69,3 +69,20 @@ python cold start on the uv base; first container after resume 0.4 s.
 - Never name other platforms in code, comments, commits, branches or PR text.
 - 0003 and 0004 are deployed and frozen. 0005 is undeployed: change it in place; add no other migration.
 - Commit after each step, one-line subjects, no attribution trailers.
+
+## Packets
+
+| Packet | Branch | Owns |
+| --- | --- | --- |
+| snapshotter | opt-snapshotter | internal/imagefs/snapshotter, cmd/snapshotter, cmd/agent/snapshotter.go |
+| hostsession | opt-hostsession | internal/hostsession, storage links and credentials, stage comments |
+| imagefs | opt-imagefs | internal/imagefs (not snapshotter), storage/layers.go, the shared convert-then-upload helper and its two callers |
+| images | opt-images | internal/images, internal/platformimages, migration 0005 |
+| agent | opt-agent | internal/agent (not the convert-then-upload code) |
+| tracing and deploy | opt-ops | internal/telemetry, collector chart, Terraform, workflows, base images |
+
+## Integrator, after the packets
+
+- One layer grant and frame read shape: host.proto imports the imagefs
+  LayerGrant and FrameRead; delete layersource.Grant, FrameRead, readsOut and
+  the agent's grantsIn. Same wire format.
