@@ -189,6 +189,9 @@ func pushPythonBase() error {
 	if err := bake.Run(); err != nil {
 		return fmt.Errorf("build the Python base: %w", err)
 	}
+	// A Docker Engine builder also keeps the image; the tests read the
+	// registry's.
+	_ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", registry+"/release/python:"+pythonVersion+"-acceptance").Run()
 	return nil
 }
 
