@@ -54,9 +54,12 @@ func (d Digest) String() string { return hex.EncodeToString(d[:]) }
 // requests use path-style addressing; without it they go to AWS S3. The key
 // pair is optional; without it the AWS default credential chain applies.
 type Config struct {
-	Endpoint        string
-	Region          string
-	Bucket          string
+	Endpoint string
+	Region   string
+	Bucket   string
+	// LayerBucket holds converted image layers, which hosts read through
+	// presigned URLs.
+	LayerBucket     string
 	AccessKeyID     string
 	SecretAccessKey string
 	// Workspaces configures the buckets that hold volumes and disks.
@@ -76,6 +79,7 @@ type Storage struct {
 	client  *s3.Client
 	presign *s3.PresignClient
 	bucket  string
+	layers  string
 	config  Config
 	buckets bucketProvider
 	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
@@ -100,7 +104,7 @@ func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
 	})
 	return &Storage{
 		pool: pool, queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket,
-		config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
+		layers: cfg.LayerBucket, config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
 	}
 }
 

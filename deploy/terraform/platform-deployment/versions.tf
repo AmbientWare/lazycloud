@@ -43,34 +43,10 @@ locals {
   default_tags = { "lazycloud:deployment" = var.deployment, "lazycloud:managed-by" = "terraform" }
 }
 
+# Resources in other regions, the fleet networks and layer copies, set
+# their own region argument.
 provider "aws" {
   region = var.region
-  default_tags {
-    tags = local.default_tags
-  }
-}
-
-# One alias per further fleet region: Terraform cannot make providers from
-# a list. fleet.tf calls the network module once per provider.
-provider "aws" {
-  alias  = "us_east_2"
-  region = "us-east-2"
-  default_tags {
-    tags = local.default_tags
-  }
-}
-
-provider "aws" {
-  alias  = "us_west_1"
-  region = "us-west-1"
-  default_tags {
-    tags = local.default_tags
-  }
-}
-
-provider "aws" {
-  alias  = "us_west_2"
-  region = "us-west-2"
   default_tags {
     tags = local.default_tags
   }

@@ -48,7 +48,8 @@ services:
       GARAGE_ADMIN_TOKEN: local-garage-admin
       ACCESS_KEY_ID: GK1a2b3c4d5e6f708192a3b4c5
       SECRET_ACCESS_KEY: 6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
-      BUCKET: lazycloud
+      # The platform bucket and the layer bucket.
+      BUCKETS: lazycloud lazycloud-layers
     volumes:
       - ./deploy/local/garage-bootstrap.sh:/bootstrap.sh:ro
     depends_on:

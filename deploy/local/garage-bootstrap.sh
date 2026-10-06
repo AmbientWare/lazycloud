@@ -1,9 +1,9 @@
 #!/bin/sh
 # shellcheck shell=busybox
-# BUCKET, GARAGE_ADMIN_URL and GARAGE_ADMIN_TOKEN come from compose.yaml.
+# BUCKETS, GARAGE_ADMIN_URL and GARAGE_ADMIN_TOKEN come from compose.yaml.
 # shellcheck disable=SC2153
 # Assigns the single node's layout, imports the development key and creates the
-# bucket. Every step is idempotent.
+# buckets. Every step is idempotent.
 set -eu -o pipefail
 
 api() {
@@ -26,9 +26,11 @@ if ! api GET "GetKeyInfo?id=$ACCESS_KEY_ID" >/dev/null 2>&1; then
   api POST ImportKey -d "{\"accessKeyId\":\"$ACCESS_KEY_ID\",\"secretAccessKey\":\"$SECRET_ACCESS_KEY\",\"name\":\"lazycloud-local\"}" >/dev/null
 fi
 
-if ! bucket=$(api GET "GetBucketInfo?globalAlias=$BUCKET" 2>/dev/null); then
-  bucket=$(api POST CreateBucket -d "{\"globalAlias\":\"$BUCKET\"}")
-fi
-bucket_id=$(printf '%s' "$bucket" | sed -n 's/^{"id":"\([0-9a-f]*\)".*/\1/p')
-api POST AllowBucketKey -d "{\"bucketId\":\"$bucket_id\",\"accessKeyId\":\"$ACCESS_KEY_ID\",\"permissions\":{\"read\":true,\"write\":true,\"owner\":true}}" >/dev/null
-echo "object store ready: bucket $BUCKET"
+for name in $BUCKETS; do
+  if ! bucket=$(api GET "GetBucketInfo?globalAlias=$name" 2>/dev/null); then
+    bucket=$(api POST CreateBucket -d "{\"globalAlias\":\"$name\"}")
+  fi
+  bucket_id=$(printf '%s' "$bucket" | sed -n 's/^{"id":"\([0-9a-f]*\)".*/\1/p')
+  api POST AllowBucketKey -d "{\"bucketId\":\"$bucket_id\",\"accessKeyId\":\"$ACCESS_KEY_ID\",\"permissions\":{\"read\":true,\"write\":true,\"owner\":true}}" >/dev/null
+done
+echo "object store ready: buckets $BUCKETS"

@@ -49,7 +49,8 @@ type accountLoops struct {
 func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.Images, listener *database.Listener, logger *slog.Logger) (*accountLoops, func(), error) {
 	store := storage.Config{
 		Endpoint: os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"), Region: os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
-		Bucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"), AccessKeyID: os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
+		Bucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"), LayerBucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
+		AccessKeyID: os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
 	}
 	if err := store.Validate(); err != nil {

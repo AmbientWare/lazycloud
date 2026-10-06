@@ -25,6 +25,7 @@ func Config() storage.Config {
 		Endpoint:        endpoint,
 		Region:          "garage",
 		Bucket:          "lazycloud",
+		LayerBucket:     "lazycloud-layers",
 		AccessKeyID:     "GK1a2b3c4d5e6f708192a3b4c5",
 		SecretAccessKey: "6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31",
 		Workspaces: storage.WorkspaceBuckets{
