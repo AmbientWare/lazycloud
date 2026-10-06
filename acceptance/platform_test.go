@@ -1,6 +1,8 @@
 // Package acceptance runs cross-owner workflows against real PostgreSQL, the
-// local object store, Docker and the managed Python runtime: server owners,
-// scheduler loops and an agent in one test process.
+// local object store, a registry, Docker with lazycloud-snapshotter and the
+// managed Python runtime: server owners, scheduler loops and an agent in one
+// test process. The managed image and the agent's platform images convert
+// for real, so the first start of a test waits for those conversions.
 package acceptance
 
 import (
@@ -10,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +43,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
@@ -50,6 +55,9 @@ import (
 const (
 	pythonVersion = "3.12"
 	testLabel     = "lazycloud.acceptance"
+	// managedTemplate is the platform's image template in these tests.
+	managedTemplate = "docker.io/library/python:{version}-slim"
+	registryImage   = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 )
 
 // supervisorBinary is built once per test binary.
@@ -112,9 +120,37 @@ func runtimeDir(t *testing.T) string {
 	return dir
 }
 
+// startRegistry runs the platform registry on a loopback port for the test.
+func startRegistry(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
+	if err != nil {
+		t.Fatalf("start registry: %v", err)
+	}
+	id := strings.TrimSpace(string(out))
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
+	port, err := exec.CommandContext(t.Context(), "docker", "port", id, "5000/tcp").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
+		if err == nil {
+			_ = resp.Body.Close()
+			return address
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("registry did not start: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func startPlatform(t *testing.T) *platform {
 	t.Helper()
 	runtime := runtimeDir(t)
+	registry := startRegistry(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -137,7 +173,7 @@ func startPlatform(t *testing.T) *platform {
 	}
 
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
-		database.ChannelExecution, execution.ChannelContainerLog)
+		database.ChannelExecution, database.ChannelImageBuild, execution.ChannelContainerLog)
 	edgeListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +204,9 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, p.execution, vault, p.storage, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: managedTemplate})
-	publishManagedImage(t, pool)
+	im := images.NewImages(pool, p.execution, vault, p.storage, images.Config{
+		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: managedTemplate,
+	})
 	p.secrets = vault
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
@@ -275,14 +312,43 @@ func startPlatform(t *testing.T) *platform {
 		err := agent.Run(ctx, agent.Config{
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, ServerPlaintext: true,
+			GeeseFSPath: geesefs, ServerPlaintext: true, Snapshotter: layersource.Socket, BuildNetwork: "host",
 			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
 		})
 		if err != nil && ctx.Err() == nil {
 			t.Errorf("agent: %v", err)
 		}
 	})
+	p.convertManagedImage(im)
 	return p
+}
+
+// convertManagedImage waits until the host joined and the managed image is
+// converted: its mirror build runs in the converted builder image and
+// uploads its layers. Tests' deadlines then measure their own workflows,
+// not the platform's first conversions.
+func (p *platform) convertManagedImage(im *images.Images) {
+	p.t.Helper()
+	ctx := p.t.Context()
+	started := time.Now()
+	for deadline := started.Add(10 * time.Minute); ; time.Sleep(time.Second) {
+		if time.Now().After(deadline) {
+			p.t.Fatal("the managed image did not convert within 10 minutes")
+		}
+		var host uuid.UUID
+		if err := p.pool.QueryRow(ctx, "select id from hosts where state = 'online' limit 1").Scan(&host); err != nil {
+			continue
+		}
+		_, err := im.ManagedPull(ctx, compute.HostID(host), p.workspace.ID, pythonVersion)
+		switch {
+		case err == nil:
+			p.t.Logf("the managed image converted in %s", time.Since(started).Round(time.Millisecond))
+			return
+		case errors.Is(err, images.ErrNotReady):
+		default:
+			p.t.Fatalf("convert the managed image: %v", err)
+		}
+	}
 }
 
 // removeContainers deletes the Docker containers the test's agent left.
