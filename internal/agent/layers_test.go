@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -30,7 +29,7 @@ func serveSnapshotter(t *testing.T, socket string) {
 	ready, done := make(chan struct{}), make(chan error, 1)
 	cfg := snapshotter.Config{
 		Root: filepath.Join(filepath.Dir(socket), "root"), CacheBytes: 64 << 20, Fetches: 4,
-		HTTP: http.DefaultClient, Registry: prometheus.NewRegistry(), Logger: slog.New(slog.DiscardHandler),
+		HTTP: http.DefaultClient, Logger: slog.New(slog.DiscardHandler),
 	}
 	go func() { done <- snapshotter.Serve(ctx, cfg, socket, func() { close(ready) }) }()
 	select {
