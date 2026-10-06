@@ -39,10 +39,12 @@ func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pg
 
 func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-func (c *queryCounter) count(name string) int {
+// completions counts the completion transactions: each sets its attempts'
+// states in one statement.
+func (c *queryCounter) completions() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.n[name]
+	return c.n["SetAttemptStates"]
 }
 
 // take returns the counts since the last take and starts again.
@@ -185,11 +187,11 @@ where a.container_id = $1 and a.state = 'succeeded' and t.status = 'succeeded'`,
 		}
 		notes++
 	}
-	t.Logf("%d completions: %d transactions, %d task and execution notifications", n+1, writes.count("SetAttemptStates"), notes)
+	t.Logf("%d completions: %d transactions, %d task and execution notifications", n+1, writes.completions(), notes)
 	if succeeded != n {
 		t.Fatalf("%d attempts succeeded, want %d", succeeded, n)
 	}
-	if got := writes.count("SetAttemptStates"); got > 3 {
+	if got := writes.completions(); got > 3 {
 		t.Fatalf("%d completions took %d transactions, want the burst in one after the first", n+1, got)
 	}
 	if notes >= n {
@@ -206,7 +208,7 @@ func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 	container, attempts := h.runningAttempts(host, 2*n)
 	var direct, queued []time.Duration
 	for i, attempt := range attempts {
-		before := writes.count("SetAttemptStates")
+		before := writes.completions()
 		start := time.Now()
 		if i < n {
 			id := execution.AttemptID(uuid.MustParse(attempt))
@@ -223,7 +225,7 @@ func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 			}
 			queued = append(queued, time.Since(start))
 		}
-		if got := writes.count("SetAttemptStates") - before; got != 1 {
+		if got := writes.completions() - before; got != 1 {
 			t.Fatalf("completion %d took %d transactions, want 1", i, got)
 		}
 	}
