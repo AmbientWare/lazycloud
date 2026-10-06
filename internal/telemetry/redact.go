@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
-	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -46,21 +45,14 @@ func (s redactedSpan) Events() []sdktrace.Event {
 	return out
 }
 
-// redactAttrs is attrs with URL queries removed from string values, copied
-// only when one changes.
+// redactAttrs is a copy of attrs with URL queries removed from string values.
 func redactAttrs(attrs []attribute.KeyValue) []attribute.KeyValue {
-	var out []attribute.KeyValue
+	out := make([]attribute.KeyValue, len(attrs))
 	for n, a := range attrs {
-		if a.Value.Type() != attribute.STRING || !strings.Contains(a.Value.AsString(), "?") {
-			continue
+		if a.Value.Type() == attribute.STRING {
+			a.Value = attribute.StringValue(Redact(a.Value.AsString()))
 		}
-		if out == nil {
-			out = append([]attribute.KeyValue(nil), attrs...)
-		}
-		out[n] = attribute.String(string(a.Key), Redact(a.Value.AsString()))
-	}
-	if out == nil {
-		return attrs
+		out[n] = a
 	}
 	return out
 }
