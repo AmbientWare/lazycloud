@@ -25,6 +25,15 @@ import (
 	"time"
 )
 
+func frameReader(t *testing.T) *FrameReader {
+	t.Helper()
+	r, err := NewFrameReader(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 // serve is a RangeReader of object, served over HTTP.
 func serve(t *testing.T, object []byte) RangeReader {
 	t.Helper()
@@ -80,7 +89,7 @@ func contents(t *testing.T, ix Index, data RangeReader, frames map[int][]byte, e
 		frame, ok := frames[i]
 		if !ok {
 			var err error
-			if frame, err = ix.ReadFrame(t.Context(), data, i); err != nil {
+			if frame, err = frameReader(t).Read(t.Context(), ix, data, i); err != nil {
 				t.Fatal(err)
 			}
 			frames[i] = frame
@@ -494,7 +503,7 @@ func TestReadFrameRefusesCorruptFrames(t *testing.T) {
 	for _, at := range []int{len(data) / 3, len(data) / 2, len(data) - 100} {
 		corrupt := append([]byte(nil), data...)
 		corrupt[at] ^= 0x40
-		if got, err := ix.ReadFrame(t.Context(), serve(t, corrupt), 0); !errors.Is(err, ErrInvalidIndex) {
+		if got, err := frameReader(t).Read(t.Context(), ix, serve(t, corrupt), 0); !errors.Is(err, ErrInvalidIndex) {
 			t.Fatalf("a frame changed at byte %d: %d bytes, %v", at, len(got), err)
 		}
 	}

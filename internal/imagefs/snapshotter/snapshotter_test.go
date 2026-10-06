@@ -616,8 +616,35 @@ func newTestCache(t *testing.T, transport http.RoundTripper, bound int64) *frame
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(c.close)
+	t.Cleanup(c.background.Wait)
 	return c
+}
+
+// Mounts stay up after Close, so reads whose frames arrive once the cache
+// stopped still decode them.
+func TestReadsOutliveClose(t *testing.T) {
+	ts := newTestStore(t)
+	held := &holdingTransport{release: make(chan struct{})}
+	life, stop := context.WithCancel(t.Context())
+	c, err := newFrameCache(life, t.TempDir(), testConfig("", held, slog.New(slog.DiscardHandler)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.limit = 64 << 20
+	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(4 * imagefs.FrameSize)}})).grantTo(c)
+	reads := make(chan error, len(l.index.Frames))
+	for frame := range l.index.Frames {
+		go func() { reads <- c.read(l, frame, make([]byte, 8), 0) }()
+	}
+	waitFor(t, func() bool { return held.waiting.Load() == int64(len(l.index.Frames)) })
+	stop()
+	c.background.Wait()
+	close(held.release)
+	for range l.index.Frames {
+		if err := <-reads; err != nil {
+			t.Fatalf("a read whose frame arrived after close: %v", err)
+		}
+	}
 }
 
 // grantTo grants the stored layer to c and returns an unmounted layer of it.

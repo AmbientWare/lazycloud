@@ -136,7 +136,7 @@ func (s *snapshotter) Close() error {
 	s.cancel()
 	<-s.done
 	s.teardowns.Wait()
-	s.cache.close()
+	s.cache.background.Wait()
 	return s.Snapshotter.Close() //nolint:wrapcheck // the metadata store's own error
 }
 

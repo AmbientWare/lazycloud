@@ -2,7 +2,9 @@ package snapshotter
 
 import (
 	"archive/tar"
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -273,8 +275,9 @@ func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
 	c.cache.background.Wait()
 }
 
-// holdingTransport holds requests until release closes, and lets them
-// through once pass is set.
+// holdingTransport answers each request from the store at once but holds
+// the answer until release closes, and lets answers through once pass is
+// set.
 type holdingTransport struct {
 	release chan struct{}
 	pass    atomic.Bool
@@ -282,11 +285,19 @@ type holdingTransport struct {
 }
 
 func (h *holdingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !h.pass.Load() {
-		h.waiting.Add(1)
-		<-h.release
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	if err != nil || h.pass.Load() {
+		return resp, err //nolint:wrapcheck // the store's own answer
 	}
-	return http.DefaultTransport.RoundTrip(r)
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the store's own answer
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	h.waiting.Add(1)
+	<-h.release
+	return resp, nil
 }
 
 func waitFor(t *testing.T, done func() bool) {

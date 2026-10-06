@@ -123,12 +123,6 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 	}, nil
 }
 
-// close waits for the background work and releases the decoder.
-func (c *frameCache) close() {
-	c.background.Wait()
-	c.reader.Close()
-}
-
 // newLayer returns a layer ix describes, read through its current grant.
 func (c *frameCache) newLayer(ix imagefs.Index) *layer {
 	return &layer{

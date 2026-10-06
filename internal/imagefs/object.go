@@ -91,18 +91,10 @@ func (o RangeReader) read(ctx context.Context, off int64, p []byte) error {
 	return nil
 }
 
-// ReadFrame returns frame i's uncompressed bytes.
-func (ix Index) ReadFrame(ctx context.Context, data RangeReader, i int) ([]byte, error) {
-	r, err := NewFrameReader(1)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	return r.Read(ctx, ix, data, i)
-}
-
 // FrameReader reads frames through one decoder and keeps its buffers
-// between reads. It reads up to its concurrency frames at once.
+// between reads. It reads up to its concurrency frames at once. Its decoder
+// only decodes whole buffers, which starts no goroutines, so it is never
+// closed: reads may run until the process ends.
 type FrameReader struct {
 	dec *zstd.Decoder
 	// packed holds a buffer for each read at once, made on first use.
@@ -120,9 +112,6 @@ func NewFrameReader(concurrency int) (*FrameReader, error) {
 	}
 	return r, nil
 }
-
-// Close releases the decoder.
-func (r *FrameReader) Close() { r.dec.Close() }
 
 // Read returns frame i of ix's uncompressed bytes, read from data.
 func (r *FrameReader) Read(ctx context.Context, ix Index, data RangeReader, i int) ([]byte, error) {
