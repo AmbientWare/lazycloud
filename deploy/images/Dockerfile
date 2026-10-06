@@ -99,9 +99,9 @@ EXPOSE 8080
 
 # The agent's release bundle. Hosts install /opt/lazycloud from it; the agent
 # finds the supervisor, the snapshotter and GeeseFS beside its executable and
-# the runtimes in /opt/lazycloud/runtimes. It needs root and the host's Docker socket, and it
-# passes these paths to Docker, so a containerized agent must see them at the
-# same paths as the host.
+# the runtimes in /opt/lazycloud/runtimes. It needs root and the host's
+# Docker socket, and it passes these paths to Docker, so a containerized
+# agent must see them at the same paths as the host.
 FROM gcr.io/distroless/static-debian13@sha256:58133991db06659feaabe0f4e97a35cebf15ef4ea08f8a4c6d2ee5f75e4aa6a0 AS agent
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="lazycloud-agent" org.opencontainers.image.version="${VERSION}"

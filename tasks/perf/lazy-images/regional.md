@@ -51,7 +51,11 @@ On `perf-integration`, 2026-10-05.
   region, at most 4 per server, waited by `Server.Wait`): it claims each
   unconfirmed layer's check in one insert, so across replicas a layer is
   checked once per minute at most, HEADs index and data in the copy, and
-  records those present. The next grant or refresh reads the copy.
+  records those present with a notify on `ChannelImageBuild` key
+  `layer-replicas:<region>`. While a layer is missing the check looks
+  again every minute for up to 15 minutes. Sessions of hosts in that
+  region, on any server, mark their grants that read the layer bucket due
+  on the notify and sign them again against the copy at once.
 
 ## Evidence
 
@@ -65,9 +69,11 @@ project `perf-regional`, ports 24970 and 24973):
   sweep leaves no check rows. Fails with a claim that ignores the period.
 - `TestReplicaChecksRunOncePerLayerAcrossServers` (images): 8 concurrent
   checks over two servers check 3 layers in total.
-- `TestGrantsMoveToTheRegionsCopyOnceConfirmed` (hostsession): the start's
-  grant reads the layer bucket, the refresh after the background check
-  reads the copy. Fails without the background check.
+- `TestALateCopyIsGrantedOnceTheRecheckFindsIt` (hostsession, recheck
+  shortened to 0.5 s, hour-long grants): the start's grant reads the layer
+  bucket; the layer is copied after the first check found it missing; a
+  grant from the copy follows within a recheck. Fails without the recheck
+  loop and without marking grants due on the notify.
 
 ## Gaps and unverified boundaries
 
@@ -76,5 +82,7 @@ project `perf-regional`, ports 24970 and 24973):
   fleet networks; check that before the apply.
 - EC2 frame latency from the copies and S3 replication itself are
   unmeasured.
-- A layer's first starts in a region read across regions until its copy
-  is confirmed and the grant refreshes (up to a third of the grant life).
+- A new layer's first starts in a region read across regions until its
+  copy is confirmed: replication time plus up to a minute. A copy that
+  replication has not made after 15 minutes is checked again only when a
+  grant next reads the layer, at the latest at its 20-minute refresh.

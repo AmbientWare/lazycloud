@@ -103,7 +103,7 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 		layerLifetime: layerLifetime, lifetime: lifetime, shutdown: shutdown,
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
 		platform:    platformConversions{running: map[string]bool{}, failures: failures},
-		replicas:    replicaChecks{running: map[string]bool{}},
+		replicas:    replicaChecks{running: map[string]bool{}, recheck: replicaRecheck},
 	}
 }
 

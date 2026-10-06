@@ -112,27 +112,28 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	confirm := func(want int) {
+	confirm := func(want int, pending bool) {
 		t.Helper()
-		if checked, err := im.ConfirmReplicas(ctx, reference, replicaRegion); err != nil || checked != want {
-			t.Fatalf("checked %d layers (%v), want %d", checked, err, want)
+		check, err := im.ConfirmReplicas(ctx, reference, replicaRegion, time.Minute)
+		if err != nil || check.Checked != want || check.Pending != pending {
+			t.Fatalf("checked %+v (%v), want %d checked, pending %v", check, err, want, pending)
 		}
 	}
 
 	expect(regional, replicaRegion, main, main, main, main)
 	expect(elsewhere, "", main, main, main, main)
-	if checked, err := im.ConfirmReplicas(ctx, reference, "us-west-2"); err != nil || checked != 0 {
-		t.Fatalf("a region without a copy was checked: %d %v", checked, err)
+	if check, err := im.ConfirmReplicas(ctx, reference, "us-west-2", time.Minute); err != nil || check.Checked != 0 {
+		t.Fatalf("a region without a copy was checked: %+v %v", check, err)
 	}
 
-	confirm(2)
+	confirm(2, true)
 	expect(regional, replicaRegion, main, main, main, main)
 	replicate(t, pool, reference, 0)
-	confirm(0)
+	confirm(0, true)
 	expect(regional, replicaRegion, main, main, main, main)
 
 	recheck()
-	confirm(2)
+	confirm(2, true)
 	expect(regional, replicaRegion, copied, copied, main, main)
 	if ix := readIndex(t, readsOf(t, im, reference, regional).Layers[0].Index); len(ix.Entries) == 0 {
 		t.Fatal("the copy's index reads back empty")
@@ -140,10 +141,10 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 
 	replicate(t, pool, reference, 1)
 	recheck()
-	confirm(1)
+	confirm(1, false)
 	expect(regional, "", copied, copied, copied, copied)
 	recheck()
-	confirm(0)
+	confirm(0, false)
 	expect(elsewhere, "", main, main, main, main)
 
 	if _, err := pool.Exec(ctx, "update image_layers set unreferenced_since = now() - interval '25 hours'"); err != nil {
@@ -177,12 +178,12 @@ func TestReplicaChecksRunOncePerLayerAcrossServers(t *testing.T) {
 	total := 0
 	for n := range 8 {
 		wg.Go(func() {
-			checked, err := servers[n%2].ConfirmReplicas(ctx, reference, replicaRegion)
+			check, err := servers[n%2].ConfirmReplicas(ctx, reference, replicaRegion, time.Minute)
 			if err != nil {
 				t.Error(err)
 			}
 			mu.Lock()
-			total += checked
+			total += check.Checked
 			mu.Unlock()
 		})
 	}

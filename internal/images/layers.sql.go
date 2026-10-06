@@ -75,7 +75,7 @@ func (q *Queries) ClaimUpload(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const confirmReplicas = `-- name: ConfirmReplicas :exec
+const confirmReplicas = `-- name: ConfirmReplicas :execrows
 update image_layer_replicas set confirmed_at = now()
 where region = $1 and layer_id = any($2::uuid[]) and confirmed_at is null
 `
@@ -85,9 +85,12 @@ type ConfirmReplicasParams struct {
 	LayerIds []uuid.UUID
 }
 
-func (q *Queries) ConfirmReplicas(ctx context.Context, arg ConfirmReplicasParams) error {
-	_, err := q.db.Exec(ctx, confirmReplicas, arg.Region, arg.LayerIds)
-	return err
+func (q *Queries) ConfirmReplicas(ctx context.Context, arg ConfirmReplicasParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmReplicas, arg.Region, arg.LayerIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteUploads = `-- name: DeleteUploads :exec
@@ -410,6 +413,27 @@ func (q *Queries) ReferenceLayers(ctx context.Context, reference string) ([]Refe
 		return nil, err
 	}
 	return items, nil
+}
+
+const replicasPending = `-- name: ReplicasPending :one
+select exists (
+    select 1 from image_reference_layers r
+    left join image_layer_replicas c on c.layer_id = r.layer_id and c.region = $1
+    where r.reference = $2 and c.confirmed_at is null
+)::boolean
+`
+
+type ReplicasPendingParams struct {
+	Region    string
+	Reference string
+}
+
+// Whether region's copy is not confirmed to hold some layer of reference.
+func (q *Queries) ReplicasPending(ctx context.Context, arg ReplicasPendingParams) (bool, error) {
+	row := q.db.QueryRow(ctx, replicasPending, arg.Region, arg.Reference)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const retireLayer = `-- name: RetireLayer :execrows

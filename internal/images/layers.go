@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -53,10 +55,10 @@ type LayerReads struct {
 	Unconfirmed string
 }
 
-// replicaRecheck is how long a check of a layer's copy that found it
-// missing, or whose server stopped, holds off the next check. Replication
-// Time Control copies nearly every object within 15 minutes.
-const replicaRecheck = time.Minute
+// ReplicasConfirmed is the ChannelImageBuild key that announces a
+// confirmation of layers in region's copy of the layer bucket, after which
+// grants that read those layers from the layer bucket may read the copy.
+func ReplicasConfirmed(region string) string { return "layer-replicas:" + region }
 
 // LayerReadURLs presigns GET URLs, valid for up to ttl, for every layer of
 // reference, the image by digest a release pinned, in layer order, for
@@ -102,20 +104,30 @@ func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compu
 	return out, nil
 }
 
+// ReplicaCheck is what one ConfirmReplicas call did.
+type ReplicaCheck struct {
+	// Checked counts the layers this call checked.
+	Checked int
+	// Pending means some layer of the reference is still not confirmed in
+	// the region's copy.
+	Pending bool
+}
+
 // ConfirmReplicas checks region's copy of the layer bucket for the layers
-// of reference it is not confirmed to hold, and records those it holds. A
-// check is claimed per layer and region, so concurrent calls on any
-// server check each layer once, and a layer found missing is checked again
-// only after replicaRecheck. It returns how many layers it checked; a
-// failed check leaves the others' confirmations recorded.
-func (i *Images) ConfirmReplicas(ctx context.Context, reference, region string) (int, error) {
+// of reference it is not confirmed to hold, records those it holds and
+// announces them under ReplicasConfirmed. A check is claimed per layer and
+// region, so concurrent calls on any server check each layer once, and a
+// layer found missing is checked again only after recheck. A failed check
+// leaves the others' confirmations recorded.
+func (i *Images) ConfirmReplicas(ctx context.Context, reference, region string, recheck time.Duration) (ReplicaCheck, error) {
 	if !i.storage.HasLayerReplica(region) {
-		return 0, nil
+		return ReplicaCheck{}, nil
 	}
-	ids, err := i.queries.ClaimReplicaChecks(ctx, ClaimReplicaChecksParams{Reference: reference, Region: region, RetrySeconds: replicaRecheck.Seconds()})
+	ids, err := i.queries.ClaimReplicaChecks(ctx, ClaimReplicaChecksParams{Reference: reference, Region: region, RetrySeconds: recheck.Seconds()})
 	if err != nil {
-		return 0, fmt.Errorf("claim layer replica checks: %w", err)
+		return ReplicaCheck{}, fmt.Errorf("claim layer replica checks: %w", err)
 	}
+	out := ReplicaCheck{Checked: len(ids)}
 	var errs []error
 	held := make([]uuid.UUID, 0, len(ids))
 	for _, id := range ids {
@@ -129,11 +141,22 @@ func (i *Images) ConfirmReplicas(ctx context.Context, reference, region string) 
 		}
 	}
 	if len(held) > 0 {
-		if err := i.queries.ConfirmReplicas(ctx, ConfirmReplicasParams{Region: region, LayerIds: held}); err != nil {
+		err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
+			n, err := i.queries.WithTx(tx).ConfirmReplicas(ctx, ConfirmReplicasParams{Region: region, LayerIds: held})
+			if err != nil || n == 0 {
+				return err //nolint:wrapcheck // Wrapped below.
+			}
+			return database.Notify(ctx, tx, database.ChannelImageBuild, ReplicasConfirmed(region))
+		})
+		if err != nil {
 			errs = append(errs, fmt.Errorf("record layer replicas: %w", err))
 		}
 	}
-	return len(ids), errors.Join(errs...)
+	if out.Pending, err = i.queries.ReplicasPending(ctx, ReplicasPendingParams{Reference: reference, Region: region}); err != nil {
+		errs = append(errs, fmt.Errorf("read layer replicas: %w", err))
+		out.Pending = true
+	}
+	return out, errors.Join(errs...)
 }
 
 // RecordUses records that references were published or sent to hosts in

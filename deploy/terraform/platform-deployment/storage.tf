@@ -1,6 +1,7 @@
 # objects holds sources, artifacts and build contexts; deploy holds the
-# chart values; the layer buckets below hold converted images. Workspace buckets (<prefix>-<workspace id>) hold volumes and
-# disks; the server creates them, so they stay outside Terraform.
+# chart values; the layer buckets below hold converted images. Workspace
+# buckets (<prefix>-<workspace id>) hold volumes and disks; the server
+# creates them, so they stay outside Terraform.
 locals {
   workspace_bucket_prefix = "${var.deployment}-workspace"
   workspace_bucket_arn    = "${local.arn_prefix}:s3:::${local.workspace_bucket_prefix}-*"

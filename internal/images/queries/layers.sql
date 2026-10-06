@@ -29,9 +29,17 @@ where image_layer_replicas.confirmed_at is null
     and image_layer_replicas.checked_at < now() - make_interval(secs => @retry_seconds::float8)
 returning layer_id;
 
--- name: ConfirmReplicas :exec
+-- name: ConfirmReplicas :execrows
 update image_layer_replicas set confirmed_at = now()
 where region = @region and layer_id = any(@layer_ids::uuid[]) and confirmed_at is null;
+
+-- name: ReplicasPending :one
+-- Whether region's copy is not confirmed to hold some layer of reference.
+select exists (
+    select 1 from image_reference_layers r
+    left join image_layer_replicas c on c.layer_id = r.layer_id and c.region = @region
+    where r.reference = @reference and c.confirmed_at is null
+)::boolean;
 
 -- name: UploadsOf :many
 -- The uploads offered to a build container for these blobs.

@@ -231,7 +231,7 @@ func (sess *session) platformImage(ctx context.Context, cache layerCache, key st
 		sess.server.logger.WarnContext(ctx, "issuing platform image grants failed", "host", sess.host.String(), "image", pull.Pull.Reference, "error", err)
 		return nil, false, nil
 	}
-	sess.platform.sent[key] = sess.server.grantOf(layers, now)
+	sess.platform.sent[key] = sess.server.grantOf(cache, pull.Pull.Reference, now)
 	return &hostproto.PlatformImage{
 		Reference: pull.Reference, Image: pull.Pull.Reference, Auth: registryAuthOut(pull.Pull.Auth), Platform: pull.Pull.Platform, Layers: layers,
 	}, false, nil

@@ -405,20 +405,31 @@ func bucketOf(t *testing.T, raw string) string {
 }
 
 // A start on a host in a region with a copy of the layer bucket reads the
-// layer bucket while the copy is unconfirmed; the server checks the copy
-// on its own, and the next grant reads the copy. Garage signs one region,
-// so the platform bucket stands in for that region's copy.
-func TestGrantsMoveToTheRegionsCopyOnceConfirmed(t *testing.T) {
+// layer bucket while the copy is unconfirmed. A layer replicated after the
+// server's first check is found by its next one, and the host gets grants
+// from the copy then, not when its hour-long grant is due. Garage signs one
+// region, so the platform bucket stands in for that region's copy.
+func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
 	cfg := storagetest.Config()
 	cfg.LayerReplicas = map[string]string{cfg.Region: cfg.Bucket}
 	h := serveWith(t, dbtest.New(t), cfg)
-	const lifetime = 3 * time.Second
-	hostsession.SetLayerLifetime(h.server, lifetime)
+	const recheck = 500 * time.Millisecond
+	hostsession.SetReplicaRecheck(h.server, recheck)
 	host, ctx := h.enroll()
 	h.exec("update hosts set region = $1 where id = $2", cfg.Region, uuid.UUID(host))
 	layer := h.storeLayer("regional")
 	ref := reference("regional")
 	h.publish(ref, layer)
+	h.startingImage(host, ref)
+
+	in := commands(t, open(t, ctx, h.client))
+	first := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil }).GetStart().GetLayers()[0]
+	if bucketOf(t, first.GetIndexUrl()) != cfg.LayerBucket || bucketOf(t, first.GetDataUrl()) != cfg.LayerBucket {
+		t.Fatalf("an unconfirmed copy was granted: %s", first.GetIndexUrl())
+	}
+	for h.count("select count(*) from image_layer_replicas where confirmed_at is null") == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
 	client := s3.New(s3.Options{
 		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
@@ -431,18 +442,14 @@ func TestGrantsMoveToTheRegionsCopyOnceConfirmed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.startingImage(host, ref)
-
-	in := commands(t, open(t, ctx, h.client))
-	first := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil }).GetStart().GetLayers()[0]
-	if bucketOf(t, first.GetIndexUrl()) != cfg.LayerBucket || bucketOf(t, first.GetDataUrl()) != cfg.LayerBucket {
-		t.Fatalf("an unconfirmed copy was granted: %s", first.GetIndexUrl())
+	copied := next(t, in, 10*recheck, func(m *hostproto.ServerMessage) bool {
+		layers := m.GetLayerGrants().GetLayers()
+		return len(layers) > 0 && bucketOf(t, layers[0].GetIndexUrl()) == cfg.Bucket
+	}).GetLayerGrants().GetLayers()[0]
+	if bucketOf(t, copied.GetDataUrl()) != cfg.Bucket {
+		t.Fatalf("the copy's grant reads data from %s", copied.GetDataUrl())
 	}
-	refresh := next(t, in, 2*lifetime, func(m *hostproto.ServerMessage) bool { return m.GetLayerGrants() != nil }).GetLayerGrants().GetLayers()[0]
-	if bucketOf(t, refresh.GetIndexUrl()) != cfg.Bucket || bucketOf(t, refresh.GetDataUrl()) != cfg.Bucket {
-		t.Fatalf("the refresh after the check reads %s", refresh.GetIndexUrl())
-	}
-	if status, body := get(t, refresh.GetIndexUrl(), nil); status != http.StatusOK || !bytes.Equal(body, layer.index) {
+	if status, body := get(t, copied.GetIndexUrl(), nil); status != http.StatusOK || !bytes.Equal(body, layer.index) {
 		t.Fatalf("the copy's index: %d", status)
 	}
 }

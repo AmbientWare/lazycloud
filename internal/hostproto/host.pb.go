@@ -7442,14 +7442,14 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x11failure_transient\x18\\ \x01(\bR\x10failureTransientB\t\n" +
 	"\aoutcome\"a\n" +
 	"\x1aCompleteImageBuildResponse\x12C\n" +
-	"\rlayer_uploads\x18Z \x03(\v2\x1e.lazycloud.host.v1.LayerUploadR\flayerUploads\"\xb2\x01\n" +
+	"\rlayer_uploads\x18Z \x03(\v2\x1e.lazycloud.host.v1.LayerUploadR\flayerUploads\"\xc8\x01\n" +
 	"\vLayerUpload\x12\x1f\n" +
 	"\vblob_digest\x18\x01 \x01(\tR\n" +
 	"blobDigest\x12\x17\n" +
 	"\adiff_id\x18\x02 \x01(\tR\x06diffId\x12\x1b\n" +
 	"\tindex_url\x18\x03 \x01(\tR\bindexUrl\x12$\n" +
 	"\x0edata_part_urls\x18\x04 \x03(\tR\fdataPartUrls\x12&\n" +
-	"\x0fdata_part_bytes\x18\x05 \x01(\x03R\rdataPartBytes\"q\n" +
+	"\x0fdata_part_bytes\x18\x05 \x01(\x03R\rdataPartBytesJ\x04\b\x06\x10\aR\x0eurls_expire_at\"q\n" +
 	"\x0eConvertedLayer\x12\x1f\n" +
 	"\vblob_digest\x18\x01 \x01(\tR\n" +
 	"blobDigest\x12\x1d\n" +
