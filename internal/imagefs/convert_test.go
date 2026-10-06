@@ -26,15 +26,13 @@ import (
 )
 
 // serve is a RangeReader of object, served over HTTP.
-func serve(t testing.TB, object []byte) RangeReader {
+func serve(t *testing.T, object []byte) RangeReader {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(object))
 	}))
 	t.Cleanup(server.Close)
-	client := server.Client()
-	client.Transport.(*http.Transport).MaxIdleConnsPerHost = 64 //nolint:forcetypeassert // httptest's client.
-	return HTTPObject(client, func() string { return server.URL })
+	return HTTPObject(server.Client(), func() string { return server.URL })
 }
 
 // roundTrip converts a layer and returns the index as a reader decodes it,
@@ -503,7 +501,7 @@ func TestReadFrameRefusesCorruptFrames(t *testing.T) {
 }
 
 // fileTar is a layer of one regular file, after the headers before it.
-func fileTar(t testing.TB, name string, body []byte, before ...tar.Header) []byte {
+func fileTar(t *testing.T, name string, body []byte, before ...tar.Header) []byte {
 	t.Helper()
 	var layer bytes.Buffer
 	tw := tar.NewWriter(&layer)
