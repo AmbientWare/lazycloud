@@ -27,7 +27,10 @@ address, which the VM answers too.
 
 With that environment exported, `lazycloud deploy` and the SDK work against
 the stack, and `lazycloud machine join --name m1 --workspaces dev` enrolls
-another machine from the agent release run.sh published. The end-to-end
+another machine from the agent release run.sh published. The join runs as
+root and reconfigures that machine's Docker for the snapshotter, restarting
+it (docs/platform/compute.mdx says how to revert), so the VM is the easier
+host. The end-to-end
 Python checks run with `LAZYCLOUD_TEST_ENDPOINT`, `LAZYCLOUD_TEST_TOKEN` and
 `LAZYCLOUD_TEST_WORKSPACE` set to the exported values: `uv run --group dev
 pytest -x -s python/tests/acceptance`.
