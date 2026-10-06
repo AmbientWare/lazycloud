@@ -425,8 +425,19 @@ func (c *frameCache) linkLocked(f *cachedFrame, recent bool) {
 // evict drops frames until the cache fits its bound: unmounted layers'
 // frames first, then mounted layers', least recently used first.
 func (c *frameCache) evict() {
-	var victims []*cachedFrame
 	c.mu.Lock()
+	victims := c.evictLocked()
+	c.mu.Unlock()
+	for _, f := range victims {
+		if err := c.remove(f); err != nil {
+			c.log.Warn("evicting a cached frame failed", "layer", f.key.layer, "frame", f.key.frame, "error", err)
+		}
+	}
+}
+
+// evictLocked unlinks the frames evict removes.
+func (c *frameCache) evictLocked() []*cachedFrame {
+	var victims []*cachedFrame
 	for c.used > c.limit {
 		from := &c.idle
 		if from.Len() == 0 {
@@ -440,12 +451,7 @@ func (c *frameCache) evict() {
 		c.used -= f.size
 		victims = append(victims, f)
 	}
-	c.mu.Unlock()
-	for _, f := range victims {
-		if err := c.remove(f); err != nil {
-			c.log.Warn("evicting a cached frame failed", "layer", f.key.layer, "frame", f.key.frame, "error", err)
-		}
-	}
+	return victims
 }
 
 // remove deletes an evicted frame's file unless it was stored again since.
