@@ -107,7 +107,7 @@ func schedulerEnv(t *testing.T, pool *pgxpool.Pool) {
 	if err := os.WriteFile(key, secret, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := storagetest.Config()
+	store := storagetest.Config(t)
 	for name, value := range map[string]string{
 		"LAZYCLOUD_DATABASE_URL":                   pool.Config().ConnString(),
 		"LAZYCLOUD_SECRETS_KEY_FILE":               key,

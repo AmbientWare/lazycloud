@@ -108,7 +108,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := storage.NewStorage(pool, storagetest.Config())
+	store := storage.NewStorage(pool, storagetest.Config(t))
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: store,
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,

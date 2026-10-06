@@ -31,6 +31,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 const testImage = "python:3.12-slim"
@@ -50,10 +51,20 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(fmt.Sprintf("build supervisor: %v", err))
 	}
+	store, removeStore, err := storagetest.Open(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	layerBucket = store.LayerBucket
 	if err := convertLazyImages(context.Background()); err != nil {
+		_ = removeStore(context.Background())
 		panic(fmt.Sprintf("convert the test images: %v", err))
 	}
 	code := m.Run()
+	if err := removeStore(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
+		code = max(code, 1)
+	}
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }

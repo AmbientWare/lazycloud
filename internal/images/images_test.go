@@ -114,7 +114,7 @@ func newFixture(t *testing.T) fixture {
 	pool := dbtest.New(t)
 	exec := execution.NewExecution(pool)
 	vault := newVault(t, pool)
-	store := storage.NewStorage(pool, storagetest.Config())
+	store := storage.NewStorage(pool, storagetest.Config(t))
 	im := images.NewImages(pool, exec, vault, store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true,
 		ManagedBase: registry + "/library/python:{version}-slim",

@@ -410,7 +410,7 @@ func bucketOf(t *testing.T, raw string) string {
 // from the copy then, not when its hour-long grant is due. Garage signs one
 // region, so the platform bucket stands in for that region's copy.
 func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
-	cfg := storagetest.Config()
+	cfg := storagetest.Config(t)
 	cfg.LayerReplicas = map[string]string{cfg.Region: cfg.Bucket}
 	h := serveWith(t, dbtest.New(t), cfg)
 	const recheck = 500 * time.Millisecond

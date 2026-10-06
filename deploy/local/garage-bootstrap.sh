@@ -1,6 +1,7 @@
 #!/bin/sh
 # shellcheck shell=busybox
-# BUCKETS, GARAGE_ADMIN_URL and GARAGE_ADMIN_TOKEN come from compose.yaml.
+# BUCKETS, GARAGE_ADMIN_URL and GARAGE_ADMIN_TOKEN come from compose.yaml or
+# compose.test.yaml.
 # shellcheck disable=SC2153
 # Assigns the single node's layout, imports the development key and creates the
 # buckets. Every step is idempotent.

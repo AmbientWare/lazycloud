@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/images"
@@ -32,22 +31,18 @@ import (
 
 // lazyImages are the workload and platform images the tests start from a
 // registry. Every host reads images through its snapshotter, so TestMain
-// converts their layers into the development object store, as the server
-// does, and start commands and sessions carry the grants it would send.
+// converts their layers into layerBucket, as the server does, and start commands and sessions carry the grants it would send.
 var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage, platformimages.Builder, platformimages.Mount}
 
 // imageLayers holds the layer grants of each of lazyImages.
 var imageLayers = map[string][]*hostproto.LayerGrant{}
 
-// layerStore is the development object store the test pairs go to, and
-// its bucket.
-func layerStore() (*s3.Client, string) {
-	cfg := storagetest.Config()
-	return s3.New(s3.Options{
-		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	}), cfg.LayerBucket
-}
+// layerBucket is the test store's bucket the test pairs go to, made and
+// removed by TestMain.
+var layerBucket string //nolint:gochecknoglobals // Set once in TestMain.
+
+// layerStore is the test store and its bucket for pairs.
+func layerStore() (*s3.Client, string) { return storagetest.Client(), layerBucket }
 
 // convertLazyImages fills imageLayers with grants for twelve hours.
 func convertLazyImages(ctx context.Context) error {

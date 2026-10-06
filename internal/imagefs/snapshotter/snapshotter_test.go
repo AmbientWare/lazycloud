@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	"github.com/containerd/containerd/v2/core/mount"
@@ -40,7 +39,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// testStore holds layers in the development Garage, read through
+// testStore holds layers in a test bucket, read through
 // presigned URLs as hosts read the platform store.
 type testStore struct {
 	client  *s3.Client
@@ -51,24 +50,8 @@ type testStore struct {
 
 func newTestStore(t *testing.T) *testStore {
 	t.Helper()
-	cfg := storagetest.Config()
-	client := s3.New(s3.Options{
-		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	})
-	ts := &testStore{client: client, bucket: cfg.Bucket, prefix: "snapshotter-test/" + uuid.NewString() + "/", presign: s3.NewPresignClient(client)}
-	t.Cleanup(func() {
-		ctx := context.Background()
-		listed, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(ts.bucket), Prefix: aws.String(ts.prefix)})
-		if err != nil {
-			t.Errorf("list test objects: %v", err)
-			return
-		}
-		for _, o := range listed.Contents {
-			_, _ = client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(ts.bucket), Key: o.Key})
-		}
-	})
-	return ts
+	client := storagetest.Client()
+	return &testStore{client: client, bucket: storagetest.Config(t).Bucket, prefix: "snapshotter-test/" + uuid.NewString() + "/", presign: s3.NewPresignClient(client)}
 }
 
 func (ts *testStore) put(t *testing.T, key string, body []byte) {

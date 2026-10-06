@@ -122,7 +122,7 @@ func start(t *testing.T) *harness {
 // serve serves the host service on a random local port over pool.
 func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 	t.Helper()
-	return serveWith(t, pool, storagetest.Config())
+	return serveWith(t, pool, storagetest.Config(t))
 }
 
 // serveWith serves the host service over pool and the object store cfg.

@@ -48,8 +48,10 @@ reach.
 `docker compose run --rm object-store-bootstrap` creates the `lazycloud` and
 `lazycloud-layers` buckets and the development key. Both steps are idempotent.
 
-Owner tests use `docker compose -f compose.test.yaml up -d --wait`, a disposable
-PostgreSQL on 127.0.0.1:15442.
+Tests use `docker compose -f compose.test.yaml up -d --wait`, a disposable
+PostgreSQL on 127.0.0.1:15442 and Garage on 127.0.0.1:15900 (admin API on
+15903), never this stack. Each test makes its own buckets there and deletes
+them when it ends.
 
 Each binary serves Prometheus metrics at `/metrics` on `LAZYCLOUD_METRICS_ADDR`
 when it is set, and exports traces over OTLP/gRPC to `LAZYCLOUD_OTLP_ENDPOINT`
