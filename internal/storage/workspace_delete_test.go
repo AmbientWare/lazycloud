@@ -16,7 +16,7 @@ import (
 // a deletion pass stays bounded, and the next call finishes the prefix.
 func TestDeleteWorkspaceObjectsIsBoundedPerCall(t *testing.T) {
 	ctx := t.Context()
-	cfg := storagetest.Config()
+	cfg := storagetest.Config(t)
 	s := NewStorage(dbtest.New(t), cfg)
 	ws := identity.WorkspaceID(uuid.New())
 	prefix := fmt.Sprintf("workspaces/%s/", ws)

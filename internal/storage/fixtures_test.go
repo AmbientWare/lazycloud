@@ -23,6 +23,8 @@ type fixture struct {
 	t       testing.TB
 	pool    *pgxpool.Pool
 	storage *Storage
+	// bucket is the platform bucket.
+	bucket  string
 	ws      identity.WorkspaceID
 	release uuid.UUID
 	host    compute.HostID
@@ -32,7 +34,8 @@ func newFixture(t testing.TB, spec string) *fixture {
 	t.Helper()
 	pool := dbtest.New(t)
 	f := &fixture{t: t, pool: pool}
-	f.storage = NewStorage(pool, withLinks(t, func() *Storage { return f.storage }))
+	cfg := withLinks(t, func() *Storage { return f.storage })
+	f.storage, f.bucket = NewStorage(pool, cfg), cfg.Bucket
 	f.ws = f.workspace("ws-" + uuid.NewString()[:8])
 	var app, workload uuid.UUID
 	f.exec(`insert into apps (workspace_id, name, state) values ($1, 'app', 'active') returning id`, &app, uuid.UUID(f.ws))
@@ -106,7 +109,7 @@ func send(t *testing.T, url string, body []byte) (int, string) {
 	return resp.StatusCode, resp.Header.Get("ETag")
 }
 
-// withLinks is the development store with download links served the way
+// withLinks is a test store with download links served the way
 // the API serves them, by the storage that store returns.
 func withLinks(t testing.TB, store func() *Storage) Config {
 	t.Helper()
@@ -119,7 +122,7 @@ func withLinks(t testing.TB, store func() *Storage) Config {
 		http.Redirect(w, r, url, http.StatusFound)
 	}))
 	t.Cleanup(links.Close)
-	cfg := storagetest.Config()
+	cfg := storagetest.Config(t)
 	cfg.Links = Links{URL: links.URL + "/v1/links/", Key: []byte("download links of the storage tests")}
 	return cfg
 }

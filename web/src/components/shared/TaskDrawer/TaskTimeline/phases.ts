@@ -1,7 +1,7 @@
 import type { Schemas } from "@/lib/api/client";
 
 export type ExecutionPhase = {
-  kind: "queued" | "startup" | "execution";
+  kind: "queued" | "conversion" | "startup" | "execution";
   label: string;
   startMs: number;
   endMs: number;
@@ -31,17 +31,19 @@ export function executionPhaseDomain(task: PhaseInput, nowMs: number): Execution
   return { startMs: created, endMs: Math.max(observedEnd, created + 1_000) };
 }
 
-/** Stages between placement and readiness: what the timeline calls preparation. */
+/** Stages on the host between placement and readiness: what the timeline calls preparation. */
 const PREPARATION: ReadonlySet<Schemas["LifecycleStageKind"]> = new Set([
   "image",
   "source",
+  "disk",
   "create",
   "runtime",
 ]);
 
 /**
- * User-facing lifecycle rollup on the task request domain. The container's
- * finished start stages determine when preparation began, but are
+ * User-facing lifecycle rollup on the task request domain. A start held for
+ * its image conversion shows that wait as its own phase. The container's
+ * finished host stages determine when preparation began, but are
  * deliberately collapsed to one preparation phase. Stages outside this task
  * are excluded so startup work from a reused container is not attributed to
  * the current task.
@@ -61,26 +63,37 @@ export function executionPhases(
   const preparationEnd = Math.min(executionStart ?? taskEnd, taskEnd);
   const phases: Array<Omit<ExecutionPhase, "leftPct" | "widthPct">> = [];
 
-  const preparationStarts = stages.flatMap((stage) => {
-    const startMs = parseMs(stage.started_at);
-    const endMs = parseMs(stage.finished_at);
-    if (
-      !PREPARATION.has(stage.stage) ||
-      startMs === null ||
-      endMs === null ||
-      endMs <= startMs ||
-      endMs <= domain.startMs ||
-      startMs >= preparationEnd
-    ) {
-      return [];
-    }
-    return [Math.max(startMs, domain.startMs)];
-  });
+  const inTask = (included: (kind: Schemas["LifecycleStageKind"]) => boolean) =>
+    stages.flatMap((stage) => {
+      const startMs = parseMs(stage.started_at);
+      const endMs = parseMs(stage.finished_at);
+      if (
+        !included(stage.stage) ||
+        startMs === null ||
+        endMs === null ||
+        endMs <= startMs ||
+        endMs <= domain.startMs ||
+        startMs >= preparationEnd
+      ) {
+        return [];
+      }
+      return [
+        { startMs: Math.max(startMs, domain.startMs), endMs: Math.min(endMs, preparationEnd) },
+      ];
+    });
+  const conversion = inTask((kind) => kind === "conversion")[0] ?? null;
+  // Preparation begins when the server sends the start: at the end of a
+  // conversion, or else at the first host stage.
+  const preparationStarts = inTask((kind) => PREPARATION.has(kind)).map((stage) => stage.startMs);
+  if (conversion) preparationStarts.push(conversion.endMs);
   const preparationStart = preparationStarts.length > 0 ? Math.min(...preparationStarts) : null;
 
-  const queuedEnd = preparationStart ?? preparationEnd;
+  const queuedEnd = conversion?.startMs ?? preparationStart ?? preparationEnd;
   if (queuedEnd > domain.startMs) {
     phases.push(phase("queued", "Queued", domain.startMs, queuedEnd));
+  }
+  if (conversion && preparationStart !== null && preparationStart > conversion.startMs) {
+    phases.push(phase("conversion", "Image conversion", conversion.startMs, preparationStart));
   }
   if (preparationStart !== null && preparationEnd > preparationStart) {
     phases.push(phase("startup", "Container preparation", preparationStart, preparationEnd));

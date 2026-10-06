@@ -403,6 +403,7 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {
 			delete(derived, id)
+			sess.waiting(ctx, start.Container, "image", "")
 			continue
 		}
 		if reason, permanent := permanentStartFailure(err); permanent {
@@ -411,6 +412,7 @@ func (sess *session) sync(ctx context.Context) error {
 			// containers are unaffected.
 			sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(),
 				"container", start.Container.String(), "error", err)
+			sess.recordConversion(ctx, start.Container, time.Now())
 			sess.endStart(start.Container, reason)
 			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, reason); err != nil {
 				return sess.server.grpcError(ctx, err)
@@ -440,6 +442,7 @@ func (sess *session) sync(ctx context.Context) error {
 		if err := sess.send(msg); err != nil {
 			return err
 		}
+		sess.recordConversion(ctx, start.Container, issued)
 		sess.endStart(start.Container, "")
 		sess.live[start.Container] = true
 		started = append(started, msg.GetStart().GetImage())

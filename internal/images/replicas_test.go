@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,23 +26,19 @@ import (
 // same store under that region's name.
 const replicaRegion = "garage"
 
-// replicated is the development store with the platform bucket standing in
-// for replicaRegion's copy of the layer bucket.
-func replicated() storage.Config {
-	cfg := storagetest.Config()
+// replicated is a test store with its platform bucket standing in for
+// replicaRegion's copy of the layer bucket.
+func replicated(t *testing.T) storage.Config {
+	cfg := storagetest.Config(t)
 	cfg.LayerReplicas = map[string]string{replicaRegion: cfg.Bucket}
 	return cfg
 }
 
 // replicate copies the pairs of reference's layers at positions into
-// replicaRegion's copy, as S3 replication does.
-func replicate(t *testing.T, pool *pgxpool.Pool, reference string, positions ...int) {
+// replicaRegion's copy in cfg, as S3 replication does.
+func replicate(t *testing.T, cfg storage.Config, pool *pgxpool.Pool, reference string, positions ...int) {
 	t.Helper()
-	cfg := replicated()
-	client := s3.New(s3.Options{
-		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	})
+	client := storagetest.Client()
 	for _, position := range positions {
 		var id uuid.UUID
 		if err := pool.QueryRow(t.Context(), "select layer_id from image_reference_layers where reference = $1 and position = $2", reference, position).Scan(&id); err != nil {
@@ -92,7 +87,7 @@ func readsOf(t *testing.T, im *images.Images, reference string, host compute.Hos
 func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	cfg := replicated()
+	cfg := replicated(t)
 	store := storage.NewStorage(pool, cfg)
 	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
 	reference := "registry.test/lazycloud/images/regional@sha256:" + hex64("1")
@@ -128,7 +123,7 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 
 	confirm(2, true)
 	expect(regional, replicaRegion, main, main, main, main)
-	replicate(t, pool, reference, 0)
+	replicate(t, cfg, pool, reference, 0)
 	confirm(0, true)
 	expect(regional, replicaRegion, main, main, main, main)
 
@@ -139,7 +134,7 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 		t.Fatal("the copy's index reads back empty")
 	}
 
-	replicate(t, pool, reference, 1)
+	replicate(t, cfg, pool, reference, 1)
 	recheck()
 	confirm(1, false)
 	expect(regional, "", copied, copied, copied, copied)
@@ -164,14 +159,15 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 func TestReplicaChecksRunOncePerLayerAcrossServers(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	store := storage.NewStorage(pool, replicated())
+	cfg := replicated(t)
+	store := storage.NewStorage(pool, cfg)
 	servers := []*images.Images{
 		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{}),
-		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, replicated()), images.Config{}),
+		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg), images.Config{}),
 	}
 	reference := "registry.test/lazycloud/images/deduped@sha256:" + hex64("2")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("one"), []byte("two"), []byte("three")})
-	replicate(t, pool, reference, 0, 1, 2)
+	replicate(t, cfg, pool, reference, 0, 1, 2)
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup

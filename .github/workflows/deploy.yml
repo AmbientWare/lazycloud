@@ -91,6 +91,10 @@ jobs:
             aws ecr describe-images --repository-name "$prefix/$image" --image-ids "imageTag=$VERSION" \
               --query 'imageDetails[0].imageDigest' --output text
           done
+          for python in 3.10 3.11 3.12 3.13 3.14; do
+            aws ecr describe-images --repository-name "$prefix/python" --image-ids "imageTag=$python-$VERSION" \
+              --query 'imageDetails[0].imageDigest' --output text
+          done
       - name: Render the chart
         run: |
           set -euo pipefail

@@ -14,7 +14,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -22,11 +21,11 @@ import (
 )
 
 const (
-	// maxConversions bounds the layers one build converts or uploads at
-	// once: each conversion takes a core.
+	// maxConversions bounds the layers one build converts at once, since
+	// each conversion takes a core, and separately those it uploads.
 	maxConversions = 4
-	// maxPublishRounds bounds the completions one build makes while the
-	// server still names layers: one to size them, one to upload them.
+	// maxPublishRounds bounds the times the server may name one layer and
+	// the agent act on it: once to convert and size it, once to upload it.
 	maxPublishRounds = 4
 	// publishCallTimeout bounds one CompleteImageBuild call, which reads the
 	// pushed image and checks every reported pair.
@@ -59,115 +58,244 @@ type convertedLayer struct {
 }
 
 // layerPublish converts and uploads the layers the server names for one
-// build. Only the build's publishBuild uses it; its conversions run under
-// mu.
+// build, each in a goroutine of its own that wait waits for, so layers
+// upload while others convert. Only the build's publishBuild uses it.
 type layerPublish struct {
-	a     *Agent
-	build *hostproto.ImageBuild
-	dir   string
-	logs  *buildLogs
+	a       *Agent
+	build   *hostproto.ImageBuild
+	dir     string
+	logs    *buildLogs
+	options []name.Option
+	auth    authn.Authenticator
+	// converting and uploading hold a token for each conversion and each
+	// upload that runs.
+	converting, uploading chan struct{}
+	running               sync.WaitGroup
+	// ready is signalled when a conversion or upload ends.
+	ready chan struct{}
 
-	mu   sync.Mutex
-	done map[string]*convertedLayer
+	mu     sync.Mutex
+	layers map[string]*publishedLayer
+	err    error
 }
 
-// answer does what uploads ask: converts the layers without URLs and those
-// not yet converted, which it reports sized, and uploads the others. A
-// layer that cannot be converted or stored is an error.
-func (p *layerPublish) answer(ctx context.Context, uploads []*hostproto.LayerUpload) ([]*hostproto.ConvertedLayer, []*hostproto.UploadedLayer, error) {
-	var convert, upload []*hostproto.LayerUpload
-	for _, u := range uploads {
-		p.mu.Lock()
-		_, converted := p.done[u.GetBlobDigest()]
-		p.mu.Unlock()
-		switch {
-		case !converted:
-			convert = append(convert, u)
-		case u.GetIndexUrl() != "":
-			upload = append(upload, u)
-		default:
-			convert = append(convert, u)
-		}
-	}
-	if err := p.convert(ctx, convert); err != nil {
-		return nil, nil, err
-	}
-	sized := make([]*hostproto.ConvertedLayer, len(convert))
-	for n, u := range convert {
-		p.mu.Lock()
-		l := p.done[u.GetBlobDigest()]
-		p.mu.Unlock()
-		sized[n] = &hostproto.ConvertedLayer{BlobDigest: u.GetBlobDigest(), DataBytes: l.dataBytes, IndexBytes: int64(len(l.index))}
-	}
-	uploaded, err := p.upload(ctx, upload)
-	return sized, uploaded, err
+// publishedLayer is what the agent did with one layer and has yet to report.
+type publishedLayer struct {
+	converted *convertedLayer
+	// rounds counts the times the server named the layer and the agent
+	// converted, sized or uploaded it.
+	rounds int
+	// busy is set while its conversion or upload runs.
+	busy     bool
+	sized    *hostproto.ConvertedLayer
+	uploaded *hostproto.UploadedLayer
 }
 
-// convert converts each layer not yet converted, read from the image the
-// build pushed.
-func (p *layerPublish) convert(ctx context.Context, uploads []*hostproto.LayerUpload) error {
-	var todo []*hostproto.LayerUpload
-	p.mu.Lock()
-	for _, u := range uploads {
-		if p.done[u.GetBlobDigest()] == nil {
-			todo = append(todo, u)
-		}
+func newLayerPublish(a *Agent, build *hostproto.ImageBuild, dir string, logs *buildLogs) *layerPublish {
+	options, auth := registryAccess(build)
+	return &layerPublish{
+		a: a, build: build, dir: dir, logs: logs, options: options, auth: auth,
+		converting: make(chan struct{}, maxConversions), uploading: make(chan struct{}, maxConversions),
+		ready: make(chan struct{}, 1), layers: map[string]*publishedLayer{},
 	}
-	p.mu.Unlock()
-	if len(todo) == 0 {
-		return nil
-	}
-	repository := p.build.GetPushRepository()
-	options := []name.Option{}
-	if p.build.GetInsecureRegistry() {
+}
+
+// registryAccess is how the agent reads the build's push repository.
+func registryAccess(build *hostproto.ImageBuild) ([]name.Option, authn.Authenticator) {
+	var options []name.Option
+	if build.GetInsecureRegistry() {
 		options = append(options, name.Insecure)
 	}
 	auth := authn.Anonymous
-	registry, _, _ := strings.Cut(repository, "/")
-	if login := p.build.GetRegistryAuth()[registry]; login != nil {
+	registry, _, _ := strings.Cut(build.GetPushRepository(), "/")
+	if login := build.GetRegistryAuth()[registry]; login != nil {
 		auth = authn.FromConfig(authn.AuthConfig{Username: login.GetUsername(), Password: login.GetPassword(), IdentityToken: login.GetIdentityToken()})
 	}
-	p.logs.add(fmt.Sprintf("converting %d layers", len(todo)))
+	return options, auth
+}
+
+// publish sends request through complete, then acts on the layers each
+// answer names and sends what that produced, until an answer names none.
+// It returns once its conversions and uploads end.
+func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteImageBuildRequest,
+	complete func(*hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer p.wait()
+	defer cancel()
 	began := time.Now()
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConversions)
-	for _, u := range todo {
-		g.Go(func() error {
-			ref, err := name.NewDigest(repository+"@"+u.GetBlobDigest(), options...)
-			if err != nil {
-				return fmt.Errorf("layer %s: %w", u.GetBlobDigest(), err)
+	for {
+		resp := complete(request)
+		uploads := resp.GetLayerUploads()
+		if len(uploads) == 0 {
+			if n := p.count(); resp != nil && n > 0 {
+				p.logs.add(fmt.Sprintf("converted and stored %d layers in %s", n, time.Since(began).Round(time.Millisecond)))
 			}
-			start := time.Now()
-			var l *convertedLayer
-			var ix imagefs.Index
-			layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, u.GetDiffId())))
-			err = retryTransfer(layerCtx, func() error {
-				var err error
-				l, ix, err = p.convertLayer(layerCtx, ref, auth, u.GetDiffId())
-				return err
-			})
-			span.SetAttributes(attribute.Int64("lazycloud.bytes", ix.DataSize), attribute.Int("lazycloud.files", len(ix.Entries)))
-			telemetry.Fail(span, err)
-			if err != nil {
-				return fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
-			}
-			p.mu.Lock()
-			p.done[u.GetBlobDigest()] = l
-			p.mu.Unlock()
-			p.logs.add(fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
-				u.GetBlobDigest(), len(ix.Entries), ix.DataSize>>20, time.Since(start).Round(time.Millisecond)))
 			return nil
-		})
+		}
+		if err := p.start(ctx, uploads); err != nil {
+			return err
+		}
+		converted, uploaded, err := p.next(ctx)
+		if err != nil {
+			return err
+		}
+		request.ConvertedLayers, request.UploadedLayers = converted, uploaded
 	}
-	if err := g.Wait(); err != nil {
-		return err //nolint:wrapcheck // Each conversion's error names its layer.
+}
+
+// start acts on each layer uploads names that is neither running nor
+// waiting to be reported: it converts a layer not yet converted, uploads a
+// converted one the server sent URLs for, and sizes the others again. A
+// layer named more than maxPublishRounds times is an error.
+func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUpload) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	conversions := 0
+	for _, u := range uploads {
+		l := p.layers[u.GetBlobDigest()]
+		if l == nil {
+			l = &publishedLayer{}
+			p.layers[u.GetBlobDigest()] = l
+		}
+		if l.busy || l.sized != nil || l.uploaded != nil {
+			continue
+		}
+		if l.rounds++; l.rounds > maxPublishRounds {
+			return fmt.Errorf("layer %s was still not stored after %d rounds", u.GetBlobDigest(), maxPublishRounds)
+		}
+		switch {
+		case l.converted == nil:
+			l.busy = true
+			conversions++
+			p.running.Go(func() {
+				converted, err := p.convert(ctx, u)
+				p.finish(l, err, func() { l.converted, l.sized = converted, sizes(u, converted) })
+			})
+		case u.GetIndexUrl() != "":
+			l.busy = true
+			converted := l.converted
+			p.running.Go(func() {
+				uploaded, err := p.upload(ctx, converted, u)
+				p.finish(l, err, func() { l.uploaded = uploaded })
+			})
+		default:
+			l.sized = sizes(u, l.converted)
+		}
 	}
-	p.logs.add(fmt.Sprintf("converted %d layers in %s", len(todo), time.Since(began).Round(time.Millisecond)))
+	if conversions > 0 {
+		p.logs.add(fmt.Sprintf("converting %d layers", conversions))
+	}
 	return nil
 }
 
+func sizes(u *hostproto.LayerUpload, l *convertedLayer) *hostproto.ConvertedLayer {
+	return &hostproto.ConvertedLayer{BlobDigest: u.GetBlobDigest(), DataBytes: l.dataBytes, IndexBytes: int64(len(l.index))}
+}
+
+// finish records the end of l's conversion or upload: done on success, the
+// first error of the build otherwise.
+func (p *layerPublish) finish(l *publishedLayer, err error, done func()) {
+	p.mu.Lock()
+	l.busy = false
+	switch {
+	case err == nil:
+		done()
+	case p.err == nil:
+		p.err = err
+	}
+	p.mu.Unlock()
+	select {
+	case p.ready <- struct{}{}:
+	default:
+	}
+}
+
+// next waits until a layer has something to report, or none runs, and
+// returns the sizes and uploads to report. A conversion or upload that
+// failed is the error.
+func (p *layerPublish) next(ctx context.Context) ([]*hostproto.ConvertedLayer, []*hostproto.UploadedLayer, error) {
+	for {
+		p.mu.Lock()
+		var sized []*hostproto.ConvertedLayer
+		var uploaded []*hostproto.UploadedLayer
+		busy := false
+		for _, l := range p.layers {
+			if l.sized != nil {
+				sized = append(sized, l.sized)
+			}
+			if l.uploaded != nil {
+				uploaded = append(uploaded, l.uploaded)
+			}
+			l.sized, l.uploaded = nil, nil
+			busy = busy || l.busy
+		}
+		err := p.err
+		p.mu.Unlock()
+		if err != nil || len(sized) > 0 || len(uploaded) > 0 || !busy {
+			return sized, uploaded, err
+		}
+		select {
+		case <-p.ready:
+		case <-ctx.Done():
+			return nil, nil, fmt.Errorf("convert layers: %w", ctx.Err())
+		}
+	}
+}
+
+// wait waits for every conversion and upload to end.
+func (p *layerPublish) wait() { p.running.Wait() }
+
+// count is how many layers the server named.
+func (p *layerPublish) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.layers)
+}
+
+// acquire takes one of tokens, or fails when ctx ends first.
+func acquire(ctx context.Context, tokens chan struct{}) error {
+	select {
+	case tokens <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err() //nolint:wrapcheck // The caller names the step.
+	}
+}
+
+// convert converts one layer, read from the image the build pushed.
+func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*convertedLayer, error) {
+	if err := acquire(ctx, p.converting); err != nil {
+		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
+	}
+	defer func() { <-p.converting }()
+	ref, err := name.NewDigest(p.build.GetPushRepository()+"@"+u.GetBlobDigest(), p.options...)
+	if err != nil {
+		return nil, fmt.Errorf("layer %s: %w", u.GetBlobDigest(), err)
+	}
+	start := time.Now()
+	var l *convertedLayer
+	var ix imagefs.Index
+	layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, u.GetDiffId())))
+	defer span.End()
+	err = retryTransfer(layerCtx, func() error {
+		var err error
+		l, ix, err = p.convertLayer(layerCtx, ref, p.auth, u.GetDiffId())
+		return err
+	})
+	span.SetAttributes(attribute.Int64("lazycloud.bytes", ix.DataSize), attribute.Int("lazycloud.files", len(ix.Entries)))
+	telemetry.Fail(span, err)
+	if err != nil {
+		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
+	}
+	p.logs.add(fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
+		u.GetBlobDigest(), len(ix.Entries), ix.DataSize>>20, time.Since(start).Round(time.Millisecond)))
+	return l, nil
+}
+
 // convertLayer reads one layer from the registry and converts it into a
-// data file under the build's directory.
+// data file under the build's directory. The file lives only until its
+// upload, and a host that stops abandons the build, so it is not synced.
 func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, auth authn.Authenticator, diffID string) (*convertedLayer, imagefs.Index, error) {
 	layer, err := remote.Layer(ref, remote.WithContext(ctx), remote.WithAuth(auth))
 	if err != nil {
@@ -182,53 +310,40 @@ func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, auth a
 	if err != nil {
 		return nil, imagefs.Index{}, fmt.Errorf("create layer data file: %w", err)
 	}
-	keep := false
-	defer func() {
-		_ = data.Close()
-		if !keep {
-			_ = os.Remove(data.Name())
-		}
-	}()
 	ix, index, err := imagefs.ConvertLayer(ctx, tarball, data, imagefs.Digest(diffID))
+	if closeErr := data.Close(); err == nil && closeErr != nil {
+		err = fmt.Errorf("write layer data: %w", closeErr)
+	}
+	if err != nil {
+		_ = os.Remove(data.Name())
+	}
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
 		return nil, imagefs.Index{}, fmt.Errorf("%w: %w", errLayerContent, err)
 	}
 	if err != nil {
 		return nil, imagefs.Index{}, err //nolint:wrapcheck // The caller names the layer.
 	}
-	if err := data.Sync(); err != nil {
-		return nil, imagefs.Index{}, fmt.Errorf("write layer data: %w", err)
-	}
-	keep = true
 	return &convertedLayer{data: data.Name(), dataBytes: ix.DataSize, index: index}, ix, nil
 }
 
-// upload stores each converted layer's data parts, then its index, and
-// returns the parts' ETags.
-func (p *layerPublish) upload(ctx context.Context, uploads []*hostproto.LayerUpload) ([]*hostproto.UploadedLayer, error) {
-	out := make([]*hostproto.UploadedLayer, len(uploads))
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConversions)
-	for n, u := range uploads {
-		p.mu.Lock()
-		l := p.done[u.GetBlobDigest()]
-		p.mu.Unlock()
-		g.Go(func() error {
-			uploadCtx, span := telemetry.Start(ctx, "agent.upload_layer", trace.WithAttributes(
-				attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
-			etags, err := p.a.uploadLayer(uploadCtx, l, u)
-			telemetry.Fail(span, err)
-			if err != nil {
-				return fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
-			}
-			out[n] = &hostproto.UploadedLayer{BlobDigest: u.GetBlobDigest(), PartEtags: etags}
-			return nil
-		})
+// upload stores l's data parts, then its index, and returns the parts'
+// ETags.
+func (p *layerPublish) upload(ctx context.Context, l *convertedLayer, u *hostproto.LayerUpload) (*hostproto.UploadedLayer, error) {
+	if err := acquire(ctx, p.uploading); err != nil {
+		return nil, fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
 	}
-	if err := g.Wait(); err != nil {
-		return nil, err //nolint:wrapcheck // Each upload's error names its layer.
+	defer func() { <-p.uploading }()
+	start := time.Now()
+	uploadCtx, span := telemetry.Start(ctx, "agent.upload_layer", trace.WithAttributes(
+		attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
+	defer span.End()
+	etags, err := p.a.uploadLayer(uploadCtx, l, u)
+	telemetry.Fail(span, err)
+	if err != nil {
+		return nil, fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
 	}
-	return out, nil
+	p.logs.add(fmt.Sprintf("uploaded %s in %s", u.GetBlobDigest(), time.Since(start).Round(time.Millisecond)))
+	return &hostproto.UploadedLayer{BlobDigest: u.GetBlobDigest(), PartEtags: etags}, nil
 }
 
 // uploadLayer PUTs l's data in the parts upload names, then its index.

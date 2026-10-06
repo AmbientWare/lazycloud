@@ -59,14 +59,16 @@ import (
 const (
 	pythonVersion = "3.12"
 	testLabel     = "lazycloud.acceptance"
-	// managedTemplate is the platform's image template in these tests.
-	managedTemplate = "docker.io/library/python:{version}-slim"
-	registryImage   = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
+	registryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 )
 
 // supervisorBinary is built once per test binary, and registry is the
 // platform registry every test's server shares.
 var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
+
+// objectStore holds the buckets every test's server shares: the converted
+// images of the template database live in its layer bucket.
+var objectStore storage.Config //nolint:gochecknoglobals // Set once in TestMain.
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
@@ -85,7 +87,21 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	registry = address
+	if err := pushPythonBase(); err != nil {
+		stop()
+		panic(err)
+	}
+	store, removeStore, err := storagetest.Open(context.Background())
+	if err != nil {
+		stop()
+		panic(err)
+	}
+	objectStore = store
 	code := m.Run()
+	if err := removeStore(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
+		code = max(code, 1)
+	}
 	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
@@ -160,10 +176,30 @@ func startRegistry() (string, func(), error) {
 	}
 }
 
-// newImages is the images owner every test's server runs over pool.
+// pushPythonBase builds the platform's Python base of pythonVersion with
+// deploy/images/python and pushes it to the registry, as Ship pushes the
+// bases beside a release.
+func pushPythonBase() error {
+	target := "python-" + strings.ReplaceAll(pythonVersion, ".", "")
+	bake := exec.CommandContext(context.Background(), "docker", "buildx", "bake", "--progress", "quiet",
+		"-f", "deploy/images/docker-bake.hcl", target, "--push")
+	bake.Dir = ".."
+	bake.Env = append(os.Environ(), "REGISTRY="+registry+"/release", "VERSION=acceptance")
+	bake.Stdout, bake.Stderr = os.Stdout, os.Stderr
+	if err := bake.Run(); err != nil {
+		return fmt.Errorf("build the Python base: %w", err)
+	}
+	// A Docker Engine builder also keeps the image; the tests read the
+	// registry's.
+	_ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", registry+"/release/python:"+pythonVersion+"-acceptance").Run()
+	return nil
+}
+
+// newImages is the images owner every test's server runs over pool. Its
+// managed template names the bases pushPythonBase pushed.
 func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
 	return images.NewImages(pool, exec, vault, store, images.Config{
-		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: managedTemplate,
+		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
 	})
 }
 
@@ -178,7 +214,7 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	exec := execution.NewExecution(pool)
-	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, storagetest.Config()))
+	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore))
 	source, err := im.ManagedSource(ctx, pythonVersion)
 	if err != nil {
 		return err
@@ -228,7 +264,7 @@ func startPlatform(t *testing.T) *platform {
 	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
-		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
+		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore),
 		execution: execution.NewExecution(pool),
 	}
 	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})

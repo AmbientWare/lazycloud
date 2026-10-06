@@ -1,7 +1,7 @@
 -- name: StartingContainersOnHost :many
 select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
        r.spec, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,
-       r.workload_id, wl.kind as workload_kind, c.traceparent
+       r.workload_id, wl.kind as workload_kind, c.traceparent, c.assigned_at
 from containers c
 join releases r on r.id = c.release_id
 join workloads wl on wl.id = r.workload_id

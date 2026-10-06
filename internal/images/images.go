@@ -356,6 +356,9 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 		if err != nil {
 			return "", err
 		}
+		if ref == managed {
+			return untagged(p.ref), nil
+		}
 		return p.ref, nil
 	}
 	out.dockerfile, err = s.render(i.config.ManagedBase, pin)
@@ -833,9 +836,10 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	// deadline.
 	access := hostAccess{push: []string{image, cache}}
 	// A build reads its base from the platform registry only when it mirrors
-	// an image there or starts from the managed base; definitions cannot
-	// name other platform images.
-	if base, ok := i.config.repositoryOf(dockerfileBase(row.Dockerfile)); ok {
+	// an image there or starts from the managed base, which may sit outside
+	// the workload repositories; definitions cannot name other platform
+	// images.
+	if base, _ := i.config.repositoryOf(dockerfileBase(row.Dockerfile)); base != "" {
 		access.pull = []string{base}
 	}
 	platform, err := i.login.host(ctx, access, row.DeadlineAt.Add(time.Minute))

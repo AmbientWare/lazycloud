@@ -120,8 +120,8 @@ message HostMessage {
     Interruption interruption = 70;
     // The answer to PrepareReserve.
     ReserveReady reserve_ready = 71;
-    // The frames a container read before it was ready, for a start that
-    // asked with record_trace.
+    // The frames a container read through its first task or request, for a
+    // start that asked with record_trace.
     StartupTrace startup_trace = 120;
     // Spans the host recorded in traces the server sampled. The agent sends
     // them while the session's queue has room and drops them otherwise.
@@ -137,7 +137,8 @@ message Traces {
 }
 
 // StartupTrace is the frames of its image's layers a container read from
-// its start until it reported ready.
+// its start through the end of its first task or request, or a bounded
+// time when none ended sooner.
 message StartupTrace {
   string container_id = 1;
   ImageTrace trace = 2;
@@ -475,11 +476,12 @@ message StartContainer {
   // Reads of every layer of image, base first. The host hands them to its
   // snapshotter before it pulls the image and keeps them from containers.
   repeated LayerGrant layers = 100;
-  // The frames earlier containers of the image read before they were
-  // ready. The host fetches them ahead of the container's own reads.
+  // The frames earlier containers of the image read through their first
+  // task or request. The host fetches them ahead of the container's own
+  // reads.
   ImageTrace prefetch = 120;
-  // Record the frames this container reads before it is ready and report
-  // them in a StartupTrace.
+  // Record the frames this container reads through its first task or
+  // request and report them in a StartupTrace.
   bool record_trace = 121;
   // The W3C traceparent of the server's span that sent the start, when it
   // was sampled. The host's spans of the start are its children.

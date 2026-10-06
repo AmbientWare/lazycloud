@@ -17,12 +17,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
-// Tools copied into images that need them, pinned by digest.
+// Tools copied into images that need them, pinned by digest. The uv
+// release is the one deploy/images/python installs the managed base with.
 const (
-	uvImage         = "ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
+	uvImage         = "ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c"
 	micromambaImage = "docker.io/mambaorg/micromamba:2.9.0@sha256:e0a99b0f17a759e14c2f967dc0ca2d3a3c1ca3c62955f4d20bba770eaaf0184d"
 	poetryVersion   = "2.2.1"
-	// managedPython is where a base without Python gets one.
+	// managedPython is where uv installs a Python, as in the managed base.
 	managedPython      = "/opt/runtime-python"
 	projectEnvironment = "/opt/lazycloud/.venv"
 	poetryEnvironment  = "/opt/lazycloud/poetry"
@@ -32,8 +33,8 @@ const (
 	identityVersion = 2
 )
 
-// pipBoundaryFlags end a group of merged pip installs: they change how the
-// packages around them resolve.
+// pipBoundaryFlags end a group of merged pip or micromamba installs: they
+// change how the packages around them resolve.
 func pipBoundaryFlags() []string {
 	return []string{
 		"--no-deps", "--only-binary", "--no-binary", "--prefer-binary", "--require-hashes", "--pre",
@@ -263,7 +264,8 @@ func cleanStep(step apitypes.ImageStep) (*apitypes.ImageStep, error) {
 }
 
 // baseReference is the base image the definition starts from, or "" for a
-// Dockerfile, which names its own.
+// Dockerfile, which names its own. The managed base has one image per minor
+// version.
 func (s spec) baseReference(managedBase string) string {
 	if s.dockerfile != "" {
 		return ""
@@ -271,7 +273,7 @@ func (s spec) baseReference(managedBase string) string {
 	if s.base != "" {
 		return s.base
 	}
-	return strings.ReplaceAll(managedBase, "{version}", s.python)
+	return strings.ReplaceAll(managedBase, "{version}", minorVersion(s.python))
 }
 
 // render writes the Dockerfile. pin maps each FROM image to its reference by
@@ -291,10 +293,9 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 	for _, key := range sortedKeys(s.env) {
 		lines = append(lines, "ENV "+key+"="+dockerValue(s.env[key]))
 	}
-	python, setup := s.pythonSetup(managedBase)
+	python, setup := s.pythonSetup()
 	lines = append(lines, setup...)
-	managed := python != "python"
-	commands, err := s.installCommands(python, managed)
+	commands, err := s.installCommands(python)
 	if err != nil {
 		return "", err
 	}
@@ -362,42 +363,52 @@ func (s spec) addRunFlags(lines []string) {
 }
 
 // pythonSetup returns the interpreter later steps install with and the
-// instructions that provide it.
-func (s spec) pythonSetup(managedBase string) (string, []string) {
-	needsUV := slices.ContainsFunc(s.steps, func(step apitypes.ImageStep) bool {
-		return projectKind(step.Kind) && step.Kind != apitypes.MicromambaEnvironment
-	})
-	uv := []string{}
-	if needsUV {
-		uv = []string{"COPY --from=" + uvImage + " /uv /uvx /usr/local/bin/"}
+// instructions that provide it. The managed base is the newest patch
+// release of its minor version; a definition naming another patch release
+// installs that one unless the base already is it.
+func (s spec) pythonSetup() (string, []string) {
+	python, install := "python", ""
+	switch {
+	case s.micromamba:
+	case s.base == "" && s.dockerfile == "":
+		if s.python != minorVersion(s.python) {
+			install = "RUN python -c " + versionCheck(s.python) + " 2>/dev/null || (" + managedPythonInstall(s.python) + ")"
+		}
+	case !s.baseProvidesPython():
+		python, install = "/usr/local/bin/python"+minorVersion(s.python), "RUN "+managedPythonInstall(s.python)
 	}
+	var lines []string
 	if s.micromamba {
-		lines := append([]string{
-			"COPY --from=" + micromambaImage + " /bin/micromamba /usr/local/bin/",
+		lines = append(lines,
+			"COPY --from="+micromambaImage+" /bin/micromamba /usr/local/bin/",
 			"ENV MAMBA_ROOT_PREFIX=/opt/micromamba",
 			"ENV PATH=${MAMBA_ROOT_PREFIX}/bin:${PATH}",
-		}, uv...)
-		hasEnvironment := slices.ContainsFunc(s.steps, func(step apitypes.ImageStep) bool { return step.Kind == apitypes.MicromambaEnvironment })
-		if !hasEnvironment {
-			lines = append(lines, "RUN micromamba create -y -n base -c conda-forge python="+s.python+" pip && micromamba clean --all --yes")
-		}
-		return "python", lines
+		)
 	}
-	if s.baseProvidesPython(managedBase) {
-		return "python", uv
+	if install != "" || s.stepsUseUV() {
+		lines = append(lines, "COPY --from="+uvImage+" /uv /uvx /usr/local/bin/")
 	}
-	runtime := "/usr/local/bin/python" + minorVersion(s.python)
-	return runtime, []string{
-		"COPY --from=" + uvImage + " /uv /uvx /usr/local/bin/",
-		"ENV UV_PYTHON_INSTALL_DIR=/opt/python",
-		"RUN " + managedPythonInstall(s.python),
+	if s.micromamba && !slices.ContainsFunc(s.steps, func(step apitypes.ImageStep) bool { return step.Kind == apitypes.MicromambaEnvironment }) {
+		lines = append(lines, "RUN micromamba create -y -n base -c conda-forge python="+s.python+" pip && micromamba clean --all --yes")
 	}
+	if install != "" {
+		lines = append(lines, install)
+	}
+	return python, lines
 }
 
-// baseProvidesPython reports whether the base is a python image of the
-// requested version, as the managed base is.
-func (s spec) baseProvidesPython(managedBase string) bool {
-	ref := s.baseReference(managedBase)
+// stepsUseUV reports whether a step runs uv: every pip-style install and
+// every project but a micromamba environment.
+func (s spec) stepsUseUV() bool {
+	return len(s.packages) > 0 || slices.ContainsFunc(s.steps, func(step apitypes.ImageStep) bool {
+		return step.Kind == apitypes.Pip || projectKind(step.Kind) && step.Kind != apitypes.MicromambaEnvironment
+	})
+}
+
+// baseProvidesPython reports whether the user's base is a python image of
+// the requested version.
+func (s spec) baseProvidesPython() bool {
+	ref := s.base
 	if s.dockerfile != "" {
 		ref = dockerfileBase(s.dockerfile)
 	}
@@ -411,29 +422,49 @@ func (s spec) baseProvidesPython(managedBase string) bool {
 	return tag == s.python || strings.HasPrefix(tag, s.python+"-") || strings.HasPrefix(tag, s.python+".")
 }
 
-// managedPythonInstall installs exactly version with uv and links it as
-// python, python3, python3.X and pip.
-func managedPythonInstall(version string) string {
-	minor := minorVersion(version)
+// versionCheck is a Python program that exits 0 only on version, the
+// release or minor version it names.
+func versionCheck(version string) string {
 	parts := strings.Split(version, ".")
-	check := shellQuote(fmt.Sprintf("import sys; raise SystemExit(0 if sys.version_info[:%d] == (%s) else 1)", len(parts), strings.Join(parts, ", ")))
-	prefix := managedPython + "/bin/python"
+	return shellQuote(fmt.Sprintf("import sys; raise SystemExit(0 if sys.version_info[:%d] == (%s) else 1)", len(parts), strings.Join(parts, ", ")))
+}
+
+// compileStdlib compiles the standard library's bytecode with unchecked
+// hashes, so imports never stat the sources and layer time rewrites leave
+// it valid. deploy/images/python compiles the managed base's the same way.
+const compileStdlib = "import compileall, py_compile, sysconfig; " +
+	"raise SystemExit(not compileall.compile_dir(sysconfig.get_path('stdlib'), force=True, quiet=1, " +
+	"invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH))"
+
+// stdlibPath prints where the standard library is, which holds uv's
+// externally managed marker.
+const stdlibPath = "import sysconfig; print(sysconfig.get_path('stdlib'))"
+
+// managedPythonInstall installs exactly version with uv into managedPython,
+// as deploy/images/python builds the managed base, links it as python,
+// python3, python3.X and pip, and compiles its standard library. It is the
+// image's own Python, so it drops uv's externally managed marker and pip
+// installs into it as into a python image's.
+func managedPythonInstall(version string) string {
+	quoted := shellQuote(version)
 	return strings.Join([]string{
-		"/usr/local/bin/uv python install " + shellQuote(version) + " --managed-python --no-bin",
-		"managed=$(/usr/local/bin/uv python find " + shellQuote(version) + " --managed-python --no-project)",
-		`"$managed" -c ` + check,
-		`"$managed" -m pip --version >/dev/null 2>&1 || "$managed" -m ensurepip`,
-		"mkdir -p " + managedPython + "/bin",
-		`ln -sf "$managed" ` + prefix,
-		"for link in python python3 python" + minor + "; do ln -sf " + prefix + " /usr/local/bin/$link; done",
-		`ln -sf "$(dirname "$(readlink -f ` + prefix + `)")/pip" /usr/local/bin/pip`,
-	}, " && ")
+		"set -eu",
+		"export UV_PYTHON_INSTALL_DIR=" + managedPython + " UV_NO_CACHE=1",
+		"/usr/local/bin/uv python install " + quoted + " --managed-python --no-bin",
+		"python=$(/usr/local/bin/uv python find " + quoted + " --managed-python --no-project)",
+		`"$python" -c ` + versionCheck(version),
+		`"$python" -m pip --version >/dev/null 2>&1 || "$python" -m ensurepip`,
+		`rm -f "$("$python" -c ` + shellQuote(stdlibPath) + `)/EXTERNALLY-MANAGED"`,
+		"for link in python python3 python" + minorVersion(version) + `; do ln -sf "$python" /usr/local/bin/$link; done`,
+		`ln -sf "$(dirname "$python")/pip" /usr/local/bin/pip`,
+		`"$python" -c ` + shellQuote(compileStdlib),
+	}, "; ")
 }
 
 // installCommands renders packages, steps and commands in that order.
 // Consecutive pip or micromamba installs merge into one RUN unless a flag
 // changes how they resolve.
-func (s spec) installCommands(python string, managed bool) ([][]string, error) {
+func (s spec) installCommands(python string) ([][]string, error) {
 	ordered := make([]apitypes.ImageStep, 0, len(s.steps)+len(s.commands)+1)
 	if len(s.packages) > 0 {
 		packages := s.packages
@@ -450,7 +481,7 @@ func (s spec) installCommands(python string, managed bool) ([][]string, error) {
 	var pending []string
 	flush := func() {
 		if len(pending) > 0 {
-			out = append(out, []string{"RUN " + installCommand(pendingKind, pending, python, managed)})
+			out = append(out, []string{"RUN " + installCommand(pendingKind, pending, python)})
 		}
 		pendingKind, pending = "", nil
 	}
@@ -480,14 +511,17 @@ func (s spec) installCommands(python string, managed bool) ([][]string, error) {
 			flush()
 			out = append(out, projectInstall(step, python))
 			// Later installs go into the project's environment.
-			python, managed = "python", true
+			python = "python"
 		}
 	}
 	flush()
 	return out, nil
 }
 
-func installCommand(kind apitypes.ImageStepKind, args []string, python string, managed bool) string {
+// installCommand installs args with micromamba or, for a pip step, with uv
+// into python's environment. uv's cache would stay in the layer, so the
+// install runs without one.
+func installCommand(kind apitypes.ImageStepKind, args []string, python string) string {
 	var tokens []string
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") {
@@ -501,10 +535,12 @@ func installCommand(kind apitypes.ImageStepKind, args []string, python string, m
 	if kind == apitypes.Micromamba {
 		return "micromamba install -y -n base " + strings.Join(tokens, " ")
 	}
-	if managed {
-		return "uv pip install --python " + python + " --break-system-packages --compile-bytecode " + strings.Join(tokens, " ")
+	if python == "python" {
+		// uv pip takes an interpreter's bare name only for a virtual
+		// environment; a path names any environment.
+		python = `"$(command -v python)"`
 	}
-	return python + " -m pip install --no-cache-dir " + strings.Join(tokens, " ")
+	return "UV_NO_CACHE=1 uv pip install --python " + python + " --break-system-packages --compile-bytecode " + strings.Join(tokens, " ")
 }
 
 func projectInstall(step apitypes.ImageStep, python string) []string {
@@ -555,7 +591,7 @@ func projectInstall(step apitypes.ImageStep, python string) []string {
 	return []string{
 		`COPY ["./", "./"]`,
 		"ENV UV_PROJECT_ENVIRONMENT=" + projectEnvironment,
-		"RUN " + command,
+		"RUN export UV_NO_CACHE=1 && " + command,
 		"ENV VIRTUAL_ENV=${UV_PROJECT_ENVIRONMENT}",
 		"ENV PATH=${VIRTUAL_ENV}/bin:${PATH}",
 	}

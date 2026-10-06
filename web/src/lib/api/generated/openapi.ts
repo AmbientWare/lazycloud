@@ -4938,10 +4938,10 @@ export interface components {
             gpu_type?: string;
         };
         /**
-         * @description placement: waiting for a host. image: pulling the image, or finding it on the host. source: fetching the source. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
+         * @description placement: waiting for a host. conversion: waiting for the image to be converted before the host could pull it. image: pulling the image, or finding it on the host. source: fetching the source. disk: leasing and restoring the container's disks. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
          * @enum {string}
          */
-        LifecycleStageKind: "placement" | "image" | "source" | "create" | "runtime" | "draining";
+        LifecycleStageKind: "placement" | "conversion" | "image" | "source" | "disk" | "create" | "runtime" | "draining";
         LifecycleStage: {
             stage: components["schemas"]["LifecycleStageKind"];
             /** Format: date-time */
@@ -11599,7 +11599,7 @@ export const containerLogEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<
 export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "requests", "containers", "storage.secrets", "storage.volumes", "usage"];
 export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
 export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
-export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "image", "source", "create", "runtime", "draining"];
+export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "conversion", "image", "source", "disk", "create", "runtime", "draining"];
 export const activityMeasureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityMeasure"]> = ["containers", "tasks", "cpu", "memory", "gpu"];
 export const activityUnitValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityUnit"]> = ["starts", "cores", "gibibytes", "gpus"];
 export const activitySeriesKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivitySeriesKind"]> = ["app", "unassigned", "other"];

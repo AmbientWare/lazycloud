@@ -1227,8 +1227,10 @@ class ContainerMetricPoint(APIModel):
 
 class LifecycleStageKind(str, Enum):
     placement = "placement"
+    conversion = "conversion"
     image = "image"
     source = "source"
+    disk = "disk"
     create = "create"
     runtime = "runtime"
     draining = "draining"

@@ -6417,10 +6417,12 @@ components:
 
     LifecycleStageKind:
       type: string
-      enum: [placement, image, source, create, runtime, draining]
+      enum: [placement, conversion, image, source, disk, create, runtime, draining]
       description: >-
-        placement: waiting for a host. image: pulling the image, or finding
-        it on the host. source: fetching the source. create: starting the
+        placement: waiting for a host. conversion: waiting for the image to
+        be converted before the host could pull it. image: pulling the
+        image, or finding it on the host. source: fetching the source. disk:
+        leasing and restoring the container's disks. create: starting the
         container process. runtime: loading the handler. draining: from the
         stop request until the container stopped.
 
