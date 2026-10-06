@@ -2,9 +2,10 @@ package hostsession_test
 
 import (
 	"context"
-	"regexp"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,50 +19,50 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/hostsession"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-var queryName = regexp.MustCompile(`-- name: (\w+)`)
-
-// queryCounter counts the named queries a pool runs.
+// queryCounter counts the statements a pool runs, and the completion
+// transactions among them: each sets its attempts' states in one statement.
 type queryCounter struct {
-	mu sync.Mutex
-	n  map[string]int
+	all, writes atomic.Int64
+	settled     int64
 }
 
 func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if m := queryName.FindStringSubmatch(data.SQL); m != nil {
-		c.mu.Lock()
-		c.n[m[1]]++
-		c.mu.Unlock()
+	c.all.Add(1)
+	if strings.Contains(data.SQL, "name: SetAttemptStates") {
+		c.writes.Add(1)
 	}
 	return ctx
 }
 
 func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// completions counts the completion transactions: each sets its attempts'
-// states in one statement.
-func (c *queryCounter) completions() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.n["SetAttemptStates"]
+func (c *queryCounter) completions() int64 { return c.writes.Load() }
+
+// settle waits until the pool has run no statement for half a second and
+// returns the statements run since the last settle.
+func (c *queryCounter) settle() int64 {
+	for last := int64(-1); ; time.Sleep(500 * time.Millisecond) {
+		if n := c.all.Load(); n != last {
+			last = n
+			continue
+		}
+		n := c.all.Load()
+		out := n - c.settled
+		c.settled = n
+		return out
+	}
 }
 
-// take returns the counts since the last take and starts again.
-func (c *queryCounter) take() map[string]int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := c.n
-	c.n = map[string]int{}
-	return out
-}
-
-// countedHarness serves the host service over a pool traced by queries;
-// base is the same database untraced.
-func countedHarness(t *testing.T) (h *harness, base *pgxpool.Pool, queries *queryCounter) {
+// countedHarness serves the host service, configured by configure, over a
+// pool traced by queries; base is the same database untraced.
+func countedHarness(t *testing.T, configure ...func(*hostsession.Config)) (h *harness, base *pgxpool.Pool, queries *queryCounter) {
 	t.Helper()
 	base = dbtest.New(t)
-	queries = &queryCounter{n: map[string]int{}}
+	queries = &queryCounter{}
 	cfg := base.Config().Copy()
 	cfg.ConnConfig.Tracer = queries
 	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
@@ -69,7 +70,7 @@ func countedHarness(t *testing.T) (h *harness, base *pgxpool.Pool, queries *quer
 		t.Fatal(err)
 	}
 	t.Cleanup(traced.Close)
-	return serve(t, traced), base, queries
+	return serveWith(t, traced, storagetest.Config(t), configure...), base, queries
 }
 
 // runningAttempts makes host's container ready with n running attempts.

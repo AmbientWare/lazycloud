@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,22 +45,24 @@ func serveSnapshotter(t *testing.T, socket string) {
 	})
 }
 
-// testLayerSources is the agent's side of a snapshotter the test runs.
-func testLayerSources(t *testing.T) (*layerSources, *layersource.Client) {
+// dialSnapshotter returns a socket for a snapshotter and a client of it,
+// which connects on first use.
+func dialSnapshotter(t *testing.T) (string, *layersource.Client) {
 	t.Helper()
-	// Socket paths are short; a test's own directory may not be.
-	dir, err := os.MkdirTemp("", "lcsnap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "s.sock")
-	serveSnapshotter(t, socket)
+	socket := filepath.Join(shortDir(t), "s.sock")
 	client, err := layersource.Dial(socket)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
+	return socket, client
+}
+
+// testLayerSources is the agent's side of a snapshotter the test runs.
+func testLayerSources(t *testing.T) (*layerSources, *layersource.Client) {
+	t.Helper()
+	socket, client := dialSnapshotter(t)
+	serveSnapshotter(t, socket)
 	return newLayerSources(client), client
 }
 
@@ -226,17 +227,7 @@ func TestStartupTracesEndWithinTheWindow(t *testing.T) {
 // take is kept and retried until it does, and a start whose grants it
 // refuses fails.
 func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
-	dir, err := os.MkdirTemp("", "lcsnap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "s.sock")
-	client, err := layersource.Dial(socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
+	socket, client := dialSnapshotter(t)
 	l := newLayerSources(client)
 	ctx, cancel := context.WithCancel(t.Context())
 	looped := make(chan struct{})

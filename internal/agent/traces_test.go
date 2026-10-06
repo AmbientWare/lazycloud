@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -40,12 +39,7 @@ func TestContainerAPICallsRunUnderTheirAttempt(t *testing.T) {
 // An OTLP export to the host's trace socket reaches the session as the
 // batch the exporter sent.
 func TestHostSpansReachTheSession(t *testing.T) {
-	dir, err := os.MkdirTemp("", "lctrace")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "t.sock")
+	socket := filepath.Join(shortDir(t), "t.sock")
 	ctx, cancel := context.WithCancel(t.Context())
 	out := &sessionOut{ch: make(chan *hostproto.HostMessage, 8), cancel: func() {}}
 	a := &Agent{cfg: Config{TraceSocket: socket}, log: slog.New(slog.DiscardHandler), session: out}

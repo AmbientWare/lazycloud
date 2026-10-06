@@ -9,7 +9,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -40,10 +39,7 @@ func (s *Server) startTrace(ctx context.Context, cache *syncCache, workspace ide
 	}
 	t := startTrace{record: record}
 	if len(reads) > 0 {
-		t.prefetch = &hostproto.ImageTrace{Reads: make([]*imagefsproto.FrameRead, len(reads))}
-		for n, r := range reads {
-			t.prefetch.Reads[n] = &imagefsproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
-		}
+		t.prefetch = &hostproto.ImageTrace{Reads: reads}
 	}
 	cache.traces[key] = t
 	return t
@@ -59,11 +55,7 @@ func (sess *session) recordTrace(ctx context.Context, report *hostproto.StartupT
 	}
 	workspace, reference, ok, err := sess.server.execution.ContainerImage(ctx, sess.host, execution.ContainerID(id))
 	if err == nil && ok {
-		reads := make([]images.FrameRead, len(report.GetTrace().GetReads()))
-		for n, r := range report.GetTrace().GetReads() {
-			reads[n] = images.FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
-		}
-		err = sess.server.images.RecordTrace(ctx, workspace, reference, reads)
+		err = sess.server.images.RecordTrace(ctx, workspace, reference, report.GetTrace().GetReads())
 	}
 	if err != nil && ctx.Err() == nil {
 		msg := "storing a startup trace failed"

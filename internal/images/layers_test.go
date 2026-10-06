@@ -355,11 +355,7 @@ func TestLayerReadURLs(t *testing.T) {
 	want := convertReference(t, pool, store, reference, contents)
 	host := hostIn(t, pool, "")
 
-	reads, err := im.LayerReadURLs(ctx, reference, host, 10*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	urls := reads.Layers
+	urls := readsOf(t, im, reference, host).Layers
 	if len(urls) != len(contents) {
 		t.Fatalf("got %d layers, want %d", len(urls), len(contents))
 	}
@@ -367,7 +363,7 @@ func TestLayerReadURLs(t *testing.T) {
 		if u.DiffID != want[n] {
 			t.Fatalf("layer %d is %s, want %s", n, u.DiffID, want[n])
 		}
-		if left := time.Until(u.ExpiresAt); left < 9*time.Minute || left > 10*time.Minute {
+		if left := time.Until(u.ExpiresAt); left < 50*time.Second || left > time.Minute {
 			t.Fatalf("layer %d expires in %s", n, left)
 		}
 		ix := readIndex(t, u.Index)
@@ -388,8 +384,8 @@ func TestLayerReadURLs(t *testing.T) {
 		}
 	}
 
-	if _, err := im.LayerReadURLs(ctx, "registry.test/lazycloud/images/abc@sha256:"+hex64("2"), host, time.Minute); !errors.Is(err, images.ErrNotConverted) {
-		t.Fatalf("an unconverted reference gave %v", err)
+	if !unconverted(t, im, "registry.test/lazycloud/images/abc@sha256:"+hex64("2"), host) {
+		t.Fatal("an unconverted reference has grants")
 	}
 }
 
@@ -440,8 +436,8 @@ func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
 	if image, err := f.images.Get(t.Context(), ws, first.Image.ID); err != nil || image.Reference != nil {
 		t.Fatalf("an image with an unconverted layer is unpublished: %+v %v", image, err)
 	}
-	if _, err := f.images.LayerReadURLs(t.Context(), reference, host, time.Minute); !errors.Is(err, images.ErrNotConverted) {
-		t.Fatalf("nor readable: %v", err)
+	if !unconverted(t, f.images, reference, host) {
+		t.Fatal("nor readable")
 	}
 	_, uploaded := h.answer(t, rest)
 	report := images.BuildOutcome{Digest: digest, Uploaded: uploaded}
@@ -454,10 +450,7 @@ func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
 	if image, err := f.images.Get(t.Context(), ws, first.Image.ID); err != nil || image.Reference == nil || *image.Reference != reference {
 		t.Fatalf("published: %+v %v", image, err)
 	}
-	reads, err := f.images.LayerReadURLs(t.Context(), reference, host, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reads := readsOf(t, f.images, reference, host)
 	for n, d := range diffIDs(t, img) {
 		if reads.Layers[n].DiffID != d {
 			t.Fatalf("layer %d reads %s, want %s", n, reads.Layers[n].DiffID, d)

@@ -51,24 +51,32 @@ func pushLayers(t *testing.T, wrap func(http.Handler) http.Handler, sizes ...int
 }
 
 // layerServer answers completions as the images owner does: it names every
-// layer not yet uploaded, with URLs on store once its sizes arrived. With
-// again set it names uploaded layers again too.
+// layer not yet uploaded, with URLs on store in parts of partBytes once its
+// sizes arrived. With again set it names uploaded layers again too.
 type layerServer struct {
-	store  string
-	again  bool
-	mu     sync.Mutex
-	layers []*testLayer
+	store     string
+	partBytes int64
+	again     bool
+	mu        sync.Mutex
+	layers    []*testLayer
 }
 
+// testLayer is one layer and what the host reported of it: how often it
+// sent the layer's sizes and its upload, and the upload's ETags.
 type testLayer struct {
-	blob, diffID string
-	dataBytes    int64
-	uploaded     bool
+	blob, diffID    string
+	dataBytes       int64
+	sized, uploaded int
+	etags           []string
 }
+
+// signature is the query of every URL the server signs, which no error or
+// output may show.
+const signature = "?X-Amz-Signature=secret"
 
 func newLayerServer(t *testing.T, store string, layers []v1.Layer) *layerServer {
 	t.Helper()
-	s := &layerServer{store: store}
+	s := &layerServer{store: store, partBytes: 1 << 10}
 	for _, l := range layers {
 		blob, err := l.Digest()
 		if err != nil {
@@ -91,21 +99,24 @@ func (s *layerServer) complete(r *hostproto.CompleteImageBuildRequest) *hostprot
 		for _, c := range r.GetConvertedLayers() {
 			if c.GetBlobDigest() == l.blob {
 				l.dataBytes = c.GetDataBytes()
+				l.sized++
 			}
 		}
 		for _, u := range r.GetUploadedLayers() {
-			l.uploaded = l.uploaded || u.GetBlobDigest() == l.blob
+			if u.GetBlobDigest() == l.blob {
+				l.etags = u.GetPartEtags()
+				l.uploaded++
+			}
 		}
-		if l.uploaded && !s.again {
+		if l.uploaded > 0 && !s.again {
 			continue
 		}
 		upload := &hostproto.LayerUpload{BlobDigest: l.blob, DiffId: l.diffID}
 		if l.dataBytes >= 0 {
-			const partBytes = 1 << 10
 			prefix := s.store + "/" + strconv.Itoa(n)
-			upload.IndexUrl, upload.DataPartBytes = prefix+"/index", partBytes
-			for p := range (l.dataBytes + partBytes - 1) / partBytes {
-				upload.DataPartUrls = append(upload.DataPartUrls, prefix+"/data/"+strconv.Itoa(int(p)))
+			upload.IndexUrl, upload.DataPartBytes = prefix+"/index"+signature, s.partBytes
+			for p := range (l.dataBytes + s.partBytes - 1) / s.partBytes {
+				upload.DataPartUrls = append(upload.DataPartUrls, prefix+"/data/"+strconv.Itoa(int(p))+signature)
 			}
 		}
 		resp.LayerUploads = append(resp.LayerUploads, upload)
@@ -179,7 +190,7 @@ func TestLayerPublishUploadsALayerWhileAnotherConverts(t *testing.T) {
 		t.Fatal("the small layer was stored only after the large one converted")
 	}
 	for n, l := range server.layers {
-		if !l.uploaded || puts["/"+strconv.Itoa(n)+"/index"] != 1 {
+		if l.uploaded != 1 || puts["/"+strconv.Itoa(n)+"/index"] != 1 {
 			t.Fatalf("layer %d was not uploaded once: %v", n, puts)
 		}
 	}

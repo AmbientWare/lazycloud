@@ -49,7 +49,7 @@ func (ix Index) Marshal() ([]byte, error) {
 		msg.Entries[i] = &imagefsproto.Entry{
 			Path:           e.Path,
 			Type:           t,
-			Mode:           posixMode(e.Mode),
+			Mode:           PosixMode(e.Mode),
 			Uid:            e.UID,
 			Gid:            e.GID,
 			ModTimeSeconds: e.ModTime.Unix(),

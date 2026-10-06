@@ -157,10 +157,7 @@ func newForwardingAgent(t *testing.T) (*dataServer, *container) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp("", "lca")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := shortDir(t)
 	layers, _ := testLayerSources(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
@@ -182,7 +179,6 @@ func newForwardingAgent(t *testing.T) (*dataServer, *container) {
 		a.work.Wait()
 		_ = conn.Close()
 		grpcServer.Stop()
-		_ = os.RemoveAll(dir)
 	})
 	if err := os.MkdirAll(c.linkDir(), 0o700); err != nil {
 		t.Fatal(err)
@@ -1080,12 +1076,7 @@ func tarOf(t *testing.T, files map[string]string) []byte {
 
 // The handshake reader keeps bytes the supervisor sent right after its 101.
 func TestPortTunnelKeepsBytesSentWithTheUpgrade(t *testing.T) {
-	dir, err := os.MkdirTemp("", "lca")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, controlSocketName)
+	socket := filepath.Join(shortDir(t), controlSocketName)
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
 	if err != nil {
 		t.Fatal(err)

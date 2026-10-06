@@ -124,12 +124,6 @@ func grantsLasting(d time.Duration) func(*hostsession.Config) {
 	return func(c *hostsession.Config) { c.LayerLifetime = d }
 }
 
-// serve serves the host service on a random local port over pool.
-func serve(t *testing.T, pool *pgxpool.Pool) *harness {
-	t.Helper()
-	return serveWith(t, pool, storagetest.Config(t))
-}
-
 // serveWith serves the host service over pool and the object store cfg.
 func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure ...func(*hostsession.Config)) *harness {
 	t.Helper()

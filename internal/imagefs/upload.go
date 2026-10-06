@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // errStoreRefused marks a request the store refused for itself, such as a
@@ -72,7 +74,7 @@ func (f *ConvertedFile) Upload(ctx context.Context, client *http.Client, partURL
 func putObject(ctx context.Context, client *http.Client, url string, body io.Reader, size int64) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
 	if err != nil {
-		return "", fmt.Errorf("build upload request: %w", redact(err))
+		return "", fmt.Errorf("build upload request: %w", telemetry.RedactURL(err))
 	}
 	req.ContentLength = size
 	if size == 0 {
@@ -80,7 +82,7 @@ func putObject(ctx context.Context, client *http.Client, url string, body io.Rea
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("upload: %w", redact(err))
+		return "", fmt.Errorf("upload: %w", telemetry.RedactURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

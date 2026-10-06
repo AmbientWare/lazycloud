@@ -74,9 +74,7 @@ func TestManagedImageIsConvertedByTheServer(t *testing.T) {
 	if err != nil || !strings.HasPrefix(pull.Reference, f.registry+"/lazycloud/platform/") || pull.Platform != "linux/amd64" {
 		t.Fatalf("every start pulls the converted copy: %+v %v", pull, err)
 	}
-	if _, err := f.images.LayerReadURLs(t.Context(), pull.Reference, host, time.Minute); err != nil {
-		t.Fatalf("the managed image is readable: %v", err)
-	}
+	readsOf(t, f.images, pull.Reference, host)
 	if err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
@@ -184,9 +182,7 @@ func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
 	if ref, err := f.images.Deployable(t.Context(), ws, r.Image.ID, "3.12"); err != nil || ref != old {
 		t.Fatalf("the converted reference deploys: %s %v", ref, err)
 	}
-	if _, err := f.images.LayerReadURLs(t.Context(), old, host, time.Minute); err != nil {
-		t.Fatal(err)
-	}
+	readsOf(t, f.images, old, host)
 }
 
 // pinned resolves numpy for ws and pushes a random image for it under the
@@ -368,9 +364,8 @@ func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
 	if err != nil || pull.Reference != reference {
 		t.Fatalf("the start pulls the pinned reference once converted: %+v %v", pull, err)
 	}
-	reads, err := f.images.LayerReadURLs(t.Context(), reference, host, time.Minute)
-	if err != nil || len(reads.Layers) != len(diffIDs(t, original)) || reads.Layers[0].DiffID != diffIDs(t, original)[0] {
-		t.Fatalf("the pinned reference reads the mirror's layers: %+v %v", reads, err)
+	if reads := readsOf(t, f.images, reference, host); len(reads.Layers) != len(diffIDs(t, original)) || reads.Layers[0].DiffID != diffIDs(t, original)[0] {
+		t.Fatalf("the pinned reference reads the mirror's layers: %+v", reads)
 	}
 	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null"); n != 0 {
 		t.Fatalf("%d adopted layers are still in their grace period", n)

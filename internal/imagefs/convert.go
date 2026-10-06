@@ -445,8 +445,9 @@ func fileMode(t EntryType, posix uint32) fs.FileMode {
 	return m
 }
 
-// posixMode is fileMode's inverse for the bits the index stores.
-func posixMode(m fs.FileMode) uint32 {
+// PosixMode is fileMode's inverse for the bits the index stores: the POSIX
+// permission, setuid, setgid and sticky bits of m.
+func PosixMode(m fs.FileMode) uint32 {
 	posix := uint32(m.Perm())
 	if m&fs.ModeSetuid != 0 {
 		posix |= 0o4000

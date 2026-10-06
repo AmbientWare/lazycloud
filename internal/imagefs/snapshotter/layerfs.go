@@ -105,7 +105,7 @@ func (n *node) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrOut) 
 	e := n.entry
 	a := &out.Attr
 	a.Ino = n.ino
-	a.Mode = fileType(e.Type) | permBits(e.Mode)
+	a.Mode = fileType(e.Type) | imagefs.PosixMode(e.Mode)
 	a.Nlink = n.nlink
 	a.Uid, a.Gid = e.UID, e.GID
 	a.Rdev = uint32(unix.Mkdev(e.DevMajor, e.DevMinor)) //nolint:gosec // the kernel's 32-bit device encoding
@@ -210,18 +210,4 @@ func fileType(t imagefs.EntryType) uint32 {
 		return syscall.S_IFIFO
 	}
 	return syscall.S_IFREG
-}
-
-func permBits(m fs.FileMode) uint32 {
-	bits := uint32(m.Perm())
-	if m&fs.ModeSetuid != 0 {
-		bits |= syscall.S_ISUID
-	}
-	if m&fs.ModeSetgid != 0 {
-		bits |= syscall.S_ISGID
-	}
-	if m&fs.ModeSticky != 0 {
-		bits |= syscall.S_ISVTX
-	}
-	return bits
 }
