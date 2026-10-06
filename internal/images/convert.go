@@ -109,11 +109,7 @@ func (i *Images) convertReference(ctx context.Context, workspace identity.Worksp
 		return &ConversionError{Reason: reference + " is not pinned by digest"}
 	}
 	dockerfile := "FROM " + reference + "\n"
-	digest := imageDigest(dockerfile, architecture, nil, buildInputs{})
-	p := prepared{
-		spec: spec{python: python, architecture: architecture}, dockerfile: dockerfile, digest: digest,
-		id: imageID(digest), secretVersions: map[string]string{},
-	}
+	p := stepless(imageDigest(dockerfile, architecture, nil, buildInputs{}), dockerfile, python, architecture)
 	kind := buildSharedMirror
 	if repository, platform := i.config.repositoryOf(reference); platform && !strings.HasPrefix(repository, i.config.Repository+"/images/") {
 		kind = buildOwnMirror
@@ -126,6 +122,15 @@ func (i *Images) convertReference(ctx context.Context, workspace identity.Worksp
 }
 
 func imageID(digest []byte) string { return "img_" + hex.EncodeToString(digest)[:24] }
+
+// stepless is an image of digest whose build only copies the image its
+// Dockerfile names, to convert it.
+func stepless(digest []byte, dockerfile, python, architecture string) prepared {
+	return prepared{
+		spec: spec{python: python, architecture: architecture}, dockerfile: dockerfile, digest: digest,
+		id: imageID(digest), secretVersions: map[string]string{},
+	}
+}
 
 // digestOf is the digest a reference by digest names.
 func digestOf(reference string) string {
@@ -259,8 +264,7 @@ func (i *Images) recordManagedSource(ctx context.Context, python string) (string
 	}
 	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: untagged(pinned)})
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Another server's insert committed while this one waited on it,
-		// after this statement's snapshot.
+		// Another server recorded its pin first.
 		source, err = i.queries.ManagedSource(ctx, key)
 	}
 	if err != nil {

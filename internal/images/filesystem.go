@@ -17,13 +17,7 @@ import (
 // container's release.
 func (i *Images) RegisterFilesystem(ctx context.Context, workspace identity.WorkspaceID, reference, architecture, python string) (string, error) {
 	sum := sha256.Sum256([]byte("filesystem\x00" + reference))
-	p := prepared{
-		spec:           spec{python: python, architecture: architecture},
-		dockerfile:     "# The filesystem of a sandbox container, published as one layer.\nFROM " + reference + "\n",
-		digest:         sum[:],
-		id:             imageID(sum[:]),
-		secretVersions: map[string]string{},
-	}
+	p := stepless(sum[:], "# The filesystem of a sandbox container, published as one layer.\nFROM "+reference+"\n", python, architecture)
 	r, err := i.build(ctx, workspace, p, false, buildOwnMirror)
 	if err != nil {
 		return "", fmt.Errorf("register filesystem image: %w", err)

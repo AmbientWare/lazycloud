@@ -27,16 +27,10 @@ func (q *Queries) ManagedSource(ctx context.Context, arg ManagedSourceParams) (s
 }
 
 const recordManagedSource = `-- name: RecordManagedSource :one
-with recorded as (
-    insert into managed_images (python_version, template, source)
-    values ($1, $2, $3)
-    on conflict do nothing
-    returning source
-)
-select source from recorded
-union all
-select source from managed_images where python_version = $1 and template = $2
-limit 1
+insert into managed_images (python_version, template, source)
+values ($1, $2, $3)
+on conflict do nothing
+returning source
 `
 
 type RecordManagedSourceParams struct {
@@ -45,7 +39,8 @@ type RecordManagedSourceParams struct {
 	Source        string
 }
 
-// The first source recorded for a version and template stays.
+// The first source recorded for a version and template stays; no row
+// means another was recorded.
 func (q *Queries) RecordManagedSource(ctx context.Context, arg RecordManagedSourceParams) (string, error) {
 	row := q.db.QueryRow(ctx, recordManagedSource, arg.PythonVersion, arg.Template, arg.Source)
 	var source string
