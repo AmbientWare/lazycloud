@@ -12,6 +12,9 @@ services:
       POSTGRES_PASSWORD: lazycloud
       POSTGRES_DB: postgres
     command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "max_connections=400"]
+    # Concurrent test packages' migrations and parallel queries outgrow
+    # Docker's 64 MB default.
+    shm_size: 1g
     ports:
       - "127.0.0.1:15442:5432"
     tmpfs:
