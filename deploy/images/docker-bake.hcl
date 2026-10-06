@@ -23,7 +23,7 @@ variable "SOURCE_DATE_EPOCH" {
 # serves. The Dockerfile's runtimes take the minors as PYTHON_VERSIONS;
 # deploy/images/python-versions.sh prints them for the workflows and
 # build-runtime.sh.
-variable "PYTHON" {
+variable "PYTHON_RELEASES" {
   default = ["3.10.20", "3.11.15", "3.12.13", "3.13.14", "3.14.6"]
 }
 
@@ -49,7 +49,7 @@ target "_labels" {
 
 target "_python" {
   args = {
-    PYTHON_VERSIONS = join(" ", [for release in PYTHON : minor(release)])
+    PYTHON_VERSIONS = join(" ", [for release in PYTHON_RELEASES : minor(release)])
   }
 }
 
@@ -98,7 +98,7 @@ target "agent" {
 # otherwise unpack the image, which rewritten timestamps rule out.
 target "python" {
   name      = "python-${replace(minor(release), ".", "")}"
-  matrix    = { release = PYTHON }
+  matrix    = { release = PYTHON_RELEASES }
   inherits  = ["_labels"]
   context   = "deploy/images/python"
   platforms = ["linux/amd64"]

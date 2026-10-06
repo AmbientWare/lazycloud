@@ -13,7 +13,8 @@ out="${1:-$root/.lazycloud/runtime}"
 shift || true
 versions=("$@")
 if [[ ${#versions[@]} -eq 0 ]]; then
-  read -r -a versions <<<"$("$root/deploy/images/python-versions.sh")"
+  listed="$("$root/deploy/images/python-versions.sh")"
+  read -r -a versions <<<"$listed"
 fi
 # LAZYCLOUD_RUNTIME_PLATFORM selects the wheels; the agent bundle sets it per architecture.
 platform="${LAZYCLOUD_RUNTIME_PLATFORM:-x86_64-manylinux_2_28}"
