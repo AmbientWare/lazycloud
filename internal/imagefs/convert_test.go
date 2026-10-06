@@ -363,51 +363,13 @@ func TestConvertKeepsEveryEntryKind(t *testing.T) {
 // Convert refuses a layer it cannot index faithfully rather than storing a
 // tree that differs from extraction.
 func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
-	layers := map[string][]tar.Header{
-		"a hard link to a missing file": {{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}},
-		"a hard link target replaced": {
-			{Name: "a", Typeflag: tar.TypeReg}, {Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}, {Name: "a", Typeflag: tar.TypeReg},
-		},
-		"a file below a file": {{Name: "a", Typeflag: tar.TypeReg}, {Name: "a/b", Typeflag: tar.TypeReg}},
-	}
-	for name, headers := range layers {
-		var layer bytes.Buffer
-		tw := tar.NewWriter(&layer)
-		for _, hdr := range headers {
-			hdr.Mode = 0o644
-			if err := tw.WriteHeader(&hdr); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := tw.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Convert(t.Context(), &layer, io.Discard); !errors.Is(err, ErrInvalidLayer) {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	var truncated bytes.Buffer
-	tw := tar.NewWriter(&truncated)
-	if err := tw.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1000}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(make([]byte, 100)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Convert(t.Context(), &truncated, io.Discard); !errors.Is(err, ErrInvalidLayer) {
-		t.Errorf("a truncated layer: %v", err)
-	}
-	// A stream cut inside a header, and a header that is not one.
-	var whole bytes.Buffer
-	tw = tar.NewWriter(&whole)
-	if err := tw.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
 	streams := map[string][]byte{
-		"a stream cut inside a header": whole.Bytes()[:100],
+		"a hard link to a missing file": headersTar(t, tar.Header{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}),
+		"a hard link target replaced": headersTar(t,
+			tar.Header{Name: "a", Typeflag: tar.TypeReg}, tar.Header{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}, tar.Header{Name: "a", Typeflag: tar.TypeReg}),
+		"a file below a file":          headersTar(t, tar.Header{Name: "a", Typeflag: tar.TypeReg}, tar.Header{Name: "a/b", Typeflag: tar.TypeReg}),
+		"a truncated layer":            fileTar(t, "a", make([]byte, 1000))[:512+100],
+		"a stream cut inside a header": fileTar(t, "a", nil)[:100],
 		"a malformed header":           bytes.Repeat([]byte("not a tar header"), 32),
 	}
 	for name, stream := range streams {
@@ -421,9 +383,7 @@ func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
 // of the same layer: a file stays, and a directory stays and turns opaque.
 func TestWhiteoutsHideOnlyLowerLayers(t *testing.T) {
 	mtime := time.Date(2026, 10, 5, 12, 30, 0, 0, time.UTC)
-	var layer bytes.Buffer
-	tw := tar.NewWriter(&layer)
-	for _, hdr := range []tar.Header{
+	headers := []tar.Header{
 		{Name: "file-first", Typeflag: tar.TypeReg},
 		{Name: ".wh.file-first", Typeflag: tar.TypeReg},
 		{Name: "dir-first/", Typeflag: tar.TypeDir},
@@ -434,16 +394,11 @@ func TestWhiteoutsHideOnlyLowerLayers(t *testing.T) {
 		{Name: "dir-later/", Typeflag: tar.TypeDir},
 		{Name: ".wh.parent", Typeflag: tar.TypeReg},
 		{Name: "parent/child", Typeflag: tar.TypeReg},
-	} {
-		hdr.Mode, hdr.ModTime = 0o755, mtime
-		if err := tw.WriteHeader(&hdr); err != nil {
-			t.Fatal(err)
-		}
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
+	for i := range headers {
+		headers[i].Mode, headers[i].ModTime = 0o755, mtime
 	}
-	ix, _ := roundTrip(t, layer.Bytes())
+	ix, _ := roundTrip(t, headersTar(t, headers...))
 	want := []Entry{
 		{Path: "file-first", Type: TypeRegular, Mode: 0o755, ModTime: mtime},
 		{Path: "dir-first", Type: TypeDirectory, Mode: fs.ModeDir | 0o755, ModTime: mtime, Opaque: true},
@@ -524,6 +479,22 @@ func fileTar(t *testing.T, name string, body []byte, before ...tar.Header) []byt
 	}
 	if _, err := tw.Write(body); err != nil {
 		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return layer.Bytes()
+}
+
+// headersTar is a layer of the members hdrs describe, each empty.
+func headersTar(t *testing.T, hdrs ...tar.Header) []byte {
+	t.Helper()
+	var layer bytes.Buffer
+	tw := tar.NewWriter(&layer)
+	for _, hdr := range hdrs {
+		if err := tw.WriteHeader(&hdr); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
