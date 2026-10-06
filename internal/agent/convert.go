@@ -50,8 +50,9 @@ func retryTransfer(ctx context.Context, fn func() error) error {
 }
 
 // layerPublish converts and uploads the layers the server names for one
-// build, each in a goroutine of its own that publish waits for, so layers
-// upload while others convert. Only the build's publishBuild uses it.
+// build. Each conversion and upload runs on a goroutine of its own, so
+// layers upload while others convert, and hands its result to publish,
+// which alone reads and writes the layers' state.
 type layerPublish struct {
 	c       *container
 	build   *hostproto.ImageBuild
@@ -63,12 +64,8 @@ type layerPublish struct {
 	// upload that runs.
 	converting, uploading chan struct{}
 	running               sync.WaitGroup
-	// ready is signalled when a conversion or upload ends.
-	ready chan struct{}
-
-	mu     sync.Mutex
-	layers map[string]*publishedLayer
-	err    error
+	results               chan layerResult
+	layers                map[string]*publishedLayer
 }
 
 // publishedLayer is what the agent did with one layer and has yet to report.
@@ -85,27 +82,28 @@ type publishedLayer struct {
 	uploaded *hostproto.UploadedLayer
 }
 
-func newLayerPublish(c *container, build *hostproto.ImageBuild, dir string, logs buildLogs) *layerPublish {
-	options, auth := registryAccess(build)
-	return &layerPublish{
-		c: c, build: build, dir: dir, logs: logs, options: options, auth: auth,
-		converting: make(chan struct{}, maxConversions), uploading: make(chan struct{}, maxConversions),
-		ready: make(chan struct{}, 1), layers: map[string]*publishedLayer{},
-	}
+// layerResult is the end of a layer's conversion or upload; done records
+// what it produced.
+type layerResult struct {
+	layer *publishedLayer
+	done  func()
+	err   error
 }
 
-// registryAccess is how the agent reads the build's push repository.
-func registryAccess(build *hostproto.ImageBuild) ([]name.Option, authn.Authenticator) {
-	var options []name.Option
-	if build.GetInsecureRegistry() {
-		options = append(options, name.Insecure)
+func newLayerPublish(c *container, build *hostproto.ImageBuild, dir string, logs buildLogs) *layerPublish {
+	p := &layerPublish{
+		c: c, build: build, dir: dir, logs: logs, auth: authn.Anonymous,
+		converting: make(chan struct{}, maxConversions), uploading: make(chan struct{}, maxConversions),
+		results: make(chan layerResult), layers: map[string]*publishedLayer{},
 	}
-	auth := authn.Anonymous
+	if build.GetInsecureRegistry() {
+		p.options = append(p.options, name.Insecure)
+	}
 	registry, _, _ := strings.Cut(build.GetPushRepository(), "/")
 	if login := build.GetRegistryAuth()[registry]; login != nil {
-		auth = authn.FromConfig(authn.AuthConfig{Username: login.GetUsername(), Password: login.GetPassword(), IdentityToken: login.GetIdentityToken()})
+		p.auth = authn.FromConfig(authn.AuthConfig{Username: login.GetUsername(), Password: login.GetPassword(), IdentityToken: login.GetIdentityToken()})
 	}
-	return options, auth
+	return p
 }
 
 // publish completes the build with request, then acts on the layers each
@@ -120,22 +118,18 @@ func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteI
 		resp := p.c.completeBuild(ctx, request)
 		uploads := resp.GetLayerUploads()
 		if len(uploads) == 0 {
-			p.mu.Lock()
-			n := len(p.layers)
-			p.mu.Unlock()
-			if resp != nil && n > 0 {
-				p.logs.add(ctx, fmt.Sprintf("converted and stored %d layers in %s", n, time.Since(began).Round(time.Millisecond)))
+			if resp != nil && len(p.layers) > 0 {
+				p.logs.add(ctx, fmt.Sprintf("converted and stored %d layers in %s", len(p.layers), time.Since(began).Round(time.Millisecond)))
 			}
 			return nil
 		}
 		if err := p.start(ctx, uploads); err != nil {
 			return err
 		}
-		converted, uploaded, err := p.next(ctx)
-		if err != nil {
+		var err error
+		if request.ConvertedLayers, request.UploadedLayers, err = p.next(ctx); err != nil {
 			return err
 		}
-		request.ConvertedLayers, request.UploadedLayers = converted, uploaded
 	}
 }
 
@@ -145,7 +139,6 @@ func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteI
 // layer named more than maxPublishRounds times is an error.
 func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUpload) error {
 	conversions := 0
-	p.mu.Lock()
 	for _, u := range uploads {
 		l := p.layers[u.GetBlobDigest()]
 		if l == nil {
@@ -156,31 +149,24 @@ func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUplo
 			continue
 		}
 		if l.rounds++; l.rounds > maxPublishRounds {
-			p.mu.Unlock()
 			return fmt.Errorf("layer %s was still not stored after %d rounds", u.GetBlobDigest(), maxPublishRounds)
 		}
-		switch {
-		case l.converted == nil:
-			l.busy = true
+		switch converted := l.converted; {
+		case converted == nil:
 			conversions++
-			p.running.Go(func() {
+			p.run(ctx, l, func() (func(), error) {
 				converted, err := p.convert(ctx, u)
-				p.finish(l, err, func() { l.converted, l.sized = converted, sizes(u, converted) })
+				return func() { l.converted, l.sized = converted, sizes(u, converted) }, err
 			})
 		case u.GetIndexUrl() != "":
-			l.busy = true
-			converted := l.converted
-			p.running.Go(func() {
+			p.run(ctx, l, func() (func(), error) {
 				uploaded, err := p.upload(ctx, converted, u)
-				p.finish(l, err, func() { l.uploaded = uploaded })
+				return func() { l.uploaded = uploaded }, err
 			})
 		default:
-			l.sized = sizes(u, l.converted)
+			l.sized = sizes(u, converted)
 		}
 	}
-	p.mu.Unlock()
-	// Logging waits while the build's output is backed up, so it runs
-	// outside the lock finishing conversions take.
 	if conversions > 0 {
 		p.logs.add(ctx, fmt.Sprintf("converting %d layers", conversions))
 	}
@@ -191,22 +177,17 @@ func sizes(u *hostproto.LayerUpload, l *imagefs.ConvertedFile) *hostproto.Conver
 	return &hostproto.ConvertedLayer{BlobDigest: u.GetBlobDigest(), DataBytes: l.DataBytes, IndexBytes: int64(len(l.Index))}
 }
 
-// finish records the end of l's conversion or upload: done on success, the
-// first error of the build otherwise.
-func (p *layerPublish) finish(l *publishedLayer, err error, done func()) {
-	p.mu.Lock()
-	l.busy = false
-	switch {
-	case err == nil:
-		done()
-	case p.err == nil:
-		p.err = err
-	}
-	p.mu.Unlock()
-	select {
-	case p.ready <- struct{}{}:
-	default:
-	}
+// run runs l's conversion or upload on a goroutine publish waits for and
+// hands its result to next.
+func (p *layerPublish) run(ctx context.Context, l *publishedLayer, work func() (func(), error)) {
+	l.busy = true
+	p.running.Go(func() {
+		done, err := work()
+		select {
+		case p.results <- layerResult{layer: l, done: done, err: err}:
+		case <-ctx.Done():
+		}
+	})
 }
 
 // next waits until a layer has something to report, or none runs, and
@@ -214,7 +195,6 @@ func (p *layerPublish) finish(l *publishedLayer, err error, done func()) {
 // failed is the error.
 func (p *layerPublish) next(ctx context.Context) ([]*hostproto.ConvertedLayer, []*hostproto.UploadedLayer, error) {
 	for {
-		p.mu.Lock()
 		var sized []*hostproto.ConvertedLayer
 		var uploaded []*hostproto.UploadedLayer
 		busy := false
@@ -228,17 +208,38 @@ func (p *layerPublish) next(ctx context.Context) ([]*hostproto.ConvertedLayer, [
 			l.sized, l.uploaded = nil, nil
 			busy = busy || l.busy
 		}
-		err := p.err
-		p.mu.Unlock()
-		if err != nil || len(sized) > 0 || len(uploaded) > 0 || !busy {
-			return sized, uploaded, err
+		if len(sized) > 0 || len(uploaded) > 0 || !busy {
+			return sized, uploaded, nil
 		}
 		select {
-		case <-p.ready:
+		case r := <-p.results:
+			if err := r.record(); err != nil {
+				return nil, nil, err
+			}
 		case <-ctx.Done():
 			return nil, nil, fmt.Errorf("convert layers: %w", ctx.Err())
 		}
+		// Results that ended meanwhile report with it.
+		for drained := false; !drained; {
+			select {
+			case r := <-p.results:
+				if err := r.record(); err != nil {
+					return nil, nil, err
+				}
+			default:
+				drained = true
+			}
+		}
 	}
+}
+
+// record applies r to its layer and returns its error.
+func (r layerResult) record() error {
+	r.layer.busy = false
+	if r.err == nil {
+		r.done()
+	}
+	return r.err
 }
 
 // acquire takes one of tokens, or fails when ctx ends first.

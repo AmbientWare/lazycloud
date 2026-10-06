@@ -185,38 +185,6 @@ func TestLayerPublishUploadsALayerWhileAnotherConverts(t *testing.T) {
 	}
 }
 
-// A publish waiting on backed-up build output holds no lock, so a layer
-// whose conversion or upload ends meanwhile still records its result.
-func TestLayerPublishRecordsResultsWhileItsOutputWaits(t *testing.T) {
-	repository, layers := pushLayers(t, func(h http.Handler) http.Handler { return h }, 2<<10)
-	server := newLayerServer(t, "http://store", layers)
-	p := testPublish(t, repository, server)
-	// Nothing sends this output, so one line fills its buffer.
-	p.logs.add(t.Context(), strings.Repeat("x", logBufferBytes))
-	ctx, cancel := context.WithCancel(t.Context())
-	started := make(chan error, 1)
-	go func() {
-		started <- p.start(ctx, server.complete(&hostproto.CompleteImageBuildRequest{}).GetLayerUploads())
-	}()
-	time.Sleep(200 * time.Millisecond)
-	recorded := make(chan struct{})
-	go func() {
-		p.finish(&publishedLayer{busy: true}, nil, func() {})
-		close(recorded)
-	}()
-	select {
-	case <-recorded:
-	case <-time.After(10 * time.Second):
-		t.Error("a layer could not record its result while the publish waited on its output")
-	}
-	cancel()
-	if err := <-started; err != nil {
-		t.Fatal(err)
-	}
-	<-recorded
-	p.running.Wait()
-}
-
 // A layer the server keeps naming after its upload fails the build for
 // itself once it has taken maxPublishRounds.
 func TestLayerPublishBoundsTheRoundsOfALayer(t *testing.T) {
