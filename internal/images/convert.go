@@ -246,7 +246,8 @@ func PythonVersions() []string {
 
 // ManagedSource is the template's image for python by digest: pinned the
 // first time any server asks, and the same image from then on until the
-// template changes.
+// template changes. It names no tag, so a release whose base is unchanged
+// converts nothing again.
 func (i *Images) ManagedSource(ctx context.Context, python string) (string, error) {
 	if !apitypes.ImageSpecPythonVersion(python).Valid() {
 		return "", &ConversionError{Reason: fmt.Sprintf("Python %q has no managed image", python)}
@@ -275,7 +276,7 @@ func (i *Images) ManagedSource(ctx context.Context, python string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: pinned.ref})
+	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: untagged(pinned.ref)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Another server's insert committed while this one waited on it,
 		// after this statement's snapshot.

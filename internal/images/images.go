@@ -356,6 +356,9 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 		if err != nil {
 			return "", err
 		}
+		if ref == managed {
+			return untagged(p.ref), nil
+		}
 		return p.ref, nil
 	}
 	out.dockerfile, err = s.render(i.config.ManagedBase, pin)
