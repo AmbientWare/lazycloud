@@ -1,10 +1,11 @@
--- name: UpsertImage :one
--- The update locks the image row, so build requests for one image run one
--- at a time. Only a build publishes an image.
+-- name: InsertImage :one
+-- Returns no row when the image exists. With no conflict target it also
+-- waits out a concurrent first insert, which would otherwise collide on
+-- the id index that an ON CONFLICT (digest) does not arbitrate.
 insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu)
 values (@digest, @id, @dockerfile, @python_version, @architecture, @build_secrets, @build_gpu)
-on conflict (digest) do update set digest = excluded.digest
-returning digest, id, python_version, architecture, reference, created_at, ready_at;
+on conflict do nothing
+returning id;
 
 -- name: GrantImage :exec
 insert into workspace_images (workspace_id, image_digest)

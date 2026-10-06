@@ -520,17 +520,24 @@ func (i *Images) upsert(ctx context.Context, q *Queries, workspace identity.Work
 	if err != nil {
 		return Image{}, fmt.Errorf("encode secret versions: %w", err)
 	}
-	row, err := q.UpsertImage(ctx, UpsertImageParams{
+	// A new row is locked by its insert, an existing one by LockImage, so
+	// build requests for one image run one at a time.
+	id, err := q.InsertImage(ctx, InsertImageParams{
 		Digest: p.digest, ID: p.id, Dockerfile: p.dockerfile, PythonVersion: p.spec.python,
 		Architecture: p.spec.architecture, BuildSecrets: versions, BuildGpu: p.spec.gpu,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		var row LockImageRow
+		row, err = q.LockImage(ctx, p.digest)
+		id = row.ID
+	}
 	if err != nil {
 		return Image{}, fmt.Errorf("upsert image: %w", err)
 	}
 	if err := q.GrantImage(ctx, GrantImageParams{WorkspaceID: uuid.UUID(workspace), ImageDigest: p.digest}); err != nil {
 		return Image{}, fmt.Errorf("grant image: %w", err)
 	}
-	return i.workspaceImage(ctx, q, workspace, row.ID)
+	return i.workspaceImage(ctx, q, workspace, id)
 }
 
 func (i *Images) workspaceImage(ctx context.Context, q *Queries, workspace identity.WorkspaceID, id string) (Image, error) {

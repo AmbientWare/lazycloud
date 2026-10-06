@@ -363,6 +363,41 @@ func (q *Queries) InsertBuildLogs(ctx context.Context, arg InsertBuildLogsParams
 	return err
 }
 
+const insertImage = `-- name: InsertImage :one
+insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu)
+values ($1, $2, $3, $4, $5, $6, $7)
+on conflict do nothing
+returning id
+`
+
+type InsertImageParams struct {
+	Digest        []byte
+	ID            string
+	Dockerfile    string
+	PythonVersion string
+	Architecture  string
+	BuildSecrets  []byte
+	BuildGpu      string
+}
+
+// Returns no row when the image exists. With no conflict target it also
+// waits out a concurrent first insert, which would otherwise collide on
+// the id index that an ON CONFLICT (digest) does not arbitrate.
+func (q *Queries) InsertImage(ctx context.Context, arg InsertImageParams) (string, error) {
+	row := q.db.QueryRow(ctx, insertImage,
+		arg.Digest,
+		arg.ID,
+		arg.Dockerfile,
+		arg.PythonVersion,
+		arg.Architecture,
+		arg.BuildSecrets,
+		arg.BuildGpu,
+	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const latestBuild = `-- name: LatestBuild :one
 select id, image_digest, state, failure, failure_transient, created_at, finished_at
 from image_builds where image_digest = $1
@@ -522,58 +557,6 @@ where id = $1
 func (q *Queries) SucceedBuild(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, succeedBuild, id)
 	return err
-}
-
-const upsertImage = `-- name: UpsertImage :one
-insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu)
-values ($1, $2, $3, $4, $5, $6, $7)
-on conflict (digest) do update set digest = excluded.digest
-returning digest, id, python_version, architecture, reference, created_at, ready_at
-`
-
-type UpsertImageParams struct {
-	Digest        []byte
-	ID            string
-	Dockerfile    string
-	PythonVersion string
-	Architecture  string
-	BuildSecrets  []byte
-	BuildGpu      string
-}
-
-type UpsertImageRow struct {
-	Digest        []byte
-	ID            string
-	PythonVersion string
-	Architecture  string
-	Reference     *string
-	CreatedAt     time.Time
-	ReadyAt       *time.Time
-}
-
-// The update locks the image row, so build requests for one image run one
-// at a time. Only a build publishes an image.
-func (q *Queries) UpsertImage(ctx context.Context, arg UpsertImageParams) (UpsertImageRow, error) {
-	row := q.db.QueryRow(ctx, upsertImage,
-		arg.Digest,
-		arg.ID,
-		arg.Dockerfile,
-		arg.PythonVersion,
-		arg.Architecture,
-		arg.BuildSecrets,
-		arg.BuildGpu,
-	)
-	var i UpsertImageRow
-	err := row.Scan(
-		&i.Digest,
-		&i.ID,
-		&i.PythonVersion,
-		&i.Architecture,
-		&i.Reference,
-		&i.CreatedAt,
-		&i.ReadyAt,
-	)
-	return i, err
 }
 
 const workspaceBuild = `-- name: WorkspaceBuild :one
