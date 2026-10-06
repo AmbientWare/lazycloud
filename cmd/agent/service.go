@@ -72,11 +72,7 @@ func installService(args []string) error {
 		return fmt.Errorf("write service wrapper: %w", err)
 	}
 	// The agent's preflight refuses a host without the snapshotter.
-	exe, err := filepath.EvalSymlinks(j.cfg.Executable)
-	if err != nil {
-		return fmt.Errorf("resolve the agent executable: %w", err)
-	}
-	if err := installSnapshotter(filepath.Dir(exe), os.Stderr); err != nil {
+	if err := installSnapshotter(j.cfg.Executable, os.Stderr); err != nil {
 		return err
 	}
 	unit := filepath.Join(systemdUnits, *name+".service")
@@ -96,15 +92,25 @@ func installService(args []string) error {
 // releaseRoot is the install root of an executable at
 // <root>/releases/<version>/lazycloud-agent.
 func releaseRoot(executable string) (string, error) {
-	exe, err := filepath.EvalSymlinks(executable)
+	exe, err := resolveAgent(executable)
 	if err != nil {
-		return "", fmt.Errorf("resolve the agent executable: %w", err)
+		return "", err
 	}
 	releases := filepath.Dir(filepath.Dir(exe))
 	if filepath.Base(releases) != "releases" || filepath.Base(exe) != agent.AgentExecutable {
 		return "", fmt.Errorf("install-service runs from an installed release, <root>/releases/<version>/%s; this is %s", agent.AgentExecutable, exe)
 	}
 	return filepath.Dir(releases), nil
+}
+
+// resolveAgent follows the links to the agent executable, whose release
+// directory holds the binaries it installs.
+func resolveAgent(executable string) (string, error) {
+	exe, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return "", fmt.Errorf("resolve the agent executable: %w", err)
+	}
+	return exe, nil
 }
 
 // serviceArgs restates the flags given on the command line for the unit,

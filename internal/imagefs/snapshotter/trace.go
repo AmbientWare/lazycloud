@@ -2,7 +2,6 @@ package snapshotter
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,7 +13,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 const (
@@ -59,16 +57,13 @@ type trace struct {
 // was mounted when it started, and no other start has named one since. A
 // read also reaches FUSE only when the page cache of its mount misses.
 type tracer struct {
-	life time.Duration
-	// running counts traces so reads skip the lock when there are none.
-	running atomic.Int32
+	// gen counts the traces started. A frame recorded since the latest
+	// start is in every running trace of its layer, so reading it again
+	// takes no lock.
+	gen atomic.Uint32
 
 	mu     sync.Mutex
 	traces map[string]*trace
-}
-
-func newTracer(life time.Duration) *tracer {
-	return &tracer{life: life, traces: make(map[string]*trace)}
 }
 
 // expireLocked drops traces past their life.
@@ -78,20 +73,19 @@ func (t *tracer) expireLocked(now time.Time) {
 			delete(t.traces, name)
 		}
 	}
-	t.running.Store(int32(len(t.traces))) //nolint:gosec // at most maxTraces
 }
 
-// record adds a read of frame of layer to the traces of layer.
-func (t *tracer) record(layer imagefs.Digest, frame int) {
-	if t.running.Load() == 0 {
+// record adds a read of frame of l to the traces of l.
+func (t *tracer) record(l *layer, frame int) {
+	if l.traced[frame].Load() == t.gen.Load() {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.expireLocked(time.Now())
-	k := frameKey{layer: layer, frame: frame}
+	k := frameKey{layer: l.digest, frame: frame}
 	for _, tr := range t.traces {
-		position, ok := tr.layers[layer]
+		position, ok := tr.layers[l.digest]
 		if !ok || len(tr.reads) >= maxTraceReads {
 			continue
 		}
@@ -101,6 +95,7 @@ func (t *tracer) record(layer imagefs.Digest, frame int) {
 		tr.seen[k] = struct{}{}
 		tr.reads = append(tr.reads, frameRead{layer: position, frame: uint32(frame)}) //nolint:gosec // frame numbers are below imagefs's frame bound
 	}
+	l.traced[frame].Store(t.gen.Load())
 }
 
 // claim marks incomplete every running trace other than name's that shares
@@ -111,15 +106,16 @@ func (t *tracer) claim(name string, layers []imagefs.Digest) {
 	t.claimLocked(name, layers)
 }
 
-func (t *tracer) claimLocked(name string, layers []imagefs.Digest) {
+// claimLocked reports whether another trace shares one of layers.
+func (t *tracer) claimLocked(name string, layers []imagefs.Digest) bool {
+	shared := false
 	for other, tr := range t.traces {
-		if other == name && name != "" {
-			continue
-		}
-		if slices.ContainsFunc(layers, func(l imagefs.Digest) bool { _, ok := tr.layers[l]; return ok }) {
+		if other != name && slices.ContainsFunc(layers, func(l imagefs.Digest) bool { _, ok := tr.layers[l]; return ok }) {
 			tr.complete = false
+			shared = true
 		}
 	}
+	return shared
 }
 
 // start begins the trace name of layers, replacing a running one of that
@@ -135,21 +131,16 @@ func (t *tracer) start(name string, layers []imagefs.Digest, complete bool) erro
 	delete(t.traces, name)
 	tr := &trace{
 		layers: make(map[imagefs.Digest]uint32, len(layers)), seen: make(map[frameKey]struct{}),
-		expires: time.Now().Add(t.life),
+		expires: time.Now().Add(traceLife),
 	}
 	for i, l := range layers {
 		if _, ok := tr.layers[l]; !ok {
 			tr.layers[l] = uint32(i) //nolint:gosec // at most maxGrantsPerCall layers
 		}
 	}
-	shared := false
-	for _, other := range t.traces {
-		shared = shared || slices.ContainsFunc(layers, func(l imagefs.Digest) bool { _, ok := other.layers[l]; return ok })
-	}
-	t.claimLocked(name, layers)
-	tr.complete = complete && !shared
+	tr.complete = !t.claimLocked(name, layers) && complete
 	t.traces[name] = tr
-	t.running.Store(int32(len(t.traces))) //nolint:gosec // at most maxTraces
+	t.gen.Add(1)
 	return nil
 }
 
@@ -160,25 +151,15 @@ func (t *tracer) end(name string) (*trace, bool) {
 	t.expireLocked(time.Now())
 	tr, ok := t.traces[name]
 	delete(t.traces, name)
-	t.running.Store(int32(len(t.traces))) //nolint:gosec // at most maxTraces
 	return tr, ok
 }
 
 // startTrace begins a trace of layers, complete if none is mounted.
 func (c *frameCache) startTrace(name string, layers []imagefs.Digest) error {
 	c.mu.Lock()
-	complete := true
-	for _, l := range layers {
-		complete = complete && c.mounted[l] == 0
-	}
+	complete := !slices.ContainsFunc(layers, func(l imagefs.Digest) bool { return c.live[l] != nil })
 	c.mu.Unlock()
 	return c.traces.start(name, layers, complete)
-}
-
-// prefetchRead is a frame a prefetch fetches.
-type prefetchRead struct {
-	layer imagefs.Digest
-	frame int
 }
 
 // prefetchRun is a running prefetch; stop ends it.
@@ -190,7 +171,7 @@ type prefetchRun struct {
 // is mounted, sharing fetches with reads and fills, until stopPrefetch of
 // name. It holds at most a quarter of the cache, so it never evicts most of
 // what containers use.
-func (c *frameCache) prefetch(name string, reads []prefetchRead, parent oteltrace.SpanContext) error {
+func (c *frameCache) prefetch(name string, reads []frameKey, parent oteltrace.SpanContext) error {
 	reads = reads[:min(len(reads), int(c.limit/imagefs.FrameSize/4))]
 	ctx, cancel := context.WithTimeout(c.life, prefetchLife)
 	run := &prefetchRun{stop: cancel}
@@ -216,8 +197,7 @@ func (c *frameCache) prefetch(name string, reads []prefetchRead, parent oteltrac
 		began := time.Now()
 		var span oteltrace.Span
 		if parent.IsSampled() {
-			_, span = c.starts.tracer.Start(oteltrace.ContextWithRemoteSpanContext(context.Background(), parent), "snapshotter.prefetch",
-				oteltrace.WithAttributes(attribute.Int("lazycloud.frames", len(reads))))
+			span = c.starts.span(parent, "snapshotter.prefetch", oteltrace.WithAttributes(attribute.Int("lazycloud.frames", len(reads))))
 		}
 		fetched := c.runPrefetch(ctx, reads)
 		if span != nil {
@@ -239,51 +219,27 @@ func (c *frameCache) stopPrefetch(name string) {
 	}
 }
 
-// runPrefetch fetches reads and returns how many frames it fetched.
-func (c *frameCache) runPrefetch(ctx context.Context, reads []prefetchRead) int64 {
-	var fetched atomic.Int64
-	var wg sync.WaitGroup
-	defer wg.Wait()
+// runPrefetch loads reads as their layers mount and returns how many
+// frames it fetched.
+func (c *frameCache) runPrefetch(ctx context.Context, reads []frameKey) int64 {
 	mounting, stopWaiting := context.WithTimeout(ctx, prefetchMountWait)
 	defer stopWaiting()
 	// seen holds the layers found mounted; one gone since is skipped.
 	seen := make(map[imagefs.Digest]bool)
-	for _, r := range reads {
-		l := c.awaitMount(mounting, r.layer, seen)
-		if ctx.Err() != nil {
-			wg.Wait()
-			return fetched.Load()
-		}
-		if l == nil || r.frame >= len(l.index.Frames) {
-			continue
-		}
-		c.mu.Lock()
-		_, cached := c.frames[frameKey{layer: l.digest, frame: r.frame}]
-		c.mu.Unlock()
-		if cached {
-			continue
-		}
-		select {
-		case c.filling <- struct{}{}:
-		case <-ctx.Done():
-			wg.Wait()
-			return fetched.Load()
-		}
-		wg.Go(func() { //nolint:contextcheck // a shared fetch runs under the cache's life
-			defer func() { <-c.filling }()
-			if _, err := c.load(l, r.frame); err != nil {
-				c.log.Debug("prefetch failed", "layer", l.digest, "frame", r.frame, "error", err)
+	return c.loadEach(ctx, func(yield func(*layer, int) bool) {
+		for _, r := range reads {
+			l := c.awaitMount(mounting, r.layer, seen)
+			if ctx.Err() != nil {
 				return
 			}
-			fetched.Add(1)
-			c.metrics.framesPrefetched.Inc()
-		})
-	}
-	wg.Wait()
-	return fetched.Load()
+			if l != nil && r.frame < len(l.index.Frames) && !yield(l, r.frame) {
+				return
+			}
+		}
+	})
 }
 
-// awaitMount returns a mounted layer of digest, waiting for it to mount
+// awaitMount returns the mounted layer of digest, waiting for it to mount
 // until ctx ends. It returns nil for a layer seen mounted and gone since.
 func (c *frameCache) awaitMount(ctx context.Context, digest imagefs.Digest, seen map[imagefs.Digest]bool) *layer {
 	for {
@@ -303,82 +259,4 @@ func (c *frameCache) awaitMount(ctx context.Context, digest imagefs.Digest, seen
 			return nil
 		}
 	}
-}
-
-// digestsIn checks and converts the diff_ids of a request.
-func digestsIn(layers []string) ([]imagefs.Digest, error) {
-	if len(layers) > maxGrantsPerCall {
-		return nil, status.Errorf(codes.InvalidArgument, "a call names at most %d layers", maxGrantsPerCall)
-	}
-	out := make([]imagefs.Digest, len(layers))
-	for i, raw := range layers {
-		out[i] = imagefs.Digest(raw)
-		if err := out[i].Check(); err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-	}
-	return out, nil
-}
-
-func checkName(name string) error {
-	if name == "" || len(name) > maxName {
-		return status.Errorf(codes.InvalidArgument, "a name has 1 to %d bytes", maxName)
-	}
-	return nil
-}
-
-func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.PrefetchRequest) (*imagefsproto.PrefetchResponse, error) {
-	if err := checkName(request.GetName()); err != nil {
-		return nil, err
-	}
-	layers, err := digestsIn(request.GetLayers())
-	if err != nil {
-		return nil, err
-	}
-	if len(request.GetReads()) > maxTraceReads {
-		return nil, status.Errorf(codes.InvalidArgument, "a prefetch names at most %d frames", maxTraceReads)
-	}
-	reads := make([]prefetchRead, len(request.GetReads()))
-	for i, r := range request.GetReads() {
-		if int(r.GetLayer()) >= len(layers) {
-			return nil, status.Errorf(codes.InvalidArgument, "read %d names layer %d of %d", i, r.GetLayer(), len(layers))
-		}
-		reads[i] = prefetchRead{layer: layers[r.GetLayer()], frame: int(r.GetFrame())}
-	}
-	s.frames.traces.claim(request.GetName(), layers)
-	if err := s.frames.prefetch(request.GetName(), reads, incomingParent(ctx)); err != nil { //nolint:contextcheck // a prefetch lives with the cache, not the call
-		return nil, err
-	}
-	return &imagefsproto.PrefetchResponse{}, nil
-}
-
-func (s layerSources) StopPrefetch(_ context.Context, request *imagefsproto.StopPrefetchRequest) (*imagefsproto.StopPrefetchResponse, error) {
-	s.frames.stopPrefetch(request.GetName())
-	return &imagefsproto.StopPrefetchResponse{}, nil
-}
-
-func (s layerSources) StartTrace(_ context.Context, request *imagefsproto.StartTraceRequest) (*imagefsproto.StartTraceResponse, error) {
-	if err := checkName(request.GetName()); err != nil {
-		return nil, err
-	}
-	layers, err := digestsIn(request.GetLayers())
-	if err != nil {
-		return nil, err
-	}
-	if err := s.frames.startTrace(request.GetName(), layers); err != nil {
-		return nil, err
-	}
-	return &imagefsproto.StartTraceResponse{}, nil
-}
-
-func (s layerSources) EndTrace(_ context.Context, request *imagefsproto.EndTraceRequest) (*imagefsproto.EndTraceResponse, error) {
-	tr, ok := s.frames.traces.end(request.GetName())
-	if !ok {
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("no trace %q is recording", request.GetName()))
-	}
-	out := &imagefsproto.EndTraceResponse{Complete: tr.complete, Reads: make([]*imagefsproto.FrameRead, len(tr.reads))}
-	for i, r := range tr.reads {
-		out.Reads[i] = &imagefsproto.FrameRead{Layer: r.layer, Frame: r.frame}
-	}
-	return out, nil
 }

@@ -22,6 +22,9 @@ const (
 	// Socket is where the snapshotter serves containerd's snapshotter API
 	// and LayerSources on a host.
 	Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
+	// Root holds the snapshotter's metadata, snapshots and frame cache on a
+	// host. containerd mounts the snapshots below it.
+	Root = "/var/lib/lazycloud-snapshotter"
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"
