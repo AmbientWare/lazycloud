@@ -124,7 +124,7 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 				return nil, err
 			}
 			out[n].Pull = &pull
-		case row.Failure != nil && !*row.FailureTransient && time.Since(*row.FailedAt) < platformFailureRetry:
+		case row.Failure != nil && row.FailedAt != nil && !*row.FailureTransient && time.Since(*row.FailedAt) < platformFailureRetry:
 			out[n].Failure, out[n].RetryAt = *row.Failure, row.FailedAt.Add(platformFailureRetry)
 		}
 	}
