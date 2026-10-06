@@ -40,6 +40,12 @@ containerd's API, never restart the process holding FUSE while containers
 run, convert every image, and store each layer as an index plus one framed
 data object read by range with presigned URLs.
 
+## Goal
+
+Performance parity with beta9 on image pulls, nothing more (user, 2026-10-05).
+Acceptance compares the same images on Beam and on LazyCloud; only measured
+gaps get more work.
+
 ## Packets
 
 | Packet | Branch | Migration | Shared-file range | Depends on |
@@ -52,6 +58,7 @@ data object read by range with presigned URLs.
 | [grants](lazy-images/grants.md) | `perf-lazy-grants` | 0004 | host.proto fields 100-109 | format, publish |
 | [platform-images](lazy-images/platform-images.md) | `perf-lazy-platform-images` | 0006 if needed | host.proto fields 110-119 | snapshotter |
 | [prefetch](lazy-images/prefetch.md) | `perf-lazy-prefetch` | 0005 if it stores traces | the snapshotter's read path, host.proto fields 120-129 | snapshotter |
+| [regional](lazy-images/regional.md) | `perf-integration` | 0007 | layers bucket config, Terraform storage and IAM | all above |
 | [acceptance](lazy-images/acceptance.md) | `perf-lazy-acceptance` | none | none | all |
 
 The lazy images design is [lazy-images/plan.md](lazy-images/plan.md).
