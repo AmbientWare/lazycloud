@@ -395,7 +395,7 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 	}
 	sizes := make([]ConvertedLayer, 0, len(files))
 	for blob, f := range files {
-		sizes = append(sizes, ConvertedLayer{Blob: blob, DataBytes: f.dataBytes, IndexBytes: int64(len(f.index))})
+		sizes = append(sizes, ConvertedLayer{Blob: blob, DataBytes: f.DataBytes, IndexBytes: int64(len(f.Index))})
 	}
 	if offers, err = i.platformRound(ctx, pushed, nil, sizes, finish); err != nil || len(offers) == 0 {
 		return err
@@ -452,18 +452,10 @@ func (i *Images) platformRound(ctx context.Context, pushed publication, converte
 	return offers, nil
 }
 
-// platformLayer is a layer the server converted: its data in a file under
-// the conversion's directory, and its index.
-type platformLayer struct {
-	data      string
-	dataBytes int64
-	index     []byte
-}
-
 // convertPlatformLayers converts the layers offers name, read from image's
-// repository, a few at a time.
-func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, auth *Auth, dir string, offers []offer, blobBytes map[string]int64) (map[string]*platformLayer, error) {
-	out := make([]*platformLayer, len(offers))
+// repository, a few at a time, into data files under dir.
+func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, auth *Auth, dir string, offers []offer, blobBytes map[string]int64) (map[string]*imagefs.ConvertedFile, error) {
+	out := make([]*imagefs.ConvertedFile, len(offers))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(platformLayerParallelism)
 	for n, o := range offers {
@@ -486,7 +478,7 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 	if err := g.Wait(); err != nil {
 		return nil, err //nolint:wrapcheck // Each conversion's error names its layer.
 	}
-	files := make(map[string]*platformLayer, len(offers))
+	files := make(map[string]*imagefs.ConvertedFile, len(offers))
 	for n, o := range offers {
 		files[o.blob] = out[n]
 	}
@@ -496,7 +488,7 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 // convertPlatformLayer downloads blob, of size bytes, and converts it once
 // its digest checks. A download cut short is the registry's failure; only
 // a blob that holds its digest's bytes can fail as content.
-func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string, size int64) (*platformLayer, error) {
+func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string, size int64) (*imagefs.ConvertedFile, error) {
 	fetchCtx, fetch := telemetry.Start(ctx, "images.download_layer")
 	path, mediaType, err := i.fetchPlatformBlob(fetchCtx, blob, auth, dir, size)
 	telemetry.Fail(fetch, err)
@@ -515,19 +507,14 @@ func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, aut
 		return nil, fmt.Errorf("open layer %s: %w", blob.DigestStr(), err)
 	}
 	defer func() { _ = uncompressed.Close() }()
-	data, err := os.CreateTemp(dir, "layer-*.data")
-	if err != nil {
-		return nil, fmt.Errorf("%w: create layer data file: %w", ErrServerDisk, err)
-	}
-	defer func() { _ = data.Close() }()
-	ix, index, err := imagefs.ConvertLayer(ctx, uncompressed, data, imagefs.Digest(diffID))
+	l, err := imagefs.ConvertFile(ctx, uncompressed, dir, imagefs.Digest(diffID))
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
 		return nil, &ConversionError{Reason: fmt.Sprintf("layer %s: %v", blob.DigestStr(), err)}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("convert layer: %w", err)
 	}
-	return &platformLayer{data: data.Name(), dataBytes: ix.DataSize, index: index}, nil
+	return l, nil
 }
 
 // fetchPlatformBlob downloads blob, of size bytes, into a file under dir
@@ -571,7 +558,7 @@ func (i *Images) fetchPlatformBlob(ctx context.Context, blob name.Digest, auth *
 
 // uploadPlatformLayers PUTs each layer's data parts, then its index, to
 // the URLs uploads carry, and returns the parts' ETags.
-func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload, files map[string]*platformLayer) ([]UploadedLayer, error) {
+func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload, files map[string]*imagefs.ConvertedFile) ([]UploadedLayer, error) {
 	for _, u := range uploads {
 		if files[u.Blob] == nil || u.Index == "" {
 			return nil, fmt.Errorf("layer %s has no converted data or no upload", u.Blob)
@@ -584,8 +571,8 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 		l := files[u.Blob]
 		g.Go(func() error {
 			uploadCtx, span := telemetry.Start(ctx, "images.upload_layer", trace.WithAttributes(
-				attribute.String(telemetry.AttrLayer, u.DiffID), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
-			etags, err := i.uploadPlatformLayer(uploadCtx, u, l)
+				attribute.String(telemetry.AttrLayer, u.DiffID), attribute.Int64("lazycloud.bytes", l.DataBytes+int64(len(l.Index)))))
+			etags, err := l.Upload(uploadCtx, i.transfer, u.DataParts, u.PartBytes, u.Index, retryPlatform)
 			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("upload layer %s: %w", u.Blob, err)
@@ -598,15 +585,6 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 		return nil, err //nolint:wrapcheck // Each upload's error names its layer.
 	}
 	return out, nil
-}
-
-func (i *Images) uploadPlatformLayer(ctx context.Context, u LayerUpload, l *platformLayer) ([]string, error) {
-	data, err := os.Open(l.data)
-	if err != nil {
-		return nil, fmt.Errorf("open layer data: %w", err)
-	}
-	defer func() { _ = data.Close() }()
-	return imagefs.UploadPair(ctx, i.transfer, data, l.dataBytes, l.index, u.DataParts, u.PartBytes, u.Index, retryPlatform) //nolint:wrapcheck // The caller names the layer.
 }
 
 // retryPlatform runs fn until it succeeds, fails for the image, the

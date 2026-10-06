@@ -1,17 +1,30 @@
 // Package imagefs owns the stored layer format of lazy images: converting an
 // OCI layer tar into a framed zstd data object and an index of its file tree,
-// encoding that index, and reading frames back by HTTP range. The schema is
-// contracts/imagefs/v1/index.proto. It has no database access.
+// encoding that index, uploading the pair, and reading frames back by HTTP
+// range. The schema is contracts/imagefs/v1/index.proto. It has no database
+// access.
 package imagefs
 
 import (
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 )
 
 // Digest is a layer's uncompressed digest (diff_id), "sha256:<hex>".
 type Digest string
+
+// Check reports whether d is "sha256:" and 64 lowercase hex digits.
+func (d Digest) Check() error {
+	h, ok := strings.CutPrefix(string(d), "sha256:")
+	if _, err := hex.DecodeString(h); !ok || len(h) != 64 || strings.ToLower(h) != h || err != nil {
+		return fmt.Errorf("layer digest %q is not sha256:<64 lowercase hex>", string(d))
+	}
+	return nil
+}
 
 // FrameSize is the uncompressed size of every data frame but the last.
 const FrameSize = 4 << 20
@@ -29,6 +42,11 @@ type Index struct {
 type Frame struct {
 	Offset int64 // in the data object
 	Size   int64 // compressed bytes
+}
+
+// FrameLen is the uncompressed length of frame i.
+func (ix Index) FrameLen(i int) int {
+	return int(min(FrameSize, ix.StreamSize-int64(i)*FrameSize))
 }
 
 // EntryType is the kind of file an entry describes.
@@ -64,9 +82,9 @@ type Entry struct {
 }
 
 var (
-	// ErrInvalidLayer marks a layer tar Convert refuses: a path outside the
-	// root, a hard link to a missing or unlinkable entry, or an unknown entry
-	// type.
+	// ErrInvalidLayer marks a layer conversion refuses: a malformed tar, a
+	// path outside the root, a hard link to a missing or unlinkable entry,
+	// an unknown entry type, or content that is not the named diff_id.
 	ErrInvalidLayer = errors.New("invalid layer")
 	// ErrUnsupportedVersion marks a stored index written in a format version
 	// this reader does not know.
@@ -76,16 +94,5 @@ var (
 	ErrInvalidIndex = errors.New("invalid index")
 )
 
-// FrameSpan is the frames holding bytes [off, off+n) of e's contents. The
-// range is clipped to the file; an empty result has first > last.
-func (ix Index) FrameSpan(e Entry, off, n int64) (first, last int) {
-	off = max(off, 0)
-	if n <= 0 || off >= e.Size {
-		return 0, -1
-	}
-	end := e.Size
-	if n < e.Size-off {
-		end = off + n
-	}
-	return int((e.Offset + off) / FrameSize), int((e.Offset + end - 1) / FrameSize)
-}
+// ceilDiv is n/d rounded up, for n >= 0 and d > 0.
+func ceilDiv(n, d int64) int64 { return (n + d - 1) / d }

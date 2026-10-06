@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -49,14 +48,6 @@ func retryTransfer(ctx context.Context, fn func() error) error {
 	return imagefs.Retry(ctx, transferAttempts, transferBackoff, content, fn) //nolint:wrapcheck // fn's error.
 }
 
-// convertedLayer is a layer converted to a data file under the build's
-// directory and an index, kept until its pair is uploaded.
-type convertedLayer struct {
-	data      string
-	dataBytes int64
-	index     []byte
-}
-
 // layerPublish converts and uploads the layers the server names for one
 // build, each in a goroutine of its own that wait waits for, so layers
 // upload while others convert. Only the build's publishBuild uses it.
@@ -81,7 +72,9 @@ type layerPublish struct {
 
 // publishedLayer is what the agent did with one layer and has yet to report.
 type publishedLayer struct {
-	converted *convertedLayer
+	// converted is the layer's data file under the build's directory and
+	// its index, kept until the pair is uploaded.
+	converted *imagefs.ConvertedFile
 	// rounds counts the times the server named the layer and the agent
 	// converted, sized or uploaded it.
 	rounds int
@@ -189,8 +182,8 @@ func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUplo
 	return nil
 }
 
-func sizes(u *hostproto.LayerUpload, l *convertedLayer) *hostproto.ConvertedLayer {
-	return &hostproto.ConvertedLayer{BlobDigest: u.GetBlobDigest(), DataBytes: l.dataBytes, IndexBytes: int64(len(l.index))}
+func sizes(u *hostproto.LayerUpload, l *imagefs.ConvertedFile) *hostproto.ConvertedLayer {
+	return &hostproto.ConvertedLayer{BlobDigest: u.GetBlobDigest(), DataBytes: l.DataBytes, IndexBytes: int64(len(l.Index))}
 }
 
 // finish records the end of l's conversion or upload: done on success, the
@@ -264,7 +257,7 @@ func acquire(ctx context.Context, tokens chan struct{}) error {
 }
 
 // convert converts one layer, read from the image the build pushed.
-func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*convertedLayer, error) {
+func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*imagefs.ConvertedFile, error) {
 	if err := acquire(ctx, p.converting); err != nil {
 		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
 	}
@@ -274,85 +267,60 @@ func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*
 		return nil, fmt.Errorf("layer %s: %w", u.GetBlobDigest(), err)
 	}
 	start := time.Now()
-	var l *convertedLayer
-	var ix imagefs.Index
 	layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, u.GetDiffId())))
 	defer span.End()
+	var l *imagefs.ConvertedFile
 	err = retryTransfer(layerCtx, func() error {
 		var err error
-		l, ix, err = p.convertLayer(layerCtx, ref, p.auth, u.GetDiffId())
+		l, err = p.convertLayer(layerCtx, ref, u.GetDiffId())
 		return err
 	})
-	span.SetAttributes(attribute.Int64("lazycloud.bytes", ix.DataSize), attribute.Int("lazycloud.files", len(ix.Entries)))
 	telemetry.Fail(span, err)
 	if err != nil {
 		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
 	}
+	span.SetAttributes(attribute.Int64("lazycloud.bytes", l.DataBytes), attribute.Int("lazycloud.files", l.Entries))
 	p.logs.add(fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
-		u.GetBlobDigest(), len(ix.Entries), ix.DataSize>>20, time.Since(start).Round(time.Millisecond)))
+		u.GetBlobDigest(), l.Entries, l.DataBytes>>20, time.Since(start).Round(time.Millisecond)))
 	return l, nil
 }
 
 // convertLayer reads one layer from the registry and converts it into a
 // data file under the build's directory. The file lives only until its
 // upload, and a host that stops abandons the build, so it is not synced.
-func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, auth authn.Authenticator, diffID string) (*convertedLayer, imagefs.Index, error) {
-	layer, err := remote.Layer(ref, remote.WithContext(ctx), remote.WithAuth(auth))
+func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, diffID string) (*imagefs.ConvertedFile, error) {
+	layer, err := remote.Layer(ref, remote.WithContext(ctx), remote.WithAuth(p.auth))
 	if err != nil {
-		return nil, imagefs.Index{}, fmt.Errorf("read layer: %w", err)
+		return nil, fmt.Errorf("read layer: %w", err)
 	}
 	tarball, err := layer.Uncompressed()
 	if err != nil {
-		return nil, imagefs.Index{}, fmt.Errorf("read layer: %w", err)
+		return nil, fmt.Errorf("read layer: %w", err)
 	}
 	defer func() { _ = tarball.Close() }()
-	data, err := os.CreateTemp(p.dir, "layer-*.data")
-	if err != nil {
-		return nil, imagefs.Index{}, fmt.Errorf("create layer data file: %w", err)
-	}
-	ix, index, err := imagefs.ConvertLayer(ctx, tarball, data, imagefs.Digest(diffID))
-	if closeErr := data.Close(); err == nil && closeErr != nil {
-		err = fmt.Errorf("write layer data: %w", closeErr)
-	}
-	if err != nil {
-		_ = os.Remove(data.Name())
-	}
+	l, err := imagefs.ConvertFile(ctx, tarball, p.dir, imagefs.Digest(diffID))
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
-		return nil, imagefs.Index{}, fmt.Errorf("%w: %w", errLayerContent, err)
+		return nil, fmt.Errorf("%w: %w", errLayerContent, err)
 	}
-	if err != nil {
-		return nil, imagefs.Index{}, err //nolint:wrapcheck // The caller names the layer.
-	}
-	return &convertedLayer{data: data.Name(), dataBytes: ix.DataSize, index: index}, ix, nil
+	return l, err //nolint:wrapcheck // The caller names the layer.
 }
 
 // upload stores l's data parts, then its index, and returns the parts'
 // ETags.
-func (p *layerPublish) upload(ctx context.Context, l *convertedLayer, u *hostproto.LayerUpload) (*hostproto.UploadedLayer, error) {
+func (p *layerPublish) upload(ctx context.Context, l *imagefs.ConvertedFile, u *hostproto.LayerUpload) (*hostproto.UploadedLayer, error) {
 	if err := acquire(ctx, p.uploading); err != nil {
 		return nil, fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
 	}
 	defer func() { <-p.uploading }()
 	start := time.Now()
 	uploadCtx, span := telemetry.Start(ctx, "agent.upload_layer", trace.WithAttributes(
-		attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
+		attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.DataBytes+int64(len(l.Index)))))
 	defer span.End()
-	etags, err := p.a.uploadLayer(uploadCtx, l, u)
+	etags, err := l.Upload(uploadCtx, p.a.http, u.GetDataPartUrls(), u.GetDataPartBytes(), u.GetIndexUrl(), retryTransfer)
 	telemetry.Fail(span, err)
 	if err != nil {
 		return nil, fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
 	}
 	p.logs.add(fmt.Sprintf("uploaded %s in %s", u.GetBlobDigest(), time.Since(start).Round(time.Millisecond)))
 	return &hostproto.UploadedLayer{BlobDigest: u.GetBlobDigest(), PartEtags: etags}, nil
-}
-
-// uploadLayer PUTs l's data in the parts upload names, then its index.
-func (a *Agent) uploadLayer(ctx context.Context, l *convertedLayer, upload *hostproto.LayerUpload) ([]string, error) {
-	data, err := os.Open(l.data)
-	if err != nil {
-		return nil, fmt.Errorf("open layer data: %w", err)
-	}
-	defer func() { _ = data.Close() }()
-	return imagefs.UploadPair(ctx, a.http, data, l.dataBytes, l.index, //nolint:wrapcheck // The caller names the layer.
-		upload.GetDataPartUrls(), upload.GetDataPartBytes(), upload.GetIndexUrl(), retryTransfer)
 }

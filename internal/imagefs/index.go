@@ -2,10 +2,8 @@ package imagefs
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -141,7 +139,7 @@ func Unmarshal(b []byte) (Index, error) {
 		}
 	}
 	if err := ix.validate(); err != nil {
-		return Index{}, err
+		return Index{}, fmt.Errorf("%w: %w", ErrInvalidIndex, err)
 	}
 	return ix, nil
 }
@@ -186,36 +184,29 @@ func checkRecordCounts(raw []byte) error {
 
 // validate checks what readers rely on: the frame table covers the stream,
 // every file's bytes lie inside it, and the tree has one entry per path
-// with each directory before its children.
-// Check reports whether d is "sha256:" and 64 lowercase hex digits.
-func (d Digest) Check() error {
-	if hexDigest, ok := strings.CutPrefix(string(d), "sha256:"); !ok || len(hexDigest) != 64 || strings.ToLower(hexDigest) != hexDigest || !isHex(hexDigest) {
-		return fmt.Errorf("layer digest %q is not sha256:<64 lowercase hex>", string(d))
-	}
-	return nil
-}
-
+// with each directory before its children. The caller names the error's
+// kind.
 func (ix Index) validate() error {
 	if err := ix.Layer.Check(); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidIndex, err)
+		return err
 	}
-	if ix.StreamSize < 0 || int64(len(ix.Frames)) != (ix.StreamSize+FrameSize-1)/FrameSize {
-		return fmt.Errorf("%w: %d frames for a %d byte stream", ErrInvalidIndex, len(ix.Frames), ix.StreamSize)
+	if ix.StreamSize < 0 || int64(len(ix.Frames)) != ceilDiv(ix.StreamSize, FrameSize) {
+		return fmt.Errorf("%d frames for a %d byte stream", len(ix.Frames), ix.StreamSize)
 	}
 	var offset int64
 	for i, f := range ix.Frames {
 		if f.Size <= 0 || f.Size > maxPackedFrame || f.Offset != offset {
-			return fmt.Errorf("%w: frame %d at %d of %d bytes", ErrInvalidIndex, i, f.Offset, f.Size)
+			return fmt.Errorf("frame %d at %d of %d bytes", i, f.Offset, f.Size)
 		}
 		offset += f.Size
 	}
 	if offset != ix.DataSize {
-		return fmt.Errorf("%w: frames hold %d of %d data bytes", ErrInvalidIndex, offset, ix.DataSize)
+		return fmt.Errorf("frames hold %d of %d data bytes", offset, ix.DataSize)
 	}
 	seen := make(map[string]int, len(ix.Entries))
 	for i, e := range ix.Entries {
 		if err := ix.validateEntry(e, seen); err != nil {
-			return fmt.Errorf("%w: %q: %w", ErrInvalidIndex, e.Path, err)
+			return fmt.Errorf("%q: %w", e.Path, err)
 		}
 		seen[e.Path] = i
 	}
@@ -297,19 +288,4 @@ func entryType(t imagefsproto.EntryType) (EntryType, error) {
 	case imagefsproto.EntryType_ENTRY_TYPE_UNSPECIFIED:
 	}
 	return "", fmt.Errorf("entry type %d", t)
-}
-
-// frameLen is the uncompressed length of frame i.
-func (ix Index) frameLen(i int) int {
-	if i == len(ix.Frames)-1 {
-		if rest := ix.StreamSize % FrameSize; rest != 0 {
-			return int(rest)
-		}
-	}
-	return FrameSize
-}
-
-func isHex(s string) bool {
-	_, err := hex.DecodeString(s)
-	return err == nil
 }

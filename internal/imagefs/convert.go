@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -19,12 +20,51 @@ import (
 
 const (
 	whiteoutPrefix = ".wh."
-	// Names under this prefix are whiteout metadata; only the opaque marker
-	// has a meaning in OCI layers, the rest (aufs) are skipped.
+	// Names under this prefix are whiteout metadata. Only the opaque marker
+	// has an OCI meaning; the others are skipped.
 	whiteoutMetaPrefix = ".wh..wh."
 	opaqueMarker       = ".wh..wh..opq"
 	xattrPrefix        = "SCHILY.xattr."
 )
+
+// ConvertedFile is a converted layer: its data object in a file and its
+// encoded index.
+type ConvertedFile struct {
+	Path      string
+	DataBytes int64
+	Index     []byte
+	Entries   int // paths in the index
+}
+
+// ConvertFile converts layer, which the image config names diffID, into a
+// new data file under dir. A layer Convert refuses or whose content is not
+// diffID is ErrInvalidLayer. A failed conversion leaves no file.
+func ConvertFile(ctx context.Context, layer io.Reader, dir string, diffID Digest) (out *ConvertedFile, err error) {
+	data, err := os.CreateTemp(dir, "layer-*.data")
+	if err != nil {
+		return nil, fmt.Errorf("create layer data file: %w", err)
+	}
+	defer func() {
+		if closeErr := data.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("write layer data file: %w", closeErr)
+		}
+		if err != nil {
+			out, err = nil, errors.Join(err, os.Remove(data.Name()))
+		}
+	}()
+	ix, err := Convert(ctx, layer, data)
+	if err != nil {
+		return nil, err
+	}
+	if ix.Layer != diffID {
+		return nil, fmt.Errorf("%w: its content is %s, but the image config names %s", ErrInvalidLayer, ix.Layer, diffID)
+	}
+	index, err := ix.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return &ConvertedFile{Path: data.Name(), DataBytes: ix.DataSize, Index: index, Entries: len(ix.Entries)}, nil
+}
 
 // Convert reads an uncompressed OCI layer tar, writes the compressed data
 // object to data as it goes, and returns the index. Memory stays bounded
@@ -34,7 +74,8 @@ const (
 // earlier one in place, and a non-directory replacing a directory removes
 // what was below it. A layer that replaces or removes an entry a hard link
 // names fails with ErrInvalidLayer. Missing parent directories are added as
-// 0755 root-owned directories just before their first child.
+// 0755 root-owned directories just before their first child. PAX global
+// headers describe no file and are skipped, as extraction skips them.
 func Convert(ctx context.Context, layer io.Reader, data io.Writer) (Index, error) {
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderCRC(true),
 		zstd.WithWindowSize(FrameSize), zstd.WithLowerEncoderMem(true))
@@ -64,6 +105,9 @@ func Convert(ctx context.Context, layer io.Reader, data io.Writer) (Index, error
 		if err != nil {
 			return Index{}, tarError(err)
 		}
+		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
 		if err := c.add(hdr, tr); err != nil {
 			return Index{}, err
 		}
@@ -92,6 +136,15 @@ func Convert(ctx context.Context, layer io.Reader, data io.Writer) (Index, error
 		return Index{}, fmt.Errorf("%w: %w", ErrInvalidLayer, err)
 	}
 	return ix, nil
+}
+
+// tarError is a failure reading the layer: ErrInvalidLayer when the tar
+// stream is truncated or malformed, which reading it again does not change.
+func tarError(err error) error {
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, tar.ErrHeader) || errors.Is(err, tar.ErrFieldTooLong) {
+		return fmt.Errorf("%w: %w", ErrInvalidLayer, err)
+	}
+	return fmt.Errorf("read layer tar: %w", err)
 }
 
 type converter struct {
@@ -129,11 +182,11 @@ func (c *converter) add(hdr *tar.Header, r io.Reader) error {
 		return err
 	}
 	if name, ok := strings.CutPrefix(base, whiteoutPrefix); ok && name != "" {
-		e.Path = path.Join(path.Dir(p), name)
-		e.Type, e.Whiteout, e.Xattrs = TypeCharDevice, true, nil
-		e.LinkTarget, e.DevMajor, e.DevMinor = "", 0, 0
-		e.Mode = fileMode(e.Type, uint32(hdr.Mode&07777)) //nolint:gosec // Masked to 12 bits.
-		return c.put(e)
+		return c.put(Entry{
+			Path: path.Join(path.Dir(p), name), Type: TypeCharDevice, Whiteout: true,
+			Mode: fileMode(TypeCharDevice, uint32(hdr.Mode&07777)), //nolint:gosec // Masked to 12 bits.
+			UID:  e.UID, GID: e.GID, ModTime: e.ModTime,
+		})
 	}
 	switch hdr.Typeflag {
 	case tar.TypeReg, tar.TypeGNUSparse: // archive/tar fills a sparse file's holes
@@ -278,15 +331,6 @@ func (c *converter) dir(d string, root bool) (int, error) {
 // write appends n bytes of r to the data stream and returns their offset. A
 // file of at most one frame starts a new frame when it would span two, so
 // one frame read serves it.
-// tarError is a failure reading the layer: ErrInvalidLayer when the tar
-// stream is truncated or malformed, which reading it again does not change.
-func tarError(err error) error {
-	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, tar.ErrHeader) || errors.Is(err, tar.ErrFieldTooLong) {
-		return fmt.Errorf("%w: %w", ErrInvalidLayer, err)
-	}
-	return fmt.Errorf("read layer tar: %w", err)
-}
-
 func (c *converter) write(r io.Reader, n int64) (int64, error) {
 	if n <= FrameSize && len(c.frame) > 0 && int64(len(c.frame))+n > FrameSize {
 		pad := FrameSize - len(c.frame)
@@ -346,8 +390,7 @@ func cleanPath(name string) string {
 }
 
 func headerEntry(p string, hdr *tar.Header) (Entry, error) {
-	ids := []int64{int64(hdr.Uid), int64(hdr.Gid), hdr.Devmajor, hdr.Devminor}
-	for _, id := range ids {
+	for _, id := range []int64{int64(hdr.Uid), int64(hdr.Gid), hdr.Devmajor, hdr.Devminor} {
 		if id < 0 || id > math.MaxUint32 {
 			return Entry{}, fmt.Errorf("%w: %s has owner or device number %d", ErrInvalidLayer, p, id)
 		}

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,9 +16,22 @@ import (
 	"time"
 )
 
-// A pair's data parts go up UploadParts at once, never more, and the index
+// convertedFile is a ConvertedFile of data and index, written under a test
+// directory.
+func convertedFile(t *testing.T, data []byte, index string) *ConvertedFile {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "data")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return &ConvertedFile{Path: path, DataBytes: int64(len(data)), Index: []byte(index)}
+}
+
+func once(_ context.Context, fn func() error) error { return fn() }
+
+// A pair's data parts go up uploadParts at once, never more, and the index
 // only after every part is stored.
-func TestUploadPairPutsPartsInParallelAndTheIndexLast(t *testing.T) {
+func TestUploadPutsPartsInParallelAndTheIndexLast(t *testing.T) {
 	const parts, partBytes = 10, 1000
 	data := bytes.Repeat([]byte("0123456789"), parts*partBytes/10-5)
 	var mu sync.Mutex
@@ -33,7 +48,7 @@ func TestUploadPairPutsPartsInParallelAndTheIndexLast(t *testing.T) {
 		}
 		inFlight++
 		most = max(most, inFlight)
-		if inFlight == UploadParts {
+		if inFlight == uploadParts {
 			select {
 			case <-full:
 			default:
@@ -41,13 +56,13 @@ func TestUploadPairPutsPartsInParallelAndTheIndexLast(t *testing.T) {
 			}
 		}
 		mu.Unlock()
-		// Parts wait until UploadParts are in flight, which only parallel
+		// Parts wait until uploadParts are in flight, which only parallel
 		// PUTs reach.
 		if r.URL.Path != "/index" {
 			select {
 			case <-full:
 			case <-time.After(10 * time.Second):
-				t.Error("parts never reached UploadParts in flight")
+				t.Error("parts never reached uploadParts in flight")
 			}
 		}
 		mu.Lock()
@@ -61,13 +76,12 @@ func TestUploadPairPutsPartsInParallelAndTheIndexLast(t *testing.T) {
 	for n := range urls {
 		urls[n] = server.URL + "/part/" + strconv.Itoa(n)
 	}
-	once := func(_ context.Context, fn func() error) error { return fn() }
-	etags, err := UploadPair(t.Context(), server.Client(), bytes.NewReader(data), int64(len(data)), []byte("index"), urls, partBytes, server.URL+"/index", once)
+	etags, err := convertedFile(t, data, "index").Upload(t.Context(), server.Client(), urls, partBytes, server.URL+"/index", once)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if most != UploadParts {
-		t.Fatalf("%d parts were in flight at most, want %d", most, UploadParts)
+	if most != uploadParts {
+		t.Fatalf("%d parts were in flight at most, want %d", most, uploadParts)
 	}
 	var joined []byte
 	for n, etag := range etags {
@@ -82,17 +96,20 @@ func TestUploadPairPutsPartsInParallelAndTheIndexLast(t *testing.T) {
 	}
 }
 
-// A part the store refuses fails the pair, and the index never goes up.
-func TestUploadPairStopsAtARefusedPart(t *testing.T) {
+// A part the store refuses fails the pair without a retry, its error keeps
+// the store's code but not the signature the store echoes, and the index
+// never goes up.
+func TestUploadStopsAtARefusedPart(t *testing.T) {
 	var mu sync.Mutex
 	var paths []string
+	refused := refusingStore(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
 		mu.Unlock()
 		if r.URL.Path == "/part/2" {
-			http.Error(w, "SignatureDoesNotMatch", http.StatusForbidden)
+			refused.Config.Handler.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("ETag", `"x"`)
@@ -102,13 +119,19 @@ func TestUploadPairStopsAtARefusedPart(t *testing.T) {
 	for n := range urls {
 		urls[n] = server.URL + "/part/" + strconv.Itoa(n) + "?X-Amz-Signature=secret"
 	}
-	once := func(_ context.Context, fn func() error) error { return fn() }
-	_, err := UploadPair(t.Context(), server.Client(), bytes.NewReader(make([]byte, 600)), 600, []byte("index"), urls, 100, server.URL+"/index", once)
-	if !errors.Is(err, ErrStoreRefused) || !strings.Contains(err.Error(), "part 3") || strings.Contains(err.Error(), "secret") {
+	retry := func(ctx context.Context, fn func() error) error {
+		return Retry(ctx, 3, time.Millisecond, func(error) bool { return false }, fn)
+	}
+	_, err := convertedFile(t, make([]byte, 600), "index").Upload(t.Context(), server.Client(), urls, 100, server.URL+"/index", retry)
+	if !errors.Is(err, errStoreRefused) || !strings.Contains(err.Error(), "part 3") ||
+		!strings.Contains(err.Error(), "SignatureDoesNotMatch") || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("a refused part gave %v, want the store's refusal naming part 3 without the signature", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	if n := strings.Count(strings.Join(paths, " "), "/part/2"); n != 1 {
+		t.Fatalf("the refused part was sent %d times", n)
+	}
 	for _, p := range paths {
 		if p == "/index" {
 			t.Fatal("the index went up after a part failed")

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -17,13 +17,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 )
-
-// bytesObject reads ranges of an object held in memory.
-type bytesObject []byte
-
-func (b bytesObject) ReadRange(_ context.Context, off, n int64) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(b[off : off+n])), nil
-}
 
 // After its push a build converts each layer the server names and reports
 // its sizes, uploads the data in the parts it is given and the index, and
@@ -181,8 +174,12 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 		if string(ix.Layer) != l.diffID || ix.DataSize != int64(len(data)) || l.dataBytes != ix.DataSize {
 			t.Fatalf("layer %d: index of %s with %d data bytes, got %d bytes", n, ix.Layer, ix.DataSize, len(data))
 		}
+		object := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+		}))
+		t.Cleanup(object.Close)
 		for f := range ix.Frames {
-			if _, err := ix.ReadFrame(t.Context(), bytesObject(data), f); err != nil {
+			if _, err := ix.ReadFrame(t.Context(), imagefs.HTTPObject(object.Client(), func() string { return object.URL }), f); err != nil {
 				t.Fatal(err)
 			}
 		}
