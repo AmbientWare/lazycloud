@@ -15,6 +15,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -104,6 +108,8 @@ type harness struct {
 	listener  *database.Listener
 	server    *hostsession.Server
 	store     *storage.Storage
+	// spans records the server's spans in traces a caller sampled.
+	spans *tracetest.SpanRecorder
 }
 
 // start serves the host service on a random local port against real
@@ -152,7 +158,10 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
 		ContainerAPI:  containerAPI,
 		Observability: obs,
 	}, logger)
-	g := grpc.NewServer(srv.ServerOptions()...)
+	spans := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())))
+	g := grpc.NewServer(append(srv.ServerOptions(), grpc.StatsHandler(otelgrpc.NewServerHandler(
+		otelgrpc.WithTracerProvider(provider), otelgrpc.WithPropagators(propagation.TraceContext{}))))...)
 	hostproto.RegisterHostServiceServer(g, srv)
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -164,7 +173,8 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
 	wg.Go(func() { _ = obs.RunIngest(runCtx) })
 	wg.Go(func() { _ = obs.RunStartedPublisher(runCtx) })
 	wg.Go(func() { _ = g.Serve(lis) })
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(otelgrpc.WithTracerProvider(provider), otelgrpc.WithPropagators(propagation.TraceContext{}))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +188,7 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
 	})
 	return &harness{
 		t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault, obs: obs, listener: listener,
-		server: srv, store: store,
+		server: srv, store: store, spans: spans,
 	}
 }
 

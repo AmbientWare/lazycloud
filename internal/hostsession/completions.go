@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -41,6 +43,8 @@ type completions struct {
 type pendingCompletion struct {
 	completion execution.Completion
 	done       chan error
+	// batch is how many completions its write wrote, set before done.
+	batch int
 }
 
 // complete queues c behind host's other completions and waits for its write
@@ -62,6 +66,7 @@ func (s *Server) complete(ctx context.Context, host compute.HostID, c execution.
 	}
 	select {
 	case err := <-p.done:
+		trace.SpanFromContext(ctx).SetAttributes(attribute.Int("lazycloud.completion_batch", p.batch))
 		return err
 	case <-ctx.Done():
 		return fmt.Errorf("wait for the completion write: %w", ctx.Err())
@@ -93,6 +98,7 @@ func (s *Server) writeCompletions(host compute.HostID) {
 		errs := s.execution.CompleteAttempts(ctx, host, in)
 		cancel()
 		for n, p := range batch {
+			p.batch = len(batch)
 			p.done <- errs[n]
 		}
 	}

@@ -50,8 +50,8 @@ func (q *Queries) ActiveRelease(ctx context.Context, id uuid.UUID) (ActiveReleas
 }
 
 const insertRelease = `-- name: InsertRelease :one
-insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-values ($1, $2, $3, $4, $5)
+insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
+values ($1, $2, $3, $4, $5, $6::text)
 returning id, version, created_at
 `
 
@@ -61,6 +61,7 @@ type InsertReleaseParams struct {
 	Spec         []byte
 	SpecDigest   []byte
 	SourceSha256 []byte
+	Traceparent  *string
 }
 
 type InsertReleaseRow struct {
@@ -76,6 +77,7 @@ func (q *Queries) InsertRelease(ctx context.Context, arg InsertReleaseParams) (I
 		arg.Spec,
 		arg.SpecDigest,
 		arg.SourceSha256,
+		arg.Traceparent,
 	)
 	var i InsertReleaseRow
 	err := row.Scan(&i.ID, &i.Version, &i.CreatedAt)

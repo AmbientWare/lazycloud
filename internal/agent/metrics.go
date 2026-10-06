@@ -122,7 +122,7 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 		a.metrics.sampling.Observe(time.Since(began).Seconds())
 		a.metrics.samples.Add(float64(len(samples)))
 		if len(samples) > 0 {
-			a.reportMetrics(&hostproto.HostMessage{Body: &hostproto.HostMessage_Metrics{Metrics: &hostproto.ContainerMetrics{Samples: samples}}})
+			a.reportIfRoom(&hostproto.HostMessage{Body: &hostproto.HostMessage_Metrics{Metrics: &hostproto.ContainerMetrics{Samples: samples}}})
 		}
 	}
 }

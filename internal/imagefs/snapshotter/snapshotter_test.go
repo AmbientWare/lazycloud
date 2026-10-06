@@ -28,6 +28,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -604,7 +605,7 @@ func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +651,7 @@ func TestEvictionKeepsAFrameStoredAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, newGrants(time.Now), m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, newGrants(time.Now), m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +678,7 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 64<<20, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,7 +743,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	}
 	dir := t.TempDir()
 	const bound = 64 << 20
-	frames, err := newFrameCache(t.Context(), dir, bound, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), dir, bound, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
 	if err != nil {
 		t.Fatal(err)
 	}

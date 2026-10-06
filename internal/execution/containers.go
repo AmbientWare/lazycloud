@@ -136,6 +136,14 @@ func (e *Execution) notifyStopped(ctx context.Context, tx pgx.Tx, host *uuid.UUI
 
 func ptr[T any](v T) *T { return &v }
 
+// deref is *s, or "" for nil.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 func int32Of(v *int) *int32 {
 	if v == nil {
 		return nil

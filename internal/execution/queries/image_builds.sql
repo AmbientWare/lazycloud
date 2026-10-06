@@ -1,6 +1,6 @@
 -- name: CreateBuildContainer :one
-insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, gpu_count)
-values (@workspace_id, @image_build_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count)
+insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, gpu_count, traceparent)
+values (@workspace_id, @image_build_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, sqlc.narg('traceparent')::text)
 returning id;
 
 -- name: BuildContainers :many
@@ -23,7 +23,7 @@ set state = 'stopped', stop_reason = 'stopped', exit_message = 'build ended', st
 where image_build_id = @image_build_id and state = 'pending';
 
 -- name: StartingBuildContainersOnHost :many
-select c.id, c.image_build_id::uuid as image_build_id, c.cpu_millis, c.memory_bytes,
+select c.id, c.image_build_id::uuid as image_build_id, c.cpu_millis, c.memory_bytes, c.traceparent,
        (select count(*) from containers p where p.image_build_id = c.image_build_id and p.created_at <= c.created_at)::int as attempt
 from containers c
 where c.host_id = @host_id and c.state = 'starting' and c.image_build_id is not null

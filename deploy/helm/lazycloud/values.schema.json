@@ -141,8 +141,8 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "image": { "$ref": "#/definitions/image" },
-        "endpoint": { "type": "string" },
-        "sampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" }
+        "sampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" },
+        "edgeSampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" }
       }
     }
   }

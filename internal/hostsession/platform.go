@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // maxPlatformConversions bounds the platform image conversions one server
@@ -48,7 +51,7 @@ type platformConversions struct {
 // convertPlatform starts converting reference for architecture unless this
 // server already is, or runs maxPlatformConversions. A session that still
 // waits asks again at its next sync.
-func (s *Server) convertPlatform(reference, architecture string) {
+func (s *Server) convertPlatform(reference, architecture, traceparent string) {
 	key := reference + " " + architecture
 	s.platform.mu.Lock()
 	defer s.platform.mu.Unlock()
@@ -61,7 +64,7 @@ func (s *Server) convertPlatform(reference, architecture string) {
 		return
 	}
 	s.platform.running[key] = true
-	s.platform.wg.Go(func() { s.runPlatform(key, reference, architecture) })
+	s.platform.wg.Go(func() { s.runPlatform(key, reference, architecture, traceparent) })
 }
 
 // ConvertAtStart converts platform, the platform images agents of this
@@ -101,22 +104,26 @@ func (s *Server) ConvertAtStart(platform, architectures []string) {
 					<-s.platform.slots
 					continue
 				}
-				s.runPlatform(key, reference, architecture)
+				s.runPlatform(key, reference, architecture, "")
 			}
 		}
 	})
 }
 
 // runPlatform converts reference for architecture, then frees the slot and
-// key convertPlatform or ConvertAtStart took.
-func (s *Server) runPlatform(key, reference, architecture string) {
+// key convertPlatform or ConvertAtStart took. The conversion is a child of
+// the start traceparent names that asked for it, or a trace of its own.
+func (s *Server) runPlatform(key, reference, architecture, traceparent string) {
 	defer func() {
 		s.platform.mu.Lock()
 		delete(s.platform.running, key)
 		s.platform.mu.Unlock()
 		<-s.platform.slots
 	}()
-	err := s.images.ConvertPlatformImage(s.lifetime, reference, architecture)
+	ctx, span := telemetry.StartIn(s.lifetime, s.tracer, traceparent, "images.convert_platform", trace.WithAttributes(
+		attribute.String(telemetry.AttrImage, reference), attribute.String("lazycloud.architecture", architecture)))
+	err := s.images.ConvertPlatformImage(ctx, reference, architecture)
+	telemetry.Fail(span, err)
 	if err == nil || s.lifetime.Err() != nil {
 		return
 	}
@@ -184,6 +191,8 @@ func (sess *session) syncPlatform(ctx context.Context, cache layerCache, waits m
 	if len(p.named)+len(p.running) == 0 || (!p.waiting && !p.due(now)) {
 		return nil
 	}
+	ctx, span := telemetry.StartIn(ctx, sess.server.tracer, "", "hostsession.platform_images", trace.WithAttributes(telemetry.Host(sess.host.String())))
+	defer span.End()
 	var out []*hostproto.PlatformImage
 	var known []string
 	for _, reference := range p.named {
@@ -224,7 +233,7 @@ func (sess *session) syncPlatform(ctx context.Context, cache layerCache, waits m
 		}
 		if waiting {
 			p.waiting = true
-			sess.server.convertPlatform(pull.Reference, pull.Architecture)
+			sess.server.convertPlatform(pull.Reference, pull.Architecture, "") //nolint:contextcheck // Conversions run under the server's lifetime.
 			continue
 		}
 		if image != nil {

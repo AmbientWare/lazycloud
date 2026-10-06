@@ -7,9 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -190,9 +194,13 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 	}
 	layers := layersOf(spec.GetLayers())
 	shared := l.begin(container, layers)
+	ctx, span := telemetry.Start(ctx, "agent.layer_grant", trace.WithAttributes(attribute.Int("lazycloud.layers", len(layers)),
+		attribute.Int("lazycloud.prefetch_frames", len(spec.GetPrefetch().GetReads())), attribute.Bool("lazycloud.shared", shared)))
+	defer span.End()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
 	if err := l.client.Grant(ctx, container, grantsIn(spec.GetLayers())); err != nil {
+		telemetry.Fail(span, err)
 		return err //nolint:wrapcheck // The client names the call.
 	}
 	if trace := spec.GetPrefetch().GetReads(); len(trace) > 0 {

@@ -8,8 +8,8 @@ where c.id = @id and c.workspace_id = @workspace_id
 for share of c;
 
 -- name: InsertSnapshot :one
-insert into memory_snapshots (id, workspace_id, release_id, container_id, automatic, state)
-values (coalesce(sqlc.narg('id')::uuid, uuidv7()), @workspace_id, @release_id, @container_id, @automatic, 'pending')
+insert into memory_snapshots (id, workspace_id, release_id, container_id, automatic, state, traceparent)
+values (coalesce(sqlc.narg('id')::uuid, uuidv7()), @workspace_id, @release_id, @container_id, @automatic, 'pending', sqlc.narg('traceparent')::text)
 returning id, created_at;
 
 -- name: SnapshotView :one
@@ -19,7 +19,7 @@ from memory_snapshots where id = @id;
 -- name: PendingSnapshotsOnHost :many
 -- Snapshots the host's live containers still owe, with how a pod's
 -- automatic one waits for readiness.
-select s.id, s.workspace_id, s.container_id::uuid as container_id, s.automatic, s.created_at, r.spec
+select s.id, s.workspace_id, s.container_id::uuid as container_id, s.automatic, s.created_at, r.spec, s.traceparent
 from memory_snapshots s
 join containers c on c.id = s.container_id
 join releases r on r.id = s.release_id
@@ -65,8 +65,8 @@ limit 100;
 
 -- name: InsertAutomaticSnapshot :execrows
 -- One automatic snapshot per release at a time; a concurrent insert loses.
-insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state)
-values (@workspace_id, @release_id, @container_id, true, 'pending')
+insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state, traceparent)
+values (@workspace_id, @release_id, @container_id, true, 'pending', sqlc.narg('traceparent')::text)
 on conflict (release_id) where automatic and state <> 'failed' do nothing;
 
 -- name: RestoreSnapshot :one

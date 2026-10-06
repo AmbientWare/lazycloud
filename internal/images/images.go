@@ -34,6 +34,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -241,6 +242,8 @@ type Build struct {
 	Failure    string
 	CreatedAt  time.Time
 	FinishedAt *time.Time
+	// traceparent is the trace of the request that started the build.
+	traceparent string
 }
 
 // Resolution is an image and the build that runs for it, if any.
@@ -476,6 +479,7 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		switch {
 		case err == nil:
 			b, err := i.buildOut(ctx, q, active.ID, image.ID, active.State, active.Failure, active.CreatedAt, active.FinishedAt)
+			b.traceparent = deref(active.Traceparent)
 			out.Build = &b
 			return err
 		case !errors.Is(err, pgx.ErrNoRows):
@@ -485,7 +489,7 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		// build can start between the check and the insert.
 		row, err := q.InsertBuild(ctx, InsertBuildParams{
 			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), Forced: forced, Mirror: kind == buildSharedMirror, ContextSha256: p.spec.context,
-			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(),
+			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(), Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
@@ -503,6 +507,7 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		}
 		out.Build = &Build{
 			ID: row.ID, ImageID: image.ID, Status: BuildBuilding, Phase: PhaseQueued, Attempt: 1, CreatedAt: row.CreatedAt,
+			traceparent: telemetry.TraceParentOf(ctx),
 		}
 		return nil
 	})
@@ -989,6 +994,7 @@ func (i *Images) failReported(ctx context.Context, build, container uuid.UUID, d
 // build, and announces the build when fn reports it changed its state. A
 // build that already finished is ErrStaleBuild.
 func (i *Images) finishBuildFunc(ctx context.Context, build uuid.UUID, digest []byte, fn func(*Queries, LockBuildRow) (bool, error)) error {
+	var ended *LockBuildRow
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		// Lock order: image, then build.
@@ -1006,10 +1012,14 @@ func (i *Images) finishBuildFunc(ctx context.Context, build uuid.UUID, digest []
 		if err != nil || !finished {
 			return err
 		}
+		ended = &row
 		return database.Notify(ctx, tx, database.ChannelImageBuild, build.String())
 	})
 	if err != nil {
 		return fmt.Errorf("complete build %s: %w", build, err)
+	}
+	if ended != nil {
+		traceBuild(ctx, *ended, "")
 	}
 	return nil
 }
@@ -1115,6 +1125,8 @@ func (i *Images) Recover(ctx context.Context, logger *slog.Logger) (int, error) 
 
 func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) (bool, error) {
 	changed := false
+	var failed *LockBuildRow
+	var failure string
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		if _, err := q.LockImage(ctx, digest); err != nil {
@@ -1133,7 +1145,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		// Lost containers and deadlines say nothing of the image.
 		fail := func(reason string, transient bool) error {
-			changed = true
+			changed, failed, failure = true, &build, reason
 			return i.failLocked(ctx, tx, id, reason, transient)
 		}
 		// A build that ran out of time or of attempts may fail the same way
@@ -1164,6 +1176,8 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		if err := q.ResetBuildLogCount(ctx, id); err != nil {
 			return fmt.Errorf("reset build log count: %w", err)
 		}
+		// The next attempt's container joins the build's trace.
+		ctx := telemetry.WithTraceParent(ctx, deref(build.Traceparent))
 		if build.Mirror {
 			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
 			return err
@@ -1183,6 +1197,9 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 	})
 	if err != nil {
 		return false, fmt.Errorf("recover build %s: %w", id, err)
+	}
+	if failed != nil {
+		traceBuild(ctx, *failed, failure)
 	}
 	return changed, nil
 }

@@ -80,7 +80,7 @@ type layerSources struct {
 
 // Grant validates every grant before it records any, so a refused call
 // changes nothing.
-func (s layerSources) Grant(_ context.Context, request *imagefsproto.GrantRequest) (*imagefsproto.GrantResponse, error) {
+func (s layerSources) Grant(ctx context.Context, request *imagefsproto.GrantRequest) (*imagefsproto.GrantResponse, error) {
 	if len(request.GetLayers()) > maxGrantsPerCall {
 		return nil, status.Errorf(codes.InvalidArgument, "a call grants at most %d layers", maxGrantsPerCall)
 	}
@@ -106,6 +106,7 @@ func (s layerSources) Grant(_ context.Context, request *imagefsproto.GrantReques
 	}
 	s.grants.put(layers)
 	s.frames.traces.claim(request.GetName(), slices.Collect(maps.Keys(layers)))
+	s.frames.starts.begin(request.GetName(), incomingParent(ctx), slices.Collect(maps.Keys(layers)))
 	return &imagefsproto.GrantResponse{}, nil
 }
 

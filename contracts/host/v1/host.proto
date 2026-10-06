@@ -123,7 +123,17 @@ message HostMessage {
     // The frames a container read before it was ready, for a start that
     // asked with record_trace.
     StartupTrace startup_trace = 120;
+    // Spans the host recorded in traces the server sampled. The agent sends
+    // them while the session's queue has room and drops them otherwise.
+    Traces traces = 130;
   }
+}
+
+// Traces is spans of the host's agent and snapshotter: one OTLP
+// ExportTraceServiceRequest, protobuf-encoded. The server marks each
+// resource with the host and forwards it to its collector.
+message Traces {
+  bytes otlp = 1;
 }
 
 // StartupTrace is the frames of its image's layers a container read from
@@ -337,6 +347,9 @@ message SnapshotContainer {
   google.protobuf.Timestamp deadline = 4;
   // Checkpoint only once this answers, for a pod's automatic snapshot.
   ReadinessProbe ready = 5;
+  // The W3C traceparent of the request that asked for the snapshot, when it
+  // was sampled.
+  string traceparent = 130;
 }
 
 message ReadinessProbe {
@@ -468,6 +481,9 @@ message StartContainer {
   // Record the frames this container reads before it is ready and report
   // them in a StartupTrace.
   bool record_trace = 121;
+  // The W3C traceparent of the server's span that sent the start, when it
+  // was sampled. The host's spans of the start are its children.
+  string traceparent = 130;
 }
 
 // LayerGrant is presigned GET URLs for one image layer's index and data

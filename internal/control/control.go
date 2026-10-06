@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
@@ -22,6 +24,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // ErrNotFound means the app or function does not exist.
@@ -196,6 +199,10 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 	if len(req.Workloads) == 0 && (req.Prune == nil || !*req.Prune) {
 		return apitypes.Deployment{}, ErrNothingToDeploy
 	}
+	// The releases it creates store this span's trace, which their first
+	// containers join.
+	ctx, span := telemetry.Start(ctx, "control.deploy", trace.WithAttributes(attribute.Int("lazycloud.workloads", len(req.Workloads))))
+	defer span.End()
 	functions := make([]resolvedFunction, len(req.Workloads))
 	seen := map[string]bool{}
 	for n, spec := range req.Workloads {
@@ -331,7 +338,7 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 	}
 	inserted, err := q.InsertRelease(ctx, InsertReleaseParams{
 		WorkloadID: workload.ID, Version: &workload.NextVersion,
-		Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:],
+		Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: traceparent(ctx),
 	})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("insert release of %s: %w", f.spec.Name, err)
@@ -354,4 +361,13 @@ func versionOf(v *int32) *int {
 	}
 	n := int(*v)
 	return &n
+}
+
+// traceparent is the trace of ctx's span, stored with a release; nil when
+// it was not sampled.
+func traceparent(ctx context.Context) *string {
+	if tp := telemetry.TraceParentOf(ctx); tp != "" {
+		return &tp
+	}
+	return nil
 }

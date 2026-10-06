@@ -13,7 +13,7 @@ import (
 )
 
 const activeBuild = `-- name: ActiveBuild :one
-select id, image_digest, state, failure, created_at, finished_at
+select id, image_digest, state, failure, created_at, finished_at, traceparent
 from image_builds
 where image_digest = $1 and state = 'building'
   and forced = $2 and (not $2 or workspace_id = $3)
@@ -32,6 +32,7 @@ type ActiveBuildRow struct {
 	Failure     *string
 	CreatedAt   time.Time
 	FinishedAt  *time.Time
+	Traceparent *string
 }
 
 // The build a request joins: the global one, or the workspace's own
@@ -46,6 +47,7 @@ func (q *Queries) ActiveBuild(ctx context.Context, arg ActiveBuildParams) (Activ
 		&i.Failure,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.Traceparent,
 	)
 	return i, err
 }
@@ -294,9 +296,9 @@ func (q *Queries) ImageBuildGPU(ctx context.Context, digest []byte) (string, err
 }
 
 const insertBuild = `-- name: InsertBuild :one
-insert into image_builds (image_digest, state, workspace_id, forced, mirror, context_sha256, registry_auth, deadline_at)
+insert into image_builds (image_digest, state, workspace_id, forced, mirror, context_sha256, registry_auth, deadline_at, traceparent)
 values ($1, 'building', $2, $3, $4, $5, $6,
-        now() + make_interval(secs => $7::float8))
+        now() + make_interval(secs => $7::float8), $8::text)
 returning id, image_digest, state, failure, created_at, finished_at
 `
 
@@ -308,6 +310,7 @@ type InsertBuildParams struct {
 	ContextSha256  []byte
 	RegistryAuth   []byte
 	TimeoutSeconds float64
+	Traceparent    *string
 }
 
 type InsertBuildRow struct {
@@ -328,6 +331,7 @@ func (q *Queries) InsertBuild(ctx context.Context, arg InsertBuildParams) (Inser
 		arg.ContextSha256,
 		arg.RegistryAuth,
 		arg.TimeoutSeconds,
+		arg.Traceparent,
 	)
 	var i InsertBuildRow
 	err := row.Scan(
@@ -399,7 +403,7 @@ func (q *Queries) InsertImage(ctx context.Context, arg InsertImageParams) (strin
 }
 
 const latestBuild = `-- name: LatestBuild :one
-select id, image_digest, state, failure, failure_transient, created_at, finished_at
+select id, image_digest, state, failure, failure_transient, created_at, finished_at, traceparent
 from image_builds where image_digest = $1
 order by created_at desc, id desc limit 1
 `
@@ -412,6 +416,7 @@ type LatestBuildRow struct {
 	FailureTransient bool
 	CreatedAt        time.Time
 	FinishedAt       *time.Time
+	Traceparent      *string
 }
 
 func (q *Queries) LatestBuild(ctx context.Context, imageDigest []byte) (LatestBuildRow, error) {
@@ -425,12 +430,13 @@ func (q *Queries) LatestBuild(ctx context.Context, imageDigest []byte) (LatestBu
 		&i.FailureTransient,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.Traceparent,
 	)
 	return i, err
 }
 
 const lockBuild = `-- name: LockBuild :one
-select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines
+select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines, created_at, traceparent
 from image_builds where id = $1 for update
 `
 
@@ -444,6 +450,8 @@ type LockBuildRow struct {
 	DeadlineAt  time.Time
 	LogBytes    int64
 	LogLines    int32
+	CreatedAt   time.Time
+	Traceparent *string
 }
 
 func (q *Queries) LockBuild(ctx context.Context, id uuid.UUID) (LockBuildRow, error) {
@@ -459,6 +467,8 @@ func (q *Queries) LockBuild(ctx context.Context, id uuid.UUID) (LockBuildRow, er
 		&i.DeadlineAt,
 		&i.LogBytes,
 		&i.LogLines,
+		&i.CreatedAt,
+		&i.Traceparent,
 	)
 	return i, err
 }

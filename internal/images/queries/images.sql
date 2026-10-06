@@ -38,20 +38,20 @@ from images where digest = @digest for update;
 -- name: ActiveBuild :one
 -- The build a request joins: the global one, or the workspace's own
 -- workspace-scoped build (forced = true).
-select id, image_digest, state, failure, created_at, finished_at
+select id, image_digest, state, failure, created_at, finished_at, traceparent
 from image_builds
 where image_digest = @image_digest and state = 'building'
   and forced = @forced and (not @forced or workspace_id = @workspace_id);
 
 -- name: LatestBuild :one
-select id, image_digest, state, failure, failure_transient, created_at, finished_at
+select id, image_digest, state, failure, failure_transient, created_at, finished_at, traceparent
 from image_builds where image_digest = @image_digest
 order by created_at desc, id desc limit 1;
 
 -- name: InsertBuild :one
-insert into image_builds (image_digest, state, workspace_id, forced, mirror, context_sha256, registry_auth, deadline_at)
+insert into image_builds (image_digest, state, workspace_id, forced, mirror, context_sha256, registry_auth, deadline_at, traceparent)
 values (@image_digest, 'building', @workspace_id, @forced, @mirror, sqlc.narg(context_sha256), sqlc.narg(registry_auth),
-        now() + make_interval(secs => @timeout_seconds::float8))
+        now() + make_interval(secs => @timeout_seconds::float8), sqlc.narg(traceparent)::text)
 returning id, image_digest, state, failure, created_at, finished_at;
 
 -- name: WorkspaceBuild :one
@@ -75,7 +75,7 @@ join images i on i.digest = b.image_digest
 where b.id = @id;
 
 -- name: LockBuild :one
-select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines
+select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines, created_at, traceparent
 from image_builds where id = @id for update;
 
 -- name: SucceedBuild :exec

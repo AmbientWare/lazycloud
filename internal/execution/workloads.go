@@ -166,6 +166,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		if grant.Start == 0 {
 			return &ConflictError{Reason: "the account's plan allows no more containers now"}
 		}
+		params.Traceparent = traceparent(ctx)
 		inserted, err := q.InsertInstance(ctx, params)
 		if err != nil {
 			return fmt.Errorf("insert instance: %w", err)

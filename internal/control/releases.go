@@ -56,7 +56,7 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 			return fmt.Errorf("find release: %w", err)
 		}
 		inserted, err := q.InsertRelease(ctx, InsertReleaseParams{
-			WorkloadID: workload.ID, Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:],
+			WorkloadID: workload.ID, Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("insert release: %w", err)

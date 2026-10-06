@@ -14,10 +14,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Pods and sandboxes answer on <release id>-<port> and <container id>-<port>
@@ -136,20 +139,35 @@ func (e *Edge) resolvePod(ctx context.Context, id uuid.UUID, port int) (podTarge
 }
 
 // podContainer picks the container a connection goes to, waking a cold pod
-// and waiting for it until deadline.
+// and waiting for it until deadline. A connection that woke the pod links
+// to the start of the container it got.
 func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time) (execution.ContainerID, uuid.UUID, error) {
+	ctx, span := telemetry.Start(ctx, "edge.pod_container", trace.WithAttributes(attribute.String("lazycloud.workload_id", t.workload.String())))
+	c, woken, err := e.pickPodContainer(ctx, t, deadline)
+	span.SetAttributes(attribute.Bool("lazycloud.cold", woken))
+	if err == nil {
+		span.SetAttributes(telemetry.Container(uuid.UUID(c.Container).String()))
+		if woken {
+			span.AddLink(telemetry.Link(c.Traceparent))
+		}
+	}
+	telemetry.Fail(span, err)
+	return c.Container, c.Host, err
+}
+
+func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.Time) (execution.PodContainer, bool, error) {
 	if t.container != nil {
 		route, err := e.execution.Route(ctx, execution.ContainerID(*t.container))
 		if err != nil {
-			return execution.ContainerID{}, uuid.Nil, err
+			return execution.PodContainer{}, false, err
 		}
 		if route.State != execution.ContainerReady || route.Host == nil {
-			return execution.ContainerID{}, uuid.Nil, errBusy
+			return execution.PodContainer{}, false, errBusy
 		}
-		return route.ID, *route.Host, nil
+		return execution.PodContainer{Container: route.ID, Host: *route.Host}, false, nil
 	}
 	if !t.accepting {
-		return execution.ContainerID{}, uuid.Nil, errPodStopped
+		return execution.PodContainer{}, false, errPodStopped
 	}
 	woken := false
 	var wokeAt time.Time
@@ -157,7 +175,7 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 		wake := e.podWaits.subscribe(t.workload)
 		ready, err := e.execution.ReadyPodContainers(ctx, t.workload)
 		if err != nil {
-			return execution.ContainerID{}, uuid.Nil, err
+			return execution.PodContainer{}, woken, err
 		}
 		pick := -1
 		for n, c := range ready {
@@ -170,17 +188,17 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 			pick = 0
 		}
 		if pick >= 0 {
-			return ready[pick].Container, ready[pick].Host, nil
+			return ready[pick], woken, nil
 		}
 		if woken {
 			// A start that failed since the wake fails the connection at
 			// once instead of at its deadline.
 			reason, err := e.execution.PodStartFailure(ctx, t.workload, wokeAt)
 			if err != nil {
-				return execution.ContainerID{}, uuid.Nil, err
+				return execution.PodContainer{}, woken, err
 			}
 			if reason != "" {
-				return execution.ContainerID{}, uuid.Nil, fmt.Errorf("%w: %s", errPodStartFailed, reason)
+				return execution.PodContainer{}, woken, fmt.Errorf("%w: %s", errPodStartFailed, reason)
 			}
 		}
 		if !woken {
@@ -188,9 +206,9 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 			if err := e.execution.WakePod(ctx, t.workspace, t.workload); err != nil {
 				var conflict *execution.ConflictError
 				if errors.As(err, &conflict) {
-					return execution.ContainerID{}, uuid.Nil, errPodStopped
+					return execution.PodContainer{}, woken, errPodStopped
 				}
-				return execution.ContainerID{}, uuid.Nil, err
+				return execution.PodContainer{}, woken, err
 			}
 			woken = true
 		}
@@ -198,13 +216,13 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return execution.ContainerID{}, uuid.Nil, fmt.Errorf("wait for the pod: %w", ctx.Err())
+			return execution.PodContainer{}, woken, fmt.Errorf("wait for the pod: %w", ctx.Err())
 		case <-wake:
 		case <-timer.C:
 		}
 		timer.Stop()
 		if time.Now().After(deadline) {
-			return execution.ContainerID{}, uuid.Nil, errPodNotReady
+			return execution.PodContainer{}, woken, errPodNotReady
 		}
 	}
 }

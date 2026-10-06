@@ -123,6 +123,11 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 		if count = grant.Start; count == 0 {
 			return nil
 		}
+		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, active+int(row.Draining) == 0)
+		if err != nil {
+			return err
+		}
+		defer span.End()
 		var keepWarm *int32
 		if !row.AlwaysOn {
 			keepWarm = ptr(row.KeepWarmSeconds)
@@ -132,7 +137,8 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 			CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes, GpuCount: row.GpuCount,
 			RateClass:       string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			KeepWarmSeconds: keepWarm, BlockNetwork: row.BlockNetwork, AllowList: row.AllowList,
-			Count: int32(count), //nolint:gosec // Bounded by the pod's count.
+			Count:       int32(count), //nolint:gosec // Bounded by the pod's count.
+			Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("create containers: %w", err)
@@ -320,6 +326,8 @@ type PodContainer struct {
 	Container ContainerID
 	Host      uuid.UUID
 	Release   uuid.UUID
+	// Traceparent is the trace of the container's start.
+	Traceparent string
 }
 
 // ReadyPodContainers lists the pod's ready serve containers, the active
@@ -332,7 +340,7 @@ func (e *Execution) ReadyPodContainers(ctx context.Context, workload uuid.UUID) 
 	out := make([]PodContainer, 0, len(rows))
 	for _, r := range rows {
 		if r.HostID != nil {
-			out = append(out, PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID})
+			out = append(out, PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: deref(r.Traceparent)})
 		}
 	}
 	return out, nil

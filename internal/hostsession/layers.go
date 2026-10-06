@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // layerLifetime is how long the URLs of a layer grant last: the hour other
@@ -63,7 +66,7 @@ func (s *Server) layers(ctx context.Context, host compute.HostID, cache layerCac
 		return nil, err //nolint:wrapcheck // permanentStartFailure matches the owner's error.
 	}
 	if reads.Unconfirmed != "" {
-		s.confirmReplicas(reference, reads.Unconfirmed)
+		s.confirmReplicas(reference, reads.Unconfirmed, telemetry.TraceParentOf(ctx)) //nolint:contextcheck // Checks run under the server's lifetime.
 	}
 	out := make([]*hostproto.LayerGrant, len(reads.Layers))
 	for n, u := range reads.Layers {
@@ -106,7 +109,7 @@ type replicaChecks struct {
 // replicationWindow; each confirmation it records wakes the sessions whose
 // grants it outdates. A reference it skips is asked for again by its next
 // grant.
-func (s *Server) confirmReplicas(reference, region string) {
+func (s *Server) confirmReplicas(reference, region, traceparent string) {
 	key := reference + " " + region
 	s.replicas.mu.Lock()
 	defer s.replicas.mu.Unlock()
@@ -120,9 +123,12 @@ func (s *Server) confirmReplicas(reference, region string) {
 			delete(s.replicas.running, key)
 			s.replicas.mu.Unlock()
 		}()
+		ctx, span := telemetry.StartIn(s.lifetime, s.tracer, traceparent, "images.replica_checks", trace.WithAttributes(
+			attribute.String(telemetry.AttrImage, reference), attribute.String("lazycloud.region", region)))
+		defer span.End()
 		until := time.Now().Add(replicationWindow)
 		for {
-			check, err := s.images.ConfirmReplicas(s.lifetime, reference, region, s.replicas.recheck)
+			check, err := s.images.ConfirmReplicas(ctx, reference, region, s.replicas.recheck)
 			if s.lifetime.Err() != nil {
 				return
 			}
@@ -204,6 +210,8 @@ func (sess *session) refreshLayers(ctx context.Context, cache layerCache) error 
 			return nil
 		}
 	}
+	ctx, span := telemetry.StartIn(ctx, sess.server.tracer, "", "hostsession.refresh_grants", trace.WithAttributes(telemetry.Host(sess.host.String())))
+	defer span.End()
 	references, err := sess.server.execution.LiveImagesOnHost(ctx, sess.host)
 	if err != nil {
 		return sess.server.grpcError(ctx, err)

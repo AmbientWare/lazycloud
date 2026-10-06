@@ -87,6 +87,7 @@ serviceAccounts:
   # Names match the EKS Pod Identity associations that grant AWS access.
   server: lazycloud-server
   scheduler: lazycloud-scheduler
+  otelCollector: lazycloud-otel-collector
   # Named in the secrets-reader role's IRSA trust.
   secretsReader: secrets-reader
 
@@ -217,12 +218,10 @@ agentRelease:
 telemetry:
   enabled: false
   image: docker.io/otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
-  # OTLP/HTTP endpoint of the backend.
-  endpoint: ""
+  # X-Ray bills about $5 per million traces kept: every start, task and
+  # deploy at sampleRatio 1, and edgeSampleRatio of workload requests.
   sampleRatio: "1"
-  # Secret keys of the backend's basic auth.
-  usernameKey: LAZYCLOUD_TELEMETRY_BACKEND_USERNAME
-  passwordKey: LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD
+  edgeSampleRatio: "0.01"
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 256Mi }

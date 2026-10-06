@@ -114,11 +114,11 @@ func (q *Queries) ContainerRoute(ctx context.Context, id uuid.UUID) (ContainerRo
 const createPendingPodContainers = `-- name: CreatePendingPodContainers :many
 insert into containers (
     workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
-    keep_warm_seconds, block_network, allow_list
+    keep_warm_seconds, block_network, allow_list, traceparent
 )
 select $1, $2::uuid, 'pending', 1, $3, $4, $5, $6,
-       $7, $8, $9::text[]
-from generate_series(1, $10::int)
+       $7, $8, $9::text[], $10::text
+from generate_series(1, $11::int)
 returning id
 `
 
@@ -132,6 +132,7 @@ type CreatePendingPodContainersParams struct {
 	KeepWarmSeconds *int32
 	BlockNetwork    bool
 	AllowList       []string
+	Traceparent     *string
 	Count           int32
 }
 
@@ -146,6 +147,7 @@ func (q *Queries) CreatePendingPodContainers(ctx context.Context, arg CreatePend
 		arg.KeepWarmSeconds,
 		arg.BlockNetwork,
 		arg.AllowList,
+		arg.Traceparent,
 		arg.Count,
 	)
 	if err != nil {
@@ -389,12 +391,14 @@ func (q *Queries) ExposePort(ctx context.Context, arg ExposePortParams) ([]int32
 const insertInstance = `-- name: InsertInstance :one
 insert into containers (
     workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
-    purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports, created_by_container
+    purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports, created_by_container,
+    traceparent
 )
 values (
     $1, $2, 'pending', 1, $3, $4, $5, $6,
     $7, $8, $9::text[], $10,
-    $11, $12::text[], $13::int[], $14
+    $11, $12::text[], $13::int[], $14,
+    $15::text
 )
 returning id, created_at
 `
@@ -414,6 +418,7 @@ type InsertInstanceParams struct {
 	AllowList          []string
 	ExposedPorts       []int32
 	CreatedByContainer *uuid.UUID
+	Traceparent        *string
 }
 
 type InsertInstanceRow struct {
@@ -437,6 +442,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.AllowList,
 		arg.ExposedPorts,
 		arg.CreatedByContainer,
+		arg.Traceparent,
 	)
 	var i InsertInstanceRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -944,7 +950,7 @@ func (q *Queries) PodState(ctx context.Context, workloadID uuid.UUID) (PodStateR
 }
 
 const readyPodContainers = `-- name: ReadyPodContainers :many
-select c.id, c.host_id, c.release_id::uuid as release_id
+select c.id, c.host_id, c.release_id::uuid as release_id, c.traceparent
 from containers c
 join releases r on r.id = c.release_id
 where r.workload_id = $1 and c.purpose = 'serve' and c.state = 'ready' and c.host_id is not null
@@ -952,9 +958,10 @@ order by r.version desc nulls last, c.ready_at, c.id
 `
 
 type ReadyPodContainersRow struct {
-	ID        uuid.UUID
-	HostID    *uuid.UUID
-	ReleaseID uuid.UUID
+	ID          uuid.UUID
+	HostID      *uuid.UUID
+	ReleaseID   uuid.UUID
+	Traceparent *string
 }
 
 // Ready serve containers of a pod's releases with their hosts, newest
@@ -968,7 +975,12 @@ func (q *Queries) ReadyPodContainers(ctx context.Context, workloadID uuid.UUID) 
 	var items []ReadyPodContainersRow
 	for rows.Next() {
 		var i ReadyPodContainersRow
-		if err := rows.Scan(&i.ID, &i.HostID, &i.ReleaseID); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
+			&i.ReleaseID,
+			&i.Traceparent,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
