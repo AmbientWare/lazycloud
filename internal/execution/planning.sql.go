@@ -462,8 +462,9 @@ type ScaleUpTraceParams struct {
 }
 
 // The trace a scale-up of the release joins: the queued task that has
-// waited longest, read through tasks_queued; else, while the release rolls
-// out (no live container, created within rollout_seconds), its deploy's.
+// waited longest, read through tasks_queued. Else, when @rollout says only
+// the warm minimum asks for containers, the deploy's, for a release created
+// within rollout_seconds.
 func (q *Queries) ScaleUpTrace(ctx context.Context, arg ScaleUpTraceParams) (string, error) {
 	row := q.db.QueryRow(ctx, scaleUpTrace, arg.ReleaseID, arg.Rollout, arg.RolloutSeconds)
 	var traceparent string

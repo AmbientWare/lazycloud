@@ -13,8 +13,9 @@ import (
 
 // pendingStart is the span of one container's start on this session, from
 // the first sync that derived it to the start sent, in the container's
-// trace. A start that waits for its image keeps it open across syncs, with
-// wait open while it waits. The session goroutine alone uses it.
+// trace. A start that waits for its image keeps the span open across syncs,
+// with a wait span open until the image is ready. Only the session goroutine
+// uses it.
 type pendingStart struct {
 	span trace.Span
 	wait trace.Span
@@ -35,9 +36,9 @@ func (sess *session) startContext(ctx context.Context, start execution.StartComm
 	return trace.ContextWithSpan(ctx, p.span)
 }
 
-// waiting records that container's start waits for its image to convert in
-// the work of kind traceparent names, linking the wait to that work.
-// The work's own trace is the start's when this start began it.
+// waiting records that container's start waits for its image, converting
+// in the work of kind that traceparent names. The wait links to that work
+// unless the work is in the start's own trace, as when this start began it.
 func (sess *session) waiting(ctx context.Context, container execution.ContainerID, kind, traceparent string) {
 	p := sess.starts[container]
 	if p == nil {

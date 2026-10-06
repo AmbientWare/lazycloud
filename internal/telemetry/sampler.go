@@ -8,13 +8,13 @@ import (
 )
 
 // PassPrefix starts the name of a scheduler pass's span. A pass never
-// starts a trace: the steps it takes for a container record in that
-// container's trace, and only the steps for none start their own.
+// starts a trace. Its steps for a container record in that container's
+// trace, and a step for no container starts its own.
 const PassPrefix = "scheduler."
 
 // rootSampler decides the traces a binary starts: edge's share of workload
 // requests, which anyone may send, and ratio's share of the rest. It starts
-// none for a scheduler pass or for a gRPC call outside a traced step: hosts
+// none for a scheduler pass or for a gRPC call outside a traced step. Hosts
 // call the server all the time, so a call records only in the trace of the
 // step that made it.
 type rootSampler struct{ ratio, edge sdktrace.Sampler }

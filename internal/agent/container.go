@@ -1039,8 +1039,8 @@ func (c *container) attemptSpan(ctx context.Context, attempt string) (context.Co
 
 // taskContext is ctx under the span of the running attempt of task, so a
 // container API call the attempt makes, and what the server does for it,
-// join the attempt's trace. Another task's id, or none, leaves ctx: the
-// server decides what the call may do.
+// join the attempt's trace. Another task's id, or none, leaves ctx as it
+// is. The server still decides what the call may do.
 func (c *container) taskContext(ctx context.Context, task string) context.Context {
 	if task == "" {
 		return ctx

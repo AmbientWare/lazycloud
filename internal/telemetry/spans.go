@@ -23,7 +23,7 @@ const scope = "github.com/AmbientWare/lazycloud"
 // spans of later steps, in any process, are its children. A step that joins
 // work another trace started links to that trace instead.
 
-// TracerOf is the tracer of ctx's span: owners trace under the provider of
+// TracerOf is the tracer of ctx's span. Owners trace under the provider of
 // the request, RPC or pass that called them and hold none of their own.
 // Without a recording span in ctx it records nothing.
 func TracerOf(ctx context.Context) trace.Tracer {
@@ -91,8 +91,8 @@ func Fail(span trace.Span, err error) {
 // urlQuery matches the query of a URL in a message.
 var urlQuery = regexp.MustCompile(`(https?://[^\s?"]*)\?[^\s"]*`) //nolint:gochecknoglobals // A compiled constant.
 
-// Redact removes the query of every URL in message: presigned URLs carry
-// their signature there. Span statuses and events take only redacted
+// Redact removes the query of every URL in message, where presigned URLs
+// carry their signature. Span statuses and events take only redacted
 // messages.
 func Redact(message string) string {
 	return urlQuery.ReplaceAllString(message, "$1?<redacted>")

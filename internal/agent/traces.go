@@ -19,8 +19,8 @@ const maxTraceBatchBytes = 4 << 20
 
 // traceReceiver takes OTLP spans from the agent's own exporter and the
 // snapshotter's, and sends each batch to the server over the session while
-// its queue has room. Batches that arrive with no session open are dropped:
-// spans only explain latency.
+// its queue has room. Batches that arrive with no session open are dropped,
+// since spans only explain latency.
 type traceReceiver struct {
 	collector.UnimplementedTraceServiceServer
 	a *Agent

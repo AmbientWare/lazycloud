@@ -28,14 +28,14 @@ const (
 	// holds at most 512 spans.
 	maxHostTraceBytes = 4 << 20
 	// hostSpansPerSecond and hostSpanBurst bound the spans each host may
-	// send: a start records a few dozen.
+	// send. A start records a few dozen.
 	hostSpansPerSecond = 200
 	hostSpanBurst      = 2000
 	// hostBucketIdle drops the budget of a host that sent nothing for that
 	// long; a new one starts full.
 	hostBucketIdle = 10 * time.Minute
 	// hostTraceQueue bounds the batches waiting to be forwarded. Past it
-	// batches are dropped: spans only explain latency.
+	// batches are dropped, since spans only explain latency.
 	hostTraceQueue = 64
 	// hostTraceTimeout bounds one forward to the collector.
 	hostTraceTimeout = 10 * time.Second
@@ -46,7 +46,7 @@ const (
 var hostServices = map[string]bool{"lazycloud-agent": true, "lazycloud-snapshotter": true} //nolint:gochecknoglobals // A constant set.
 
 // HostTraces forwards the spans hosts send over their sessions to the
-// server's collector. Hosts are not trusted: each host has a span budget,
+// server's collector. Hosts are not trusted. Each host has a span budget,
 // and every resource and span names the host that sent it and nothing a
 // backend reads as identity or AWS metadata.
 type HostTraces struct {

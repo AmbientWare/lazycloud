@@ -14,8 +14,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// readIdle ends the summary of a start's frame reads once its layers went
-// that long without one: a start reads in a burst until it is ready.
+// readIdle is how long a start's layers go unread before its read summary
+// ends. A start reads in a burst until it is ready.
 const readIdle = 2 * time.Second
 
 // startTrace is the trace of one container start the agent granted layers
