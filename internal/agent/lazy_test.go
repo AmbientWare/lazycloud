@@ -46,7 +46,7 @@ func layerStore() (*s3.Client, string) {
 	return s3.New(s3.Options{
 		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	}), cfg.Bucket
+	}), cfg.LayerBucket
 }
 
 // convertLazyImages fills imageLayers with grants for twelve hours.

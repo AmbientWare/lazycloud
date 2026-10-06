@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -311,6 +312,37 @@ func withoutQuery(t *testing.T, raw string) string {
 	return u.String()
 }
 
+// convertReference stores a converted pair for each of contents and
+// records them as reference's layers, in order. It returns their diff_ids.
+func convertReference(t *testing.T, pool *pgxpool.Pool, store *storage.Storage, reference string, contents [][]byte) []imagefs.Digest {
+	t.Helper()
+	var out []imagefs.Digest
+	for position, body := range contents {
+		id := uuid.New()
+		ix := storeLayer(t, store, id, layerTar(t, "file", body))
+		out = append(out, ix.Layer)
+		if _, err := pool.Exec(t.Context(), `insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
+			values ($1, $2, $3, 1, $4, $5, $6)`, id, "sha256:"+hex64(uuid.NewString()[:8]), ix.Layer, ix.DataSize, len(ix.Entries), len(ix.Frames)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(), `insert into image_reference_layers (reference, position, layer_id) values ($1, $2, $3)`, reference, position, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out
+}
+
+// hostIn inserts a host in region.
+func hostIn(t *testing.T, pool *pgxpool.Pool, region string) compute.HostID {
+	t.Helper()
+	var id uuid.UUID
+	if err := pool.QueryRow(t.Context(), `insert into hosts (name, state, cpu_millis, memory_bytes, region)
+		values ('h', 'online', 8000, 1::bigint << 34, $1) returning id`, region).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return compute.HostID(id)
+}
+
 // The read URLs of a converted reference list its layers in order and read
 // them by range; a reference without converted layers is a typed error.
 func TestLayerReadURLs(t *testing.T) {
@@ -321,24 +353,14 @@ func TestLayerReadURLs(t *testing.T) {
 
 	reference := "registry.test/lazycloud/images/abc@sha256:" + hex64("1")
 	contents := [][]byte{bytes.Repeat([]byte("base "), 1<<20), []byte("app layer")}
-	var want []imagefs.Digest
-	for position, body := range contents {
-		id := uuid.New()
-		ix := storeLayer(t, store, id, layerTar(t, "file", body))
-		want = append(want, ix.Layer)
-		if _, err := pool.Exec(ctx, `insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-			values ($1, $2, $3, 1, $4, $5, $6)`, id, "sha256:"+hex64(string(rune('a'+position))), ix.Layer, ix.DataSize, len(ix.Entries), len(ix.Frames)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `insert into image_reference_layers (reference, position, layer_id) values ($1, $2, $3)`, reference, position, id); err != nil {
-			t.Fatal(err)
-		}
-	}
+	want := convertReference(t, pool, store, reference, contents)
+	host := hostIn(t, pool, "")
 
-	urls, err := im.LayerReadURLs(ctx, reference, 10*time.Minute)
+	reads, err := im.LayerReadURLs(ctx, reference, host, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
+	urls := reads.Layers
 	if len(urls) != len(contents) {
 		t.Fatalf("got %d layers, want %d", len(urls), len(contents))
 	}
@@ -363,7 +385,7 @@ func TestLayerReadURLs(t *testing.T) {
 		}
 	}
 
-	if _, err := im.LayerReadURLs(ctx, "registry.test/lazycloud/images/abc@sha256:"+hex64("2"), time.Minute); !errors.Is(err, images.ErrNotConverted) {
+	if _, err := im.LayerReadURLs(ctx, "registry.test/lazycloud/images/abc@sha256:"+hex64("2"), host, time.Minute); !errors.Is(err, images.ErrNotConverted) {
 		t.Fatalf("an unconverted reference gave %v", err)
 	}
 }
@@ -415,7 +437,7 @@ func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
 	if image, err := f.images.Get(t.Context(), ws, first.Image.ID); err != nil || image.Reference != nil {
 		t.Fatalf("an image with an unconverted layer is unpublished: %+v %v", image, err)
 	}
-	if _, err := f.images.LayerReadURLs(t.Context(), reference, time.Minute); !errors.Is(err, images.ErrNotConverted) {
+	if _, err := f.images.LayerReadURLs(t.Context(), reference, host, time.Minute); !errors.Is(err, images.ErrNotConverted) {
 		t.Fatalf("nor readable: %v", err)
 	}
 	_, uploaded := h.answer(t, rest)
@@ -429,13 +451,13 @@ func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
 	if image, err := f.images.Get(t.Context(), ws, first.Image.ID); err != nil || image.Reference == nil || *image.Reference != reference {
 		t.Fatalf("published: %+v %v", image, err)
 	}
-	urls, err := f.images.LayerReadURLs(t.Context(), reference, time.Minute)
+	reads, err := f.images.LayerReadURLs(t.Context(), reference, host, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for n, d := range diffIDs(t, img) {
-		if urls[n].DiffID != d {
-			t.Fatalf("layer %d reads %s, want %s", n, urls[n].DiffID, d)
+		if reads.Layers[n].DiffID != d {
+			t.Fatalf("layer %d reads %s, want %s", n, reads.Layers[n].DiffID, d)
 		}
 	}
 

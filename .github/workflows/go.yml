@@ -64,9 +64,9 @@ jobs:
       - run: go tool buf lint
       - run: go vet ./...
       - run: go tool golangci-lint run ./...
-      # The host runtime tests run in the host-runtime job, on a runner set
-      # up as a host.
-      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs/snapshotter$ | xargs go test -race
+      # The host runtime and acceptance tests run in their own jobs, on
+      # runners set up as hosts.
+      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs/snapshotter$ -e /acceptance$ | xargs go test -race
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up
@@ -98,5 +98,51 @@ jobs:
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
       - run: go test -race ./internal/agent/... ./internal/imagefs ./internal/imagefs/layersource
-      # The snapshotter mounts FUSE and overlay filesystems as root, as on hosts.
+      # The snapshotter mounts FUSE and overlay filesystems as root, as on
+      # hosts, and a join installs as root.
       - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/imagefs/snapshotter
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
+
+  # Cross-owner workflows against an agent on a runner set up as a host:
+  # the platform images and the managed image convert for real and
+  # workloads start through the snapshotter. A skipped test fails the job.
+  acceptance:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.29"
+          python-version: "3.12"
+      - name: Install the snapshotter as hosts do
+        run: |
+          go build -o "$RUNNER_TEMP/host/lazycloud-agent" ./cmd/agent
+          go build -o "$RUNNER_TEMP/host/lazycloud-snapshotter" ./cmd/snapshotter
+          sudo "$RUNNER_TEMP/host/lazycloud-agent" install-snapshotter
+          sudo chmod 0755 /run/lazycloud-snapshotter
+          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
+          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
+          docker info --format 'storage driver {{.Driver}}'
+      # Started after the snapshotter install, which restarts Docker.
+      - name: PostgreSQL and the object store
+        run: |
+          docker compose -f compose.test.yaml up -d --wait postgres
+          docker compose up -d --wait object-store
+          docker compose run --rm object-store-bootstrap
+      - name: GeeseFS and the managed runtime
+        run: |
+          deploy/local/fetch-geesefs.sh
+          deploy/local/build-runtime.sh .lazycloud/runtime 3.12
+      - name: Acceptance
+        run: |
+          set -o pipefail
+          go test -race -timeout 60m -v ./acceptance 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
+          if grep -- '--- SKIP' "$RUNNER_TEMP/acceptance.log"; then
+            echo "acceptance tests skipped" >&2
+            exit 1
+          fi

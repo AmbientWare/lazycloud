@@ -15,14 +15,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // storedLayer is a converted layer pair in the store and its row.
@@ -386,5 +391,65 @@ func TestReconnectedSessionGrantsRunningImages(t *testing.T) {
 		case <-quiet:
 			return
 		}
+	}
+}
+
+// bucketOf is the bucket a path-style presigned URL reads.
+func bucketOf(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 2)[0]
+}
+
+// A start on a host in a region with a copy of the layer bucket reads the
+// layer bucket while the copy is unconfirmed. A layer replicated after the
+// server's first check is found by its next one, and the host gets grants
+// from the copy then, not when its hour-long grant is due. Garage signs one
+// region, so the platform bucket stands in for that region's copy.
+func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
+	cfg := storagetest.Config()
+	cfg.LayerReplicas = map[string]string{cfg.Region: cfg.Bucket}
+	h := serveWith(t, dbtest.New(t), cfg)
+	const recheck = 500 * time.Millisecond
+	hostsession.SetReplicaRecheck(h.server, recheck)
+	host, ctx := h.enroll()
+	h.exec("update hosts set region = $1 where id = $2", cfg.Region, uuid.UUID(host))
+	layer := h.storeLayer("regional")
+	ref := reference("regional")
+	h.publish(ref, layer)
+	h.startingImage(host, ref)
+
+	in := commands(t, open(t, ctx, h.client))
+	first := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil }).GetStart().GetLayers()[0]
+	if bucketOf(t, first.GetIndexUrl()) != cfg.LayerBucket || bucketOf(t, first.GetDataUrl()) != cfg.LayerBucket {
+		t.Fatalf("an unconfirmed copy was granted: %s", first.GetIndexUrl())
+	}
+	for h.count("select count(*) from image_layer_replicas where confirmed_at is null") == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	client := s3.New(s3.Options{
+		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
+	})
+	for _, object := range []string{"index", "data"} {
+		key := "layers/" + layer.id.String() + "/" + object
+		if _, err := client.CopyObject(t.Context(), &s3.CopyObjectInput{
+			Bucket: aws.String(cfg.Bucket), Key: aws.String(key), CopySource: aws.String(cfg.LayerBucket + "/" + key),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copied := next(t, in, 10*recheck, func(m *hostproto.ServerMessage) bool {
+		layers := m.GetLayerGrants().GetLayers()
+		return len(layers) > 0 && bucketOf(t, layers[0].GetIndexUrl()) == cfg.Bucket
+	}).GetLayerGrants().GetLayers()[0]
+	if bucketOf(t, copied.GetDataUrl()) != cfg.Bucket {
+		t.Fatalf("the copy's grant reads data from %s", copied.GetDataUrl())
+	}
+	if status, body := get(t, copied.GetIndexUrl(), nil); status != http.StatusOK || !bytes.Equal(body, layer.index) {
+		t.Fatalf("the copy's index: %d", status)
 	}
 }

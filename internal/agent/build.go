@@ -28,7 +28,6 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -695,8 +694,8 @@ func (a *Agent) removeHostContainers(ctx context.Context) error {
 	return a.removeBuildContainers(ctx)
 }
 
-// pullOptions carries a login and platform to one pull.
-func pullOptions(auth *hostproto.RegistryAuth, platform string) (client.ImagePullOptions, error) {
+// pullOptions carries a login to one pull.
+func pullOptions(auth *hostproto.RegistryAuth) (client.ImagePullOptions, error) {
 	var options client.ImagePullOptions
 	if auth != nil {
 		encoded, err := authconfig.Encode(registry.AuthConfig{
@@ -706,13 +705,6 @@ func pullOptions(auth *hostproto.RegistryAuth, platform string) (client.ImagePul
 			return options, fmt.Errorf("encode registry login: %w", err)
 		}
 		options.RegistryAuth = encoded
-	}
-	if platform != "" {
-		os, arch, ok := strings.Cut(platform, "/")
-		if !ok {
-			return options, fmt.Errorf("platform %q is not os/arch", platform)
-		}
-		options.Platforms = []ocispec.Platform{{OS: os, Architecture: arch}}
 	}
 	return options, nil
 }

@@ -925,7 +925,8 @@ message LayerUpload {
   string index_url = 3;
   repeated string data_part_urls = 4;
   int64 data_part_bytes = 5;
-  google.protobuf.Timestamp urls_expire_at = 6;
+  reserved 6;
+  reserved "urls_expire_at";
 }
 
 message ConvertedLayer {

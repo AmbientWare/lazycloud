@@ -118,7 +118,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	began := time.Now()
-	if _, err := (&imageCache{containerd: ctrd}).ensureLazy(ctx, tenantRef, nil, "linux/amd64"); err != nil {
+	if _, err := (&imageCache{containerd: ctrd}).ensure(ctx, tenantRef, nil, "linux/amd64"); err != nil {
 		t.Fatal(err)
 	}
 	noLayerSince(t, tenantRef, began)

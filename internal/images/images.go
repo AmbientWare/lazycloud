@@ -490,7 +490,12 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
 		}
-		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu); err != nil {
+		if kind == buildSharedMirror {
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes)
+		} else {
+			_, err = i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu)
+		}
+		if err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelImageBuild, row.ID.String()); err != nil {
@@ -515,17 +520,24 @@ func (i *Images) upsert(ctx context.Context, q *Queries, workspace identity.Work
 	if err != nil {
 		return Image{}, fmt.Errorf("encode secret versions: %w", err)
 	}
-	row, err := q.UpsertImage(ctx, UpsertImageParams{
+	// A new row is locked by its insert, an existing one by LockImage, so
+	// build requests for one image run one at a time.
+	id, err := q.InsertImage(ctx, InsertImageParams{
 		Digest: p.digest, ID: p.id, Dockerfile: p.dockerfile, PythonVersion: p.spec.python,
 		Architecture: p.spec.architecture, BuildSecrets: versions, BuildGpu: p.spec.gpu,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		var row LockImageRow
+		row, err = q.LockImage(ctx, p.digest)
+		id = row.ID
+	}
 	if err != nil {
 		return Image{}, fmt.Errorf("upsert image: %w", err)
 	}
 	if err := q.GrantImage(ctx, GrantImageParams{WorkspaceID: uuid.UUID(workspace), ImageDigest: p.digest}); err != nil {
 		return Image{}, fmt.Errorf("grant image: %w", err)
 	}
-	return i.workspaceImage(ctx, q, workspace, row.ID)
+	return i.workspaceImage(ctx, q, workspace, id)
 }
 
 func (i *Images) workspaceImage(ctx context.Context, q *Queries, workspace identity.WorkspaceID, id string) (Image, error) {
@@ -1151,6 +1163,10 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		if err := q.ResetBuildLogCount(ctx, id); err != nil {
 			return fmt.Errorf("reset build log count: %w", err)
+		}
+		if build.Mirror {
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
+			return err
 		}
 		gpu, err := q.ImageBuildGPU(ctx, digest)
 		if err != nil {

@@ -24,4 +24,65 @@ the west), where beta9 reads from its own locality.
 
 ## Progress
 
+On `perf-integration`, 2026-10-05.
+
+- Terraform: `local.fleet_regions` in fleet.tf is the one region list. The
+  fleet networks (`module.fleet`, for_each, the provider's per-resource
+  `region`; `moved` blocks from the old per-region modules; the provider
+  aliases are gone) and `aws_s3_bucket.layers` (one bucket per fleet
+  region) derive from it, with public access blocked, versioning, SSE-S3
+  and a lifecycle that aborts incomplete uploads and expires noncurrent
+  versions after a day. `aws_s3_bucket_replication_configuration.layers`
+  has one rule per other region (RTC 15 minutes, delete markers
+  replicated) under role `<deployment>-layer-replication`. The server role
+  gets `Layers`, `ListLayers` and `ReadLayerReplicas`. A new region is one
+  entry in `fleet_regions` (and its node images) and an apply.
+- Config: `LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET` /
+  `-object-store-layer-bucket` (server and scheduler; Garage
+  `lazycloud-layers` locally) and `LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS` /
+  `-object-store-layer-replicas`, JSON region to bucket (server only;
+  unset locally).
+- Server: migration 0007 `image_layer_replicas` (layer, region,
+  checked_at, confirmed_at; cascades with its layer row, so the sweep's
+  retire drops it). `images.LayerReadURLs` takes the host and presigns the
+  region's copy for confirmed layers, the layer bucket otherwise, and
+  names the region while any is unconfirmed. The session then starts
+  `images.ConfirmReplicas` in the background (one per reference and
+  region, at most 4 per server, waited by `Server.Wait`): it claims each
+  unconfirmed layer's check in one insert, so across replicas a layer is
+  checked once per minute at most, HEADs index and data in the copy, and
+  records those present with a notify on `ChannelImageBuild` key
+  `layer-replicas:<region>`. While a layer is missing the check looks
+  again every minute for up to 15 minutes. Sessions of hosts in that
+  region, on any server, mark their grants that read the layer bucket due
+  on the notify and sign them again against the copy at once.
+
+## Evidence
+
+`go test -race`, Postgres from `compose.test.yaml`, own Garage (compose
+project `perf-regional`, ports 24970 and 24973):
+
+- `TestGrantsReadTheirRegionsCopyOnceConfirmed` (images): layer bucket
+  before any check, before the copy exists, and within the recheck period
+  after it does; one layer from the copy once its check passes, both once
+  both pass; a region without a copy always reads the layer bucket; the
+  sweep leaves no check rows. Fails with a claim that ignores the period.
+- `TestReplicaChecksRunOncePerLayerAcrossServers` (images): 8 concurrent
+  checks over two servers check 3 layers in total.
+- `TestALateCopyIsGrantedOnceTheRecheckFindsIt` (hostsession, recheck
+  shortened to 0.5 s, hour-long grants): the start's grant reads the layer
+  bucket; the layer is copied after the first check found it missing; a
+  grant from the copy follows within a recheck. Fails without the recheck
+  loop and without marking grants due on the notify.
+
 ## Gaps and unverified boundaries
+
+- No `terraform plan` was run: the `moved` blocks and the switch from
+  provider aliases to per-resource `region` should plan no change to the
+  fleet networks; check that before the apply.
+- EC2 frame latency from the copies and S3 replication itself are
+  unmeasured.
+- A new layer's first starts in a region read across regions until its
+  copy is confirmed: replication time plus up to a minute. A copy that
+  replication has not made after 15 minutes is checked again only when a
+  grant next reads the layer, at the latest at its 20-minute refresh.

@@ -5,9 +5,12 @@
 #   curl -fsSL "$GATEWAY/install/agent" | sh -s -- \
 #     --gateway "$GATEWAY" --server host:port --join-token TOKEN [--background]
 #
-# A release unpacks into <root>/releases/<version> and <root>/current links
-# to it. Root installs use /opt/lazycloud/agent with state in
-# /var/lib/lazycloud/agent; other users install under ~/.lazycloud/agent.
+# A release unpacks into /opt/lazycloud/agent/releases/<version> and
+# /opt/lazycloud/agent/current links to it; state lives in
+# /var/lib/lazycloud/agent. It needs root and systemd: before the agent
+# starts, it installs lazycloud-snapshotter and switches Docker to the
+# containerd image store with the snapshotter as storage driver, which
+# restarts Docker.
 set -eu
 
 CONFIGURED_VERSION="__AGENT_VERSION__"
@@ -42,9 +45,7 @@ main() {
   detect_platform
   validate
   resolve_release
-  if [ "$BACKGROUND" = 1 ]; then
-    require_service_host
-  fi
+  require_host
   require_docker
   choose_paths
   install_release
@@ -167,12 +168,12 @@ resolve_release() {
   fi
 }
 
-require_service_host() {
+require_host() {
   if [ "$(id -u)" -ne 0 ]; then
-    fail "background installation requires root; rerun with sudo or use --foreground" 1
+    fail "joining requires root: the agent installs its snapshotter and reconfigures Docker; rerun with sudo" 1
   fi
   if [ ! -d /run/systemd/system ] || ! command -v systemctl >/dev/null 2>&1; then
-    fail "systemd is required for background installation; use --foreground on this host" 1
+    fail "systemd is required: the snapshotter runs as a systemd unit" 1
   fi
 }
 
@@ -183,14 +184,8 @@ require_docker() {
 }
 
 choose_paths() {
-  if [ "$(id -u)" -eq 0 ]; then
-    ROOT=/opt/lazycloud/agent
-    [ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/lazycloud/agent
-  else
-    [ -n "${HOME:-}" ] || fail "HOME is not set" 1
-    ROOT="$HOME/.lazycloud/agent"
-    [ -n "$STATE_DIR" ] || STATE_DIR="$HOME/.lazycloud/agent/state"
-  fi
+  ROOT=/opt/lazycloud/agent
+  [ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/lazycloud/agent
 }
 
 install_release() {
@@ -254,8 +249,11 @@ file_sha256() {
   fi
 }
 
-# run_foreground replaces this shell with the agent.
+# run_foreground installs the snapshotter, then replaces this shell with
+# the agent.
 run_foreground() {
+  say "Installing lazycloud-snapshotter"
+  "$ROOT/current/lazycloud-agent" install-snapshotter || fail "installing the snapshotter failed" 1
   say "Starting lazycloud-agent"
   exec "$ROOT/current/lazycloud-agent" join "$@" \
     --runtime-dir "$ROOT/current/runtime" --supervisor "$ROOT/current/supervisor"

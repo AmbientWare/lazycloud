@@ -115,7 +115,7 @@ func (a *Agent) platformImage(ctx context.Context, reference string) (string, er
 		if err := a.layers.grant(ctx, "platform:"+digest, image.GetLayers()); err != nil {
 			return "", err
 		}
-		if _, err := a.images.ensureLazy(ctx, image.GetImage(), image.GetAuth(), image.GetPlatform()); err != nil {
+		if _, err := a.images.ensure(ctx, image.GetImage(), image.GetAuth(), image.GetPlatform()); err != nil {
 			return "", err
 		}
 		return image.GetImage(), nil

@@ -29,11 +29,11 @@ const maxBuildLogLine = 16 << 10
 
 // imagePull is how host pulls the image of a container of workspace: the
 // image by digest its release pinned, or the platform's image for its
-// Python version. Either waits, with images.BuildWaitError, while the image
-// converts.
+// Python version. Either waits while the image converts: the first with
+// images.BuildWaitError, the second with images.PlatformWaitError.
 func (s *Server) imagePull(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID, spec apitypes.ImageSpec) (images.Pull, error) {
 	if spec.ImageId == nil {
-		return s.images.ManagedPull(ctx, host, workspace, string(spec.PythonVersion))
+		return s.images.ManagedPull(ctx, host, string(spec.PythonVersion))
 	}
 	if spec.Reference == nil {
 		return images.Pull{}, fmt.Errorf("release names image %s: %w", *spec.ImageId, errImageUnpinned)
@@ -154,7 +154,6 @@ func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.Complete
 		upload := &hostproto.LayerUpload{BlobDigest: u.Blob, DiffId: u.DiffID}
 		if u.Index != "" {
 			upload.IndexUrl, upload.DataPartUrls, upload.DataPartBytes = u.Index, u.DataParts, u.PartBytes
-			upload.UrlsExpireAt = timestamppb.New(u.ExpiresAt)
 		}
 		resp.LayerUploads = append(resp.LayerUploads, upload)
 	}

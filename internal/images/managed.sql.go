@@ -49,75 +49,46 @@ func (q *Queries) ImageRuntime(ctx context.Context, id string) (ImageRuntimeRow,
 	return i, err
 }
 
-const managedImage = `-- name: ManagedImage :one
-select i.digest, i.id, i.dockerfile, i.python_version, i.architecture,
-       coalesce(w.reference, i.reference) as reference,
-       exists (select 1 from image_reference_layers r where r.reference = coalesce(w.reference, i.reference))::bool as converted
-from managed_images m
-join images i on i.digest = m.image_digest
-left join workspace_images w on w.image_digest = i.digest and w.workspace_id = $1
-where m.python_version = $2 and m.template = $3 and m.architecture = $4
+const managedSource = `-- name: ManagedSource :one
+select source from managed_images where python_version = $1 and template = $2
 `
 
-type ManagedImageParams struct {
-	WorkspaceID   uuid.UUID
+type ManagedSourceParams struct {
 	PythonVersion string
 	Template      string
-	Architecture  string
 }
 
-type ManagedImageRow struct {
-	Digest        []byte
-	ID            string
-	Dockerfile    string
-	PythonVersion string
-	Architecture  string
-	Reference     *string
-	Converted     bool
+// The source pinned for a Python version and template.
+func (q *Queries) ManagedSource(ctx context.Context, arg ManagedSourceParams) (string, error) {
+	row := q.db.QueryRow(ctx, managedSource, arg.PythonVersion, arg.Template)
+	var source string
+	err := row.Scan(&source)
+	return source, err
 }
 
-// The managed image for a version, template and architecture, as workspace
-// sees it.
-func (q *Queries) ManagedImage(ctx context.Context, arg ManagedImageParams) (ManagedImageRow, error) {
-	row := q.db.QueryRow(ctx, managedImage,
-		arg.WorkspaceID,
-		arg.PythonVersion,
-		arg.Template,
-		arg.Architecture,
-	)
-	var i ManagedImageRow
-	err := row.Scan(
-		&i.Digest,
-		&i.ID,
-		&i.Dockerfile,
-		&i.PythonVersion,
-		&i.Architecture,
-		&i.Reference,
-		&i.Converted,
-	)
-	return i, err
-}
-
-const recordManagedImage = `-- name: RecordManagedImage :exec
-insert into managed_images (python_version, template, architecture, image_digest)
-values ($1, $2, $3, $4)
-on conflict do nothing
+const recordManagedSource = `-- name: RecordManagedSource :one
+with recorded as (
+    insert into managed_images (python_version, template, source)
+    values ($1, $2, $3)
+    on conflict do nothing
+    returning source
+)
+select source from recorded
+union all
+select source from managed_images where python_version = $1 and template = $2
+limit 1
 `
 
-type RecordManagedImageParams struct {
+type RecordManagedSourceParams struct {
 	PythonVersion string
 	Template      string
-	Architecture  string
-	ImageDigest   []byte
+	Source        string
 }
 
-// The first image recorded for a version, template and architecture stays.
-func (q *Queries) RecordManagedImage(ctx context.Context, arg RecordManagedImageParams) error {
-	_, err := q.db.Exec(ctx, recordManagedImage,
-		arg.PythonVersion,
-		arg.Template,
-		arg.Architecture,
-		arg.ImageDigest,
-	)
-	return err
+// The first source recorded for a version and template stays.
+func (q *Queries) RecordManagedSource(ctx context.Context, arg RecordManagedSourceParams) (string, error) {
+	row := q.db.QueryRow(ctx, recordManagedSource, arg.PythonVersion, arg.Template, arg.Source)
+	var source string
+	err := row.Scan(&source)
+	return source, err
 }

@@ -18,8 +18,13 @@ import (
 // such chain and needs the pair, which is also the key its workspace
 // buckets are opened to.
 func (c Config) Validate() error {
-	if c.Region == "" || c.Bucket == "" {
-		return errors.New("the object store region and bucket are required")
+	if c.Region == "" || c.Bucket == "" || c.LayerBucket == "" {
+		return errors.New("the object store region, bucket and layer bucket are required")
+	}
+	for region, bucket := range c.LayerReplicas {
+		if region == "" || bucket == "" {
+			return fmt.Errorf("layer replica %q in region %q: a replica names its region and bucket", bucket, region)
+		}
 	}
 	if (c.AccessKeyID == "") != (c.SecretAccessKey == "") {
 		return errors.New("set both the object store access key id and secret access key, or neither to use the AWS default credential chain")

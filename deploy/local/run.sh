@@ -17,6 +17,7 @@ export LAZYCLOUD_DOCKER_BRIDGE_IP
 export LAZYCLOUD_OBJECT_STORE_ENDPOINT="http://$LAZYCLOUD_DOCKER_BRIDGE_IP:23900"
 export LAZYCLOUD_OBJECT_STORE_REGION=garage
 export LAZYCLOUD_OBJECT_STORE_BUCKET=lazycloud
+export LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET=lazycloud-layers
 export LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID=GK1a2b3c4d5e6f708192a3b4c5
 export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
 export LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER=garage
@@ -82,7 +83,7 @@ start() {
   echo $! >"$state/server.pid"
   bin/scheduler >"$state/logs/scheduler.log" 2>&1 &
   echo $! >"$state/scheduler.pid"
-  deploy/local/host-vm.sh up
+  LAZYCLOUD_AGENT_ARCHIVE="$LAZYCLOUD_AGENT_DIST_DIR/$release/lazycloud-agent-linux-amd64.tar.gz" deploy/local/host-vm.sh up
   echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082"
   echo "export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8080 LAZYCLOUD_WORKSPACE=dev LAZYCLOUD_TOKEN=$(cat "$state/token")"
 }

@@ -10,7 +10,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -43,38 +46,117 @@ type LayerURLs struct {
 	ExpiresAt   time.Time
 }
 
+// LayerReads is how a host reads the layers of one reference.
+type LayerReads struct {
+	Layers []LayerURLs
+	// Unconfirmed is the host's region when its copy of the layer bucket is
+	// not yet confirmed to hold every layer; those layers read from the
+	// layer bucket until ConfirmReplicas confirms them there.
+	Unconfirmed string
+}
+
+// ReplicasConfirmed is the ChannelImageBuild key that announces a
+// confirmation of layers in region's copy of the layer bucket, after which
+// grants that read those layers from the layer bucket may read the copy.
+func ReplicasConfirmed(region string) string { return "layer-replicas:" + region }
+
 // LayerReadURLs presigns GET URLs, valid for up to ttl, for every layer of
-// reference, the image by digest a release pinned, in layer order. A
+// reference, the image by digest a release pinned, in layer order, for
+// host: from its region's copy of the layer bucket where that copy is
+// confirmed to hold the layer, and from the layer bucket otherwise. A
 // reference is converted as a whole or not at all, so an image with an
 // unconverted layer is ErrNotConverted.
 //
 // Layers belong to the reference rather than the image id: a workspace's
 // rebuild gives an image a new reference while releases that pinned the old
 // one keep running it.
-func (i *Images) LayerReadURLs(ctx context.Context, reference string, ttl time.Duration) ([]LayerURLs, error) {
-	rows, err := i.queries.ReferenceLayers(ctx, reference)
+func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compute.HostID, ttl time.Duration) (LayerReads, error) {
+	rows, err := i.queries.LayerReadsFor(ctx, LayerReadsForParams{Reference: reference, Host: uuid.UUID(host)})
 	if err != nil {
-		return nil, fmt.Errorf("read image layers: %w", err)
+		return LayerReads{}, fmt.Errorf("read image layers: %w", err)
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("%s: %w", reference, ErrNotConverted)
+		return LayerReads{}, fmt.Errorf("%s: %w", reference, ErrNotConverted)
 	}
-	out := make([]LayerURLs, len(rows))
+	out := LayerReads{Layers: make([]LayerURLs, len(rows))}
 	for n, row := range rows {
-		index, expires, err := i.storage.LayerReadURL(ctx, row.ID, storage.LayerIndex, ttl)
-		if err != nil {
-			return nil, err
+		region := ""
+		if i.storage.HasLayerReplica(row.Region) {
+			if row.Replicated {
+				region = row.Region
+			} else {
+				out.Unconfirmed = row.Region
+			}
 		}
-		data, dataExpires, err := i.storage.LayerReadURL(ctx, row.ID, storage.LayerData, ttl)
+		index, expires, err := i.storage.LayerReadURL(ctx, row.ID, storage.LayerIndex, region, ttl)
 		if err != nil {
-			return nil, err
+			return LayerReads{}, err
+		}
+		data, dataExpires, err := i.storage.LayerReadURL(ctx, row.ID, storage.LayerData, region, ttl)
+		if err != nil {
+			return LayerReads{}, err
 		}
 		if dataExpires.Before(expires) {
 			expires = dataExpires
 		}
-		out[n] = LayerURLs{DiffID: imagefs.Digest(row.DiffID), Index: index, Data: data, ExpiresAt: expires}
+		out.Layers[n] = LayerURLs{DiffID: imagefs.Digest(row.DiffID), Index: index, Data: data, ExpiresAt: expires}
 	}
 	return out, nil
+}
+
+// ReplicaCheck is what one ConfirmReplicas call did.
+type ReplicaCheck struct {
+	// Checked counts the layers this call checked.
+	Checked int
+	// Pending means some layer of the reference is still not confirmed in
+	// the region's copy.
+	Pending bool
+}
+
+// ConfirmReplicas checks region's copy of the layer bucket for the layers
+// of reference it is not confirmed to hold, records those it holds and
+// announces them under ReplicasConfirmed. A check is claimed per layer and
+// region, so concurrent calls on any server check each layer once, and a
+// layer found missing is checked again only after recheck. A failed check
+// leaves the others' confirmations recorded.
+func (i *Images) ConfirmReplicas(ctx context.Context, reference, region string, recheck time.Duration) (ReplicaCheck, error) {
+	if !i.storage.HasLayerReplica(region) {
+		return ReplicaCheck{}, nil
+	}
+	ids, err := i.queries.ClaimReplicaChecks(ctx, ClaimReplicaChecksParams{Reference: reference, Region: region, RetrySeconds: recheck.Seconds()})
+	if err != nil {
+		return ReplicaCheck{}, fmt.Errorf("claim layer replica checks: %w", err)
+	}
+	out := ReplicaCheck{Checked: len(ids)}
+	var errs []error
+	held := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		ok, err := i.storage.LayerReplicated(ctx, id, region)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if ok {
+			held = append(held, id)
+		}
+	}
+	if len(held) > 0 {
+		err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
+			n, err := i.queries.WithTx(tx).ConfirmReplicas(ctx, ConfirmReplicasParams{Region: region, LayerIds: held})
+			if err != nil || n == 0 {
+				return err //nolint:wrapcheck // Wrapped below.
+			}
+			return database.Notify(ctx, tx, database.ChannelImageBuild, ReplicasConfirmed(region))
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("record layer replicas: %w", err))
+		}
+	}
+	if out.Pending, err = i.queries.ReplicasPending(ctx, ReplicasPendingParams{Reference: reference, Region: region}); err != nil {
+		errs = append(errs, fmt.Errorf("read layer replicas: %w", err))
+		out.Pending = true
+	}
+	return out, errors.Join(errs...)
 }
 
 // RecordUses records that references were published or sent to hosts in
@@ -100,7 +182,6 @@ type LayerUpload struct {
 	Index        string
 	DataParts    []string
 	PartBytes    int64
-	ExpiresAt    time.Time
 }
 
 // ConvertedLayer is a layer a host converted, with the sizes of its pair.
@@ -376,7 +457,7 @@ func (i *Images) presignUploads(ctx context.Context, offers []offer) ([]LayerUpl
 		if err != nil {
 			return nil, err
 		}
-		out[n].Index, out[n].DataParts, out[n].PartBytes, out[n].ExpiresAt = urls.Index, urls.DataParts, storage.LayerPartBytes, urls.ExpiresAt
+		out[n].Index, out[n].DataParts, out[n].PartBytes = urls.Index, urls.DataParts, storage.LayerPartBytes
 	}
 	return out, nil
 }

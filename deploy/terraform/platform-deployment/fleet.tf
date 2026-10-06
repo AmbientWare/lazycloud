@@ -1,43 +1,38 @@
-# The fleet's networks, one per US region the compute owner buys in. A new
-# region is a provider alias in versions.tf, a module call here and an entry
-# in fleet_networks.
+# The US regions the fleet buys in, the deployment's own first. Each gets a
+# fleet network and a copy of the layer bucket (storage.tf); both reach the
+# server's settings from here. The node images LAZYCLOUD_FLEET_IMAGES names
+# per region come from the Node images workflow.
 locals {
-  fleet_tags = { "lazycloud:fleet" = local.fleet_name }
-  fleet_networks = {
-    (var.region) = module.fleet_us_east_1.network
-    "us-east-2"  = module.fleet_us_east_2.network
-    "us-west-1"  = module.fleet_us_west_1.network
-    "us-west-2"  = module.fleet_us_west_2.network
-  }
+  fleet_regions  = toset([var.region, "us-east-2", "us-west-1", "us-west-2"])
+  fleet_tags     = { "lazycloud:fleet" = local.fleet_name }
+  fleet_networks = { for region, network in module.fleet : region => network.network }
 }
 
-module "fleet_us_east_1" {
-  source = "./fleet-network"
-  name   = "${var.deployment}-fleet"
-  cidr   = var.fleet_cidr
-  tags   = local.fleet_tags
+module "fleet" {
+  for_each = local.fleet_regions
+  source   = "./fleet-network"
+  region   = each.key
+  name     = "${var.deployment}-fleet"
+  cidr     = var.fleet_cidr
+  tags     = local.fleet_tags
 }
 
-module "fleet_us_east_2" {
-  source    = "./fleet-network"
-  providers = { aws = aws.us_east_2 }
-  name      = "${var.deployment}-fleet"
-  cidr      = var.fleet_cidr
-  tags      = local.fleet_tags
+moved {
+  from = module.fleet_us_east_1
+  to   = module.fleet["us-east-1"]
 }
 
-module "fleet_us_west_1" {
-  source    = "./fleet-network"
-  providers = { aws = aws.us_west_1 }
-  name      = "${var.deployment}-fleet"
-  cidr      = var.fleet_cidr
-  tags      = local.fleet_tags
+moved {
+  from = module.fleet_us_east_2
+  to   = module.fleet["us-east-2"]
 }
 
-module "fleet_us_west_2" {
-  source    = "./fleet-network"
-  providers = { aws = aws.us_west_2 }
-  name      = "${var.deployment}-fleet"
-  cidr      = var.fleet_cidr
-  tags      = local.fleet_tags
+moved {
+  from = module.fleet_us_west_1
+  to   = module.fleet["us-west-1"]
+}
+
+moved {
+  from = module.fleet_us_west_2
+  to   = module.fleet["us-west-2"]
 }

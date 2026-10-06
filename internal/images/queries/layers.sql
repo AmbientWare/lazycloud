@@ -6,6 +6,41 @@ join image_layers l on l.id = r.layer_id
 where r.reference = @reference
 order by r.position;
 
+-- name: LayerReadsFor :many
+-- The converted layers of a published reference, in the image's order,
+-- with the host's region and whether that region's copy is confirmed to
+-- hold each.
+select l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
+from image_reference_layers r
+join image_layers l on l.id = r.layer_id
+left join hosts h on h.id = @host
+left join image_layer_replicas c on c.layer_id = l.id and c.region = h.region
+where r.reference = @reference
+order by r.position;
+
+-- name: ClaimReplicaChecks :many
+-- Claims the check of every layer of a reference in region's copy that is
+-- not confirmed and was not claimed within the retry period, so one server
+-- checks each layer and region at a time.
+insert into image_layer_replicas (layer_id, region, checked_at)
+select r.layer_id, @region, now() from image_reference_layers r where r.reference = @reference
+on conflict (layer_id, region) do update set checked_at = now()
+where image_layer_replicas.confirmed_at is null
+    and image_layer_replicas.checked_at < now() - make_interval(secs => @retry_seconds::float8)
+returning layer_id;
+
+-- name: ConfirmReplicas :execrows
+update image_layer_replicas set confirmed_at = now()
+where region = @region and layer_id = any(@layer_ids::uuid[]) and confirmed_at is null;
+
+-- name: ReplicasPending :one
+-- Whether region's copy is not confirmed to hold some layer of reference.
+select exists (
+    select 1 from image_reference_layers r
+    left join image_layer_replicas c on c.layer_id = r.layer_id and c.region = @region
+    where r.reference = @reference and c.confirmed_at is null
+)::boolean;
+
 -- name: UploadsOf :many
 -- The uploads offered to a build container for these blobs.
 select id, blob_digest, upload_id, data_bytes, index_bytes from image_layer_uploads
@@ -91,7 +126,7 @@ with live_releases as (
 ), live as (
     select r.spec -> 'image' ->> 'reference' as reference from releases r join live_releases l on l.id = r.id
     union
-    select i.reference from managed_images m join images i on i.digest = m.image_digest where i.reference is not null
+    select p.mirror from managed_images m join platform_images p on p.reference = m.source where p.mirror is not null
     union
     select u.reference from image_reference_uses u
     where u.used_at > now() - make_interval(secs => @grace_seconds::float8)

@@ -84,9 +84,9 @@ func TestDefaultChainWithoutSourceFails(t *testing.T) {
 
 func TestConfigValidation(t *testing.T) {
 	ok := []Config{
-		{Region: "us-east-2", Bucket: "b"},
-		{Region: "us-east-2", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, RoleARN: "arn:aws:iam::1:role/hosts"}},
-		{Endpoint: "http://garage", Region: "garage", Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s",
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l"},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, RoleARN: "arn:aws:iam::1:role/hosts"}},
+		{Endpoint: "http://garage", Region: "garage", Bucket: "b", LayerBucket: "l", AccessKeyID: "k", SecretAccessKey: "s",
 			Workspaces: WorkspaceBuckets{Provider: ProviderGarage}},
 	}
 	for _, c := range ok {
@@ -95,8 +95,9 @@ func TestConfigValidation(t *testing.T) {
 		}
 	}
 	bad := []Config{
-		{Bucket: "b"},
-		{Region: "us-east-2", Bucket: "b", AccessKeyID: "k"},
+		{Bucket: "b", LayerBucket: "l"},
+		{Region: "us-east-2", Bucket: "b"},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", AccessKeyID: "k"},
 		{Region: "garage", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderGarage}},
 		{Region: "us-east-2", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderAWS}},
 	}

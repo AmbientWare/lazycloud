@@ -64,6 +64,11 @@ type session struct {
 	// platform is what the session sent for the platform images the Hello
 	// named.
 	platform platformState
+	// replicaWake wakes the session when layers are confirmed in its host
+	// region's copy of the layer bucket, once a grant waits for one;
+	// replicaStop ends the subscription.
+	replicaWake <-chan struct{}
+	replicaStop func()
 }
 
 // buildWaits subscribes to the ChannelImageBuild keys the session waits
@@ -179,6 +184,11 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			sent:    map[string]layerGrant{}, failed: map[string]platformFailure{},
 		}}
 	defer sess.builds.close()
+	defer func() {
+		if sess.replicaStop != nil {
+			sess.replicaStop()
+		}
+	}()
 	for _, r := range reports {
 		sess.observe(r)
 	}
@@ -242,6 +252,11 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 				return err
 			}
 		case <-sess.builds.wake:
+			if err := sess.sync(ctx); err != nil {
+				return err
+			}
+		case <-sess.replicaWake:
+			sess.staleUnconfirmed()
 			if err := sess.sync(ctx); err != nil {
 				return err
 			}
@@ -366,6 +381,13 @@ func (sess *session) sync(ctx context.Context) error {
 			waiting[building.Build.String()] = true
 			continue
 		}
+		var converting *images.PlatformWaitError
+		if errors.As(err, &converting) {
+			delete(derived, id)
+			sess.server.convertPlatform(converting.Reference, converting.Architecture)
+			waiting[images.PlatformConverted] = true
+			continue
+		}
 		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {
 			delete(derived, id)
 			continue
@@ -404,7 +426,7 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 		sess.live[start.Container] = true
 		started = append(started, msg.GetStart().GetImage())
-		sess.layers[msg.GetStart().GetImage()] = sess.server.grantOf(msg.GetStart().GetLayers(), issued)
+		sess.layers[msg.GetStart().GetImage()] = sess.server.grantOf(cache, msg.GetStart().GetImage(), issued)
 	}
 	sess.builds.await(sess.server.listener, waiting)
 	if err := sess.server.images.RecordUses(ctx, started); err != nil {
@@ -449,7 +471,11 @@ func (sess *session) sync(ctx context.Context) error {
 	if err := sess.refreshGrants(ctx); err != nil {
 		return err
 	}
-	return sess.refreshLayers(ctx, cache)
+	if err := sess.refreshLayers(ctx, cache); err != nil {
+		return err
+	}
+	sess.watchReplicas()
+	return nil
 }
 
 // observe tracks whether the host still runs a reported container.
@@ -538,7 +564,7 @@ func (s *Server) startMessage(ctx context.Context, host compute.HostID, id strin
 	if err != nil {
 		return nil, err
 	}
-	layers, err := s.layers(ctx, cache, image.Reference)
+	layers, err := s.layers(ctx, host, cache, image.Reference)
 	if err != nil {
 		return nil, err
 	}
