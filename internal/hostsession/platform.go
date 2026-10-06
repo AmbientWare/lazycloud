@@ -221,7 +221,7 @@ func (sess *session) platformImage(ctx context.Context, cache layerCache, key st
 	if pull.Pull == nil {
 		return nil, true, nil
 	}
-	layers, err := sess.server.layers(ctx, cache, pull.Pull.Reference)
+	layers, err := sess.server.layers(ctx, sess.host, cache, pull.Pull.Reference)
 	switch {
 	case errors.Is(err, images.ErrNotConverted):
 		return nil, true, nil

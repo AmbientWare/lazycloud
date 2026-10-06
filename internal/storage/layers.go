@@ -122,15 +122,57 @@ func (s *Storage) AbortLayerUpload(ctx context.Context, id uuid.UUID, uploadID s
 	return s.abortMultipart(ctx, s.layers, layerKey(id, LayerData), uploadID)
 }
 
+// layerReplica is the copy of the layer bucket in one region.
+type layerReplica struct {
+	bucket  string
+	client  *s3.Client
+	presign *s3.PresignClient
+}
+
+// HasLayerReplica reports whether region has a copy of the layer bucket.
+func (s *Storage) HasLayerReplica(region string) bool {
+	_, ok := s.replicas[region]
+	return ok
+}
+
+// LayerReplicated reports whether region's copy of the layer bucket holds
+// both objects of pair id. Replication copies them on its own schedule, so
+// a missing object is false, not an error.
+func (s *Storage) LayerReplicated(ctx context.Context, id uuid.UUID, region string) (bool, error) {
+	replica, ok := s.replicas[region]
+	if !ok {
+		return false, fmt.Errorf("no layer replica in region %q", region)
+	}
+	for _, object := range []LayerObject{LayerIndex, LayerData} {
+		_, err := replica.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(replica.bucket), Key: aws.String(layerKey(id, object))})
+		if isNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("head layer %s in %s: %w", object, region, err)
+		}
+	}
+	return true, nil
+}
+
 // LayerReadURL is a presigned GET of one object of layer pair id, valid for
-// up to lifetime. Range requests read parts of it.
-func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerObject, lifetime time.Duration) (string, time.Time, error) {
+// up to lifetime, from region's copy of the layer bucket, or from the layer
+// bucket itself when region is "". Range requests read parts of it.
+func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerObject, region string, lifetime time.Duration) (string, time.Time, error) {
+	bucket, presign := s.layers, s.presign
+	if region != "" {
+		replica, ok := s.replicas[region]
+		if !ok {
+			return "", time.Time{}, fmt.Errorf("no layer replica in region %q", region)
+		}
+		bucket, presign = replica.bucket, replica.presign
+	}
 	lifetime, err := s.signedLifetime(ctx, min(lifetime, maxPresignLifetime))
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.layers), Key: aws.String(layerKey(id, object)),
+	req, err := presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(layerKey(id, object)),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("presign layer read: %w", err)

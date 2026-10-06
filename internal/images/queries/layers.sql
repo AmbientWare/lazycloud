@@ -6,6 +6,33 @@ join image_layers l on l.id = r.layer_id
 where r.reference = @reference
 order by r.position;
 
+-- name: LayerReadsFor :many
+-- The converted layers of a published reference, in the image's order,
+-- with the host's region and whether that region's copy is confirmed to
+-- hold each.
+select l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
+from image_reference_layers r
+join image_layers l on l.id = r.layer_id
+left join hosts h on h.id = @host
+left join image_layer_replicas c on c.layer_id = l.id and c.region = h.region
+where r.reference = @reference
+order by r.position;
+
+-- name: ClaimReplicaChecks :many
+-- Claims the check of every layer of a reference in region's copy that is
+-- not confirmed and was not claimed within the retry period, so one server
+-- checks each layer and region at a time.
+insert into image_layer_replicas (layer_id, region, checked_at)
+select r.layer_id, @region, now() from image_reference_layers r where r.reference = @reference
+on conflict (layer_id, region) do update set checked_at = now()
+where image_layer_replicas.confirmed_at is null
+    and image_layer_replicas.checked_at < now() - make_interval(secs => @retry_seconds::float8)
+returning layer_id;
+
+-- name: ConfirmReplicas :exec
+update image_layer_replicas set confirmed_at = now()
+where region = @region and layer_id = any(@layer_ids::uuid[]) and confirmed_at is null;
+
 -- name: UploadsOf :many
 -- The uploads offered to a build container for these blobs.
 select id, blob_digest, upload_id, data_bytes, index_bytes from image_layer_uploads

@@ -2,11 +2,13 @@ package hostsession
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -30,27 +32,69 @@ func (g layerGrant) due(now time.Time) bool {
 	return !now.Before(g.issued.Add(g.expires.Sub(g.issued) / 3))
 }
 
-// layerCache holds the grants issued for each reference during one sync, so
-// the replicas of one image cost one query and one set of signatures.
+// layerCache holds the grants issued for each reference during one sync of
+// one host, so the replicas of one image cost one query and one set of
+// signatures.
 type layerCache map[string][]*hostproto.LayerGrant
 
-// layers returns grants for every layer of reference.
-func (s *Server) layers(ctx context.Context, cache layerCache, reference string) ([]*hostproto.LayerGrant, error) {
+// layers returns grants for every layer of reference on host. Layers its
+// region's copy of the layer bucket is not confirmed to hold read from the
+// layer bucket, and a check of that copy starts.
+func (s *Server) layers(ctx context.Context, host compute.HostID, cache layerCache, reference string) ([]*hostproto.LayerGrant, error) {
 	if grants, ok := cache[reference]; ok {
 		return grants, nil
 	}
-	urls, err := s.images.LayerReadURLs(ctx, reference, s.layerLifetime)
+	reads, err := s.images.LayerReadURLs(ctx, reference, host, s.layerLifetime)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // permanentStartFailure matches the owner's error.
 	}
-	out := make([]*hostproto.LayerGrant, len(urls))
-	for n, u := range urls {
+	if reads.Unconfirmed != "" {
+		s.confirmReplicas(reference, reads.Unconfirmed)
+	}
+	out := make([]*hostproto.LayerGrant, len(reads.Layers))
+	for n, u := range reads.Layers {
 		out[n] = &hostproto.LayerGrant{
 			DiffId: string(u.DiffID), IndexUrl: u.Index, DataUrl: u.Data, ExpiresAt: timestamppb.New(u.ExpiresAt),
 		}
 	}
 	cache[reference] = out
 	return out, nil
+}
+
+// maxReplicaChecks bounds the checks of layer copies one server runs at
+// once. Each layer and region is checked once across the replicas, so this
+// bounds only how fast new images reach new regions.
+const maxReplicaChecks = 4
+
+// replicaChecks runs the checks of regional layer copies grants ask for,
+// one per reference and region, under the server's lifetime.
+type replicaChecks struct {
+	mu      sync.Mutex
+	running map[string]bool
+	wg      sync.WaitGroup
+}
+
+// confirmReplicas starts checking region's copy for the layers of
+// reference unless this server already is, or runs maxReplicaChecks. The
+// next grant of the reference asks again.
+func (s *Server) confirmReplicas(reference, region string) {
+	key := reference + " " + region
+	s.replicas.mu.Lock()
+	defer s.replicas.mu.Unlock()
+	if s.replicas.running[key] || len(s.replicas.running) >= maxReplicaChecks {
+		return
+	}
+	s.replicas.running[key] = true
+	s.replicas.wg.Go(func() {
+		defer func() {
+			s.replicas.mu.Lock()
+			delete(s.replicas.running, key)
+			s.replicas.mu.Unlock()
+		}()
+		if _, err := s.images.ConfirmReplicas(s.lifetime, reference, region); err != nil && s.lifetime.Err() == nil {
+			s.logger.WarnContext(s.lifetime, "checking regional layer copies failed", "image", reference, "region", region, "error", err)
+		}
+	})
 }
 
 // grantOf is the life of layers issued at issued.
@@ -91,7 +135,7 @@ func (sess *session) refreshLayers(ctx context.Context, cache layerCache) error 
 		if g, ok := sess.layers[image]; ok && !g.due(now) {
 			continue
 		}
-		layers, err := sess.server.layers(ctx, cache, image)
+		layers, err := sess.server.layers(ctx, sess.host, cache, image)
 		if err != nil {
 			if ctx.Err() != nil {
 				return status.FromContextError(ctx.Err()).Err()

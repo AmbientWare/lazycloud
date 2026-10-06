@@ -100,12 +100,12 @@ func TestPlatformImagesConvertOnceAcrossReplicas(t *testing.T) {
 	if n := f.count(t, "select count(*) from image_reference_uses where reference = $1", mirror); n != 1 {
 		t.Fatal("the converted copy is not live for the layer sweep")
 	}
-	urls, err := f.images.LayerReadURLs(ctx, mirror, time.Minute)
+	reads, err := f.images.LayerReadURLs(ctx, mirror, host, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []imagefs.Digest
-	for _, u := range urls {
+	for _, u := range reads.Layers {
 		_, ix, err := imagefs.FetchIndex(ctx, http.DefaultClient, u.Index)
 		if err != nil {
 			t.Fatal(err)

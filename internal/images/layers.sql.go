@@ -28,12 +28,65 @@ func (q *Queries) AbandonUpload(ctx context.Context, arg AbandonUploadParams) er
 	return err
 }
 
+const claimReplicaChecks = `-- name: ClaimReplicaChecks :many
+insert into image_layer_replicas (layer_id, region, checked_at)
+select r.layer_id, $1, now() from image_reference_layers r where r.reference = $2
+on conflict (layer_id, region) do update set checked_at = now()
+where image_layer_replicas.confirmed_at is null
+    and image_layer_replicas.checked_at < now() - make_interval(secs => $3::float8)
+returning layer_id
+`
+
+type ClaimReplicaChecksParams struct {
+	Region       string
+	Reference    string
+	RetrySeconds float64
+}
+
+// Claims the check of every layer of a reference in region's copy that is
+// not confirmed and was not claimed within the retry period, so one server
+// checks each layer and region at a time.
+func (q *Queries) ClaimReplicaChecks(ctx context.Context, arg ClaimReplicaChecksParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, claimReplicaChecks, arg.Region, arg.Reference, arg.RetrySeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var layer_id uuid.UUID
+		if err := rows.Scan(&layer_id); err != nil {
+			return nil, err
+		}
+		items = append(items, layer_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const claimUpload = `-- name: ClaimUpload :exec
 delete from image_layer_uploads where id = $1
 `
 
 func (q *Queries) ClaimUpload(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, claimUpload, id)
+	return err
+}
+
+const confirmReplicas = `-- name: ConfirmReplicas :exec
+update image_layer_replicas set confirmed_at = now()
+where region = $1 and layer_id = any($2::uuid[]) and confirmed_at is null
+`
+
+type ConfirmReplicasParams struct {
+	Region   string
+	LayerIds []uuid.UUID
+}
+
+func (q *Queries) ConfirmReplicas(ctx context.Context, arg ConfirmReplicasParams) error {
+	_, err := q.db.Exec(ctx, confirmReplicas, arg.Region, arg.LayerIds)
 	return err
 }
 
@@ -103,6 +156,56 @@ func (q *Queries) ExpiredUploads(ctx context.Context, batchSize int32) ([]Expire
 	for rows.Next() {
 		var i ExpiredUploadsRow
 		if err := rows.Scan(&i.ID, &i.UploadID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const layerReadsFor = `-- name: LayerReadsFor :many
+select l.id, l.diff_id, coalesce(h.region, '')::text as region, (c.confirmed_at is not null)::boolean as replicated
+from image_reference_layers r
+join image_layers l on l.id = r.layer_id
+left join hosts h on h.id = $1
+left join image_layer_replicas c on c.layer_id = l.id and c.region = h.region
+where r.reference = $2
+order by r.position
+`
+
+type LayerReadsForParams struct {
+	Host      uuid.UUID
+	Reference string
+}
+
+type LayerReadsForRow struct {
+	ID         uuid.UUID
+	DiffID     string
+	Region     string
+	Replicated bool
+}
+
+// The converted layers of a published reference, in the image's order,
+// with the host's region and whether that region's copy is confirmed to
+// hold each.
+func (q *Queries) LayerReadsFor(ctx context.Context, arg LayerReadsForParams) ([]LayerReadsForRow, error) {
+	rows, err := q.db.Query(ctx, layerReadsFor, arg.Host, arg.Reference)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LayerReadsForRow
+	for rows.Next() {
+		var i LayerReadsForRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DiffID,
+			&i.Region,
+			&i.Replicated,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

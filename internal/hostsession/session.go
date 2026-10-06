@@ -538,7 +538,7 @@ func (s *Server) startMessage(ctx context.Context, host compute.HostID, id strin
 	if err != nil {
 		return nil, err
 	}
-	layers, err := s.layers(ctx, cache, image.Reference)
+	layers, err := s.layers(ctx, host, cache, image.Reference)
 	if err != nil {
 		return nil, err
 	}

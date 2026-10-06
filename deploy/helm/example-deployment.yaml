@@ -43,5 +43,6 @@ server:
     LAZYCLOUD_IMAGE_REPOSITORY: lazycloud/workload-images
     LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN: arn:aws:iam::000000000000:role/example-registry-hosts
     LAZYCLOUD_CLOUDFLARE_ZONE_ID: "00000000000000000000000000000000"
+    LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS: '{"us-east-2":"example-layers-us-east-2-000000000000"}'
   hostService:
     certificateArn: arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-4000-8000-000000000000

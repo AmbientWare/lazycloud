@@ -59,7 +59,11 @@ type Config struct {
 	Bucket   string
 	// LayerBucket holds converted image layers, which hosts read through
 	// presigned URLs.
-	LayerBucket     string
+	LayerBucket string
+	// LayerReplicas maps a region to the bucket there that S3 replication
+	// copies LayerBucket to. Hosts in that region read a layer from its copy
+	// once images confirmed the copy holds it.
+	LayerReplicas   map[string]string
 	AccessKeyID     string
 	SecretAccessKey string
 	// Workspaces configures the buckets that hold volumes and disks.
@@ -80,8 +84,11 @@ type Storage struct {
 	presign *s3.PresignClient
 	bucket  string
 	layers  string
-	config  Config
-	buckets bucketProvider
+	// replicas are the copies of the layer bucket by region, each signed
+	// for its own region.
+	replicas map[string]layerReplica
+	config   Config
+	buckets  bucketProvider
 	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
 	orphanAge time.Duration
 }
@@ -102,9 +109,14 @@ func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 	})
+	replicas := make(map[string]layerReplica, len(cfg.LayerReplicas))
+	for region, bucket := range cfg.LayerReplicas {
+		regional := s3.New(client.Options(), func(o *s3.Options) { o.Region = region })
+		replicas[region] = layerReplica{bucket: bucket, client: regional, presign: s3.NewPresignClient(regional)}
+	}
 	return &Storage{
 		pool: pool, queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket,
-		layers: cfg.LayerBucket, config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
+		layers: cfg.LayerBucket, replicas: replicas, config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
 	}
 }
 

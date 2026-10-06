@@ -86,7 +86,7 @@ func TestManagedImageIsBuiltOnceAndPublishedConverted(t *testing.T) {
 			t.Fatalf("every start pulls the published mirror: %+v %v", pull, err)
 		}
 	}
-	if _, err := f.images.LayerReadURLs(t.Context(), repository+"@"+digest, time.Minute); err != nil {
+	if _, err := f.images.LayerReadURLs(t.Context(), repository+"@"+digest, host, time.Minute); err != nil {
 		t.Fatalf("the managed image is readable: %v", err)
 	}
 	// The managed image stays live with no release pinning it.
@@ -152,7 +152,7 @@ func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
 	if ref, err := f.images.Deployable(t.Context(), ws, r.Image.ID, "3.12"); err != nil || ref != old {
 		t.Fatalf("the converted reference deploys: %s %v", ref, err)
 	}
-	if _, err := f.images.LayerReadURLs(t.Context(), old, time.Minute); err != nil {
+	if _, err := f.images.LayerReadURLs(t.Context(), old, host, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -339,9 +339,9 @@ func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
 	if err != nil || pull.Reference != reference {
 		t.Fatalf("the start pulls the pinned reference once converted: %+v %v", pull, err)
 	}
-	urls, err := f.images.LayerReadURLs(t.Context(), reference, time.Minute)
-	if err != nil || len(urls) != len(diffIDs(t, original)) || urls[0].DiffID != diffIDs(t, original)[0] {
-		t.Fatalf("the pinned reference reads the mirror's layers: %+v %v", urls, err)
+	reads, err := f.images.LayerReadURLs(t.Context(), reference, host, time.Minute)
+	if err != nil || len(reads.Layers) != len(diffIDs(t, original)) || reads.Layers[0].DiffID != diffIDs(t, original)[0] {
+		t.Fatalf("the pinned reference reads the mirror's layers: %+v %v", reads, err)
 	}
 
 	failing := pinned("second")

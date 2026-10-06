@@ -95,11 +95,17 @@ func start(t *testing.T) *harness {
 // serve serves the host service on a random local port over pool.
 func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 	t.Helper()
+	return serveWith(t, pool, storagetest.Config())
+}
+
+// serveWith serves the host service over pool and the object store cfg.
+func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
+	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp, database.ChannelImageBuild)
 	e := execution.NewExecution(pool)
 	c := compute.NewCompute(pool, e, compute.Config{})
-	store := storage.NewStorage(pool, storagetest.Config())
+	store := storage.NewStorage(pool, cfg)
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)

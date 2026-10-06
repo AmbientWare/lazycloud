@@ -79,7 +79,7 @@ func TestLayerDataUploadsInSignedParts(t *testing.T) {
 	if size, err := store.LayerSize(ctx, id, LayerData); err != nil || size != int64(len(data)) {
 		t.Fatalf("stored %d bytes, want %d: %v", size, len(data), err)
 	}
-	read, _, err := store.LayerReadURL(ctx, id, LayerData, time.Minute)
+	read, _, err := store.LayerReadURL(ctx, id, LayerData, "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
