@@ -54,6 +54,33 @@ describe("task execution phase projection", () => {
       ],
     },
     {
+      name: "a start held for its image conversion",
+      state: { created_at: T0, started_at: T20, finished_at: T40 },
+      stages: [
+        stage("placement", T0, "2026-07-01T00:00:01Z"),
+        stage("conversion", "2026-07-01T00:00:01Z", T10),
+        stage("image", "2026-07-01T00:00:12Z", "2026-07-01T00:00:15Z"),
+      ],
+      now: T40,
+      expected: [
+        ["queued", 1_000],
+        ["conversion", 9_000],
+        ["startup", 10_000],
+        ["execution", 20_000],
+      ],
+    },
+    {
+      name: "a conversion before the host reported its stages",
+      state: { created_at: T0 },
+      stages: [stage("conversion", T5, T10)],
+      now: T20,
+      expected: [
+        ["queued", 5_000],
+        ["conversion", 5_000],
+        ["startup", 10_000],
+      ],
+    },
+    {
       name: "unfinished execution",
       state: { created_at: T0, started_at: T10 },
       stages: [],

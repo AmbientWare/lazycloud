@@ -1,20 +1,24 @@
 package hostsession_test
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // A start that needs the managed image waits while another server converts
 // it, its syncs writing nothing and building nothing, and is sent with the
-// converted copy once that server records it.
+// converted copy once that server records it. The wait is the start's
+// conversion stage.
 func TestStartWaitsForTheManagedImageConversion(t *testing.T) {
 	h := start(t)
 	host, ctx := h.enroll()
 	recordManagedSource(t, h.pool, "3.11")
 	h.exec(`insert into platform_images (reference, architecture, lease_token, leased_until)
 		values ($1, 'amd64', gen_random_uuid(), now() + interval '1 hour')`, managedSource("3.11"))
-	_, container := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.11"}}`)
+	ws, container := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.11"}}`)
 	stream := open(t, ctx, h.client)
 
 	got := make(chan string, 1)
@@ -60,5 +64,26 @@ union all select string_agg(xmin::text, ',') from managed_images`).Scan(&v); err
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the start was not sent after its image was converted")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		lifecycle, err := h.obs.ContainerLifecycle(t.Context(), ws, container)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(lifecycle.Stages, func(s apitypes.LifecycleStage) bool {
+			return s.Stage == apitypes.LifecycleStageKindConversion
+		})
+		if i >= 0 {
+			if ms := *lifecycle.Stages[i].DurationMs; ms < 900 {
+				t.Fatalf("the conversion stage lasted %d ms of a wait of about a second", ms)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no conversion stage: %+v", lifecycle.Stages)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

@@ -220,7 +220,7 @@ func (p pointRow) out() apitypes.ContainerMetricPoint {
 	return out
 }
 
-// StartupStageKind names a stage of a container's start on its host.
+// StartupStageKind names a stage of a container's start.
 type StartupStageKind string
 
 const (
@@ -230,6 +230,9 @@ const (
 	StageRuntime StartupStageKind = "runtime"
 	// StageDisk is leasing and restoring the container's disks.
 	StageDisk StartupStageKind = "disk"
+	// StageConversion is the server holding the start until its image is
+	// converted, before the host gets it.
+	StageConversion StartupStageKind = "conversion"
 )
 
 // StartupStage is how long one stage took.
