@@ -39,9 +39,6 @@ type session struct {
 	server *Server
 	stream grpc.BidiStreamingServer[hostproto.HostMessage, hostproto.ServerMessage]
 	host   compute.HostID
-	// opened is when the session opened. A start assigned before then was
-	// held by an earlier session.
-	opened time.Time
 	// sent holds the ids of derived commands this session already sent, so
 	// each is sent once per session. It keeps only ids still derived.
 	sent map[string]bool
@@ -155,7 +152,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
-	sess := &session{server: s, stream: stream, host: host, opened: time.Now(), sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
+	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
 		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
 		platform: platformState{
 			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
