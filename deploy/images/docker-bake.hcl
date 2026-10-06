@@ -68,8 +68,11 @@ target "agent" {
 
 # The Python base of each version the platform serves, tagged
 # <minor>-<VERSION>; the server's image template names them. Their
-# timestamps are fixed rather than the commit's, so a release that leaves
-# them alone builds the same digests and image identities stay.
+# timestamps are fixed rather than the commit's and they carry no
+# provenance, whose build times would change the pushed digest, so a
+# release that leaves them alone builds the same digests and image
+# identities stay. A Docker Engine with the containerd image store would
+# otherwise unpack the image, which rewritten timestamps rule out.
 target "python" {
   name = "python-${replace(item.minor, ".", "")}"
   matrix = {
@@ -90,6 +93,7 @@ target "python" {
   labels = {
     "org.opencontainers.image.source" = "https://github.com/AmbientWare/lazycloud"
   }
-  output = ["type=image,rewrite-timestamp=true"]
+  attest = ["type=provenance,disabled=true"]
+  output = ["type=image,rewrite-timestamp=true,unpack=false"]
   tags   = ["${REGISTRY}/python:${item.minor}-${VERSION}"]
 }
