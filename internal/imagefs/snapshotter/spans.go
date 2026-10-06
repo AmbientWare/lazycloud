@@ -57,7 +57,7 @@ func incomingParent(ctx context.Context) oteltrace.SpanContext {
 	if len(values) == 0 {
 		return oteltrace.SpanContext{}
 	}
-	return oteltrace.SpanContextFromContext(telemetry.WithTraceParent(context.Background(), values[0]))
+	return telemetry.SpanContextOf(values[0])
 }
 
 // begin records that the start name, traced under parent, uses layers.

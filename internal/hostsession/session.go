@@ -386,15 +386,15 @@ func (sess *session) sync(ctx context.Context) error {
 		var building *images.BuildWaitError
 		if errors.As(err, &building) {
 			delete(derived, id)
-			sess.waiting(start.Container, "build", building.Traceparent)
+			sess.waiting(ctx, start.Container, "build", building.Traceparent)
 			waiting[building.Build.String()] = true
 			continue
 		}
 		var converting *images.PlatformWaitError
 		if errors.As(err, &converting) {
 			delete(derived, id)
-			sess.waiting(start.Container, "platform_conversion", converting.Traceparent)
-			sess.server.convertPlatform(converting.Reference, converting.Architecture, telemetry.TraceParentOf(startCtx))
+			sess.waiting(ctx, start.Container, "platform_conversion", converting.Traceparent)
+			sess.server.convertPlatform(converting.Reference, converting.Architecture, telemetry.TraceParentOf(startCtx)) //nolint:contextcheck // Conversions run under the server's lifetime.
 			waiting[images.PlatformConverted] = true
 			continue
 		}

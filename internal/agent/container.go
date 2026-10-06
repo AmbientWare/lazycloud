@@ -741,7 +741,7 @@ func (c *container) stopRunning(ctx context.Context) {
 func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.SupervisorMessage) {
 	switch body := m.GetBody().(type) {
 	case *hostproto.SupervisorMessage_Ready:
-		c.onReady(body.Ready)
+		c.onReady(ctx, body.Ready)
 	case *hostproto.SupervisorMessage_LoadFailed:
 		c.mu.Lock()
 		c.loadError = body.LoadFailed.GetError()
@@ -771,7 +771,7 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 // onReady marks the container ready. After an agent restart the supervisor
 // restates its running attempts, including finished ones it has not yet
 // reported, which then occupy slots.
-func (c *container) onReady(ready *hostproto.SlotsReady) {
+func (c *container) onReady(ctx context.Context, ready *hostproto.SlotsReady) {
 	c.mu.Lock()
 	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
 		c.mu.Unlock()
@@ -808,7 +808,7 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	created := c.created
 	c.mu.Unlock()
 	if span != nil {
-		telemetry.Record(trace.ContextWithSpan(context.Background(), span), "agent.runtime", created)
+		telemetry.Record(trace.ContextWithSpan(ctx, span), "agent.runtime", created)
 		span.End()
 	}
 	if changed && c.a.layers != nil {

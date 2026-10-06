@@ -66,7 +66,7 @@ func (s *Server) layers(ctx context.Context, host compute.HostID, cache layerCac
 		return nil, err //nolint:wrapcheck // permanentStartFailure matches the owner's error.
 	}
 	if reads.Unconfirmed != "" {
-		s.confirmReplicas(reference, reads.Unconfirmed, telemetry.TraceParentOf(ctx))
+		s.confirmReplicas(reference, reads.Unconfirmed, telemetry.TraceParentOf(ctx)) //nolint:contextcheck // Checks run under the server's lifetime.
 	}
 	out := make([]*hostproto.LayerGrant, len(reads.Layers))
 	for n, u := range reads.Layers {

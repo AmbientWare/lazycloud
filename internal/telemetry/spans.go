@@ -2,11 +2,12 @@ package telemetry
 
 import (
 	"context"
+	"encoding/hex"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -82,13 +83,31 @@ func Fail(span trace.Span, err error) {
 	span.End()
 }
 
-func spanContextOf(traceparent string) trace.SpanContext {
-	if traceparent == "" {
+// SpanContextOf is the remote span a W3C traceparent of version 00 names;
+// invalid when it is empty or malformed.
+func SpanContextOf(traceparent string) trace.SpanContext {
+	parts := strings.Split(traceparent, "-")
+	if len(parts) != 4 || parts[0] != "00" || len(parts[3]) != 2 {
 		return trace.SpanContext{}
 	}
-	ctx := propagation.TraceContext{}.Extract(context.Background(), propagation.MapCarrier{"traceparent": traceparent})
-	return trace.SpanContextFromContext(ctx)
+	traceID, err := trace.TraceIDFromHex(parts[1])
+	if err != nil {
+		return trace.SpanContext{}
+	}
+	spanID, err := trace.SpanIDFromHex(parts[2])
+	if err != nil {
+		return trace.SpanContext{}
+	}
+	flags, err := hex.DecodeString(parts[3])
+	if err != nil {
+		return trace.SpanContext{}
+	}
+	return trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: spanID, TraceFlags: trace.TraceFlags(flags[0]) & trace.FlagsSampled, Remote: true,
+	})
 }
+
+func spanContextOf(traceparent string) trace.SpanContext { return SpanContextOf(traceparent) }
 
 // Attribute keys of span attributes beside the correlation keys.
 const (

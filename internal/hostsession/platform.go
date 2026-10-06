@@ -233,7 +233,7 @@ func (sess *session) syncPlatform(ctx context.Context, cache layerCache, waits m
 		}
 		if waiting {
 			p.waiting = true
-			sess.server.convertPlatform(pull.Reference, pull.Architecture, "")
+			sess.server.convertPlatform(pull.Reference, pull.Architecture, "") //nolint:contextcheck // Conversions run under the server's lifetime.
 			continue
 		}
 		if image != nil {

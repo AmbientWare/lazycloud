@@ -37,18 +37,20 @@ func (sess *session) startContext(ctx context.Context, start execution.StartComm
 
 // waiting records that container's start waits for its image to convert in
 // the work of kind traceparent names, linking the wait to that work.
-func (sess *session) waiting(container execution.ContainerID, kind, traceparent string) {
+// The work's own trace is the start's when this start began it.
+func (sess *session) waiting(ctx context.Context, container execution.ContainerID, kind, traceparent string) {
 	p := sess.starts[container]
 	if p == nil {
 		return
 	}
 	if p.wait == nil {
-		_, p.wait = sess.server.tracer.Start(trace.ContextWithSpan(context.Background(), p.span), "hostsession.image_wait",
+		_, p.wait = sess.server.tracer.Start(trace.ContextWithSpan(ctx, p.span), "hostsession.image_wait",
 			trace.WithAttributes(attribute.String("lazycloud.wait", kind)))
 	}
-	if traceparent != "" && !p.linked[traceparent] && traceparent != telemetry.TraceParentOf(trace.ContextWithSpan(context.Background(), p.span)) {
+	work := telemetry.SpanContextOf(traceparent)
+	if work.IsValid() && !p.linked[traceparent] && work.TraceID() != p.span.SpanContext().TraceID() {
 		p.linked[traceparent] = true
-		p.wait.AddLink(telemetry.Link(traceparent))
+		p.wait.AddLink(trace.Link{SpanContext: work})
 	}
 }
 
