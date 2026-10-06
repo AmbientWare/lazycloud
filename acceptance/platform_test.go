@@ -153,7 +153,9 @@ func startPlatform(t *testing.T) *platform {
 	registry := startRegistry(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	level := new(slog.LevelVar)
+	level.Set(slog.LevelDebug)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	pool := dbtest.New(t)
 	p := &platform{
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
@@ -320,6 +322,7 @@ func startPlatform(t *testing.T) *platform {
 		}
 	})
 	p.convertManagedImage(im)
+	level.Set(slog.LevelWarn)
 	return p
 }
 
@@ -343,6 +346,7 @@ func (p *platform) convertManagedImage(im *images.Images) {
 		switch {
 		case err == nil:
 			p.t.Logf("the managed image converted in %s", time.Since(started).Round(time.Millisecond))
+			p.timeline(started)
 			return
 		case errors.Is(err, images.ErrNotReady):
 		default:
@@ -590,4 +594,40 @@ func (p *platform) startEdge() string {
 		wg.Wait()
 	})
 	return traffic.Addr().String()
+}
+
+// timeline logs when each step of the first conversions happened, relative
+// to started. Diagnostic only.
+func (p *platform) timeline(started time.Time) {
+	ctx := p.t.Context()
+	rows, err := p.pool.Query(ctx, `
+select at, what from (
+    select created_at as at, 'host row ' || name as what from hosts
+    union all select created_at, 'platform image row ' || reference || ' ' || coalesce(failure, '') from platform_images
+    union all select failed_at, 'platform image failed ' || reference || ' ' || coalesce(failure, '') from platform_images where failed_at is not null
+    union all select created_at, 'layer pair ' || blob_digest || ' ' || data_bytes from image_layers
+    union all select created_at, 'build created ' || id || ' mirror=' || mirror from image_builds
+    union all select finished_at, 'build finished ' || id || ' ' || state from image_builds where finished_at is not null
+    union all select created_at, 'build container created ' || id from containers where image_build_id is not null
+    union all select assigned_at, 'build container assigned ' || id from containers where image_build_id is not null and assigned_at is not null
+    union all select ready_at, 'build container ready ' || id from containers where image_build_id is not null and ready_at is not null
+    union all select stopped_at, 'build container stopped ' || id from containers where image_build_id is not null and stopped_at is not null
+    union all select logged_at, 'log ' || left(data, 300) from image_build_logs
+    union all select ready_at, 'image ready ' || id from images where ready_at is not null
+    union all select created_at, 'upload offered ' || blob_digest from image_layer_uploads
+) t order by at`)
+	if err != nil {
+		p.t.Logf("timeline: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var at time.Time
+		var what string
+		if err := rows.Scan(&at, &what); err != nil {
+			p.t.Logf("timeline: %v", err)
+			return
+		}
+		p.t.Logf("timeline %+8.3fs %s", at.Sub(started).Seconds(), what)
+	}
 }
