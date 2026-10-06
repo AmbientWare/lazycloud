@@ -275,6 +275,11 @@ func (i *Images) ManagedSource(ctx context.Context, python string) (string, erro
 		return "", err
 	}
 	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: pinned.ref})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Another server's insert committed while this one waited on it,
+		// after this statement's snapshot.
+		source, err = i.queries.ManagedSource(ctx, key)
+	}
 	if err != nil {
 		return "", fmt.Errorf("record managed image: %w", err)
 	}

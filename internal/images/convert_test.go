@@ -1,6 +1,7 @@
 package images_test
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
@@ -83,6 +84,39 @@ func TestManagedImageIsConvertedByTheServer(t *testing.T) {
 	}
 	if _, err := f.images.ManagedPull(t.Context(), host, "3.9"); err == nil {
 		t.Fatal("a Python version without a managed image was pulled")
+	}
+}
+
+// A server that pins the managed image while another server's pin of it
+// commits gets the other's source.
+func TestConcurrentPinsOfTheManagedImageAgree(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	other := f.registry + "/library/python:3.12-slim@sha256:" + hex64("e")
+	if _, err := tx.Exec(ctx, "insert into managed_images (python_version, template, source) values ('3.12', $1, $2)",
+		f.registry+"/library/python:{version}-slim", other); err != nil {
+		t.Fatal(err)
+	}
+	type pinned struct {
+		source string
+		err    error
+	}
+	done := make(chan pinned, 1)
+	go func() {
+		source, err := f.images.ManagedSource(ctx, "3.12")
+		done <- pinned{source, err}
+	}()
+	time.Sleep(500 * time.Millisecond)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-done; got.err != nil || got.source != other {
+		t.Fatalf("the pin gave %q (%v), want the committed %q", got.source, got.err, other)
 	}
 }
 

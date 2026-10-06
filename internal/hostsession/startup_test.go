@@ -69,7 +69,7 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 	if err := remote.Write(template, img, remote.WithContext(t.Context())); err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.DiscardHandler)
+	logger := slog.New(slog.NewTextHandler(t.Output(), nil))
 	e := execution.NewExecution(pool)
 	key, err := secrets.NewFileKey(make([]byte, 32))
 	if err != nil {
