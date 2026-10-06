@@ -1,6 +1,7 @@
 #!/bin/sh
 # Lints and renders the Helm chart, validates the manifests and Argo CD
-# Applications against their schemas, checks that every setting the chart
+# Applications against their schemas and the collector's configuration with
+# the collector, checks that every setting the chart
 # gives a process is one its binary reads, checks the Terraform roots, the
 # workflows and the shell scripts, using pinned tool images. Nothing here
 # reaches AWS, GitHub or a cluster.
@@ -59,6 +60,16 @@ refuse "a secret in config" --set server.config.LAZYCLOUD_GITHUB_CLIENT_SECRET=p
 docker run --rm -v "$out:/manifests:ro" -v "$PWD/deploy/argocd:/argocd:ro" "$kubeconform" -strict -summary \
   -kubernetes-version "$kubernetes" -schema-location "$k8s_schemas" -schema-location "$crd_schemas" \
   /manifests/prod.yaml /manifests/variant.yaml /argocd/apps
+
+# The collector image the chart pins accepts the configuration the chart
+# renders for it.
+# shellcheck disable=SC2086
+run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes" \
+  --show-only templates/telemetry.yaml >"$out/telemetry.yaml"
+awk '/^  config.yaml: \|$/ { on = 1; next } /^---$/ { on = 0 } on { sub(/^    /, ""); print }' \
+  "$out/telemetry.yaml" >"$out/otelcol.yaml"
+collector=$(sed -n 's/^ *image: //p' "$out/telemetry.yaml")
+docker run --rm -v "$out/otelcol.yaml:/etc/otelcol/config.yaml:ro" "$collector" validate --config=/etc/otelcol/config.yaml
 
 # Every LAZYCLOUD_* variable the chart gives a container is one its binary
 # reads: the server's and jobs' in cmd/server, the scheduler's in

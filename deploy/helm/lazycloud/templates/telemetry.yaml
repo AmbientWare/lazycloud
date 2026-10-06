@@ -1,11 +1,62 @@
-{{- if .Values.telemetry.enabled }}
 {{/*
 Receives OTLP/gRPC traces from the scheduler and the server, which forwards
 the spans fleet hosts send over their sessions, and sends them to AWS X-Ray
 in the deployment's region, as its service account's EKS Pod Identity, which
 may only put trace segments and telemetry records.
-Metrics stay on each process's /metrics for scraping.
+
+X-Ray names a segment after its service only for a server span or a span
+marked as its process's local root, and folds any other span into its
+parent's segment. The transform marks each span that starts a trace or
+continues one from another process (OTLP flags 0x100 and 0x200 set: the
+parent is known to be remote), so the scheduler, server, agent and
+snapshotter each get their own segments, and keeps the span's name in the
+lazycloud.span annotation.
+
+The collector's own metrics, spans received, sent and failed among them, are
+on its metrics port; the processes' metrics are on their own /metrics.
 */}}
+{{- define "lazycloud.otelCollectorConfig" -}}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  transform:
+    error_mode: propagate
+    trace_statements:
+      - set(span.attributes["aws.span.kind"], "LOCAL_ROOT") where IsRootSpan() or span.flags >= 768
+      - set(span.attributes["aws.local.service"], resource.attributes["service.name"]) where span.attributes["aws.span.kind"] == "LOCAL_ROOT"
+      - set(span.attributes["lazycloud.span"], span.name) where span.attributes["aws.span.kind"] == "LOCAL_ROOT"
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+exporters:
+  awsxray:
+    region: {{ required "awsRegion is required" .Values.awsRegion | quote }}
+    indexed_attributes: [lazycloud.span, lazycloud.container_id, lazycloud.task_id, lazycloud.host_id, otel.resource.lazycloud.host_id]
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform, batch]
+      exporters: [awsxray]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+{{- end }}
+{{- if .Values.telemetry.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,31 +65,7 @@ metadata:
     {{- include "lazycloud.labels" (list . "otel-collector") | nindent 4 }}
 data:
   config.yaml: |
-    receivers:
-      otlp:
-        protocols:
-          grpc:
-            endpoint: 0.0.0.0:4317
-    processors:
-      batch: {}
-      memory_limiter:
-        check_interval: 1s
-        limit_percentage: 80
-        spike_limit_percentage: 20
-    extensions:
-      health_check:
-        endpoint: 0.0.0.0:13133
-    exporters:
-      awsxray:
-        region: {{ required "awsRegion is required" .Values.awsRegion | quote }}
-        indexed_attributes: [lazycloud.container_id, lazycloud.task_id, lazycloud.host_id, otel.resource.lazycloud.host_id]
-    service:
-      extensions: [health_check]
-      pipelines:
-        traces:
-          receivers: [otlp]
-          processors: [memory_limiter, batch]
-          exporters: [awsxray]
+    {{- include "lazycloud.otelCollectorConfig" . | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -56,7 +83,7 @@ spec:
       labels:
         {{- include "lazycloud.labels" (list . "otel-collector") | nindent 8 }}
       annotations:
-        checksum/config: {{ .Values.telemetry | toJson | sha256sum }}
+        checksum/config: {{ include "lazycloud.otelCollectorConfig" . | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.otelCollector }}
       automountServiceAccountToken: false
@@ -75,6 +102,8 @@ spec:
               containerPort: 4317
             - name: health
               containerPort: 13133
+            - name: metrics
+              containerPort: 8888
           readinessProbe:
             httpGet: { path: /, port: health }
           livenessProbe:
