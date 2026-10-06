@@ -2,7 +2,7 @@
 # names an older version, so tagged images stay. Ship pushes them with the
 # github root's release role.
 resource "aws_ecr_repository" "release" {
-  for_each             = toset(["server", "scheduler", "web"])
+  for_each             = toset(["server", "scheduler", "web", "python"])
   name                 = "${var.name}/release/${each.key}"
   image_tag_mutability = "IMMUTABLE"
 

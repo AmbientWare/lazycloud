@@ -2,6 +2,7 @@ package hostsession
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -18,7 +19,9 @@ import (
 // uses it.
 type pendingStart struct {
 	span trace.Span
-	wait trace.Span
+	// assigned is when placement gave the container this host.
+	assigned *time.Time
+	wait     trace.Span
 	// linked holds the traces of the conversions the wait linked to.
 	linked map[string]bool
 }
@@ -30,15 +33,16 @@ func (sess *session) startContext(ctx context.Context, start execution.StartComm
 	if !ok {
 		_, span := telemetry.StartIn(ctx, sess.server.tracer, start.Traceparent, "hostsession.start", trace.WithAttributes(
 			telemetry.Container(start.Container.String()), telemetry.Host(sess.host.String())))
-		p = &pendingStart{span: span, linked: map[string]bool{}}
+		p = &pendingStart{span: span, assigned: start.AssignedAt, linked: map[string]bool{}}
 		sess.starts[start.Container] = p
 	}
 	return trace.ContextWithSpan(ctx, p.span)
 }
 
 // waiting records that container's start waits for its image, converting
-// in the work of kind that traceparent names. The wait links to that work
-// unless the work is in the start's own trace, as when this start began it.
+// in the work of kind that traceparent names, if any. The wait links to
+// that work unless the work is in the start's own trace, as when this start
+// began it.
 func (sess *session) waiting(ctx context.Context, container execution.ContainerID, kind, traceparent string) {
 	p := sess.starts[container]
 	if p == nil {

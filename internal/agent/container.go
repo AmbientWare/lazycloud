@@ -331,8 +331,16 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 
 	began := time.Now()
-	if err := c.a.layers.start(ctx, c.log, c.id, spec); err != nil {
+	tracing, err := c.a.layers.start(ctx, c.log, c.id, spec)
+	if err != nil {
 		return err
+	}
+	if tracing {
+		c.a.goOwned(func(ctx context.Context) {
+			if trace := c.a.layers.await(ctx, c.log, c.id, traceWindow); trace != nil {
+				c.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: c.id, Trace: trace}}})
+			}
+		})
 	}
 	pullCtx, pull := telemetry.Start(ctx, "agent.image_pull")
 	pulled, err := c.a.images.ensure(pullCtx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
@@ -815,13 +823,6 @@ func (c *container) onReady(ctx context.Context, ready *hostproto.SlotsReady) {
 		telemetry.Record(trace.ContextWithSpan(ctx, span), "agent.runtime", created)
 		span.End()
 	}
-	if changed && c.a.layers != nil {
-		c.a.goOwned(func(ctx context.Context) {
-			if trace := c.a.layers.ready(ctx, c.log, c.id); trace != nil {
-				c.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: c.id, Trace: trace}}})
-			}
-		})
-	}
 	c.signalSlotFree()
 	if changed {
 		c.log.Info("container ready", "slots", ready.GetSlots(), "running", len(running))
@@ -960,6 +961,7 @@ func (c *container) onFinished(finished *hostproto.AttemptFinished) {
 	}
 	c.completing[attempt] = struct{}{}
 	c.mu.Unlock()
+	c.a.layers.served(c.id)
 	seq := c.logs.mark()
 	c.completions.Add(1)
 	c.a.goOwned(func(context.Context) {

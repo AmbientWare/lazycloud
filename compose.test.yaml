@@ -1,6 +1,7 @@
-# Disposable services for Go owner tests: LAZYCLOUD_TEST_DATABASE_URL defaults
-# to this database, and billing's Stripe tests to this stripe-mock
-# (LAZYCLOUD_TEST_STRIPE_URL).
+# Disposable services for Go tests: LAZYCLOUD_TEST_DATABASE_URL defaults to
+# this database, internal/storage/storagetest to this Garage
+# (LAZYCLOUD_TEST_OBJECT_STORE_ENDPOINT, LAZYCLOUD_TEST_GARAGE_ADMIN_URL) and
+# billing's Stripe tests to this stripe-mock (LAZYCLOUD_TEST_STRIPE_URL).
 name: lazycloud-go-test
 
 services:
@@ -25,3 +26,44 @@ services:
     image: stripe/stripe-mock:v0.205.0@sha256:ff32647993847be491e68533e2881c90434fa8d5df40246ee5f7d41253422081
     ports:
       - "127.0.0.1:12111:12111"
+
+  # Tests create their own buckets here and delete them when they end.
+  object-store:
+    image: dxflrs/garage:v2.3.0
+    environment:
+      GARAGE_RPC_SECRET: 4c0cd1d2c1f1a6c5b0e7e9f1b3f6a2d8c4e5f7a9b1c3d5e7f9a1b3c5d7e9f1a3
+      GARAGE_ADMIN_TOKEN: local-garage-admin
+    volumes:
+      - ./deploy/local/garage.toml:/etc/garage.toml:ro
+    ports:
+      - "127.0.0.1:15900:3900"
+      - "127.0.0.1:15903:3903"
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  # Assigns the node's layout and imports the development key, then stays up
+  # healthy so that `up --wait` waits for it.
+  object-store-bootstrap:
+    image: curlimages/curl:8.16.0
+    init: true
+    entrypoint: ["sh", "-c", "sh /bootstrap.sh && touch /tmp/ready && exec sleep 2147483647"]
+    environment:
+      GARAGE_ADMIN_URL: http://object-store:3903
+      GARAGE_ADMIN_TOKEN: local-garage-admin
+      ACCESS_KEY_ID: GK1a2b3c4d5e6f708192a3b4c5
+      SECRET_ACCESS_KEY: 6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
+      BUCKETS: ""
+    volumes:
+      - ./deploy/local/garage-bootstrap.sh:/bootstrap.sh:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      object-store:
+        condition: service_healthy
+        restart: true

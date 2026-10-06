@@ -3,7 +3,6 @@ package imagefs
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"crypto/rand"
 	"errors"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
@@ -42,21 +40,14 @@ func TestHTTPObjectReadsFramesThroughPresignedURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := storagetest.Config()
-	testBucket := cfg.Bucket
-	store := s3.New(s3.Options{
-		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	})
+	testBucket := storagetest.Config(t).Bucket
+	store := storagetest.Client()
 	key := "imagefs-test/" + uuid.NewString() + "/data"
 	if _, err := store.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(testBucket), Key: aws.String(key), Body: bytes.NewReader(data.Bytes()),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_, _ = store.DeleteObject(context.Background(), &s3.DeleteObjectInput{Bucket: aws.String(testBucket), Key: aws.String(key)})
-	})
 	presign := func(lifetime time.Duration) string {
 		req, err := s3.NewPresignClient(store).PresignGetObject(ctx, &s3.GetObjectInput{
 			Bucket: aws.String(testBucket), Key: aws.String(key),

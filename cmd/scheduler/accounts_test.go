@@ -33,7 +33,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
-	store := storage.NewStorage(pool, storagetest.Config())
+	store := storage.NewStorage(pool, storagetest.Config(t))
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
 		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}), storage: store, logger: logger,
@@ -151,7 +151,7 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
-	store := storage.NewStorage(pool, storagetest.Config())
+	store := storage.NewStorage(pool, storagetest.Config(t))
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
 		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}),

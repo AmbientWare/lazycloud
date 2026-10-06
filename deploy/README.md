@@ -8,14 +8,15 @@ version, Deploy records it on the `prod` branch, and Argo CD syncs the chart
 
 | Command | What it does |
 | --- | --- |
-| `gh workflow run ship.yml -f bump=patch` (or `minor`, `major`) | Tags the next version on main, runs every check, pushes the server, scheduler and web images, publishes the CLI to PyPI, then calls Deploy |
+| `gh workflow run ship.yml -f bump=patch` (or `minor`, `major`) | Tags the next version on main, runs every check, pushes the server, scheduler and web images and the Python bases, publishes the CLI to PyPI, then calls Deploy |
 | `gh workflow run deploy.yml -f version=<x.y.z>` | Writes `prod` as that version's tree plus `values-deployment.yaml`; an earlier version rolls back. Migrations do not roll back |
 | `gh workflow run node-images.yml` | Bakes the CPU and GPU node images into every fleet region; its summary holds the `LAZYCLOUD_FLEET_IMAGES` value for the env file |
 
 Some releases need a step before Ship. New scheduler IAM applies
-`platform-deployment` first; it only adds permissions. A change to
-`deploy/ami` runs Node images from main and lands a PR updating
-`LAZYCLOUD_FLEET_IMAGES`.
+`platform-deployment` first; it only adds permissions. A new release
+repository applies `platform-core`, `github` and `platform-deployment`
+first. A change to `deploy/ami` runs Node images from main and lands a PR
+updating `LAZYCLOUD_FLEET_IMAGES`.
 
 ## Settings and secrets
 
@@ -38,7 +39,7 @@ the operator writes and Terraform only reads. All variables carry the
 | `RESEND_API_KEY` | operator document | scheduler |
 | `CLOUDFLARE_API_TOKEN` (custom domains) | operator document | server |
 | `TCP_DNS_API_TOKEN` (DNS edit on the zone) | operator document | cert-manager |
-| Listen addresses, `PUBLIC_URL`, `EDGE_URL`, `EDGE_TCP_URL`, `EDGE_TCP_CERT`/`_KEY`, `AGENT_SERVER_ADDR`, `INSTALL_URL`, `CLIENT_RELEASE_VERSION`, `DRAIN_DELAY`, telemetry | chart | server; the scheduler takes `AGENT_SERVER_ADDR` and `INSTALL_URL` for user data |
+| Listen addresses, `PUBLIC_URL`, `EDGE_URL`, `EDGE_TCP_URL`, `EDGE_TCP_CERT`/`_KEY`, `AGENT_SERVER_ADDR`, `INSTALL_URL`, `CLIENT_RELEASE_VERSION`, `IMAGE_TEMPLATE`, `DRAIN_DELAY`, telemetry | chart | server; the scheduler takes `AGENT_SERVER_ADDR` and `INSTALL_URL` for user data |
 | Object store, workspace buckets, ECR registry and host role, Cloudflare zone, fleet account, networks, node role and instance profile, `AWS_REGION` | values | server, scheduler |
 | `FLEET_IMAGES`, `FLEET_MAX_HOSTS`, `FLEET_IDLE_TIMEOUT`, `LOG_FORMAT` | env file | server, scheduler |
 | `AGENT_DIST_DIR` | server image | server |

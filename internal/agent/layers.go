@@ -24,6 +24,12 @@ const (
 	// maxGrantRetry.
 	minGrantRetry = time.Second
 	maxGrantRetry = 30 * time.Second
+	// traceWindow bounds a startup trace, which ends with the container's
+	// first task or request: a handler's imports run in it, after the
+	// container is ready. A recording start has no prefetch, and a first
+	// task importing torch from the store then ends about 11 s after the
+	// trace began on an m7i.large.
+	traceWindow = 60 * time.Second
 )
 
 // layerSources hands layer grants to the snapshotter. Refreshes go through
@@ -158,6 +164,19 @@ type startup struct {
 	// shared is set once another start on the host used a traced layer:
 	// the snapshotter cannot tell their reads apart.
 	shared bool
+	// traced is when the trace began. over closes once the container's
+	// first task or request ended or the container exited.
+	traced time.Time
+	over   chan struct{}
+	ended  bool
+}
+
+// end closes over once.
+func (s *startup) end() {
+	if !s.ended {
+		s.ended = true
+		close(s.over)
+	}
 }
 
 // shares reports whether s uses one of layers.
@@ -177,20 +196,20 @@ func (l *layerSources) begin(container string, layers []imagefs.Digest) bool {
 			shared = true
 		}
 	}
-	l.startups[container] = &startup{layers: layers}
+	l.startups[container] = &startup{layers: layers, over: make(chan struct{})}
 	return shared
 }
 
 // start hands the start's grants to the snapshotter, which then reads the
 // image's layers only through them, and returns once it holds them. It
 // then starts the start's prefetch and its trace when asked and no other
-// start on the host shares a layer. Prefetching and tracing only speed
-// starts up, so their refusals are logged. A host without a snapshotter
-// fails its preflight check before it runs anything, so l is nil only on
-// hosts that never get layers.
-func (l *layerSources) start(ctx context.Context, log *slog.Logger, container string, spec *hostproto.StartContainer) error {
+// start on the host shares a layer, and reports whether it traces.
+// Prefetching and tracing only speed starts up, so their refusals are
+// logged. A host without a snapshotter fails its preflight check before it
+// runs anything, so l is nil only on hosts that never get layers.
+func (l *layerSources) start(ctx context.Context, log *slog.Logger, container string, spec *hostproto.StartContainer) (bool, error) {
 	if l == nil || len(spec.GetLayers()) == 0 {
-		return nil
+		return false, nil
 	}
 	layers := layersOf(spec.GetLayers())
 	shared := l.begin(container, layers)
@@ -201,7 +220,7 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 	defer cancel()
 	if err := l.client.Grant(ctx, container, grantsIn(spec.GetLayers())); err != nil {
 		telemetry.Fail(span, err)
-		return err //nolint:wrapcheck // The client names the call.
+		return false, err //nolint:wrapcheck // The client names the call.
 	}
 	if trace := spec.GetPrefetch().GetReads(); len(trace) > 0 {
 		reads := make([]layersource.FrameRead, len(trace))
@@ -214,14 +233,16 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 			l.mark(container, func(s *startup) { s.prefetching = true })
 		}
 	}
-	if spec.GetRecordTrace() && !shared {
-		if err := l.client.StartTrace(ctx, container, layers); err != nil {
-			log.Warn("tracing the image's startup reads failed", "error", err)
-		} else {
-			l.mark(container, func(s *startup) { s.tracing = true })
-		}
+	if !spec.GetRecordTrace() || shared {
+		return false, nil
 	}
-	return nil
+	traced := time.Now()
+	if err := l.client.StartTrace(ctx, container, layers); err != nil {
+		log.Warn("tracing the image's startup reads failed", "error", err)
+		return false, nil
+	}
+	l.mark(container, func(s *startup) { s.tracing, s.traced = true, traced })
+	return true, nil
 }
 
 func (l *layerSources) mark(container string, change func(*startup)) {
@@ -235,9 +256,6 @@ func (l *layerSources) mark(container string, change func(*startup)) {
 // takeTrace stops counting container's trace and reports whether it ran
 // and whether another start shared a layer with it.
 func (l *layerSources) takeTrace(container string) (tracing, shared bool) {
-	if l == nil {
-		return false, false
-	}
 	l.smu.Lock()
 	defer l.smu.Unlock()
 	s, ok := l.startups[container]
@@ -248,9 +266,44 @@ func (l *layerSources) takeTrace(container string) (tracing, shared bool) {
 	return true, s.shared
 }
 
-// ready ends container's trace once it is ready and returns it when every
-// read reached it and only this start used its layers, or nil.
-func (l *layerSources) ready(ctx context.Context, log *slog.Logger, container string) *hostproto.ImageTrace {
+// served ends container's trace at the end of its first task or request.
+func (l *layerSources) served(container string) {
+	if l == nil {
+		return
+	}
+	l.smu.Lock()
+	defer l.smu.Unlock()
+	if s, ok := l.startups[container]; ok {
+		s.end()
+	}
+}
+
+// await waits for container's first task or request to end, at most window
+// from the start of its trace, then ends the trace as end does. It returns
+// nil at once if the container does not trace, exits or ctx ends.
+func (l *layerSources) await(ctx context.Context, log *slog.Logger, container string, window time.Duration) *hostproto.ImageTrace {
+	l.smu.Lock()
+	s, ok := l.startups[container]
+	if !ok || !s.tracing {
+		l.smu.Unlock()
+		return nil
+	}
+	traced, over := s.traced, s.over
+	l.smu.Unlock()
+	timer := time.NewTimer(time.Until(traced.Add(window)))
+	defer timer.Stop()
+	select {
+	case <-over:
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil
+	}
+	return l.end(ctx, log, container)
+}
+
+// end ends container's trace and returns it when every read reached it and
+// only this start used its layers, or nil.
+func (l *layerSources) end(ctx context.Context, log *slog.Logger, container string) *hostproto.ImageTrace {
 	tracing, shared := l.takeTrace(container)
 	if !tracing {
 		return nil
@@ -287,6 +340,9 @@ func (l *layerSources) release(ctx context.Context, log *slog.Logger, container 
 	l.smu.Lock()
 	s, ok := l.startups[container]
 	delete(l.startups, container)
+	if ok {
+		s.end()
+	}
 	l.smu.Unlock()
 	if !ok || (!s.prefetching && !s.tracing) {
 		return

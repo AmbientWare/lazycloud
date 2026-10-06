@@ -1046,8 +1046,8 @@ type HostMessage_ReserveReady struct {
 }
 
 type HostMessage_StartupTrace struct {
-	// The frames a container read before it was ready, for a start that
-	// asked with record_trace.
+	// The frames a container read through its first task or request, for a
+	// start that asked with record_trace.
 	StartupTrace *StartupTrace `protobuf:"bytes,120,opt,name=startup_trace,json=startupTrace,proto3,oneof"`
 }
 
@@ -1121,7 +1121,8 @@ func (x *Traces) GetOtlp() []byte {
 }
 
 // StartupTrace is the frames of its image's layers a container read from
-// its start until it reported ready.
+// its start through the end of its first task or request, or a bounded
+// time when none ended sooner.
 type StartupTrace struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ContainerId   string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
@@ -2986,11 +2987,12 @@ type StartContainer struct {
 	// Reads of every layer of image, base first. The host hands them to its
 	// snapshotter before it pulls the image and keeps them from containers.
 	Layers []*LayerGrant `protobuf:"bytes,100,rep,name=layers,proto3" json:"layers,omitempty"`
-	// The frames earlier containers of the image read before they were
-	// ready. The host fetches them ahead of the container's own reads.
+	// The frames earlier containers of the image read through their first
+	// task or request. The host fetches them ahead of the container's own
+	// reads.
 	Prefetch *ImageTrace `protobuf:"bytes,120,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
-	// Record the frames this container reads before it is ready and report
-	// them in a StartupTrace.
+	// Record the frames this container reads through its first task or
+	// request and report them in a StartupTrace.
 	RecordTrace bool `protobuf:"varint,121,opt,name=record_trace,json=recordTrace,proto3" json:"record_trace,omitempty"`
 	// The W3C traceparent of the server's span that sent the start, when it
 	// was sampled. The host's spans of the start are its children.

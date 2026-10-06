@@ -53,7 +53,7 @@ func TestManagedImageIsConvertedByTheServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := f.registry + "/library/python:3.12-slim@" + digest.Digest.String()
+	source := f.registry + "/library/python@" + digest.Digest.String()
 	want := images.PlatformWaitError{Reference: source, Architecture: "amd64"}
 	if len(seen) != 1 || !seen[want] {
 		t.Fatalf("concurrent first starts waited on %v, want %v", seen, want)

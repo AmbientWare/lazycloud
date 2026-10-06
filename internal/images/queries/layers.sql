@@ -21,9 +21,11 @@ order by r.position;
 -- name: ClaimReplicaChecks :many
 -- Claims the check of every layer of a reference in region's copy that is
 -- not confirmed and was not claimed within the retry period, so one server
--- checks each layer and region at a time.
+-- checks each layer and region at a time. Claims take the rows in layer
+-- order, so concurrent claims of shared layers wait instead of deadlocking.
 insert into image_layer_replicas (layer_id, region, checked_at)
 select r.layer_id, @region, now() from image_reference_layers r where r.reference = @reference
+order by r.layer_id
 on conflict (layer_id, region) do update set checked_at = now()
 where image_layer_replicas.confirmed_at is null
     and image_layer_replicas.checked_at < now() - make_interval(secs => @retry_seconds::float8)

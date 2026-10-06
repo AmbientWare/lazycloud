@@ -1,9 +1,10 @@
 name: Ship
 
 # Cuts the next v<version> tag on main, runs every owner check on it,
-# publishes the server, scheduler and web images and the Python package
-# under that version, then records the version for prod through Deploy.
-# The server image carries the agent release of the same version.
+# publishes the server, scheduler and web images, the Python base images
+# and the Python package under that version, then records the version for
+# prod through Deploy. The server image carries the agent release of the
+# same version.
 
 on:
   workflow_dispatch:
@@ -143,7 +144,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_IMAGE_RELEASE_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      # The Python bases' digests, and so the identity of every image built
+      # on them, depend on the BuildKit that writes their layers.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=docker.io/moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
       - name: Build and push
         env:
           REGISTRY: ${{ vars.IMAGE_REGISTRY }}

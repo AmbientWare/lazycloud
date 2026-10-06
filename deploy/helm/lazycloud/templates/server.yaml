@@ -92,6 +92,9 @@ spec:
               value: {{ printf "https://%s" $domain | quote }}
             - name: LAZYCLOUD_CLIENT_RELEASE_VERSION
               value: {{ include "lazycloud.version" . | quote }}
+            # The Python bases Ship pushes beside the release images.
+            - name: LAZYCLOUD_IMAGE_TEMPLATE
+              value: {{ printf "%s/python:{version}-%s" .Values.image.registry (include "lazycloud.version" .) | quote }}
             {{- include "lazycloud.hostEnv" . | nindent 12 }}
             {{- include "lazycloud.awsEnv" . | nindent 12 }}
             {{- if .Values.telemetry.enabled }}

@@ -286,20 +286,12 @@ func TestVolumeDeletionChecksLiveMounts(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, `select count(*) from volumes where id = $1`, volume.Id).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("deleted volume rows after sweep: %d err=%v", left, err)
 	}
-	client := platformS3()
+	client := storagetest.Client()
 	bucket := bucketOf(t, f)
 	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String("volumes/" + volume.Id.String() + "/")})
 	if err != nil || len(out.Contents) != 0 {
 		t.Fatalf("deleted volume objects after sweep: %d err=%v", len(out.Contents), err)
 	}
-}
-
-func platformS3() *s3.Client {
-	cfg := storagetest.Config()
-	return s3.New(s3.Options{
-		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	})
 }
 
 func bucketOf(t *testing.T, f *fixture) string {
@@ -343,7 +335,7 @@ func TestHostGrantReachesOneWorkspace(t *testing.T) {
 	if err := write(otherBucket); err == nil {
 		t.Fatal("the grant wrote another workspace's bucket")
 	}
-	if err := write(storagetest.Config().Bucket); err == nil {
+	if err := write(f.bucket); err == nil {
 		t.Fatal("the grant wrote the platform bucket")
 	}
 

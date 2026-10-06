@@ -10,28 +10,14 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
-
-// Development object store credentials from compose.yaml.
-const (
-	testBucket    = "lazycloud"
-	testAccessKey = "GK1a2b3c4d5e6f708192a3b4c5"
-	testSecretKey = "6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31" //nolint:gosec // Development key.
-)
-
-func testEndpoint() string {
-	if endpoint := os.Getenv("LAZYCLOUD_TEST_OBJECT_STORE_ENDPOINT"); endpoint != "" {
-		return endpoint
-	}
-	return "http://127.0.0.1:23900"
-}
 
 // testGeeseFS is the pinned GeeseFS binary deploy/local/fetch-geesefs.sh
 // installs.
@@ -64,6 +50,8 @@ func volumeStart(e *env, source *hostproto.Source, workspace, volume string, rea
 // and the other reads it, while neither sees a credential.
 func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	geesefs := testGeeseFS(t)
+	// Made first so that the mounts stop before the bucket goes.
+	cfg := storagetest.Config(t)
 	e := newEnv(t)
 	t.Cleanup(e.stopMounts)
 	e.geesefs = geesefs
@@ -77,8 +65,8 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	// The start waits for the workspace's grant.
 	time.Sleep(500 * time.Millisecond)
 	s.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
-		WorkspaceId: workspace, Endpoint: testEndpoint(), Region: "garage", Bucket: testBucket,
-		AccessKeyId: testAccessKey, SecretAccessKey: testSecretKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
+		WorkspaceId: workspace, Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket,
+		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	}}})
 	writer := start.GetStart().GetContainerId()
 	s.phase(t, writer, ready)
@@ -104,12 +92,8 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 		t.Fatal("a read-only mount accepted a write")
 	}
 
-	store := s3.New(s3.Options{
-		Region: "garage", BaseEndpoint: aws.String(testEndpoint()), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
-	})
 	key := "volumes/" + volume + "/notes/hello.txt"
-	object, err := store.GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(testBucket), Key: aws.String(key)})
+	object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(cfg.Bucket), Key: aws.String(key)})
 	if err != nil {
 		t.Fatalf("read %s from the bucket: %v", key, err)
 	}
@@ -140,52 +124,32 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 		}
 		delete(pending, report.GetContainerId())
 	}
-
-	t.Cleanup(func() {
-		ctx := context.Background()
-		pages := s3.NewListObjectsV2Paginator(store, &s3.ListObjectsV2Input{Bucket: aws.String(testBucket), Prefix: aws.String("volumes/" + volume + "/")})
-		for pages.HasMorePages() {
-			page, err := pages.NextPage(ctx)
-			if err != nil {
-				return
-			}
-			for _, o := range page.Contents {
-				_, _ = store.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(testBucket), Key: o.Key})
-			}
-		}
-	})
 }
 
 // TestCloudBucketMountsWithItsKeys mounts a user's bucket with keys from the
 // start and removes the mount and its keys when the container goes.
 func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 	geesefs := testGeeseFS(t)
+	cfg := storagetest.Config(t)
 	e := newEnv(t)
 	t.Cleanup(e.stopMounts)
 	e.geesefs = geesefs
 	e.startAgent()
 	s := e.session()
 	prefix := "test-buckets/" + uuid.NewString() + "/"
-	store := s3.New(s3.Options{
-		Region: "garage", BaseEndpoint: aws.String(testEndpoint()), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
-	})
-	if _, err := store.PutObject(t.Context(), &s3.PutObjectInput{
-		Bucket: aws.String(testBucket), Key: aws.String(prefix + "weights.txt"), Body: strings.NewReader("from the bucket"),
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(cfg.Bucket), Key: aws.String(prefix + "weights.txt"), Body: strings.NewReader("from the bucket"),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_, _ = store.DeleteObject(context.Background(), &s3.DeleteObjectInput{Bucket: aws.String(testBucket), Key: aws.String(prefix + "weights.txt")})
-	})
 
 	start := e.startCommand("app:handle", 1)
 	start.GetStart().Source = serveSource(t, "testdata/volumes")
 	start.GetStart().Volumes = []*hostproto.VolumeMount{{
 		MountPath: "/models", ReadOnly: true,
 		Source: &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
-			Bucket: testBucket, Prefix: prefix, Region: "garage", Endpoint: testEndpoint(), ForcePathStyle: true,
-			AccessKeyId: testAccessKey, SecretAccessKey: testSecretKey,
+			Bucket: cfg.Bucket, Prefix: prefix, Region: cfg.Region, Endpoint: cfg.Endpoint, ForcePathStyle: true,
+			AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey,
 		}},
 	}}
 	id := start.GetStart().GetContainerId()

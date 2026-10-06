@@ -110,5 +110,6 @@ function phaseKey(phase: ExecutionPhase): string {
 function phaseClass(phase: ExecutionPhase): string {
   if (phase.kind === "queued") return "bg-muted-foreground/45";
   if (phase.kind === "execution") return "bg-brand";
+  if (phase.kind === "conversion") return "bg-chart-3";
   return "bg-chart-5";
 }

@@ -1296,18 +1296,24 @@ func (e KillRequestSignal) Valid() bool {
 
 // Defines values for LifecycleStageKind.
 const (
-	LifecycleStageKindCreate    LifecycleStageKind = "create"
-	LifecycleStageKindDraining  LifecycleStageKind = "draining"
-	LifecycleStageKindImage     LifecycleStageKind = "image"
-	LifecycleStageKindPlacement LifecycleStageKind = "placement"
-	LifecycleStageKindRuntime   LifecycleStageKind = "runtime"
-	LifecycleStageKindSource    LifecycleStageKind = "source"
+	LifecycleStageKindConversion LifecycleStageKind = "conversion"
+	LifecycleStageKindCreate     LifecycleStageKind = "create"
+	LifecycleStageKindDisk       LifecycleStageKind = "disk"
+	LifecycleStageKindDraining   LifecycleStageKind = "draining"
+	LifecycleStageKindImage      LifecycleStageKind = "image"
+	LifecycleStageKindPlacement  LifecycleStageKind = "placement"
+	LifecycleStageKindRuntime    LifecycleStageKind = "runtime"
+	LifecycleStageKindSource     LifecycleStageKind = "source"
 )
 
 // Valid indicates whether the value is a known member of the LifecycleStageKind enum.
 func (e LifecycleStageKind) Valid() bool {
 	switch e {
+	case LifecycleStageKindConversion:
+		return true
 	case LifecycleStageKindCreate:
+		return true
+	case LifecycleStageKindDisk:
 		return true
 	case LifecycleStageKindDraining:
 		return true
@@ -3907,12 +3913,12 @@ type LifecycleStage struct {
 	// FinishedAt Absent while the stage runs.
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 
-	// Stage placement: waiting for a host. image: pulling the image, or finding it on the host. source: fetching the source. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
+	// Stage placement: waiting for a host. conversion: waiting for the image to be converted before the host could pull it. image: pulling the image, or finding it on the host. source: fetching the source. disk: leasing and restoring the container's disks. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
 	Stage     LifecycleStageKind `json:"stage"`
 	StartedAt time.Time          `json:"started_at"`
 }
 
-// LifecycleStageKind placement: waiting for a host. image: pulling the image, or finding it on the host. source: fetching the source. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
+// LifecycleStageKind placement: waiting for a host. conversion: waiting for the image to be converted before the host could pull it. image: pulling the image, or finding it on the host. source: fetching the source. disk: leasing and restoring the container's disks. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
 type LifecycleStageKind string
 
 // LiveAppState defines model for LiveAppState.
