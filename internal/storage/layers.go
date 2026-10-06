@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -39,7 +40,6 @@ const LayerPartBytes = 64 << 20
 type LayerUpload struct {
 	Index     string
 	DataParts []string
-	ExpiresAt time.Time
 }
 
 // CreateLayerUpload starts the multipart upload of pair id's data object of
@@ -64,7 +64,7 @@ func (s *Storage) CreateLayerUpload(ctx context.Context, id uuid.UUID, dataBytes
 }
 
 // LayerDataParts is how many parts a data object of size bytes takes.
-func LayerDataParts(size int64) int64 { return (size + LayerPartBytes - 1) / LayerPartBytes }
+func LayerDataParts(size int64) int64 { return ceilDiv(size, LayerPartBytes) }
 
 // PresignLayerUpload signs, for up to lifetime, the index PUT of indexBytes
 // and every data part of the multipart upload uploadID for dataBytes. A
@@ -84,17 +84,12 @@ func (s *Storage) PresignLayerUpload(ctx context.Context, id uuid.UUID, uploadID
 	if err != nil {
 		return LayerUpload{}, fmt.Errorf("presign layer index upload: %w", err)
 	}
-	out := LayerUpload{Index: index.URL, DataParts: make([]string, parts), ExpiresAt: time.Now().Add(lifetime)}
+	out := LayerUpload{Index: index.URL, DataParts: make([]string, parts)}
 	for n := range parts {
-		req, err := s.presign.PresignUploadPart(ctx, &s3.UploadPartInput{
-			Bucket: aws.String(s.layers), Key: aws.String(layerKey(id, LayerData)), UploadId: aws.String(uploadID),
-			PartNumber:    aws.Int32(int32(n + 1)), //nolint:gosec // At most maxParts.
-			ContentLength: aws.Int64(min(LayerPartBytes, dataBytes-n*LayerPartBytes)),
-		}, s3.WithPresignExpires(lifetime))
-		if err != nil {
-			return LayerUpload{}, fmt.Errorf("presign layer part %d: %w", n+1, err)
+		size := min(LayerPartBytes, dataBytes-n*LayerPartBytes)
+		if out.DataParts[n], err = s.presignPart(ctx, s.layers, layerKey(id, LayerData), uploadID, int32(n+1), &size, lifetime); err != nil { //nolint:gosec // At most maxParts.
+			return LayerUpload{}, fmt.Errorf("presign layer upload: %w", err)
 		}
-		out.DataParts[n] = req.URL
 	}
 	return out, nil
 }
@@ -144,8 +139,8 @@ func (s *Storage) LayerReplicated(ctx context.Context, id uuid.UUID, region stri
 		return false, fmt.Errorf("no layer replica in region %q", region)
 	}
 	for _, object := range []LayerObject{LayerIndex, LayerData} {
-		_, err := replica.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(replica.bucket), Key: aws.String(layerKey(id, object))})
-		if isNotFound(err) {
+		_, err := head(ctx, replica.client, replica.bucket, layerKey(id, object))
+		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
 		if err != nil {
@@ -182,7 +177,7 @@ func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerOb
 
 // LayerSize is the size of one object of layer pair id, or ErrNotFound.
 func (s *Storage) LayerSize(ctx context.Context, id uuid.UUID, object LayerObject) (int64, error) {
-	info, err := s.head(ctx, s.layers, layerKey(id, object))
+	info, err := head(ctx, s.client, s.layers, layerKey(id, object))
 	if err != nil {
 		return 0, err
 	}

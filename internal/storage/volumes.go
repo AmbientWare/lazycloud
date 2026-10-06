@@ -316,7 +316,7 @@ func (s *Storage) StatVolumeFile(ctx context.Context, workspace identity.Workspa
 }
 
 func (s *Storage) statKey(ctx context.Context, bucket, prefix, rel string) (apitypes.VolumeFile, error) {
-	o, err := s.head(ctx, bucket, prefix+rel)
+	o, err := head(ctx, s.client, bucket, prefix+rel)
 	if err == nil {
 		return fileOut(prefix, o), nil
 	}
@@ -336,7 +336,7 @@ func (s *Storage) statKey(ctx context.Context, bucket, prefix, rel string) (apit
 // objectsAt lists the object at rel and every object below it.
 func (s *Storage) objectsAt(ctx context.Context, bucket, prefix, rel string) ([]objectInfo, error) {
 	var found []objectInfo
-	if o, err := s.head(ctx, bucket, prefix+rel); err == nil {
+	if o, err := head(ctx, s.client, bucket, prefix+rel); err == nil {
 		found = append(found, o)
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
@@ -463,7 +463,7 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 		if req.UploadId == nil || req.PartNumber == nil {
 			return apitypes.PresignedUrl{}, invalid("upload_part needs upload_id and part_number")
 		}
-		url, err = s.presignPart(ctx, bucket, prefix+rel, *req.UploadId, int32(*req.PartNumber), lifetime) //nolint:gosec // The schema caps part numbers.
+		url, err = s.presignPart(ctx, bucket, prefix+rel, *req.UploadId, int32(*req.PartNumber), nil, lifetime) //nolint:gosec // The schema caps part numbers.
 		if err != nil {
 			return apitypes.PresignedUrl{}, err
 		}
