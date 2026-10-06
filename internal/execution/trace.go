@@ -30,15 +30,18 @@ func traceparent(ctx context.Context) *string {
 // containers of release, in the trace of the demand that asked for them:
 // the longest-waiting queued task, else the release's deploy when rollout
 // says the release has no live container and no demand, so its warm
-// minimum alone asks for them. It links to the pass. The containers store
-// the span's traceparent.
+// minimum alone asks for them. The containers store the span's
+// traceparent. Without tracing it reads no trace.
 func (e *Execution) scaleUp(ctx context.Context, q *Queries, release uuid.UUID, count int, rollout bool) (context.Context, trace.Span, error) {
-	parent, err := q.ScaleUpTrace(ctx, ScaleUpTraceParams{ReleaseID: release, Rollout: rollout, RolloutSeconds: rolloutTrace.Seconds()})
-	if err != nil {
-		return ctx, nil, fmt.Errorf("read the scale-up's trace: %w", err)
+	var parent string
+	if telemetry.Tracing(ctx) {
+		var err error
+		parent, err = q.ScaleUpTrace(ctx, ScaleUpTraceParams{ReleaseID: release, Rollout: rollout, RolloutSeconds: rolloutTrace.Seconds()})
+		if err != nil {
+			return ctx, nil, fmt.Errorf("read the scale-up's trace: %w", err)
+		}
 	}
-	ctx, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), parent, "execution.scale_up",
-		telemetry.LinkTo(telemetry.TraceParentOf(ctx)),
+	ctx, span := telemetry.StartFor(ctx, parent, "execution.scale_up",
 		trace.WithAttributes(attribute.String(telemetry.AttrRelease, release.String()), attribute.Int("lazycloud.containers", count)))
 	return ctx, span, nil
 }

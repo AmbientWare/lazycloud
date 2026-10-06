@@ -27,7 +27,8 @@ import (
 
 // Config selects what a binary exports.
 type Config struct {
-	// Service names the binary in traces: server, scheduler or agent.
+	// Service names the binary in traces: server, scheduler, agent or
+	// snapshotter.
 	Service string
 	Version string
 	// OTLPEndpoint is an OTLP/gRPC collector address, host:port. Empty
@@ -83,11 +84,6 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("describe telemetry resource: %w", err)
 	}
-	for _, ratio := range []float64{cfg.SampleRatio, cfg.EdgeSampleRatio} {
-		if ratio < 0 || ratio > 1 {
-			return nil, fmt.Errorf("trace sample ratio %v is outside 0 to 1", ratio)
-		}
-	}
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(redacting{exporter}),
 		sdktrace.WithResource(res),
@@ -102,7 +98,7 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 
 // Tracer is the binary's tracer for its own spans.
 func (t *Telemetry) Tracer() trace.Tracer {
-	return t.provider.Tracer("github.com/AmbientWare/lazycloud")
+	return t.provider.Tracer(scope)
 }
 
 // Shutdown flushes buffered spans.

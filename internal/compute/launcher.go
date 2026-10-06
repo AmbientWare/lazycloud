@@ -102,14 +102,14 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 }
 
 // hostSpan starts a span of work on host in the trace of the container
-// waiting longest for it, linked to ctx's span.
+// waiting longest for it, or in a trace of its own when none waits or the
+// read fails. Without tracing it reads no trace.
 func (c *Compute) hostSpan(ctx context.Context, host uuid.UUID, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
-	parent, err := c.queries.HostWaitTrace(ctx, &host)
-	if err != nil {
-		parent = ""
+	var parent string
+	if telemetry.Tracing(ctx) {
+		parent, _ = c.queries.HostWaitTrace(ctx, &host)
 	}
-	return telemetry.StartIn(ctx, telemetry.TracerOf(ctx), parent, name, telemetry.LinkTo(telemetry.TraceParentOf(ctx)),
-		trace.WithAttributes(append(attrs, telemetry.Host(host.String()))...))
+	return telemetry.StartFor(ctx, parent, name, trace.WithAttributes(append(attrs, telemetry.Host(host.String()))...))
 }
 
 func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {

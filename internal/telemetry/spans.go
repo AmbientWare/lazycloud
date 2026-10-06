@@ -2,11 +2,9 @@ package telemetry
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"net/url"
 	"regexp"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -47,6 +45,18 @@ func StartIn(ctx context.Context, tracer trace.Tracer, traceparent, name string,
 	return tracer.Start(ctx, name, opts...) //nolint:spancheck // The caller ends it.
 }
 
+// StartFor is StartIn with the tracer of ctx's span, for a step of a pass
+// or request on work that carries its own trace.
+func StartFor(ctx context.Context, traceparent, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	return StartIn(ctx, TracerOf(ctx), traceparent, name, opts...) //nolint:spancheck // The caller ends it.
+}
+
+// Tracing reports whether ctx's span comes from a tracer that exports,
+// sampled or not, so a caller can skip reads that only feed spans.
+func Tracing(ctx context.Context) bool {
+	return trace.SpanContextFromContext(ctx).IsValid()
+}
+
 // Record records a finished step from began to now as a child of ctx's
 // span, for steps timed before their span could start.
 func Record(ctx context.Context, name string, began time.Time, attrs ...attribute.KeyValue) {
@@ -60,15 +70,6 @@ func Step(ctx context.Context, name string, fn func(context.Context) error, attr
 	err := fn(ctx)
 	Fail(span, err)
 	return err
-}
-
-// LinkTo links a span to the one traceparent names; empty or malformed
-// adds nothing.
-func LinkTo(traceparent string) trace.SpanStartOption {
-	if sc := SpanContextOf(traceparent); sc.IsValid() {
-		return trace.WithLinks(trace.Link{SpanContext: sc})
-	}
-	return trace.WithLinks()
 }
 
 // Link is a link to the span traceparent names; an empty or malformed one
@@ -113,28 +114,12 @@ func RedactURL(err error) error {
 	return &url.Error{Op: failed.Op, URL: stripped, Err: failed.Err}
 }
 
-// SpanContextOf is the remote span a W3C traceparent of version 00 names;
-// invalid when it is empty or malformed.
+// SpanContextOf is the remote span a W3C traceparent names; invalid when
+// it is empty or malformed.
+//
+//nolint:contextcheck // Parsing a string needs no caller context.
 func SpanContextOf(traceparent string) trace.SpanContext {
-	parts := strings.Split(traceparent, "-")
-	if len(parts) != 4 || parts[0] != "00" || len(parts[3]) != 2 {
-		return trace.SpanContext{}
-	}
-	traceID, err := trace.TraceIDFromHex(parts[1])
-	if err != nil {
-		return trace.SpanContext{}
-	}
-	spanID, err := trace.SpanIDFromHex(parts[2])
-	if err != nil {
-		return trace.SpanContext{}
-	}
-	flags, err := hex.DecodeString(parts[3])
-	if err != nil {
-		return trace.SpanContext{}
-	}
-	return trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID: traceID, SpanID: spanID, TraceFlags: trace.TraceFlags(flags[0]) & trace.FlagsSampled, Remote: true,
-	})
+	return trace.SpanContextFromContext(WithTraceParent(context.Background(), traceparent))
 }
 
 // Attribute keys of span attributes beside the correlation keys.

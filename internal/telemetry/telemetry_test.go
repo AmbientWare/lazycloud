@@ -181,7 +181,7 @@ func TestStoredTraceparentsJoinTheirTrace(t *testing.T) {
 	passCtx, pass := tel.Tracer().Start(t.Context(), telemetry.PassPrefix+"place")
 	_, idle := telemetry.Start(passCtx, "scheduling.idle")
 	idle.End()
-	_, placed := telemetry.StartIn(passCtx, telemetry.TracerOf(passCtx), stored, "scheduling.placement")
+	_, placed := telemetry.StartFor(passCtx, stored, "scheduling.placement")
 	placed.End()
 	pass.End()
 	server := httptest.NewServer(tel.EdgeHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
