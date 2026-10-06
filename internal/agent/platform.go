@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/moby/moby/client"
 
@@ -48,6 +49,10 @@ func (p *platformImages) update(images []*hostproto.PlatformImage) {
 	p.changed = make(chan struct{})
 }
 
+// platformListTimeout bounds the container listing a session open waits
+// for, so a slow Docker does not hold the session back.
+const platformListTimeout = 5 * time.Second
+
 // forgetFailures drops the failures recorded for images, so that waiters
 // wait for the next answer.
 func (p *platformImages) forgetFailures() {
@@ -64,6 +69,8 @@ func (p *platformImages) forgetFailures() {
 // network holder containers run, which may be copies of platform images
 // an earlier agent named: their layers need grants while they run.
 func (a *Agent) runningPlatformImages(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, platformListTimeout)
+	defer cancel()
 	list, err := a.docker.ContainerList(ctx, client.ContainerListOptions{
 		Filters: client.Filters{}.Add("label", labelHost+"="+a.identity.HostID),
 	})

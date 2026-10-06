@@ -3,6 +3,8 @@ package images
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/sync/errgroup"
@@ -364,7 +368,11 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 		return fmt.Errorf("create conversion directory: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	files, err := i.convertPlatformLayers(ctx, target, auth, dir, offers)
+	blobBytes := make(map[string]int64, len(pushed.layers))
+	for _, l := range pushed.layers {
+		blobBytes[l.blob] = l.size
+	}
+	files, err := i.convertPlatformLayers(ctx, target, auth, dir, offers, blobBytes)
 	if err != nil {
 		return err
 	}
@@ -434,7 +442,7 @@ type platformLayer struct {
 
 // convertPlatformLayers converts the layers offers name, read from image's
 // repository, a few at a time.
-func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, auth *Auth, dir string, offers []offer) (map[string]*platformLayer, error) {
+func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, auth *Auth, dir string, offers []offer, blobBytes map[string]int64) (map[string]*platformLayer, error) {
 	out := make([]*platformLayer, len(offers))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(platformLayerParallelism)
@@ -442,7 +450,7 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 		g.Go(func() error {
 			blob := image.Context().Digest(o.blob)
 			err := retryPlatform(ctx, func() error {
-				l, err := i.convertPlatformLayer(ctx, blob, auth, dir, o.diffID)
+				l, err := i.convertPlatformLayer(ctx, blob, auth, dir, o.diffID, blobBytes[o.blob])
 				out[n] = l
 				return err
 			})
@@ -462,22 +470,30 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 	return files, nil
 }
 
-func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string) (*platformLayer, error) {
-	layer, err := remote.Layer(blob, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport))
+// convertPlatformLayer downloads blob, of size bytes, and converts it once
+// its digest checks. A download cut short is the registry's failure; only
+// a blob that holds its digest's bytes can fail as content.
+func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string, size int64) (*platformLayer, error) {
+	path, mediaType, err := i.fetchPlatformBlob(ctx, blob, auth, dir, size)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read layer: %w", ErrRegistryUnavailable, err)
+		return nil, err
 	}
-	tarball, err := layer.Uncompressed()
+	defer func() { _ = os.Remove(path) }()
+	layer, err := tarball.LayerFromFile(path, tarball.WithMediaType(mediaType))
 	if err != nil {
-		return nil, fmt.Errorf("%w: read layer: %w", ErrRegistryUnavailable, err)
+		return nil, fmt.Errorf("open layer %s: %w", blob.DigestStr(), err)
 	}
-	defer func() { _ = tarball.Close() }()
+	uncompressed, err := layer.Uncompressed()
+	if err != nil {
+		return nil, fmt.Errorf("open layer %s: %w", blob.DigestStr(), err)
+	}
+	defer func() { _ = uncompressed.Close() }()
 	data, err := os.CreateTemp(dir, "layer-*.data")
 	if err != nil {
 		return nil, fmt.Errorf("create layer data file: %w", err)
 	}
 	defer func() { _ = data.Close() }()
-	ix, err := imagefs.Convert(ctx, tarball, data)
+	ix, err := imagefs.Convert(ctx, uncompressed, data)
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
 		return nil, &ConversionError{Reason: err.Error()}
 	}
@@ -492,6 +508,45 @@ func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, aut
 		return nil, fmt.Errorf("encode index: %w", err)
 	}
 	return &platformLayer{data: data.Name(), dataBytes: ix.DataSize, index: index}, nil
+}
+
+// fetchPlatformBlob downloads blob, of size bytes, into a file under dir
+// and returns its path and media type once the bytes hold the digest.
+func (i *Images) fetchPlatformBlob(ctx context.Context, blob name.Digest, auth *Auth, dir string, size int64) (string, types.MediaType, error) {
+	layer, err := remote.Layer(blob, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport))
+	if err != nil {
+		return "", "", fmt.Errorf("%w: read layer %s: %w", ErrRegistryUnavailable, blob.DigestStr(), err)
+	}
+	mediaType, err := layer.MediaType()
+	if err != nil {
+		return "", "", fmt.Errorf("%w: read layer %s: %w", ErrRegistryUnavailable, blob.DigestStr(), err)
+	}
+	body, err := layer.Compressed()
+	if err != nil {
+		return "", "", fmt.Errorf("%w: read layer %s: %w", ErrRegistryUnavailable, blob.DigestStr(), err)
+	}
+	defer func() { _ = body.Close() }()
+	file, err := os.CreateTemp(dir, "blob-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create layer blob file: %w", err)
+	}
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(body, size+1))
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	got := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	switch {
+	case err != nil:
+		err = fmt.Errorf("%w: download layer %s: %w", ErrRegistryUnavailable, blob.DigestStr(), err)
+	case n != size || got != blob.DigestStr():
+		err = fmt.Errorf("%w: the registry sent %d bytes holding %s for layer %s of %d bytes", ErrRegistryUnavailable, n, got, blob.DigestStr(), size)
+	}
+	if err != nil {
+		_ = os.Remove(file.Name())
+		return "", "", err
+	}
+	return file.Name(), mediaType, nil
 }
 
 // uploadPlatformLayers PUTs each layer's data parts, then its index, to

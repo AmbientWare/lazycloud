@@ -43,8 +43,10 @@ On `perf-lazy-platform-images` from `perf-plan` (071eb734); draft PR #495.
   it): `Builder`, the BuildKit builder, and `Mount`, which runs volume
   mounts, the network holder of checkpointable containers and the network
   policy helper. The agent's `-mount-image` flag is gone. The server
-  refuses a Hello naming any other image (`InvalidArgument`) and converts
-  only these. `Hello.platform_images = 110`
+  converts only these; any other image a Hello names (an agent of another
+  release) gets the failure "not a platform image of this release" and the
+  session stays open, so the agent's update still reaches it. A Hello
+  names at most 16. `Hello.platform_images = 110`
   names both; `ServerMessage.platform_images = 110` (`PlatformImages` of
   `PlatformImage`: reference as named, image, auth, platform, layers,
   failure) answers. `imageCache.ensure` and its `docker pull` are gone;
@@ -113,8 +115,18 @@ registry per test:
   answer carries the builder's converted copy with its grant and the mount
   image's recorded failure; once another replica records the mount
   image's copy the session sends it; grants are renewed before they
-  expire; sent copies count as uses. `TestHelloNamesOnlyPlatformImages`:
-  a Hello naming another image is refused and nothing converts.
+  expire; sent copies count as uses.
+- `TestAnAgentOfAnotherReleaseGetsItsUpdate` (hostsession): an agent naming
+  an older builder digest gets that image's failure and its update; the
+  server converts nothing for it.
+- `TestCutDownloadsAreTransientAndTruncatedLayersAreContent` (images): the
+  server downloads each blob to a file and checks its size and digest
+  before converting, so a download a proxy cuts halfway is a transient
+  registry failure, while a blob holding its digest that is a truncated
+  tar fails the image; no download stays behind.
+- `TestListingRunningPlatformImagesIsBounded` (agent): the container
+  listing for the Hello gives up after 5 s; the Hello then names no
+  running copies and the agent logs it.
 - `TestConvertRefusesLayersItCannotIndex` (imagefs): a stream cut inside a
   header and a malformed header are `ErrInvalidLayer`, so conversion and
   publish fail the image instead of retrying. Before, they were plain read
@@ -167,5 +179,6 @@ only to the server's conversion.
   `deploy/terraform/platform-deployment` before this ships; Ship applies
   no Terraform. Pushing to ECR is untried.
 
-- A layer stream a network failure truncates is now a content failure
-  too: imagefs cannot tell it from a truncated layer.
+- The agent's build path still converts layers streamed from the
+  registry, so there a cut download that reads as a truncated tar fails
+  the build as content.

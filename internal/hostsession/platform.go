@@ -8,6 +8,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // maxPlatformConversions bounds the platform image conversions one server
@@ -16,9 +17,18 @@ import (
 // for.
 const maxPlatformConversions = 2
 
-// maxRunningPlatformImages bounds the copies of platform images a Hello
-// says the host's containers run: a few releases' worth.
-const maxRunningPlatformImages = 16
+// maxNamedPlatformImages bounds the platform images a Hello names, and
+// maxRunningPlatformImages the copies it says the host's containers run:
+// a few releases' worth.
+const (
+	maxNamedPlatformImages   = 16
+	maxRunningPlatformImages = 16
+)
+
+// unknownPlatformImage is the failure of a platform image the agent names
+// that this server's release does not, as an agent of another release
+// does until it updates.
+const unknownPlatformImage = "not a platform image of this release"
 
 // platformConversions runs the platform image conversions sessions ask
 // for, one per reference and architecture, under the server's lifetime.
@@ -101,7 +111,18 @@ func (sess *session) syncPlatform(ctx context.Context, cache layerCache, waits m
 	if len(p.named)+len(p.running) == 0 || (!p.waiting && !p.due(now)) {
 		return nil
 	}
-	pulls, err := sess.server.images.PlatformPulls(ctx, sess.host, p.named)
+	var out []*hostproto.PlatformImage
+	var known []string
+	for _, reference := range p.named {
+		switch {
+		case platformimages.Known(reference):
+			known = append(known, reference)
+		case p.failed[reference].reason == "":
+			p.failed[reference] = platformFailure{reason: unknownPlatformImage}
+			out = append(out, &hostproto.PlatformImage{Reference: reference, Failure: unknownPlatformImage})
+		}
+	}
+	pulls, err := sess.server.images.PlatformPulls(ctx, sess.host, known)
 	if err != nil {
 		return sess.server.grpcError(ctx, err)
 	}
@@ -109,7 +130,6 @@ func (sess *session) syncPlatform(ctx context.Context, cache layerCache, waits m
 	if err != nil {
 		return sess.server.grpcError(ctx, err)
 	}
-	var out []*hostproto.PlatformImage
 	var used []string
 	p.waiting = false
 	current := map[string]bool{}

@@ -6,9 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
@@ -117,17 +115,45 @@ func TestSessionsSendPlatformImagesOnceConverted(t *testing.T) {
 	}
 }
 
-// A Hello naming an image that is not a platform image is refused, and
-// the server converts nothing.
-func TestHelloNamesOnlyPlatformImages(t *testing.T) {
+// An agent of another release names a builder this server does not know:
+// its session stays open, the image gets a failure and nothing converts,
+// and the agent's update reaches it.
+func TestAnAgentOfAnotherReleaseGetsItsUpdate(t *testing.T) {
 	h := start(t)
-	_, ctx := h.enroll()
-	_, err := openNaming(t, ctx, h.client, platformimages.Builder, "docker.io/library/python@sha256:"+strings.Repeat("a", 64)).Recv()
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("a Hello naming another image: %v", err)
+	if err := h.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
+		Version: "v2", SHA256: map[string]string{"amd64": strings.Repeat("a", 64)}, RolloutPercent: 100,
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if n := h.count("select count(*) from platform_images"); n != 0 {
-		t.Fatalf("a refused Hello left %d platform images", n)
+	_, ctx := h.enroll()
+	old := "docker.io/moby/buildkit:v0.30.0-rootless@sha256:" + strings.Repeat("a", 64)
+	in := commands(t, openHello(t, ctx, h.client, &hostproto.Hello{
+		BootId: "boot-1", AgentVersion: "v1", Updatable: true, PlatformImages: []string{old, platformimages.Mount},
+	}))
+	var failure string
+	updated := false
+	deadline := time.After(5 * time.Second)
+	for failure == "" || !updated {
+		select {
+		case m, ok := <-in:
+			if !ok {
+				t.Fatal("the session ended")
+			}
+			for _, image := range m.GetPlatformImages().GetImages() {
+				if image.GetReference() == old {
+					failure = image.GetFailure()
+				}
+			}
+			updated = updated || m.GetUpdate().GetVersion() == "v2"
+		case <-deadline:
+			t.Fatalf("failure %q, update %v", failure, updated)
+		}
+	}
+	if failure != "not a platform image of this release" {
+		t.Fatalf("the unknown builder failed with %q", failure)
+	}
+	if n := h.count("select count(*) from platform_images where reference = $1", old); n != 0 {
+		t.Fatal("the server converts an image it does not know")
 	}
 }
 

@@ -5,9 +5,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -300,5 +306,89 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 	}
 	if n := f.count(t, "select count(*) from platform_images where reference = $1 and lease_token is null and failure_transient", reference); n != 1 {
 		t.Fatal("the lapsed lease was not taken over")
+	}
+}
+
+// cuttingRegistry proxies registry and cuts every layer download from the
+// platform repositories halfway, as a connection reset does.
+func cuttingRegistry(t *testing.T, registry string) string {
+	t.Helper()
+	upstream := &url.URL{Scheme: "http", Host: registry}
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/lazycloud/platform/") || !strings.Contains(r.URL.Path, "/blobs/") {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		resp, err := http.Get(upstream.String() + r.URL.Path) //nolint:noctx // The test's proxy.
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		if len(body) < 1024 {
+			w.WriteHeader(resp.StatusCode)
+			_, _ = w.Write(body)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body[:len(body)/2])
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(server.Close)
+	return strings.TrimPrefix(server.URL, "http://")
+}
+
+// A layer download cut short is the registry's failure, retried later; a
+// layer whose blob holds its digest but is a truncated tar is the image's.
+// Neither leaves its download behind.
+func TestCutDownloadsAreTransientAndTruncatedLayersAreContent(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	leftovers := func() int {
+		dirs, err := filepath.Glob(filepath.Join(os.TempDir(), "lazycloud-platform-*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(dirs)
+	}
+	before := leftovers()
+
+	registry := cuttingRegistry(t, f.registry)
+	cut := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	img, err := random.Image(64<<10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := registry + "/tools/cut:1@" + pushImage(t, f.registry+"/tools/cut:1", img)
+	err = cut.ConvertPlatformImage(ctx, reference, "amd64")
+	var unconvertible *images.ConversionError
+	if err == nil || errors.As(err, &unconvertible) || !errors.Is(err, images.ErrRegistryUnavailable) {
+		t.Fatalf("a cut download is the registry's failure: %v", err)
+	}
+	if n := f.count(t, "select count(*) from platform_images where reference = $1 and failure_transient", reference); n != 1 {
+		t.Fatal("the cut download is not recorded as transient")
+	}
+
+	var layer bytes.Buffer
+	tw := tar.NewWriter(&layer)
+	if err := tw.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+	truncated, err := mutate.AppendLayers(empty.Image, static.NewLayer(layer.Bytes(), types.DockerUncompressedLayer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := f.registry + "/tools/truncated:1@" + pushImage(t, f.registry+"/tools/truncated:1", truncated)
+	if err := f.images.ConvertPlatformImage(ctx, broken, "amd64"); !errors.As(err, &unconvertible) {
+		t.Fatalf("a truncated layer fails the image: %v", err)
+	}
+	if n := leftovers(); n != before {
+		t.Fatalf("%d conversion directories stayed", n-before)
 	}
 }

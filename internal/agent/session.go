@@ -71,9 +71,14 @@ func (a *Agent) sessions(ctx context.Context) error {
 func (a *Agent) runSession(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// A Hello that cannot list them names none: the session matters more
+	// than renewing grants a running container's copy has for an hour.
 	running, err := a.runningPlatformImages(ctx)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return err
+		}
+		a.log.Warn("listing the platform images containers run failed; the Hello names none", "error", err)
 	}
 	stream, err := a.control.Session(ctx)
 	if err != nil {

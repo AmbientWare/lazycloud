@@ -23,7 +23,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
-	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
@@ -146,14 +145,12 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if hello == nil {
 		return status.Error(codes.InvalidArgument, "the first message must be Hello")
 	}
-	// The server converts only the platform images it knows.
-	for _, reference := range hello.GetPlatformImages() {
-		if !platformimages.Known(reference) {
-			return status.Errorf(codes.InvalidArgument, "%s is not a platform image", reference)
-		}
+	// The server converts only the platform images it knows; others get a
+	// failure, so an agent of another release still gets its update. These
+	// bound the work, not what a host may read.
+	if len(hello.GetPlatformImages()) > maxNamedPlatformImages {
+		return status.Errorf(codes.InvalidArgument, "a host names at most %d platform images", maxNamedPlatformImages)
 	}
-	// Grants go only to copies the server recorded, so this bounds the
-	// work, not what a host may read.
 	if len(hello.GetRunningPlatformImages()) > maxRunningPlatformImages {
 		return status.Errorf(codes.InvalidArgument, "a host names at most %d running platform images", maxRunningPlatformImages)
 	}
