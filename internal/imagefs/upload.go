@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // ErrStoreRefused marks a request the store refused for itself, such as a
@@ -33,9 +35,14 @@ func ConvertLayer(ctx context.Context, layer io.Reader, data io.Writer, diffID D
 	return ix, index, nil
 }
 
-// UploadPair PUTs dataBytes of data in parts of partBytes to partURLs, then
-// index to indexURL, and returns the parts' ETags. The index goes last: its
-// presence marks a complete pair. Each PUT runs under retry.
+// UploadParts bounds the data parts one UploadPair PUTs at once. Parts
+// stream from data, so each holds no more than a request's buffers.
+const UploadParts = 4
+
+// UploadPair PUTs dataBytes of data in parts of partBytes to partURLs, up
+// to UploadParts at once, then index to indexURL, and returns the parts'
+// ETags. The index goes last: its presence marks a complete pair. Each PUT
+// runs under retry; the first part that fails ends the others.
 func UploadPair(ctx context.Context, client *http.Client, data io.ReaderAt, dataBytes int64, index []byte,
 	partURLs []string, partBytes int64, indexURL string, retry func(context.Context, func() error) error,
 ) ([]string, error) {
@@ -43,17 +50,25 @@ func UploadPair(ctx context.Context, client *http.Client, data io.ReaderAt, data
 		return nil, fmt.Errorf("%d parts of %d bytes cannot hold %d bytes", len(partURLs), partBytes, dataBytes)
 	}
 	etags := make([]string, len(partURLs))
+	g, partsCtx := errgroup.WithContext(ctx)
+	g.SetLimit(UploadParts)
 	for n, part := range partURLs {
 		offset := int64(n) * partBytes
 		length := min(partBytes, dataBytes-offset)
-		err := retry(ctx, func() error {
-			var err error
-			etags[n], err = putObject(ctx, client, part, io.NewSectionReader(data, offset, length), length)
-			return err
+		g.Go(func() error {
+			err := retry(partsCtx, func() error {
+				var err error
+				etags[n], err = putObject(partsCtx, client, part, io.NewSectionReader(data, offset, length), length)
+				return err
+			})
+			if err != nil {
+				return fmt.Errorf("upload data part %d: %w", n+1, err)
+			}
+			return nil
 		})
-		if err != nil {
-			return nil, fmt.Errorf("upload data part %d: %w", n+1, err)
-		}
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err //nolint:wrapcheck // Each part's error names it.
 	}
 	err := retry(ctx, func() error {
 		_, err := putObject(ctx, client, indexURL, bytes.NewReader(index), int64(len(index)))

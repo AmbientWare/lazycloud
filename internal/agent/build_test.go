@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -120,9 +121,30 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	if outcome.GetContainerId() != container || !strings.HasPrefix(digest, "sha256:") {
 		t.Fatalf("want a pushed digest, got %v\noutput:\n%s", outcome, e.server.buildOutput())
 	}
+	// The pushed image is reported while the builder still exports the
+	// build cache, which a second BuildKit daemon starts for.
+	builders, err := e.docker.ContainerList(t.Context(), client.ContainerListOptions{
+		Filters: client.Filters{}.Add("label", labelBuildContainer+"="+container).Add("status", "running"),
+	})
+	if err != nil || len(builders.Items) != 1 {
+		t.Fatalf("the builder was not running when the image was reported: %v %v", builders.Items, err)
+	}
 	exit := session.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
-	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_STOPPED {
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_STOPPED || exit.GetExitCode() != 0 {
 		t.Fatalf("a finished build exits as stopped: %v", exit)
+	}
+	probe, err := http.NewRequestWithContext(t.Context(), http.MethodHead, "http://"+registry+"/v2/lazycloud/cache/manifests/test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
+	cache, err := http.DefaultClient.Do(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = cache.Body.Close()
+	if cache.StatusCode != http.StatusOK {
+		t.Fatalf("the build cache was not exported: %s", cache.Status)
 	}
 	if out := e.server.buildOutput(); !strings.Contains(out, "echo built > /proof") || !strings.Contains(out, "pushed "+registry) {
 		t.Fatalf("build output streams to the server, got:\n%s", out)
