@@ -54,17 +54,10 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 		return fmt.Errorf("serve snapshotter: %w", err)
 	case <-ctx.Done():
 	}
-	stopped := make(chan struct{})
-	go func() {
-		server.GracefulStop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-	case <-time.After(stopGrace):
-		server.Stop()
-		<-stopped
-	}
+	// Stop ends a graceful stop still waiting at the grace.
+	force := time.AfterFunc(stopGrace, server.Stop)
+	server.GracefulStop()
+	force.Stop()
 	<-served
 	return nil
 }

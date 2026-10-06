@@ -2,6 +2,8 @@ package snapshotter
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,13 +75,7 @@ func (t *startTraces) begin(name string, parent oteltrace.SpanContext, layers []
 		t.removeLocked(old)
 	}
 	if len(t.byName) >= maxTraces {
-		var oldest *startTrace
-		for _, s := range t.byName {
-			if oldest == nil || s.granted.Before(oldest.granted) {
-				oldest = s
-			}
-		}
-		t.removeLocked(oldest)
+		t.removeLocked(slices.MinFunc(slices.Collect(maps.Values(t.byName)), func(a, b *startTrace) int { return a.granted.Compare(b.granted) }))
 	}
 	s := &startTrace{name: name, parent: parent, granted: time.Now()}
 	t.byName[name] = s

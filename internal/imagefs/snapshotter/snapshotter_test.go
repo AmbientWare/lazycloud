@@ -389,27 +389,17 @@ func TestLazyLayerServesItsFiles(t *testing.T) {
 	if fifo.Mode&unix.S_IFMT != unix.S_IFIFO {
 		t.Fatalf("run/queue is mode %o", fifo.Mode)
 	}
+	// overlayfs reads an opaque directory's marker, a trusted xattr only
+	// root reads, from a lower layer.
+	marker := make([]byte, 4)
+	if n, err := unix.Lgetxattr(filepath.Join(dir, "opaque"), opaqueXattr, marker); err != nil || string(marker[:n]) != "y" {
+		t.Fatalf("the opaque directory's %s: %v", opaqueXattr, err)
+	}
+	if _, err := unix.Lgetxattr(filepath.Join(dir, "etc"), opaqueXattr, marker); !errors.Is(err, unix.ENODATA) {
+		t.Fatalf("a plain directory's %s: %v", opaqueXattr, err)
+	}
 	if fetched := transport.requests.Load() - pulled; fetched != int64(len(l.index.Frames)) {
 		t.Fatalf("reading every file made %d store requests for %d frames", fetched, len(l.index.Frames))
-	}
-}
-
-// The overlayfs opaque marker is the trusted xattr the kernel reads from a
-// lower layer; only root reads trusted xattrs, so the node answers here.
-func TestOpaqueDirectoriesCarryTheOverlayMarker(t *testing.T) {
-	n := &node{entry: &imagefs.Entry{Path: "opaque", Type: imagefs.TypeDirectory, Opaque: true, Xattrs: map[string][]byte{"user.a": []byte("b")}}}
-	value := make([]byte, 4)
-	if size, errno := n.Getxattr(t.Context(), opaqueXattr, value); errno != 0 || string(value[:size]) != "y" {
-		t.Fatalf("%s is %q, %v", opaqueXattr, value[:size], errno)
-	}
-	list := make([]byte, 64)
-	size, errno := n.Listxattr(t.Context(), list)
-	if errno != 0 || string(list[:size]) != opaqueXattr+"\x00user.a\x00" {
-		t.Fatalf("xattrs listed %q, %v", list[:size], errno)
-	}
-	plain := &node{entry: &imagefs.Entry{Path: "plain", Type: imagefs.TypeDirectory}}
-	if _, errno := plain.Getxattr(t.Context(), opaqueXattr, value); errno != syscall.ENODATA {
-		t.Fatalf("a plain directory answers %v", errno)
 	}
 }
 
@@ -639,39 +629,24 @@ func (l storedLayer) grantTo(c *frameCache) *layer {
 // Cancelling a fill never fails a read waiting on the frame it fetches.
 func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 	ts := newTestStore(t)
-	started, release := make(chan struct{}), make(chan struct{})
-	c := newTestCache(t, gatedTransport{started: started, release: release}, 64<<20)
+	held := &holdingTransport{release: make(chan struct{})}
+	c := newTestCache(t, held, 64<<20)
 	c.fillBytes = 64 << 20
 	l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(1 << 20)}})).grantTo(c)
 	fillCtx, stopFill := context.WithCancel(t.Context())
 	filled := make(chan struct{})
 	go func() { c.fillLayer(fillCtx, l); close(filled) }()
-	<-started
+	waitFor(t, func() bool { return held.waiting.Load() > 0 })
 	read := make(chan error, 1)
 	go func() { read <- c.read(l, 0, make([]byte, 16), 0) }()
 	time.Sleep(100 * time.Millisecond)
 	stopFill()
 	time.Sleep(100 * time.Millisecond)
-	close(release)
+	close(held.release)
 	if err := <-read; err != nil {
 		t.Fatalf("a read sharing a cancelled fill's fetch: %v", err)
 	}
 	<-filled
-}
-
-// gatedTransport holds the first request until release closes.
-type gatedTransport struct {
-	started, release chan struct{}
-}
-
-func (g gatedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	select {
-	case <-g.started:
-	default:
-		close(g.started)
-	}
-	<-g.release
-	return http.DefaultTransport.RoundTrip(r)
 }
 
 // An eviction that cannot delete a frame's file keeps the frame counted, so
