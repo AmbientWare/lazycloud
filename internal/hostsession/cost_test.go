@@ -1,47 +1,13 @@
 package hostsession_test
 
 import (
-	"context"
-	"regexp"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
-
-var queryName = regexp.MustCompile(`-- name: (\w+)`)
-
-// queryCounter counts the named queries a pool runs.
-type queryCounter struct {
-	mu sync.Mutex
-	n  map[string]int
-}
-
-func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if m := queryName.FindStringSubmatch(data.SQL); m != nil {
-		c.mu.Lock()
-		c.n[m[1]]++
-		c.mu.Unlock()
-	}
-	return ctx
-}
-
-func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-// take returns the counts since the last take and starts again.
-func (c *queryCounter) take() map[string]int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := c.n
-	c.n = map[string]int{}
-	return out
-}
 
 // replicate adds n starting containers of container's release on its host.
 func (h *harness) replicate(container uuid.UUID, n int) {
@@ -57,15 +23,7 @@ from containers, generate_series(1, $2) where id = $1`, container, n)
 // replicas start, and a start that waits for its image's conversion reads
 // no secrets.
 func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
-	counter := &queryCounter{n: map[string]int{}}
-	cfg := dbtest.New(t).Config().Copy()
-	cfg.ConnConfig.Tracer = counter
-	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(traced.Close)
-	h := serve(t, traced)
+	h, _, counter := countedHarness(t)
 	host, ctx := h.enroll()
 	const replicas = 4
 	ref := reference("a")
