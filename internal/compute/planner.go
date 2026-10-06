@@ -12,10 +12,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -97,7 +100,21 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 		return PlanResult{Skipped: true}, nil
 	}
 	pass.log(ctx, logger)
+	pass.trace(ctx)
 	return pass.result, nil
+}
+
+// trace records each decision in its container's trace, linked to the pass.
+func (ps *fleetPass) trace(ctx context.Context) {
+	pass := telemetry.TraceParentOf(ctx)
+	for _, d := range ps.decisions {
+		_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), d.traceparent, "compute.capacity", telemetry.LinkTo(pass),
+			trace.WithAttributes(telemetry.Container(d.container.String()), attribute.String("lazycloud.wait", d.wait.wait)))
+		if d.wait.host != uuid.Nil {
+			span.SetAttributes(telemetry.Host(d.wait.host.String()))
+		}
+		span.End()
+	}
 }
 
 // policy is the platform fleet policy with the configured idle timeout.
@@ -125,10 +142,23 @@ type fleetPass struct {
 	rates    []billing.ComputeRate
 	reported map[string]int64
 	waits    map[uuid.UUID]waitRow
-	w        fleetWrites
-	result   PlanResult
+	// traces holds the pending containers' traces and earlier waits.
+	traces map[uuid.UUID]pendingTrace
+	w      fleetWrites
+	result PlanResult
 	// notes are what the pass logs once it commits.
 	notes []note
+	// decisions are the hosts the pass newly gave waiting containers, which
+	// it traces once it commits.
+	decisions []capacityDecision
+}
+
+// capacityDecision is a host a pass bought or resumed for a container, or
+// the fleet limit it found, in the container's trace.
+type capacityDecision struct {
+	traceparent string
+	container   uuid.UUID
+	wait        waitRow
 }
 
 type note struct {
@@ -139,6 +169,12 @@ type note struct {
 type waitRow struct {
 	wait string
 	host uuid.UUID
+}
+
+type pendingTrace struct {
+	traceparent string
+	bought      uuid.UUID
+	wait        string
 }
 
 // fleetWrites are a pass's intents, each written by one statement.
@@ -212,6 +248,14 @@ func (ps *fleetPass) decide() error {
 	groups, err := pendingGroups(ps.r.pending)
 	if err != nil {
 		return err
+	}
+	ps.traces = map[uuid.UUID]pendingTrace{}
+	for _, r := range ps.r.pending {
+		for n, id := range r.Ids {
+			if n < len(r.Traceparents) && n < len(r.Bought) {
+				ps.traces[id] = pendingTrace{traceparent: r.Traceparents[n], bought: r.Bought[n]}
+			}
+		}
 	}
 	if err := ps.platform(groups); err != nil {
 		return err
@@ -470,6 +514,9 @@ func (ps *fleetPass) settleWaits(plan FleetPlan, bought map[int]uuid.UUID) {
 		}
 		if row.wait == string(WaitLimit) {
 			ps.result.Limited++
+		}
+		if t, ok := ps.traces[w.Container]; ok && t.traceparent != "" && (row.host != t.bought || row.wait != t.wait) && row.wait != "" {
+			ps.decisions = append(ps.decisions, capacityDecision{traceparent: t.traceparent, container: w.Container, wait: row})
 		}
 		ps.waits[w.Container] = row
 	}

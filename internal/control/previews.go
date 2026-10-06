@@ -87,7 +87,7 @@ func (c *Control) CreatePreview(ctx context.Context, workspace identity.Workspac
 			return fmt.Errorf("ensure workload: %w", err)
 		}
 		release, err := q.InsertPreviewRelease(ctx, InsertPreviewReleaseParams{
-			WorkloadID: workload, Spec: encoded, SpecDigest: digest, SourceSha256: source[:],
+			WorkloadID: workload, Spec: encoded, SpecDigest: digest, SourceSha256: source[:], Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("insert preview release: %w", err)

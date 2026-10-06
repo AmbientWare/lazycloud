@@ -12,6 +12,8 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -312,7 +314,9 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 		// reconcile's.
 		return nil
 	}
-	_, err := client.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{deref(h.InstanceID)}})
+	spanCtx, span := c.hostSpan(ctx, h.ID, "compute.resume")
+	_, err := client.StartInstances(spanCtx, &ec2.StartInstancesInput{InstanceIds: []string{deref(h.InstanceID)}})
+	telemetry.Fail(span, err)
 	if err == nil {
 		logger.InfoContext(ctx, "reserve starting", "host_id", h.ID, "instance_id", deref(h.InstanceID))
 		result.Started++
