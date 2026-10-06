@@ -2,6 +2,7 @@ package hostsession
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -18,7 +19,9 @@ import (
 // uses it.
 type pendingStart struct {
 	span trace.Span
-	wait trace.Span
+	// opened is when the first sync derived the start.
+	opened time.Time
+	wait   trace.Span
 	// linked holds the traces of the conversions the wait linked to.
 	linked map[string]bool
 }
@@ -30,7 +33,7 @@ func (sess *session) startContext(ctx context.Context, start execution.StartComm
 	if !ok {
 		_, span := telemetry.StartIn(ctx, sess.server.tracer, start.Traceparent, "hostsession.start", trace.WithAttributes(
 			telemetry.Container(start.Container.String()), telemetry.Host(sess.host.String())))
-		p = &pendingStart{span: span, linked: map[string]bool{}}
+		p = &pendingStart{span: span, opened: time.Now(), linked: map[string]bool{}}
 		sess.starts[start.Container] = p
 	}
 	return trace.ContextWithSpan(ctx, p.span)
