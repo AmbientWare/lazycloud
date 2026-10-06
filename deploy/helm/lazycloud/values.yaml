@@ -83,12 +83,12 @@ networkPolicy:
   # Node CIDRs the kubelet probes the health ports from.
   nodeCIDRs: []
 
+# platform-deployment reads these names for the EKS Pod Identity
+# associations that grant AWS access and the secrets reader's IRSA trust.
 serviceAccounts:
-  # Names match the EKS Pod Identity associations that grant AWS access.
   server: lazycloud-server
   scheduler: lazycloud-scheduler
   otelCollector: lazycloud-otel-collector
-  # Named in the secrets-reader role's IRSA trust.
   secretsReader: secrets-reader
 
 podSecurityContext:
@@ -214,14 +214,14 @@ agentRelease:
     limits: { memory: 256Mi }
 
 # OpenTelemetry collector the processes push traces to. It holds the
-# backend credential, which the processes cannot send.
+# backend credential, which the processes cannot send. X-Ray bills about $5
+# per million traces recorded: every API write, container start, build,
+# conversion and launch, and 1% of API reads and workload requests;
+# LAZYCLOUD_TRACE_SAMPLE_RATIO and LAZYCLOUD_EDGE_TRACE_SAMPLE_RATIO in
+# config change those shares.
 telemetry:
   enabled: false
   image: docker.io/otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
-  # X-Ray bills about $5 per million traces kept: every start, task and
-  # deploy at sampleRatio 1, and edgeSampleRatio of workload requests.
-  sampleRatio: "1"
-  edgeSampleRatio: "0.01"
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 256Mi }

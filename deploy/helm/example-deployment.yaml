@@ -15,10 +15,6 @@ externalSecrets:
   documents:
     platform: example/platform
     operator: example/operator
-serviceAccounts:
-  server: lazycloud-server
-  scheduler: lazycloud-scheduler
-  secretsReader: secrets-reader
 networkPolicy:
   nodeCIDRs: [10.80.0.0/16]
   hostCIDRs: [10.80.0.0/16]

@@ -33,11 +33,11 @@ run_helm lint --strict /charts/lazycloud $prod --kube-version "$kubernetes"
 # shellcheck disable=SC2086
 run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes" \
   --namespace lazycloud-prod >"$out/prod.yaml"
-# The other branches: telemetry on, no TCP pods, hosts inside the cluster, an
-# existing Secret.
+# The other branches: telemetry off, no TCP pods, hosts inside the cluster,
+# an existing Secret.
 # shellcheck disable=SC2086
 run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes" \
-  --set telemetry.enabled=true \
+  --set telemetry.enabled=false \
   --set server.tcpService.enabled=false --set server.hostService.type=ClusterIP \
   --set externalSecrets.enabled=false --namespace lazycloud-prod >"$out/variant.yaml"
 
@@ -85,7 +85,6 @@ for binary in server scheduler; do
   for template in $templates; do
     # shellcheck disable=SC2086
     run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes" \
-      --set telemetry.enabled=true \
       --show-only "$template" >"$out/env.yaml"
     grep -oE '^ *- name: LAZYCLOUD_[A-Z0-9_]+' "$out/env.yaml" | awk '{print $3}' | sort -u >"$out/names"
     while read -r name; do
@@ -97,13 +96,16 @@ for binary in server scheduler; do
   done
 done
 
+# platform-deployment reads the chart's values, so roots see the repository.
+run_terraform() {
+  dir=$1
+  shift
+  docker run --rm --user "$user" -e HOME=/tmp -e TF_IN_AUTOMATION=1 -v "$PWD:/repo" -w "/repo/$dir" "$terraform" "$@"
+}
 for root in deploy/terraform/*/; do
-  docker run --rm --user "$user" -e HOME=/tmp -e TF_IN_AUTOMATION=1 -v "$PWD/$root:/root-module" \
-    -w /root-module "$terraform" fmt -check -recursive -diff
-  docker run --rm --user "$user" -e HOME=/tmp -e TF_IN_AUTOMATION=1 -v "$PWD/$root:/root-module" \
-    -w /root-module "$terraform" init -backend=false -input=false -lockfile=readonly >/dev/null
-  docker run --rm --user "$user" -e HOME=/tmp -e TF_IN_AUTOMATION=1 -v "$PWD/$root:/root-module" \
-    -w /root-module "$terraform" validate
+  run_terraform "$root" fmt -check -recursive -diff
+  run_terraform "$root" init -backend=false -input=false -lockfile=readonly >/dev/null
+  run_terraform "$root" validate
 done
 
 docker run --rm -v "$PWD:/repo:ro" -w /repo "$actionlint" -no-color

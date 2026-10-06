@@ -97,9 +97,7 @@ spec:
               value: {{ printf "%s/python:{version}-%s" .Values.image.registry (include "lazycloud.version" .) | quote }}
             {{- include "lazycloud.hostEnv" . | nindent 12 }}
             {{- include "lazycloud.awsEnv" . | nindent 12 }}
-            {{- if .Values.telemetry.enabled }}
             {{- include "lazycloud.telemetryEnv" . | nindent 12 }}
-            {{- end }}
             {{- include "lazycloud.env" (list . "server") | trim | nindent 12 }}
           ports:
             - name: http
