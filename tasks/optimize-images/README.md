@@ -67,5 +67,5 @@ python cold start on the uv base; first container after resume 0.4 s.
 ## Rules for every packet
 
 - Never name other platforms in code, comments, commits, branches or PR text.
-- One migration file for the pass at most; 0003 to 0005 are deployed and frozen.
+- 0003 and 0004 are deployed and frozen. 0005 is undeployed: change it in place; add no other migration.
 - Commit after each step, one-line subjects, no attribution trailers.
