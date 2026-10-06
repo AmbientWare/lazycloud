@@ -33,32 +33,19 @@ func SetRoute(ctx context.Context, name string) {
 	trace.SpanFromContext(ctx).SetName(name)
 }
 
-// HTTPMetrics counts and times requests by operation and status.
-type HTTPMetrics struct {
-	duration *prometheus.HistogramVec
-	inFlight prometheus.Gauge
-}
-
-// NewHTTPMetrics registers the request collectors on t's registry.
-func (t *Telemetry) NewHTTPMetrics() *HTTPMetrics {
-	m := &HTTPMetrics{
-		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "lazycloud_http_request_duration_seconds",
-			Help:    "Public API request duration by operation and status, up to the end of the response.",
-			Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 10, 60},
-		}, []string{"operation", "status"}),
-		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lazycloud_http_requests_in_flight",
-			Help: "Public API requests being served, including open streams.",
-		}),
-	}
-	t.Registry.MustRegister(m.duration, m.inFlight)
-	return m
-}
-
 // HTTPHandler traces next, assigns each request an id that its logs carry,
-// and records its operation, status and duration.
-func (t *Telemetry) HTTPHandler(next http.Handler, metrics *HTTPMetrics) http.Handler {
+// and records its operation, status and duration on t's registry.
+func (t *Telemetry) HTTPHandler(next http.Handler) http.Handler {
+	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "lazycloud_http_request_duration_seconds",
+		Help:    "Public API request duration by operation and status, up to the end of the response.",
+		Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 10, 60},
+	}, []string{"operation", "status"})
+	inFlight := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "lazycloud_http_requests_in_flight",
+		Help: "Public API requests being served, including open streams.",
+	})
+	t.Registry.MustRegister(duration, inFlight)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := newRequestID()
 		w.Header().Set(RequestIDHeader, id)
@@ -67,25 +54,30 @@ func (t *Telemetry) HTTPHandler(next http.Handler, metrics *HTTPMetrics) http.Ha
 		ctx = With(ctx, slog.String(KeyRequest, id))
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		began := time.Now()
-		metrics.inFlight.Inc()
+		inFlight.Inc()
 		defer func() {
-			metrics.inFlight.Dec()
-			metrics.duration.WithLabelValues(rt.name, strconv.Itoa(recorder.status)).Observe(time.Since(began).Seconds())
+			inFlight.Dec()
+			duration.WithLabelValues(rt.name, strconv.Itoa(recorder.status)).Observe(time.Since(began).Seconds())
 		}()
 		next.ServeHTTP(recorder, r.WithContext(ctx))
 	})
-	// The API is public: a caller's trace context becomes a link, so
-	// callers cannot choose what is sampled or join their spans to ours.
-	return otelhttp.NewHandler(inner, "http", otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true }),
-		otelhttp.WithTracerProvider(t.provider), otelhttp.WithPropagators(propagation.TraceContext{}))
+	return otelhttp.NewHandler(inner, "http", t.publicTracing()...)
 }
 
-// EdgeHandler traces next, the edge serving workload traffic. A caller's
-// trace context becomes a link, as on the API.
+// EdgeHandler traces next, the edge serving workload traffic.
 func (t *Telemetry) EdgeHandler(next http.Handler) http.Handler {
-	return otelhttp.NewHandler(next, "edge", otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true }),
+	return otelhttp.NewHandler(next, "edge", append(t.publicTracing(),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return "edge " + r.Method }))...)
+}
+
+// publicTracing traces requests anyone may send: a caller's trace context
+// becomes a link, so callers cannot choose what is sampled or join their
+// spans to ours.
+func (t *Telemetry) publicTracing() []otelhttp.Option {
+	return []otelhttp.Option{
+		otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true }),
 		otelhttp.WithTracerProvider(t.provider), otelhttp.WithPropagators(propagation.TraceContext{}),
-		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return "edge " + r.Method }))
+	}
 }
 
 // statusRecorder keeps the status for metrics and passes flushes through,

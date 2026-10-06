@@ -343,7 +343,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	p.api = "http://" + apiListener.Addr().String()
-	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
+	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 

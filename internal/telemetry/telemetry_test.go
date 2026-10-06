@@ -99,7 +99,7 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	handler := tel.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		telemetry.SetRoute(r.Context(), "tasks")
 		w.WriteHeader(http.StatusTeapot)
-	}), tel.NewHTTPMetrics())
+	}))
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
