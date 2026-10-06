@@ -91,18 +91,15 @@ func (sess *session) recordConversion(ctx context.Context, container execution.C
 }
 
 // recordWaits stores the conversion stage so far of each start still
-// waiting for its image as the session ends.
+// waiting for its image as the session ends, within a few seconds.
 func (sess *session) recordWaits(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordWaitsTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	ended := time.Now()
 	for container := range sess.starts {
 		sess.recordConversion(ctx, container, ended)
 	}
 }
-
-// recordWaitsTimeout bounds the writes of recordWaits.
-const recordWaitsTimeout = 5 * time.Second
 
 func stageKind(k hostproto.StartupStageKind) (observability.StartupStageKind, bool) {
 	switch k {

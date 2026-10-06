@@ -50,16 +50,15 @@ type platformConversions struct {
 // a slot until ctx ends when wait is set. It reports false when it took
 // neither: the slots are full, or this server converts the image already.
 func (c *platformConversions) claim(ctx context.Context, key string, wait bool) bool {
-	if wait {
+	select {
+	case c.slots <- struct{}{}:
+	default:
+		if !wait {
+			return false
+		}
 		select {
 		case c.slots <- struct{}{}:
 		case <-ctx.Done():
-			return false
-		}
-	} else {
-		select {
-		case c.slots <- struct{}{}:
-		default:
 			return false
 		}
 	}
