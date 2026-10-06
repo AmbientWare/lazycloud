@@ -13,6 +13,8 @@ import (
 //	LAZYCLOUD_TRACE_SAMPLE_RATIO  share of other new traces recorded, 0 to 1 (default 1)
 //	LAZYCLOUD_EDGE_TRACE_SAMPLE_RATIO  share of workload requests and API reads traced, 0 to 1 (default 0.01)
 //	LAZYCLOUD_METRICS_ADDR        address of the /metrics listener; unset serves none
+//
+// A trace that arrives sampled from another process is always recorded.
 func ConfigFromEnv(service, version string) (Config, error) {
 	cfg := Config{
 		Service: service, Version: version,

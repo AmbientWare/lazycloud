@@ -24,26 +24,14 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// Config selects what a binary exports.
+// Config selects what a binary exports; ConfigFromEnv describes each
+// setting. Service names the binary in traces as lazycloud-<Service>.
 type Config struct {
-	// Service names the binary in traces: server, scheduler, agent or
-	// snapshotter.
-	Service string
-	Version string
-	// OTLPEndpoint is an OTLP/gRPC collector address, host:port. Empty
-	// turns tracing off.
-	OTLPEndpoint string
-	// OTLPInsecure sends spans without TLS, for a local collector.
-	OTLPInsecure bool
-	// SampleRatio is the share of new traces recorded, 0 to 1, other than
-	// EdgeSampleRatio's. A trace that arrives sampled from another process
-	// is always recorded.
-	SampleRatio float64
-	// EdgeSampleRatio is the share of workload requests through the edge
-	// and of API reads traced.
-	EdgeSampleRatio float64
-	// MetricsAddr is where /metrics listens. Empty serves nothing.
-	MetricsAddr string
+	Service, Version             string
+	OTLPEndpoint                 string
+	OTLPInsecure                 bool
+	SampleRatio, EdgeSampleRatio float64
+	MetricsAddr                  string
 }
 
 // Telemetry is one binary's tracer provider and metrics.
