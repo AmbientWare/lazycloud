@@ -87,20 +87,25 @@ func putPair(ctx context.Context, t *testing.T, index string, parts []string, pa
 	return etags
 }
 
+// convertLayer converts the uncompressed layer into its pair's data and
+// encoded index. It reports a failure without stopping the goroutine.
+func convertLayer(t *testing.T, layer io.Reader) (imagefs.Index, []byte, []byte) {
+	t.Helper()
+	var data bytes.Buffer
+	ix, err := imagefs.Convert(t.Context(), layer, &data)
+	encoded, marshalErr := ix.Marshal()
+	if err = errors.Join(err, marshalErr); err != nil {
+		t.Error(err)
+	}
+	return ix, data.Bytes(), encoded
+}
+
 // storeLayer converts layer and stores its pair under id through the
 // presigned uploads a host gets, and returns its index.
 func storeLayer(t *testing.T, store *storage.Storage, id uuid.UUID, layer []byte) imagefs.Index {
 	t.Helper()
-	var data bytes.Buffer
-	ix, err := imagefs.Convert(t.Context(), bytes.NewReader(layer), &data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := ix.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	storePair(t.Context(), t, store, id, data.Bytes(), encoded)
+	ix, data, encoded := convertLayer(t, bytes.NewReader(layer))
+	storePair(t.Context(), t, store, id, data, encoded)
 	return ix
 }
 
@@ -178,17 +183,11 @@ func (h *fakeHost) convertLayer(t *testing.T, u images.LayerUpload) [2][]byte {
 		return [2][]byte{}
 	}
 	defer func() { _ = tarball.Close() }()
-	var data bytes.Buffer
-	ix, err := imagefs.Convert(t.Context(), tarball, &data)
-	if err != nil || string(ix.Layer) != u.DiffID {
-		t.Errorf("convert %s: %s %v", u.Blob, ix.Layer, err)
-		return [2][]byte{}
+	ix, data, encoded := convertLayer(t, tarball)
+	if string(ix.Layer) != u.DiffID {
+		t.Errorf("convert %s: %s", u.Blob, ix.Layer)
 	}
-	encoded, err := ix.Marshal()
-	if err != nil {
-		t.Error(err)
-	}
-	return [2][]byte{data.Bytes(), encoded}
+	return [2][]byte{data, encoded}
 }
 
 // report sends one completion with what the host answered to uploads.
@@ -321,8 +320,8 @@ func convertReference(t *testing.T, pool *pgxpool.Pool, store *storage.Storage, 
 		id := uuid.New()
 		ix := storeLayer(t, store, id, layerTar(t, "file", body))
 		out = append(out, ix.Layer)
-		if _, err := pool.Exec(t.Context(), `insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-			values ($1, $2, $3, 1, $4, $5, $6)`, id, "sha256:"+hex64(uuid.NewString()[:8]), ix.Layer, ix.DataSize, len(ix.Entries), len(ix.Frames)); err != nil {
+		if _, err := pool.Exec(t.Context(), `insert into image_layers (id, blob_digest, diff_id, frames)
+			values ($1, $2, $3, $4)`, id, "sha256:"+hex64(uuid.NewString()[:8]), ix.Layer, len(ix.Frames)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(t.Context(), `insert into image_reference_layers (reference, position, layer_id) values ($1, $2, $3)`, reference, position, id); err != nil {
@@ -531,9 +530,11 @@ func TestConcurrentConversionsOfOneLayerEndWithOneRecord(t *testing.T) {
 	if _, err := f.pool.Exec(t.Context(), "update image_layer_uploads set expires_at = now() - interval '1 second' where id = $1", loser); err != nil {
 		t.Fatal(err)
 	}
-	sweep, err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler))
-	if err != nil || sweep.Deleted != 1 {
-		t.Fatalf("sweep: %+v %v", sweep, err)
+	if err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "select count(*) from image_layer_uploads where id = $1", loser); n != 0 {
+		t.Fatal("the sweep kept the losing upload")
 	}
 	if _, err := f.storage.LayerSize(t.Context(), loser, storage.LayerData); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("the losing pair is still stored: %v", err)
@@ -581,16 +582,8 @@ func TestCustomerHostLayersServeOnlyTheirWorkspace(t *testing.T) {
 	// The host converts another layer for the base blob.
 	h := newFakeHost(repository)
 	h.convert = func(images.LayerUpload) ([]byte, []byte) {
-		var data bytes.Buffer
-		ix, err := imagefs.Convert(t.Context(), bytes.NewReader(layerTar(t, "other", []byte("not the base"))), &data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, err := ix.Marshal()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data.Bytes(), encoded
+		_, data, encoded := convertLayer(t, bytes.NewReader(layerTar(t, "other", []byte("not the base"))))
+		return data, encoded
 	}
 	uploads, err := h.report(t, f, platform, container, digest, named[:1])
 	if err != nil {
@@ -634,8 +627,8 @@ func TestLayerUploadsAreBoundedAndAbortedWithTheirBuild(t *testing.T) {
 	if n := f.count(t, "select count(*) from image_layer_uploads where expires_at > now() + interval '50 minutes' and expires_at <= now() + interval '1 hour'"); n != 1 {
 		t.Fatalf("%d uploads end when their URLs lapse", n)
 	}
-	if sweep, err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil || sweep.Deleted != 0 {
-		t.Fatalf("the sweep deleted an upload whose URLs still write: %+v %v", sweep, err)
+	if err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil || f.count(t, "select count(*) from image_layer_uploads") != 1 {
+		t.Fatalf("the sweep deleted an upload whose URLs still write: %v", err)
 	}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, uploads[0].DataParts[0], bytes.NewReader(h.done[uploads[0].Blob][0]))
 	if err != nil {
@@ -700,8 +693,8 @@ func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
 	pair := func(reference string) uuid.UUID {
 		id := uuid.New()
 		storePair(ctx, t, f.storage, id, []byte("pair"), []byte("pair"))
-		if _, err := f.pool.Exec(ctx, `insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-			values ($1, $2, $2, 4, 4, 0, 0)`, id, "sha256:"+strings.Repeat(strings.ReplaceAll(id.String(), "-", ""), 2)); err != nil {
+		if _, err := f.pool.Exec(ctx, `insert into image_layers (id, blob_digest, diff_id, frames)
+			values ($1, $2, $2, 0)`, id, "sha256:"+strings.Repeat(strings.ReplaceAll(id.String(), "-", ""), 2)); err != nil {
 			t.Fatal(err)
 		}
 		use(reference, 0, id)
@@ -732,26 +725,46 @@ func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := f.images.SweepLayers(ctx, logger); err != nil {
+	// Without a release, the newest converted managed image of each Python
+	// version and architecture is live, and an older one while a container
+	// runs it.
+	if _, err := f.pool.Exec(ctx, `
+insert into managed_images (python_version, template, source, created_at)
+values ('3.12', 'oldest/{version}', 'oldest-source', now() - interval '2 hours'),
+       ('3.12', 'old/{version}', 'old-source', now() - interval '1 hour'), ('3.12', 'new/{version}', 'new-source', now());
+insert into platform_images (reference, architecture, mirror)
+values ('oldest-source', 'amd64', 'oldest-amd64'), ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'),
+       ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
 		t.Fatal(err)
 	}
-	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null and id = any($1)", []uuid.UUID{stale, recent, idle}); n != 3 ||
-		f.count(t, "select count(*) from image_layers where unreferenced_since is not null") != 3 {
-		t.Fatalf("pairs in their grace period: want stale, recent and idle only")
+	if _, err := f.pool.Exec(ctx, `insert into containers (workspace_id, state, slots, cpu_millis, memory_bytes, host_id, release_id, image_reference)
+		values ($1, 'ready', 1, 100, 100, $2, $3, 'oldest-amd64')`, uuid.UUID(ws), uuid.UUID(f.host(t)), release); err != nil {
+		t.Fatal(err)
+	}
+	superseded, newest, onlyArm, running := pair("old-amd64"), pair("new-amd64"), pair("old-arm64"), pair("oldest-amd64")
+
+	if err := f.images.SweepLayers(ctx, logger); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null and id = any($1)", []uuid.UUID{stale, recent, idle, superseded}); n != 4 ||
+		f.count(t, "select count(*) from image_layers where unreferenced_since is not null") != 4 {
+		t.Fatalf("pairs in their grace period: want stale, recent, idle and the superseded managed image only")
 	}
 	if f.count(t, "select count(*) from image_reference_uses where reference = 'old'") != 0 {
 		t.Fatal("a use older than the grace period stays")
 	}
-	if f.count(t, "select count(*) from image_layers where id = any($1) and unreferenced_since is null", []uuid.UUID{live, shared, started}) != 3 {
+	if f.count(t, "select count(*) from image_layers where id = any($1) and unreferenced_since is null", []uuid.UUID{live, shared, started, newest, onlyArm, running}) != 6 {
 		t.Fatal("a pinned, shared or started pair started its grace period")
 	}
 	// stale has been unused past the grace period; recent only just.
 	if _, err := f.pool.Exec(ctx, "update image_layers set unreferenced_since = now() - interval '25 hours' where id = $1", stale); err != nil {
 		t.Fatal(err)
 	}
-	sweep, err := f.images.SweepLayers(ctx, logger)
-	if err != nil || sweep.Retired != 1 || sweep.Deleted != 1 {
-		t.Fatalf("sweep: %+v %v", sweep, err)
+	if err := f.images.SweepLayers(ctx, logger); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "select count(*) from image_layers where id = $1", stale); n != 0 || f.count(t, "select count(*) from image_layer_uploads") != 0 {
+		t.Fatal("the stale pair was not retired and deleted")
 	}
 	if n := f.count(t, "select count(*) from image_layers where id = any($1)", []uuid.UUID{live, recent}); n != 2 {
 		t.Fatal("a live or recently used pair was retired")
@@ -771,7 +784,7 @@ func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
 		'registry.test/lazycloud/workspace-images/recent@sha256:' || $2::text)) where id = $1`, release, hex64("3")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.images.SweepLayers(ctx, logger); err != nil {
+	if err := f.images.SweepLayers(ctx, logger); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count(t, "select count(*) from image_layers where id = $1 and unreferenced_since is null", recent); n != 1 {

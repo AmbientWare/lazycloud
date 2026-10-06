@@ -84,8 +84,8 @@ with copy as (
     insert into platform_images (reference, architecture, mirror) values ($1, 'amd64', $2)
     on conflict (reference, architecture) do update set mirror = excluded.mirror, lease_token = null, leased_until = null
 ), layer as (
-    insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-    values (gen_random_uuid(), 'sha256:' || encode(sha256($3::bytea), 'hex'), 'sha256:' || encode(sha256($3::bytea), 'hex'), 1, 0, 0, 0)
+    insert into image_layers (id, blob_digest, diff_id, frames)
+    values (gen_random_uuid(), 'sha256:' || encode(sha256($3::bytea), 'hex'), 'sha256:' || encode(sha256($3::bytea), 'hex'), 0)
     returning id
 ), refs as (
     insert into image_reference_layers (reference, position, layer_id) select $2, 0, id from layer

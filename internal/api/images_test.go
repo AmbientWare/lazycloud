@@ -27,8 +27,8 @@ insert into workspace_images (workspace_id, image_digest) select ws.id, img.dige
 		t.Helper()
 		if _, err := e.pool.Exec(ctx, `
 with layer as (
-    insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-    values (gen_random_uuid(), 'sha256:' || encode(sha256($1::text::bytea), 'hex'), 'sha256:' || encode(sha256($1::text::bytea), 'hex'), 1, 0, 0, 0)
+    insert into image_layers (id, blob_digest, diff_id, frames)
+    values (gen_random_uuid(), 'sha256:' || encode(sha256($1::text::bytea), 'hex'), 'sha256:' || encode(sha256($1::text::bytea), 'hex'), 0)
     returning id
 )
 insert into image_reference_layers (reference, position, layer_id) select $1, 0, id from layer`, reference); err != nil {

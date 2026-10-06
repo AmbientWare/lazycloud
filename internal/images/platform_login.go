@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -69,33 +70,34 @@ func (l *platformLogin) auth(ctx context.Context) (*Auth, error) {
 		return current, nil
 	}
 	// Concurrent refreshes each fetch a token; any of them is valid.
-	out, err := l.ecr.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
+	auth, expires, err := ecrLogin(ctx, l.ecr)
 	if err != nil {
 		return nil, fmt.Errorf("get platform registry login: %w", err)
 	}
-	if len(out.AuthorizationData) == 0 {
-		return nil, fmt.Errorf("ECR returned no authorization data")
-	}
-	data := out.AuthorizationData[0]
-	auth, err := decodeECRToken(aws.ToString(data.AuthorizationToken))
-	if err != nil {
-		return nil, err
-	}
 	l.mu.Lock()
-	l.current, l.expires = auth, aws.ToTime(data.ExpiresAt)
+	l.current, l.expires = auth, expires
 	l.mu.Unlock()
 	return auth, nil
 }
 
-// decodeECRToken splits an ECR authorization token, base64 user:password.
-func decodeECRToken(token string) (*Auth, error) {
-	decoded, err := base64.StdEncoding.DecodeString(token)
+// ecrLogin is the registry login client's credentials get from
+// GetAuthorizationToken, and when it expires.
+func ecrLogin(ctx context.Context, client *ecr.Client) (*Auth, time.Time, error) {
+	out, err := client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
-		return nil, fmt.Errorf("decode ECR token: %w", err)
+		return nil, time.Time{}, fmt.Errorf("get ECR authorization token: %w", err)
+	}
+	if len(out.AuthorizationData) == 0 {
+		return nil, time.Time{}, errors.New("ECR returned no authorization data")
+	}
+	data := out.AuthorizationData[0]
+	decoded, err := base64.StdEncoding.DecodeString(aws.ToString(data.AuthorizationToken))
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("decode ECR token: %w", err)
 	}
 	user, password, ok := strings.Cut(string(decoded), ":")
 	if !ok {
-		return nil, fmt.Errorf("ECR token is not user:password")
+		return nil, time.Time{}, errors.New("ECR token is not user:password")
 	}
-	return &Auth{Username: user, Password: password}, nil
+	return &Auth{Username: user, Password: password}, aws.ToTime(data.ExpiresAt), nil
 }
