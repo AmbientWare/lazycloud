@@ -6,7 +6,7 @@ name: lazycloud-go-test
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
       POSTGRES_USER: lazycloud
       POSTGRES_PASSWORD: lazycloud
@@ -29,7 +29,7 @@ services:
 
   # Tests create their own buckets here and delete them when they end.
   object-store:
-    image: dxflrs/garage:v2.3.0
+    image: dxflrs/garage:v2.3.0@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690
     environment:
       GARAGE_RPC_SECRET: 4c0cd1d2c1f1a6c5b0e7e9f1b3f6a2d8c4e5f7a9b1c3d5e7f9a1b3c5d7e9f1a3
       GARAGE_ADMIN_TOKEN: local-garage-admin
@@ -47,7 +47,7 @@ services:
   # Assigns the node's layout and imports the development key, then stays up
   # healthy so that `up --wait` waits for it.
   object-store-bootstrap:
-    image: curlimages/curl:8.16.0
+    image: curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
     init: true
     entrypoint: ["sh", "-c", "sh /bootstrap.sh && touch /tmp/ready && exec sleep 2147483647"]
     environment:

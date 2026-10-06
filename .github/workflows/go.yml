@@ -19,6 +19,7 @@ on:
       - "compose.test.yaml"
       - "deploy/local/garage.toml"
       - "deploy/local/garage-bootstrap.sh"
+      - "deploy/local/install-snapshotter.sh"
   push:
     branches: [main]
 
@@ -28,24 +29,6 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-26.04
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: lazycloud
-          POSTGRES_PASSWORD: lazycloud
-          POSTGRES_DB: postgres
-        ports:
-          - 15442:5432
-        options: >-
-          --health-cmd "pg_isready -U lazycloud -d postgres"
-          --health-interval 1s
-          --health-retries 30
-      # Billing's Stripe tests fail without it rather than skip.
-      stripe-mock:
-        image: stripe/stripe-mock:v0.205.0@sha256:ff32647993847be491e68533e2881c90434fa8d5df40246ee5f7d41253422081
-        ports:
-          - 12111:12111
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,8 +36,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Object store for storage tests
-        run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
+      - name: PostgreSQL, stripe-mock and the object store
+        run: docker compose -f compose.test.yaml up -d --wait
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
       - name: Generated code is current
@@ -68,7 +51,7 @@ jobs:
       - run: go tool golangci-lint run ./...
       # The host runtime and acceptance tests run in their own jobs, on
       # runners set up as hosts.
-      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs/snapshotter$ -e /acceptance$ | xargs go test -race
+      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs -e /acceptance$ | xargs go test -race
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up
@@ -83,16 +66,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install the snapshotter as hosts do
-        run: |
-          go build -o "$RUNNER_TEMP/host/lazycloud-agent" ./cmd/agent
-          go build -o "$RUNNER_TEMP/host/lazycloud-snapshotter" ./cmd/snapshotter
-          sudo "$RUNNER_TEMP/host/lazycloud-agent" install-snapshotter
-          # Hosts run the agent as root; the tests run as the runner user,
-          # who is in the docker group.
-          sudo chmod 0755 /run/lazycloud-snapshotter
-          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
-          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
-          docker info --format 'storage driver {{.Driver}}'
+        run: deploy/local/install-snapshotter.sh
       - name: Object store for layers and volumes
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
@@ -125,22 +99,7 @@ jobs:
           version: "0.11.29"
           python-version: "3.12"
       - name: Install the snapshotter as hosts do
-        run: |
-          go build -o "$RUNNER_TEMP/host/lazycloud-agent" ./cmd/agent
-          go build -o "$RUNNER_TEMP/host/lazycloud-snapshotter" ./cmd/snapshotter
-          sudo "$RUNNER_TEMP/host/lazycloud-agent" install-snapshotter
-          sudo chmod 0755 /run/lazycloud-snapshotter
-          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
-          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
-          docker info --format 'storage driver {{.Driver}}'
-          sudo mkdir -p /etc/systemd/system/lazycloud-snapshotter.service.d
-          printf '[Service]\nEnvironment=LAZYCLOUD_OTLP_ENDPOINT=%s LAZYCLOUD_OTLP_INSECURE=true\n' "$LAZYCLOUD_OTLP_ENDPOINT" |
-            sudo tee /etc/systemd/system/lazycloud-snapshotter.service.d/traces.conf
-          sudo systemctl daemon-reload
-          sudo systemctl restart lazycloud-snapshotter
-          sudo chmod 0755 /run/lazycloud-snapshotter
-          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock
-          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock
+        run: deploy/local/install-snapshotter.sh
       # Started after the snapshotter install, which restarts Docker.
       - name: PostgreSQL, the object store and Jaeger
         run: |
