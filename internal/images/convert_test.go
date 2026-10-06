@@ -189,42 +189,67 @@ func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
 	}
 }
 
+// pinned resolves numpy for ws and pushes a random image for it under the
+// shared images repository, as a release would have pinned it before its
+// layers were converted. It returns the image's id and the reference.
+func (f fixture) pinned(t *testing.T, ws identity.WorkspaceID, tag string) (string, string) {
+	t.Helper()
+	r, err := f.images.Resolve(t.Context(), ws, numpy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.Image.ID, f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:"+tag)
+}
+
+// conversion is the mirror build a start of reference waits on.
+func (f fixture) conversion(t *testing.T, ws identity.WorkspaceID, id, reference string) uuid.UUID {
+	t.Helper()
+	_, err := f.images.ConvertedPull(t.Context(), ws, id, reference)
+	var waiting *images.BuildWaitError
+	if !errors.As(err, &waiting) || !errors.Is(err, images.ErrNotReady) {
+		t.Fatalf("want a wait on the conversion, got %v", err)
+	}
+	return waiting.Build
+}
+
+// conversionFailure is the ConversionError a start of reference ends with.
+func (f fixture) conversionFailure(t *testing.T, ws identity.WorkspaceID, id, reference string) string {
+	t.Helper()
+	_, err := f.images.ConvertedPull(t.Context(), ws, id, reference)
+	var failed *images.ConversionError
+	if !errors.As(err, &failed) {
+		t.Fatalf("want a conversion failure, got %v", err)
+	}
+	return failed.Reason
+}
+
+// recover settles lost and late builds.
+func (f fixture) recover(t *testing.T) {
+	t.Helper()
+	if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A mirror build whose failure says nothing of the image is built again by
 // the next request, while a failure of its content holds requests off.
 func TestTransientMirrorFailuresBuildAgain(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
-	r, err := f.images.Resolve(t.Context(), ws, numpy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference := f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:t")
-	wait := func() uuid.UUID {
-		t.Helper()
-		_, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
-		var waiting *images.BuildWaitError
-		if !errors.As(err, &waiting) {
-			t.Fatalf("want a wait, got %v", err)
-		}
-		return waiting.Build
-	}
-	first := wait()
+	id, reference := f.pinned(t, ws, "t")
+	first := f.conversion(t, ws, id, reference)
 	if _, err := f.images.CompleteBuild(t.Context(), host, placeAndStart(t, f, host),
 		images.BuildOutcome{Failure: "the store stayed unreachable", Transient: true}); err != nil {
 		t.Fatal(err)
 	}
-	if second := wait(); second == first {
+	if f.conversion(t, ws, id, reference) == first {
 		t.Fatal("a transient failure was not built again")
 	}
 	if _, err := f.images.CompleteBuild(t.Context(), host, placeAndStart(t, f, host), images.BuildOutcome{Failure: "layer 0 is foreign"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
-	var failed *images.ConversionError
-	if !errors.As(err, &failed) {
-		t.Fatalf("a content failure holds requests off: %v", err)
-	}
+	f.conversionFailure(t, ws, id, reference)
 }
 
 // A connected account's workspace converts a mirror on a platform host,
@@ -238,14 +263,8 @@ with owner as (insert into users (email) values ('owner@example.com') returning 
 update workspaces set connection_id = (select id from conn) where id = $1`, uuid.UUID(ws)); err != nil {
 		t.Fatal(err)
 	}
-	r, err := f.images.Resolve(t.Context(), ws, numpy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference := f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:m")
-	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); !errors.Is(err, images.ErrNotReady) {
-		t.Fatalf("want a wait, got %v", err)
-	}
+	id, reference := f.pinned(t, ws, "m")
+	f.conversion(t, ws, id, reference)
 	var forced, mirror bool
 	if err := f.pool.QueryRow(t.Context(), "select forced, mirror from image_builds").Scan(&forced, &mirror); err != nil {
 		t.Fatal(err)
@@ -293,8 +312,7 @@ func TestFilesystemImagesPublishConverted(t *testing.T) {
 	host := f.host(t)
 	// A filesystem is the workspace's own: it converts into its repository.
 	repository := f.workspaceImageRepository(t, ws, id)
-	snapshot := pullImage(t, pushed)
-	digest := pushImage(t, repository+":mirror", snapshot)
+	digest := pushImage(t, repository+":mirror", pullImage(t, pushed))
 	f.publish(t, host, placeAndStart(t, f, host), repository, digest)
 	if ref, err := f.images.Deployable(t.Context(), ws, id, "3.12"); err != nil || ref != repository+"@"+digest {
 		t.Fatalf("the converted filesystem image deploys: %s %v", ref, err)
@@ -306,27 +324,21 @@ func TestFilesystemImagesPublishConverted(t *testing.T) {
 
 // A reference a release pinned without layer rows converts on its first
 // start: concurrent starts join one build that mirrors exactly that image,
-// whose layers then become the reference's. A failed conversion ends the
-// wait with a typed error.
+// whose layers then become the reference's and leave any grace period in
+// the same transaction, so a sweep that marked them before cannot retire
+// them after. A failed conversion ends the wait with a typed error.
 func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
-	r, err := f.images.Resolve(t.Context(), ws, numpy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pinned := func(tag string) string {
-		return f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:"+tag)
-	}
-	reference := pinned("first")
+	id, reference := f.pinned(t, ws, "first")
 
 	const starts = 6
 	builds := make(chan uuid.UUID, starts)
 	var wg sync.WaitGroup
 	for range starts {
 		wg.Go(func() {
-			_, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
+			_, err := f.images.ConvertedPull(t.Context(), ws, id, reference)
 			var waiting *images.BuildWaitError
 			if !errors.As(err, &waiting) {
 				t.Errorf("an unconverted reference is waited for, got %v", err)
@@ -346,14 +358,13 @@ func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
 	}
 
 	// The build mirrors the reference: its push holds the same layers.
-	var mirrorID string
-	if err := f.pool.QueryRow(t.Context(), "select i.id from images i join image_builds b on b.image_digest = i.digest where b.state = 'building'").Scan(&mirrorID); err != nil {
+	original := pullImage(t, reference)
+	repository := f.imageRepository(t, mirrorOf(t, f))
+	f.publish(t, host, placeAndStart(t, f, host), repository, pushImage(t, repository+":mirror", original))
+	if _, err := f.pool.Exec(t.Context(), "update image_layers set unreferenced_since = now() - interval '25 hours'"); err != nil {
 		t.Fatal(err)
 	}
-	original := pullImage(t, reference)
-	repository := f.imageRepository(t, mirrorID)
-	f.publish(t, host, placeAndStart(t, f, host), repository, pushImage(t, repository+":mirror", original))
-	pull, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
+	pull, err := f.images.ConvertedPull(t.Context(), ws, id, reference)
 	if err != nil || pull.Reference != reference {
 		t.Fatalf("the start pulls the pinned reference once converted: %+v %v", pull, err)
 	}
@@ -361,20 +372,17 @@ func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
 	if err != nil || len(reads.Layers) != len(diffIDs(t, original)) || reads.Layers[0].DiffID != diffIDs(t, original)[0] {
 		t.Fatalf("the pinned reference reads the mirror's layers: %+v %v", reads, err)
 	}
-
-	failing := pinned("second")
-	_, err = f.images.ConvertedPull(t.Context(), ws, r.Image.ID, failing)
-	var waiting *images.BuildWaitError
-	if !errors.As(err, &waiting) {
-		t.Fatalf("want a wait, got %v", err)
+	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null"); n != 0 {
+		t.Fatalf("%d adopted layers are still in their grace period", n)
 	}
+
+	_, failing := f.pinned(t, ws, "second")
+	f.conversion(t, ws, id, failing)
 	if _, err := f.images.CompleteBuild(t.Context(), host, placeAndStart(t, f, host), images.BuildOutcome{Failure: "registry gone"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.images.ConvertedPull(t.Context(), ws, r.Image.ID, failing)
-	var failed *images.ConversionError
-	if !errors.As(err, &failed) || !strings.Contains(failed.Reason, "registry gone") {
-		t.Fatalf("a failed conversion ends the wait with its reason, got %v", err)
+	if reason := f.conversionFailure(t, ws, id, failing); !strings.Contains(reason, "registry gone") {
+		t.Fatalf("a failed conversion ends the wait with its reason, got %q", reason)
 	}
 }
 
@@ -410,9 +418,7 @@ func TestAWorkspacesOwnReferenceConvertsOnItsOwnHosts(t *testing.T) {
 	}
 	f.host(t)
 	connected := f.connect(t, ws)
-	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); !errors.Is(err, images.ErrNotReady) {
-		t.Fatalf("want a wait, got %v", err)
-	}
+	build := f.conversion(t, ws, r.Image.ID, reference)
 	var forced, mirror bool
 	if err := f.pool.QueryRow(t.Context(), "select forced, mirror from image_builds").Scan(&forced, &mirror); err != nil {
 		t.Fatal(err)
@@ -421,10 +427,6 @@ func TestAWorkspacesOwnReferenceConvertsOnItsOwnHosts(t *testing.T) {
 		t.Fatalf("an own mirror is forced %v, shared %v", forced, mirror)
 	}
 	container := placeAndStart(t, f, connected)
-	var build uuid.UUID
-	if err := f.pool.QueryRow(t.Context(), "select id from image_builds").Scan(&build); err != nil {
-		t.Fatal(err)
-	}
 	command, err := f.images.BuildCommandOf(t.Context(), connected, execution.BuildStart{Container: container, Build: build, Attempt: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -437,8 +439,7 @@ func TestAWorkspacesOwnReferenceConvertsOnItsOwnHosts(t *testing.T) {
 	if command.PushRepository != repository {
 		t.Fatalf("the mirror pushes to %s, want %s", command.PushRepository, repository)
 	}
-	original := pullImage(t, reference)
-	f.publish(t, connected, container, repository, pushImage(t, repository+":mirror", original))
+	f.publish(t, connected, container, repository, pushImage(t, repository+":mirror", pullImage(t, reference)))
 	if pull, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); err != nil || pull.Reference != reference {
 		t.Fatalf("the reference converts: %+v %v", pull, err)
 	}
@@ -480,8 +481,7 @@ func TestASweptImageReconvertsByMirroringItsReference(t *testing.T) {
 		t.Fatalf("the image's steps ran %d times", n)
 	}
 	mirrorRepository := f.imageRepository(t, mirrorOf(t, f))
-	original := pullImage(t, reference)
-	f.publish(t, host, placeAndStart(t, f, host), mirrorRepository, pushImage(t, mirrorRepository+":mirror", original))
+	f.publish(t, host, placeAndStart(t, f, host), mirrorRepository, pushImage(t, mirrorRepository+":mirror", pullImage(t, reference)))
 	if ref, err := f.images.Deployable(t.Context(), ws, r.Image.ID, "3.12"); err != nil || ref != reference {
 		t.Fatalf("the image deploys its own reference again: %s %v", ref, err)
 	}
@@ -493,14 +493,8 @@ func TestAMirrorThatExhaustsItsAttemptsFailsTheImage(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
-	r, err := f.images.Resolve(t.Context(), ws, numpy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference := f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:x")
-	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); !errors.Is(err, images.ErrNotReady) {
-		t.Fatalf("want a wait, got %v", err)
-	}
+	id, reference := f.pinned(t, ws, "x")
+	f.conversion(t, ws, id, reference)
 	for range 2 {
 		container := placeAndStart(t, f, host)
 		if _, err := f.execution.ApplyReport(t.Context(), host, execution.ContainerReport{
@@ -509,14 +503,10 @@ func TestAMirrorThatExhaustsItsAttemptsFailsTheImage(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
-			t.Fatal(err)
-		}
+		f.recover(t)
 	}
-	_, err = f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
-	var failed *images.ConversionError
-	if !errors.As(err, &failed) || !strings.Contains(failed.Reason, "a layer killed the builder") {
-		t.Fatalf("want the image's failure, got %v", err)
+	if reason := f.conversionFailure(t, ws, id, reference); !strings.Contains(reason, "a layer killed the builder") {
+		t.Fatalf("want the image's failure, got %q", reason)
 	}
 }
 
@@ -547,42 +537,23 @@ func TestPrepareWaitsOnlyOnBuildsForTheWorkspace(t *testing.T) {
 func TestADeadlineFailsTheImageOnlyIfTheBuildRan(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
-	r, err := f.images.Resolve(t.Context(), ws, numpy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference := f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:d")
-	wait := func() uuid.UUID {
-		t.Helper()
-		_, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
-		var waiting *images.BuildWaitError
-		if !errors.As(err, &waiting) {
-			t.Fatalf("want a wait, got %v", err)
-		}
-		return waiting.Build
-	}
+	id, reference := f.pinned(t, ws, "d")
 	expire := func(build uuid.UUID) {
 		t.Helper()
 		if _, err := f.pool.Exec(t.Context(), "update image_builds set deadline_at = now() - interval '1 second' where id = $1", build); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
-			t.Fatal(err)
-		}
+		f.recover(t)
 	}
-	first := wait()
+	first := f.conversion(t, ws, id, reference)
 	expire(first)
-	second := wait()
+	second := f.conversion(t, ws, id, reference)
 	if second == first {
 		t.Fatal("a mirror that never reached a host was not built again")
 	}
 	placeAndStart(t, f, f.host(t))
 	expire(second)
-	_, err = f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
-	var failed *images.ConversionError
-	if !errors.As(err, &failed) {
-		t.Fatalf("a mirror that ran out of time fails the image: %v", err)
-	}
+	f.conversionFailure(t, ws, id, reference)
 }
 
 // A shared mirror converts an image for every workspace, so it is the
@@ -615,17 +586,8 @@ update billing_balances set balance_nanos = 0`); err != nil {
 	if _, err := f.pool.Exec(ctx, "update images set reference = $1, ready_at = now() where id = $2", stored, r.Image.ID); err != nil {
 		t.Fatal(err)
 	}
-	wait := func(ws identity.WorkspaceID) uuid.UUID {
-		t.Helper()
-		_, err := f.images.ConvertedPull(ctx, ws, r.Image.ID, stored)
-		var waiting *images.BuildWaitError
-		if !errors.As(err, &waiting) {
-			t.Fatalf("the shared mirror is built whatever the account's standing: %v", err)
-		}
-		return waiting.Build
-	}
-	build := wait(a)
-	if wait(b) != build {
+	build := f.conversion(t, a, r.Image.ID, stored)
+	if f.conversion(t, b, r.Image.ID, stored) != build {
 		t.Fatal("another workspace does not join the shared mirror")
 	}
 
@@ -646,80 +608,11 @@ update billing_balances set balance_nanos = 0`); err != nil {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.images.Recover(ctx, slog.New(slog.DiscardHandler)); err != nil {
-		t.Fatal(err)
-	}
-	if wait(b) != build {
+	f.recover(t)
+	if f.conversion(t, b, r.Image.ID, stored) != build {
 		t.Fatal("the retry failed the mirror for every workspace")
 	}
 	if n := f.count(t, "select count(*) from containers where image_build_id = $1 and state = 'pending'", build); n != 1 {
 		t.Fatalf("%d retry containers, want 1", n)
-	}
-}
-
-// Only the newest converted managed image of each Python version and
-// architecture stays live without a release: a superseded template's copy
-// starts its grace period once its successor is converted for the same
-// architecture, and stays live on one its successor is not converted for.
-func TestOnlyTheNewestManagedImagesStayLive(t *testing.T) {
-	f := newFixture(t)
-	ctx := t.Context()
-	layer := func(mirror string) uuid.UUID {
-		t.Helper()
-		id := uuid.New()
-		if _, err := f.pool.Exec(ctx, `
-with layer as (insert into image_layers (id, blob_digest, diff_id, frames) values ($1, $2, $2, 0) returning id)
-insert into image_reference_layers (reference, position, layer_id) select $3, 0, id from layer`,
-			id, "sha256:"+strings.Repeat(strings.ReplaceAll(id.String(), "-", ""), 2), mirror); err != nil {
-			t.Fatal(err)
-		}
-		return id
-	}
-	if _, err := f.pool.Exec(ctx, `
-insert into managed_images (python_version, template, source, created_at)
-values ('3.12', 'old/{version}', 'old-source', now() - interval '1 hour'), ('3.12', 'new/{version}', 'new-source', now());
-insert into platform_images (reference, architecture, mirror)
-values ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'),
-       ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
-		t.Fatal(err)
-	}
-	superseded, live, onlyArm := layer("old-amd64"), layer("new-amd64"), layer("old-arm64")
-	if err := f.images.SweepLayers(ctx, slog.New(slog.DiscardHandler)); err != nil {
-		t.Fatal(err)
-	}
-	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null and id = $1", superseded); n != 1 {
-		t.Fatal("a superseded managed image stayed live")
-	}
-	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is null and id = any($1)", []uuid.UUID{live, onlyArm}); n != 2 {
-		t.Fatal("the newest managed image of an architecture started its grace period")
-	}
-}
-
-// Adopting a mirror's layers for a reference takes them out of their grace
-// period in the same transaction, so a sweep that marked them before the
-// adoption cannot retire them after it.
-func TestAdoptedLayersLeaveTheirGracePeriod(t *testing.T) {
-	f := newFixture(t)
-	ws := f.workspace(t, "a")
-	host := f.host(t)
-	r, err := f.images.Resolve(t.Context(), ws, numpy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference := f.registry + "/lazycloud/images/old@" + pushRandom(t, f.registry+"/lazycloud/images/old:adopt")
-	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); !errors.Is(err, images.ErrNotReady) {
-		t.Fatalf("want a wait, got %v", err)
-	}
-	repository := f.imageRepository(t, mirrorOf(t, f))
-	f.publish(t, host, placeAndStart(t, f, host), repository, pushImage(t, repository+":mirror", pullImage(t, reference)))
-	if _, err := f.pool.Exec(t.Context(), "update image_layers set unreferenced_since = now() - interval '25 hours'"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); err != nil {
-		t.Fatal(err)
-	}
-	if n := f.count(t, `select count(*) from image_layers l join image_reference_layers r on r.layer_id = l.id
-		where r.reference = $1 and l.unreferenced_since is not null`, reference); n != 0 {
-		t.Fatalf("%d adopted layers are still in their grace period", n)
 	}
 }

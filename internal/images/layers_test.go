@@ -734,17 +734,29 @@ func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Only the newest converted managed image of each Python version and
+	// architecture is live without a release.
+	if _, err := f.pool.Exec(ctx, `
+insert into managed_images (python_version, template, source, created_at)
+values ('3.12', 'old/{version}', 'old-source', now() - interval '1 hour'), ('3.12', 'new/{version}', 'new-source', now());
+insert into platform_images (reference, architecture, mirror)
+values ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'),
+       ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
+		t.Fatal(err)
+	}
+	superseded, newest, onlyArm := pair("old-amd64"), pair("new-amd64"), pair("old-arm64")
+
 	if err := f.images.SweepLayers(ctx, logger); err != nil {
 		t.Fatal(err)
 	}
-	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null and id = any($1)", []uuid.UUID{stale, recent, idle}); n != 3 ||
-		f.count(t, "select count(*) from image_layers where unreferenced_since is not null") != 3 {
-		t.Fatalf("pairs in their grace period: want stale, recent and idle only")
+	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null and id = any($1)", []uuid.UUID{stale, recent, idle, superseded}); n != 4 ||
+		f.count(t, "select count(*) from image_layers where unreferenced_since is not null") != 4 {
+		t.Fatalf("pairs in their grace period: want stale, recent, idle and the superseded managed image only")
 	}
 	if f.count(t, "select count(*) from image_reference_uses where reference = 'old'") != 0 {
 		t.Fatal("a use older than the grace period stays")
 	}
-	if f.count(t, "select count(*) from image_layers where id = any($1) and unreferenced_since is null", []uuid.UUID{live, shared, started}) != 3 {
+	if f.count(t, "select count(*) from image_layers where id = any($1) and unreferenced_since is null", []uuid.UUID{live, shared, started, newest, onlyArm}) != 5 {
 		t.Fatal("a pinned, shared or started pair started its grace period")
 	}
 	// stale has been unused past the grace period; recent only just.
