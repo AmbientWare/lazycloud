@@ -31,10 +31,7 @@ func newTestContainer(t *testing.T, server *hostServer) *container {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp("", "lca")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := shortDir(t)
 	layers, _ := testLayerSources(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
@@ -51,7 +48,6 @@ func newTestContainer(t *testing.T, server *hostServer) *container {
 		a.work.Wait()
 		_ = conn.Close()
 		grpcServer.Stop()
-		_ = os.RemoveAll(dir)
 	})
 	return a.newContainer(uuid.NewString(), "app:handle", 1, nil, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
 }
