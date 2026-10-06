@@ -16,6 +16,13 @@ decision needs. Owns no product code; fixes go back to the owning packet.
   after an agent restart.
 - After the Ship, the same numbers in prod with `/tmp/lcb2`.
 
+## Parity
+
+The same python slim and torch CPU images on Beam and on LazyCloud: the
+first call after a deploy (image pull included) and the cold start after
+scale-to-zero, several runs each, from the same client. Gaps found here are
+the only further work.
+
 ## Evidence to record
 
 ## Gaps and unverified boundaries
