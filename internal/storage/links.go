@@ -155,7 +155,8 @@ func (s *Storage) signedLifetime(ctx context.Context, want time.Duration) (time.
 		return want, nil
 	}
 	if creds.Expired() {
-		// The cache renews them on the next call.
+		// The source issued them inside the renewal window, so the cache
+		// stored them expired; it fetches again on this call.
 		if creds, err = provider.Retrieve(ctx); err != nil {
 			return 0, fmt.Errorf("object store credentials: %w", err)
 		}
