@@ -47,7 +47,8 @@ type issuedLayers struct {
 // per sync. Layers its region's copy of the layer bucket is not confirmed to
 // hold read from the layer bucket; the session then watches that region's
 // confirmations before a check of the copy starts, so none the check
-// records is missed.
+// records is missed. One another server records between the read and the
+// watch reaches the host at the grant's renewal.
 func (sess *session) grantLayers(ctx context.Context, cache *syncCache, reference string) ([]*hostproto.LayerGrant, layerGrant, error) {
 	if l, ok := cache.layers[reference]; ok {
 		return l.grants, l.grant, l.err
