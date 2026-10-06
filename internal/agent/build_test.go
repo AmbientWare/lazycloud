@@ -163,6 +163,40 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	}
 }
 
+// A cache export that fails after the push leaves the build published: the
+// digest is reported and only the exit names the cache.
+func TestAgentPublishesABuildWhoseCacheExportFails(t *testing.T) {
+	e := newEnv(t)
+	registry := startTestRegistry(t)
+	e.startAgent()
+	session := e.session()
+
+	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\necho built > /proof\nLAZYCLOUD_STEP\n")
+	// Nothing listens on port 1: the cache import is skipped and the
+	// export fails.
+	start.GetStart().GetBuild().CacheRef = "127.0.0.1:1/lazycloud/cache:test"
+	container := start.GetStart().GetContainerId()
+	session.send(t, start)
+	select {
+	case outcome := <-e.server.builds:
+		if !strings.HasPrefix(outcome.GetDigest(), "sha256:") {
+			t.Fatalf("want a pushed digest, got %v\noutput:\n%s", outcome, e.server.buildOutput())
+		}
+	case <-time.After(5 * time.Minute):
+		t.Fatal("the build reported no outcome")
+	}
+	exit := session.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_STOPPED || exit.GetExitCode() == 0 ||
+		!strings.Contains(exit.GetMessage(), "exporting the build cache failed") {
+		t.Fatalf("the exit names the failed cache export: %v", exit)
+	}
+	select {
+	case outcome := <-e.server.builds:
+		t.Fatalf("the build reported a second outcome: %v", outcome)
+	default:
+	}
+}
+
 func TestAgentReportsAFailedBuildWithItsOutputTail(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
