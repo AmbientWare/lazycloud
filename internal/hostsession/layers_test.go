@@ -428,6 +428,18 @@ func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
 	for h.count("select count(*) from image_layer_replicas where confirmed_at is null") == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
+	// Watching the region's confirmations does not sign the grant again.
+	quiet := time.After(2 * recheck)
+	for waiting := true; waiting; {
+		select {
+		case m := <-in:
+			if m.GetLayerGrants() != nil {
+				t.Fatal("the start's grant was signed again before any copy was confirmed")
+			}
+		case <-quiet:
+			waiting = false
+		}
+	}
 	client := s3.New(s3.Options{
 		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),

@@ -2,9 +2,7 @@ package hostsession_test
 
 import (
 	"context"
-	"maps"
 	"regexp"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
-	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -47,20 +44,12 @@ func (c *queryCounter) take() map[string]int {
 }
 
 // replicate adds n starting containers of container's release on its host.
-func (h *harness) replicate(container uuid.UUID, n int) []execution.ContainerID {
+func (h *harness) replicate(container uuid.UUID, n int) {
 	h.t.Helper()
-	out := make([]execution.ContainerID, n)
-	for i := range n {
-		var id uuid.UUID
-		if err := h.pool.QueryRow(h.t.Context(), `
+	h.exec(`
 insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select workspace_id, release_id, 'starting', host_id, slots, cpu_millis, memory_bytes, now() from containers where id = $1
-returning id`, container).Scan(&id); err != nil {
-			h.t.Fatal(err)
-		}
-		out[i] = execution.ContainerID(id)
-	}
-	return out
+select workspace_id, release_id, 'starting', host_id, slots, cpu_millis, memory_bytes, now()
+from containers, generate_series(1, $2) where id = $1`, container, n)
 }
 
 // TestImageQueriesPerSyncDoNotGrowWithReplicas: the queries that resolve
@@ -100,21 +89,30 @@ func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
 	for range 2 * replicas {
 		next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil })
 	}
-	time.Sleep(50 * time.Millisecond)
+	// The sync that sends the starts resolves each image once: the
+	// workspace image's architecture, the managed image's pin, the host's
+	// architecture and the platform copy, and one signing per image.
 	first := counter.take()
+	for name, want := range map[string]int{"ImageArchitecture": 1, "ManagedSource": 1, "HostArchitecture": 1, "PlatformImagesOf": 1, "LayerReadsFor": 2} {
+		if first[name] != want {
+			t.Errorf("sending %d starts ran %s %d times, want %d", 2*replicas, name, first[name], want)
+		}
+	}
+	// Later syncs look once at the image the waiting replicas need, and
+	// read none of their secrets.
 	time.Sleep(time.Second)
-	steady := counter.take()
-	syncs := steady["StartingContainersOnHost"]
+	later := counter.take()
+	syncs := later["StartingContainersOnHost"]
 	if syncs == 0 {
 		t.Fatal("no sync ran")
 	}
-	per := map[string]float64{}
-	for name, n := range steady {
-		per[name] = float64(n) / float64(syncs)
+	for _, name := range []string{"ReferenceLayers", "ImageRuntime", "LatestBuild"} {
+		// A sync may straddle the window's start.
+		if later[name] > syncs+1 {
+			t.Errorf("%d syncs ran %s %d times for %d waiting replicas", syncs, name, later[name], replicas)
+		}
 	}
-	names := maps.Clone(first)
-	maps.Copy(names, steady)
-	for _, name := range slices.Sorted(maps.Keys(names)) {
-		t.Logf("%-32s first %3d  per later sync %.1f", name, first[name], per[name])
+	if n := first["SealedSecrets"] + later["SealedSecrets"]; n != 0 {
+		t.Errorf("waiting starts read their secrets %d times", n)
 	}
 }
