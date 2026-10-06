@@ -36,11 +36,12 @@ type Config struct {
 	OTLPEndpoint string
 	// OTLPInsecure sends spans without TLS, for a local collector.
 	OTLPInsecure bool
-	// SampleRatio is the share of new traces recorded, 0 to 1. A trace
-	// that arrives sampled from another process is always recorded.
+	// SampleRatio is the share of new traces recorded, 0 to 1, other than
+	// EdgeSampleRatio's. A trace that arrives sampled from another process
+	// is always recorded.
 	SampleRatio float64
 	// EdgeSampleRatio is the share of workload requests through the edge
-	// traced, which anyone may send.
+	// and of API reads traced.
 	EdgeSampleRatio float64
 	// MetricsAddr is where /metrics listens. Empty serves nothing.
 	MetricsAddr string

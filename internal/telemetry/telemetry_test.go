@@ -66,8 +66,9 @@ func (r *receiver) Export(_ context.Context, req *collector.ExportTraceServiceRe
 	return &collector.ExportTraceServiceResponse{}, nil
 }
 
-// Request spans named by their operation export over OTLP, linked to the
-// caller's trace, and /metrics reports the request.
+// An API write's span, named by its operation, exports over OTLP linked to
+// the caller's trace. Reads and the task long poll take the edge's ratio,
+// none here. /metrics reports every request.
 func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -96,24 +97,28 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	go func() { served <- tel.ServeMetrics(ctx, slog.New(slog.DiscardHandler)) }()
 
 	handler := tel.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		telemetry.SetRoute(r.Context(), "getTask")
+		telemetry.SetRoute(r.Context(), "tasks")
 		w.WriteHeader(http.StatusTeapot)
 	}), tel.NewHTTPMetrics())
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
-	req, err := http.NewRequestWithContext(t.Context(), "GET", server.URL+"/v1/workspaces/acme/tasks/x", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("traceparent", "00-"+traceID+"-00f067aa0ba902b7-01")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusTeapot || len(resp.Header.Get(telemetry.RequestIDHeader)) != 24 {
-		t.Fatalf("response %d, request id %q", resp.StatusCode, resp.Header.Get(telemetry.RequestIDHeader))
+	for _, call := range []struct{ method, path string }{
+		{"POST", "/v1/workspaces/acme/tasks"}, {"GET", "/v1/workspaces/acme/tasks/x"}, {"POST", "/v1/workspaces/acme/tasks/wait"},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), call.method, server.URL+call.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("traceparent", "00-"+traceID+"-00f067aa0ba902b7-01")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusTeapot || len(resp.Header.Get(telemetry.RequestIDHeader)) != 24 {
+			t.Fatalf("response %d, request id %q", resp.StatusCode, resp.Header.Get(telemetry.RequestIDHeader))
+		}
 	}
 	if err := tel.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
@@ -123,7 +128,7 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	recv.mu.Unlock()
 	// The caller's trace is a link, not the parent: a public caller does
 	// not decide sampling.
-	if len(spans) != 1 || spans[0].GetName() != "getTask" || hex.EncodeToString(spans[0].GetTraceId()) == traceID ||
+	if len(spans) != 1 || spans[0].GetName() != "tasks" || hex.EncodeToString(spans[0].GetTraceId()) == traceID ||
 		len(spans[0].GetLinks()) != 1 || hex.EncodeToString(spans[0].GetLinks()[0].GetTraceId()) != traceID {
 		t.Fatalf("exported spans %v", spans)
 	}
@@ -143,7 +148,7 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(body, `lazycloud_http_request_duration_seconds_count{operation="getTask",status="418"} 1`) {
+	if !strings.Contains(body, `lazycloud_http_request_duration_seconds_count{operation="tasks",status="418"} 3`) {
 		t.Fatalf("metrics lack the request:\n%s", body)
 	}
 	stop()
