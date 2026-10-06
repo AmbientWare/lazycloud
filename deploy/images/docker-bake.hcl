@@ -19,18 +19,17 @@ variable "SOURCE_DATE_EPOCH" {
   default = "0"
 }
 
-# The Python versions the platform serves, with the exact release of each
-# base image. The Dockerfile's runtimes take the minors as PYTHON_VERSIONS;
+# The Python releases of the base images, one per minor the platform
+# serves. The Dockerfile's runtimes take the minors as PYTHON_VERSIONS;
 # deploy/images/python-versions.sh prints them for the workflows and
 # build-runtime.sh.
 variable "PYTHON" {
-  default = [
-    { minor = "3.10", release = "3.10.20" },
-    { minor = "3.11", release = "3.11.15" },
-    { minor = "3.12", release = "3.12.13" },
-    { minor = "3.13", release = "3.13.14" },
-    { minor = "3.14", release = "3.14.6" },
-  ]
+  default = ["3.10.20", "3.11.15", "3.12.13", "3.13.14", "3.14.6"]
+}
+
+function "minor" {
+  params = [release]
+  result = regex_replace(release, "[.][0-9]+$", "")
 }
 
 group "default" {
@@ -50,7 +49,7 @@ target "_labels" {
 
 target "_python" {
   args = {
-    PYTHON_VERSIONS = join(" ", [for p in PYTHON : p.minor])
+    PYTHON_VERSIONS = join(" ", [for release in PYTHON : minor(release)])
   }
 }
 
@@ -98,16 +97,16 @@ target "agent" {
 # identities stay. A Docker Engine with the containerd image store would
 # otherwise unpack the image, which rewritten timestamps rule out.
 target "python" {
-  name      = "python-${replace(item.minor, ".", "")}"
-  matrix    = { item = PYTHON }
+  name      = "python-${replace(minor(release), ".", "")}"
+  matrix    = { release = PYTHON }
   inherits  = ["_labels"]
   context   = "deploy/images/python"
   platforms = ["linux/amd64"]
   args = {
-    PYTHON_VERSION    = item.release
+    PYTHON_VERSION    = release
     SOURCE_DATE_EPOCH = "0"
   }
   attest = ["type=provenance,disabled=true"]
   output = ["type=image,rewrite-timestamp=true,unpack=false"]
-  tags   = ["${REGISTRY}/python:${item.minor}-${VERSION}"]
+  tags   = ["${REGISTRY}/python:${minor(release)}-${VERSION}"]
 }
