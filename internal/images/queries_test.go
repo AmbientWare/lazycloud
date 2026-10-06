@@ -85,7 +85,7 @@ func TestStartReadsCostOneStatement(t *testing.T) {
 		{"no platform images", 0, func() error { _, err := im.PlatformPulls(ctx, host, nil); return err }},
 		{"trace record", 1, func() error { return im.RecordTrace(ctx, ws, pinned, []images.FrameRead{{}}) }},
 		{"grants of three references", 1, func() error {
-			_, err := im.LayerReadURLsOf(ctx, append([]string{pinned}, others...), host, time.Minute)
+			_, err := im.LayerReadURLs(ctx, append([]string{pinned}, others...), host, time.Minute)
 			return err
 		}},
 	}

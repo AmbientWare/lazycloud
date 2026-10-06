@@ -71,13 +71,25 @@ func bucketsOf(t *testing.T, reads images.LayerReads) []string {
 	return out
 }
 
+// readsOf is host's minute-long grant of reference's layers, which must be
+// converted.
 func readsOf(t *testing.T, im *images.Images, reference string, host compute.HostID) images.LayerReads {
 	t.Helper()
-	reads, err := im.LayerReadURLs(t.Context(), reference, host, time.Minute)
+	reads, err := im.LayerReadURLs(t.Context(), []string{reference}, host, time.Minute)
+	if err != nil || len(reads) != 1 {
+		t.Fatalf("grants of %s: %+v %v", reference, reads, err)
+	}
+	return reads[reference]
+}
+
+// unconverted reports whether host gets no grant of reference's layers.
+func unconverted(t *testing.T, im *images.Images, reference string, host compute.HostID) bool {
+	t.Helper()
+	reads, err := im.LayerReadURLs(t.Context(), []string{reference}, host, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return reads
+	return len(reads) == 0
 }
 
 // A host reads a layer from its region's copy only once a check found the

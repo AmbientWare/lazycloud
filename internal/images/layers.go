@@ -63,21 +63,7 @@ type LayerReads struct {
 // grants that read those layers from the layer bucket may read the copy.
 func ReplicasConfirmed(region string) string { return "layer-replicas:" + region }
 
-// LayerReadURLs is LayerReadURLsOf for one reference: a reference without
-// converted layers is ErrNotConverted.
-func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compute.HostID, ttl time.Duration) (LayerReads, error) {
-	reads, err := i.LayerReadURLsOf(ctx, []string{reference}, host, ttl)
-	if err != nil {
-		return LayerReads{}, err
-	}
-	out, ok := reads[reference]
-	if !ok {
-		return LayerReads{}, fmt.Errorf("%s: %w", reference, ErrNotConverted)
-	}
-	return out, nil
-}
-
-// LayerReadURLsOf presigns GET URLs, valid for up to ttl, for every layer of
+// LayerReadURLs presigns GET URLs, valid for up to ttl, for every layer of
 // each of references, images by digest, in layer order, for host: from its
 // region's copy of the layer bucket where that copy is confirmed to hold
 // the layer, and from the layer bucket otherwise. A reference is converted
@@ -87,7 +73,7 @@ func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compu
 // Layers belong to the reference rather than the image id: a workspace's
 // rebuild gives an image a new reference while releases that pinned the old
 // one keep running it.
-func (i *Images) LayerReadURLsOf(ctx context.Context, references []string, host compute.HostID, ttl time.Duration) (out map[string]LayerReads, err error) {
+func (i *Images) LayerReadURLs(ctx context.Context, references []string, host compute.HostID, ttl time.Duration) (out map[string]LayerReads, err error) {
 	ctx, span := telemetry.Start(ctx, "images.grant_layers", trace.WithAttributes(attribute.String(telemetry.AttrImage, strings.Join(references, " "))))
 	layers := 0
 	defer func() {

@@ -70,7 +70,7 @@ func (sess *session) signLayers(ctx context.Context, cache *syncCache, reference
 	}
 	sess.replicas.set(sess.server.listener, watched)
 	issued, lifetime := time.Now(), sess.server.config.LayerLifetime
-	reads, err := sess.server.images.LayerReadURLsOf(ctx, references, sess.host, lifetime)
+	reads, err := sess.server.images.LayerReadURLs(ctx, references, sess.host, lifetime)
 	var unconfirmed []string
 	for _, reference := range references {
 		r, ok := reads[reference]
