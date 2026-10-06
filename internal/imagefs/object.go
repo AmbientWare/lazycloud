@@ -91,8 +91,30 @@ func (o RangeReader) read(ctx context.Context, off int64, p []byte) error {
 	return nil
 }
 
-// ReadFrame returns frame i's uncompressed bytes.
-func (ix Index) ReadFrame(ctx context.Context, data RangeReader, i int) ([]byte, error) {
+// FrameReader reads frames through one decoder and keeps its buffers
+// between reads. It reads up to its concurrency frames at once. Its decoder
+// only decodes whole buffers, which starts no goroutines, so it is never
+// closed: reads may run until the process ends.
+type FrameReader struct {
+	dec *zstd.Decoder
+	// packed holds a buffer for each read at once, made on first use.
+	packed chan []byte
+}
+
+func NewFrameReader(concurrency int) (*FrameReader, error) {
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(concurrency), zstd.WithDecoderMaxMemory(FrameSize), zstd.IgnoreChecksum(false))
+	if err != nil {
+		return nil, fmt.Errorf("start frame decoder: %w", err)
+	}
+	r := &FrameReader{dec: dec, packed: make(chan []byte, concurrency)}
+	for range concurrency {
+		r.packed <- nil
+	}
+	return r, nil
+}
+
+// Read returns frame i of ix's uncompressed bytes, read from data.
+func (r *FrameReader) Read(ctx context.Context, ix Index, data RangeReader, i int) ([]byte, error) {
 	if i < 0 || i >= len(ix.Frames) {
 		return nil, fmt.Errorf("read frame %d of %d: out of range", i, len(ix.Frames))
 	}
@@ -100,17 +122,21 @@ func (ix Index) ReadFrame(ctx context.Context, data RangeReader, i int) ([]byte,
 	if f.Size <= 0 || f.Size > maxPackedFrame {
 		return nil, fmt.Errorf("%w: frame %d of %d bytes", ErrInvalidIndex, i, f.Size)
 	}
-	packed := make([]byte, f.Size)
-	if err := data.read(ctx, f.Offset, packed); err != nil {
+	var packed []byte
+	select {
+	case packed = <-r.packed:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("read frame %d: %w", i, ctx.Err())
+	}
+	if packed == nil {
+		packed = make([]byte, maxPackedFrame)
+	}
+	defer func() { r.packed <- packed }()
+	if err := data.read(ctx, f.Offset, packed[:f.Size]); err != nil {
 		return nil, fmt.Errorf("read frame %d: %w", i, err)
 	}
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(FrameSize), zstd.IgnoreChecksum(false))
-	if err != nil {
-		return nil, fmt.Errorf("start frame decoder: %w", err)
-	}
-	defer dec.Close()
 	want := ix.FrameLen(i)
-	out, err := dec.DecodeAll(packed, make([]byte, 0, want))
+	out, err := r.dec.DecodeAll(packed[:f.Size], make([]byte, 0, want))
 	if err != nil {
 		return nil, fmt.Errorf("%w: frame %d: %w", ErrInvalidIndex, i, err)
 	}

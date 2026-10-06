@@ -374,7 +374,11 @@ func TestLayerReadURLs(t *testing.T) {
 		if ix.Layer != want[n] {
 			t.Fatalf("layer %d index is of %s", n, ix.Layer)
 		}
-		frame, err := ix.ReadFrame(ctx, imagefs.HTTPObject(http.DefaultClient, func() string { return u.Data }), 0)
+		frames, err := imagefs.NewFrameReader(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := frames.Read(ctx, ix, imagefs.HTTPObject(http.DefaultClient, func() string { return u.Data }), 0)
 		if err != nil {
 			t.Fatal(err)
 		}

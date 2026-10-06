@@ -178,8 +178,12 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 			http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 		}))
 		t.Cleanup(object.Close)
+		frames, err := imagefs.NewFrameReader(1)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for f := range ix.Frames {
-			if _, err := ix.ReadFrame(t.Context(), imagefs.HTTPObject(object.Client(), func() string { return object.URL }), f); err != nil {
+			if _, err := frames.Read(t.Context(), ix, imagefs.HTTPObject(object.Client(), func() string { return object.URL }), f); err != nil {
 				t.Fatal(err)
 			}
 		}

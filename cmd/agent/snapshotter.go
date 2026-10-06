@@ -23,7 +23,6 @@ const (
 	// snapshotterBinary is a copy outside the agent's releases, which
 	// updates replace and prune while the snapshotter keeps running.
 	snapshotterBinary = "/usr/local/lib/lazycloud/" + snapshotterExecutable
-	snapshotterRoot   = "/var/lib/lazycloud-snapshotter"
 	containerdConfig  = "/etc/containerd/config.toml"
 	dockerConfig      = "/etc/docker/daemon.json"
 	// minDockerMajor is the first Docker with the containerd image store
@@ -41,7 +40,7 @@ Before=containerd.service docker.service
 
 [Service]
 Type=notify
-ExecStart=` + snapshotterBinary + ` --root=` + snapshotterRoot + `
+ExecStart=` + snapshotterBinary + `
 Restart=always
 RestartSec=2
 KillMode=process
@@ -58,17 +57,17 @@ const containerdProxy = `
   type = "snapshot"
   address = "` + layersource.Socket + `"
   [proxy_plugins.` + layersource.Snapshotter + `.exports]
-    root = "` + snapshotterRoot + `"
+    root = "` + layersource.Root + `"
 `
 
-// installSnapshotter installs the snapshotter from release and points
-// containerd and Docker at it: the containerd image store, the snapshotter
-// as storage driver and live-restore. A running snapshotter is left alone,
-// since restarting it breaks every container on the host. containerd and
-// Docker restart only when their settings change, which stops containers
-// that run then; Docker images pulled under another storage driver stay
-// hidden while this one is set.
-func installSnapshotter(release string, out io.Writer) error {
+// installSnapshotter installs the snapshotter beside the agent executable
+// and points containerd and Docker at it: the containerd image store, the
+// snapshotter as storage driver and live-restore. A running snapshotter is
+// left alone, since restarting it breaks every container on the host.
+// containerd and Docker restart only when their settings change, which
+// stops containers that run then; Docker images pulled under another
+// storage driver stay hidden while this one is set.
+func installSnapshotter(executable string, out io.Writer) error {
 	if err := checkDocker(); err != nil {
 		return err
 	}
@@ -78,8 +77,18 @@ func installSnapshotter(release string, out io.Writer) error {
 	active := exec.CommandContext(context.Background(), "systemctl", "is-active", "--quiet", snapshotterUnitName).Run() == nil //nolint:gosec // a fixed unit name
 	if active {
 		_, _ = fmt.Fprintln(out, "lazycloud-snapshotter is running and keeps its version; it changes on a drained host")
-	} else if err := copyFile(filepath.Join(release, snapshotterExecutable), snapshotterBinary); err != nil {
-		return err
+	} else {
+		exe, err := resolveAgent(executable)
+		if err != nil {
+			return err
+		}
+		binary, err := os.ReadFile(filepath.Join(filepath.Dir(exe), snapshotterExecutable)) //nolint:gosec // the snapshotter inside the agent's own release
+		if err != nil {
+			return fmt.Errorf("read the snapshotter from the agent release: %w", err)
+		}
+		if _, err := writeIfChanged(snapshotterBinary, binary, 0o755); err != nil {
+			return err
+		}
 	}
 	if _, err := writeIfChanged(filepath.Join(systemdUnits, snapshotterUnitName), []byte(snapshotterUnit), 0o644); err != nil {
 		return err
@@ -200,19 +209,5 @@ func installSnapshotterCommand() error {
 	if err != nil {
 		return fmt.Errorf("find the agent executable: %w", err)
 	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		return fmt.Errorf("resolve the agent executable: %w", err)
-	}
-	return installSnapshotter(filepath.Dir(exe), os.Stderr)
-}
-
-func copyFile(from, to string) error {
-	data, err := os.ReadFile(from) //nolint:gosec // the snapshotter inside the agent's own release
-	if err != nil {
-		return fmt.Errorf("read the snapshotter from the agent release: %w", err)
-	}
-	if _, err := writeIfChanged(to, data, 0o755); err != nil {
-		return err
-	}
-	return nil
+	return installSnapshotter(exe, os.Stderr)
 }

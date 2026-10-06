@@ -3,10 +3,10 @@ package snapshotter
 import (
 	"context"
 	"io/fs"
-	"log/slog"
 	"maps"
 	"path"
 	"slices"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,36 +21,19 @@ import (
 // reads it from lower layers mounted as trusted.
 const opaqueXattr = "trusted.overlay.opaque"
 
-// layer is one converted layer a mount reads.
+// layer is one converted layer its mounts read. The mounts of one digest
+// share it.
 type layer struct {
 	digest imagefs.Digest
 	index  imagefs.Index
 	// data reads the data object through the layer's current grant.
-	data   imagefs.RangeReader
-	frames *frameCache
-	log    *slog.Logger
-	failed func()
-}
-
-// read fills dest with e's bytes from off and returns how many it read. A
-// read the store cannot serve fails whole; it never returns partial or
-// zeroed bytes.
-func (l *layer) read(e *imagefs.Entry, dest []byte, off int64) (int, error) {
-	if off >= e.Size {
-		return 0, nil
-	}
-	n := min(int64(len(dest)), e.Size-off)
-	start := e.Offset + off
-	for pos := start; pos < start+n; {
-		frame := pos / imagefs.FrameSize
-		frameStart := frame * imagefs.FrameSize
-		end := min(start+n, frameStart+imagefs.FrameSize)
-		if err := l.frames.read(l, int(frame), dest[pos-start:end-start], pos-frameStart); err != nil {
-			return 0, err
-		}
-		pos = end
-	}
-	return int(n), nil
+	data  imagefs.RangeReader
+	cache *frameCache
+	// traced holds the tracer generation each frame was last recorded in.
+	traced []atomic.Uint32
+	// Guarded by cache.mu.
+	mounts   int
+	stopFill context.CancelFunc
 }
 
 // node is one inode of a mounted layer. Hard links share one node.
@@ -71,15 +54,11 @@ var (
 	_ gofs.NodeReader      = (*node)(nil)
 )
 
-// rootEntry stands in for a layer whose tar has no "." member.
-func rootEntry() *imagefs.Entry {
-	return &imagefs.Entry{Path: ".", Type: imagefs.TypeDirectory, Mode: fs.ModeDir | 0o755, ModTime: time.Unix(0, 0).UTC()}
-}
-
 // newRoot returns the root of l's file tree; build fills it in once it is
-// mounted.
+// mounted. A layer whose tar has no "." member gets a plain root.
 func newRoot(l *layer) *node {
-	root := &node{layer: l, entry: rootEntry(), ino: 1, nlink: 2}
+	root := &node{layer: l, ino: 1, nlink: 2,
+		entry: &imagefs.Entry{Path: ".", Type: imagefs.TypeDirectory, Mode: fs.ModeDir | 0o755, ModTime: time.Unix(0, 0).UTC()}}
 	for i := range l.index.Entries {
 		if l.index.Entries[i].Path == "." {
 			root.entry = &l.index.Entries[i]
@@ -146,44 +125,39 @@ func (n *node) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrOut) 
 	return 0
 }
 
-func (n *node) xattrs() map[string][]byte {
-	if !n.entry.Opaque {
-		return n.entry.Xattrs
-	}
-	all := maps.Clone(n.entry.Xattrs)
-	if all == nil {
-		all = make(map[string][]byte, 1)
-	}
-	all[opaqueXattr] = []byte("y")
-	return all
-}
-
 func (n *node) Getxattr(_ context.Context, attr string, dest []byte) (uint32, syscall.Errno) {
-	v, ok := n.xattrs()[attr]
+	v, ok := n.entry.Xattrs[attr]
+	if attr == opaqueXattr && n.entry.Opaque {
+		v, ok = []byte("y"), true
+	}
 	if !ok {
 		return 0, syscall.ENODATA
 	}
-	if len(dest) == 0 {
-		return uint32(len(v)), 0 //nolint:gosec // xattr values are small
-	}
-	if len(dest) < len(v) {
-		return uint32(len(v)), syscall.ERANGE //nolint:gosec // xattr values are small
-	}
-	return uint32(copy(dest, v)), 0 //nolint:gosec // xattr values are small
+	return xattrReply(dest, v)
 }
 
 func (n *node) Listxattr(_ context.Context, dest []byte) (uint32, syscall.Errno) {
+	names := slices.Collect(maps.Keys(n.entry.Xattrs))
+	if _, ok := n.entry.Xattrs[opaqueXattr]; n.entry.Opaque && !ok {
+		names = append(names, opaqueXattr)
+	}
+	slices.Sort(names)
 	var list []byte
-	for _, name := range slices.Sorted(maps.Keys(n.xattrs())) {
+	for _, name := range names {
 		list = append(append(list, name...), 0)
 	}
+	return xattrReply(dest, list)
+}
+
+// xattrReply copies v to dest, or gives its size when dest is empty.
+func xattrReply(dest, v []byte) (uint32, syscall.Errno) {
 	if len(dest) == 0 {
-		return uint32(len(list)), 0 //nolint:gosec // xattr names are small
+		return uint32(len(v)), 0 //nolint:gosec // xattrs are small
 	}
-	if len(dest) < len(list) {
-		return uint32(len(list)), syscall.ERANGE //nolint:gosec // xattr names are small
+	if len(dest) < len(v) {
+		return uint32(len(v)), syscall.ERANGE //nolint:gosec // xattrs are small
 	}
-	return uint32(copy(dest, list)), 0 //nolint:gosec // xattr names are small
+	return uint32(copy(dest, v)), 0 //nolint:gosec // xattrs are small
 }
 
 func (n *node) Readlink(context.Context) ([]byte, syscall.Errno) {
@@ -201,16 +175,23 @@ func (n *node) Open(_ context.Context, flags uint32) (gofs.FileHandle, uint32, s
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }
 
-// Read fails with EIO when the store cannot serve the bytes, logged and
-// counted.
+// Read fills dest with the file's bytes from off, frame by frame. A read
+// the store cannot serve fails whole with EIO, logged; it never returns
+// partial or zeroed bytes.
 func (n *node) Read(ctx context.Context, _ gofs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	got, err := n.layer.read(n.entry, dest, off) //nolint:contextcheck // a shared fetch runs under the cache's life
-	if err != nil {
-		n.layer.failed()
-		n.layer.log.ErrorContext(ctx, "layer read failed", "layer", n.layer.digest, "path", n.entry.Path, "offset", off, "error", err)
-		return nil, syscall.EIO
+	l, e := n.layer, n.entry
+	dest = dest[:max(0, min(int64(len(dest)), e.Size-off))]
+	for done := 0; done < len(dest); {
+		pos := e.Offset + off + int64(done)
+		within := pos % imagefs.FrameSize
+		part := dest[done:min(len(dest), done+int(imagefs.FrameSize-within))]
+		if err := l.cache.read(l, int(pos/imagefs.FrameSize), part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
+			l.cache.log.ErrorContext(ctx, "layer read failed", "layer", l.digest, "path", e.Path, "offset", off, "error", err)
+			return nil, syscall.EIO
+		}
+		done += len(part)
 	}
-	return fuse.ReadResultData(dest[:got]), 0
+	return fuse.ReadResultData(dest), 0
 }
 
 func fileType(t imagefs.EntryType) uint32 {

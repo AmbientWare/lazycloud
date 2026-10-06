@@ -51,12 +51,12 @@ func TestHTTPObjectReadsFramesThroughPresignedURLs(t *testing.T) {
 	current := presign(2 * time.Second)
 	object := HTTPObject(http.DefaultClient, func() string { return current })
 	frames := map[int][]byte{}
-	if frames[0], err = ix.ReadFrame(ctx, object, 0); err != nil {
+	if frames[0], err = frameReader(t).Read(ctx, ix, object, 0); err != nil {
 		t.Fatal(err)
 	}
 	var refused *StatusError
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(250 * time.Millisecond) {
-		_, err = ix.ReadFrame(ctx, object, 1)
+		_, err = frameReader(t).Read(ctx, ix, object, 1)
 		if errors.As(err, &refused) || time.Now().After(deadline) {
 			break
 		}
@@ -95,7 +95,7 @@ func TestRefusedReadsKeepOnlyTheStoreErrorCode(t *testing.T) {
 	server := refusingStore(t)
 	url := server.URL + "/layer?X-Amz-Signature=secret"
 	ix, _ := roundTrip(t, fileTar(t, "app", []byte("hi")))
-	_, frameErr := ix.ReadFrame(t.Context(), HTTPObject(server.Client(), func() string { return url }), 0)
+	_, frameErr := frameReader(t).Read(t.Context(), ix, HTTPObject(server.Client(), func() string { return url }), 0)
 	_, _, indexErr := FetchIndex(t.Context(), server.Client(), url)
 	for name, err := range map[string]error{"frame": frameErr, "index": indexErr} {
 		var refused *StatusError
