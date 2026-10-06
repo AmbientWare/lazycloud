@@ -998,24 +998,24 @@ func (c *container) complete(ctx context.Context, seq uint64, finished *hostprot
 	}
 	ctx, span := c.attemptSpan(ctx, finished.GetAttemptId())
 	defer span.End()
-	c.a.deliverOutcome(ctx, c.log.With("attempt_id", finished.GetAttemptId()), "task", completeCallTimeout, func(ctx context.Context) error {
+	deliverOutcome(ctx, c.a.drain, c.log.With("attempt_id", finished.GetAttemptId()), "task", completeCallTimeout, func(ctx context.Context) error {
 		_, err := c.a.host.CompleteTask(ctx, request)
 		return err //nolint:wrapcheck // deliverOutcome reads the call's status.
 	})
 }
 
 // deliverOutcome calls send until the server takes the outcome or refuses
-// it, retrying transient failures with backoff until ctx ends. A call is
-// bounded by timeout and the agent's drain but not cut short by ctx, so the
-// call in flight when the container or agent stops still lands, and a stop
-// during a backoff leaves one last call.
-func (a *Agent) deliverOutcome(ctx context.Context, log *slog.Logger, what string, timeout time.Duration, send func(context.Context) error) {
+// it, retrying transient failures with backoff until ctx ends. Calls run
+// until timeout or until ends, which may be later than ctx: with the
+// agent's drain as until, the call in flight when the container or agent
+// stops still lands, and a stop during a backoff leaves one last call.
+func deliverOutcome(ctx, until context.Context, log *slog.Logger, what string, timeout time.Duration, send func(context.Context) error) {
 	delay := 100 * time.Millisecond
-	for {
+	for until.Err() == nil {
 		call, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		drained := context.AfterFunc(a.drain, cancel)
+		stop := context.AfterFunc(until, cancel)
 		err := send(call)
-		drained()
+		stop()
 		cancel()
 		switch {
 		case err == nil:

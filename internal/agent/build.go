@@ -737,7 +737,7 @@ func (c *container) publishBuild(ctx, work context.Context, build *hostproto.Ima
 // covers an outcome never delivered.
 func (c *container) completeBuild(ctx context.Context, request *hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse {
 	var resp *hostproto.CompleteImageBuildResponse
-	c.a.deliverOutcome(ctx, c.log, "build", publishCallTimeout, func(ctx context.Context) error {
+	deliverOutcome(ctx, c.a.drain, c.log, "build", publishCallTimeout, func(ctx context.Context) error {
 		var err error
 		resp, err = c.a.host.CompleteImageBuild(ctx, request)
 		return err //nolint:wrapcheck // deliverOutcome reads the call's status.

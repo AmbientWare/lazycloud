@@ -101,22 +101,36 @@ func TestCompletionOutlastsAServerOutage(t *testing.T) {
 
 // An outcome call in flight when the agent stops keeps going, so the
 // outcome still lands, until the drain ends it, so the agent exits inside
-// its stop timeout.
-func TestOutcomeCallsEndWithTheDrain(t *testing.T) {
+// its stop timeout; an outcome whose window ends makes no call past it.
+func TestOutcomeCallsEndWithTheirBound(t *testing.T) {
+	calls := 0
+	deliver := func(ctx, until context.Context) chan struct{} {
+		calling, delivered := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(delivered)
+			deliverOutcome(ctx, until, slog.New(slog.DiscardHandler), "task", time.Hour, func(ctx context.Context) error {
+				if calls++; calls == 1 {
+					close(calling)
+				}
+				<-ctx.Done()
+				return status.Error(codes.Unavailable, ctx.Err().Error())
+			})
+		}()
+		<-calling
+		return delivered
+	}
+	ended := func(delivered chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the outcome call outlived %s", what)
+		}
+	}
+
 	stopped, stop := context.WithCancel(t.Context())
 	drain, endDrain := context.WithCancel(t.Context())
-	a := &Agent{drain: drain}
-	calling := make(chan struct{})
-	delivered := make(chan struct{})
-	go func() {
-		defer close(delivered)
-		a.deliverOutcome(stopped, slog.New(slog.DiscardHandler), "task", time.Hour, func(ctx context.Context) error {
-			close(calling)
-			<-ctx.Done()
-			return status.Error(codes.Unavailable, ctx.Err().Error())
-		})
-	}()
-	<-calling
+	delivered := deliver(stopped, drain)
 	stop()
 	select {
 	case <-delivered:
@@ -124,10 +138,14 @@ func TestOutcomeCallsEndWithTheDrain(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	endDrain()
-	select {
-	case <-delivered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the outcome call outlived the drain")
+	ended(delivered, "the drain")
+
+	calls = 0
+	window, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	ended(deliver(window, window), "its window")
+	if calls != 1 {
+		t.Fatalf("an outcome made %d calls in a window one call outlasted", calls)
 	}
 }
 

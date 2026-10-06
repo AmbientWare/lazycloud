@@ -578,10 +578,10 @@ func (a *Agent) releaseOperation(key string) {
 	delete(a.operations, key)
 }
 
-// deliver delivers an operation's outcome, retrying transient failures
-// until reportGrace past deadline.
+// deliver delivers an operation's outcome, retrying transient failures; no
+// call runs past reportGrace after deadline, when the server stops waiting.
 func (a *Agent) deliver(ctx context.Context, deadline time.Time, what string, report func(context.Context) error) {
 	ctx, cancel := context.WithDeadline(ctx, deadline.Add(reportGrace))
 	defer cancel()
-	a.deliverOutcome(ctx, a.log, what, completeCallTimeout, report)
+	deliverOutcome(ctx, ctx, a.log, what, completeCallTimeout, report)
 }

@@ -65,12 +65,15 @@ func grantsIn(layers []*hostproto.LayerGrant) []layersource.Grant {
 	return out
 }
 
-// grant hands layers to the snapshotter for the start name and returns
-// once it holds them.
+// grant hands layers to the snapshotter for the platform image start name
+// and returns once it holds them.
 func (l *layerSources) grant(ctx context.Context, name string, layers []*hostproto.LayerGrant) error {
 	if len(layers) == 0 {
 		return nil
 	}
+	l.smu.Lock()
+	l.shareLocked(name, layersOf(layers))
+	l.smu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
 	return l.client.Grant(ctx, name, grantsIn(layers)) //nolint:wrapcheck // The client names the call.
@@ -159,8 +162,23 @@ type startup struct {
 	tracing     bool
 	// traced is when the trace began.
 	traced time.Time
+	// shared is set once another start or a platform image on the host
+	// names one of its layers.
+	shared bool
 	// released is closed once the container exited or failed to start.
 	released chan struct{}
+}
+
+// shareLocked marks shared every live start other than name that uses one
+// of layers, and reports whether there was one.
+func (l *layerSources) shareLocked(name string, layers []imagefs.Digest) bool {
+	shared := false
+	for id, other := range l.startups {
+		if id != name && slices.ContainsFunc(layers, func(d imagefs.Digest) bool { return slices.Contains(other.layers, d) }) {
+			other.shared, shared = true, true
+		}
+	}
+	return shared
 }
 
 // begin records that container starts with layers and reports whether a
@@ -168,22 +186,23 @@ type startup struct {
 func (l *layerSources) begin(container string, layers []imagefs.Digest) bool {
 	l.smu.Lock()
 	defer l.smu.Unlock()
-	shared := false
-	for id, other := range l.startups {
-		shared = shared || (id != container && slices.ContainsFunc(layers, func(d imagefs.Digest) bool { return slices.Contains(other.layers, d) }))
-	}
-	l.startups[container] = &startup{layers: layers, released: make(chan struct{})}
+	shared := l.shareLocked(container, layers)
+	l.startups[container] = &startup{layers: layers, shared: shared, released: make(chan struct{})}
 	return shared
 }
 
 // start hands the start's grants to the snapshotter, which then reads the
 // image's layers only through them, and returns once it holds them. It
 // then starts the start's prefetch, and its trace when asked and no live
-// start on the host shares a layer, and reports whether it traces. The
-// snapshotter cannot tell apart the reads of starts sharing a layer: it
-// leaves incomplete a trace whose layers a later start names or that began
-// with one mounted. Prefetching and tracing only speed starts up, so their
-// refusals are logged.
+// start on the host shares a layer, and reports whether it traces.
+// Prefetching and tracing only speed starts up, so their refusals are
+// logged.
+//
+// The snapshotter cannot tell apart the reads of starts sharing a layer. It
+// leaves incomplete a trace that began with one of its layers mounted or
+// whose layers a later grant names, but not one whose layers another start
+// was granted, unmounted, before it began. The agent marks such a start
+// shared, and end drops its trace.
 func (l *layerSources) start(ctx context.Context, log *slog.Logger, container string, spec *hostproto.StartContainer) (bool, error) {
 	if len(spec.GetLayers()) == 0 {
 		return false, nil
@@ -275,7 +294,11 @@ func (l *layerSources) end(ctx context.Context, log *slog.Logger, container stri
 		log.Warn("ending the startup read trace failed", "error", err)
 		return nil
 	}
-	if !complete || len(reads) == 0 {
+	// A start that began while the trace ended shares it too.
+	l.smu.Lock()
+	shared := s.shared
+	l.smu.Unlock()
+	if !complete || shared || len(reads) == 0 {
 		return nil
 	}
 	trace := &hostproto.ImageTrace{Reads: make([]*hostproto.FrameRead, len(reads))}
