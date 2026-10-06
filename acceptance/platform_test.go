@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
@@ -45,6 +47,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
@@ -60,8 +63,9 @@ const (
 	registryImage   = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 )
 
-// supervisorBinary is built once per test binary.
-var supervisorBinary string //nolint:gochecknoglobals // built once in TestMain
+// supervisorBinary is built once per test binary, and registry is the
+// platform registry every test's server shares.
+var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
@@ -75,7 +79,13 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(fmt.Sprintf("build supervisor: %v", err))
 	}
+	address, stop, err := startRegistry()
+	if err != nil {
+		panic(err)
+	}
+	registry = address
 	code := m.Run()
+	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
@@ -120,43 +130,91 @@ func runtimeDir(t *testing.T) string {
 	return dir
 }
 
-// startRegistry runs the platform registry on a loopback port for the test.
-func startRegistry(t *testing.T) string {
-	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
+// startRegistry runs the platform registry on a loopback port and returns
+// its address and how to remove it.
+func startRegistry() (string, func(), error) {
+	ctx := context.Background()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
 	if err != nil {
-		t.Fatalf("start registry: %v", err)
+		return "", nil, fmt.Errorf("start registry: %w", err)
 	}
 	id := strings.TrimSpace(string(out))
-	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
-	port, err := exec.CommandContext(t.Context(), "docker", "port", id, "5000/tcp").Output()
+	stop := func() { _ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run() }
+	port, err := exec.CommandContext(ctx, "docker", "port", id, "5000/tcp").Output()
 	if err != nil {
-		t.Fatal(err)
+		stop()
+		return "", nil, fmt.Errorf("registry port: %w", err)
 	}
 	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
-	for deadline := time.Now().Add(30 * time.Second); ; {
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
 		if err == nil {
 			_ = resp.Body.Close()
-			return address
+			return address, stop, nil
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("registry did not start: %v", err)
+			stop()
+			return "", nil, fmt.Errorf("registry did not start: %w", err)
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// newImages is the images owner every test's server runs over pool.
+func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
+	return images.NewImages(pool, exec, vault, store, images.Config{
+		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: managedTemplate,
+	})
+}
+
+// convertImages converts the platform images and the managed image for
+// this host's architecture into pool, the template every test's database
+// is cloned from, so each test starts with them converted, as a server
+// that converted them at its start would.
+func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
+	started := time.Now()
+	key, err := secrets.NewFileKey(make([]byte, 32))
+	if err != nil {
+		return err
+	}
+	exec := execution.NewExecution(pool)
+	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, storagetest.Config()))
+	source, err := im.ManagedSource(ctx, pythonVersion)
+	if err != nil {
+		return err
+	}
+	references := append(platformimages.All(), source)
+	g, ctx := errgroup.WithContext(ctx)
+	for _, reference := range references {
+		g.Go(func() error {
+			began := time.Now()
+			if err := im.ConvertPlatformImage(ctx, reference, goruntime.GOARCH); err != nil {
+				return err
+			}
+			fmt.Printf("converted %s in %s\n", reference, time.Since(began).Round(time.Millisecond))
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	var converted int
+	if err := pool.QueryRow(ctx, "select count(*) from platform_images where mirror is not null").Scan(&converted); err != nil {
+		return err
+	}
+	if converted != len(references) {
+		return fmt.Errorf("%d of %d images converted", converted, len(references))
+	}
+	fmt.Printf("converted the platform and managed images once in %s\n", time.Since(started).Round(time.Millisecond))
+	return nil
 }
 
 func startPlatform(t *testing.T) *platform {
 	t.Helper()
 	runtime := runtimeDir(t)
-	registry := startRegistry(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	level := new(slog.LevelVar)
-	level.Set(slog.LevelDebug)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	pool := dbtest.New(t)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
 		execution: execution.NewExecution(pool),
@@ -206,9 +264,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, p.execution, vault, p.storage, images.Config{
-		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: managedTemplate,
-	})
+	im := newImages(pool, p.execution, vault, p.storage)
 	p.secrets = vault
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
@@ -321,36 +377,30 @@ func startPlatform(t *testing.T) *platform {
 			t.Errorf("agent: %v", err)
 		}
 	})
-	p.convertManagedImage(im)
-	level.Set(slog.LevelWarn)
+	p.awaitHost(im)
 	return p
 }
 
-// convertManagedImage waits until the host joined and the managed image is
-// converted: its mirror build runs in the converted builder image and
-// uploads its layers. Tests' deadlines then measure their own workflows,
-// not the platform's first conversions.
-func (p *platform) convertManagedImage(im *images.Images) {
+// awaitHost waits until the host joined and the managed image pulls for
+// it, so tests' deadlines measure their own workflows.
+func (p *platform) awaitHost(im *images.Images) {
 	p.t.Helper()
 	ctx := p.t.Context()
-	started := time.Now()
-	for deadline := started.Add(10 * time.Minute); ; time.Sleep(time.Second) {
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			p.t.Fatal("the managed image did not convert within 10 minutes")
+			p.t.Fatal("the host did not join with the managed image converted within a minute")
 		}
 		var host uuid.UUID
 		if err := p.pool.QueryRow(ctx, "select id from hosts where state = 'online' limit 1").Scan(&host); err != nil {
 			continue
 		}
-		_, err := im.ManagedPull(ctx, compute.HostID(host), p.workspace.ID, pythonVersion)
+		_, err := im.ManagedPull(ctx, compute.HostID(host), pythonVersion)
 		switch {
 		case err == nil:
-			p.t.Logf("the managed image converted in %s", time.Since(started).Round(time.Millisecond))
-			p.timeline(started)
 			return
 		case errors.Is(err, images.ErrNotReady):
 		default:
-			p.t.Fatalf("convert the managed image: %v", err)
+			p.t.Fatalf("pull the managed image: %v", err)
 		}
 	}
 }
@@ -594,40 +644,4 @@ func (p *platform) startEdge() string {
 		wg.Wait()
 	})
 	return traffic.Addr().String()
-}
-
-// timeline logs when each step of the first conversions happened, relative
-// to started. Diagnostic only.
-func (p *platform) timeline(started time.Time) {
-	ctx := p.t.Context()
-	rows, err := p.pool.Query(ctx, `
-select at, what from (
-    select created_at as at, 'host row ' || name as what from hosts
-    union all select created_at, 'platform image row ' || reference || ' ' || coalesce(failure, '') from platform_images
-    union all select failed_at, 'platform image failed ' || reference || ' ' || coalesce(failure, '') from platform_images where failed_at is not null
-    union all select created_at, 'layer pair ' || blob_digest || ' ' || data_bytes from image_layers
-    union all select created_at, 'build created ' || id || ' mirror=' || mirror from image_builds
-    union all select finished_at, 'build finished ' || id || ' ' || state from image_builds where finished_at is not null
-    union all select created_at, 'build container created ' || id from containers where image_build_id is not null
-    union all select assigned_at, 'build container assigned ' || id from containers where image_build_id is not null and assigned_at is not null
-    union all select ready_at, 'build container ready ' || id from containers where image_build_id is not null and ready_at is not null
-    union all select stopped_at, 'build container stopped ' || id from containers where image_build_id is not null and stopped_at is not null
-    union all select logged_at, 'log ' || left(data, 300) from image_build_logs
-    union all select ready_at, 'image ready ' || id from images where ready_at is not null
-    union all select created_at, 'upload offered ' || blob_digest from image_layer_uploads
-) t order by at`)
-	if err != nil {
-		p.t.Logf("timeline: %v", err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var at time.Time
-		var what string
-		if err := rows.Scan(&at, &what); err != nil {
-			p.t.Logf("timeline: %v", err)
-			return
-		}
-		p.t.Logf("timeline %+8.3fs %s", at.Sub(started).Seconds(), what)
-	}
 }

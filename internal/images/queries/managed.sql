@@ -1,19 +1,19 @@
--- name: ManagedImage :one
--- The managed image for a version, template and architecture, as workspace
--- sees it.
-select i.digest, i.id, i.dockerfile, i.python_version, i.architecture,
-       coalesce(w.reference, i.reference) as reference,
-       exists (select 1 from image_reference_layers r where r.reference = coalesce(w.reference, i.reference))::bool as converted
-from managed_images m
-join images i on i.digest = m.image_digest
-left join workspace_images w on w.image_digest = i.digest and w.workspace_id = @workspace_id
-where m.python_version = @python_version and m.template = @template and m.architecture = @architecture;
+-- name: ManagedSource :one
+-- The source pinned for a Python version and template.
+select source from managed_images where python_version = @python_version and template = @template;
 
--- name: RecordManagedImage :exec
--- The first image recorded for a version, template and architecture stays.
-insert into managed_images (python_version, template, architecture, image_digest)
-values (@python_version, @template, @architecture, @image_digest)
-on conflict do nothing;
+-- name: RecordManagedSource :one
+-- The first source recorded for a version and template stays.
+with recorded as (
+    insert into managed_images (python_version, template, source)
+    values (@python_version, @template, @source)
+    on conflict do nothing
+    returning source
+)
+select source from recorded
+union all
+select source from managed_images where python_version = @python_version and template = @template
+limit 1;
 
 -- name: HostArchitecture :one
 select architecture from hosts where id = @id;

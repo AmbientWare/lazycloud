@@ -233,7 +233,7 @@ with live_releases as (
 ), live as (
     select r.spec -> 'image' ->> 'reference' as reference from releases r join live_releases l on l.id = r.id
     union
-    select i.reference from managed_images m join images i on i.digest = m.image_digest where i.reference is not null
+    select p.mirror from managed_images m join platform_images p on p.reference = m.source where p.mirror is not null
     union
     select u.reference from image_reference_uses u
     where u.used_at > now() - make_interval(secs => $1::float8)

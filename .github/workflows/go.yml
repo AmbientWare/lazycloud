@@ -141,7 +141,7 @@ jobs:
       - name: Acceptance
         run: |
           set -o pipefail
-          go test -race -timeout 60m -v -run 'TestFunctionsAreInvokedOverHTTP' ./acceptance 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
+          go test -race -timeout 60m -v ./acceptance 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
           if grep -- '--- SKIP' "$RUNNER_TEMP/acceptance.log"; then
             echo "acceptance tests skipped" >&2
             exit 1

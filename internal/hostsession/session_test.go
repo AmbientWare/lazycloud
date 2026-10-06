@@ -43,30 +43,51 @@ import (
 // images.
 const managedTemplate = "docker.io/library/python:{version}-slim"
 
-// managedReference is where the managed image for version is published.
-func managedReference(version string) string {
-	return "127.0.0.1:1/lazycloud/images/managed-" + version + "@sha256:" + strings.Repeat("c", 64)
+// managedSource is the template's image for version by digest, as the
+// server pins it.
+func managedSource(version string) string {
+	return "docker.io/library/python@sha256:" + strings.Repeat(version[len(version)-1:], 64)
 }
 
-// publishManagedImage records the managed image for version as a build
-// would publish it, with one converted layer.
+// managedReference is the managed image's converted copy for version.
+func managedReference(version string) string {
+	return "127.0.0.1:1/lazycloud/platform/docker.io/library/python-" + version + "@sha256:" + strings.Repeat("c", 64)
+}
+
+// recordManagedSource records the source the server pinned for version.
+func recordManagedSource(t *testing.T, pool *pgxpool.Pool, version string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), "insert into managed_images (python_version, template, source) values ($1, $2, $3)",
+		version, managedTemplate, managedSource(version)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// publishManagedImage records the managed image for version as the
+// server's conversion would, with one converted layer.
 func publishManagedImage(t *testing.T, pool *pgxpool.Pool, version string) {
 	t.Helper()
+	recordManagedSource(t, pool, version)
+	convertManagedImage(t, pool, version)
+}
+
+// convertManagedImage records the converted copy of version's managed
+// image and announces it, as the conversion's lease owner does.
+func convertManagedImage(t *testing.T, pool *pgxpool.Pool, version string) {
+	t.Helper()
 	_, err := pool.Exec(t.Context(), `
-with image as (
-    insert into images (digest, id, dockerfile, python_version, architecture, reference, ready_at)
-    values (sha256($1::bytea), 'img_' || left(encode(sha256($1::bytea), 'hex'), 24), 'FROM python', $2, 'amd64', $3, now())
-    returning digest
-), managed as (
-    insert into managed_images (python_version, template, architecture, image_digest)
-    select $2, $4, 'amd64', digest from image
+with copy as (
+    insert into platform_images (reference, architecture, mirror) values ($1, 'amd64', $2)
+    on conflict (reference, architecture) do update set mirror = excluded.mirror, lease_token = null, leased_until = null
 ), layer as (
     insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
-    values (gen_random_uuid(), 'sha256:' || encode(sha256($1::bytea), 'hex'), 'sha256:' || encode(sha256($1::bytea), 'hex'), 1, 0, 0, 0)
+    values (gen_random_uuid(), 'sha256:' || encode(sha256($3::bytea), 'hex'), 'sha256:' || encode(sha256($3::bytea), 'hex'), 1, 0, 0, 0)
     returning id
+), refs as (
+    insert into image_reference_layers (reference, position, layer_id) select $2, 0, id from layer
 )
-insert into image_reference_layers (reference, position, layer_id) select $3, 0, id from layer`,
-		[]byte("managed "+version), version, managedReference(version), managedTemplate)
+select pg_notify('lc_image_build', 'platform-images')`,
+		managedSource(version), managedReference(version), []byte("managed "+version))
 	if err != nil {
 		t.Fatal(err)
 	}

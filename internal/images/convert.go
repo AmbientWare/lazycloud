@@ -41,13 +41,13 @@ func (e *ConversionError) Error() string { return "the image cannot be converted
 
 // A container starts only from a converted reference. An image without
 // one gets it from a mirror build, a build with no steps that copies the
-// image into the platform registry and converts its layers: the platform's
-// managed Python image (ManagedPull), and a reference published or pinned
-// without layer rows (ConvertedPull, Deployable, Prepare). A public or
-// platform-global image mirrors on a platform host for every workspace; a
-// workspace's own image mirrors where its builds run, for it alone. The
-// first request that needs one starts it and the others join it; each gets
-// a BuildWaitError until it publishes.
+// image into the platform registry and converts its layers: a reference
+// published or pinned without layer rows (ConvertedPull, Deployable,
+// Prepare). The managed Python image is the server's to convert instead
+// (ManagedPull). A public or platform-global image mirrors on a platform
+// host for every workspace; a workspace's own image mirrors where its
+// builds run, for it alone. The first request that needs one starts it and
+// the others join it; each gets a BuildWaitError until it publishes.
 
 // Prepare makes image id of workspace ready to deploy. An image ready
 // returns no build. A stored reference without layer rows starts or joins
@@ -197,61 +197,88 @@ func (i *Images) adoptLayers(ctx context.Context, workspace identity.WorkspaceID
 	return i.RecordUses(ctx, []string{reference})
 }
 
-// ManagedPull is how a container of workspace on host with no image of its
-// own pulls the platform's image for python: Config.ManagedBase mirrored
-// into the platform registry and converted. Hosts pull the mirror, never
-// the template's registry.
-func (i *Images) ManagedPull(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID, python string) (Pull, error) {
-	architecture, err := i.queries.HostArchitecture(ctx, uuid.UUID(host))
-	if err != nil {
-		return Pull{}, fmt.Errorf("read host architecture: %w", err)
-	}
-	key := ManagedImageParams{WorkspaceID: uuid.UUID(workspace), PythonVersion: python, Template: i.config.ManagedBase, Architecture: architecture}
-	row, err := i.queries.ManagedImage(ctx, key)
-	var p prepared
-	switch {
-	case err == nil && row.Reference != nil && row.Converted:
-		return i.PullOf(ctx, row.ID, *row.Reference)
-	case err == nil:
-		// The recorded image, not the template's current digest: the image
-		// stays the same until the template changes.
-		p = prepared{
-			spec: spec{python: row.PythonVersion, architecture: row.Architecture}, dockerfile: row.Dockerfile, digest: row.Digest, id: row.ID,
-			secretVersions: map[string]string{},
-		}
-	case errors.Is(err, pgx.ErrNoRows):
-		arch := apitypes.ImageDefinitionArchitecture(architecture)
-		p, err = i.prepare(ctx, workspace, apitypes.ImageDefinition{PythonVersion: python, Architecture: &arch})
-		var invalid *InvalidError
-		if errors.As(err, &invalid) {
-			return Pull{}, &ConversionError{Reason: invalid.Reason}
-		}
-		if err != nil {
-			return Pull{}, err
-		}
-		image, err := i.buildOrWait(ctx, workspace, p, buildSharedMirror)
-		var waiting *BuildWaitError
-		if err != nil && !errors.As(err, &waiting) {
-			return Pull{}, err
-		}
-		// The image row exists once its build was asked for.
-		if err := i.queries.RecordManagedImage(ctx, RecordManagedImageParams{
-			PythonVersion: python, Template: i.config.ManagedBase, Architecture: architecture, ImageDigest: p.digest,
-		}); err != nil {
-			return Pull{}, fmt.Errorf("record managed image: %w", err)
-		}
-		if err != nil {
-			return Pull{}, err
-		}
-		return i.PullOf(ctx, image.ID, *image.Reference)
-	default:
-		return Pull{}, fmt.Errorf("read managed image: %w", err)
-	}
-	image, err := i.buildOrWait(ctx, workspace, p, buildSharedMirror)
+// PlatformWaitError means a start needs a platform image, such as the
+// managed Python image, that the server has not converted for the host's
+// architecture yet. ConvertPlatformImage converts it, and its outcome is
+// announced under PlatformConverted. It is also ErrNotReady.
+type PlatformWaitError struct{ Reference, Architecture string }
+
+func (e *PlatformWaitError) Error() string {
+	return "the image " + e.Reference + " is converting for " + e.Architecture
+}
+
+func (e *PlatformWaitError) Unwrap() error { return ErrNotReady }
+
+// ManagedPull is how a container on host with no image of its own pulls
+// the platform's image for python: the template Config.ManagedBase names,
+// pinned once and converted by the server like the agent's platform
+// images. Hosts pull the copy in the platform registry, never the
+// template's registry.
+func (i *Images) ManagedPull(ctx context.Context, host compute.HostID, python string) (Pull, error) {
+	source, err := i.ManagedSource(ctx, python)
 	if err != nil {
 		return Pull{}, err
 	}
-	return i.PullOf(ctx, image.ID, *image.Reference)
+	pulls, err := i.PlatformPulls(ctx, host, []string{source})
+	if err != nil {
+		return Pull{}, err
+	}
+	switch p := pulls[0]; {
+	case p.Pull != nil:
+		return *p.Pull, nil
+	case p.Failure != "":
+		return Pull{}, &ConversionError{Reason: p.Failure}
+	default:
+		return Pull{}, &PlatformWaitError{Reference: source, Architecture: p.Architecture}
+	}
+}
+
+// PythonVersions are the Python versions a managed image serves.
+func PythonVersions() []string {
+	return []string{
+		string(apitypes.N310), string(apitypes.N311), string(apitypes.N312), string(apitypes.N313), string(apitypes.N314),
+	}
+}
+
+// Architectures are the host architectures images converts for.
+func Architectures() []string { return []string{"amd64", "arm64"} }
+
+// ManagedSource is the template's image for python by digest: pinned the
+// first time any server asks, and the same image from then on until the
+// template changes.
+func (i *Images) ManagedSource(ctx context.Context, python string) (string, error) {
+	if !apitypes.ImageSpecPythonVersion(python).Valid() {
+		return "", &ConversionError{Reason: fmt.Sprintf("Python %q has no managed image", python)}
+	}
+	key := ManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase}
+	source, err := i.queries.ManagedSource(ctx, key)
+	if err == nil {
+		return source, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("read managed image: %w", err)
+	}
+	ref := strings.ReplaceAll(i.config.ManagedBase, "{version}", python)
+	host, err := registryHost(ref)
+	if err != nil {
+		return "", err
+	}
+	var auth *Auth
+	platform := host == i.config.registryHost()
+	if platform {
+		if auth, err = i.login.auth(ctx); err != nil {
+			return "", err
+		}
+	}
+	pinned, err := i.resolver.pin(ctx, ref, auth, platform && i.config.Insecure)
+	if err != nil {
+		return "", err
+	}
+	source, err = i.queries.RecordManagedSource(ctx, RecordManagedSourceParams{PythonVersion: python, Template: i.config.ManagedBase, Source: pinned.ref})
+	if err != nil {
+		return "", fmt.Errorf("record managed image: %w", err)
+	}
+	return source, nil
 }
 
 // buildOrWait returns p's image once its mirror build published it for

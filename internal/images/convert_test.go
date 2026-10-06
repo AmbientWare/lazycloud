@@ -19,88 +19,82 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
-// Concurrent first starts that need the managed image build it once; once
-// that build publishes the converted mirror, every start pulls it from the
-// platform registry.
-func TestManagedImageIsBuiltOnceAndPublishedConverted(t *testing.T) {
+// Concurrent first starts that need the managed image pin its template
+// once and wait for the server's conversion, which no host runs; once it
+// is converted every start pulls the copy from the platform registry, and
+// it stays live with no release pinning it.
+func TestManagedImageIsConvertedByTheServer(t *testing.T) {
 	f := newFixture(t)
-	a, b := f.workspace(t, "a"), f.workspace(t, "b")
 	host := f.host(t)
 
 	const starts = 8
-	builds := make(chan uuid.UUID, starts)
+	waits := make(chan images.PlatformWaitError, starts)
 	var wg sync.WaitGroup
-	for n := range starts {
-		ws := a
-		if n%2 == 1 {
-			ws = b
-		}
+	for range starts {
 		wg.Go(func() {
-			_, err := f.images.ManagedPull(t.Context(), host, ws, "3.12")
-			var waiting *images.BuildWaitError
-			if !errors.As(err, &waiting) {
-				t.Errorf("an unpublished managed image is waited for, got %v", err)
+			_, err := f.images.ManagedPull(t.Context(), host, "3.12")
+			var waiting *images.PlatformWaitError
+			if !errors.As(err, &waiting) || !errors.Is(err, images.ErrNotReady) {
+				t.Errorf("an unconverted managed image is waited for, got %v", err)
 				return
 			}
-			builds <- waiting.Build
+			waits <- *waiting
 		})
 	}
 	wg.Wait()
-	close(builds)
-	seen := map[uuid.UUID]bool{}
-	for id := range builds {
-		seen[id] = true
+	close(waits)
+	seen := map[images.PlatformWaitError]bool{}
+	for w := range waits {
+		seen[w] = true
 	}
-	if len(seen) != 1 {
-		t.Fatalf("concurrent first starts waited on %d builds, want 1", len(seen))
+	digest, err := remote.Head(mustRef(t, f.registry+"/library/python:3.12-slim"), remote.WithContext(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := f.registry + "/library/python:3.12-slim@" + digest.Digest.String()
+	want := images.PlatformWaitError{Reference: source, Architecture: "amd64"}
+	if len(seen) != 1 || !seen[want] {
+		t.Fatalf("concurrent first starts waited on %v, want %v", seen, want)
 	}
 	if n := f.count(t, "select count(*) from managed_images"); n != 1 {
 		t.Fatalf("%d managed images recorded, want 1", n)
 	}
-	if n := f.count(t, "select count(*) from containers where image_build_id is not null"); n != 1 {
-		t.Fatalf("%d build containers, want 1", n)
+	if n := f.count(t, "select count(*) from image_builds"); n != 0 {
+		t.Fatalf("%d builds started for the managed image", n)
 	}
 
-	// The build mirrors the template: its push holds the template's layers.
-	var id string
-	if err := f.pool.QueryRow(t.Context(), "select i.id from managed_images m join images i on i.digest = m.image_digest").Scan(&id); err != nil {
+	// The template moves on; the recorded image stays.
+	pushRandom(t, f.registry+"/library/python:3.12-slim")
+	if err := f.images.ConvertPlatformImage(t.Context(), source, "amd64"); err != nil {
 		t.Fatal(err)
 	}
-	template, err := name.ParseReference(f.registry+"/library/python:3.12-slim", name.Insecure)
-	if err != nil {
-		t.Fatal(err)
+	pull, err := f.images.ManagedPull(t.Context(), host, "3.12")
+	if err != nil || !strings.HasPrefix(pull.Reference, f.registry+"/lazycloud/platform/") || pull.Platform != "linux/amd64" {
+		t.Fatalf("every start pulls the converted copy: %+v %v", pull, err)
 	}
-	base, err := remote.Image(template, remote.WithContext(t.Context()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	repository := f.imageRepository(t, id)
-	digest := pushImage(t, repository+":managed", base)
-	if n := f.publish(t, host, placeAndStart(t, f, host), repository, digest); n != 1 {
-		t.Fatalf("the mirror converted %d layers, want 1", n)
-	}
-
-	for _, ws := range []identity.WorkspaceID{a, b} {
-		pull, err := f.images.ManagedPull(t.Context(), host, ws, "3.12")
-		if err != nil || pull.Reference != repository+"@"+digest || pull.Platform != "linux/amd64" {
-			t.Fatalf("every start pulls the published mirror: %+v %v", pull, err)
-		}
-	}
-	if _, err := f.images.LayerReadURLs(t.Context(), repository+"@"+digest, host, time.Minute); err != nil {
+	if _, err := f.images.LayerReadURLs(t.Context(), pull.Reference, host, time.Minute); err != nil {
 		t.Fatalf("the managed image is readable: %v", err)
 	}
-	// The managed image stays live with no release pinning it.
 	if _, err := f.images.SweepLayers(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count(t, "select count(*) from image_layers where unreferenced_since is not null"); n != 0 {
 		t.Fatalf("%d of the managed image's pairs started their grace period", n)
 	}
+	if _, err := f.images.ManagedPull(t.Context(), host, "3.9"); err == nil {
+		t.Fatal("a Python version without a managed image was pulled")
+	}
 }
 
-// An image whose stored reference has no layer rows reads as unpublished,
-// and deploying it starts one mirror build of that reference; once the
-// mirror publishes, the stored reference deploys with the mirror's layers.
+func mustRef(t *testing.T, ref string) name.Reference {
+	t.Helper()
+	parsed, err := name.ParseReference(ref, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
 func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
@@ -583,9 +577,9 @@ func TestADeadlineFailsTheImageOnlyIfTheBuildRan(t *testing.T) {
 
 // A shared mirror converts an image for every workspace, so it is the
 // platform's work: an account that may start nothing of its own still gets
-// the managed image built, the retry after its container was lost runs
-// whatever that account's standing, and the container is neither counted
-// nor charged to the workspace that asked.
+// a public image it stored mirrored, the retry after its container was
+// lost runs whatever that account's standing, and the container is neither
+// counted nor charged to the workspace that asked.
 func TestSharedMirrorsAreThePlatformsWork(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
@@ -600,12 +594,23 @@ update billing_balances set balance_nanos = 0`); err != nil {
 	if _, err := f.images.Build(ctx, a, numpy(), false); !errors.As(err, &unpaid) {
 		t.Fatalf("the account may start no work of its own: %v", err)
 	}
+	r, err := f.images.Resolve(ctx, a, numpy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.images.Resolve(ctx, b, numpy()); err != nil {
+		t.Fatal(err)
+	}
+	stored := f.registry + "/library/python@" + pushRandom(t, f.registry+"/library/python:stored")
+	if _, err := f.pool.Exec(ctx, "update images set reference = $1, ready_at = now() where id = $2", stored, r.Image.ID); err != nil {
+		t.Fatal(err)
+	}
 	wait := func(ws identity.WorkspaceID) uuid.UUID {
 		t.Helper()
-		_, err := f.images.ManagedPull(ctx, host, ws, "3.12")
+		_, err := f.images.ConvertedPull(ctx, ws, r.Image.ID, stored)
 		var waiting *images.BuildWaitError
 		if !errors.As(err, &waiting) {
-			t.Fatalf("the managed image is built whatever the account's standing: %v", err)
+			t.Fatalf("the shared mirror is built whatever the account's standing: %v", err)
 		}
 		return waiting.Build
 	}

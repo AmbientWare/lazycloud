@@ -381,6 +381,13 @@ func (sess *session) sync(ctx context.Context) error {
 			waiting[building.Build.String()] = true
 			continue
 		}
+		var converting *images.PlatformWaitError
+		if errors.As(err, &converting) {
+			delete(derived, id)
+			sess.server.convertPlatform(converting.Reference, converting.Architecture)
+			waiting[images.PlatformConverted] = true
+			continue
+		}
 		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {
 			delete(derived, id)
 			continue
