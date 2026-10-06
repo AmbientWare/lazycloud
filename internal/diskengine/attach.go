@@ -11,7 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Attach restores the disk if its local copy is not current, starts its
@@ -78,15 +82,21 @@ func (e *Engine) Attach(ctx context.Context, req AttachRequest) (AttachResult, e
 		}
 	}
 
-	state, result, err := e.prepare(ctx, p, state, req, store)
+	prepareCtx, span := telemetry.Start(ctx, "diskengine.restore", trace.WithAttributes(attribute.Int("lazycloud.generations", len(req.Chain))))
+	state, result, err := e.prepare(prepareCtx, p, state, req, store)
+	span.SetAttributes(attribute.Bool("lazycloud.reused", result.Reused))
+	telemetry.Fail(span, err)
 	if err != nil {
 		return AttachResult{}, err
 	}
-	if err := startAttachment(ctx, p, state, target); err != nil {
+	err = telemetry.Step(ctx, "diskengine.start_daemon", func(ctx context.Context) error { return startAttachment(ctx, p, state, target) })
+	if err != nil {
 		return AttachResult{}, err
 	}
 	result.Formatted = state.Unformatted
-	if err := connectAndMount(ctx, p, state); err != nil {
+	err = telemetry.Step(ctx, "diskengine.connect_and_mount", func(ctx context.Context) error { return connectAndMount(ctx, p, state) },
+		attribute.Bool("lazycloud.format", state.Unformatted))
+	if err != nil {
 		return AttachResult{}, errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
 	}
 	e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", result.Generation,

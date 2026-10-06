@@ -107,7 +107,7 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 		}
 		msg := &hostproto.SnapshotContainer{
 			ContainerId: snap.Container.String(), SnapshotId: snap.Snapshot.String(), UploadUrl: url,
-			Deadline: timestamppb.New(snap.Deadline),
+			Deadline: timestamppb.New(snap.Deadline), Traceparent: snap.Traceparent,
 		}
 		if r := snap.Ready; r != nil {
 			msg.Ready = &hostproto.ReadinessProbe{

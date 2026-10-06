@@ -394,7 +394,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		if err != nil {
 			return fmt.Errorf("load TCP pod certificate: %w", err)
 		}
-		tcpConfig = edge.TCPConfig{URL: cfg.tcp.url, Certificate: cert}
+		tcpConfig = edge.TCPConfig{URL: cfg.tcp.url, Certificate: cert, Tracer: tel.Tracer()}
 	}
 	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
 		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)

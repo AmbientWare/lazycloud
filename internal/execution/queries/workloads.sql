@@ -250,7 +250,7 @@ returning c.id;
 -- name: ReadyPodContainers :many
 -- Ready serve containers of a pod's releases with their hosts, newest
 -- version first and then the oldest container.
-select c.id, c.host_id, c.release_id::uuid as release_id
+select c.id, c.host_id, c.release_id::uuid as release_id, c.traceparent
 from containers c
 join releases r on r.id = c.release_id
 where r.workload_id = @workload_id and c.purpose = 'serve' and c.state = 'ready' and c.host_id is not null

@@ -950,7 +950,7 @@ func (q *Queries) PodState(ctx context.Context, workloadID uuid.UUID) (PodStateR
 }
 
 const readyPodContainers = `-- name: ReadyPodContainers :many
-select c.id, c.host_id, c.release_id::uuid as release_id
+select c.id, c.host_id, c.release_id::uuid as release_id, c.traceparent
 from containers c
 join releases r on r.id = c.release_id
 where r.workload_id = $1 and c.purpose = 'serve' and c.state = 'ready' and c.host_id is not null
@@ -958,9 +958,10 @@ order by r.version desc nulls last, c.ready_at, c.id
 `
 
 type ReadyPodContainersRow struct {
-	ID        uuid.UUID
-	HostID    *uuid.UUID
-	ReleaseID uuid.UUID
+	ID          uuid.UUID
+	HostID      *uuid.UUID
+	ReleaseID   uuid.UUID
+	Traceparent *string
 }
 
 // Ready serve containers of a pod's releases with their hosts, newest
@@ -974,7 +975,12 @@ func (q *Queries) ReadyPodContainers(ctx context.Context, workloadID uuid.UUID) 
 	var items []ReadyPodContainersRow
 	for rows.Next() {
 		var i ReadyPodContainersRow
-		if err := rows.Scan(&i.ID, &i.HostID, &i.ReleaseID); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
+			&i.ReleaseID,
+			&i.Traceparent,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

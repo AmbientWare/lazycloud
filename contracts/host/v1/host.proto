@@ -337,6 +337,9 @@ message SnapshotContainer {
   google.protobuf.Timestamp deadline = 4;
   // Checkpoint only once this answers, for a pod's automatic snapshot.
   ReadinessProbe ready = 5;
+  // The W3C traceparent of the request that asked for the snapshot, when it
+  // was sampled.
+  string traceparent = 130;
 }
 
 message ReadinessProbe {

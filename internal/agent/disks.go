@@ -12,11 +12,14 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/mount"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Durable disks: the agent leases each disk a container declares, restores
@@ -110,8 +113,10 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 		case target == "/" || !filepath.IsAbs(target):
 			return nil, nil, fmt.Errorf("disk %s: Docker hosts mount disks at an absolute directory, not %q", spec.GetName(), spec.GetMountPath())
 		}
+		ctx, span := telemetry.Start(ctx, "agent.disk_attach", trace.WithAttributes(attribute.String("lazycloud.disk", spec.GetName())))
 		lease, err := c.acquire(ctx, spec.GetName())
 		if err != nil {
+			telemetry.Fail(span, err)
 			return nil, nil, err
 		}
 		held := &heldDisk{ID: lease.GetDiskId(), Name: spec.GetName(), Workspace: lease.GetWorkspaceId(), Token: lease.GetLeaseToken()}
@@ -141,6 +146,7 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 		if errors.Is(err, diskengine.ErrInsufficientSpace) && c.a.evictDisks(ctx) {
 			_, err = c.a.diskEngine.Attach(ctx, request)
 		}
+		telemetry.Fail(span, err)
 		if err != nil {
 			return nil, nil, fmt.Errorf("attach disk %s: %w", spec.GetName(), err)
 		}
@@ -283,7 +289,10 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) erro
 // release publishes d's last generation, detaches it and ends its lease. A
 // disk this host never restored has nothing to publish. A lease the server
 // already ended, as after host loss, counts as released.
-func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
+func (a *Agent) release(ctx context.Context, container string, d *heldDisk) (err error) {
+	ctx, span := telemetry.StartIn(ctx, a.tracer(), "", "agent.disk_release", trace.WithAttributes(
+		telemetry.Container(container), attribute.String("lazycloud.disk_id", d.ID)))
+	defer func() { telemetry.Fail(span, err) }()
 	local, err := a.hasLocalDisk(ctx, d.ID)
 	if err != nil {
 		return err

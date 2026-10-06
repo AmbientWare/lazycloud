@@ -2303,7 +2303,10 @@ type SnapshotContainer struct {
 	UploadUrl string                 `protobuf:"bytes,3,opt,name=upload_url,json=uploadUrl,proto3" json:"upload_url,omitempty"`
 	Deadline  *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=deadline,proto3" json:"deadline,omitempty"`
 	// Checkpoint only once this answers, for a pod's automatic snapshot.
-	Ready         *ReadinessProbe `protobuf:"bytes,5,opt,name=ready,proto3" json:"ready,omitempty"`
+	Ready *ReadinessProbe `protobuf:"bytes,5,opt,name=ready,proto3" json:"ready,omitempty"`
+	// The W3C traceparent of the request that asked for the snapshot, when it
+	// was sampled.
+	Traceparent   string `protobuf:"bytes,130,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2371,6 +2374,13 @@ func (x *SnapshotContainer) GetReady() *ReadinessProbe {
 		return x.Ready
 	}
 	return nil
+}
+
+func (x *SnapshotContainer) GetTraceparent() string {
+	if x != nil {
+		return x.Traceparent
+	}
+	return ""
 }
 
 type ReadinessProbe struct {
@@ -7109,7 +7119,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\rUpdateNetwork\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x128\n" +
 	"\x06policy\x18\x02 \x01(\v2 .lazycloud.host.v1.NetworkPolicyR\x06policy\x12\x18\n" +
-	"\aversion\x18Z \x01(\x05R\aversion\"\xe7\x01\n" +
+	"\aversion\x18Z \x01(\x05R\aversion\"\x8a\x02\n" +
 	"\x11SnapshotContainer\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x1f\n" +
 	"\vsnapshot_id\x18\x02 \x01(\tR\n" +
@@ -7117,7 +7127,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"upload_url\x18\x03 \x01(\tR\tuploadUrl\x126\n" +
 	"\bdeadline\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x127\n" +
-	"\x05ready\x18\x05 \x01(\v2!.lazycloud.host.v1.ReadinessProbeR\x05ready\"\x8c\x01\n" +
+	"\x05ready\x18\x05 \x01(\v2!.lazycloud.host.v1.ReadinessProbeR\x05ready\x12!\n" +
+	"\vtraceparent\x18\x82\x01 \x01(\tR\vtraceparent\"\x8c\x01\n" +
 	"\x0eReadinessProbe\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12'\n" +

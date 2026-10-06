@@ -218,8 +218,8 @@ func (q *Queries) FinishSnapshot(ctx context.Context, arg FinishSnapshotParams) 
 }
 
 const insertAutomaticSnapshot = `-- name: InsertAutomaticSnapshot :execrows
-insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state)
-values ($1, $2, $3, true, 'pending')
+insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state, traceparent)
+values ($1, $2, $3, true, 'pending', $4::text)
 on conflict (release_id) where automatic and state <> 'failed' do nothing
 `
 
@@ -227,11 +227,17 @@ type InsertAutomaticSnapshotParams struct {
 	WorkspaceID uuid.UUID
 	ReleaseID   uuid.UUID
 	ContainerID *uuid.UUID
+	Traceparent *string
 }
 
 // One automatic snapshot per release at a time; a concurrent insert loses.
 func (q *Queries) InsertAutomaticSnapshot(ctx context.Context, arg InsertAutomaticSnapshotParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertAutomaticSnapshot, arg.WorkspaceID, arg.ReleaseID, arg.ContainerID)
+	result, err := q.db.Exec(ctx, insertAutomaticSnapshot,
+		arg.WorkspaceID,
+		arg.ReleaseID,
+		arg.ContainerID,
+		arg.Traceparent,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -256,8 +262,8 @@ func (q *Queries) InsertFilesystemImage(ctx context.Context, arg InsertFilesyste
 }
 
 const insertSnapshot = `-- name: InsertSnapshot :one
-insert into memory_snapshots (id, workspace_id, release_id, container_id, automatic, state)
-values (coalesce($1::uuid, uuidv7()), $2, $3, $4, $5, 'pending')
+insert into memory_snapshots (id, workspace_id, release_id, container_id, automatic, state, traceparent)
+values (coalesce($1::uuid, uuidv7()), $2, $3, $4, $5, 'pending', $6::text)
 returning id, created_at
 `
 
@@ -267,6 +273,7 @@ type InsertSnapshotParams struct {
 	ReleaseID   uuid.UUID
 	ContainerID *uuid.UUID
 	Automatic   bool
+	Traceparent *string
 }
 
 type InsertSnapshotRow struct {
@@ -281,6 +288,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 		arg.ReleaseID,
 		arg.ContainerID,
 		arg.Automatic,
+		arg.Traceparent,
 	)
 	var i InsertSnapshotRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -368,7 +376,7 @@ func (q *Queries) PendingFilesystemImagesOnHost(ctx context.Context, hostID *uui
 }
 
 const pendingSnapshotsOnHost = `-- name: PendingSnapshotsOnHost :many
-select s.id, s.workspace_id, s.container_id::uuid as container_id, s.automatic, s.created_at, r.spec
+select s.id, s.workspace_id, s.container_id::uuid as container_id, s.automatic, s.created_at, r.spec, s.traceparent
 from memory_snapshots s
 join containers c on c.id = s.container_id
 join releases r on r.id = s.release_id
@@ -383,6 +391,7 @@ type PendingSnapshotsOnHostRow struct {
 	Automatic   bool
 	CreatedAt   time.Time
 	Spec        []byte
+	Traceparent *string
 }
 
 // Snapshots the host's live containers still owe, with how a pod's
@@ -403,6 +412,7 @@ func (q *Queries) PendingSnapshotsOnHost(ctx context.Context, hostID *uuid.UUID)
 			&i.Automatic,
 			&i.CreatedAt,
 			&i.Spec,
+			&i.Traceparent,
 		); err != nil {
 			return nil, err
 		}

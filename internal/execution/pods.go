@@ -326,6 +326,8 @@ type PodContainer struct {
 	Container ContainerID
 	Host      uuid.UUID
 	Release   uuid.UUID
+	// Traceparent is the trace of the container's start.
+	Traceparent string
 }
 
 // ReadyPodContainers lists the pod's ready serve containers, the active
@@ -338,7 +340,7 @@ func (e *Execution) ReadyPodContainers(ctx context.Context, workload uuid.UUID) 
 	out := make([]PodContainer, 0, len(rows))
 	for _, r := range rows {
 		if r.HostID != nil {
-			out = append(out, PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID})
+			out = append(out, PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: deref(r.Traceparent)})
 		}
 	}
 	return out, nil

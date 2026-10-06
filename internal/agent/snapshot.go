@@ -19,10 +19,13 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Memory snapshots are Docker checkpoints (CRIU under runc, runsc's own
@@ -203,7 +206,11 @@ func (a *Agent) snapshot(request *hostproto.SnapshotContainer) {
 		defer a.releaseOperation(key)
 		deadline := hostDeadline(request.GetDeadline().AsTime(), request.GetDeadline() != nil)
 		work, cancel := context.WithDeadline(ctx, deadline)
+		work, span := telemetry.StartIn(work, a.tracer(), request.GetTraceparent(), "agent.snapshot", trace.WithAttributes(
+			telemetry.Container(request.GetContainerId()), attribute.String("lazycloud.snapshot_id", request.GetSnapshotId())))
 		size, sum, err := a.takeSnapshot(work, request)
+		span.SetAttributes(attribute.Int64("lazycloud.bytes", size))
+		telemetry.Fail(span, err)
 		cancel()
 		result := &hostproto.CompleteSnapshotRequest{ContainerId: request.GetContainerId(), SnapshotId: request.GetSnapshotId(), SizeBytes: size, Sha256: sum}
 		if err != nil {
@@ -263,16 +270,20 @@ func (a *Agent) takeSnapshot(ctx context.Context, request *hostproto.SnapshotCon
 			a.log.Warn("removing a snapshot directory failed", "dir", dir, "error", err)
 		}
 	}()
-	reattach := c.detachForCheckpoint(ctx)
-	err = a.checkpoint(ctx, c, client.CheckpointCreateOptions{CheckpointID: id, CheckpointDir: dir, Exit: false})
-	reattach()
+	err = telemetry.Step(ctx, "agent.checkpoint", func(ctx context.Context) error {
+		reattach := c.detachForCheckpoint(ctx)
+		defer reattach()
+		return a.checkpoint(ctx, c, client.CheckpointCreateOptions{CheckpointID: id, CheckpointDir: dir, Exit: false})
+	})
 	if err != nil {
 		if cannotCheckpoint(err) {
 			return 0, "", fmt.Errorf("%w: %v", errCannotCheckpoint, err) //nolint:errorlint // the runtime's error is a message, not a cause to match
 		}
 		return 0, "", fmt.Errorf("checkpoint: %w", err)
 	}
-	size, sum, err := a.uploadDir(ctx, filepath.Join(dir, id), request.GetUploadUrl())
+	uploadCtx, upload := telemetry.Start(ctx, "agent.snapshot_upload")
+	size, sum, err := a.uploadDir(uploadCtx, filepath.Join(dir, id), request.GetUploadUrl())
+	telemetry.Fail(upload, err)
 	if errors.Is(err, fs.ErrPermission) && os.Geteuid() != 0 {
 		// Docker writes the checkpoint as root.
 		return 0, "", fmt.Errorf("%w: reading a checkpoint takes an agent running as root: %v", errCannotCheckpoint, err) //nolint:errorlint // see above
