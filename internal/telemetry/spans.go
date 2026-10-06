@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -45,13 +44,6 @@ func StartIn(ctx context.Context, tracer trace.Tracer, traceparent, name string,
 // or request on work that carries its own trace.
 func StartFor(ctx context.Context, traceparent, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	return StartIn(ctx, TracerOf(ctx), traceparent, name, opts...) //nolint:spancheck // The caller ends it.
-}
-
-// Record records a finished step from began to now as a child of ctx's
-// span, for steps timed before their span could start.
-func Record(ctx context.Context, name string, began time.Time, attrs ...attribute.KeyValue) {
-	_, span := Start(ctx, name, trace.WithTimestamp(began), trace.WithAttributes(attrs...))
-	span.End()
 }
 
 // Step runs fn in a child span of ctx's named name, failed when fn fails.

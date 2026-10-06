@@ -599,7 +599,7 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 	}
 	c.mu.Unlock()
 	if span != nil {
-		span.SetStatus(otelcodes.Error, telemetry.Redact("exited before it was ready: "+exit.GetMessage()))
+		span.SetStatus(otelcodes.Error, "exited before it was ready: "+exit.GetMessage())
 		span.End()
 	}
 	c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })

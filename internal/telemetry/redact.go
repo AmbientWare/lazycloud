@@ -31,7 +31,7 @@ func (s redactedSpan) Attributes() []attribute.KeyValue {
 
 func (s redactedSpan) Status() sdktrace.Status {
 	status := s.ReadOnlySpan.Status()
-	status.Description = Redact(status.Description)
+	status.Description = redact(status.Description)
 	return status
 }
 
@@ -50,7 +50,7 @@ func redactAttrs(attrs []attribute.KeyValue) []attribute.KeyValue {
 	out := make([]attribute.KeyValue, len(attrs))
 	for n, a := range attrs {
 		if a.Value.Type() == attribute.STRING {
-			a.Value = attribute.StringValue(Redact(a.Value.AsString()))
+			a.Value = attribute.StringValue(redact(a.Value.AsString()))
 		}
 		out[n] = a
 	}
@@ -60,9 +60,9 @@ func redactAttrs(attrs []attribute.KeyValue) []attribute.KeyValue {
 // urlQuery matches the query of a URL in a message.
 var urlQuery = regexp.MustCompile(`(https?://[^\s?"]*)\?[^\s"]*`) //nolint:gochecknoglobals // A compiled constant.
 
-// Redact removes the query of every URL in message, where presigned URLs
+// redact removes the query of every URL in message, where presigned URLs
 // carry their signature.
-func Redact(message string) string {
+func redact(message string) string {
 	return urlQuery.ReplaceAllString(message, "$1?<redacted>")
 }
 
@@ -73,7 +73,7 @@ func RedactURL(err error) error {
 	if !errors.As(err, &failed) {
 		return err
 	}
-	stripped := Redact(failed.URL)
+	stripped := redact(failed.URL)
 	if u, parseErr := url.Parse(failed.URL); parseErr == nil {
 		u.RawQuery, u.Fragment = "", ""
 		stripped = u.String()

@@ -195,7 +195,7 @@ func hostRequest(host string, otlp []byte) (*collector.ExportTraceServiceRequest
 					e.Attributes = hostSpanAttrs(e.GetAttributes())
 				}
 				if s.GetStatus() != nil {
-					s.Status.Message = Redact(s.GetStatus().GetMessage())
+					s.Status.Message = redact(s.GetStatus().GetMessage())
 				}
 			}
 		}
@@ -213,7 +213,7 @@ func hostSpanAttrs(attrs []*commonpb.KeyValue) []*commonpb.KeyValue {
 			continue
 		}
 		if v, ok := a.GetValue().GetValue().(*commonpb.AnyValue_StringValue); ok {
-			v.StringValue = Redact(v.StringValue)
+			v.StringValue = redact(v.StringValue)
 		}
 		out = append(out, a)
 	}

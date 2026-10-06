@@ -98,7 +98,7 @@ func (sess *session) endStart(ctx context.Context, container execution.Container
 		p.wait.End()
 	}
 	if failure != "" {
-		p.span.SetStatus(codes.Error, telemetry.Redact(failure))
+		p.span.SetStatus(codes.Error, failure)
 	}
 	p.span.End()
 }
