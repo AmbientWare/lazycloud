@@ -87,7 +87,6 @@ func (s *snapshotter) hold(ctx context.Context, refs []lazyRef) (func(), error) 
 			}
 			if err := s.mount(r); err != nil { //nolint:contextcheck // a layer's mount and fill outlive the call
 				s.unhold(refs[:i])
-				s.tidy(detached)
 				return err
 			}
 			s.holds[r.id]++
