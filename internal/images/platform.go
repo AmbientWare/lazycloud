@@ -508,10 +508,12 @@ func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, aut
 	}
 	defer func() { _ = uncompressed.Close() }()
 	l, err := imagefs.ConvertFile(ctx, uncompressed, dir, imagefs.Digest(diffID))
-	if errors.Is(err, imagefs.ErrInvalidLayer) {
+	switch {
+	case errors.Is(err, imagefs.ErrInvalidLayer):
 		return nil, &ConversionError{Reason: fmt.Sprintf("layer %s: %v", blob.DigestStr(), err)}
-	}
-	if err != nil {
+	case errors.Is(err, imagefs.ErrDataFile):
+		return nil, fmt.Errorf("%w: %w", ErrServerDisk, err)
+	case err != nil:
 		return nil, fmt.Errorf("convert layer: %w", err)
 	}
 	return l, nil

@@ -38,15 +38,16 @@ type ConvertedFile struct {
 
 // ConvertFile converts layer, which the image config names diffID, into a
 // new data file under dir. A layer Convert refuses or whose content is not
-// diffID is ErrInvalidLayer. A failed conversion leaves no file.
+// diffID is ErrInvalidLayer, and a data file it cannot create, write or
+// close is ErrDataFile. A failed conversion leaves no file.
 func ConvertFile(ctx context.Context, layer io.Reader, dir string, diffID Digest) (out *ConvertedFile, err error) {
 	data, err := os.CreateTemp(dir, "layer-*.data")
 	if err != nil {
-		return nil, fmt.Errorf("create layer data file: %w", err)
+		return nil, fmt.Errorf("%w: create: %w", ErrDataFile, err)
 	}
 	defer func() {
 		if closeErr := data.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("write layer data file: %w", closeErr)
+			err = fmt.Errorf("%w: close: %w", ErrDataFile, closeErr)
 		}
 		if err != nil {
 			out, err = nil, errors.Join(err, os.Remove(data.Name()))
@@ -68,7 +69,8 @@ func ConvertFile(ctx context.Context, layer io.Reader, dir string, diffID Digest
 
 // Convert reads an uncompressed OCI layer tar, writes the compressed data
 // object to data as it goes, and returns the index. Memory stays bounded
-// by a few frames whatever the layer size.
+// by a few frames whatever the layer size. A failed write to data is
+// ErrDataFile.
 //
 // Entries keep tar order with one entry per path: a later entry replaces an
 // earlier one in place, and a non-directory replacing a directory removes
@@ -370,7 +372,7 @@ func (c *converter) flush() error {
 	}
 	c.packed = c.enc.EncodeAll(c.frame, c.packed[:0])
 	if _, err := c.out.Write(c.packed); err != nil {
-		return fmt.Errorf("write data object: %w", err)
+		return fmt.Errorf("%w: %w", ErrDataFile, err)
 	}
 	size := int64(len(c.packed))
 	c.frames = append(c.frames, Frame{Offset: c.dataSize, Size: size})

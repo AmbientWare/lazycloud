@@ -554,6 +554,9 @@ func TestConvertFileLeavesNoFileOnFailure(t *testing.T) {
 			t.Fatalf("%s left %d files", name, len(left))
 		}
 	}
+	if _, err := ConvertFile(t.Context(), bytes.NewReader(layer), filepath.Join(dir, "missing"), diffID); !errors.Is(err, ErrDataFile) {
+		t.Fatalf("a directory without room for the data file: %v", err)
+	}
 	f, err := ConvertFile(t.Context(), bytes.NewReader(layer), dir, diffID)
 	if err != nil {
 		t.Fatal(err)

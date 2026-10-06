@@ -86,6 +86,10 @@ var (
 	// path outside the root, a hard link to a missing or unlinkable entry,
 	// an unknown entry type, or content that is not the named diff_id.
 	ErrInvalidLayer = errors.New("invalid layer")
+	// ErrDataFile marks a failure to create, write or close the data object
+	// a conversion writes: a fault of the converting machine's disk, not of
+	// the layer.
+	ErrDataFile = errors.New("cannot write the layer data file")
 	// ErrUnsupportedVersion marks a stored index written in a format version
 	// this reader does not know.
 	ErrUnsupportedVersion = errors.New("unsupported index format version")
