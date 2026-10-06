@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 const (
@@ -25,17 +26,12 @@ const (
 // does not have, or more frames than a trace holds.
 var ErrInvalidTrace = errors.New("the trace does not fit the image")
 
-// FrameRead is a frame of the layer at a position in an image's layers.
-type FrameRead struct {
-	Layer, Frame uint32
-}
-
 // StartupTrace returns the frames the workspace's containers of reference
 // read through their first task or request, empty when none is stored, and
 // whether the next start should record them again. Traces are kept per
 // workspace: what a container reads says something of its code, so no
 // other workspace's host gets it.
-func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceID, reference string) ([]FrameRead, bool, error) {
+func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceID, reference string) ([]*imagefsproto.FrameRead, bool, error) {
 	row, err := i.queries.StartupTrace(ctx, StartupTraceParams{Reference: reference, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, true, nil
@@ -45,9 +41,9 @@ func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceI
 	}
 	// The table keeps the arrays of one length, and the record keeps them
 	// non-negative.
-	reads := make([]FrameRead, len(row.Layers))
+	reads := make([]*imagefsproto.FrameRead, len(row.Layers))
 	for n := range reads {
-		reads[n] = FrameRead{Layer: uint32(row.Layers[n]), Frame: uint32(row.Frames[n])} //nolint:gosec // See above.
+		reads[n] = &imagefsproto.FrameRead{Layer: uint32(row.Layers[n]), Frame: uint32(row.Frames[n])} //nolint:gosec // See above.
 	}
 	return reads, time.Since(row.RecordedAt) >= traceAge, nil
 }
@@ -56,7 +52,7 @@ func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceI
 // reference through its first task or request, unless a trace younger than
 // traceAge is stored. The trace lasts as long as the reference's converted
 // layers. A trace that does not fit them is ErrInvalidTrace.
-func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID, reference string, reads []FrameRead) error {
+func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID, reference string, reads []*imagefsproto.FrameRead) error {
 	if len(reads) == 0 {
 		return nil
 	}
@@ -69,7 +65,7 @@ func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID
 	}
 	for n, r := range reads {
 		// A read past the int32 range turns negative, which the query refuses.
-		params.Layers[n], params.Frames[n] = int32(r.Layer), int32(r.Frame) //nolint:gosec // Checked by the query.
+		params.Layers[n], params.Frames[n] = int32(r.GetLayer()), int32(r.GetFrame()) //nolint:gosec // Checked by the query.
 	}
 	fits, err := i.queries.RecordTrace(ctx, params)
 	if err != nil {

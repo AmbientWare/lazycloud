@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -26,10 +27,10 @@ func TestStartupTracesLastAsLongAsTheirLayers(t *testing.T) {
 	if err := f.images.RecordUses(ctx, []string{reference}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.images.RecordTrace(ctx, ws, reference, []images.FrameRead{{Layer: 0, Frame: 1}}); !errors.Is(err, images.ErrInvalidTrace) {
+	if err := f.images.RecordTrace(ctx, ws, reference, []*imagefsproto.FrameRead{{Layer: 0, Frame: 1}}); !errors.Is(err, images.ErrInvalidTrace) {
 		t.Fatalf("a frame the layer does not have was stored: %v", err)
 	}
-	if err := f.images.RecordTrace(ctx, ws, reference, []images.FrameRead{{Layer: 0, Frame: 0}}); err != nil {
+	if err := f.images.RecordTrace(ctx, ws, reference, []*imagefsproto.FrameRead{{Layer: 0, Frame: 0}}); err != nil {
 		t.Fatal(err)
 	}
 	stored := func() int {
@@ -84,7 +85,7 @@ func TestATraceRacingItsLayersRetirementIsDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorded := make(chan error, 1)
-	go func() { recorded <- f.images.RecordTrace(ctx, ws, reference, []images.FrameRead{{}}) }()
+	go func() { recorded <- f.images.RecordTrace(ctx, ws, reference, []*imagefsproto.FrameRead{{}}) }()
 	time.Sleep(300 * time.Millisecond)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)

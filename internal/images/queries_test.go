@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -83,7 +84,7 @@ func TestStartReadsCostOneStatement(t *testing.T) {
 		{"pinned pull", 1, func() error { _, err := im.ConvertedPull(ctx, ws, r.Image.ID, pinned); return err }},
 		{"managed pull", 1, func() error { _, err := im.ManagedPull(ctx, host, "3.12"); return err }},
 		{"no platform images", 0, func() error { _, err := im.PlatformPulls(ctx, host, nil); return err }},
-		{"trace record", 1, func() error { return im.RecordTrace(ctx, ws, pinned, []images.FrameRead{{}}) }},
+		{"trace record", 1, func() error { return im.RecordTrace(ctx, ws, pinned, []*imagefsproto.FrameRead{{}}) }},
 		{"grants of three references", 1, func() error {
 			_, err := im.LayerReadURLs(ctx, append([]string{pinned}, others...), host, time.Minute)
 			return err
