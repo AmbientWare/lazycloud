@@ -29,6 +29,9 @@ export LAZYCLOUD_SECRETS_KEY_FILE="$PWD/$state/secrets.key"
 export LAZYCLOUD_CALLBACK_ALLOW_PRIVATE=1
 export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
 export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
+# The Python bases, pushed by start outside the workload repositories as
+# Ship pushes them.
+export LAZYCLOUD_IMAGE_TEMPLATE="$LAZYCLOUD_IMAGE_REGISTRY/release/python:{version}-local"
 # Agent release archives `lazycloud machine join` installs from.
 export LAZYCLOUD_AGENT_DIST_DIR="$PWD/$state/agent-dist"
 # The server and scheduler trace into Jaeger; the VM's agent and
@@ -57,6 +60,8 @@ start() {
   fi
   docker compose up -d --wait postgres object-store registry jaeger >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
+  REGISTRY="$LAZYCLOUD_IMAGE_REGISTRY/release" VERSION=local \
+    docker buildx bake --progress quiet -f deploy/images/docker-bake.hcl python --push
   go build -o bin/server ./cmd/server
   go build -o bin/scheduler ./cmd/scheduler
   go build -o bin/agent ./cmd/agent
