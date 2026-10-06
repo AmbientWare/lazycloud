@@ -65,7 +65,7 @@ select host.id, ctr.id from host, ctr`, uuid.UUID(f.workspace), f.release, strin
 func listen(t *testing.T, pool *pgxpool.Pool) *database.Listener {
 	t.Helper()
 	l := database.NewListener(pool, slog.New(slog.DiscardHandler),
-		database.ChannelHost, database.ChannelTask, database.ChannelClaim)
+		database.ChannelHost, database.ChannelTask, database.ChannelTaskFinished, database.ChannelClaim)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = l.Run(ctx) })

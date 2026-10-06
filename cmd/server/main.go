@@ -351,8 +351,8 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	// metrics leave them out.
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
 	changes := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
-	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
-		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
+	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelTaskFinished,
+		database.ChannelClaim, database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
 	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
 	if err != nil {

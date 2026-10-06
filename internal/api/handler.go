@@ -49,8 +49,8 @@ type Owners struct {
 	// Changes fans out the workspace change streams.
 	Changes *observability.Changes
 	// Listener wakes waits on task, image build and queue changes. It must
-	// listen on database.ChannelTask, ChannelImageBuild, ChannelImageBuildLog
-	// and storage.ChannelQueue.
+	// listen on database.ChannelTask, ChannelTaskFinished, ChannelImageBuild,
+	// ChannelImageBuildLog and storage.ChannelQueue.
 	Listener *database.Listener
 	// Edge describes HTTP workloads and owns custom domains.
 	Edge *edge.Edge

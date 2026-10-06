@@ -528,6 +528,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/tasks/wait": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the listed tasks that have finished, waiting until one has
+         * @description Answers as soon as at least one listed task has finished or is not in the workspace, or with empty lists once `wait_seconds` pass. Tasks still queued or running are left out.
+         */
+        post: operations["waitTasks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/tasks/{task}/result": {
         parameters: {
             query?: never;
@@ -3861,6 +3883,26 @@ export interface components {
         SubmitTasksResponse: {
             tasks: components["schemas"]["Task"][];
         };
+        WaitTasksRequest: {
+            task_ids: string[];
+            /**
+             * @description Hold the request until a listed task finishes or this many seconds pass.
+             * @default 0
+             */
+            wait_seconds?: number;
+        };
+        WaitTasksResponse: {
+            tasks: components["schemas"]["FinishedTask"][];
+            /** @description The listed tasks the workspace does not have, in request order. */
+            missing_task_ids: string[];
+        };
+        /** @description A finished task with the value it returned. A result of at most 256 KiB comes inline while the response's results stay within 4 MiB; any other result is left out with `result_omitted` set, and getTaskResult returns it. */
+        FinishedTask: {
+            task: components["schemas"]["Task"];
+            result?: components["schemas"]["Payload"];
+            /** @description The task succeeded and its result is not inline. */
+            result_omitted: boolean;
+        };
         /** @enum {string} */
         TaskStatus: "queued" | "running" | "succeeded" | "failed" | "cancelled";
         Task: {
@@ -7125,6 +7167,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    waitTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaitTasksRequest"];
+            };
+        };
+        responses: {
+            /** @description The finished tasks, in request order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitTasksResponse"];
                 };
             };
             default: components["responses"]["Error"];
