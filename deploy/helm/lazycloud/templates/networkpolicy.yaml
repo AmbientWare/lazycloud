@@ -116,5 +116,11 @@ spec:
   ingress:
     {{- include "lazycloud.podPeers" (dict "names" (list "server" "scheduler") "ports" (list "otlp")) | nindent 4 }}
     {{- include "lazycloud.cidrPeers" (dict "cidrs" $np.nodeCIDRs "ports" (list "health")) | nindent 4 }}
+    {{- with $np.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
+    {{- end }}
 {{- end }}
 {{- end }}
