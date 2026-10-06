@@ -74,7 +74,7 @@ join images i on i.digest = b.image_digest
 where b.id = @id;
 
 -- name: LockBuild :one
-select id, image_digest, state, workspace_id, forced, deadline_at, log_bytes, log_lines
+select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines
 from image_builds where id = @id for update;
 
 -- name: SucceedBuild :exec

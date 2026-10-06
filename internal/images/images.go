@@ -490,7 +490,12 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
 		}
-		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu); err != nil {
+		if kind == buildSharedMirror {
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes)
+		} else {
+			_, err = i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu)
+		}
+		if err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelImageBuild, row.ID.String()); err != nil {
@@ -1151,6 +1156,10 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		if err := q.ResetBuildLogCount(ctx, id); err != nil {
 			return fmt.Errorf("reset build log count: %w", err)
+		}
+		if build.Mirror {
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
+			return err
 		}
 		gpu, err := q.ImageBuildGPU(ctx, digest)
 		if err != nil {

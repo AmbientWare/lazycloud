@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -577,5 +578,66 @@ func TestADeadlineFailsTheImageOnlyIfTheBuildRan(t *testing.T) {
 	var failed *images.ConversionError
 	if !errors.As(err, &failed) {
 		t.Fatalf("a mirror that ran out of time fails the image: %v", err)
+	}
+}
+
+// A shared mirror converts an image for every workspace, so it is the
+// platform's work: an account that may start nothing of its own still gets
+// the managed image built, the retry after its container was lost runs
+// whatever that account's standing, and the container is neither counted
+// nor charged to the workspace that asked.
+func TestSharedMirrorsAreThePlatformsWork(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	a, b := f.workspace(t, "a"), f.workspace(t, "b")
+	host := f.host(t)
+	if _, err := f.pool.Exec(ctx, `
+update billing_accounts set complimentary_since = null, payment_method_attached_at = null;
+update billing_balances set balance_nanos = 0`); err != nil {
+		t.Fatal(err)
+	}
+	var unpaid *billing.PaymentRequiredError
+	if _, err := f.images.Build(ctx, a, numpy(), false); !errors.As(err, &unpaid) {
+		t.Fatalf("the account may start no work of its own: %v", err)
+	}
+	wait := func(ws identity.WorkspaceID) uuid.UUID {
+		t.Helper()
+		_, err := f.images.ManagedPull(ctx, host, ws, "3.12")
+		var waiting *images.BuildWaitError
+		if !errors.As(err, &waiting) {
+			t.Fatalf("the managed image is built whatever the account's standing: %v", err)
+		}
+		return waiting.Build
+	}
+	build := wait(a)
+	if wait(b) != build {
+		t.Fatal("another workspace does not join the shared mirror")
+	}
+
+	container := placeAndStart(t, f, host)
+	if _, err := billing.NewBilling(f.pool, billing.Config{}, slog.New(slog.DiscardHandler)).Meter(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "select coalesce(sum(live_containers), 0)::int from billing_balances"); n != 0 {
+		t.Fatalf("accounts hold %d live containers for the mirror", n)
+	}
+	if n := f.count(t, "select count(*) from usage_cursors where source_id = $1", container); n != 0 {
+		t.Fatal("the mirror's container is metered")
+	}
+
+	if _, err := f.execution.ApplyReport(ctx, host, execution.ContainerReport{
+		Container: container, Phase: execution.ReportExited, ObservedAt: time.Now(),
+		Exit: &execution.ContainerExit{Reason: execution.StopCrashed, Message: "the builder crashed"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.images.Recover(ctx, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	if wait(b) != build {
+		t.Fatal("the retry failed the mirror for every workspace")
+	}
+	if n := f.count(t, "select count(*) from containers where image_build_id = $1 and state = 'pending'", build); n != 1 {
+		t.Fatalf("%d retry containers, want 1", n)
 	}
 }

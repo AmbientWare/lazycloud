@@ -395,7 +395,7 @@ func (q *Queries) LatestBuild(ctx context.Context, imageDigest []byte) (LatestBu
 }
 
 const lockBuild = `-- name: LockBuild :one
-select id, image_digest, state, workspace_id, forced, deadline_at, log_bytes, log_lines
+select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines
 from image_builds where id = $1 for update
 `
 
@@ -405,6 +405,7 @@ type LockBuildRow struct {
 	State       string
 	WorkspaceID uuid.UUID
 	Forced      bool
+	Mirror      bool
 	DeadlineAt  time.Time
 	LogBytes    int64
 	LogLines    int32
@@ -419,6 +420,7 @@ func (q *Queries) LockBuild(ctx context.Context, id uuid.UUID) (LockBuildRow, er
 		&i.State,
 		&i.WorkspaceID,
 		&i.Forced,
+		&i.Mirror,
 		&i.DeadlineAt,
 		&i.LogBytes,
 		&i.LogLines,
