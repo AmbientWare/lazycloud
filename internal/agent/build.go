@@ -149,29 +149,28 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	}
 	logs.add(ctx, "preparing build container")
 	began := time.Now()
-	prepareCtx, prepare := telemetry.Start(ctx, "agent.build_prepare")
-	defer prepare.End()
-	builder, err := c.a.platformImage(prepareCtx, platformimages.Builder)
-	if err != nil {
-		telemetry.Fail(prepare, err)
-		return startFailed(err)
-	}
 	// The secrets leave the host when the build ends, whatever its outcome.
 	defer func() { _ = os.RemoveAll(filepath.Join(c.dir, "secrets")) }()
-	if err := c.prepareBuildFiles(ctx, build); err != nil {
-		return startFailed(err)
-	}
-	var gpu *buildGPU
-	if n := int(spec.GetResources().GetGpuCount()); n > 0 {
-		gpus, err := c.a.allocateGPUs(c, n)
+	if err := telemetry.Step(ctx, "agent.build_prepare", func(ctx context.Context) error {
+		builder, err := c.a.platformImage(ctx, platformimages.Builder)
 		if err != nil {
-			return startFailed(err)
+			return err
 		}
-		if gpu, err = writeBuildCDI(ctx, filepath.Join(c.dir, "cdi"), gpus); err != nil {
-			return startFailed(err)
+		if err := c.prepareBuildFiles(ctx, build); err != nil {
+			return err
 		}
-	}
-	if err := c.a.createBuilder(ctx, c, builder, spec, gpu); err != nil {
+		var gpu *buildGPU
+		if n := int(spec.GetResources().GetGpuCount()); n > 0 {
+			gpus, err := c.a.allocateGPUs(c, n)
+			if err != nil {
+				return err
+			}
+			if gpu, err = writeBuildCDI(ctx, filepath.Join(c.dir, "cdi"), gpus); err != nil {
+				return err
+			}
+		}
+		return c.a.createBuilder(ctx, c, builder, spec, gpu)
+	}); err != nil {
 		return startFailed(err)
 	}
 	c.mu.Lock()
@@ -179,7 +178,6 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	c.phase = hostproto.ContainerPhase_CONTAINER_PHASE_READY
 	c.mu.Unlock()
 	c.report()
-	prepare.End()
 	ctx, run := telemetry.Start(ctx, "agent.build_run")
 	defer run.End()
 	c.log.Info("build container started", "build_id", build.GetBuildId(), "attempt", build.GetAttempt(), "prepare_ms", time.Since(began).Milliseconds())

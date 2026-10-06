@@ -37,8 +37,8 @@ const (
 type LayerSourcesClient interface {
 	// Grant records the read URLs of layers. A FUSE read cannot be told apart
 	// by container, so a Grant, Prefetch or StartTrace that names a layer of a
-	// running trace under another name, or no name, marks that trace
-	// incomplete.
+	// running trace under another name marks that trace incomplete. A Grant
+	// with no name refreshes URLs and leaves traces as they are.
 	Grant(ctx context.Context, in *GrantRequest, opts ...grpc.CallOption) (*GrantResponse, error)
 	// Prefetch fetches the frames an image's earlier containers read at
 	// startup into the host's frame cache, in the order they were read, as
@@ -127,8 +127,8 @@ func (c *layerSourcesClient) EndTrace(ctx context.Context, in *EndTraceRequest, 
 type LayerSourcesServer interface {
 	// Grant records the read URLs of layers. A FUSE read cannot be told apart
 	// by container, so a Grant, Prefetch or StartTrace that names a layer of a
-	// running trace under another name, or no name, marks that trace
-	// incomplete.
+	// running trace under another name marks that trace incomplete. A Grant
+	// with no name refreshes URLs and leaves traces as they are.
 	Grant(context.Context, *GrantRequest) (*GrantResponse, error)
 	// Prefetch fetches the frames an image's earlier containers read at
 	// startup into the host's frame cache, in the order they were read, as

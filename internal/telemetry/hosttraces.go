@@ -194,6 +194,9 @@ func hostRequest(host string, otlp []byte) (*collector.ExportTraceServiceRequest
 				for _, e := range s.GetEvents() {
 					e.Attributes = hostSpanAttrs(e.GetAttributes())
 				}
+				for _, l := range s.GetLinks() {
+					l.Attributes = hostSpanAttrs(l.GetAttributes())
+				}
 				if s.GetStatus() != nil {
 					s.Status.Message = redact(s.GetStatus().GetMessage())
 				}

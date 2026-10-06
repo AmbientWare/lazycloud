@@ -38,7 +38,7 @@ python cold start on the uv base; first container after resume 0.4 s.
 - [ ] Containerd proxy snapshotter, FUSE layer mounts, mount reconciliation (internal/imagefs/snapshotter)
 - [ ] Bounded LRU frame cache, small-layer fills
 - [ ] Prefetch from startup traces; shared-layer rule; refreshes do not void traces
-- [ ] Metrics and spans
+- [x] Spans. Intentional: the snapshotter's metrics are removed; no host served them (the unit set no metrics address) and nothing read them.
 
 ### Agent
 - [ ] Pulls through containerd into the moby namespace

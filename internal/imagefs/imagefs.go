@@ -29,6 +29,11 @@ func (d Digest) Check() error {
 // FrameSize is the uncompressed size of every data frame but the last.
 const FrameSize = 4 << 20
 
+// MaxTraceReads bounds the frames one startup trace records and one prefetch
+// names: 16 GiB uncompressed, past what a startup reads. The server stores
+// traces under the same bound.
+const MaxTraceReads = 4096
+
 // Index is one layer's file tree and the frame table of its data object.
 type Index struct {
 	Layer      Digest

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
@@ -18,8 +19,6 @@ const (
 	// release's code decides what its containers read at startup, and
 	// changes with deploys while the image stays.
 	traceAge = 24 * time.Hour
-	// MaxTraceReads bounds a stored trace, as the table does.
-	MaxTraceReads = 4096
 )
 
 // ErrInvalidTrace means a reported trace names a layer or frame the image
@@ -56,8 +55,8 @@ func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID
 	if len(reads) == 0 {
 		return nil
 	}
-	if len(reads) > MaxTraceReads {
-		return fmt.Errorf("%w: %d frames, at most %d", ErrInvalidTrace, len(reads), MaxTraceReads)
+	if len(reads) > imagefs.MaxTraceReads {
+		return fmt.Errorf("%w: %d frames, at most %d", ErrInvalidTrace, len(reads), imagefs.MaxTraceReads)
 	}
 	params := RecordTraceParams{
 		Reference: reference, WorkspaceID: uuid.UUID(workspace), MaxAgeSeconds: traceAge.Seconds(),

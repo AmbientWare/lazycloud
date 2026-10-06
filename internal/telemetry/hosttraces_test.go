@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net"
@@ -29,8 +30,8 @@ func (r *requests) Export(_ context.Context, req *collector.ExportTraceServiceRe
 }
 
 // A host's spans reach the collector marked with the host that sent them,
-// a host cannot make them look like the control plane's or carry AWS
-// metadata, and a host past its span budget is dropped.
+// a host cannot make them look like the control plane's, carry AWS metadata
+// or a presigned query, and a host past its span budget is dropped.
 func TestHostSpansCarryTheirHost(t *testing.T) {
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -61,7 +62,11 @@ func TestHostSpansCarryTheirHost(t *testing.T) {
 			Attributes: []*commonpb.KeyValue{
 				str("lazycloud.host_id", "someone-else"), str("aws.xray.annotations", "x"), str("peer.service", "lazycloud-server"),
 				str("service.name", "lazycloud-server"), str("lazycloud.layers", "4"),
-			}}}}},
+			},
+			Status: &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: "GET " + presigned + ": 403"},
+			Events: []*tracepb.Span_Event{{Name: "exception", Attributes: []*commonpb.KeyValue{str("exception.message", presigned)}}},
+			Links:  []*tracepb.Span_Link{{TraceId: make([]byte, 16), SpanId: make([]byte, 8), Attributes: []*commonpb.KeyValue{str("url.full", presigned)}}},
+		}}}},
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +99,9 @@ func TestHostSpansCarryTheirHost(t *testing.T) {
 	}
 	if len(attrs) != 2 || attrs["lazycloud.host_id"] != "host-1" || attrs["lazycloud.layers"] != "4" {
 		t.Fatalf("forwarded span attributes %v", attrs)
+	}
+	if forwarded, err := proto.Marshal(got); err != nil || bytes.Contains(forwarded, []byte("X-Amz-Signature")) {
+		t.Fatalf("a host's presigned query reached the collector (%v)", err)
 	}
 
 	// A batch past the host's budget is dropped and counted.

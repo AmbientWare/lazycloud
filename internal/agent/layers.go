@@ -202,13 +202,13 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 	shared := l.begin(container, layers)
 	ctx, span := telemetry.Start(ctx, "agent.layer_grant", trace.WithAttributes(attribute.Int("lazycloud.layers", len(layers)),
 		attribute.Int("lazycloud.prefetch_frames", len(spec.GetPrefetch().GetReads())), attribute.Bool("lazycloud.shared", shared)))
-	defer span.End()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
 	if err := l.client.Grant(ctx, container, spec.GetLayers()); err != nil {
 		telemetry.Fail(span, err)
 		return false, err //nolint:wrapcheck // The client names the call.
 	}
+	defer span.End()
 	prefetching := false
 	if reads := spec.GetPrefetch().GetReads(); len(reads) > 0 {
 		if err := l.client.Prefetch(ctx, container, layers, reads); err != nil {

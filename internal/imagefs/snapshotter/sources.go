@@ -107,8 +107,8 @@ func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.Prefet
 	if err != nil {
 		return nil, err
 	}
-	if len(request.GetReads()) > maxTraceReads {
-		return nil, status.Errorf(codes.InvalidArgument, "a prefetch names at most %d frames", maxTraceReads)
+	if len(request.GetReads()) > imagefs.MaxTraceReads {
+		return nil, status.Errorf(codes.InvalidArgument, "a prefetch names at most %d frames", imagefs.MaxTraceReads)
 	}
 	reads := make([]frameKey, len(request.GetReads()))
 	for i, r := range request.GetReads() {

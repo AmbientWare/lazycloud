@@ -93,7 +93,7 @@ func digestOf(c byte) imagefs.Digest {
 // Traces are bounded in number and size, and ones nobody ends expire.
 func TestTracesAreBounded(t *testing.T) {
 	c := newTestCache(t, http.DefaultTransport, 64<<20)
-	l := &layer{digest: digestOf('0'), traced: make([]atomic.Uint32, maxTraceReads+10)}
+	l := &layer{digest: digestOf('0'), traced: make([]atomic.Uint32, imagefs.MaxTraceReads+10)}
 	layers := []imagefs.Digest{l.digest}
 	for i := range maxTraces {
 		if err := c.startTrace(fmt.Sprint(i), layers); err != nil {
@@ -106,7 +106,7 @@ func TestTracesAreBounded(t *testing.T) {
 	for frame := range l.traced {
 		c.traces.record(l, frame)
 	}
-	if got, err := c.traces.end("0"); err != nil || len(got.GetReads()) != maxTraceReads {
+	if got, err := c.traces.end("0"); err != nil || len(got.GetReads()) != imagefs.MaxTraceReads {
 		t.Fatalf("a trace past its bound ended %v, %d reads", err, len(got.GetReads()))
 	}
 	c.traces.traces["1"].expires = time.Now()

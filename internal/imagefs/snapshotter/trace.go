@@ -17,9 +17,6 @@ import (
 )
 
 const (
-	// maxTraceReads bounds the frames one trace records and one prefetch
-	// names: 16 GiB uncompressed, past what a startup reads.
-	maxTraceReads = 4096
 	// maxTraces bounds the traces recording at once, and maxName the name
 	// of a trace or prefetch.
 	maxTraces = 64
@@ -82,7 +79,7 @@ func (t *tracer) record(l *layer, frame int) {
 	k := frameKey{layer: l.digest, frame: frame}
 	for _, tr := range t.traces {
 		position, ok := tr.layers[l.digest]
-		if _, read := tr.seen[k]; !ok || read || len(tr.result.Reads) >= maxTraceReads {
+		if _, read := tr.seen[k]; !ok || read || len(tr.result.Reads) >= imagefs.MaxTraceReads {
 			continue
 		}
 		tr.seen[k] = struct{}{}
