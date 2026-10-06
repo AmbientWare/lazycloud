@@ -167,7 +167,7 @@ func (c *container) downloadRestore(ctx context.Context, restore *hostproto.Snap
 	}
 	response, err := c.a.http.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("download snapshot: %w", err)
+		return nil, fmt.Errorf("download snapshot: %w", telemetry.RedactURL(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -429,7 +429,7 @@ func (a *Agent) uploadDir(ctx context.Context, dir, url string) (int64, string, 
 	_ = reader.CloseWithError(errors.New("upload ended"))
 	writeErr := <-written
 	if err != nil {
-		return 0, "", fmt.Errorf("upload snapshot: %w", err)
+		return 0, "", fmt.Errorf("upload snapshot: %w", telemetry.RedactURL(err))
 	}
 	_ = response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {

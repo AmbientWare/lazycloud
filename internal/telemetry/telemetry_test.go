@@ -152,8 +152,10 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	}
 }
 
-// A step started from a stored traceparent is a child in that trace, and a
-// gRPC call outside any traced step starts no trace.
+// A step started from a stored traceparent is a child in that trace. A
+// gRPC call outside any traced step, a scheduler pass and a workload
+// request past the edge's ratio start no trace, while a pass's step for a
+// traced container records in that container's trace.
 func TestStoredTraceparentsJoinTheirTrace(t *testing.T) {
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -176,20 +178,34 @@ func TestStoredTraceparentsJoinTheirTrace(t *testing.T) {
 	_, call := tel.Tracer().Start(t.Context(), "lazycloud.host.v1.HostService/ClaimTasks",
 		trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("rpc.system.name", "grpc")))
 	call.End()
+	passCtx, pass := tel.Tracer().Start(t.Context(), telemetry.PassPrefix+"place")
+	_, idle := telemetry.Start(passCtx, "scheduling.idle")
+	idle.End()
+	_, placed := telemetry.StartIn(passCtx, telemetry.TracerOf(passCtx), stored, "scheduling.placement")
+	placed.End()
+	pass.End()
+	server := httptest.NewServer(tel.EdgeHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	resp, err := http.Get(server.URL) //nolint:noctx // A local test server.
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	server.Close()
 	if err := tel.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	recv.mu.Lock()
 	defer recv.mu.Unlock()
-	if len(recv.spans) != 2 {
-		t.Fatalf("exported %d spans, want submit and agent.start: %v", len(recv.spans), recv.spans)
+	if len(recv.spans) != 3 {
+		t.Fatalf("exported %d spans, want submit, agent.start and scheduling.placement: %v", len(recv.spans), recv.spans)
 	}
 	byName := map[string]*tracepb.Span{}
 	for _, s := range recv.spans {
 		byName[s.GetName()] = s
 	}
-	submit, start := byName["submit"], byName["agent.start"]
-	if submit == nil || start == nil || !bytes.Equal(start.GetTraceId(), submit.GetTraceId()) || !bytes.Equal(start.GetParentSpanId(), submit.GetSpanId()) {
-		t.Fatalf("agent.start is not a child of submit: %v", recv.spans)
+	submit, start, placement := byName["submit"], byName["agent.start"], byName["scheduling.placement"]
+	if submit == nil || start == nil || placement == nil || !bytes.Equal(start.GetTraceId(), submit.GetTraceId()) ||
+		!bytes.Equal(start.GetParentSpanId(), submit.GetSpanId()) || !bytes.Equal(placement.GetTraceId(), submit.GetTraceId()) {
+		t.Fatalf("agent.start and scheduling.placement are not in submit's trace: %v", recv.spans)
 	}
 }

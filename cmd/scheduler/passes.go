@@ -9,8 +9,9 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// newPassTimer returns a wrapper that traces each pass of a loop and
-// records its duration by name.
+// newPassTimer returns a wrapper that records each pass's duration by name
+// and runs it under a span the sampler never keeps, which hands the pass's
+// steps the tracer that records them in their containers' traces.
 func newPassTimer(tel *telemetry.Telemetry) func(name string, pass func(context.Context) bool) func(context.Context) bool {
 	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "lazycloud_scheduler_pass_seconds",
@@ -27,7 +28,7 @@ func newPassTimer(tel *telemetry.Telemetry) func(name string, pass func(context.
 		observe := duration.WithLabelValues(name)
 		rerun := contended.WithLabelValues(name)
 		return func(ctx context.Context) bool {
-			ctx, span := tracer.Start(ctx, "scheduler."+name)
+			ctx, span := tracer.Start(ctx, telemetry.PassPrefix+name)
 			began := time.Now()
 			again := pass(ctx)
 			observe.Observe(time.Since(began).Seconds())

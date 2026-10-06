@@ -462,7 +462,6 @@ func snapshotterCheck(ctx context.Context, docker *client.Client, socket string)
 	return check("snapshotter", true, "Docker stores images on lazycloud-snapshotter", "")
 }
 
-// goOwned runs fn on a goroutine Run waits for.
 // tracer is the agent's tracer, recording nothing without telemetry.
 func (a *Agent) tracer() trace.Tracer {
 	if a.cfg.Telemetry == nil {
@@ -471,6 +470,7 @@ func (a *Agent) tracer() trace.Tracer {
 	return a.cfg.Telemetry.Tracer()
 }
 
+// goOwned runs fn on a goroutine Run waits for.
 func (a *Agent) goOwned(fn func(context.Context)) {
 	a.work.Go(func() { fn(a.ctx) })
 }

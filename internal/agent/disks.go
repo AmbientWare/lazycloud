@@ -289,10 +289,7 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) erro
 // release publishes d's last generation, detaches it and ends its lease. A
 // disk this host never restored has nothing to publish. A lease the server
 // already ended, as after host loss, counts as released.
-func (a *Agent) release(ctx context.Context, container string, d *heldDisk) (err error) {
-	ctx, span := telemetry.StartIn(ctx, a.tracer(), "", "agent.disk_release", trace.WithAttributes(
-		telemetry.Container(container), attribute.String("lazycloud.disk_id", d.ID)))
-	defer func() { telemetry.Fail(span, err) }()
+func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
 	local, err := a.hasLocalDisk(ctx, d.ID)
 	if err != nil {
 		return err

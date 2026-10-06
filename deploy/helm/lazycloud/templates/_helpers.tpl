@@ -83,6 +83,8 @@ its secret keys as references. (list $ "server").
   value: "true"
 - name: LAZYCLOUD_TRACE_SAMPLE_RATIO
   value: {{ .Values.telemetry.sampleRatio | quote }}
+- name: LAZYCLOUD_EDGE_TRACE_SAMPLE_RATIO
+  value: {{ .Values.telemetry.edgeSampleRatio | quote }}
 {{- end -}}
 
 {{/* The master key file, readable by the pod's fsGroup only. */}}

@@ -31,7 +31,7 @@ data:
     exporters:
       awsxray:
         region: {{ required "awsRegion is required" .Values.awsRegion | quote }}
-        indexed_attributes: [lazycloud.container_id, lazycloud.task_id, lazycloud.host_id]
+        indexed_attributes: [lazycloud.container_id, lazycloud.task_id, lazycloud.host_id, otel.resource.lazycloud.host_id]
     service:
       extensions: [health_check]
       pipelines:

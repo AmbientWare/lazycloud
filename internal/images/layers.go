@@ -579,7 +579,7 @@ func traceBuild(ctx context.Context, build LockBuildRow, failure string) {
 	_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), *build.Traceparent, "images.build",
 		trace.WithTimestamp(build.CreatedAt), trace.WithAttributes(attribute.String(telemetry.AttrBuild, build.ID.String()), attribute.Bool("lazycloud.mirror", build.Mirror)))
 	if failure != "" {
-		span.SetStatus(codes.Error, failure)
+		span.SetStatus(codes.Error, telemetry.Redact(failure))
 	}
 	span.End()
 }

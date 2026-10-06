@@ -188,7 +188,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		},
 		starts: map[execution.ContainerID]*pendingStart{}}
 	defer sess.builds.close()
-	defer sess.endStarts(nil, "")
+	defer sess.endStarts(nil)
 	defer func() {
 		if sess.replicaStop != nil {
 			sess.replicaStop()
@@ -445,7 +445,7 @@ func (sess *session) sync(ctx context.Context) error {
 		started = append(started, msg.GetStart().GetImage())
 		sess.layers[msg.GetStart().GetImage()] = sess.server.grantOf(cache, msg.GetStart().GetImage(), issued)
 	}
-	sess.endStarts(starting, "")
+	sess.endStarts(starting)
 	sess.builds.await(sess.server.listener, waiting)
 	if err := sess.server.images.RecordUses(ctx, started); err != nil {
 		return sess.server.grpcError(ctx, err)

@@ -3,6 +3,9 @@ package telemetry
 import (
 	"context"
 	"encoding/hex"
+	"errors"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -74,13 +77,40 @@ func Link(traceparent string) trace.Link {
 	return trace.Link{SpanContext: SpanContextOf(traceparent)}
 }
 
-// Fail marks span failed with err, when err is not nil, and ends it.
+// Fail marks span failed with err, when err is not nil, and ends it. The
+// message keeps no URL query.
 func Fail(span trace.Span, err error) {
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		message := Redact(err.Error())
+		span.RecordError(errors.New(message))
+		span.SetStatus(codes.Error, message)
 	}
 	span.End()
+}
+
+// urlQuery matches the query of a URL in a message.
+var urlQuery = regexp.MustCompile(`(https?://[^\s?"]*)\?[^\s"]*`) //nolint:gochecknoglobals // A compiled constant.
+
+// Redact removes the query of every URL in message: presigned URLs carry
+// their signature there. Span statuses and events take only redacted
+// messages.
+func Redact(message string) string {
+	return urlQuery.ReplaceAllString(message, "$1?<redacted>")
+}
+
+// RedactURL is err with the query of the URL it names removed when it is a
+// *url.Error, as a failed request to a presigned URL returns.
+func RedactURL(err error) error {
+	var failed *url.Error
+	if !errors.As(err, &failed) {
+		return err
+	}
+	stripped := Redact(failed.URL)
+	if u, parseErr := url.Parse(failed.URL); parseErr == nil {
+		u.RawQuery, u.Fragment = "", ""
+		stripped = u.String()
+	}
+	return &url.Error{Op: failed.Op, URL: stripped, Err: failed.Err}
 }
 
 // SpanContextOf is the remote span a W3C traceparent of version 00 names;

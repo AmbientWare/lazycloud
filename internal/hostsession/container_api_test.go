@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -143,6 +144,39 @@ func TestSpawnFromARunningTaskRecordsItAsParent(t *testing.T) {
 	}
 	if got := spawned.Tasks[0]; got.ParentTaskID != parent.String() || got.RootTaskID != parent.String() {
 		t.Fatalf("spawned task lineage %+v", got)
+	}
+}
+
+// A task an attempt submits through the container API stores the
+// attempt's trace, and the server's handling of the call records in it.
+func TestContainerAPICallsJoinTheAttemptsTrace(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	_, container := h.startingContainer(host)
+	attempt := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{7, 7}, SpanID: trace.SpanID{3}, TraceFlags: trace.FlagsSampled, Remote: true,
+	})
+	body := []byte(`{"inputs": [{"encoding": "json", "value": {"args": [1]}}]}`)
+	reply, err := call(trace.ContextWithRemoteSpanContext(ctx, attempt), h.client, container, "POST",
+		"/v1/workspaces/ws/apps/reports/workloads/function/summarize/tasks", body, nil)
+	if err != nil || reply.status != 201 {
+		t.Fatalf("submit: %d %s %v", reply.status, reply.body, err)
+	}
+	var stored string
+	if err := h.pool.QueryRow(t.Context(), "select coalesce(traceparent, '') from tasks").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stored, "00-"+attempt.TraceID().String()+"-") {
+		t.Fatalf("the task stores trace %q, want one in %s", stored, attempt.TraceID())
+	}
+	names := map[string]bool{}
+	for _, s := range h.spans.Ended() {
+		if s.SpanContext().TraceID() == attempt.TraceID() {
+			names[s.Name()] = true
+		}
+	}
+	if !names["execution.submit"] || !names["lazycloud.host.v1.HostService/ContainerAPI"] {
+		t.Fatalf("spans in the attempt's trace: %v", names)
 	}
 }
 

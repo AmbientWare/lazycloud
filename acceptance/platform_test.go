@@ -322,7 +322,7 @@ func startPlatform(t *testing.T) *platform {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
-			passCtx, span := tel.Tracer().Start(ctx, "scheduler.passes")
+			passCtx, span := tel.Tracer().Start(ctx, telemetry.PassPrefix+"passes")
 			if _, err := p.execution.Plan(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan: %v", err)
 			}

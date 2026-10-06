@@ -28,6 +28,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -83,7 +84,7 @@ func (s *sourceCache) download(ctx context.Context, url, digest, path string) er
 	}
 	response, err := s.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("download source: %w", err)
+		return fmt.Errorf("download source: %w", telemetry.RedactURL(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {

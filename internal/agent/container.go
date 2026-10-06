@@ -123,8 +123,8 @@ type container struct {
 	// startSpan is the start's span, open until the container is ready or
 	// its start fails.
 	startSpan trace.Span
-	// traces holds, per running attempt, its start and the trace of the
-	// request that submitted it.
+	// traces holds, per running attempt, its task and its span, open from
+	// dispatch to completion in the trace of the request that submitted it.
 	traces map[string]attemptTrace
 
 	// usage is where the sampler reads the container's use, once known.
@@ -132,9 +132,8 @@ type container struct {
 }
 
 type attemptTrace struct {
-	task        string
-	traceparent string
-	started     time.Time
+	task string
+	span trace.Span
 }
 
 func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostproto.HttpServing, phase hostproto.ContainerPhase) *container {
@@ -579,9 +578,14 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 	l := c.link
 	span := c.startSpan
 	c.startSpan = nil
+	for attempt, t := range c.traces {
+		t.span.SetStatus(otelcodes.Error, "the container exited")
+		t.span.End()
+		delete(c.traces, attempt)
+	}
 	c.mu.Unlock()
 	if span != nil {
-		span.SetStatus(otelcodes.Error, "exited before it was ready: "+exit.GetMessage())
+		span.SetStatus(otelcodes.Error, telemetry.Redact("exited before it was ready: "+exit.GetMessage()))
 		span.End()
 	}
 	if c.a.layers != nil {
@@ -900,7 +904,10 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		return
 	}
 	c.running[attempt] = struct{}{}
-	c.traces[attempt] = attemptTrace{task: task.GetTaskId(), traceparent: task.GetTraceparent(), started: time.Now()}
+	_, span := telemetry.StartIn(c.work, c.a.tracer(), task.GetTraceparent(), "attempt", trace.WithAttributes( //nolint:spancheck // Completion or cancel ends it.
+		telemetry.Task(task.GetTaskId()), attribute.String("lazycloud."+telemetry.KeyAttempt, attempt),
+		telemetry.Container(c.id), telemetry.Host(c.a.identity.HostID)))
+	c.traces[attempt] = attemptTrace{task: task.GetTaskId(), span: span}
 	l := c.link
 	c.mu.Unlock()
 	l.enqueue(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Run{Run: &hostproto.RunAttempt{
@@ -924,7 +931,11 @@ func (c *container) cancelAttempt(attempt string) {
 	c.mu.Lock()
 	c.cancelled.add(attempt, time.Now())
 	delete(c.running, attempt)
-	delete(c.traces, attempt)
+	if t, ok := c.traces[attempt]; ok {
+		t.span.SetStatus(otelcodes.Error, "cancelled")
+		t.span.End()
+		delete(c.traces, attempt)
+	}
 	l := c.link
 	c.mu.Unlock()
 	c.signalSlotFree()
@@ -1013,23 +1024,35 @@ func (c *container) endStart(err error) {
 	}
 }
 
-// attemptSpan records the attempt as a span from its dispatch, in the trace
-// of the request that submitted it, so the completion call and the server's
-// handling of it join that trace.
+// attemptSpan takes the attempt's span for its completion, so the
+// completion call and the server's handling of it join its trace.
 func (c *container) attemptSpan(ctx context.Context, attempt string) (context.Context, trace.Span) {
 	c.mu.Lock()
 	t, ok := c.traces[attempt]
 	delete(c.traces, attempt)
 	c.mu.Unlock()
-	if !ok || c.a.cfg.Telemetry == nil {
+	if !ok {
 		return ctx, noop.Span{}
 	}
-	return telemetry.StartIn(ctx, c.a.tracer(), t.traceparent, "attempt", trace.WithTimestamp(t.started), trace.WithAttributes(
-		attribute.String("lazycloud."+telemetry.KeyTask, t.task),
-		attribute.String("lazycloud."+telemetry.KeyAttempt, attempt),
-		attribute.String("lazycloud."+telemetry.KeyContainer, c.id),
-		attribute.String("lazycloud."+telemetry.KeyHost, c.a.identity.HostID),
-	))
+	return trace.ContextWithSpan(ctx, t.span), t.span
+}
+
+// taskContext is ctx under the span of the running attempt of task, so a
+// container API call the attempt makes, and what the server does for it,
+// join the attempt's trace. Another task's id, or none, leaves ctx: the
+// server decides what the call may do.
+func (c *container) taskContext(ctx context.Context, task string) context.Context {
+	if task == "" {
+		return ctx
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, t := range c.traces {
+		if t.task == task {
+			return trace.ContextWithSpan(ctx, t.span)
+		}
+	}
+	return ctx
 }
 
 // cancelledAttempts remembers recent cancels, oldest first.

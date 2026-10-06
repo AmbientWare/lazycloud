@@ -66,17 +66,17 @@ func (sess *session) endStart(container execution.ContainerID, failure string) {
 		p.wait.End()
 	}
 	if failure != "" {
-		p.span.SetStatus(codes.Error, failure)
+		p.span.SetStatus(codes.Error, telemetry.Redact(failure))
 	}
 	p.span.End()
 }
 
 // endStarts ends the start spans of containers no longer derived, and all
 // of them when derived is nil, as when the session ends.
-func (sess *session) endStarts(derived map[execution.ContainerID]bool, failure string) {
+func (sess *session) endStarts(derived map[execution.ContainerID]bool) {
 	for container := range sess.starts {
 		if !derived[container] {
-			sess.endStart(container, failure)
+			sess.endStart(container, "")
 		}
 	}
 }
