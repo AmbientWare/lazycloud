@@ -68,6 +68,13 @@ const (
 	platformTransferBackoff  = time.Second
 )
 
+// ErrServerDisk means the server could not create the files a platform
+// image conversion keeps on its own disk: its temporary directory is
+// missing, read-only or full. Only the server's deployment fixes it, so it
+// is recorded as a failure hosts see and retried after
+// platformFailureRetry, like a failure of the image.
+var ErrServerDisk = errors.New("the server cannot write platform image conversion files")
+
 // PlatformPull is how a host runs one platform image it named: Pull once
 // the image is converted, or Failure when it cannot be. With neither the
 // image is converting, or waits for ConvertPlatformImage to convert it.
@@ -226,7 +233,7 @@ func (i *Images) ConvertPlatformImage(ctx context.Context, reference, architectu
 	}
 	var unconvertible *ConversionError
 	var rejected *InvalidError
-	transient := !errors.As(err, &unconvertible) && !errors.As(err, &rejected)
+	transient := !errors.As(err, &unconvertible) && !errors.As(err, &rejected) && !errors.Is(err, ErrServerDisk)
 	record := context.WithoutCancel(ctx)
 	failed := pgx.BeginFunc(record, i.pool, func(tx pgx.Tx) error {
 		if err := i.queries.WithTx(tx).FailPlatformImage(record, FailPlatformImageParams{
@@ -365,7 +372,7 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 	}
 	dir, err := os.MkdirTemp("", "lazycloud-platform-")
 	if err != nil {
-		return fmt.Errorf("create conversion directory: %w", err)
+		return fmt.Errorf("%w: create conversion directory: %w", ErrServerDisk, err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	blobBytes := make(map[string]int64, len(pushed.layers))
@@ -490,7 +497,7 @@ func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, aut
 	defer func() { _ = uncompressed.Close() }()
 	data, err := os.CreateTemp(dir, "layer-*.data")
 	if err != nil {
-		return nil, fmt.Errorf("create layer data file: %w", err)
+		return nil, fmt.Errorf("%w: create layer data file: %w", ErrServerDisk, err)
 	}
 	defer func() { _ = data.Close() }()
 	ix, err := imagefs.Convert(ctx, uncompressed, data)
@@ -528,7 +535,7 @@ func (i *Images) fetchPlatformBlob(ctx context.Context, blob name.Digest, auth *
 	defer func() { _ = body.Close() }()
 	file, err := os.CreateTemp(dir, "blob-*")
 	if err != nil {
-		return "", "", fmt.Errorf("create layer blob file: %w", err)
+		return "", "", fmt.Errorf("%w: create layer blob file: %w", ErrServerDisk, err)
 	}
 	hash := sha256.New()
 	n, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(body, size+1))
@@ -642,14 +649,14 @@ func (i *Images) putPlatformObject(ctx context.Context, target string, body io.R
 	return resp.Header.Get("ETag"), nil
 }
 
-// retryPlatform runs fn until it succeeds, fails for the image or the
-// store's refusal, or uses its attempts.
+// retryPlatform runs fn until it succeeds, fails for the image, the
+// server's disk or the store's refusal, or uses its attempts.
 func retryPlatform(ctx context.Context, fn func() error) error {
 	delay := platformTransferBackoff
 	for attempt := 1; ; attempt++ {
 		err := fn()
 		var unconvertible *ConversionError
-		if err == nil || errors.As(err, &unconvertible) || errors.Is(err, errStoreRefused) || attempt == platformTransferAttempts {
+		if err == nil || errors.As(err, &unconvertible) || errors.Is(err, ErrServerDisk) || errors.Is(err, errStoreRefused) || attempt == platformTransferAttempts {
 			return err
 		}
 		timer := time.NewTimer(delay)

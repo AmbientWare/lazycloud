@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
@@ -36,6 +38,8 @@ type platformConversions struct {
 	mu      sync.Mutex
 	running map[string]bool
 	wg      sync.WaitGroup
+	// failures counts the conversions that failed, by cause.
+	failures *prometheus.CounterVec
 }
 
 // convertPlatform starts converting reference for architecture unless this
@@ -56,7 +60,20 @@ func (s *Server) convertPlatform(reference, architecture string) {
 			s.platform.mu.Unlock()
 		}()
 		err := s.images.ConvertPlatformImage(s.lifetime, reference, architecture)
-		if err != nil && s.lifetime.Err() == nil {
+		if err == nil || s.lifetime.Err() != nil {
+			return
+		}
+		var unconvertible *images.ConversionError
+		switch {
+		case errors.Is(err, images.ErrServerDisk):
+			s.platform.failures.WithLabelValues("server_disk").Inc()
+			s.logger.ErrorContext(s.lifetime, "the server cannot convert platform images on its disk; hosts get the failure until its temporary directory is writable",
+				"image", reference, "architecture", architecture, "error", err)
+		case errors.As(err, &unconvertible):
+			s.platform.failures.WithLabelValues("image").Inc()
+			s.logger.WarnContext(s.lifetime, "converting a platform image failed", "image", reference, "architecture", architecture, "error", err)
+		default:
+			s.platform.failures.WithLabelValues("transient").Inc()
 			s.logger.WarnContext(s.lifetime, "converting a platform image failed", "image", reference, "architecture", architecture, "error", err)
 		}
 	})

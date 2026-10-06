@@ -126,8 +126,12 @@ server:
   # 10 seconds. The grace period must cover both.
   drainDelaySeconds: 5
   terminationGracePeriodSeconds: 30
+  # ephemeral-storage also sizes /tmp, where the server converts platform
+  # images: at most about 235 MB with the BuildKit builder (123 MB of layers,
+  # 122 MB converted, held until uploaded) and busybox converting at once,
+  # doubled.
   resources:
-    requests: { cpu: 250m, memory: 384Mi }
+    requests: { cpu: 250m, memory: 384Mi, ephemeral-storage: 512Mi }
     limits: { memory: 1Gi }
   service:
     annotations: {}

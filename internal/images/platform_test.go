@@ -221,6 +221,51 @@ func TestPlatformImageFailuresAreTypedAndRetried(t *testing.T) {
 	}
 }
 
+// A server whose temporary directory cannot be written fails the
+// conversion as ErrServerDisk, not for the image: hosts get the reason, and
+// the conversion waits the long retry period instead of running again
+// every few seconds. Once the directory is writable it converts.
+func TestAServerWithoutWritableTempFailsItsConversionsVisibly(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	host := f.host(t)
+	img, err := random.Image(4096, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := f.registry + "/tools/builder:disk@" + pushImage(t, f.registry+"/tools/builder:disk", img)
+	tmp := os.Getenv("TMPDIR")
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	err = f.images.ConvertPlatformImage(ctx, reference, "amd64")
+	var unconvertible *images.ConversionError
+	if !errors.Is(err, images.ErrServerDisk) || errors.As(err, &unconvertible) {
+		t.Fatalf("an unwritable temporary directory is the server's disk failure: %v", err)
+	}
+	pulls, err := f.images.PlatformPulls(ctx, host, []string{reference})
+	if err != nil || !strings.Contains(pulls[0].Failure, images.ErrServerDisk.Error()) || pulls[0].RetryAt.Before(time.Now().Add(9*time.Minute)) {
+		t.Fatalf("hosts get the disk failure until the long retry period passes: %+v %v", pulls, err)
+	}
+	if _, err := f.pool.Exec(ctx, "update platform_images set failed_at = now() - interval '31 seconds' where reference = $1", reference); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.images.ConvertPlatformImage(ctx, reference, "amd64"); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "select count(*) from platform_images where reference = $1 and failure is not null", reference); n != 1 {
+		t.Fatal("a disk failure was converted again within the short retry period")
+	}
+	t.Setenv("TMPDIR", tmp)
+	if _, err := f.pool.Exec(ctx, "update platform_images set failed_at = now() - interval '11 minutes' where reference = $1", reference); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.images.ConvertPlatformImage(ctx, reference, "amd64"); err != nil {
+		t.Fatal(err)
+	}
+	if pulls, err := f.images.PlatformPulls(ctx, host, []string{reference}); err != nil || pulls[0].Pull == nil {
+		t.Fatalf("a writable directory converts the image: %+v %v", pulls, err)
+	}
+}
+
 // hangingRegistry answers no request until the client gives up, so a
 // conversion from it runs until its context ends.
 func hangingRegistry(t *testing.T) string {

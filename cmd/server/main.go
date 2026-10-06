@@ -411,6 +411,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		TouchInterval: 10 * time.Second,
 		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		Registerer: tel.Registry,
 	}, logger)
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {

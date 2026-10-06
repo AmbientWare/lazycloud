@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
@@ -56,6 +57,9 @@ type Config struct {
 	Observability *observability.Observability
 	// SSH holds the keys of pods that serve SSH.
 	SSH *execution.SSHKeys
+	// Registerer takes the host service's metrics; nil leaves them
+	// unregistered.
+	Registerer prometheus.Registerer
 }
 
 // Server implements hostproto.HostService.
@@ -86,11 +90,18 @@ type Server struct {
 // database.ChannelHost and database.ChannelClaim.
 func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, im *images.Images, listener *database.Listener, config Config, logger *slog.Logger) *Server {
 	lifetime, shutdown := context.WithCancel(context.Background())
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lazycloud_platform_image_conversion_failures_total",
+		Help: "Platform image conversions this server ran that failed, by cause: image, server_disk or transient.",
+	}, []string{"cause"})
+	if config.Registerer != nil {
+		config.Registerer.MustRegister(failures)
+	}
 	return &Server{
 		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger,
 		layerLifetime: layerLifetime, lifetime: lifetime, shutdown: shutdown,
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
-		platform:    platformConversions{running: map[string]bool{}},
+		platform:    platformConversions{running: map[string]bool{}, failures: failures},
 	}
 }
 
