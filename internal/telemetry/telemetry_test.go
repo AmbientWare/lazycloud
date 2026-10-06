@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	collector "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -148,5 +149,47 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 	stop()
 	if err := <-served; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A step started from a stored traceparent is a child in that trace, and a
+// gRPC call outside any traced step starts no trace.
+func TestStoredTraceparentsJoinTheirTrace(t *testing.T) {
+	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv := &receiver{}
+	g := grpc.NewServer()
+	collector.RegisterTraceServiceServer(g, recv)
+	go func() { _ = g.Serve(lis) }()
+	defer g.Stop()
+	tel, err := telemetry.New(t.Context(), telemetry.Config{Service: "server", OTLPEndpoint: lis.Addr().String(), OTLPInsecure: true, SampleRatio: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, root := tel.Tracer().Start(t.Context(), "submit")
+	stored := telemetry.TraceParentOf(ctx)
+	root.End()
+	_, child := telemetry.StartIn(t.Context(), tel.Tracer(), stored, "agent.start")
+	child.End()
+	_, call := tel.Tracer().Start(t.Context(), "lazycloud.host.v1.HostService/ClaimTasks",
+		trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("rpc.system.name", "grpc")))
+	call.End()
+	if err := tel.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	recv.mu.Lock()
+	defer recv.mu.Unlock()
+	if len(recv.spans) != 2 {
+		t.Fatalf("exported %d spans, want submit and agent.start: %v", len(recv.spans), recv.spans)
+	}
+	byName := map[string]*tracepb.Span{}
+	for _, s := range recv.spans {
+		byName[s.GetName()] = s
+	}
+	submit, start := byName["submit"], byName["agent.start"]
+	if submit == nil || start == nil || !bytes.Equal(start.GetTraceId(), submit.GetTraceId()) || !bytes.Equal(start.GetParentSpanId(), submit.GetSpanId()) {
+		t.Fatalf("agent.start is not a child of submit: %v", recv.spans)
 	}
 }

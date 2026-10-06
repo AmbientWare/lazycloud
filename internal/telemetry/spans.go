@@ -36,7 +36,7 @@ func Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (con
 // names, or as a new root when traceparent is empty or malformed, never as
 // a child of ctx's span.
 func StartIn(ctx context.Context, tracer trace.Tracer, traceparent, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	if sc := spanContextOf(traceparent); sc.IsValid() {
+	if sc := SpanContextOf(traceparent); sc.IsValid() {
 		ctx = trace.ContextWithRemoteSpanContext(ctx, sc)
 	} else {
 		opts = append(opts, trace.WithNewRoot())
@@ -62,7 +62,7 @@ func Step(ctx context.Context, name string, fn func(context.Context) error, attr
 // LinkTo links a span to the one traceparent names; empty or malformed
 // adds nothing.
 func LinkTo(traceparent string) trace.SpanStartOption {
-	if sc := spanContextOf(traceparent); sc.IsValid() {
+	if sc := SpanContextOf(traceparent); sc.IsValid() {
 		return trace.WithLinks(trace.Link{SpanContext: sc})
 	}
 	return trace.WithLinks()
@@ -71,7 +71,7 @@ func LinkTo(traceparent string) trace.SpanStartOption {
 // Link is a link to the span traceparent names; an empty or malformed one
 // is invalid, and spans drop it.
 func Link(traceparent string) trace.Link {
-	return trace.Link{SpanContext: spanContextOf(traceparent)}
+	return trace.Link{SpanContext: SpanContextOf(traceparent)}
 }
 
 // Fail marks span failed with err, when err is not nil, and ends it.
@@ -107,15 +107,12 @@ func SpanContextOf(traceparent string) trace.SpanContext {
 	})
 }
 
-func spanContextOf(traceparent string) trace.SpanContext { return SpanContextOf(traceparent) }
-
 // Attribute keys of span attributes beside the correlation keys.
 const (
-	AttrImage     = "lazycloud.image"
-	AttrLayer     = "lazycloud.layer"
-	AttrBuild     = "lazycloud.build_id"
-	AttrWorkspace = "lazycloud.workspace_id"
-	AttrRelease   = "lazycloud.release_id"
+	AttrImage   = "lazycloud.image"
+	AttrLayer   = "lazycloud.layer"
+	AttrBuild   = "lazycloud.build_id"
+	AttrRelease = "lazycloud.release_id"
 )
 
 // Container is the container_id attribute.
