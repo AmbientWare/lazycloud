@@ -219,6 +219,9 @@ func (m *mounts) mount(r lazyRef) error {
 		return fmt.Errorf("%w: snapshot %s holds layer %s, labelled %s", imagefs.ErrInvalidIndex, r.id, ix.Layer, r.digest)
 	}
 	digest := r.digest
+	if span, traced := m.frames.starts.start(digest, "snapshotter.mount"); traced {
+		defer span.End()
+	}
 	l := &layer{
 		digest: digest,
 		index:  ix,

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -38,7 +40,7 @@ func newCachedLayers(t *testing.T, transport http.RoundTripper, sizes ...int) ca
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := newFrameCache(t.Context(), t.TempDir(), 256<<20, 4, g, m, slog.New(slog.DiscardHandler))
+	frames, err := newFrameCache(t.Context(), t.TempDir(), 256<<20, 4, g, m, slog.New(slog.DiscardHandler), noop.NewTracerProvider().Tracer(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +285,7 @@ func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
 	for i := range reads {
 		reads[i] = prefetchRead{layer: l.digest, frame: i}
 	}
-	if err := c.frames.prefetch("container", reads); err != nil {
+	if err := c.frames.prefetch("container", reads, oteltrace.SpanContext{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return held.waiting.Load() == 2 })

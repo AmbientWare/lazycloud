@@ -26,9 +26,13 @@ import (
 	"github.com/containerd/containerd/v2/plugins/snapshots/overlay"
 	"github.com/containerd/errdefs"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -55,6 +59,8 @@ type Config struct {
 	HTTP      *http.Client
 	Registry  prometheus.Registerer
 	Logger    *slog.Logger
+	// Tracer records the work for traced starts; nil records nothing.
+	Tracer oteltrace.Tracer
 }
 
 // Snapshotter is a containerd snapshotter with lazy layers.
@@ -64,6 +70,7 @@ type Snapshotter struct {
 	overlay snapshots.Snapshotter
 	grants  *grants
 	mounts  *mounts
+	starts  *startTraces
 	http    *http.Client
 	log     *slog.Logger
 	cancel  context.CancelFunc
@@ -90,11 +97,16 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 	}
 	g := newGrants(time.Now)
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	frames, err := newFrameCache(life, filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger)
+	tracer := cfg.Tracer
+	if tracer == nil {
+		tracer = noop.NewTracerProvider().Tracer("")
+	}
+	frames, err := newFrameCache(life, filepath.Join(cfg.Root, "cache"), cfg.CacheBytes, cfg.Fetches, g, m, cfg.Logger, tracer)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	frames.background.Go(func() { frames.starts.run(life) })
 	ms, err := storage.NewMetaStore(filepath.Join(cfg.Root, "metadata.db"))
 	if err != nil {
 		cancel()
@@ -107,7 +119,7 @@ func New(ctx context.Context, cfg Config) (*Snapshotter, error) {
 		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
 	s := &Snapshotter{
-		root: cfg.Root, ms: ms, overlay: ov, grants: g, http: cfg.HTTP, log: cfg.Logger, cancel: cancel,
+		root: cfg.Root, ms: ms, overlay: ov, grants: g, starts: frames.starts, http: cfg.HTTP, log: cfg.Logger, cancel: cancel,
 		mounts: &mounts{
 			root: cfg.Root, ms: ms, frames: frames, grants: g, http: cfg.HTTP, metrics: m, log: cfg.Logger,
 			fillBytes: cfg.FillBytes,
@@ -247,7 +259,12 @@ func (s *Snapshotter) prepareLazy(ctx context.Context, key, parent string, label
 	if !ok {
 		return fmt.Errorf("layer %s has no live grant from the agent, so it cannot be mounted: %w", digest, errdefs.ErrFailedPrecondition)
 	}
+	span, traced := s.starts.start(digest, "snapshotter.prepare_layer")
 	raw, ix, err := s.fetchIndex(ctx, digest, g)
+	if traced {
+		span.SetAttributes(attribute.Int("lazycloud.index_bytes", len(raw)), attribute.Int("lazycloud.frames", len(ix.Frames)))
+		telemetry.Fail(span, err)
+	}
 	if err != nil {
 		return err
 	}

@@ -12,10 +12,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -137,11 +140,14 @@ func (p *layerPublish) convert(ctx context.Context, uploads []*hostproto.LayerUp
 			start := time.Now()
 			var l *convertedLayer
 			var ix imagefs.Index
-			err = retryTransfer(ctx, func() error {
+			layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, u.GetDiffId())))
+			err = retryTransfer(layerCtx, func() error {
 				var err error
-				l, ix, err = p.convertLayer(ctx, ref, auth, u.GetDiffId())
+				l, ix, err = p.convertLayer(layerCtx, ref, auth, u.GetDiffId())
 				return err
 			})
+			span.SetAttributes(attribute.Int64("lazycloud.bytes", ix.DataSize), attribute.Int("lazycloud.files", len(ix.Entries)))
+			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
 			}
@@ -208,7 +214,10 @@ func (p *layerPublish) upload(ctx context.Context, uploads []*hostproto.LayerUpl
 		l := p.done[u.GetBlobDigest()]
 		p.mu.Unlock()
 		g.Go(func() error {
-			etags, err := p.a.uploadLayer(ctx, l, u)
+			uploadCtx, span := telemetry.Start(ctx, "agent.upload_layer", trace.WithAttributes(
+				attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
+			etags, err := p.a.uploadLayer(uploadCtx, l, u)
+			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
 			}

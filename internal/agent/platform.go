@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // platformImages holds how to run each image the agent runs on its own,
@@ -112,10 +115,17 @@ func (a *Agent) platformImage(ctx context.Context, reference string) (string, er
 		// A start of the copy, named by its digest: its reads are not a
 		// container's startup.
 		_, digest, _ := strings.Cut(image.GetImage(), "@")
-		if err := a.layers.grant(ctx, "platform:"+digest, image.GetLayers()); err != nil {
+		err := telemetry.Step(ctx, "agent.layer_grant", func(ctx context.Context) error {
+			return a.layers.grant(ctx, "platform:"+digest, image.GetLayers())
+		}, attribute.Int("lazycloud.layers", len(image.GetLayers())))
+		if err != nil {
 			return "", err
 		}
-		if _, err := a.images.ensure(ctx, image.GetImage(), image.GetAuth(), image.GetPlatform()); err != nil {
+		pullCtx, pull := telemetry.Start(ctx, "agent.image_pull", trace.WithAttributes(attribute.String(telemetry.AttrImage, reference)))
+		pulled, err := a.images.ensure(pullCtx, image.GetImage(), image.GetAuth(), image.GetPlatform())
+		pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))
+		telemetry.Fail(pull, err)
+		if err != nil {
 			return "", err
 		}
 		return image.GetImage(), nil

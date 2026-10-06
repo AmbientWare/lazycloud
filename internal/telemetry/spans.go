@@ -50,6 +50,14 @@ func Record(ctx context.Context, name string, began time.Time, attrs ...attribut
 	span.End()
 }
 
+// Step runs fn in a child span of ctx's named name, failed when fn fails.
+func Step(ctx context.Context, name string, fn func(context.Context) error, attrs ...attribute.KeyValue) error {
+	ctx, span := Start(ctx, name, trace.WithAttributes(attrs...))
+	err := fn(ctx)
+	Fail(span, err)
+	return err
+}
+
 // LinkTo links a span to the one traceparent names; empty or malformed
 // adds nothing.
 func LinkTo(traceparent string) trace.SpanStartOption {

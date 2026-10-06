@@ -23,6 +23,8 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -454,6 +456,14 @@ func snapshotterCheck(ctx context.Context, docker *client.Client, socket string)
 }
 
 // goOwned runs fn on a goroutine Run waits for.
+// tracer is the agent's tracer, recording nothing without telemetry.
+func (a *Agent) tracer() trace.Tracer {
+	if a.cfg.Telemetry == nil {
+		return noop.NewTracerProvider().Tracer("")
+	}
+	return a.cfg.Telemetry.Tracer()
+}
+
 func (a *Agent) goOwned(fn func(context.Context)) {
 	a.work.Go(func() { fn(a.ctx) })
 }

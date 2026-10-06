@@ -62,7 +62,7 @@ func run(args []string) int {
 	go func() { metricsDone <- tel.ServeMetrics(ctx, logger) }()
 	cfg := snapshotter.Config{
 		Root: *root, CacheBytes: *cacheBytes, Fetches: *fetches, FillBytes: *fillBytes,
-		HTTP: &http.Client{}, Registry: tel.Registry, Logger: logger,
+		HTTP: &http.Client{}, Registry: tel.Registry, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, *socket, func() {
 		logger.Info("serving", "socket", *socket)
