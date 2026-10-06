@@ -272,7 +272,7 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 // prepare fetches the image and source, attaches disks, creates the link
 // socket, starts the Docker container and applies its network policy. Each
 // stage is timed and reported as it finishes.
-func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer) error {
+func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer) (err error) {
 	pod := spec.GetPod()
 	if pod == nil && spec.GetFunction().GetHandler() == "" {
 		return fmt.Errorf("start has neither a function handler nor a pod")
@@ -285,14 +285,21 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 	// The holder starts while the image and source are prepared; prepare
 	// does not return before it settled.
+	// A failed preparation stops the holder's start, which may be waiting
+	// for its image.
 	var holder chan error
 	if c.checkpointable {
+		holderCtx, cancelHolder := context.WithCancel(ctx)
 		holder = make(chan error, 1)
-		go func() { holder <- c.a.startHolder(ctx, c) }()
+		go func() { holder <- c.a.startHolder(holderCtx, c) }()
 		defer func() {
+			if err != nil {
+				cancelHolder()
+			}
 			if holder != nil {
 				<-holder
 			}
+			cancelHolder()
 		}()
 	}
 	// Functions run the managed Python runner; a pod mounts the runtime

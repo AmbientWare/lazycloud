@@ -382,6 +382,24 @@ func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
 	if _, err := Convert(t.Context(), &truncated, io.Discard); !errors.Is(err, ErrInvalidLayer) {
 		t.Errorf("a truncated layer: %v", err)
 	}
+	// A stream cut inside a header, and a header that is not one.
+	var whole bytes.Buffer
+	tw = tar.NewWriter(&whole)
+	if err := tw.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	streams := map[string][]byte{
+		"a stream cut inside a header": whole.Bytes()[:100],
+		"a malformed header":           bytes.Repeat([]byte("not a tar header"), 32),
+	}
+	for name, stream := range streams {
+		if _, err := Convert(t.Context(), bytes.NewReader(stream), io.Discard); !errors.Is(err, ErrInvalidLayer) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }
 
 // A whiteout hides only the lower layers, in either order against an entry

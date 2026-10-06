@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // A container's outbound policy is an nftables filter in its network
@@ -222,7 +223,8 @@ func (a *Agent) runNetfilter(ctx context.Context, c *container, policy *hostprot
 	}
 	ctx, cancel := context.WithTimeout(ctx, netfilterTimeout)
 	defer cancel()
-	if err := a.images.ensure(ctx, a.cfg.MountImage, ""); err != nil {
+	image, err := a.platformImage(ctx, platformimages.Mount)
+	if err != nil {
 		return err
 	}
 	rules, err := json.Marshal(netfilterRules{Block: policy.GetBlock(), Allow: append([]string{}, policy.GetAllow()...)})
@@ -240,7 +242,7 @@ func (a *Agent) runNetfilter(ctx context.Context, c *container, policy *hostprot
 	options := client.ContainerCreateOptions{
 		Name: name,
 		Config: &containertypes.Config{
-			Image:      a.cfg.MountImage,
+			Image:      image,
 			Entrypoint: []string{containerSupervisor},
 			Cmd:        []string{"netfilter", string(rules)},
 			Labels:     labels,

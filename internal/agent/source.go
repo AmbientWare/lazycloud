@@ -23,7 +23,6 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sync/singleflight"
 
@@ -197,8 +196,7 @@ func extractFile(root *os.Root, name string, entry *zip.File, budget int64) (int
 
 // imageCache pulls each image reference once at a time.
 type imageCache struct {
-	docker *client.Client
-	// containerd is Docker's containerd, which lazy pulls go through.
+	// containerd is Docker's containerd, which every pull goes through.
 	containerd *containerd.Client
 	group      singleflight.Group
 }
@@ -299,35 +297,4 @@ func registryResolver(domain string, auth *hostproto.RegistryAuth) remotes.Resol
 		docker.WithAuthorizer(docker.NewDockerAuthorizer(docker.WithAuthCreds(creds))),
 		docker.WithPlainHTTP(docker.MatchLocalhost),
 	)})
-}
-
-// ensure pulls a platform image through Docker, which unpacks it on the
-// snapshotter as a plain overlay image.
-func (c *imageCache) ensure(ctx context.Context, image, platform string) error {
-	options, err := pullOptions(nil, platform)
-	if err != nil {
-		return err
-	}
-	for {
-		_, err, _ := c.group.Do(image, func() (any, error) {
-			if _, err := c.docker.ImageInspect(ctx, image); err == nil {
-				return nil, nil
-			} else if !cerrdefs.IsNotFound(err) {
-				return nil, fmt.Errorf("inspect image %s: %w", image, err)
-			}
-			response, err := c.docker.ImagePull(ctx, image, options)
-			if err != nil {
-				return nil, fmt.Errorf("pull image %s: %w", image, err)
-			}
-			defer func() { _ = response.Close() }()
-			if err := response.Wait(ctx); err != nil {
-				return nil, fmt.Errorf("pull image %s: %w", image, err)
-			}
-			return nil, nil
-		})
-		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
-			continue
-		}
-		return err //nolint:wrapcheck // wrapped inside the call
-	}
 }

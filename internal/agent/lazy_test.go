@@ -26,25 +26,32 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// lazyImages are the workload images the tests start from a registry.
-// Every host reads workload images through its snapshotter, so TestMain
-// converts their layers into the development object store, as publishing
-// does, and start commands carry the grants the server would send.
-var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage}
+// lazyImages are the workload and platform images the tests start from a
+// registry. Every host reads images through its snapshotter, so TestMain
+// converts their layers into the development object store, as the server
+// does, and start commands and sessions carry the grants it would send.
+var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage, platformimages.Builder, platformimages.Mount}
 
 // imageLayers holds the layer grants of each of lazyImages.
 var imageLayers = map[string][]*hostproto.LayerGrant{}
 
-// convertLazyImages fills imageLayers with grants for twelve hours.
-func convertLazyImages(ctx context.Context) error {
+// layerStore is the development object store the test pairs go to, and
+// its bucket.
+func layerStore() (*s3.Client, string) {
 	cfg := storagetest.Config()
-	store := s3.New(s3.Options{
+	return s3.New(s3.Options{
 		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	})
+	}), cfg.Bucket
+}
+
+// convertLazyImages fills imageLayers with grants for twelve hours.
+func convertLazyImages(ctx context.Context) error {
+	store, bucket := layerStore()
 	presign := s3.NewPresignClient(store)
 	expires := time.Now().Add(12 * time.Hour)
 	for _, ref := range lazyImages {
@@ -61,7 +68,7 @@ func convertLazyImages(ctx context.Context) error {
 			return err
 		}
 		for _, l := range layers {
-			grant, err := convertLayer(ctx, store, presign, cfg.Bucket, l, expires)
+			grant, err := convertLayer(ctx, store, presign, bucket, "agent-test/layers/", l, expires)
 			if err != nil {
 				return fmt.Errorf("convert a layer of %s: %w", ref, err)
 			}
@@ -71,7 +78,9 @@ func convertLazyImages(ctx context.Context) error {
 	return nil
 }
 
-func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket string, l v1.Layer, expires time.Time) (*hostproto.LayerGrant, error) {
+// convertLayer converts l into a pair under prefix and returns a grant of
+// it until expires.
+func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket, prefix string, l v1.Layer, expires time.Time) (*hostproto.LayerGrant, error) {
 	tar, err := l.Uncompressed()
 	if err != nil {
 		return nil, err
@@ -93,7 +102,7 @@ func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClie
 	if _, err := data.Seek(0, 0); err != nil {
 		return nil, err
 	}
-	key := "agent-test/layers/" + strings.TrimPrefix(string(ix.Layer), "sha256:")
+	key := prefix + strings.TrimPrefix(string(ix.Layer), "sha256:")
 	urls := map[string]string{}
 	for object, body := range map[string]io.Reader{"index": bytes.NewReader(index), "data": data} {
 		if _, err := store.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key + "/" + object), Body: body}); err != nil {

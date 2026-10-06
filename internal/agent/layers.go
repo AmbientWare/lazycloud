@@ -56,6 +56,17 @@ func grantsIn(layers []*hostproto.LayerGrant) []layersource.Grant {
 	return out
 }
 
+// grant hands layers to the snapshotter for the start name and returns
+// once it holds them; l is nil only on hosts that never get layers.
+func (l *layerSources) grant(ctx context.Context, name string, layers []*hostproto.LayerGrant) error {
+	if l == nil || len(layers) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	return l.client.Grant(ctx, name, grantsIn(layers)) //nolint:wrapcheck // The client names the call.
+}
+
 // refresh queues fresh grants for refreshLoop.
 func (l *layerSources) refresh(layers []*hostproto.LayerGrant) {
 	if l == nil {

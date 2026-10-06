@@ -34,11 +34,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
-
-// builderImage runs image builds: BuildKit rootless, with buildkitd and
-// buildctl in one container that exits when its build ends.
-const builderImage = "docker.io/moby/buildkit:v0.33.1-rootless@sha256:f8a833b2de9d68e27f0815e4a737abdfaf8a2e4c615650557df11025101557b4"
 
 // Labels on build containers. They differ from workload labels, so adopt
 // never takes a build container for a workload.
@@ -121,7 +118,8 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	}
 	logs.add("preparing build container")
 	began := time.Now()
-	if err := c.a.images.ensure(ctx, builderImage, ""); err != nil {
+	builder, err := c.a.platformImage(ctx, platformimages.Builder)
+	if err != nil {
 		return startFailed(err)
 	}
 	// The secrets leave the host when the build ends, whatever its outcome.
@@ -139,7 +137,7 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 			return startFailed(err)
 		}
 	}
-	if err := c.a.createBuilder(ctx, c, spec, gpu); err != nil {
+	if err := c.a.createBuilder(ctx, c, builder, spec, gpu); err != nil {
 		return startFailed(err)
 	}
 	c.mu.Lock()
@@ -444,7 +442,7 @@ func dockerConfig(auths map[string]*hostproto.RegistryAuth) ([]byte, error) {
 	return encoded, nil
 }
 
-func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto.StartContainer, gpu *buildGPU) error {
+func (a *Agent) createBuilder(ctx context.Context, c *container, image string, spec *hostproto.StartContainer, gpu *buildGPU) error {
 	build := spec.GetBuild()
 	insecure := ""
 	if build.GetInsecureRegistry() {
@@ -496,7 +494,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 	options := client.ContainerCreateOptions{
 		Name: c.dockerName(),
 		Config: &containertypes.Config{
-			Image:      builderImage,
+			Image:      image,
 			Entrypoint: []string{"buildctl-daemonless.sh"},
 			Cmd:        args,
 			Env:        env,

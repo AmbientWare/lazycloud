@@ -79,6 +79,7 @@ type Server struct {
 	// ends when its RPC ends.
 	receivers   sync.WaitGroup
 	completions completions
+	platform    platformConversions
 }
 
 // NewServer returns the host service. listener must listen on
@@ -89,6 +90,7 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger,
 		layerLifetime: layerLifetime, lifetime: lifetime, shutdown: shutdown,
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
+		platform:    platformConversions{running: map[string]bool{}},
 	}
 }
 
@@ -108,11 +110,13 @@ func (s *Server) ServerOptions() []grpc.ServerOption {
 // Shutdown ends open sessions and long polls so a graceful stop completes.
 func (s *Server) Shutdown() { s.shutdown() }
 
-// Wait returns once every session's receive goroutine and every completion
-// writer has ended. Call it after the gRPC server stopped.
+// Wait returns once every session's receive goroutine, every completion
+// writer and every platform image conversion has ended. Call it after the
+// gRPC server stopped and Shutdown.
 func (s *Server) Wait() {
 	s.receivers.Wait()
 	s.completions.writers.Wait()
+	s.platform.wg.Wait()
 }
 
 type hostKey struct{}

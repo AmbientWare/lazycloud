@@ -62,7 +62,7 @@ func Convert(ctx context.Context, layer io.Reader, data io.Writer) (Index, error
 			break
 		}
 		if err != nil {
-			return Index{}, fmt.Errorf("read layer tar: %w", err)
+			return Index{}, tarError(err)
 		}
 		if err := c.add(hdr, tr); err != nil {
 			return Index{}, err
@@ -73,7 +73,7 @@ func Convert(ctx context.Context, layer io.Reader, data io.Writer) (Index, error
 	}
 	// The diff_id covers the whole stream, including the tar's end padding.
 	if _, err := io.Copy(io.Discard, in); err != nil {
-		return Index{}, fmt.Errorf("read layer tar: %w", err)
+		return Index{}, tarError(err)
 	}
 	entries := c.entries[:0]
 	for _, e := range c.entries {
@@ -278,6 +278,15 @@ func (c *converter) dir(d string, root bool) (int, error) {
 // write appends n bytes of r to the data stream and returns their offset. A
 // file of at most one frame starts a new frame when it would span two, so
 // one frame read serves it.
+// tarError is a failure reading the layer: ErrInvalidLayer when the tar
+// stream is truncated or malformed, which reading it again does not change.
+func tarError(err error) error {
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, tar.ErrHeader) || errors.Is(err, tar.ErrFieldTooLong) {
+		return fmt.Errorf("%w: %w", ErrInvalidLayer, err)
+	}
+	return fmt.Errorf("read layer tar: %w", err)
+}
+
 func (c *converter) write(r io.Reader, n int64) (int64, error) {
 	if n <= FrameSize && len(c.frame) > 0 && int64(len(c.frame))+n > FrameSize {
 		pad := FrameSize - len(c.frame)
@@ -294,10 +303,7 @@ func (c *converter) write(r io.Reader, n int64) (int64, error) {
 		chunk := min(n, int64(FrameSize-start))
 		c.frame = c.frame[:start+int(chunk)]
 		if _, err := io.ReadFull(r, c.frame[start:]); err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return 0, fmt.Errorf("%w: truncated: %w", ErrInvalidLayer, err)
-			}
-			return 0, fmt.Errorf("read layer tar: %w", err)
+			return 0, tarError(err)
 		}
 		c.streamSize += chunk
 		n -= chunk
