@@ -79,6 +79,14 @@ func (t *Telemetry) HTTPHandler(next http.Handler, metrics *HTTPMetrics) http.Ha
 		otelhttp.WithTracerProvider(t.provider), otelhttp.WithPropagators(t.propagator))
 }
 
+// EdgeHandler traces next, the edge serving workload traffic. A caller's
+// trace context becomes a link, as on the API.
+func (t *Telemetry) EdgeHandler(next http.Handler) http.Handler {
+	return otelhttp.NewHandler(next, "edge", otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true }),
+		otelhttp.WithTracerProvider(t.provider), otelhttp.WithPropagators(t.propagator),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return "edge " + r.Method }))
+}
+
 // statusRecorder keeps the status for metrics and passes flushes through,
 // which streamed responses need.
 type statusRecorder struct {

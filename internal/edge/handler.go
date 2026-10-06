@@ -12,7 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -265,7 +269,7 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 	}
 	policy := execution.RetryPolicyOf(t.release.spec)
 	for attempt, tries := 1, 0; ; tries++ {
-		lease, err := e.acquire(ctx, t, deadline)
+		lease, err := e.tracedAcquire(ctx, t, deadline)
 		if err != nil {
 			e.fail(w, r, err)
 			return
@@ -274,7 +278,16 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 		// aborts the handler.
 		defer lease.end()
 		rec.container = lease.slot.id
-		ex, err := e.exchange(ctx, lease, rc, head, body, deadline)
+		forwardCtx, forward := telemetry.Start(ctx, "edge.forward", trace.WithAttributes(
+			telemetry.Container(lease.slot.id.String()), attribute.Int("lazycloud.try", tries+1)))
+		ex, err := e.exchange(forwardCtx, lease, rc, head, body, deadline)
+		if err == nil {
+			forward.SetAttributes(attribute.Int("http.response.status_code", int(ex.first.GetHead().GetStatus())))
+			if refusal := ex.first.GetError(); refusal != nil {
+				forward.SetAttributes(attribute.String("lazycloud.refusal", refusal.GetKind().String()))
+			}
+		}
+		telemetry.Fail(forward, err)
 		if err != nil {
 			lease.end()
 			e.fail(w, r, err)
@@ -315,6 +328,22 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 		lease.end()
 		return
 	}
+}
+
+// tracedAcquire is acquire in its own span. A request that waited while
+// no container of its release ran links to the start of the container it
+// got.
+func (e *Edge) tracedAcquire(ctx context.Context, t target, deadline time.Time) (*lease, error) {
+	ctx, span := telemetry.Start(ctx, "edge.acquire", trace.WithAttributes(attribute.String(telemetry.AttrRelease, t.release.id.String())))
+	l, err := e.acquire(ctx, t, deadline)
+	if err == nil {
+		span.SetAttributes(telemetry.Container(l.slot.id.String()), attribute.Bool("lazycloud.cold", l.cold))
+		if l.cold {
+			span.AddLink(telemetry.Link(l.slot.traceparent))
+		}
+	}
+	telemetry.Fail(span, err)
+	return l, err //nolint:wrapcheck // acquire's own errors, which fail maps.
 }
 
 // requestHead is the request as the container receives it: hop-by-hop

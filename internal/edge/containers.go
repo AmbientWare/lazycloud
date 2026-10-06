@@ -31,11 +31,13 @@ type workloadState struct {
 
 // slot is one ready container.
 type slot struct {
-	id       uuid.UUID
-	release  uuid.UUID
-	version  int
-	host     uuid.UUID
-	inflight int
+	id      uuid.UUID
+	release uuid.UUID
+	version int
+	host    uuid.UUID
+	// traceparent is the trace of the container's start.
+	traceparent string
+	inflight    int
 	// avoid is set after the container answered busy or not running, until
 	// the next reload of the set says otherwise.
 	avoid time.Time
@@ -101,7 +103,7 @@ func (e *Edge) applyLocked(ws *workloadState, read uint64, rows []execution.Endp
 			next[id] = old
 			continue
 		}
-		next[id] = &slot{id: id, release: row.Release, version: row.Version, host: row.Host}
+		next[id] = &slot{id: id, release: row.Release, version: row.Version, host: row.Host, traceparent: row.Traceparent}
 	}
 	ws.containers = next
 	ws.loaded = true
@@ -173,6 +175,8 @@ type lease struct {
 	slot  *slot
 	load  *releaseLoad
 	ended bool
+	// cold says the request waited while no container of its release ran.
+	cold bool
 }
 
 // acquire waits until a container of t can take the request and holds one
@@ -190,7 +194,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 		}
 	}
 	var load *releaseLoad
-	waiting := false
+	waiting, cold := false, false
 	defer func() {
 		if waiting {
 			e.mu.Lock()
@@ -225,7 +229,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 			load.inFlight++
 			load.sample(time.Now())
 			e.mu.Unlock()
-			return &lease{e: e, ws: ws, slot: s, load: load}, nil
+			return &lease{e: e, ws: ws, slot: s, load: load, cold: cold}, nil
 		}
 		if !waiting {
 			if load.waiting >= t.release.maxPending {
@@ -236,13 +240,13 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 			waiting = true
 			load.sample(time.Now())
 		}
-		cold := !any
+		cold = cold || !any
 		// A change that wakes the request before the next check is due,
 		// such as the container that failed to load stopping, is checked
 		// once it is due.
 		check := false
 		var recheck <-chan time.Time
-		if cold {
+		if !any {
 			if wait := load.failureCheckIn(time.Now()); wait > 0 {
 				recheck = time.After(wait)
 			} else {
@@ -257,7 +261,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 			avoided = time.After(time.Until(until))
 		}
 		e.mu.Unlock()
-		if cold {
+		if !any {
 			// No container of the release runs: publish now so planning
 			// starts one, and fail fast when the release cannot start.
 			e.kick(t.release.id)

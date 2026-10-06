@@ -9,10 +9,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // MaxClaimInputBytes caps the total input bytes one claim returns, so a claim
@@ -41,6 +44,17 @@ type ClaimedTask struct {
 	// TraceParent is the trace of the request that submitted the task;
 	// empty when it was not traced.
 	TraceParent string
+}
+
+// traceClaim records the task's wait in the queue, from when it became due
+// to its claim, in its trace, linked to the trace of the container that
+// claimed it.
+func traceClaim(ctx context.Context, task ClaimedTask, due time.Time, container ContainerID, containerTrace string) {
+	_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), task.TraceParent, "execution.queued", trace.WithTimestamp(due),
+		telemetry.LinkTo(containerTrace), trace.WithAttributes(telemetry.Task(task.Task.String()),
+			attribute.String("lazycloud."+telemetry.KeyAttempt, task.Attempt.String()), telemetry.Container(container.String()),
+			attribute.Int("lazycloud.attempt_number", task.Number)))
+	span.End()
 }
 
 // DependencyResult is an upstream task's result.
@@ -161,6 +175,7 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 			}
 			if row.Traceparent != nil {
 				claimed[n].TraceParent = *row.Traceparent
+				traceClaim(ctx, claimed[n], row.AvailableAt, container, deref(c.Traceparent))
 			}
 			ids[n] = row.TaskID
 			index[row.TaskID] = n

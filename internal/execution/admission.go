@@ -11,12 +11,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 var (
@@ -85,6 +88,8 @@ type SubmitRequest struct {
 // upstream already failed fails at once. Planning and waiting claims wake
 // when the transaction commits.
 func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, error) {
+	ctx, span := telemetry.Start(ctx, "execution.submit", trace.WithAttributes(attribute.Int("lazycloud.tasks", len(req.Inputs))))
+	defer span.End()
 	var tasks []Task
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		var err error

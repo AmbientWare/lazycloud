@@ -4,7 +4,7 @@ select release_id::uuid as release_id from containers where id = @id and host_id
 -- name: LockContainerForClaim :one
 -- Claims of one container run one at a time, so its slot count holds.
 -- Container transitions wait for the claim to commit.
-select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec
+select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec, c.traceparent
 from containers c
 join releases r on r.id = c.release_id
 where c.id = @id
@@ -59,7 +59,7 @@ with candidate as (
 )
 select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
        i.encoding, i.data, t.max_attempts, t.parent_task_id,
-       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent, t.available_at
 from attempt
 join task_inputs i on i.task_id = attempt.task_id
 join tasks t on t.id = attempt.task_id

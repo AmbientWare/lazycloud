@@ -79,6 +79,8 @@ type EndpointContainer struct {
 	Version   int
 	Container ContainerID
 	Host      uuid.UUID
+	// Traceparent is the trace of the container's start.
+	Traceparent string
 }
 
 // EndpointContainers lists the ready containers of every release of
@@ -93,7 +95,10 @@ func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) 
 		if row.HostID == nil || row.Version == nil {
 			continue
 		}
-		out = append(out, EndpointContainer{Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID})
+		out = append(out, EndpointContainer{
+			Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID,
+			Traceparent: deref(row.Traceparent),
+		})
 	}
 	return out, nil
 }
