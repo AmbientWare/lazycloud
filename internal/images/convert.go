@@ -240,9 +240,6 @@ func PythonVersions() []string {
 	}
 }
 
-// Architectures are the host architectures images converts for.
-func Architectures() []string { return []string{"amd64", "arm64"} }
-
 // ManagedSource is the template's image for python by digest: pinned the
 // first time any server asks, and the same image from then on until the
 // template changes.

@@ -423,7 +423,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
 		Registerer: tel.Registry,
 	}, logger)
-	hosts.ConvertAtStart(platformimages.All())
+	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures())
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {
 		creds, err := credentials.NewServerTLSFromFile(cfg.grpcCert, cfg.grpcKey)

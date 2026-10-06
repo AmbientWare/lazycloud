@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,8 +54,9 @@ func startRegistry(t *testing.T) string {
 	}
 }
 
-// A server that starts converts the managed image with no host connected
-// and no start asking, so the first start after a deploy finds it.
+// A server that starts converts the managed image for the architectures the
+// fleet sells, with no host connected and no start asking, so the first start
+// after a deploy finds it. Other architectures wait for a host to ask.
 func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 	pool := dbtest.New(t)
 	registry := startRegistry(t)
@@ -81,24 +83,23 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 	})
 	srv := hostsession.NewServer(compute.NewCompute(pool, e, compute.Config{}), e, store, im,
 		database.NewListener(pool, logger, database.ChannelImageBuild), hostsession.Config{TouchInterval: time.Second}, logger)
-	srv.ConvertAtStart(nil)
+	srv.ConvertAtStart(nil, compute.FleetArchitectures())
+	// With no session open, Wait returns once the start's conversions end.
+	srv.Wait()
 	t.Cleanup(func() { srv.Shutdown(); srv.Wait() })
 
 	var host uuid.UUID
 	if err := pool.QueryRow(t.Context(), `insert into hosts (name, state, cpu_millis, memory_bytes) values ('h', 'offline', 1000, 1 << 30) returning id`).Scan(&host); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
-		pull, err := im.ManagedPull(t.Context(), compute.HostID(host), "3.12")
-		if err == nil {
-			if !strings.HasPrefix(pull.Reference, registry+"/lazycloud/platform/") {
-				t.Fatalf("the managed image pulls %s", pull.Reference)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the managed image was not converted: %v", err)
-		}
+	pull, err := im.ManagedPull(t.Context(), compute.HostID(host), "3.12")
+	if err != nil || !strings.HasPrefix(pull.Reference, registry+"/lazycloud/platform/") {
+		t.Fatalf("the managed image pulls %s (%v)", pull.Reference, err)
+	}
+	var converted []string
+	if err := pool.QueryRow(t.Context(), "select array_agg(distinct architecture) from platform_images").Scan(&converted); err != nil ||
+		!slices.Equal(converted, []string{"amd64"}) {
+		t.Fatalf("the server converted for %v (%v), want only amd64, what the fleet sells", converted, err)
 	}
 	var builds int
 	if err := pool.QueryRow(t.Context(), "select count(*) from image_builds").Scan(&builds); err != nil || builds != 0 {

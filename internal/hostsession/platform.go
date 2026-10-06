@@ -66,12 +66,12 @@ func (s *Server) convertPlatform(reference, architecture string) {
 
 // ConvertAtStart converts platform, the platform images agents of this
 // release name, and the managed Python image of every Python version, for
-// every host architecture, in the background and within
+// each of architectures, in the background and within
 // maxPlatformConversions, so the first starts after a deploy find them
 // converted. Images converted or converting elsewhere cost one claim each;
-// a failure is logged, and a start that needs the image converts it on
-// demand. Wait waits for it.
-func (s *Server) ConvertAtStart(platform []string) {
+// a failure is logged, and a start that needs the image, or a host of
+// another architecture, converts it on demand. Wait waits for it.
+func (s *Server) ConvertAtStart(platform, architectures []string) {
 	s.platform.wg.Go(func() {
 		references := slices.Clone(platform)
 		for _, python := range images.PythonVersions() {
@@ -85,7 +85,7 @@ func (s *Server) ConvertAtStart(platform []string) {
 			}
 			references = append(references, source)
 		}
-		for _, architecture := range images.Architectures() {
+		for _, architecture := range architectures {
 			for _, reference := range references {
 				select {
 				case s.platform.slots <- struct{}{}:
