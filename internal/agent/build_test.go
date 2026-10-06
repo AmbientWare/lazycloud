@@ -133,7 +133,12 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_STOPPED || exit.GetExitCode() != 0 {
 		t.Fatalf("a finished build exits as stopped: %v", exit)
 	}
-	cache, err := http.Get("http://" + registry + "/v2/lazycloud/cache/manifests/test") //nolint:noctx // A test probe.
+	probe, err := http.NewRequestWithContext(t.Context(), http.MethodHead, "http://"+registry+"/v2/lazycloud/cache/manifests/test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
+	cache, err := http.DefaultClient.Do(probe)
 	if err != nil {
 		t.Fatal(err)
 	}
