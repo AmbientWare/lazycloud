@@ -262,12 +262,12 @@ func TestAgentReconnectsAfterServerRestart(t *testing.T) {
 	}
 }
 
+// A start grants its image's layers to the snapshotter, then pulls the
+// image lazily: no layer blob downloads.
 func TestAgentPullsAMissingImage(t *testing.T) {
 	const image = "python:3.12-alpine"
 	e := newEnv(t)
-	if _, err := e.docker.ImageInspect(t.Context(), image); err == nil {
-		t.Skipf("%s is already present, so there is nothing to pull", image)
-	} else if !cerrdefs.IsNotFound(err) {
+	if _, err := e.docker.ImageRemove(t.Context(), image, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -278,13 +278,33 @@ func TestAgentPullsAMissingImage(t *testing.T) {
 	})
 	e.startAgent()
 	s := e.session()
-	start := e.startCommand("app:handle", 1)
-	start.GetStart().Image = image
+	start := withImage(e.startCommand("app:handle", 1), image)
 	began := time.Now()
 	s.send(t, start)
 	s.phase(t, start.GetStart().GetContainerId(), starting)
 	t.Logf("start command to STARTING with an image pull: %s", time.Since(began))
 	s.phase(t, start.GetStart().GetContainerId(), ready)
+	noLayerSince(t, image, began)
+}
+
+// A start without its image's grants fails: the snapshotter makes no
+// layer present without one, so no start pulls a workload image unread.
+func TestAStartWithoutGrantsFails(t *testing.T) {
+	const image = "python:3.11-alpine"
+	e := newEnv(t)
+	if _, err := e.docker.ImageRemove(t.Context(), image, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		t.Fatal(err)
+	}
+	e.startAgent()
+	s := e.session()
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Image = image
+	start.GetStart().Layers = nil
+	s.send(t, start)
+	exit := s.phase(t, start.GetStart().GetContainerId(), exited).GetExit()
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "no live grant") {
+		t.Fatalf("a start without grants exits %v", exit)
+	}
 }
 
 func (e *env) eventually(what string, ok func() bool) {

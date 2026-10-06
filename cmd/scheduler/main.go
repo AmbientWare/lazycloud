@@ -60,6 +60,9 @@ const (
 	// sweepTick paces storage retention: expired artifacts and map keys,
 	// deleted volumes and disks, expired host keys and volume sizes.
 	sweepTick = 30 * time.Second
+	// layerSweepTick paces the sweep of converted image layers; each pass
+	// reads every live image reference, and pairs wait a day anyway.
+	layerSweepTick = 10 * time.Minute
 	// purgeInterval paces deletion of finished callbacks.
 	purgeInterval = time.Minute
 	// fleetTick paces capacity planning, launches, retirement, preemption
@@ -170,8 +173,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	deliverer := callbacks.NewCallbacks(pool, vault, callbacks.CallbackConfig{
 		AllowPrivateTargets: os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1",
 	}, logger)
-	// Build recovery needs no registry: it only reads and moves build state.
-	im := images.NewImages(pool, exec, vault, images.Config{})
+	// Build recovery and the layer sweep need no registry: they read and move
+	// build state and delete layer pairs.
+	im := images.NewImages(pool, exec, vault, store, images.Config{})
 	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel, database.ChannelCallback)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
@@ -390,6 +394,14 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
+		return p.loop(ctx, cadence{every: layerSweepTick}, nil, nil, every("image_layer_sweep", layerSweepTick, func(ctx context.Context) bool {
+			if _, err := im.SweepLayers(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "image layer sweep incomplete", "error", err)
+			}
+			return false
+		}))
+	})
+	group.Go(func() error {
 		return p.loop(ctx, cadence{every: buildRecoveryTick}, buildWake, nil, every("build_recovery", buildRecoveryTick, func(ctx context.Context) bool {
 			if _, err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
@@ -430,6 +442,7 @@ func objectStoreFromEnv() (storage.Config, error) {
 		Endpoint:        os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"),
 		Region:          os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
 		Bucket:          os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"),
+		LayerBucket:     os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
 		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
 		Workspaces: storage.WorkspaceBuckets{

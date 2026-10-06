@@ -28,6 +28,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
+	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 const registryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
@@ -87,6 +89,7 @@ type fixture struct {
 	images    *images.Images
 	execution *execution.Execution
 	secrets   *secrets.Secrets
+	storage   *storage.Storage
 	registry  string
 	listener  *database.Listener
 }
@@ -111,7 +114,8 @@ func newFixture(t *testing.T) fixture {
 	pool := dbtest.New(t)
 	exec := execution.NewExecution(pool)
 	vault := newVault(t, pool)
-	im := images.NewImages(pool, exec, vault, images.Config{
+	store := storage.NewStorage(pool, storagetest.Config())
+	im := images.NewImages(pool, exec, vault, store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true,
 		ManagedBase: registry + "/library/python:{version}-slim",
 	})
@@ -121,7 +125,7 @@ func newFixture(t *testing.T) fixture {
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(ctx) })
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	return fixture{pool: pool, images: im, execution: exec, secrets: vault, registry: registry, listener: listener}
+	return fixture{pool: pool, images: im, execution: exec, secrets: vault, storage: store, registry: registry, listener: listener}
 }
 
 func (f fixture) workspace(t *testing.T, name string) identity.WorkspaceID {
@@ -178,8 +182,8 @@ func TestEqualDefinitionsShareOneImageAuthorizedPerWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.Image.Reference == nil || !strings.HasPrefix(*plain.Image.Reference, f.registry+"/library/python:3.12-slim@sha256:") {
-		t.Fatalf("a definition with nothing to build is its base by digest, got %v", plain.Image.Reference)
+	if plain.Image.Reference != nil {
+		t.Fatalf("a definition that only names its base still builds, to convert its layers: %v", *plain.Image.Reference)
 	}
 	first, err := f.images.Build(t.Context(), a, numpy(), false)
 	if err != nil {
@@ -277,26 +281,24 @@ func TestCompletedBuildPublishesOnlyAPushedDigest(t *testing.T) {
 	}
 
 	missing := "sha256:" + strings.Repeat("ab", 32)
-	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: missing}); err == nil {
+	if _, err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: missing}); err == nil {
 		t.Fatal("a digest the registry does not hold is rejected")
 	}
-	if err := f.images.CompleteBuild(t.Context(), f.host(t), container, images.BuildOutcome{Digest: missing}); !errors.Is(err, execution.ErrNotAssigned) {
+	if _, err := f.images.CompleteBuild(t.Context(), f.host(t), container, images.BuildOutcome{Digest: missing}); !errors.Is(err, execution.ErrNotAssigned) {
 		t.Fatalf("another host cannot complete the build: %v", err)
 	}
-	if err := f.images.CompleteBuild(t.Context(), host, container,
+	if _, err := f.images.CompleteBuild(t.Context(), host, container,
 		images.BuildOutcome{Digest: pushRandom(t, f.registry+"/lazycloud/images:upload")}); err == nil {
 		t.Fatal("a digest pushed outside the image's repository is rejected")
 	}
 	repository := f.imageRepository(t, r.Image.ID)
 	digest := pushRandom(t, repository+":upload")
-	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Digest: digest}); err != nil {
-		t.Fatal(err)
-	}
+	f.publish(t, host, container, repository, digest)
 	image, err := f.images.Get(t.Context(), ws, r.Image.ID)
 	if err != nil || image.Reference == nil || *image.Reference != repository+"@"+digest {
 		t.Fatalf("the image is published by digest: %+v %v", image, err)
 	}
-	if err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Failure: "late"}); !errors.Is(err, images.ErrStaleBuild) {
+	if _, err := f.images.CompleteBuild(t.Context(), host, container, images.BuildOutcome{Failure: "late"}); !errors.Is(err, images.ErrStaleBuild) {
 		t.Fatalf("a late outcome is stale: %v", err)
 	}
 	var lines []string
@@ -391,12 +393,16 @@ func TestBuildPastItsDeadlineFailsAndStopsItsContainer(t *testing.T) {
 func TestDeployableNeedsAReadyImageForTheRuntime(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
-	plain, err := f.images.Resolve(t.Context(), ws, apitypes.ImageDefinition{PythonVersion: "3.12"})
+	plain, err := f.images.Build(t.Context(), ws, apitypes.ImageDefinition{PythonVersion: "3.12"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.12"); err != nil || ref != *plain.Image.Reference {
-		t.Fatal(err)
+	repository := f.imageRepository(t, plain.Image.ID)
+	digest := pushRandom(t, repository+":plain")
+	host := f.host(t)
+	f.publish(t, host, placeAndStart(t, f, host), repository, digest)
+	if ref, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.12"); err != nil || ref != repository+"@"+digest {
+		t.Fatal(ref, err)
 	}
 	var invalid *images.InvalidError
 	if _, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.11"); !errors.As(err, &invalid) {

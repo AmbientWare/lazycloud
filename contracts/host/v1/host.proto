@@ -44,6 +44,10 @@ service HostService {
   rpc ContainerAPI(stream APIRequest) returns (stream APIResponse);
   // CompleteImageBuild records the outcome of a build container's attempt.
   // A container that no longer runs the build returns FAILED_PRECONDITION.
+  // A pushed image publishes once every layer is converted; until then the
+  // response names the layers to convert. The host converts them and calls
+  // again with their sizes, gets upload URLs signed for those sizes, uploads,
+  // and calls again with the uploaded layers.
   rpc CompleteImageBuild(CompleteImageBuildRequest) returns (CompleteImageBuildResponse);
   // AppendImageBuildLogs stores a build container's output in order.
   rpc AppendImageBuildLogs(AppendImageBuildLogsRequest) returns (AppendImageBuildLogsResponse);
@@ -116,7 +120,29 @@ message HostMessage {
     Interruption interruption = 70;
     // The answer to PrepareReserve.
     ReserveReady reserve_ready = 71;
+    // The frames a container read before it was ready, for a start that
+    // asked with record_trace.
+    StartupTrace startup_trace = 120;
   }
+}
+
+// StartupTrace is the frames of its image's layers a container read from
+// its start until it reported ready.
+message StartupTrace {
+  string container_id = 1;
+  ImageTrace trace = 2;
+}
+
+// ImageTrace lists frames of an image's layers in the order a container
+// first read them. layer indexes StartContainer.layers, base first; frame
+// numbers the layer's frames.
+message ImageTrace {
+  repeated FrameRead reads = 1;
+}
+
+message FrameRead {
+  uint32 layer = 1;
+  uint32 frame = 2;
 }
 
 // Interruption is a provider's notice that it reclaims the instance at
@@ -143,6 +169,14 @@ message Hello {
   // The last PrepareReserve attempt the host answered ready, kept across
   // boots, so a resumed or rebooted reserve names the stop it came back from.
   string sleep_attempt_id = 73;
+  // The images the agent runs on its own, such as its image builder and
+  // volume mount image, by digest. The server answers with PlatformImages.
+  repeated string platform_images = 110;
+  // The platform image copies (PlatformImage.image) that the host's
+  // containers still run, such as a mount container started from an image
+  // a newer agent no longer names. Their grants keep coming while the
+  // session lasts.
+  repeated string running_platform_images = 111;
 }
 
 enum ContainerPhase {
@@ -278,6 +312,8 @@ message ServerMessage {
     UpdateNetwork network = 90;
     SnapshotContainer snapshot = 91;
     PublishFilesystem publish_filesystem = 92;
+    LayerGrants layer_grants = 100;
+    PlatformImages platform_images = 110;
   }
 }
 
@@ -423,6 +459,54 @@ message StartContainer {
   // devbox, or a function with checkpoints. Its network is set up so a
   // restored copy gets one the same way.
   bool checkpointable = 93;
+  // Reads of every layer of image, base first. The host hands them to its
+  // snapshotter before it pulls the image and keeps them from containers.
+  repeated LayerGrant layers = 100;
+  // The frames earlier containers of the image read before they were
+  // ready. The host fetches them ahead of the container's own reads.
+  ImageTrace prefetch = 120;
+  // Record the frames this container reads before it is ready and report
+  // them in a StartupTrace.
+  bool record_trace = 121;
+}
+
+// LayerGrant is presigned GET URLs for one image layer's index and data
+// objects, keyed by the layer's uncompressed digest. Each URL reads only
+// its own object, until expires_at.
+message LayerGrant {
+  // sha256:<hex>
+  string diff_id = 1;
+  string index_url = 2;
+  string data_url = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// LayerGrants are fresh reads of layers the host's containers use, sent
+// before the earlier ones expire. Of two grants for one layer the later
+// expires_at wins.
+message LayerGrants {
+  repeated LayerGrant layers = 1;
+}
+
+// PlatformImages answers the platform images a Hello named, once each is
+// converted or cannot be, and again with fresh grants before the earlier
+// ones expire.
+message PlatformImages {
+  repeated PlatformImage images = 1;
+}
+
+// PlatformImage is how the host runs one image it named: image, a copy in
+// the platform registry, pulled with auth for platform and read through
+// layers, base first. failure is set instead when the image cannot be
+// converted.
+message PlatformImage {
+  // The reference as the Hello named it.
+  string reference = 1;
+  string image = 2;
+  RegistryAuth auth = 3;
+  string platform = 4;
+  repeated LayerGrant layers = 5;
+  string failure = 6;
 }
 
 message PodWorkload {
@@ -811,9 +895,49 @@ message CompleteImageBuildRequest {
     // Why the build failed, with the end of its output.
     string failure = 3;
   }
+  // Layers the host converted since an earlier response named them, with
+  // the sizes of their data and index objects.
+  repeated ConvertedLayer converted_layers = 90;
+  // Layers whose pairs the host uploaded to the URLs an earlier response
+  // gave.
+  repeated UploadedLayer uploaded_layers = 91;
+  // The failure is not the image's: a store or registry stayed unreachable.
+  bool failure_transient = 92;
 }
 
-message CompleteImageBuildResponse {}
+message CompleteImageBuildResponse {
+  // Layers of the pushed image with no converted pair. Empty once the image
+  // is published or the failure recorded.
+  repeated LayerUpload layer_uploads = 90;
+}
+
+// LayerUpload is one layer of a pushed image for the host to convert: read
+// the blob from the push repository and convert it with internal/imagefs.
+// Without URLs the host reports the converted sizes; with them it PUTs each
+// data part, data_part_bytes each but the last, then the index. Each URL is
+// signed for its exact Content-Length.
+message LayerUpload {
+  // The compressed layer, sha256:<hex>.
+  string blob_digest = 1;
+  // The uncompressed digest the image config names; the converted index must
+  // carry it.
+  string diff_id = 2;
+  string index_url = 3;
+  repeated string data_part_urls = 4;
+  int64 data_part_bytes = 5;
+}
+
+message ConvertedLayer {
+  string blob_digest = 1;
+  int64 data_bytes = 2;
+  int64 index_bytes = 3;
+}
+
+message UploadedLayer {
+  string blob_digest = 1;
+  // The ETag the store answered for each data part, in part order.
+  repeated string part_etags = 2;
+}
 
 message AppendImageBuildLogsRequest {
   string container_id = 1;

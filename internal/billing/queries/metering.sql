@@ -17,7 +17,8 @@ select now()::timestamptz as now,
 
 -- name: LiveMeteredContainers :many
 -- Ready and draining containers: the live set, read through its partial
--- indexes rather than the container history.
+-- indexes rather than the container history. A mirror build's container
+-- is the platform's and bills no one.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
@@ -29,11 +30,12 @@ left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
-where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at is not null;
+left join image_builds b on b.id = c.image_build_id
+where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at is not null and b.mirror is not true;
 
 -- name: StoppedMeteredContainers :many
 -- Containers that stopped since the look-back began and still owe their
--- last entries.
+-- last entries. Mirror builds' containers bill no one.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
@@ -45,7 +47,8 @@ left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
-where c.ready_at is not null and c.stopped_at >= @since and not coalesce(u.complete, false);
+left join image_builds b on b.id = c.image_build_id
+where c.ready_at is not null and c.stopped_at >= @since and not coalesce(u.complete, false) and b.mirror is not true;
 
 -- name: EnsureAccounts :exec
 -- Creates the accounts that do not exist yet with their trial credit and

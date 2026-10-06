@@ -1,9 +1,10 @@
 # The server and scheduler pods' identity, through Pod Identity. It is the
 # principal customer connection roles trust (LAZYCLOUD_AWS_PRINCIPAL_ARN),
 # so its name is an external contract once a customer connects. It holds
-# what the binaries call: S3 for objects and workspace buckets, STS for
-# host storage grants and customer connections, ECR for workload images,
-# EC2 for the fleet and for sharing node images with connected accounts.
+# what the binaries call: S3 for objects, layers and workspace buckets, STS
+# for host storage grants and customer connections, ECR for workload
+# images, EC2 for the fleet and for sharing node images with connected
+# accounts.
 resource "aws_iam_role" "control_plane" {
   name = "${var.deployment}-control-plane"
   assume_role_policy = jsonencode({
@@ -27,6 +28,7 @@ resource "aws_eks_pod_identity_association" "control_plane" {
 locals {
   objects_arn  = aws_s3_bucket.storage["objects"].arn
   workload_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/*"
+  platform_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/platform/*"
   ec2_arn      = "${local.arn_prefix}:ec2:*:${local.account_id}"
 }
 
@@ -43,6 +45,29 @@ data "aws_iam_policy_document" "control_plane" {
     sid       = "Buckets"
     actions   = ["s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:PutBucketCORS"]
     resources = [local.objects_arn, local.workspace_bucket_arn]
+  }
+
+  # Layer pairs: presigned uploads and reads, the server's own checks of
+  # what hosts uploaded, and the sweep's aborts and deletes. Listing lets a
+  # HEAD of a missing object answer 404 rather than 403.
+  statement {
+    sid       = "Layers"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+    resources = ["${local.layer_bucket_arn}/*"]
+  }
+
+  statement {
+    sid       = "ListLayers"
+    actions   = ["s3:ListBucket"]
+    resources = concat([local.layer_bucket_arn], local.layer_replica_arns)
+  }
+
+  # Hosts read a layer from their region's copy once the server confirmed
+  # it there with a HEAD.
+  statement {
+    sid       = "ReadLayerReplicas"
+    actions   = ["s3:GetObject"]
+    resources = [for arn in local.layer_replica_arns : "${arn}/*"]
   }
 
   statement {
@@ -78,6 +103,17 @@ data "aws_iam_policy_document" "control_plane" {
     sid       = "ReadWorkloadImages"
     actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
     resources = [local.workload_arn]
+  }
+
+  # The server copies the images agents run on their own (the builder, the
+  # mount image) into platform/ under the workload repositories, which ECR
+  # creates on the first push from the workload images template.
+  statement {
+    sid = "CopyPlatformImages"
+    actions = [
+      "ecr:CreateRepository", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+    ]
+    resources = [local.platform_arn]
   }
 
   # Fleet hosts: RunInstances with the host id as client token. The

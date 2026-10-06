@@ -71,6 +71,14 @@ func installService(args []string) error {
 	if err := os.WriteFile(wrapper, []byte(serviceWrapper), 0o755); err != nil { //nolint:gosec // the wrapper is executable
 		return fmt.Errorf("write service wrapper: %w", err)
 	}
+	// The agent's preflight refuses a host without the snapshotter.
+	exe, err := filepath.EvalSymlinks(j.cfg.Executable)
+	if err != nil {
+		return fmt.Errorf("resolve the agent executable: %w", err)
+	}
+	if err := installSnapshotter(filepath.Dir(exe), os.Stderr); err != nil {
+		return err
+	}
 	unit := filepath.Join(systemdUnits, *name+".service")
 	if err := os.WriteFile(unit, []byte(renderUnit(root, state, wrapper, joinArgs)), 0o644); err != nil { //nolint:gosec // units are world-readable
 		return fmt.Errorf("write systemd unit: %w", err)
@@ -133,8 +141,8 @@ func renderUnit(root, state, wrapper string, args []string) string {
 	return strings.Join([]string{
 		"[Unit]",
 		"Description=LazyCloud agent",
-		"Wants=docker.service network-online.target",
-		"After=docker.service network-online.target",
+		"Wants=docker.service network-online.target " + snapshotterUnitName,
+		"After=docker.service network-online.target " + snapshotterUnitName,
 		"",
 		"[Service]",
 		"Type=simple",

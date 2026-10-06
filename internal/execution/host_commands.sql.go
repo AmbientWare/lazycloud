@@ -12,6 +12,29 @@ import (
 	"github.com/google/uuid"
 )
 
+const containerImage = `-- name: ContainerImage :one
+select workspace_id, image_reference::text as reference from containers
+where id = $1 and host_id = $2 and state <> 'stopped' and image_reference is not null
+`
+
+type ContainerImageParams struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+type ContainerImageRow struct {
+	WorkspaceID uuid.UUID
+	Reference   string
+}
+
+// The workspace and image reference of a live container on the host.
+func (q *Queries) ContainerImage(ctx context.Context, arg ContainerImageParams) (ContainerImageRow, error) {
+	row := q.db.QueryRow(ctx, containerImage, arg.ID, arg.HostID)
+	var i ContainerImageRow
+	err := row.Scan(&i.WorkspaceID, &i.Reference)
+	return i, err
+}
+
 const endedAttemptsOnHost = `-- name: EndedAttemptsOnHost :many
 select a.id, a.container_id, a.state
 from containers c
@@ -91,6 +114,53 @@ func (q *Queries) IdleDrainingContainersOnHost(ctx context.Context, hostID *uuid
 		return nil, err
 	}
 	return items, nil
+}
+
+const liveImagesOnHost = `-- name: LiveImagesOnHost :many
+select distinct image_reference::text
+from containers
+where host_id = $1 and state <> 'stopped' and image_reference is not null
+order by 1
+`
+
+// The image references the host's live containers were started with.
+func (q *Queries) LiveImagesOnHost(ctx context.Context, hostID *uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, liveImagesOnHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var image_reference string
+		if err := rows.Scan(&image_reference); err != nil {
+			return nil, err
+		}
+		items = append(items, image_reference)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordImageReference = `-- name: RecordImageReference :execrows
+update containers set image_reference = $1
+where id = $2 and host_id = $3 and state = 'starting'
+`
+
+type RecordImageReferenceParams struct {
+	Reference *string
+	ID        uuid.UUID
+	HostID    *uuid.UUID
+}
+
+func (q *Queries) RecordImageReference(ctx context.Context, arg RecordImageReferenceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordImageReference, arg.Reference, arg.ID, arg.HostID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const startingContainersOnHost = `-- name: StartingContainersOnHost :many

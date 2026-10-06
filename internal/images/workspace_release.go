@@ -46,7 +46,7 @@ func (i *Images) failBuild(ctx context.Context, id uuid.UUID, digest []byte, rea
 		if BuildStatus(build.State) != BuildBuilding {
 			return nil
 		}
-		return i.failLocked(ctx, tx, id, reason)
+		return i.failLocked(ctx, tx, id, reason, false)
 	})
 	if err != nil {
 		return fmt.Errorf("fail build %s: %w", id, err)

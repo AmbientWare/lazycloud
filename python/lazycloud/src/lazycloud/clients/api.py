@@ -600,6 +600,14 @@ class ApiClient:
             params={"force": "true"} if force else None,
         )
 
+    def prepare_image(self, workspace: str, image_id: str) -> ImageResolution:
+        """Start or join the build that makes an image ready, unless it is."""
+        return self._send(
+            ImageResolution,
+            "POST",
+            _path("v1", "workspaces", workspace, "images", image_id, "prepare"),
+        )
+
     def get_image(self, workspace: str, image_id: str) -> Image:
         return self._send(Image, "GET", _path("v1", "workspaces", workspace, "images", image_id))
 

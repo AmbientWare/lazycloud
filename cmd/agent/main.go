@@ -3,6 +3,7 @@
 //
 //	lazycloud-agent join [flags]             run the agent
 //	lazycloud-agent install-service [flags]  run it as a systemd service
+//	lazycloud-agent install-snapshotter      install the host's snapshotter
 //	lazycloud-agent --version
 //
 // Join flags default to LAZYCLOUD_* environment variables.
@@ -24,6 +25,7 @@ import (
 	"syscall"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -45,6 +47,8 @@ var version string //nolint:gochecknoglobals // set by the linker, never at run 
 const usage = `usage:
   lazycloud-agent join [flags]             run the agent in the foreground
   lazycloud-agent install-service [flags]  install and start the agent as a systemd service
+  lazycloud-agent install-snapshotter      install the snapshotter beside this executable and
+                                           point Docker at it; install-service does this too
   lazycloud-agent --version                print the agent version
 
 Run "lazycloud-agent join -h" for the flags.
@@ -82,6 +86,12 @@ func run(args []string, logger *slog.Logger) int {
 		}
 		cfg.Logger = logger
 		return join(cfg)
+	case "install-snapshotter":
+		if err := installSnapshotterCommand(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
 	case "install-service":
 		if err := installService(args[1:]); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
@@ -169,7 +179,7 @@ func newJoinFlags(name string) *joinFlags {
 	f.BoolVar(&cfg.AllowPrivilegedDocker, "allow-privileged-docker", os.Getenv("LAZYCLOUD_ALLOW_PRIVILEGED_DOCKER") == "true",
 		"run docker_enabled containers privileged without runsc, which lets them escape to the host; only for trusted tenants")
 	f.StringVar(&cfg.GeeseFSPath, "geesefs", envOr("LAZYCLOUD_GEESEFS", filepath.Join(release, "geesefs")), "pinned GeeseFS binary that mounts volumes; volumes are unavailable without it")
-	f.StringVar(&cfg.MountImage, "mount-image", envOr("LAZYCLOUD_MOUNT_IMAGE", agent.DefaultMountImage), "image that runs GeeseFS for volume mounts")
+	f.StringVar(&cfg.Snapshotter, "snapshotter", envOr("LAZYCLOUD_SNAPSHOTTER", layersource.Socket), "socket the image layer snapshotter serves")
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	f.StringVar(&j.maxCPU, "max-cpu", os.Getenv("LAZYCLOUD_MAX_CPU"), "CPU cores to offer, such as 2 or 1.5; default detects")
 	f.StringVar(&j.maxMemory, "max-memory", os.Getenv("LAZYCLOUD_MAX_MEMORY"), "memory to offer, such as 16gib or 4096 (MB); default detects")

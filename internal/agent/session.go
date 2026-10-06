@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -70,6 +71,15 @@ func (a *Agent) sessions(ctx context.Context) error {
 func (a *Agent) runSession(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// A Hello that cannot list them names none: the session matters more
+	// than renewing grants a running container's copy has for an hour.
+	running, err := a.runningPlatformImages(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		a.log.Warn("listing the platform images containers run failed; the Hello names none", "error", err)
+	}
 	stream, err := a.control.Session(ctx)
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
@@ -87,8 +97,16 @@ func (a *Agent) runSession(ctx context.Context) error {
 	}()
 
 	a.metrics.sessions.Inc()
-	hello, exited := a.hello()
+	// A failure the last session sent may be stale; waiters take this
+	// session's answer.
+	a.platform.forgetFailures()
+	hello, exited := a.hello(running)
 	if err := stream.Send(hello); err != nil {
+		// A stream the server refused ends sends with io.EOF; its status
+		// comes with the next receive.
+		if errors.Is(err, io.EOF) {
+			_, err = stream.Recv()
+		}
 		return fmt.Errorf("send hello: %w", err)
 	}
 	a.mu.Lock()
@@ -153,8 +171,9 @@ func (a *Agent) runSession(ctx context.Context) error {
 }
 
 // hello describes every container, including exited ones within their
-// retention, and returns the exited ones.
-func (a *Agent) hello() (*hostproto.HostMessage, []*container) {
+// retention, and the platform image copies running ones run, and returns
+// the exited ones.
+func (a *Agent) hello(running []string) (*hostproto.HostMessage, []*container) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	reports := make([]*hostproto.ContainerReport, 0, len(a.containers))
@@ -167,14 +186,16 @@ func (a *Agent) hello() (*hostproto.HostMessage, []*container) {
 		}
 	}
 	return &hostproto.HostMessage{Body: &hostproto.HostMessage_Hello{Hello: &hostproto.Hello{
-		BootId:          a.bootID,
-		Capacity:        a.capacity,
-		Containers:      reports,
-		AgentVersion:    a.cfg.Version,
-		Updatable:       a.updatable,
-		RejectedVersion: readMarker(a.cfg.StateDir, RejectedFile),
-		SleptSeconds:    sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
-		SleepAttemptId:  a.sleep.ID,
+		BootId:                a.bootID,
+		Capacity:              a.capacity,
+		Containers:            reports,
+		AgentVersion:          a.cfg.Version,
+		Updatable:             a.updatable,
+		RejectedVersion:       readMarker(a.cfg.StateDir, RejectedFile),
+		SleptSeconds:          sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
+		SleepAttemptId:        a.sleep.ID,
+		PlatformImages:        a.platform.named,
+		RunningPlatformImages: running,
 	}}}, exited
 }
 
@@ -234,6 +255,14 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		a.snapshot(body.Snapshot)
 	case *hostproto.ServerMessage_PublishFilesystem:
 		a.publishFilesystem(body.PublishFilesystem)
+	case *hostproto.ServerMessage_LayerGrants:
+		a.layers.refresh(body.LayerGrants.GetLayers())
+	case *hostproto.ServerMessage_PlatformImages:
+		// Mount and builder containers keep reading their images' layers.
+		for _, image := range body.PlatformImages.GetImages() {
+			a.layers.refresh(image.GetLayers())
+		}
+		a.platform.update(body.PlatformImages.GetImages())
 	case *hostproto.ServerMessage_StorageGrant:
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
 			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
@@ -267,7 +296,10 @@ func (a *Agent) start(spec *hostproto.StartContainer) {
 	c.report()
 	if !known {
 		a.goOwned(func(ctx context.Context) { c.launch(ctx, spec) })
+		return
 	}
+	// A start sent again, as after a reconnect, carries fresh grants.
+	a.layers.refresh(spec.GetLayers())
 }
 
 // stop drains a known container. An unknown one is reported stopped, since

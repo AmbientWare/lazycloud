@@ -18,15 +18,22 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 const (
 	testRegistryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
-	testBuildBase     = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+	testBuildBase     = platformimages.Mount
 )
 
 func (s *hostServer) CompleteImageBuild(_ context.Context, r *hostproto.CompleteImageBuildRequest) (*hostproto.CompleteImageBuildResponse, error) {
 	s.builds <- r
+	s.mu.Lock()
+	answer := s.answerBuild
+	s.mu.Unlock()
+	if answer != nil {
+		return answer(r), nil
+	}
 	return &hostproto.CompleteImageBuildResponse{}, nil
 }
 
@@ -69,6 +76,14 @@ func startTestRegistry(t *testing.T) string {
 			t.Fatalf("registry did not start: %v", err)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// pullBuilt pulls an image a test build pushed, to look inside it.
+func pullBuilt(t *testing.T, reference string) {
+	t.Helper()
+	if out, err := exec.CommandContext(t.Context(), "docker", "pull", "--platform", "linux/amd64", reference).CombinedOutput(); err != nil {
+		t.Fatalf("pull %s: %v\n%s", reference, err, out)
 	}
 }
 
@@ -116,10 +131,7 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	// A host pulls the image by digest through the Docker Engine.
 	reference := registry + "/lazycloud/images@" + digest
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
-	images := &imageCache{docker: e.docker}
-	if _, err := images.ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
-		t.Fatal(err)
-	}
+	pullBuilt(t, reference)
 	proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
 	if err != nil || strings.TrimSpace(string(proof)) != "built" {
 		t.Fatalf("the pulled image holds the build's file: %q %v", proof, err)
@@ -181,9 +193,7 @@ func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
 
 	reference := registry + "/lazycloud/images@" + outcome.GetDigest()
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
-	if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
-		t.Fatal(err)
-	}
+	pullBuilt(t, reference)
 	proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
 	sum := sha256.Sum256([]byte(secret))
 	if err != nil || strings.TrimSpace(string(proof)) != hex.EncodeToString(sum[:]) {
@@ -247,9 +257,7 @@ func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 		session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
 		reference := registry + "/lazycloud/images@" + outcome.GetDigest()
 		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", reference).Run() })
-		if _, err := (&imageCache{docker: e.docker}).ensure(t.Context(), reference, nil, "linux/amd64"); err != nil {
-			t.Fatalf("%v\noutput:\n%s", err, e.server.buildOutput())
-		}
+		pullBuilt(t, reference)
 		proof, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", reference, "cat", "/proof").Output()
 		if err != nil {
 			t.Fatal(err)

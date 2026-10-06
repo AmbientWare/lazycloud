@@ -32,6 +32,11 @@ spec:
         {{- include "lazycloud.spread" "server" | trim | nindent 8 }}
       volumes:
         {{- include "lazycloud.masterKeyVolume" . | nindent 8 }}
+        # The root filesystem is read-only; platform image conversions write
+        # here.
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ required "server.resources.requests.ephemeral-storage sizes the server's /tmp" (index .Values.server.resources.requests "ephemeral-storage") }}
         {{- if .Values.server.tcpService.enabled }}
         - name: tcp-certificate
           secret:
@@ -114,6 +119,8 @@ spec:
               containerPort: 9090
           volumeMounts:
             {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
             {{- if .Values.server.tcpService.enabled }}
             - name: tcp-certificate
               mountPath: /run/lazycloud/tcp

@@ -22,6 +22,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // Volumes mount per workspace: one GeeseFS process per workspace bucket runs
@@ -51,10 +52,6 @@ const (
 	// grantMargin is how long a stored key must still be valid to mount.
 	grantMargin = time.Minute
 )
-
-// DefaultMountImage runs volume mount containers; GeeseFS needs only sh,
-// cat, mkdir and umount beside it.
-const DefaultMountImage = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
 // volumes owns the host's workspace mounts and their credentials.
 type volumes struct {
@@ -367,7 +364,8 @@ type mountSpec struct {
 
 // runMount starts a GeeseFS mount container and returns its id.
 func (v *volumes) runMount(ctx context.Context, m mountSpec) (string, error) {
-	if _, err := v.a.images.ensure(ctx, v.a.cfg.MountImage, nil, ""); err != nil {
+	image, err := v.a.platformImage(ctx, platformimages.Mount)
+	if err != nil {
 		return "", err
 	}
 	if err := v.a.removeContainer(ctx, m.name); err != nil {
@@ -429,7 +427,7 @@ exit 1`, target, strings.Join(quoted, " "))
 	created, err := v.a.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: m.name,
 		Config: &containertypes.Config{
-			Image:      v.a.cfg.MountImage,
+			Image:      image,
 			Entrypoint: []string{"/bin/sh", "-c", script},
 			Env:        []string{"AWS_SDK_LOAD_CONFIG=1", "AWS_CONFIG_FILE=/creds/config"},
 			Labels:     labels,

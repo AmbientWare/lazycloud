@@ -272,7 +272,7 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 // prepare fetches the image and source, attaches disks, creates the link
 // socket, starts the Docker container and applies its network policy. Each
 // stage is timed and reported as it finishes.
-func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer) error {
+func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer) (err error) {
 	pod := spec.GetPod()
 	if pod == nil && spec.GetFunction().GetHandler() == "" {
 		return fmt.Errorf("start has neither a function handler nor a pod")
@@ -285,14 +285,21 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 	// The holder starts while the image and source are prepared; prepare
 	// does not return before it settled.
+	// A failed preparation stops the holder's start, which may be waiting
+	// for its image.
 	var holder chan error
 	if c.checkpointable {
+		holderCtx, cancelHolder := context.WithCancel(ctx)
 		holder = make(chan error, 1)
-		go func() { holder <- c.a.startHolder(ctx, c) }()
+		go func() { holder <- c.a.startHolder(holderCtx, c) }()
 		defer func() {
+			if err != nil {
+				cancelHolder()
+			}
 			if holder != nil {
 				<-holder
 			}
+			cancelHolder()
 		}()
 	}
 	// Functions run the managed Python runner; a pod mounts the runtime
@@ -313,6 +320,9 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	}
 
 	began := time.Now()
+	if err := c.a.layers.start(ctx, c.log, c.id, spec); err != nil {
+		return err
+	}
 	pulled, err := c.a.images.ensure(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	if err != nil {
 		return err
@@ -530,6 +540,9 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 	c.running = map[string]struct{}{}
 	l := c.link
 	c.mu.Unlock()
+	if c.a.layers != nil {
+		c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })
+	}
 	c.cancelWork()
 	if l != nil {
 		l.close(0)
@@ -747,6 +760,13 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	startClaims := !c.claiming && !c.stopping && c.http == nil && c.pod == nil
 	c.claiming = c.claiming || startClaims
 	c.mu.Unlock()
+	if changed && c.a.layers != nil {
+		c.a.goOwned(func(ctx context.Context) {
+			if trace := c.a.layers.ready(ctx, c.log, c.id); trace != nil {
+				c.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{ContainerId: c.id, Trace: trace}}})
+			}
+		})
+	}
 	c.signalSlotFree()
 	if changed {
 		c.log.Info("container ready", "slots", ready.GetSlots(), "running", len(running))

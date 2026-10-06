@@ -8,12 +8,13 @@ select pg_try_advisory_xact_lock(hashtextextended('placement', 0))::bool;
 -- whose target has a host, in per-workspace round robin: every workspace's
 -- oldest request, then every workspace's second, and so on. A container's
 -- target is its release's machine pin, else its workspace's connection,
--- else the platform. Reads the containers_pending partial index.
+-- else the platform; a mirror build always runs on the platform. Reads the
+-- containers_pending partial index.
 select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
        p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count
 from (
     select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
-           ws.connection_id,
+           cw.connection_id,
            coalesce(r.spec -> 'placement' ->> 'machine', '')::text as machine,
            coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
            coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
@@ -22,8 +23,9 @@ from (
            coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
            row_number() over (partition by c.workspace_id order by c.created_at, c.id) as turn
     from containers c
-    join workspaces ws on ws.id = c.workspace_id
     left join releases r on r.id = c.release_id
+    left join image_builds b on b.id = c.image_build_id
+    left join workspaces cw on cw.id = c.workspace_id and b.mirror is not true
     where c.state = 'pending'
       and c.cpu_millis <= @max_free_cpu_millis
       and c.memory_bytes <= @max_free_memory_bytes

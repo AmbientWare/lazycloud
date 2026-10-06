@@ -31,3 +31,19 @@ where c.host_id = @host_id and c.state in ('ready', 'draining')
   and a.state in ('cancelled', 'timed_out', 'lost')
   and a.finished_at > now() - make_interval(secs => @within_seconds::float8)
 order by a.id;
+
+-- name: LiveImagesOnHost :many
+-- The image references the host's live containers were started with.
+select distinct image_reference::text
+from containers
+where host_id = @host_id and state <> 'stopped' and image_reference is not null
+order by 1;
+
+-- name: RecordImageReference :execrows
+update containers set image_reference = @reference
+where id = @id and host_id = @host_id and state = 'starting';
+
+-- name: ContainerImage :one
+-- The workspace and image reference of a live container on the host.
+select workspace_id, image_reference::text as reference from containers
+where id = @id and host_id = @host_id and state <> 'stopped' and image_reference is not null;

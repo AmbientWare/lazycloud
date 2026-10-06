@@ -76,6 +76,10 @@ type HostServiceClient interface {
 	ContainerAPI(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error)
 	// CompleteImageBuild records the outcome of a build container's attempt.
 	// A container that no longer runs the build returns FAILED_PRECONDITION.
+	// A pushed image publishes once every layer is converted; until then the
+	// response names the layers to convert. The host converts them and calls
+	// again with their sizes, gets upload URLs signed for those sizes, uploads,
+	// and calls again with the uploaded layers.
 	CompleteImageBuild(ctx context.Context, in *CompleteImageBuildRequest, opts ...grpc.CallOption) (*CompleteImageBuildResponse, error)
 	// AppendImageBuildLogs stores a build container's output in order.
 	AppendImageBuildLogs(ctx context.Context, in *AppendImageBuildLogsRequest, opts ...grpc.CallOption) (*AppendImageBuildLogsResponse, error)
@@ -280,6 +284,10 @@ type HostServiceServer interface {
 	ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error
 	// CompleteImageBuild records the outcome of a build container's attempt.
 	// A container that no longer runs the build returns FAILED_PRECONDITION.
+	// A pushed image publishes once every layer is converted; until then the
+	// response names the layers to convert. The host converts them and calls
+	// again with their sizes, gets upload URLs signed for those sizes, uploads,
+	// and calls again with the uploaded layers.
 	CompleteImageBuild(context.Context, *CompleteImageBuildRequest) (*CompleteImageBuildResponse, error)
 	// AppendImageBuildLogs stores a build container's output in order.
 	AppendImageBuildLogs(context.Context, *AppendImageBuildLogsRequest) (*AppendImageBuildLogsResponse, error)

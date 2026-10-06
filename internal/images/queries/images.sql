@@ -1,14 +1,11 @@
--- name: UpsertImage :one
--- The update locks the image row, so build requests for one image run one
--- at a time. An image that needs no build is ready on insert, and becomes
--- ready when a request finds it is its public base.
-insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu, reference, ready_at)
-values (@digest, @id, @dockerfile, @python_version, @architecture, @build_secrets, @build_gpu,
-        sqlc.narg(reference), case when sqlc.narg(reference)::text is null then null else now() end)
-on conflict (digest) do update
-set reference = coalesce(images.reference, excluded.reference),
-    ready_at = coalesce(images.ready_at, excluded.ready_at)
-returning digest, id, python_version, architecture, reference, created_at, ready_at;
+-- name: InsertImage :one
+-- Returns no row when the image exists. With no conflict target it also
+-- waits out a concurrent first insert, which would otherwise collide on
+-- the id index that an ON CONFLICT (digest) does not arbitrate.
+insert into images (digest, id, dockerfile, python_version, architecture, build_secrets, build_gpu)
+values (@digest, @id, @dockerfile, @python_version, @architecture, @build_secrets, @build_gpu)
+on conflict do nothing
+returning id;
 
 -- name: GrantImage :exec
 insert into workspace_images (workspace_id, image_digest)
@@ -16,10 +13,13 @@ values (@workspace_id, @image_digest)
 on conflict do nothing;
 
 -- name: WorkspaceImage :one
--- The workspace's view of an image: its own rebuild, else the global one.
+-- The workspace's view of an image: its own rebuild, else the global one,
+-- and whether each has layer rows.
 select i.digest, i.id, i.python_version, i.architecture,
        coalesce(w.reference, i.reference) as reference, i.reference as global_reference,
-       i.created_at, coalesce(w.ready_at, i.ready_at) as ready_at
+       i.created_at, coalesce(w.ready_at, i.ready_at) as ready_at,
+       exists (select 1 from image_reference_layers r where r.reference = coalesce(w.reference, i.reference))::bool as converted,
+       exists (select 1 from image_reference_layers r where r.reference = i.reference)::bool as global_converted
 from images i
 join workspace_images w on w.image_digest = i.digest
 where w.workspace_id = @workspace_id and i.id = @id;
@@ -44,13 +44,13 @@ where image_digest = @image_digest and state = 'building'
   and forced = @forced and (not @forced or workspace_id = @workspace_id);
 
 -- name: LatestBuild :one
-select id, image_digest, state, failure, created_at, finished_at
+select id, image_digest, state, failure, failure_transient, created_at, finished_at
 from image_builds where image_digest = @image_digest
 order by created_at desc, id desc limit 1;
 
 -- name: InsertBuild :one
-insert into image_builds (image_digest, state, workspace_id, forced, context_sha256, registry_auth, deadline_at)
-values (@image_digest, 'building', @workspace_id, @forced, sqlc.narg(context_sha256), sqlc.narg(registry_auth),
+insert into image_builds (image_digest, state, workspace_id, forced, mirror, context_sha256, registry_auth, deadline_at)
+values (@image_digest, 'building', @workspace_id, @forced, @mirror, sqlc.narg(context_sha256), sqlc.narg(registry_auth),
         now() + make_interval(secs => @timeout_seconds::float8))
 returning id, image_digest, state, failure, created_at, finished_at;
 
@@ -75,7 +75,7 @@ join images i on i.digest = b.image_digest
 where b.id = @id;
 
 -- name: LockBuild :one
-select id, image_digest, state, workspace_id, forced, deadline_at, log_bytes, log_lines
+select id, image_digest, state, workspace_id, forced, mirror, deadline_at, log_bytes, log_lines
 from image_builds where id = @id for update;
 
 -- name: SucceedBuild :exec
@@ -85,7 +85,7 @@ where id = @id;
 
 -- name: FailBuild :exec
 update image_builds
-set state = 'failed', failure = @failure::text, registry_auth = null, finished_at = now()
+set state = 'failed', failure = @failure::text, failure_transient = @transient, registry_auth = null, finished_at = now()
 where id = @id;
 
 -- name: PublishWorkspaceImage :exec

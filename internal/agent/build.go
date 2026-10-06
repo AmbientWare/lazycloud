@@ -28,17 +28,13 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
-
-// builderImage runs image builds: BuildKit rootless, with buildkitd and
-// buildctl in one container that exits when its build ends.
-const builderImage = "docker.io/moby/buildkit:v0.33.1-rootless@sha256:f8a833b2de9d68e27f0815e4a737abdfaf8a2e4c615650557df11025101557b4"
 
 // Labels on build containers. They differ from workload labels, so adopt
 // never takes a build container for a workload.
@@ -86,9 +82,9 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 }
 
 // runBuild prepares the build's files, runs the builder, streams its output
-// and reports the outcome, then the exit. If the agent stops first, the
-// build is abandoned: the next agent removes its container and the server
-// gives the build a new one.
+// and reports the outcome, converting the layers the server asks for, then
+// the exit. If the agent stops first, the build is abandoned: the next agent
+// removes its container and the server gives the build a new one.
 func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer) {
 	build := spec.GetBuild()
 	logs := newBuildLogs(c.a.host, c.id, c.log)
@@ -100,10 +96,10 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 	if ctx.Err() != nil {
 		return
 	}
-	logs.close()
 	if outcome != nil && !c.isStopping() {
-		c.completeBuild(ctx, outcome)
+		c.publishBuild(ctx, work, build, outcome, logs) //nolint:contextcheck // as above
 	}
+	logs.close()
 	c.exited(exit)
 }
 
@@ -121,7 +117,8 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	}
 	logs.add("preparing build container")
 	began := time.Now()
-	if _, err := c.a.images.ensure(ctx, builderImage, nil, ""); err != nil {
+	builder, err := c.a.platformImage(ctx, platformimages.Builder)
+	if err != nil {
 		return startFailed(err)
 	}
 	// The secrets leave the host when the build ends, whatever its outcome.
@@ -139,7 +136,7 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 			return startFailed(err)
 		}
 	}
-	if err := c.a.createBuilder(ctx, c, spec, gpu); err != nil {
+	if err := c.a.createBuilder(ctx, c, builder, spec, gpu); err != nil {
 		return startFailed(err)
 	}
 	c.mu.Lock()
@@ -444,7 +441,7 @@ func dockerConfig(auths map[string]*hostproto.RegistryAuth) ([]byte, error) {
 	return encoded, nil
 }
 
-func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto.StartContainer, gpu *buildGPU) error {
+func (a *Agent) createBuilder(ctx context.Context, c *container, image string, spec *hostproto.StartContainer, gpu *buildGPU) error {
 	build := spec.GetBuild()
 	insecure := ""
 	if build.GetInsecureRegistry() {
@@ -496,7 +493,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 	options := client.ContainerCreateOptions{
 		Name: c.dockerName(),
 		Config: &containertypes.Config{
-			Image:      builderImage,
+			Image:      image,
 			Entrypoint: []string{"buildctl-daemonless.sh"},
 			Cmd:        args,
 			Env:        env,
@@ -594,27 +591,68 @@ func readBuildDigest(path string) (string, error) {
 	return metadata.Digest, nil
 }
 
-// completeBuild delivers the outcome, retrying transient failures until the
-// agent stops. The server's recovery covers an outcome never delivered.
-func (c *container) completeBuild(ctx context.Context, request *hostproto.CompleteImageBuildRequest) {
+// publishBuild reports the outcome. While the server answers with layers
+// of the pushed image it has no converted pair of, it converts them and
+// reports their sizes, then uploads them to the URLs signed for those sizes
+// and reports them uploaded, within the build's deadline (work). A layer
+// that cannot be converted or stored, or layers still missing after a few
+// rounds, fail the build.
+func (c *container) publishBuild(ctx, work context.Context, build *hostproto.ImageBuild, request *hostproto.CompleteImageBuildRequest, logs *buildLogs) {
+	fail := func(reason string, transient bool) {
+		logs.add(reason)
+		request := failedBuild(c.id, reason, nil)
+		request.FailureTransient = transient
+		c.completeBuild(ctx, request)
+	}
+	dir, err := os.MkdirTemp(c.dir, "layers")
+	if err != nil {
+		fail(fmt.Sprintf("create the layer directory: %v", err), true)
+		return
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	layers := &layerPublish{a: c.a, build: build, dir: dir, logs: logs, done: map[string]*convertedLayer{}}
+	for round := 1; ; round++ {
+		uploads := c.completeBuild(ctx, request).GetLayerUploads()
+		if len(uploads) == 0 {
+			return
+		}
+		if round > maxPublishRounds {
+			fail(fmt.Sprintf("%d layers were still unconverted after %d rounds", len(uploads), maxPublishRounds), true)
+			return
+		}
+		converted, uploaded, err := layers.answer(work, uploads)
+		if err != nil {
+			// Only a layer's content fails the image; a store or registry
+			// that stayed unreachable fails this build alone.
+			fail(err.Error(), !errors.Is(err, errLayerContent))
+			return
+		}
+		request.ConvertedLayers, request.UploadedLayers = converted, uploaded
+	}
+}
+
+// completeBuild delivers request, retrying transient failures until the
+// agent stops, and returns the answer, or nil when there is none to act
+// on. The server's recovery covers an outcome never delivered.
+func (c *container) completeBuild(ctx context.Context, request *hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse {
 	delay := 100 * time.Millisecond
 	for {
-		callCtx, cancel := context.WithTimeout(ctx, completeCallTimeout)
-		_, err := c.a.host.CompleteImageBuild(callCtx, request)
+		callCtx, cancel := context.WithTimeout(ctx, publishCallTimeout)
+		resp, err := c.a.host.CompleteImageBuild(callCtx, request)
 		cancel()
 		switch {
 		case err == nil:
-			return
+			return resp
 		case status.Code(err) == codes.FailedPrecondition:
 			c.log.Info("discarding outcome of a finished build")
-			return
+			return nil
 		case !retryable(err):
 			c.log.Error("completing build failed", "error", err)
-			return
+			return nil
 		}
 		c.log.Warn("completing build failed; retrying", "error", err, "retry_in", delay)
 		if !sleep(ctx, delay) {
-			return
+			return nil
 		}
 		delay = min(2*delay, maxCompleteBackoff)
 	}
@@ -656,8 +694,8 @@ func (a *Agent) removeHostContainers(ctx context.Context) error {
 	return a.removeBuildContainers(ctx)
 }
 
-// pullOptions carries a login and platform to one pull.
-func pullOptions(auth *hostproto.RegistryAuth, platform string) (client.ImagePullOptions, error) {
+// pullOptions carries a login to one pull.
+func pullOptions(auth *hostproto.RegistryAuth) (client.ImagePullOptions, error) {
 	var options client.ImagePullOptions
 	if auth != nil {
 		encoded, err := authconfig.Encode(registry.AuthConfig{
@@ -667,13 +705,6 @@ func pullOptions(auth *hostproto.RegistryAuth, platform string) (client.ImagePul
 			return options, fmt.Errorf("encode registry login: %w", err)
 		}
 		options.RegistryAuth = encoded
-	}
-	if platform != "" {
-		os, arch, ok := strings.Cut(platform, "/")
-		if !ok {
-			return options, fmt.Errorf("platform %q is not os/arch", platform)
-		}
-		options.Platforms = []ocispec.Platform{{OS: os, Architecture: arch}}
 	}
 	return options, nil
 }

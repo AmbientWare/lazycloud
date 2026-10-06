@@ -267,7 +267,8 @@ left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
-where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at is not null
+left join image_builds b on b.id = c.image_build_id
+where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at is not null and b.mirror is not true
 `
 
 type LiveMeteredContainersRow struct {
@@ -293,7 +294,8 @@ type LiveMeteredContainersRow struct {
 }
 
 // Ready and draining containers: the live set, read through its partial
-// indexes rather than the container history.
+// indexes rather than the container history. A mirror build's container
+// is the platform's and bills no one.
 func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredContainersRow, error) {
 	rows, err := q.db.Query(ctx, liveMeteredContainers)
 	if err != nil {
@@ -705,7 +707,8 @@ left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
-where c.ready_at is not null and c.stopped_at >= $1 and not coalesce(u.complete, false)
+left join image_builds b on b.id = c.image_build_id
+where c.ready_at is not null and c.stopped_at >= $1 and not coalesce(u.complete, false) and b.mirror is not true
 `
 
 type StoppedMeteredContainersRow struct {
@@ -731,7 +734,7 @@ type StoppedMeteredContainersRow struct {
 }
 
 // Containers that stopped since the look-back began and still owe their
-// last entries.
+// last entries. Mirror builds' containers bill no one.
 func (q *Queries) StoppedMeteredContainers(ctx context.Context, since *time.Time) ([]StoppedMeteredContainersRow, error) {
 	rows, err := q.db.Query(ctx, stoppedMeteredContainers, since)
 	if err != nil {

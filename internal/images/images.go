@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
+	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
 const (
@@ -116,19 +118,28 @@ func (c Config) workspaceImageRepository(workspace uuid.UUID, digest []byte) str
 	return c.Repository + "/workspace-images/" + workspace.String() + "/" + hex.EncodeToString(digest)
 }
 
-// imageTarget is where a build pushes and whether its result is the
-// workspace's alone. A build on a connected account's or joined machine's
-// host runs where the customer controls it, so only the shared image a
-// platform host built may be published for every workspace.
-func (i *Images) imageTarget(ctx context.Context, q *Queries, host compute.HostID, workspace uuid.UUID, digest []byte, forced bool) (string, bool, error) {
+// buildTarget is where a build pushes and whom its result serves.
+type buildTarget struct {
+	repository string
+	// scoped means the image, and the layers its build converts, are the
+	// workspace's alone.
+	scoped bool
+}
+
+// imageTarget is where a build on host pushes. A build on a connected
+// account's or joined machine's host runs where the customer controls it, so
+// only the shared image a platform host built may be published for every
+// workspace.
+func (i *Images) imageTarget(ctx context.Context, q *Queries, host compute.HostID, workspace uuid.UUID, digest []byte, forced bool) (buildTarget, error) {
 	kind, err := q.HostKind(ctx, uuid.UUID(host))
 	if err != nil {
-		return "", false, fmt.Errorf("read host kind: %w", err)
+		return buildTarget{}, fmt.Errorf("read host kind: %w", err)
 	}
-	if forced || compute.HostKind(kind) != compute.KindPlatform {
-		return i.config.workspaceImageRepository(workspace, digest), true, nil
+	platform := compute.HostKind(kind) == compute.KindPlatform
+	if forced || !platform {
+		return buildTarget{repository: i.config.workspaceImageRepository(workspace, digest), scoped: true}, nil
 	}
-	return i.config.imageRepository(digest), false, nil
+	return buildTarget{repository: i.config.imageRepository(digest)}, nil
 }
 
 func (c Config) cacheRepository(workspace uuid.UUID) string {
@@ -161,18 +172,25 @@ type Images struct {
 	queries   *Queries
 	execution *execution.Execution
 	// secrets holds the workspace secrets builds read.
-	secrets  *secrets.Secrets
+	secrets *secrets.Secrets
+	// storage holds the converted layers of published images.
+	storage  *storage.Storage
 	resolver *resolver
 	config   Config
 	login    *platformLogin
 	ecr      ecrToken
+	// transfer stores the layer pairs of platform images.
+	transfer *http.Client
+	// platformLease is platformLease; tests shorten it.
+	platformLease time.Duration
 }
 
 // NewImages returns the images owner.
-func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, config Config) *Images {
+func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) *Images {
 	return &Images{
-		pool: pool, queries: New(pool), execution: exec, secrets: vault, resolver: newResolver(config.Registry), config: config,
-		login: newPlatformLogin(config), ecr: exchangeECR,
+		pool: pool, queries: New(pool), execution: exec, secrets: vault, storage: store, resolver: newResolver(config.Registry), config: config,
+		login: newPlatformLogin(config), ecr: exchangeECR, transfer: &http.Client{},
+		platformLease: platformLease,
 	}
 }
 
@@ -187,8 +205,11 @@ type Image struct {
 	// globalReference is the reference every workspace without its own
 	// rebuild sees.
 	globalReference *string
-	CreatedAt       time.Time
-	ReadyAt         *time.Time
+	// unconverted is the reference stored for the workspace while it has no
+	// layer rows; a mirror build converts it.
+	unconverted *string
+	CreatedAt   time.Time
+	ReadyAt     *time.Time
 }
 
 // BuildStatus is a build's outcome so far.
@@ -234,8 +255,6 @@ type prepared struct {
 	dockerfile string
 	digest     []byte
 	id         string
-	// reference is set when the image is its base: nothing to build.
-	reference *string
 	// auth holds base image logins by registry host.
 	auth map[string]Auth
 	// secretVersions are the versions of the secrets the build reads, by
@@ -346,11 +365,7 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 		inputs.Workspace = uuid.UUID(workspace).String()
 	}
 	out.digest = imageDigest(out.dockerfile, s.architecture, s.context, inputs)
-	out.id = "img_" + hex.EncodeToString(out.digest)[:24]
-	if !needsBuild(out.dockerfile) && baseAuth == nil {
-		ref := dockerfileBase(out.dockerfile)
-		out.reference = &ref
-	}
+	out.id = imageID(out.digest)
 	return out, nil
 }
 
@@ -395,7 +410,30 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 	if err != nil {
 		return Resolution{}, err
 	}
+	return i.build(ctx, workspace, p, force, buildDefinition)
+}
+
+// buildKind is what a build makes of its Dockerfile.
+type buildKind string
+
+const (
+	// buildDefinition runs a definition's steps.
+	buildDefinition buildKind = "definition"
+	// buildSharedMirror copies a public or platform-global image into the
+	// platform registry and converts it, on a platform host, for every
+	// workspace.
+	buildSharedMirror buildKind = "shared_mirror"
+	// buildOwnMirror copies one of the workspace's own images and converts
+	// it where the workspace's builds run, for that workspace alone.
+	buildOwnMirror buildKind = "own_mirror"
+)
+
+// build starts a build of p for workspace unless the image is ready, or
+// joins the one running. A definition whose stored reference lost its layer
+// rows is converted again by mirroring that reference, not rebuilt.
+func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p prepared, force bool, kind buildKind) (Resolution, error) {
 	var auth []byte
+	var err error
 	if len(p.auth) > 0 {
 		// The logins are stored until the build ends; see image_builds.
 		if auth, err = json.Marshal(p.auth); err != nil { //nolint:gosec // The build needs the password.
@@ -403,6 +441,7 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		}
 	}
 	var out Resolution
+	reconvert := false
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		image, err := i.upsert(ctx, q, workspace, p)
@@ -410,16 +449,27 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 			return err
 		}
 		out = Resolution{Image: image}
-		// An image that is its base has nothing to build.
-		if p.reference != nil || (image.Reference != nil && !force) {
+		// Every image builds, even one that only names its base: the build
+		// converts its layers.
+		if image.Reference != nil && !force {
+			return nil
+		}
+		if kind == buildDefinition && image.unconverted != nil && !force {
+			reconvert = true
 			return nil
 		}
 		// Forcing an image nobody published yet is its first build. A
 		// workspace whose builds run on its connected account's hosts
-		// builds for itself alone.
-		customer, err := q.WorkspaceOnCustomerHosts(ctx, uuid.UUID(workspace))
-		if err != nil {
-			return fmt.Errorf("read workspace hosts: %w", err)
+		// builds for itself alone, as does a mirror of its own image.
+		customer := false
+		switch kind {
+		case buildDefinition:
+			if customer, err = q.WorkspaceOnCustomerHosts(ctx, uuid.UUID(workspace)); err != nil {
+				return fmt.Errorf("read workspace hosts: %w", err)
+			}
+		case buildOwnMirror:
+			customer = true
+		case buildSharedMirror:
 		}
 		forced := (force && image.globalReference != nil) || customer
 		active, err := q.ActiveBuild(ctx, ActiveBuildParams{ImageDigest: p.digest, Forced: forced, WorkspaceID: uuid.UUID(workspace)})
@@ -434,13 +484,18 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		// The image row lock serializes requests for this image, so no other
 		// build can start between the check and the insert.
 		row, err := q.InsertBuild(ctx, InsertBuildParams{
-			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), Forced: forced, ContextSha256: p.spec.context,
+			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), Forced: forced, Mirror: kind == buildSharedMirror, ContextSha256: p.spec.context,
 			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(),
 		})
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
 		}
-		if _, err := i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu); err != nil {
+		if kind == buildSharedMirror {
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes)
+		} else {
+			_, err = i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu)
+		}
+		if err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelImageBuild, row.ID.String()); err != nil {
@@ -454,6 +509,9 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 	if err != nil {
 		return Resolution{}, fmt.Errorf("build image: %w", err)
 	}
+	if reconvert {
+		return i.Prepare(ctx, workspace, p.id)
+	}
 	return out, nil
 }
 
@@ -462,17 +520,24 @@ func (i *Images) upsert(ctx context.Context, q *Queries, workspace identity.Work
 	if err != nil {
 		return Image{}, fmt.Errorf("encode secret versions: %w", err)
 	}
-	row, err := q.UpsertImage(ctx, UpsertImageParams{
+	// A new row is locked by its insert, an existing one by LockImage, so
+	// build requests for one image run one at a time.
+	id, err := q.InsertImage(ctx, InsertImageParams{
 		Digest: p.digest, ID: p.id, Dockerfile: p.dockerfile, PythonVersion: p.spec.python,
-		Architecture: p.spec.architecture, BuildSecrets: versions, BuildGpu: p.spec.gpu, Reference: p.reference,
+		Architecture: p.spec.architecture, BuildSecrets: versions, BuildGpu: p.spec.gpu,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		var row LockImageRow
+		row, err = q.LockImage(ctx, p.digest)
+		id = row.ID
+	}
 	if err != nil {
 		return Image{}, fmt.Errorf("upsert image: %w", err)
 	}
 	if err := q.GrantImage(ctx, GrantImageParams{WorkspaceID: uuid.UUID(workspace), ImageDigest: p.digest}); err != nil {
 		return Image{}, fmt.Errorf("grant image: %w", err)
 	}
-	return i.workspaceImage(ctx, q, workspace, row.ID)
+	return i.workspaceImage(ctx, q, workspace, id)
 }
 
 func (i *Images) workspaceImage(ctx context.Context, q *Queries, workspace identity.WorkspaceID, id string) (Image, error) {
@@ -483,10 +548,19 @@ func (i *Images) workspaceImage(ctx context.Context, q *Queries, workspace ident
 	if err != nil {
 		return Image{}, fmt.Errorf("read image: %w", err)
 	}
-	return Image{
+	image := Image{
 		ID: row.ID, PythonVersion: row.PythonVersion, Architecture: row.Architecture,
 		Reference: row.Reference, globalReference: row.GlobalReference, CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt,
-	}, nil
+	}
+	// A reference is published only while it has layer rows; without them
+	// the image reads as unpublished until a build converts it.
+	if !row.Converted {
+		image.unconverted, image.Reference, image.ReadyAt = row.Reference, nil, nil
+	}
+	if !row.GlobalConverted {
+		image.globalReference = nil
+	}
+	return image, nil
 }
 
 // Get returns an image the workspace resolved, as that workspace sees it.
@@ -501,13 +575,21 @@ func (i *Images) Deployable(ctx context.Context, workspace identity.WorkspaceID,
 	if err != nil {
 		return "", err
 	}
-	if image.Reference == nil {
-		return "", ErrNotReady
-	}
 	if minorVersion(image.PythonVersion) != python {
 		return "", invalid("image %s has Python %s, not %s", id, image.PythonVersion, python)
 	}
-	return *image.Reference, nil
+	if image.Reference != nil {
+		return *image.Reference, nil
+	}
+	if image.unconverted == nil {
+		return "", ErrNotReady
+	}
+	// A stored reference without layer rows converts through a mirror build;
+	// until it publishes the deploy gets a BuildWaitError.
+	if err := i.convertReference(ctx, workspace, id, *image.unconverted); err != nil {
+		return "", err
+	}
+	return *image.unconverted, nil
 }
 
 // Pull is what a host needs to pull a ready image.
@@ -736,14 +818,22 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	// one: a build could write any cache entry it can push, and caches hold
 	// the workspace's build contexts.
 	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + dockerfileBase(row.Dockerfile)))
-	image, _, err := i.imageTarget(ctx, i.queries, host, row.WorkspaceID, row.Digest, row.Forced)
+	target, err := i.imageTarget(ctx, i.queries, host, row.WorkspaceID, row.Digest, row.Forced)
 	if err != nil {
 		return BuildCommand{}, err
 	}
+	image := target.repository
 	cache := i.config.cacheRepository(row.WorkspaceID)
 	// The build pushes only its image and its workspace's cache, until its
 	// deadline.
-	platform, err := i.login.host(ctx, hostAccess{push: []string{image, cache}}, row.DeadlineAt.Add(time.Minute))
+	access := hostAccess{push: []string{image, cache}}
+	// A build reads its base from the platform registry only when it mirrors
+	// an image there or starts from the managed base; definitions cannot
+	// name other platform images.
+	if base, ok := i.config.repositoryOf(dockerfileBase(row.Dockerfile)); ok {
+		access.pull = []string{base}
+	}
+	platform, err := i.login.host(ctx, access, row.DeadlineAt.Add(time.Minute))
 	if err != nil {
 		return BuildCommand{}, err
 	}
@@ -763,11 +853,11 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 
 // failLocked fails build id, whose image and build rows tx locked, and stops
 // its containers.
-func (i *Images) failLocked(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason string) error {
+func (i *Images) failLocked(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason string, transient bool) error {
 	if err := i.execution.StopBuildContainers(ctx, tx, id); err != nil {
 		return err
 	}
-	if err := i.queries.WithTx(tx).FailBuild(ctx, FailBuildParams{ID: id, Failure: truncate(reason)}); err != nil {
+	if err := i.queries.WithTx(tx).FailBuild(ctx, FailBuildParams{ID: id, Failure: truncate(reason), Transient: transient}); err != nil {
 		return fmt.Errorf("fail build: %w", err)
 	}
 	return database.Notify(ctx, tx, database.ChannelImageBuild, id.String())
@@ -779,43 +869,127 @@ func BuildResources() (cpuMillis cpu.Millis, memoryBytes, memoryLimitBytes int64
 }
 
 // BuildOutcome is what a build attempt produced: a pushed manifest digest or
-// a failure.
+// a failure. With the digest come the layers the host converted since an
+// earlier completion named them, and those it uploaded to the URLs one
+// returned.
 type BuildOutcome struct {
 	Digest  string
 	Failure string
+	// Transient says the failure is not the image's: a store or registry
+	// stayed unreachable.
+	Transient bool
+	Converted []ConvertedLayer
+	Uploaded  []UploadedLayer
 }
 
 // CompleteBuild records the outcome a host reports for its build container.
-// A success is checked against the registry before the image is published.
-func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, container execution.ContainerID, outcome BuildOutcome) error {
+// A pushed image is read from the registry and published once every layer
+// has a converted pair. Until then CompleteBuild returns the layers to
+// convert, and the host reports the digest again with them converted.
+func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, container execution.ContainerID, outcome BuildOutcome) ([]LayerUpload, error) {
 	build, _, err := i.execution.LiveBuildContainer(ctx, host, container)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	started, err := i.queries.BuildToStart(ctx, build)
 	if err != nil {
-		return fmt.Errorf("read build: %w", err)
+		return nil, fmt.Errorf("read build: %w", err)
 	}
-	digest := started.Digest
-	repository, scoped, err := i.imageTarget(ctx, i.queries, host, started.WorkspaceID, digest, started.Forced)
+	if outcome.Failure != "" {
+		return nil, i.failReported(ctx, build, uuid.UUID(container), started.Digest, outcome.Failure, outcome.Transient)
+	}
+	if !manifestDigest.MatchString(outcome.Digest) {
+		return nil, invalid("digest %q is not sha256:<hex>", outcome.Digest)
+	}
+	target, err := i.imageTarget(ctx, i.queries, host, started.WorkspaceID, started.Digest, started.Forced)
+	if err != nil {
+		return nil, err
+	}
+	pushed := publication{
+		reference: i.config.Registry + "/" + target.repository + "@" + outcome.Digest,
+		target:    target, workspace: started.WorkspaceID, container: uuid.UUID(container), deadline: started.DeadlineAt,
+	}
+	auth, err := i.login.auth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pushed.layers, err = i.resolver.layers(ctx, pushed.reference, auth, i.config.Insecure, "linux/"+started.Architecture)
+	var rejected *InvalidError
+	if errors.As(err, &rejected) {
+		return nil, i.failReported(ctx, build, uuid.UUID(container), started.Digest, rejected.Reason, false)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check pushed image: %w", err)
+	}
+	converted, failure, err := i.checkConversions(ctx, pushed, outcome.Uploaded)
+	if err != nil {
+		return nil, err
+	}
+	if failure != "" {
+		return nil, i.failReported(ctx, build, uuid.UUID(container), started.Digest, failure, false)
+	}
+	var offered []offer
+	finished := false
+	err = i.finishBuildFunc(ctx, build, started.Digest, func(q *Queries, row LockBuildRow) (bool, error) {
+		var failure string
+		offered, failure, err = i.recordLayers(ctx, q, pushed, converted, outcome.Converted)
+		finished = err == nil && (failure != "" || len(offered) == 0)
+		switch {
+		case err != nil:
+			return false, err
+		case failure != "":
+			offered = nil
+			return true, q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(failure)})
+		case len(offered) > 0:
+			return false, nil
+		}
+		// A workspace-scoped build, or one a customer's host ran, is that
+		// workspace's image only; other workspaces that joined it build again.
+		if target.scoped {
+			err = q.PublishWorkspaceImage(ctx, PublishWorkspaceImageParams{
+				WorkspaceID: row.WorkspaceID, ImageDigest: started.Digest, Reference: pushed.reference,
+			})
+		} else {
+			err = q.PublishImage(ctx, PublishImageParams{Digest: started.Digest, Reference: &pushed.reference})
+		}
+		if err != nil {
+			return false, fmt.Errorf("publish image: %w", err)
+		}
+		if err := q.SucceedBuild(ctx, build); err != nil {
+			return false, fmt.Errorf("finish build: %w", err)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if finished {
+		return nil, i.endUploads(ctx, uuid.UUID(container))
+	}
+	return i.presignUploads(ctx, offered)
+}
+
+// failReported fails build for a reason its host reported or its pushed
+// image showed, and ends the uploads of its container. transient says the
+// reason is not the image's content.
+func (i *Images) failReported(ctx context.Context, build, container uuid.UUID, digest []byte, reason string, transient bool) error {
+	err := i.finishBuildFunc(ctx, build, digest, func(q *Queries, _ LockBuildRow) (bool, error) {
+		if err := q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(reason), Transient: transient}); err != nil {
+			return false, fmt.Errorf("fail build: %w", err)
+		}
+		return true, nil
+	})
 	if err != nil {
 		return err
 	}
-	var reference string
-	if outcome.Failure == "" {
-		if !manifestDigest.MatchString(outcome.Digest) {
-			return invalid("digest %q is not sha256:<hex>", outcome.Digest)
-		}
-		reference = i.config.Registry + "/" + repository + "@" + outcome.Digest
-		auth, err := i.login.auth(ctx)
-		if err != nil {
-			return err
-		}
-		if _, err := i.resolver.pin(ctx, reference, auth, i.config.Insecure); err != nil {
-			return fmt.Errorf("check pushed image: %w", err)
-		}
-	}
-	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
+	return i.endUploads(ctx, container)
+}
+
+// finishBuildFunc runs fn on the locked image and build rows of a building
+// build, and announces the build when fn reports it changed its state. A
+// build that already finished is ErrStaleBuild.
+func (i *Images) finishBuildFunc(ctx context.Context, build uuid.UUID, digest []byte, fn func(*Queries, LockBuildRow) (bool, error)) error {
+	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		// Lock order: image, then build.
 		if _, err := q.LockImage(ctx, digest); err != nil {
@@ -828,28 +1002,9 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 		if BuildStatus(row.State) != BuildBuilding {
 			return ErrStaleBuild
 		}
-		if outcome.Failure != "" {
-			if err := q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(outcome.Failure)}); err != nil {
-				return fmt.Errorf("fail build: %w", err)
-			}
-		} else {
-			var err error
-			// A workspace-scoped build, or one a customer's host ran, is
-			// that workspace's image only; other workspaces that joined it
-			// build again.
-			if scoped {
-				err = q.PublishWorkspaceImage(ctx, PublishWorkspaceImageParams{
-					WorkspaceID: row.WorkspaceID, ImageDigest: digest, Reference: reference,
-				})
-			} else {
-				err = q.PublishImage(ctx, PublishImageParams{Digest: digest, Reference: &reference})
-			}
-			if err != nil {
-				return fmt.Errorf("publish image: %w", err)
-			}
-			if err := q.SucceedBuild(ctx, build); err != nil {
-				return fmt.Errorf("finish build: %w", err)
-			}
+		finished, err := fn(q, row)
+		if err != nil || !finished {
+			return err
 		}
 		return database.Notify(ctx, tx, database.ChannelImageBuild, build.String())
 	})
@@ -976,15 +1131,20 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		if err != nil {
 			return err
 		}
-		fail := func(reason string) error {
+		// Lost containers and deadlines say nothing of the image.
+		fail := func(reason string, transient bool) error {
 			changed = true
-			return i.failLocked(ctx, tx, id, reason)
+			return i.failLocked(ctx, tx, id, reason, transient)
 		}
+		// A build that ran out of time or of attempts may fail the same way
+		// every time, so its failure is the image's; one that never reached
+		// a host waited for capacity, which says nothing of the image.
 		if time.Now().After(build.DeadlineAt) {
-			return fail(fmt.Sprintf("the build did not finish within %s", BuildTimeout))
+			ran := slices.ContainsFunc(containers, func(c execution.BuildContainer) bool { return c.Host != nil })
+			return fail(fmt.Sprintf("the build did not finish within %s", BuildTimeout), !ran)
 		}
 		if len(containers) == 0 {
-			return fail("the build has no container")
+			return fail("the build has no container", true)
 		}
 		last := containers[len(containers)-1]
 		if last.State != execution.ContainerStopped {
@@ -995,7 +1155,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			reason += ": " + last.ExitMessage
 		}
 		if len(containers) >= maxAttempts {
-			return fail(reason)
+			return fail(reason, false)
 		}
 		changed = true
 		if err := i.insertLogs(ctx, tx, id, len(containers), []LogLine{{Data: reason + "; retrying", Time: time.Now()}}); err != nil {
@@ -1003,6 +1163,10 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		if err := q.ResetBuildLogCount(ctx, id); err != nil {
 			return fmt.Errorf("reset build log count: %w", err)
+		}
+		if build.Mirror {
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
+			return err
 		}
 		gpu, err := q.ImageBuildGPU(ctx, digest)
 		if err != nil {
@@ -1013,7 +1177,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		var limit *billing.LimitError
 		var unoffered *billing.GPUUnavailableError
 		if errors.As(err, &unpaid) || errors.As(err, &limit) || errors.As(err, &unoffered) {
-			return fail(reason + "; " + err.Error())
+			return fail(reason+"; "+err.Error(), false)
 		}
 		return err
 	})

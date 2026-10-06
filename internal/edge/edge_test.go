@@ -655,3 +655,46 @@ select d.id, r.id from d, r`).Scan(&deployed, &workingTree)
 		t.Fatalf("deployed version host of a paused app %+v %v, want refusing", version.workload, err)
 	}
 }
+
+// A load error recorded within failureCheckInterval of a waiting request's
+// last check fails the request once the next check is due, not at its
+// deadline: the change that woke it early is checked again.
+func TestALoadErrorBetweenChecksFailsTheWaitingRequest(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	dbtest.OwnWorkspaces(t, pool)
+	r, err := e.release(ctx, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := target{workload: &workload{id: wl, workspace: identity.WorkspaceID(ws)}, release: r}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.acquire(ctx, target, time.Now().Add(10*time.Second))
+		done <- err
+	}()
+	waitFor(t, func() bool {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		l := e.loads[rel]
+		return l != nil && !l.checkedAt.IsZero()
+	})
+	if _, err := pool.Exec(ctx, "update releases set load_error = 'no database configured' where id = $1", rel); err != nil {
+		t.Fatal(err)
+	}
+	// The failed container's stop wakes the request.
+	e.mu.Lock()
+	e.workloads[wl].wake()
+	e.mu.Unlock()
+	select {
+	case err := <-done:
+		var failed *releaseFailedError
+		if !errors.As(err, &failed) || !strings.Contains(failed.reason, "no database configured") {
+			t.Fatalf("the waiting request ended with %v", err)
+		}
+	case <-time.After(3 * failureCheckInterval):
+		t.Fatal("the load error was not checked once the next check was due")
+	}
+}

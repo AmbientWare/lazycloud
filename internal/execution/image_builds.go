@@ -52,9 +52,22 @@ func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspa
 	if gpu != "" && !slices.Contains(grant.GPUModels, billing.GPUType(gpu)) {
 		return ContainerID{}, &billing.PaymentRequiredError{Message: "this account may not use " + gpu}
 	}
+	return e.createBuildContainer(ctx, tx, workspace, build, cpuMillis, memoryBytes, len(req.GPUModels))
+}
+
+// CreatePlatformBuildContainer requests a container for build, a mirror
+// build of a public or platform-global image, which converts it for every
+// workspace. It is the platform's work: billing neither admits nor charges
+// it, so no account's standing or limits decide whether it runs. workspace
+// is the one whose request started it.
+func (e *Execution) CreatePlatformBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis cpu.Millis, memoryBytes int64) (ContainerID, error) {
+	return e.createBuildContainer(ctx, tx, workspace, build, cpuMillis, memoryBytes, 0)
+}
+
+func (e *Execution) createBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis cpu.Millis, memoryBytes int64, gpus int) (ContainerID, error) {
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
-		GpuCount: int32(len(req.GPUModels)), //nolint:gosec // At most one GPU.
+		GpuCount: int32(gpus), //nolint:gosec // At most one GPU.
 	})
 	if err != nil {
 		return ContainerID{}, fmt.Errorf("create build container: %w", err)

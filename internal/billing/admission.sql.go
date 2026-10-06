@@ -160,7 +160,8 @@ select count(*) filter (where c.gpu_count = 0)::int as cpu_containers,
        coalesce(sum(c.gpu_count), 0)::int as gpus
 from workspace_members o
 join containers c on c.workspace_id = o.workspace_id
-where o.user_id = $1 and o.role = 'owner' and c.state <> 'stopped'
+left join image_builds b on b.id = c.image_build_id
+where o.user_id = $1 and o.role = 'owner' and c.state <> 'stopped' and b.mirror is not true
 `
 
 type OwnerLiveContainersRow struct {
@@ -169,7 +170,7 @@ type OwnerLiveContainersRow struct {
 }
 
 // The account's two concurrency pools: containers without GPUs, and the
-// cards the others hold.
+// cards the others hold. A mirror build's container is the platform's.
 func (q *Queries) OwnerLiveContainers(ctx context.Context, userID uuid.UUID) (OwnerLiveContainersRow, error) {
 	row := q.db.QueryRow(ctx, ownerLiveContainers, userID)
 	var i OwnerLiveContainersRow
