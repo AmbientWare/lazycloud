@@ -1,7 +1,6 @@
 package snapshotter
 
 import (
-	"archive/tar"
 	"bytes"
 	"fmt"
 	"io"
@@ -35,7 +34,7 @@ func newCachedLayers(t *testing.T, transport http.RoundTripper, sizes ...int) ca
 	ts := newTestStore(t)
 	out := cachedLayers{cache: newTestCache(t, transport, 256<<20)}
 	for _, size := range sizes {
-		l := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, body: random(size)}}))
+		l := ts.file(t, "a", random(size))
 		out.layers = append(out.layers, l.grantTo(out.cache))
 	}
 	return out
@@ -68,10 +67,7 @@ func TestTracesRecordFirstReadsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got [][2]uint32
-	for _, r := range ended.GetReads() {
-		got = append(got, [2]uint32{r.GetLayer(), r.GetFrame()})
-	}
+	got := framePairs(ended.GetReads())
 	if want := [][2]uint32{{1, 1}, {0, 2}, {0, 0}}; !slices.Equal(got, want) || !ended.GetComplete() {
 		t.Fatalf("the trace is %v, complete %v; want %v, complete", got, ended.GetComplete(), want)
 	}
@@ -315,8 +311,8 @@ func waitFor(t *testing.T, done func() bool) {
 func TestTracedFramesPrefetchThroughMounts(t *testing.T) {
 	ts := newTestStore(t)
 	weights := random(5 * imagefs.FrameSize)
-	base := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "lib", Typeflag: tar.TypeReg, Mode: 0o644}, body: weights[:3*imagefs.FrameSize]}}))
-	app := ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: "weights", Typeflag: tar.TypeReg, Mode: 0o644}, body: weights}}))
+	base := ts.file(t, "lib", weights[:3*imagefs.FrameSize])
+	app := ts.file(t, "weights", weights)
 	layers := []imagefs.Digest{base.index.Layer, app.index.Layer}
 	start := func(s *service) (string, string) {
 		t.Helper()
