@@ -52,10 +52,6 @@ func (p *platformImages) update(images []*hostproto.PlatformImage) {
 	p.changed = make(chan struct{})
 }
 
-// platformListTimeout bounds the container listing a session open waits
-// for, so a slow Docker does not hold the session back.
-const platformListTimeout = 5 * time.Second
-
 // forgetFailures drops the failures recorded for images, so that waiters
 // wait for the next answer.
 func (p *platformImages) forgetFailures() {
@@ -67,6 +63,10 @@ func (p *platformImages) forgetFailures() {
 		}
 	}
 }
+
+// platformListTimeout bounds the container listing a session open waits
+// for, so a slow Docker does not hold the session back.
+const platformListTimeout = 5 * time.Second
 
 // runningPlatformImages lists the images that this host's mount and
 // network holder containers run, which may be copies of platform images

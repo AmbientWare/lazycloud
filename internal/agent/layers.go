@@ -233,8 +233,8 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 }
 
 // await waits until served closes, at most traceWindow from container's
-// start, then ends its trace as end does. It returns nil at
-// once if the container does not trace, exits or ctx ends.
+// start, then ends its trace as end does. It returns nil at once if the
+// container does not trace, exits or ctx ends.
 func (l *layerSources) await(ctx context.Context, log *slog.Logger, container string, served <-chan struct{}) *hostproto.ImageTrace {
 	l.smu.Lock()
 	s, ok := l.startups[container]
