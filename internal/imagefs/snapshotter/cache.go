@@ -64,10 +64,12 @@ type frameCache struct {
 	// starts sums them into the traces of the starts that read them.
 	traces *tracer
 	starts *startTraces
-	// fetches makes concurrent reads of one frame share one fetch, and
-	// slots bounds the fetches in flight and so the memory they hold.
+	// fetches makes concurrent reads of one frame share one fetch, slots
+	// bounds the fetches in flight and so the memory they hold, and reader
+	// decodes as many frames at once.
 	fetches singleflight.Group
 	slots   chan struct{}
+	reader  *imagefs.FrameReader
 	// filling bounds the background fetches in flight, of mounted layers
 	// and prefetches. They hold at most half of slots, so containers' reads
 	// always find a slot free.
@@ -102,8 +104,12 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create frame cache: %w", err)
 	}
+	reader, err := imagefs.NewFrameReader(cfg.Fetches)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the decoder names itself
+	}
 	return &frameCache{
-		dir: dir, limit: cfg.CacheBytes, fillBytes: cfg.FillBytes, http: cfg.HTTP, log: cfg.Logger,
+		dir: dir, limit: cfg.CacheBytes, fillBytes: cfg.FillBytes, http: cfg.HTTP, log: cfg.Logger, reader: reader,
 		grants:     &grants{byLayer: make(map[imagefs.Digest]grant)},
 		traces:     &tracer{traces: make(map[string]*trace)},
 		starts:     &startTraces{tracer: cfg.Tracer, byName: map[string]*startTrace{}, byLayer: map[imagefs.Digest]*startTrace{}},
@@ -115,6 +121,12 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 		live:       make(map[imagefs.Digest]*layer),
 		mountWake:  make(chan struct{}),
 	}, nil
+}
+
+// close waits for the background work and releases the decoder.
+func (c *frameCache) close() {
+	c.background.Wait()
+	c.reader.Close()
 }
 
 // newLayer returns a layer ix describes, read through its current grant.
@@ -266,7 +278,7 @@ func (c *frameCache) load(l *layer, frame int) ([]byte, error) {
 	v, err, _ := c.fetches.Do(string(l.digest)+"/"+strconv.Itoa(frame), func() (any, error) {
 		// A fetch that just finished may have stored it.
 		if f := c.touch(k); f != nil {
-			if data, err := os.ReadFile(f.path); err == nil && int64(len(data)) == f.size {
+			if data, err := os.ReadFile(f.path); err == nil && len(data) == l.index.FrameLen(frame) {
 				return data, nil
 			}
 		}
@@ -283,7 +295,7 @@ func (c *frameCache) load(l *layer, frame int) ([]byte, error) {
 			if _, ok := c.grants.lookup(l.digest); !ok {
 				return errNoGrant
 			}
-			data, err = l.index.ReadFrame(ctx, l.data, frame)
+			data, err = c.reader.Read(ctx, l.index, l.data, frame)
 			return err //nolint:wrapcheck // wrapped below
 		})
 		if err != nil {

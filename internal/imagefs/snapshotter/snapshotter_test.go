@@ -616,7 +616,7 @@ func newTestCache(t *testing.T, transport http.RoundTripper, bound int64) *frame
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(c.background.Wait)
+	t.Cleanup(c.close)
 	return c
 }
 
