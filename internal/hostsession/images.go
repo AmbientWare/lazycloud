@@ -15,6 +15,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -26,16 +27,18 @@ var errImageUnpinned = errors.New("the image has no pinned reference")
 // maxBuildLogLine bounds one stored line of build output.
 const maxBuildLogLine = 16 << 10
 
-// imagePull is how a host pulls a function's image: the image by digest its
-// release pinned, or the platform's image for its Python version.
-func (s *Server) imagePull(ctx context.Context, spec apitypes.ImageSpec) (images.Pull, error) {
+// imagePull is how host pulls the image of a container of workspace: the
+// image by digest its release pinned, or the platform's image for its
+// Python version. Either waits while the image converts: the first with
+// images.BuildWaitError, the second with images.PlatformWaitError.
+func (s *Server) imagePull(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID, spec apitypes.ImageSpec) (images.Pull, error) {
 	if spec.ImageId == nil {
-		return images.Pull{Reference: strings.ReplaceAll(s.config.ImageTemplate, "{version}", string(spec.PythonVersion))}, nil
+		return s.images.ManagedPull(ctx, host, string(spec.PythonVersion))
 	}
 	if spec.Reference == nil {
 		return images.Pull{}, fmt.Errorf("release names image %s: %w", *spec.ImageId, errImageUnpinned)
 	}
-	return s.images.PullOf(ctx, *spec.ImageId, *spec.Reference)
+	return s.images.ConvertedPull(ctx, workspace, *spec.ImageId, *spec.Reference)
 }
 
 func registryAuthOut(auth *images.Auth) *hostproto.RegistryAuth {
@@ -131,7 +134,14 @@ func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.Complete
 	default:
 		return nil, status.Error(codes.InvalidArgument, "an outcome is required")
 	}
-	err = s.images.CompleteBuild(ctx, hostFrom(ctx), container, outcome)
+	outcome.Transient = req.GetFailureTransient()
+	for _, c := range req.GetConvertedLayers() {
+		outcome.Converted = append(outcome.Converted, images.ConvertedLayer{Blob: c.GetBlobDigest(), DataBytes: c.GetDataBytes(), IndexBytes: c.GetIndexBytes()})
+	}
+	for _, u := range req.GetUploadedLayers() {
+		outcome.Uploaded = append(outcome.Uploaded, images.UploadedLayer{Blob: u.GetBlobDigest(), ETags: u.GetPartEtags()})
+	}
+	uploads, err := s.images.CompleteBuild(ctx, hostFrom(ctx), container, outcome)
 	var invalid *images.InvalidError
 	if errors.As(err, &invalid) {
 		return nil, status.Error(codes.InvalidArgument, invalid.Error())
@@ -139,7 +149,15 @@ func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.Complete
 	if err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
-	return &hostproto.CompleteImageBuildResponse{}, nil
+	resp := &hostproto.CompleteImageBuildResponse{}
+	for _, u := range uploads {
+		upload := &hostproto.LayerUpload{BlobDigest: u.Blob, DiffId: u.DiffID}
+		if u.Index != "" {
+			upload.IndexUrl, upload.DataPartUrls, upload.DataPartBytes = u.Index, u.DataParts, u.PartBytes
+		}
+		resp.LayerUploads = append(resp.LayerUploads, upload)
+	}
+	return resp, nil
 }
 
 // AppendImageBuildLogs stores a build container's output.

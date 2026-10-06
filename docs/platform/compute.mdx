@@ -64,7 +64,17 @@ Any Linux server you own can join your account and run workloads for the
 workspaces you choose, with no compute charge. Volumes and egress still bill.
 
 The host needs Linux on amd64 or arm64 with systemd and root access, a rootful
-Docker daemon, and outbound DNS and TCP 443. No inbound port or static IP.
+Docker 25 or later on the system containerd, and outbound DNS and TCP 443. No
+inbound port or static IP.
+
+Joining installs `lazycloud-snapshotter`, which serves image layers as
+containers read them. It switches Docker to the containerd image store with the
+snapshotter as its storage driver and restarts Docker, so containers you run
+there stop. Images you pulled under overlay2 stay hidden until you switch
+back. To revert, remove `storage-driver` and `features.containerd-snapshotter`
+from `/etc/docker/daemon.json` and the `proxy_plugins.lazycloud` block from
+`/etc/containerd/config.toml`, restart containerd and Docker, then
+`systemctl disable --now lazycloud-snapshotter`.
 
 On the machine:
 

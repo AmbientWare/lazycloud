@@ -167,7 +167,8 @@ func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinC
 }
 
 // joinCommand is the shell command that installs the release and joins with
-// token. Off loopback it reruns the script under sudo when not root.
+// token. It reruns the script under sudo when not root, which the install
+// needs to reconfigure Docker for the snapshotter.
 func (c *Compute) joinCommand(token string, release TargetReleaseRow) string {
 	gateway := strings.TrimRight(c.config.InstallURL, "/")
 	args := []string{"--gateway", shellQuote(gateway), "--server", shellQuote(c.config.ServerAddress)}
@@ -181,11 +182,7 @@ func (c *Compute) joinCommand(token string, release TargetReleaseRow) string {
 	if release.Sha256Arm64 != nil {
 		args = append(args, "--agent-arm64-sha256", shellQuote(*release.Sha256Arm64))
 	}
-	fetch := "curl -fsSL " + shellQuote(gateway+"/install/agent") + " | "
-	if loopback(gateway) {
-		return fetch + "sh -s -- " + strings.Join(args, " ")
-	}
-	return fetch + `sh -c 'if [ "$(id -u)" -eq 0 ]; then exec sh -s -- "$@"; else exec sudo sh -s -- "$@"; fi' -- ` +
+	return "curl -fsSL " + shellQuote(gateway+"/install/agent") + " | " + `sh -c 'if [ "$(id -u)" -eq 0 ]; then exec sh -s -- "$@"; else exec sudo sh -s -- "$@"; fi' -- ` +
 		strings.Join(args, " ")
 }
 

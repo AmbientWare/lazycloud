@@ -314,6 +314,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		routeConflict   *control.RouteConflictError
 		tooLarge        *http.MaxBytesError
 		invalidImage    *images.InvalidError
+		unconvertible   *images.ConversionError
 		conflict        *identity.ConflictError
 		invalid         *identity.InvalidError
 		roleErr         *identity.RoleError
@@ -372,7 +373,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, routeConflict.Error())
 	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	case errors.As(err, &invalidImage):
+	case errors.As(err, &invalidImage), errors.As(err, &unconvertible):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.Is(err, images.ErrUnsupported):
 		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())

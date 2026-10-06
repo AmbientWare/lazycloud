@@ -712,16 +712,6 @@ func imageDigest(dockerfile, architecture string, context []byte, inputs buildIn
 	return sum[:]
 }
 
-// needsBuild reports whether a pinned Dockerfile does more than name its
-// base.
-func needsBuild(dockerfile string) bool {
-	result, err := parser.Parse(strings.NewReader(dockerfile))
-	if err != nil {
-		return true
-	}
-	return len(result.AST.Children) != 1 || !strings.EqualFold(result.AST.Children[0].Value, "from")
-}
-
 func dockerValue(value string) string {
 	if plainEnvValue.MatchString(value) {
 		return value

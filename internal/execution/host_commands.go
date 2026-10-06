@@ -3,10 +3,12 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -145,4 +147,39 @@ func memoryLimitMiB(r apitypes.Resources) int64 {
 	}
 	reserved := int64(r.MemoryMib)
 	return min(max(reserved*memoryBurstFactor, reserved+memoryBurstFloorMi), reserved+memoryBurstCapMi)
+}
+
+// LiveImagesOnHost lists the image references the host's live containers
+// were started with.
+func (e *Execution) LiveImagesOnHost(ctx context.Context, host compute.HostID) ([]string, error) {
+	ids, err := e.queries.LiveImagesOnHost(ctx, hostUUID(host))
+	if err != nil {
+		return nil, fmt.Errorf("list live images on host: %w", err)
+	}
+	return ids, nil
+}
+
+// RecordImageReference records the image reference container is started
+// with on host, before its start is sent. It reports false when the
+// container no longer starts there.
+func (e *Execution) RecordImageReference(ctx context.Context, host compute.HostID, container ContainerID, reference string) (bool, error) {
+	n, err := e.queries.RecordImageReference(ctx, RecordImageReferenceParams{ID: uuid.UUID(container), HostID: hostUUID(host), Reference: &reference})
+	if err != nil {
+		return false, fmt.Errorf("record image reference: %w", err)
+	}
+	return n == 1, nil
+}
+
+// ContainerImage returns the workspace of a live container on host and the
+// image reference it was started with, or false when the host runs no such
+// container.
+func (e *Execution) ContainerImage(ctx context.Context, host compute.HostID, container ContainerID) (identity.WorkspaceID, string, bool, error) {
+	row, err := e.queries.ContainerImage(ctx, ContainerImageParams{ID: uuid.UUID(container), HostID: hostUUID(host)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.WorkspaceID{}, "", false, nil
+	}
+	if err != nil {
+		return identity.WorkspaceID{}, "", false, fmt.Errorf("read container image: %w", err)
+	}
+	return identity.WorkspaceID(row.WorkspaceID), row.Reference, true, nil
 }

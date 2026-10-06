@@ -14,6 +14,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,6 +48,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/observability"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -157,6 +159,7 @@ type serveConfig struct {
 	healthAddr    string
 	sessionURL    *string
 	objectStore   storage.Config
+	layerReplicas string
 	imageTemplate string
 	secretsKey    string
 	identity      identity.Config
@@ -189,6 +192,8 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.Endpoint, "object-store-endpoint", env("LAZYCLOUD_OBJECT_STORE_ENDPOINT", ""), "S3-compatible endpoint URL; empty is AWS S3 (LAZYCLOUD_OBJECT_STORE_ENDPOINT)")
 	fs.StringVar(&cfg.objectStore.Region, "object-store-region", env("LAZYCLOUD_OBJECT_STORE_REGION", ""), "object store region (LAZYCLOUD_OBJECT_STORE_REGION)")
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
+	fs.StringVar(&cfg.objectStore.LayerBucket, "object-store-layer-bucket", env("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET", ""), "bucket for converted image layers (LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET)")
+	fs.StringVar(&cfg.layerReplicas, "object-store-layer-replicas", env("LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS", ""), "JSON object of region to bucket: the layer bucket's copies hosts in those regions read (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id; empty uses the AWS default credential chain (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar((*string)(&cfg.objectStore.Workspaces.Provider), "workspace-bucket-provider", env("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER", ""), "garage or aws: creates the per-workspace buckets of volumes and disks (LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER)")
 	fs.StringVar(&cfg.objectStore.Workspaces.Prefix, "workspace-bucket-prefix", env("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX", "lazycloud-ws"), "prefix of workspace bucket names (LAZYCLOUD_WORKSPACE_BUCKET_PREFIX)")
@@ -271,6 +276,11 @@ func serve(ctx context.Context, args []string) error {
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
 	cfg.objectStore.Workspaces.GarageAdminToken = os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN")
 	cfg.cloudflare.token = os.Getenv("LAZYCLOUD_CLOUDFLARE_API_TOKEN")
+	if cfg.layerReplicas != "" {
+		if err := json.Unmarshal([]byte(cfg.layerReplicas), &cfg.objectStore.LayerReplicas); err != nil {
+			return fmt.Errorf("layer replicas (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS): %w", err)
+		}
+	}
 	if err := cfg.objectStore.Validate(); err != nil {
 		return fmt.Errorf("object store: %w", err)
 	}
@@ -360,7 +370,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	}
 	exec := execution.NewExecution(pool)
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, exec, vault, cfg.images)
+	im := images.NewImages(pool, exec, vault, store, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
 	comp := compute.NewCompute(pool, exec, cfg.compute)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
@@ -409,9 +419,11 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		return err
 	}
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
-		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		TouchInterval: 10 * time.Second,
+		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		Registerer: tel.Registry,
 	}, logger)
+	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures())
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {
 		creds, err := credentials.NewServerTLSFromFile(cfg.grpcCert, cfg.grpcKey)

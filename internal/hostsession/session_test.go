@@ -39,6 +39,60 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
+// managedTemplate is the image template of the test server's managed
+// images.
+const managedTemplate = "docker.io/library/python:{version}-slim"
+
+// managedSource is the template's image for version by digest, as the
+// server pins it.
+func managedSource(version string) string {
+	return "docker.io/library/python@sha256:" + strings.Repeat(version[len(version)-1:], 64)
+}
+
+// managedReference is the managed image's converted copy for version.
+func managedReference(version string) string {
+	return "127.0.0.1:1/lazycloud/platform/docker.io/library/python-" + version + "@sha256:" + strings.Repeat("c", 64)
+}
+
+// recordManagedSource records the source the server pinned for version.
+func recordManagedSource(t *testing.T, pool *pgxpool.Pool, version string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), "insert into managed_images (python_version, template, source) values ($1, $2, $3)",
+		version, managedTemplate, managedSource(version)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// publishManagedImage records the managed image for version as the
+// server's conversion would, with one converted layer.
+func publishManagedImage(t *testing.T, pool *pgxpool.Pool, version string) {
+	t.Helper()
+	recordManagedSource(t, pool, version)
+	convertManagedImage(t, pool, version)
+}
+
+// convertManagedImage records the converted copy of version's managed
+// image and announces it, as the conversion's lease owner does.
+func convertManagedImage(t *testing.T, pool *pgxpool.Pool, version string) {
+	t.Helper()
+	_, err := pool.Exec(t.Context(), `
+with copy as (
+    insert into platform_images (reference, architecture, mirror) values ($1, 'amd64', $2)
+    on conflict (reference, architecture) do update set mirror = excluded.mirror, lease_token = null, leased_until = null
+), layer as (
+    insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
+    values (gen_random_uuid(), 'sha256:' || encode(sha256($3::bytea), 'hex'), 'sha256:' || encode(sha256($3::bytea), 'hex'), 1, 0, 0, 0)
+    returning id
+), refs as (
+    insert into image_reference_layers (reference, position, layer_id) select $2, 0, id from layer
+)
+select pg_notify('lc_image_build', 'platform-images')`,
+		managedSource(version), managedReference(version), []byte("managed "+version))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 type harness struct {
 	t         *testing.T
 	pool      *pgxpool.Pool
@@ -48,6 +102,8 @@ type harness struct {
 	secrets   *secrets.Secrets
 	obs       *observability.Observability
 	listener  *database.Listener
+	server    *hostsession.Server
+	store     *storage.Storage
 }
 
 // start serves the host service on a random local port against real
@@ -60,11 +116,17 @@ func start(t *testing.T) *harness {
 // serve serves the host service on a random local port over pool.
 func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 	t.Helper()
+	return serveWith(t, pool, storagetest.Config())
+}
+
+// serveWith serves the host service over pool and the object store cfg.
+func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config) *harness {
+	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
-	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp)
+	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp, database.ChannelImageBuild)
 	e := execution.NewExecution(pool)
 	c := compute.NewCompute(pool, e, compute.Config{})
-	store := storage.NewStorage(pool, storagetest.Config())
+	store := storage.NewStorage(pool, cfg)
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)
@@ -81,10 +143,10 @@ func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	im := images.NewImages(pool, e, vault, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"})
+	im := images.NewImages(pool, e, vault, store, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate})
+	publishManagedImage(t, pool, "3.12")
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
-		ImageTemplate: "docker.io/library/python:{version}-slim",
 		TouchInterval: 100 * time.Millisecond,
 		Secrets:       vault,
 		ContainerAPI:  containerAPI,
@@ -114,7 +176,10 @@ func serve(t *testing.T, pool *pgxpool.Pool) *harness {
 		stop()
 		wg.Wait()
 	})
-	return &harness{t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault, obs: obs, listener: listener}
+	return &harness{
+		t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault, obs: obs, listener: listener,
+		server: srv, store: store,
+	}
 }
 
 func (h *harness) enroll() (compute.HostID, context.Context) {
@@ -225,7 +290,7 @@ func TestSessionReconcilesAndResendsAfterReconnect(t *testing.T) {
 	}
 	first := receive(t, stream).GetStart()
 	if first.GetContainerId() != container.String() ||
-		first.GetImage() != "docker.io/library/python:3.12-slim" ||
+		first.GetImage() != managedReference("3.12") ||
 		first.GetFunction().GetSlots() != 2 || first.GetFunction().GetHandler() != "reports:summarize" ||
 		first.GetEnvironment()["MODE"] != "test" ||
 		!strings.Contains(first.GetSource().GetUrl(), "/sources/"+first.GetSource().GetSha256()+".zip") {

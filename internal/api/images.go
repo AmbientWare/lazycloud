@@ -42,6 +42,19 @@ func (s *Server) BuildImage(ctx context.Context, req BuildImageRequestObject) (B
 	return BuildImage200JSONResponse(resolutionOut(resolution)), nil
 }
 
+// PrepareImage starts or joins the build that makes an image ready.
+func (s *Server) PrepareImage(ctx context.Context, req PrepareImageRequestObject) (PrepareImageResponseObject, error) {
+	ws, err := s.workspace(ctx, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	resolution, err := s.owners.Images.Prepare(ctx, ws.ID, req.Image)
+	if err != nil {
+		return nil, err
+	}
+	return PrepareImage200JSONResponse(resolutionOut(resolution)), nil
+}
+
 // GetImage returns an image the workspace resolved.
 func (s *Server) GetImage(ctx context.Context, req GetImageRequestObject) (GetImageResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)

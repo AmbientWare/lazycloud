@@ -114,6 +114,7 @@ func schedulerEnv(t *testing.T, pool *pgxpool.Pool) {
 		"LAZYCLOUD_OBJECT_STORE_ENDPOINT":          store.Endpoint,
 		"LAZYCLOUD_OBJECT_STORE_REGION":            store.Region,
 		"LAZYCLOUD_OBJECT_STORE_BUCKET":            store.Bucket,
+		"LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET":      store.LayerBucket,
 		"LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID":     store.AccessKeyID,
 		"LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": store.SecretAccessKey,
 		"LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER":      string(store.Workspaces.Provider),

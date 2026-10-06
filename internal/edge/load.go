@@ -63,12 +63,14 @@ func (l *releaseLoad) sample(now time.Time) {
 	l.window.push(now, l.inFlight+l.waiting, l.keepWarm)
 }
 
-func (l *releaseLoad) dueFailureCheck(now time.Time) bool {
-	if now.Sub(l.checkedAt) < failureCheckInterval {
-		return false
+// failureCheckIn is how long until a waiting request of the release may
+// ask whether it can start; zero means now, and the ask is recorded.
+func (l *releaseLoad) failureCheckIn(now time.Time) time.Duration {
+	if wait := failureCheckInterval - now.Sub(l.checkedAt); wait > 0 {
+		return wait
 	}
 	l.checkedAt = now
-	return true
+	return 0
 }
 
 // kick publishes a release's demand at once and wakes planning, for a

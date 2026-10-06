@@ -22,6 +22,20 @@ with ws as (select id from workspaces where name = 'acme'),
 insert into workspace_images (workspace_id, image_digest) select ws.id, img.digest from ws, img`, first); err != nil {
 		t.Fatal(err)
 	}
+	// Each reference is published as a build publishes it: converted.
+	converted := func(reference string) {
+		t.Helper()
+		if _, err := e.pool.Exec(ctx, `
+with layer as (
+    insert into image_layers (id, blob_digest, diff_id, index_bytes, data_bytes, entries, frames)
+    values (gen_random_uuid(), 'sha256:' || encode(sha256($1::text::bytea), 'hex'), 'sha256:' || encode(sha256($1::text::bytea), 'hex'), 1, 0, 0, 0)
+    returning id
+)
+insert into image_reference_layers (reference, position, layer_id) select $1, 0, id from layer`, reference); err != nil {
+			t.Fatal(err)
+		}
+	}
+	converted(first)
 	var source string
 	if err := e.pool.QueryRow(ctx, "select encode(sha256('src'), 'hex')").Scan(&source); err != nil {
 		t.Fatal(err)
@@ -53,6 +67,7 @@ insert into workspace_images (workspace_id, image_digest) select ws.id, img.dige
 		t.Fatalf("the release pins the workspace's image, got %v", r)
 	}
 	second := "registry.example.com/lazycloud/images@sha256:" + strings.Repeat("2", 64)
+	converted(second)
 	if _, err := e.pool.Exec(ctx, "update images set reference = $1", second); err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,8 @@ const hibernationMemoryLimit = 150 * gib
 // CatalogType is an instance type the platform fleet buys.
 type CatalogType struct {
 	Name string
+	// Architecture is the host architecture the type runs, as Go names it.
+	Architecture string
 	// Topology is the type's hardware threads, which EC2 sells and its
 	// quotas count, and the cores they run on.
 	Topology    cpu.Topology
@@ -77,6 +79,17 @@ func CatalogTypeNamed(name string) (CatalogType, bool) {
 	return CatalogType{}, false
 }
 
+// FleetArchitectures are the host architectures the fleet catalog sells.
+func FleetArchitectures() []string {
+	var architectures []string
+	for _, t := range FleetCatalog() {
+		if !slices.Contains(architectures, t.Architecture) {
+			architectures = append(architectures, t.Architecture)
+		}
+	}
+	return architectures
+}
+
 // regionRates are a region's gp3 and public IPv4 rates in USD micros.
 type regionRates struct {
 	gp3GiBMonth, ipv4Hour int64
@@ -100,10 +113,10 @@ func rootDiskMicros(region string, gib int64) int64 {
 // Every type runs two threads per core, its DefaultThreadsPerCore.
 func FleetCatalog() []CatalogType {
 	cpuType := func(name string, vcpus int, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
+		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
 	}
 	gpu := func(name string, vcpus int, memGiB int64, model string, cards int, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
+		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
 	}
 	return []CatalogType{
 		cpuType("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),

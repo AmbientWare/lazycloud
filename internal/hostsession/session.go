@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +22,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
@@ -40,6 +43,10 @@ type session struct {
 	sent map[string]bool
 	// grants holds the expiry of the storage grant sent per workspace.
 	grants map[identity.WorkspaceID]time.Time
+	// layers holds the life of the layer grants sent per image reference,
+	// and layersListed whether the host's live references were listed yet.
+	layers       map[string]layerGrant
+	layersListed bool
 	// live holds the containers the host runs as far as this session knows:
 	// reported and not exited, or started. A stop decided elsewhere, such as
 	// a machine removal or a preemption, reaches the host through it.
@@ -51,6 +58,67 @@ type session struct {
 	// release the Hello stated.
 	reserve *reserveAttempt
 	agent   compute.AgentState
+	// builds wakes the session when an image build a start waits for, or
+	// a platform image conversion, changes.
+	builds buildWaits
+	// platform is what the session sent for the platform images the Hello
+	// named.
+	platform platformState
+	// replicaWake wakes the session when layers are confirmed in its host
+	// region's copy of the layer bucket, once a grant waits for one;
+	// replicaStop ends the subscription.
+	replicaWake <-chan struct{}
+	replicaStop func()
+}
+
+// buildWaits subscribes to the ChannelImageBuild keys the session waits
+// for, image builds by id and images.PlatformConverted, and merges their
+// wake-ups into wake. Each subscription has a forwarder, which ends when
+// the subscription does; close waits for them.
+type buildWaits struct {
+	wake chan struct{}
+	subs map[string]func()
+	wg   sync.WaitGroup
+}
+
+// await subscribes to keys and ends the subscriptions to keys the session
+// no longer waits for. A change committed before subscribing reaches the
+// session at its next touch.
+func (w *buildWaits) await(listener *database.Listener, keys map[string]bool) {
+	for key, stop := range w.subs {
+		if !keys[key] {
+			stop()
+			delete(w.subs, key)
+		}
+	}
+	for key := range keys {
+		if _, ok := w.subs[key]; ok {
+			continue
+		}
+		changed, cancel := listener.Subscribe(database.ChannelImageBuild, key)
+		done := make(chan struct{})
+		w.wg.Go(func() {
+			for {
+				select {
+				case <-changed:
+					select {
+					case w.wake <- struct{}{}:
+					default:
+					}
+				case <-done:
+					return
+				}
+			}
+		})
+		w.subs[key] = func() { cancel(); close(done) }
+	}
+}
+
+func (w *buildWaits) close() {
+	for _, stop := range w.subs {
+		stop()
+	}
+	w.wg.Wait()
 }
 
 // recordNetwork records a newly reported applied policy version.
@@ -82,6 +150,15 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if hello == nil {
 		return status.Error(codes.InvalidArgument, "the first message must be Hello")
 	}
+	// The server converts only the platform images it knows; others get a
+	// failure, so an agent of another release still gets its update. These
+	// bound the work, not what a host may read.
+	if len(hello.GetPlatformImages()) > maxNamedPlatformImages {
+		return status.Errorf(codes.InvalidArgument, "a host names at most %d platform images", maxNamedPlatformImages)
+	}
+	if len(hello.GetRunningPlatformImages()) > maxRunningPlatformImages {
+		return status.Errorf(codes.InvalidArgument, "a host names at most %d running platform images", maxRunningPlatformImages)
+	}
 	reports := make([]execution.ContainerReport, 0, len(hello.GetContainers()))
 	for _, c := range hello.GetContainers() {
 		report, err := reportIn(c)
@@ -99,7 +176,19 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
-		grants: map[identity.WorkspaceID]time.Time{}, agent: agentStateIn(hello)}
+		grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
+		builds: buildWaits{wake: make(chan struct{}, 1), subs: map[string]func(){}},
+		platform: platformState{
+			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
+			running: slices.Compact(slices.Sorted(slices.Values(hello.GetRunningPlatformImages()))),
+			sent:    map[string]layerGrant{}, failed: map[string]platformFailure{},
+		}}
+	defer sess.builds.close()
+	defer func() {
+		if sess.replicaStop != nil {
+			sess.replicaStop()
+		}
+	}()
 	for _, r := range reports {
 		sess.observe(r)
 	}
@@ -160,6 +249,15 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			return fmt.Errorf("receive: %w", err)
 		case msg := <-inbox:
 			if err := sess.handle(ctx, msg); err != nil {
+				return err
+			}
+		case <-sess.builds.wake:
+			if err := sess.sync(ctx); err != nil {
+				return err
+			}
+		case <-sess.replicaWake:
+			sess.staleUnconfirmed()
+			if err := sess.sync(ctx); err != nil {
 				return err
 			}
 		case <-wake:
@@ -237,6 +335,9 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		return nil
 	case *hostproto.HostMessage_ReserveReady:
 		return sess.answerReserve(ctx, body.ReserveReady)
+	case *hostproto.HostMessage_StartupTrace:
+		sess.recordTrace(ctx, body.StartupTrace)
+		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
 		// outcome.
@@ -254,13 +355,43 @@ func (sess *session) sync(ctx context.Context) error {
 		return sess.server.grpcError(ctx, err)
 	}
 	derived := map[string]bool{}
+	waiting := map[string]bool{}
+	var started []string
+	cache := layerCache{}
+	traces := traceCache{}
+	// Builds, volume mounts and network holders run the platform images,
+	// so they go first.
+	if err := sess.syncPlatform(ctx, cache, waiting); err != nil {
+		return err
+	}
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
 		derived[id] = true
 		if sess.sent[id] {
 			continue
 		}
-		msg, err := sess.server.startMessage(ctx, id, start)
+		msg, err := sess.server.startMessage(ctx, sess.host, id, start, cache, traces)
+		// The start is sent once its image is published with converted
+		// layers, so a waiting start does not count as sent. A wait with no
+		// build to follow retries at the next touch, whose pull starts or
+		// joins the conversion.
+		var building *images.BuildWaitError
+		if errors.As(err, &building) {
+			delete(derived, id)
+			waiting[building.Build.String()] = true
+			continue
+		}
+		var converting *images.PlatformWaitError
+		if errors.As(err, &converting) {
+			delete(derived, id)
+			sess.server.convertPlatform(converting.Reference, converting.Architecture)
+			waiting[images.PlatformConverted] = true
+			continue
+		}
+		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {
+			delete(derived, id)
+			continue
+		}
 		if reason, permanent := permanentStartFailure(err); permanent {
 			// A container whose start can never be built fails like a failed
 			// preparation and stops being derived; the host's other
@@ -276,15 +407,30 @@ func (sess *session) sync(ctx context.Context) error {
 			// Transient: the session ends and the start is built again.
 			return sess.server.grpcError(ctx, err)
 		}
+		// The host may read the image's layers while the container is live.
+		starting, err := sess.server.execution.RecordImageReference(ctx, sess.host, start.Container, msg.GetStart().GetImage())
+		if err != nil {
+			return sess.server.grpcError(ctx, err)
+		}
+		if !starting {
+			continue
+		}
 		if usesWorkspaceBucket(msg.GetStart()) {
 			if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
 				return err
 			}
 		}
+		issued := time.Now()
 		if err := sess.send(msg); err != nil {
 			return err
 		}
 		sess.live[start.Container] = true
+		started = append(started, msg.GetStart().GetImage())
+		sess.layers[msg.GetStart().GetImage()] = sess.server.grantOf(cache, msg.GetStart().GetImage(), issued)
+	}
+	sess.builds.await(sess.server.listener, waiting)
+	if err := sess.server.images.RecordUses(ctx, started); err != nil {
+		return sess.server.grpcError(ctx, err)
 	}
 	if err := sess.syncBuilds(ctx, derived); err != nil {
 		return err
@@ -322,7 +468,14 @@ func (sess *session) sync(ctx context.Context) error {
 	if err := sess.syncReserve(ctx); err != nil {
 		return err
 	}
-	return sess.refreshGrants(ctx)
+	if err := sess.refreshGrants(ctx); err != nil {
+		return err
+	}
+	if err := sess.refreshLayers(ctx, cache); err != nil {
+		return err
+	}
+	sess.watchReplicas()
+	return nil
 }
 
 // observe tracks whether the host still runs a reported container.
@@ -381,7 +534,7 @@ func (sess *session) send(msg *hostproto.ServerMessage) error {
 	return nil
 }
 
-func (s *Server) startMessage(ctx context.Context, id string, start execution.StartCommand) (*hostproto.ServerMessage, error) {
+func (s *Server) startMessage(ctx context.Context, host compute.HostID, id string, start execution.StartCommand, cache layerCache, traces traceCache) (*hostproto.ServerMessage, error) {
 	url, expires, err := s.storage.SourceURL(ctx, start.Workspace, start.Source)
 	if err != nil {
 		return nil, err
@@ -407,10 +560,15 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if err != nil {
 		return nil, err
 	}
-	image, err := s.imagePull(ctx, start.Spec.Image)
+	image, err := s.imagePull(ctx, host, start.Workspace, start.Spec.Image)
 	if err != nil {
 		return nil, err
 	}
+	layers, err := s.layers(ctx, host, cache, image.Reference)
+	if err != nil {
+		return nil, err
+	}
+	trace := s.startTrace(ctx, traces, start.Workspace, image.Reference)
 	restore, err := s.restoreOut(ctx, start.Container)
 	if err != nil {
 		return nil, err
@@ -456,6 +614,9 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 		Volumes:        volumes,
 		Secrets:        secretValues,
 		Workspace:      start.WorkspaceName,
+		Layers:         layers,
+		Prefetch:       trace.prefetch,
+		RecordTrace:    trace.record,
 	}}}, nil
 }
 
@@ -597,6 +758,7 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 func permanentStartFailure(err error) (string, bool) {
 	var missing *secrets.NotFoundError
 	var unreadable *secrets.UnreadableError
+	var unconvertible *images.ConversionError
 	switch {
 	case err == nil:
 		return "", false
@@ -606,6 +768,8 @@ func permanentStartFailure(err error) (string, bool) {
 		return "secret " + unreadable.Name + " cannot be read", true
 	case errors.Is(err, errImageUnpinned):
 		return "the release's image has no pinned reference; deploy it again", true
+	case errors.As(err, &unconvertible):
+		return unconvertible.Error(), true
 	}
 	return "", false
 }

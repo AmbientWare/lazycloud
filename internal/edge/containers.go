@@ -237,7 +237,18 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 			load.sample(time.Now())
 		}
 		cold := !any
-		check := cold && load.dueFailureCheck(time.Now())
+		// A change that wakes the request before the next check is due,
+		// such as the container that failed to load stopping, is checked
+		// once it is due.
+		check := false
+		var recheck <-chan time.Time
+		if cold {
+			if wait := load.failureCheckIn(time.Now()); wait > 0 {
+				recheck = time.After(wait)
+			} else {
+				check = true
+			}
+		}
 		changed := ws.changed
 		// A container the edge keeps off for a moment frees nothing when the
 		// moment passes, so the wait ends then too.
@@ -259,6 +270,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 		select {
 		case <-changed:
 		case <-avoided:
+		case <-recheck:
 		case <-timer.C:
 			return nil, errNoCapacity
 		case <-ctx.Done():

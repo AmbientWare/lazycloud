@@ -1,6 +1,8 @@
 // Package acceptance runs cross-owner workflows against real PostgreSQL, the
-// local object store, Docker and the managed Python runtime: server owners,
-// scheduler loops and an agent in one test process.
+// local object store, a registry, Docker with lazycloud-snapshotter and the
+// managed Python runtime: server owners, scheduler loops and an agent in one
+// test process. The managed image and the agent's platform images convert
+// for real, so the first start of a test waits for those conversions.
 package acceptance
 
 import (
@@ -10,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +21,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
@@ -39,7 +45,9 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
@@ -50,10 +58,14 @@ import (
 const (
 	pythonVersion = "3.12"
 	testLabel     = "lazycloud.acceptance"
+	// managedTemplate is the platform's image template in these tests.
+	managedTemplate = "docker.io/library/python:{version}-slim"
+	registryImage   = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 )
 
-// supervisorBinary is built once per test binary.
-var supervisorBinary string //nolint:gochecknoglobals // built once in TestMain
+// supervisorBinary is built once per test binary, and registry is the
+// platform registry every test's server shares.
+var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
@@ -67,7 +79,13 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(fmt.Sprintf("build supervisor: %v", err))
 	}
+	address, stop, err := startRegistry()
+	if err != nil {
+		panic(err)
+	}
+	registry = address
 	code := m.Run()
+	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
@@ -112,13 +130,91 @@ func runtimeDir(t *testing.T) string {
 	return dir
 }
 
+// startRegistry runs the platform registry on a loopback port and returns
+// its address and how to remove it.
+func startRegistry() (string, func(), error) {
+	ctx := context.Background()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("start registry: %w", err)
+	}
+	id := strings.TrimSpace(string(out))
+	stop := func() { _ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run() }
+	port, err := exec.CommandContext(ctx, "docker", "port", id, "5000/tcp").Output()
+	if err != nil {
+		stop()
+		return "", nil, fmt.Errorf("registry port: %w", err)
+	}
+	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
+		if err == nil {
+			_ = resp.Body.Close()
+			return address, stop, nil
+		}
+		if time.Now().After(deadline) {
+			stop()
+			return "", nil, fmt.Errorf("registry did not start: %w", err)
+		}
+	}
+}
+
+// newImages is the images owner every test's server runs over pool.
+func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
+	return images.NewImages(pool, exec, vault, store, images.Config{
+		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: managedTemplate,
+	})
+}
+
+// convertImages converts the platform images and the managed image for
+// this host's architecture into pool, the template every test's database
+// is cloned from, so each test starts with them converted, as a server
+// that converted them at its start would.
+func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
+	started := time.Now()
+	key, err := secrets.NewFileKey(make([]byte, 32))
+	if err != nil {
+		return err
+	}
+	exec := execution.NewExecution(pool)
+	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, storagetest.Config()))
+	source, err := im.ManagedSource(ctx, pythonVersion)
+	if err != nil {
+		return err
+	}
+	references := append(platformimages.All(), source)
+	g, converting := errgroup.WithContext(ctx)
+	for _, reference := range references {
+		g.Go(func() error {
+			began := time.Now()
+			if err := im.ConvertPlatformImage(converting, reference, goruntime.GOARCH); err != nil {
+				return err
+			}
+			fmt.Printf("converted %s in %s\n", reference, time.Since(began).Round(time.Millisecond))
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	var converted int
+	if err := pool.QueryRow(ctx, "select count(*) from platform_images where mirror is not null").Scan(&converted); err != nil {
+		return err
+	}
+	if converted != len(references) {
+		return fmt.Errorf("%d of %d images converted", converted, len(references))
+	}
+	fmt.Printf("converted the platform and managed images once in %s\n", time.Since(started).Round(time.Millisecond))
+	return nil
+}
+
 func startPlatform(t *testing.T) *platform {
 	t.Helper()
 	runtime := runtimeDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	pool := dbtest.New(t)
+	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
 		execution: execution.NewExecution(pool),
@@ -137,7 +233,7 @@ func startPlatform(t *testing.T) *platform {
 	}
 
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
-		database.ChannelExecution, execution.ChannelContainerLog)
+		database.ChannelExecution, database.ChannelImageBuild, execution.ChannelContainerLog)
 	edgeListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +264,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, p.execution, vault, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"})
+	im := newImages(pool, p.execution, vault, p.storage)
 	p.secrets = vault
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
@@ -183,8 +279,8 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
-		ImageTemplate: "docker.io/library/python:{version}-slim", TouchInterval: 5 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI,
+		TouchInterval: 5 * time.Second,
+		Secrets:       vault, ContainerAPI: containerAPI,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
@@ -274,14 +370,39 @@ func startPlatform(t *testing.T) *platform {
 		err := agent.Run(ctx, agent.Config{
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, MountImage: agent.DefaultMountImage, ServerPlaintext: true,
+			GeeseFSPath: geesefs, ServerPlaintext: true, Snapshotter: layersource.Socket, BuildNetwork: "host",
 			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
 		})
 		if err != nil && ctx.Err() == nil {
 			t.Errorf("agent: %v", err)
 		}
 	})
+	p.awaitHost(im)
 	return p
+}
+
+// awaitHost waits until the host joined and the managed image pulls for
+// it, so tests' deadlines measure their own workflows.
+func (p *platform) awaitHost(im *images.Images) {
+	p.t.Helper()
+	ctx := p.t.Context()
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			p.t.Fatal("the host did not join with the managed image converted within a minute")
+		}
+		var host uuid.UUID
+		if err := p.pool.QueryRow(ctx, "select id from hosts where state = 'online' limit 1").Scan(&host); err != nil {
+			continue
+		}
+		_, err := im.ManagedPull(ctx, compute.HostID(host), pythonVersion)
+		switch {
+		case err == nil:
+			return
+		case errors.Is(err, images.ErrNotReady):
+		default:
+			p.t.Fatalf("pull the managed image: %v", err)
+		}
+	}
 }
 
 // removeContainers deletes the Docker containers the test's agent left.

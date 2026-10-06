@@ -1750,6 +1750,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/images/{image}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                image: components["parameters"]["ImagePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make an image the workspace resolved ready to deploy
+         * @description An image whose layers are not converted starts or joins the build that converts them; one already building returns that build. A build is absent when the image is ready.
+         */
+        post: operations["prepareImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/image-builds/{build}": {
         parameters: {
             query?: never;
@@ -9136,6 +9159,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Image"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    prepareImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                image: components["parameters"]["ImagePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image and the build that makes it ready, when one runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageResolution"];
                 };
             };
             default: components["responses"]["Error"];
