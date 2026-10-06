@@ -264,6 +264,14 @@ func (r *resolver) layers(ctx context.Context, ref string, auth *Auth, insecure 
 	return out, nil
 }
 
+// untagged is ref, a reference by digest, without its tag. The managed
+// base's tags name the release that pushed them, and an unchanged base
+// must keep the identity of every image built on it.
+func untagged(ref string) string {
+	repository, _, digest := splitReference(ref)
+	return repository + "@" + digest
+}
+
 // splitTag returns ref without @digest and the tag it names, if any.
 func splitTag(ref string) (string, string) {
 	repository, _, _ := strings.Cut(ref, "@")

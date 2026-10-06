@@ -145,8 +145,8 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 }
 
 // runBuilder runs the builder and returns what to report: an outcome unless
-// the build was stopped, never ran or went to pushed, and the container's
-// exit. pushed takes the outcome as soon as the image is in the registry,
+// the build was stopped, never ran or was handed to pushed, and the
+// container's exit. pushed takes the outcome as soon as the image is in the registry,
 // while the builder exports its cache, and returns at once; runBuilder calls
 // it at most once, before it returns.
 func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContainer, logs *buildLogs,
@@ -253,7 +253,7 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 		exit.Reason, exit.Message = hostproto.ExitReason_EXIT_REASON_OUT_OF_MEMORY, "the builder ran out of memory"
 		return nil, exit
 	case claimed():
-		// The image went to pushed; only the cache export can have failed.
+		// pushed has the image; only the cache export can have failed.
 		exit.Message = "build finished"
 		if state.ExitCode != 0 {
 			exit.Message = fmt.Sprintf("exporting the build cache failed with exit code %d", state.ExitCode)

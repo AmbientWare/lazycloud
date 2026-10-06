@@ -213,6 +213,42 @@ func TestEqualDefinitionsShareOneImageAuthorizedPerWorkspace(t *testing.T) {
 	}
 }
 
+// Every release tags the managed base again; an unchanged base keeps the
+// identity of the images built on it and the source containers run.
+func TestAReleaseRetaggingTheManagedBaseKeepsImageIdentities(t *testing.T) {
+	f := newFixture(t)
+	ws := f.workspace(t, "a")
+	img, err := random.Image(256, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids, sources []string
+	for _, release := range []string{"1.0.0", "1.0.1"} {
+		if err := remote.Write(mustRef(t, f.registry+"/release/python:3.12-"+release), img, remote.WithContext(t.Context())); err != nil {
+			t.Fatal(err)
+		}
+		im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{
+			Registry: f.registry, Repository: "lazycloud", Insecure: true,
+			ManagedBase: f.registry + "/release/python:{version}-" + release,
+		})
+		resolved, err := im.Resolve(t.Context(), ws, numpy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, err := im.ManagedSource(t.Context(), "3.12")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids, sources = append(ids, resolved.Image.ID), append(sources, source)
+	}
+	if ids[0] != ids[1] {
+		t.Fatalf("the release tag changed the image: %v", ids)
+	}
+	if sources[0] != sources[1] || strings.Contains(sources[0], ":3.12-") {
+		t.Fatalf("the managed sources name the release: %v", sources)
+	}
+}
+
 func TestConcurrentBuildRequestsJoinOneBuild(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
