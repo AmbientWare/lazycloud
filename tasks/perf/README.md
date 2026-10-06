@@ -107,3 +107,25 @@ batch-wait, into main):
 
 The final PR to main also gets a full review, dead and repeated code
 removal, condensed prose and an unslop pass.
+
+## Ship runbook
+
+Each step marked (yes) waits for the user's go-ahead.
+
+1. (yes) `terraform apply` of `deploy/terraform/platform-deployment` with
+   `AWS_PROFILE=default` (STS identity checked first): the server's
+   `CopyPlatformImages` statement. Without it every platform conversion fails.
+2. Bake cpu and gpu node images from the new `node-setup.sh`, update the
+   fleet image pins, share them with connected accounts again.
+3. (yes) Merge the PR to main and Ship.
+4. Replace every fleet host so each runs the new node image, agent and
+   snapshotter. Agent self-updates never replace a running snapshotter, so
+   any later change to the snapshotter or `LayerSources` needs another
+   replacement.
+5. Expect the first start of every deployed app to trigger a mirror build,
+   which waits for the server to convert the builder first.
+6. Acceptance in prod (lazy-images/acceptance.md).
+
+Known costs to watch: hosts outside the platform bucket's region read
+frames across regions; server pods pull the platform images from Docker Hub
+under per-IP anonymous limits.
