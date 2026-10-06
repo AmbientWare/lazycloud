@@ -55,3 +55,6 @@ Each binary serves Prometheus metrics at `/metrics` on `LAZYCLOUD_METRICS_ADDR`
 when it is set, and exports traces over OTLP/gRPC to `LAZYCLOUD_OTLP_ENDPOINT`
 (`LAZYCLOUD_OTLP_INSECURE=true` for a local collector). Both are off by
 default. `LAZYCLOUD_LOG_FORMAT` picks `text` or `json` logs.
+
+run.sh sends every process's traces, the VM's agent and snapshotter included,
+to the `jaeger` service; http://127.0.0.1:16686 shows one trace per container start.

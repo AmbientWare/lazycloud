@@ -108,6 +108,17 @@ jobs:
   # workloads start through the snapshotter. A skipped test fails the job.
   acceptance:
     runs-on: ubuntu-26.04
+    # The tests and the snapshotter trace into Jaeger; the job keeps the
+    # trace of the slowest container start.
+    services:
+      jaeger:
+        image: jaegertracing/jaeger:2.21.0@sha256:3d0ac795ff98aa04d1be04311d2dac6c25b4bfc8322dc02e53bc5b170c5018c3
+        ports:
+          - 16686:16686
+          - 4317:4317
+    env:
+      LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:4317
+      LAZYCLOUD_OTLP_INSECURE: "true"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -128,6 +139,14 @@ jobs:
           sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
           sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
           docker info --format 'storage driver {{.Driver}}'
+          sudo mkdir -p /etc/systemd/system/lazycloud-snapshotter.service.d
+          printf '[Service]\nEnvironment=LAZYCLOUD_OTLP_ENDPOINT=%s LAZYCLOUD_OTLP_INSECURE=true\n' "$LAZYCLOUD_OTLP_ENDPOINT" |
+            sudo tee /etc/systemd/system/lazycloud-snapshotter.service.d/traces.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart lazycloud-snapshotter
+          sudo chmod 0755 /run/lazycloud-snapshotter
+          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock
+          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock
       # Started after the snapshotter install, which restarts Docker.
       - name: PostgreSQL and the object store
         run: |
@@ -146,3 +165,16 @@ jobs:
             echo "acceptance tests skipped" >&2
             exit 1
           fi
+      - name: Export the slowest container start's trace
+        if: always()
+        run: |
+          sleep 10
+          curl -fsS 'http://127.0.0.1:16686/api/traces?service=lazycloud-acceptance&operation=agent.start&limit=200&lookback=2h' |
+            python3 -c 'import json,sys; t=json.load(sys.stdin)["data"]; s=[(sp["duration"],x["traceID"]) for x in t for sp in x["spans"] if sp["operationName"]=="agent.start"]; print(max(s)[1])' >"$RUNNER_TEMP/trace-id"
+          curl -fsS "http://127.0.0.1:16686/api/traces/$(cat "$RUNNER_TEMP/trace-id")" >"$RUNNER_TEMP/cold-start-trace.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cold-start-trace
+          path: ${{ runner.temp }}/cold-start-trace.json
+          if-no-files-found: ignore

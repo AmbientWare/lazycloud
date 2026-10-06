@@ -36,7 +36,7 @@ run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes"
 # existing Secret.
 # shellcheck disable=SC2086
 run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes" \
-  --set telemetry.enabled=true --set telemetry.endpoint=https://otlp.example.com \
+  --set telemetry.enabled=true \
   --set server.tcpService.enabled=false --set server.hostService.type=ClusterIP \
   --set externalSecrets.enabled=false --namespace lazycloud-prod >"$out/variant.yaml"
 
@@ -74,7 +74,7 @@ for binary in server scheduler; do
   for template in $templates; do
     # shellcheck disable=SC2086
     run_helm template lazycloud /charts/lazycloud $prod --kube-version "$kubernetes" \
-      --set telemetry.enabled=true --set telemetry.endpoint=https://otlp.example.com \
+      --set telemetry.enabled=true \
       --show-only "$template" >"$out/env.yaml"
     grep -oE '^ *- name: LAZYCLOUD_[A-Z0-9_]+' "$out/env.yaml" | awk '{print $3}' | sort -u >"$out/names"
     while read -r name; do

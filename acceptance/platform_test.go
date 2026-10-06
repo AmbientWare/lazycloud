@@ -53,6 +53,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -66,6 +67,13 @@ const (
 // supervisorBinary is built once per test binary, and registry is the
 // platform registry every test's server shares.
 var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in TestMain.
+
+// tel traces every test's platform to LAZYCLOUD_OTLP_ENDPOINT when it is
+// set, and httpMetrics are its API metrics.
+var (
+	tel         *telemetry.Telemetry   //nolint:gochecknoglobals // Set once in TestMain.
+	httpMetrics *telemetry.HTTPMetrics //nolint:gochecknoglobals // Set once in TestMain.
+)
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
@@ -84,7 +92,16 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	registry = address
+	cfg, err := telemetry.ConfigFromEnv("acceptance", "test")
+	if err != nil {
+		panic(err)
+	}
+	if tel, err = telemetry.New(context.Background(), cfg); err != nil {
+		panic(err)
+	}
+	httpMetrics = tel.NewHTTPMetrics()
 	code := m.Run()
+	_ = tel.Shutdown(context.Background())
 	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
@@ -280,22 +297,22 @@ func startPlatform(t *testing.T) *platform {
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second,
-		Secrets:       vault, ContainerAPI: containerAPI,
+		Secrets:       vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
 	}, logger)
-	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
+	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	hostproto.RegisterHostDataServer(grpcServer, p.edge.DataServer(hostsession.HostFrom))
 	grpcListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	edgeServer := &http.Server{Handler: p.edge, ReadHeaderTimeout: 10 * time.Second}
+	edgeServer := &http.Server{Handler: tel.EdgeHandler(p.edge), ReadHeaderTimeout: 10 * time.Second}
 	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.api = "http://" + apiListener.Addr().String()
-	apiServer := &http.Server{Handler: apiHandler, ReadHeaderTimeout: 10 * time.Second}
+	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler, httpMetrics), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
@@ -310,15 +327,17 @@ func startPlatform(t *testing.T) *platform {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
-			if _, err := p.execution.Plan(ctx, logger); err != nil && ctx.Err() == nil {
+			passCtx, span := tel.Tracer().Start(ctx, "scheduler.passes")
+			if _, err := p.execution.Plan(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan: %v", err)
 			}
-			if _, err := p.execution.PlanServing(ctx, logger); err != nil && ctx.Err() == nil {
+			if _, err := p.execution.PlanServing(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan serving: %v", err)
 			}
-			if _, err := sched.Place(ctx); err != nil && ctx.Err() == nil {
+			if _, err := sched.Place(passCtx); err != nil && ctx.Err() == nil {
 				t.Logf("place: %v", err)
 			}
+			span.End()
 			select {
 			case <-ctx.Done():
 				return
@@ -371,7 +390,7 @@ func startPlatform(t *testing.T) *platform {
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
 			GeeseFSPath: geesefs, ServerPlaintext: true, Snapshotter: layersource.Socket, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
+			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger, Telemetry: tel,
 		})
 		if err != nil && ctx.Err() == nil {
 			t.Errorf("agent: %v", err)

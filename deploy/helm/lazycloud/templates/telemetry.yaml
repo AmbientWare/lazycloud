@@ -1,8 +1,9 @@
 {{- if .Values.telemetry.enabled }}
 {{/*
-Receives OTLP/gRPC traces from the server and scheduler and forwards them
-to the backend with its basic-auth credential, which the processes cannot
-send themselves. Metrics stay on each process's /metrics for scraping.
+Receives OTLP/gRPC traces from the server and scheduler and sends them to
+AWS X-Ray in the deployment's region, as its service account's EKS Pod
+Identity, which may only put trace segments and telemetry records.
+Metrics stay on each process's /metrics for scraping.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -26,22 +27,17 @@ data:
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
-      basicauth/backend:
-        client_auth:
-          username: ${env:BACKEND_USERNAME}
-          password: ${env:BACKEND_PASSWORD}
     exporters:
-      otlphttp:
-        endpoint: {{ required "telemetry.endpoint is required" .Values.telemetry.endpoint | quote }}
-        auth:
-          authenticator: basicauth/backend
+      awsxray:
+        region: {{ required "awsRegion is required" .Values.awsRegion | quote }}
+        indexed_attributes: [lazycloud.container_id, lazycloud.task_id, lazycloud.host_id]
     service:
-      extensions: [health_check, basicauth/backend]
+      extensions: [health_check]
       pipelines:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, batch]
-          exporters: [otlphttp]
+          exporters: [awsxray]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -61,6 +57,7 @@ spec:
       annotations:
         checksum/config: {{ .Values.telemetry | toJson | sha256sum }}
     spec:
+      serviceAccountName: {{ .Values.serviceAccounts.otelCollector }}
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -72,13 +69,6 @@ spec:
         - name: otel-collector
           image: {{ .Values.telemetry.image }}
           args: ["--config=/etc/otelcol/config.yaml"]
-          env:
-            - name: BACKEND_USERNAME
-              valueFrom:
-                secretKeyRef: { name: {{ .Values.secrets.name }}, key: {{ .Values.telemetry.usernameKey }} }
-            - name: BACKEND_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: {{ .Values.secrets.name }}, key: {{ .Values.telemetry.passwordKey }} }
           ports:
             - name: otlp
               containerPort: 4317

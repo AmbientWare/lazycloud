@@ -25,6 +25,33 @@ resource "aws_eks_pod_identity_association" "control_plane" {
   disable_session_tags = true
 }
 
+# The trace collector's identity: it puts trace segments into X-Ray and
+# nothing else.
+resource "aws_iam_role" "traces" {
+  name = "${var.deployment}-traces"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "pods.eks.amazonaws.com" }, Action = ["sts:AssumeRole", "sts:TagSession"] }]
+  })
+}
+
+resource "aws_iam_role_policy" "traces" {
+  name = "put-traces"
+  role = aws_iam_role.traces.id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"], Resource = "*" }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "traces" {
+  cluster_name         = local.core.cluster_name
+  namespace            = var.deployment
+  service_account      = "lazycloud-otel-collector"
+  role_arn             = aws_iam_role.traces.arn
+  disable_session_tags = true
+}
+
 locals {
   objects_arn  = aws_s3_bucket.storage["objects"].arn
   workload_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/*"

@@ -31,6 +31,8 @@ export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
 export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 # Agent release archives `lazycloud machine join` installs from.
 export LAZYCLOUD_AGENT_DIST_DIR="$PWD/$state/agent-dist"
+# Every process, the VM's agent and snapshotter too, traces into Jaeger.
+export LAZYCLOUD_OTLP_ENDPOINT=127.0.0.1:24317 LAZYCLOUD_OTLP_INSECURE=true
 
 # stop_services leaves the host VM running for the next start.
 stop_services() {
@@ -52,7 +54,7 @@ start() {
   if [ ! -f "$LAZYCLOUD_SECRETS_KEY_FILE" ]; then
     (umask 077 && head -c 32 /dev/urandom >"$LAZYCLOUD_SECRETS_KEY_FILE")
   fi
-  docker compose up -d --wait postgres object-store registry >/dev/null
+  docker compose up -d --wait postgres object-store registry jaeger >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
   go build -o bin/server ./cmd/server
   go build -o bin/scheduler ./cmd/scheduler
@@ -84,7 +86,7 @@ start() {
   bin/scheduler >"$state/logs/scheduler.log" 2>&1 &
   echo $! >"$state/scheduler.pid"
   LAZYCLOUD_AGENT_ARCHIVE="$LAZYCLOUD_AGENT_DIST_DIR/$release/lazycloud-agent-linux-amd64.tar.gz" deploy/local/host-vm.sh up
-  echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082"
+  echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082; traces at http://127.0.0.1:16686"
   echo "export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8080 LAZYCLOUD_WORKSPACE=dev LAZYCLOUD_TOKEN=$(cat "$state/token")"
 }
 
