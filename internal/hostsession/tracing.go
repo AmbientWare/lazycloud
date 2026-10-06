@@ -55,21 +55,42 @@ func (sess *session) waiting(ctx context.Context, container execution.ContainerI
 	}
 }
 
+// startEnd is how a start left the session.
+type startEnd int
+
+const (
+	// startDropped: its container no longer starts on the host.
+	startDropped startEnd = iota
+	// startDone: the start was sent, or failed for good.
+	startDone
+	// startPaused: the session ended while the start waited.
+	startPaused
+)
+
 // endStart ends container's start span; a non-empty failure marks it
-// failed. With record set, a start that waited for its image stores the
-// wait as its conversion stage, from the container's assignment until now.
-// The stage keeps its latest end, so a wait that spans sessions is stored
-// whole when the last one waits too, and up to the end of the one before
-// when the image is ready by the time the last reads it.
-func (sess *session) endStart(ctx context.Context, container execution.ContainerID, failure string, record bool) {
+// failed. A start that waited for its image stores the wait as its
+// conversion stage, from the container's assignment until now, unless it
+// was dropped; the stage keeps its latest end. A start assigned before this
+// session opened may have waited in an earlier one, so once done it moves
+// the end of a stage stored then, and the stage runs until the start was
+// sent or failed.
+func (sess *session) endStart(ctx context.Context, container execution.ContainerID, failure string, end startEnd) {
 	p := sess.starts[container]
 	if p == nil {
 		return
 	}
 	delete(sess.starts, container)
-	if obs := sess.server.config.Observability; record && p.wait != nil && p.assigned != nil && obs != nil {
-		stage := observability.StartupStage{Kind: observability.StageConversion, StartedAt: *p.assigned, FinishedAt: time.Now()}
-		if err := obs.RecordStartup(ctx, sess.host, container, []observability.StartupStage{stage}); err != nil {
+	if obs := sess.server.config.Observability; obs != nil && p.assigned != nil && end != startDropped {
+		var err error
+		now := time.Now()
+		switch {
+		case p.wait != nil:
+			stage := observability.StartupStage{Kind: observability.StageConversion, StartedAt: *p.assigned, FinishedAt: now}
+			err = obs.RecordStartup(ctx, sess.host, container, []observability.StartupStage{stage})
+		case end == startDone && p.assigned.Before(sess.opened):
+			err = obs.ExtendConversion(ctx, sess.host, container, now)
+		}
+		if err != nil {
 			sess.server.logger.WarnContext(ctx, "recording the conversion stage failed", "container_id", container.String(), "error", err)
 		}
 	}
@@ -83,12 +104,15 @@ func (sess *session) endStart(ctx context.Context, container execution.Container
 }
 
 // endStarts ends the starts of containers no longer derived. With derived
-// nil, as when the session ends, it ends all of them and records their
-// waits so far.
+// nil, as when the session ends, it ends all of them, paused.
 func (sess *session) endStarts(ctx context.Context, derived map[execution.ContainerID]bool) {
+	end := startDropped
+	if derived == nil {
+		end = startPaused
+	}
 	for container := range sess.starts {
 		if !derived[container] {
-			sess.endStart(ctx, container, "", derived == nil)
+			sess.endStart(ctx, container, "", end)
 		}
 	}
 }

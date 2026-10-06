@@ -80,6 +80,26 @@ func (q *Queries) ContainerLifecycles(ctx context.Context, arg ContainerLifecycl
 	return items, nil
 }
 
+const extendConversionStage = `-- name: ExtendConversionStage :exec
+update container_startup_stages s set finished_at = $1
+from containers c
+where s.container_id = $2 and s.stage = 'conversion' and c.id = s.container_id and c.host_id = $3
+  and s.finished_at < $1
+`
+
+type ExtendConversionStageParams struct {
+	FinishedAt  time.Time
+	ContainerID uuid.UUID
+	HostID      *uuid.UUID
+}
+
+// Moves the end of a stored conversion stage of a container assigned to the
+// host; a container with none keeps none.
+func (q *Queries) ExtendConversionStage(ctx context.Context, arg ExtendConversionStageParams) error {
+	_, err := q.db.Exec(ctx, extendConversionStage, arg.FinishedAt, arg.ContainerID, arg.HostID)
+	return err
+}
+
 const insertStartupStages = `-- name: InsertStartupStages :exec
 insert into container_startup_stages (container_id, stage, started_at, finished_at, cached)
 select c.id, s.stage, s.started_at, s.finished_at, s.cached

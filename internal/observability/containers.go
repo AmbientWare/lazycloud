@@ -266,6 +266,17 @@ func (o *Observability) RecordStartup(ctx context.Context, host compute.HostID, 
 	return nil
 }
 
+// ExtendConversion moves the end of container's stored conversion stage to
+// ended, as when a start that waited in an earlier session is sent.
+func (o *Observability) ExtendConversion(ctx context.Context, host compute.HostID, container execution.ContainerID, ended time.Time) error {
+	hostID := uuid.UUID(host)
+	err := o.queries.ExtendConversionStage(ctx, ExtendConversionStageParams{ContainerID: uuid.UUID(container), HostID: &hostID, FinishedAt: ended})
+	if err != nil {
+		return fmt.Errorf("extend the conversion stage: %w", err)
+	}
+	return nil
+}
+
 // maxLifecycles bounds one lifecycle batch.
 const maxLifecycles = 200
 

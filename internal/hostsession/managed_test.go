@@ -9,7 +9,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -21,10 +23,7 @@ import (
 func TestStartWaitsForTheManagedImageConversion(t *testing.T) {
 	h := start(t)
 	host, ctx := h.enroll()
-	recordManagedSource(t, h.pool, "3.11")
-	h.exec(`insert into platform_images (reference, architecture, lease_token, leased_until)
-		values ($1, 'amd64', gen_random_uuid(), now() + interval '1 hour')`, managedSource("3.11"))
-	ws, container := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.11"}}`)
+	ws, container := h.waitingManagedStart(host)
 	sent := func(stream hostStream) <-chan string {
 		got := make(chan string, 1)
 		go func() {
@@ -121,4 +120,56 @@ func (h *harness) conversionStage(ws identity.WorkspaceID, container execution.C
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// waitingManagedStart is a starting container on host whose managed image
+// another server is converting.
+func (h *harness) waitingManagedStart(host compute.HostID) (identity.WorkspaceID, execution.ContainerID) {
+	h.t.Helper()
+	recordManagedSource(h.t, h.pool, "3.11")
+	h.exec(`insert into platform_images (reference, architecture, lease_token, leased_until)
+		values ($1, 'amd64', gen_random_uuid(), now() + interval '1 hour')`, managedSource("3.11"))
+	return h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.11"}}`)
+}
+
+// A start that waited in a session that ended, sent by the next one with
+// no wait, has a conversion stage that ends at the send, not at the
+// disconnect.
+func TestAWaitEndsWhereItsStartIsSent(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.waitingManagedStart(host)
+	first, endFirst := context.WithCancel(ctx)
+	defer endFirst()
+	open(t, first, h.client)
+	time.Sleep(500 * time.Millisecond)
+	endFirst()
+	h.conversionStage(ws, container, func(apitypes.LifecycleStage) bool { return true })
+	time.Sleep(500 * time.Millisecond)
+	convertManagedImage(t, h.pool, "3.11")
+	reopened := time.Now()
+	in := commands(t, open(t, ctx, h.client))
+	next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart().GetContainerId() == container.String() })
+	h.conversionStage(ws, container, func(s apitypes.LifecycleStage) bool { return s.FinishedAt.After(reopened) })
+}
+
+// A start whose wait ended but whose image reference cannot be recorded
+// ends the session and keeps its wait as its conversion stage.
+func TestAWaitSurvivesAFailedSend(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.waitingManagedStart(host)
+	stream := open(t, ctx, h.client)
+	time.Sleep(500 * time.Millisecond)
+	h.exec(`create function refuse_image_reference() returns trigger language plpgsql as $$
+begin raise exception 'refused'; end $$`)
+	h.exec(`create trigger refuse_image_reference before update of image_reference on containers
+		for each row execute function refuse_image_reference()`)
+	convertManagedImage(t, h.pool, "3.11")
+	for {
+		if _, err := stream.Recv(); err != nil {
+			break
+		}
+	}
+	h.conversionStage(ws, container, func(s apitypes.LifecycleStage) bool { return *s.DurationMs >= 400 })
 }

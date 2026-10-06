@@ -49,10 +49,13 @@ type issuedLayers struct {
 // signLayers signs reads of every layer of each of references for the
 // host in one call, skipping those the sync signed already. A reference
 // left out has no converted layers. Layers its region's copy of the layer
-// bucket is not confirmed to hold read from the layer bucket; the session
-// then watches that region's confirmations before a check of the copy
-// starts, so none the check records is missed. One another server records
-// between the read and the watch reaches the host at the grant's renewal.
+// bucket is not confirmed to hold read from the layer bucket, and a check
+// of that copy starts.
+//
+// Confirmations are watched from before the read, so none committed after
+// it is missed: in the host's region once a read named it, and until then
+// on every key, narrowed after the read. A wake-up the wider watch held
+// makes the grants just issued due.
 func (sess *session) signLayers(ctx context.Context, cache *syncCache, references []string) {
 	references = slices.DeleteFunc(slices.Clone(references), func(r string) bool { _, ok := cache.layers[r]; return ok })
 	if len(references) == 0 {
@@ -60,8 +63,14 @@ func (sess *session) signLayers(ctx context.Context, cache *syncCache, reference
 	}
 	slices.Sort(references)
 	references = slices.Compact(references)
+	watched := "" // every key
+	if sess.region != "" {
+		watched = images.ReplicasConfirmed(sess.region)
+	}
+	sess.replicas.set(sess.server.listener, watched)
 	issued, lifetime := time.Now(), sess.server.config.LayerLifetime
 	reads, err := sess.server.images.LayerReadURLsOf(ctx, references, sess.host, lifetime)
+	var unconfirmed []string
 	for _, reference := range references {
 		r, ok := reads[reference]
 		if err != nil || !ok {
@@ -78,10 +87,24 @@ func (sess *session) signLayers(ctx context.Context, cache *syncCache, reference
 		}
 		l.grant = layerGrant{renewAt: issued.Add(first.Sub(issued) / 3), unconfirmed: r.Unconfirmed}
 		if r.Unconfirmed != "" {
-			sess.replicas.set(sess.server.listener, images.ReplicasConfirmed(r.Unconfirmed))
-			sess.server.confirmReplicas(reference, r.Unconfirmed, telemetry.TraceParentOf(ctx)) //nolint:contextcheck // Checks run under the server's lifetime.
+			sess.region = r.Unconfirmed
+			unconfirmed = append(unconfirmed, reference)
 		}
 		cache.layers[reference] = l
+	}
+	var woken bool
+	if sess.region != "" {
+		woken = sess.replicas.set(sess.server.listener, images.ReplicasConfirmed(sess.region))
+	} else {
+		sess.replicas.set(sess.server.listener)
+	}
+	for _, reference := range unconfirmed {
+		if woken {
+			l := cache.layers[reference]
+			l.grant.renewAt = time.Time{}
+			cache.layers[reference] = l
+		}
+		sess.server.confirmReplicas(reference, sess.region, telemetry.TraceParentOf(ctx)) //nolint:contextcheck // Checks run under the server's lifetime.
 	}
 }
 

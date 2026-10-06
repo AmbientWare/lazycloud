@@ -14,6 +14,14 @@ join containers c on c.id = @container_id and c.host_id = @host_id
 on conflict (container_id, stage) do update set finished_at = excluded.finished_at
 where container_startup_stages.stage = 'conversion' and excluded.finished_at > container_startup_stages.finished_at;
 
+-- name: ExtendConversionStage :exec
+-- Moves the end of a stored conversion stage of a container assigned to the
+-- host; a container with none keeps none.
+update container_startup_stages s set finished_at = @finished_at
+from containers c
+where s.container_id = @container_id and s.stage = 'conversion' and c.id = s.container_id and c.host_id = @host_id
+  and s.finished_at < @finished_at;
+
 -- name: ContainerLifecycles :many
 select c.id, a.name as app_name, w.name as function_name, c.state, c.stop_reason, c.exit_message,
        h.name as host_name, c.created_at, c.assigned_at, c.ready_at, c.drain_started_at, c.stopped_at,

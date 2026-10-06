@@ -39,6 +39,8 @@ type session struct {
 	server *Server
 	stream grpc.BidiStreamingServer[hostproto.HostMessage, hostproto.ServerMessage]
 	host   compute.HostID
+	// opened is when the session opened.
+	opened time.Time
 	// sent holds the ids of derived commands this session already sent, so
 	// each is sent once per session. It keeps only ids still derived.
 	sent map[string]bool
@@ -65,10 +67,13 @@ type session struct {
 	// platform is what the session sent for the platform images the Hello
 	// named.
 	platform platformState
-	// replicas wakes the session when layers are confirmed in its host
-	// region's copy of the layer bucket once a grant waits for one, until
-	// a confirmation outdates no grant.
+	// replicas wakes the session when layers are confirmed in region, its
+	// host's region with a copy of the layer bucket, once a grant names
+	// the region; a confirmation that outdates no grant costs no sync.
 	replicas watch
+	region   string
+	// again wakes the session for a wake-up a replaced build watch held.
+	again chan struct{}
 	// starts holds the open spans of starts not sent yet.
 	starts map[execution.ContainerID]*pendingStart
 }
@@ -83,19 +88,26 @@ type watch struct {
 }
 
 // set watches keys, sorted, and nothing when there are none. The new
-// subscription starts before the old one ends, so a key kept misses no
-// notification.
-func (w *watch) set(listener *database.Listener, keys ...string) {
+// subscription starts before the old one ends, and set reports whether the
+// old one held a wake-up, which the caller acts on as if the new one woke.
+func (w *watch) set(listener *database.Listener, keys ...string) bool {
 	if slices.Equal(keys, w.keys) {
-		return
+		return false
 	}
-	old := w.cancel
+	cancel, wake := w.cancel, w.wake
 	w.keys, w.wake, w.cancel = keys, nil, nil
 	if len(keys) > 0 {
 		w.wake, w.cancel = listener.Subscribe(database.ChannelImageBuild, keys...)
 	}
-	if old != nil {
-		old()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	select {
+	case <-wake:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -147,7 +159,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
-	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
+	sess := &session{server: s, stream: stream, host: host, opened: time.Now(), again: make(chan struct{}, 1), sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
 		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
 		platform: platformState{
 			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
@@ -237,9 +249,9 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			}
 			continue
 		case <-sess.builds.wake:
+		case <-sess.again:
 		case <-sess.replicas.wake:
 			if !sess.outdateUnconfirmed() {
-				sess.replicas.set(s.listener)
 				continue
 			}
 		case <-wake:
@@ -375,7 +387,12 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 	}
 	sess.endStarts(ctx, starting)
-	sess.builds.set(sess.server.listener, slices.Sorted(maps.Keys(cache.waits))...)
+	if sess.builds.set(sess.server.listener, slices.Sorted(maps.Keys(cache.waits))...) {
+		select {
+		case sess.again <- struct{}{}:
+		default:
+		}
+	}
 	if err := sess.server.images.RecordUses(ctx, cache.started); err != nil {
 		return sess.server.grpcError(ctx, err)
 	}
@@ -454,7 +471,7 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 		// The container fails like a failed preparation and stops being
 		// derived; the host's other containers are unaffected.
 		sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(), "container", start.Container.String(), "error", err)
-		sess.endStart(ctx, start.Container, reason, true)
+		sess.endStart(ctx, start.Container, reason, startDone)
 		return false, sess.server.grpcError(ctx, sess.server.execution.StartFailed(ctx, sess.host, start.Container, reason))
 	}
 	if err != nil {
@@ -463,9 +480,12 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 	image := msg.GetStart().GetImage()
 	// The host may read the image's layers while the container is live.
 	recorded, err := sess.server.execution.RecordImageReference(ctx, sess.host, start.Container, image)
-	if err != nil || !recorded {
-		sess.endStart(ctx, start.Container, "", false)
+	if err != nil {
 		return false, sess.server.grpcError(ctx, err)
+	}
+	if !recorded {
+		sess.endStart(ctx, start.Container, "", startDropped)
+		return false, nil
 	}
 	if usesWorkspaceBucket(msg.GetStart()) {
 		if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
@@ -476,7 +496,7 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 	if err := sess.send(msg); err != nil {
 		return false, err
 	}
-	sess.endStart(ctx, start.Container, "", true)
+	sess.endStart(ctx, start.Container, "", startDone)
 	sess.live[start.Container] = true
 	sess.layers[image] = grant
 	cache.started = append(cache.started, image)
