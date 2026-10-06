@@ -48,8 +48,11 @@ type ClaimedTask struct {
 
 // traceClaim records the task's wait in the queue, from when it became due
 // to its claim, in its trace, linked to the trace of the container that
-// claimed it.
+// claimed it. A task without a trace, such as a cron task, records none.
 func traceClaim(ctx context.Context, task ClaimedTask, due time.Time, container ContainerID, containerTrace string) {
+	if !telemetry.SpanContextOf(task.TraceParent).IsValid() {
+		return
+	}
 	_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), task.TraceParent, "execution.queued", trace.WithTimestamp(due),
 		telemetry.LinkTo(containerTrace), trace.WithAttributes(telemetry.Task(task.Task.String()),
 			attribute.String("lazycloud."+telemetry.KeyAttempt, task.Attempt.String()), telemetry.Container(container.String()),
@@ -173,10 +176,8 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
 				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
 			}
-			if row.Traceparent != nil {
-				claimed[n].TraceParent = *row.Traceparent
-				traceClaim(ctx, claimed[n], row.AvailableAt, container, deref(c.Traceparent))
-			}
+			claimed[n].TraceParent = deref(row.Traceparent)
+			traceClaim(ctx, claimed[n], row.AvailableAt, container, deref(c.Traceparent))
 			ids[n] = row.TaskID
 			index[row.TaskID] = n
 		}
