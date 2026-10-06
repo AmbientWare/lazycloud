@@ -1,10 +1,10 @@
 #!/bin/sh
 # Lints and renders the Helm chart, validates the manifests and Argo CD
 # Applications against their schemas and the collector's configuration with
-# the collector, checks that every setting the chart
-# gives a process is one its binary reads, checks the Terraform roots, the
-# workflows and the shell scripts, using pinned tool images. Nothing here
-# reaches AWS, GitHub or a cluster.
+# the collector, checks that every setting the chart gives a process is one
+# its binary reads, checks the Terraform roots, the workflows and the shell
+# scripts, using pinned tool images. Nothing here reaches AWS, GitHub or a
+# cluster.
 set -eu
 cd "$(dirname "$0")/.."
 
