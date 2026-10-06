@@ -1,10 +1,10 @@
 # Run from the repository root:
 #   docker buildx bake -f deploy/images/docker-bake.hcl
 # Ship sets REGISTRY, VERSION and SOURCE_DATE_EPOCH (the commit time) and
-# pushes the server, scheduler and web images; locally the images load into
-# Docker as lazycloud/<name>:dev. The agent image is the release bundle for
-# hosts that run the agent in a container; the server image carries the
-# same bundle as an archive.
+# pushes the server, scheduler, web and Python base images; locally the
+# images load into Docker as lazycloud/<name>:dev. The agent image is the
+# release bundle for hosts that run the agent in a container; the server
+# image carries the same bundle as an archive.
 
 variable "REGISTRY" {
   default = "lazycloud"
@@ -25,7 +25,7 @@ group "default" {
 
 # What Ship pushes.
 group "release" {
-  targets = ["server", "scheduler", "web"]
+  targets = ["server", "scheduler", "web", "python"]
 }
 
 target "_common" {
@@ -64,4 +64,32 @@ target "agent" {
   inherits = ["_common"]
   target   = "agent"
   tags     = ["${REGISTRY}/agent:${VERSION}"]
+}
+
+# The Python base of each version the platform serves, tagged
+# <minor>-<VERSION>; the server's image template names them. Their
+# timestamps are fixed rather than the commit's, so a release that leaves
+# them alone builds the same digests and image identities stay.
+target "python" {
+  name = "python-${replace(item.minor, ".", "")}"
+  matrix = {
+    item = [
+      { minor = "3.10", release = "3.10.20" },
+      { minor = "3.11", release = "3.11.15" },
+      { minor = "3.12", release = "3.12.13" },
+      { minor = "3.13", release = "3.13.14" },
+      { minor = "3.14", release = "3.14.6" },
+    ]
+  }
+  context   = "deploy/images/python"
+  platforms = ["linux/amd64"]
+  args = {
+    PYTHON_VERSION    = item.release
+    SOURCE_DATE_EPOCH = "0"
+  }
+  labels = {
+    "org.opencontainers.image.source" = "https://github.com/AmbientWare/lazycloud"
+  }
+  output = ["type=image,rewrite-timestamp=true"]
+  tags   = ["${REGISTRY}/python:${item.minor}-${VERSION}"]
 }
