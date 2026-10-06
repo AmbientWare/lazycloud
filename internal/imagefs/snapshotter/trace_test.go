@@ -95,28 +95,28 @@ func digestOf(c byte) imagefs.Digest {
 
 // Traces are bounded in number and size, and ones nobody ends expire.
 func TestTracesAreBounded(t *testing.T) {
+	c := newTestCache(t, http.DefaultTransport, 64<<20)
 	l := &layer{digest: digestOf('0'), traced: make([]atomic.Uint32, maxTraceReads+10)}
 	layers := []imagefs.Digest{l.digest}
-	tr := &tracer{traces: map[string]*trace{}}
 	for i := range maxTraces {
-		if err := tr.start(fmt.Sprint(i), layers, true); err != nil {
+		if err := c.startTrace(fmt.Sprint(i), layers); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := tr.start("one more", layers, true); status.Code(err) != codes.ResourceExhausted {
+	if err := c.startTrace("one more", layers); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("trace %d started: %v", maxTraces+1, err)
 	}
 	for frame := range l.traced {
-		tr.record(l, frame)
+		c.traces.record(l, frame)
 	}
-	if got, ok := tr.end("0"); !ok || len(got.reads) != maxTraceReads {
-		t.Fatalf("a trace past its bound ended %v, %+v", ok, got)
+	if got, err := c.traces.end("0"); err != nil || len(got.GetReads()) != maxTraceReads {
+		t.Fatalf("a trace past its bound ended %v, %d reads", err, len(got.GetReads()))
 	}
-	tr.traces["1"].expires = time.Now()
-	if _, ok := tr.end("1"); ok {
-		t.Fatal("an expired trace ended with its reads")
+	c.traces.traces["1"].expires = time.Now()
+	if _, err := c.traces.end("1"); status.Code(err) != codes.NotFound {
+		t.Fatalf("an expired trace ended: %v", err)
 	}
-	if err := tr.start("one more", layers, true); err != nil {
+	if err := c.startTrace("one more", layers); err != nil {
 		t.Fatalf("a trace in an expired one's place: %v", err)
 	}
 }

@@ -2,7 +2,6 @@ package snapshotter
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"sync"
 	"time"
@@ -72,27 +71,20 @@ type layerSources struct {
 // Grant validates every grant before it records any, so a refused call
 // changes nothing.
 func (s layerSources) Grant(ctx context.Context, request *imagefsproto.GrantRequest) (*imagefsproto.GrantResponse, error) {
-	if len(request.GetLayers()) > maxGrantsPerCall {
-		return nil, status.Errorf(codes.InvalidArgument, "a call grants at most %d layers", maxGrantsPerCall)
-	}
-	next := make([]grant, len(request.GetLayers()))
-	layers := make([]imagefs.Digest, len(request.GetLayers()))
+	ids := make([]string, len(request.GetLayers()))
 	for i, l := range request.GetLayers() {
-		g := grant{layer: imagefs.Digest(l.GetDiffId()), indexURL: l.GetIndexUrl(), dataURL: l.GetDataUrl()}
-		if err := g.layer.Check(); err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+		ids[i] = l.GetDiffId()
+	}
+	layers, err := digestsIn(ids)
+	if err != nil {
+		return nil, err
+	}
+	next := make([]grant, len(layers))
+	for i, l := range request.GetLayers() {
+		next[i] = grant{layer: layers[i], indexURL: l.GetIndexUrl(), dataURL: l.GetDataUrl(), expires: l.GetExpiresAt().AsTime()}
+		if !httpURL(next[i].indexURL) || !httpURL(next[i].dataURL) || l.GetExpiresAt() == nil {
+			return nil, status.Errorf(codes.InvalidArgument, "layer %s needs absolute HTTP index and data URLs and an expiry", layers[i])
 		}
-		if err := checkURL(g.indexURL); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "layer %s index_url: %v", g.layer, err)
-		}
-		if err := checkURL(g.dataURL); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "layer %s data_url: %v", g.layer, err)
-		}
-		if l.GetExpiresAt() == nil {
-			return nil, status.Errorf(codes.InvalidArgument, "layer %s has no expires_at", g.layer)
-		}
-		g.expires = l.GetExpiresAt().AsTime()
-		next[i], layers[i] = g, g.layer
 	}
 	s.cache.grants.put(next)
 	// A refresh names no start and brings no new reader: every start grants
@@ -105,22 +97,13 @@ func (s layerSources) Grant(ctx context.Context, request *imagefsproto.GrantRequ
 	return &imagefsproto.GrantResponse{}, nil
 }
 
-func checkURL(raw string) error {
+func httpURL(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil {
-		return errors.New("unparsable URL")
-	}
-	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return errors.New("not an absolute HTTP URL")
-	}
-	return nil
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }
 
 func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.PrefetchRequest) (*imagefsproto.PrefetchResponse, error) {
-	if err := checkName(request.GetName()); err != nil {
-		return nil, err
-	}
-	layers, err := digestsIn(request.GetLayers())
+	layers, err := namedLayers(request.GetName(), request.GetLayers())
 	if err != nil {
 		return nil, err
 	}
@@ -135,10 +118,8 @@ func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.Prefet
 		reads[i] = frameKey{layer: layers[r.GetLayer()], frame: int(r.GetFrame())}
 	}
 	s.cache.traces.claim(request.GetName(), layers)
-	if err := s.cache.prefetch(request.GetName(), reads, incomingParent(ctx)); err != nil { //nolint:contextcheck // a prefetch lives with the cache, not the call
-		return nil, err
-	}
-	return &imagefsproto.PrefetchResponse{}, nil
+	//nolint:contextcheck // a prefetch lives with the cache, not the call
+	return &imagefsproto.PrefetchResponse{}, s.cache.prefetch(request.GetName(), reads, incomingParent(ctx))
 }
 
 func (s layerSources) StopPrefetch(_ context.Context, request *imagefsproto.StopPrefetchRequest) (*imagefsproto.StopPrefetchResponse, error) {
@@ -147,32 +128,26 @@ func (s layerSources) StopPrefetch(_ context.Context, request *imagefsproto.Stop
 }
 
 func (s layerSources) StartTrace(_ context.Context, request *imagefsproto.StartTraceRequest) (*imagefsproto.StartTraceResponse, error) {
-	if err := checkName(request.GetName()); err != nil {
-		return nil, err
-	}
-	layers, err := digestsIn(request.GetLayers())
+	layers, err := namedLayers(request.GetName(), request.GetLayers())
 	if err != nil {
 		return nil, err
 	}
-	if err := s.cache.startTrace(request.GetName(), layers); err != nil {
-		return nil, err
-	}
-	return &imagefsproto.StartTraceResponse{}, nil
+	return &imagefsproto.StartTraceResponse{}, s.cache.startTrace(request.GetName(), layers)
 }
 
 func (s layerSources) EndTrace(_ context.Context, request *imagefsproto.EndTraceRequest) (*imagefsproto.EndTraceResponse, error) {
-	tr, ok := s.cache.traces.end(request.GetName())
-	if !ok {
-		return nil, status.Errorf(codes.NotFound, "no trace %q is recording", request.GetName())
-	}
-	out := &imagefsproto.EndTraceResponse{Complete: tr.complete, Reads: make([]*imagefsproto.FrameRead, len(tr.reads))}
-	for i, r := range tr.reads {
-		out.Reads[i] = &imagefsproto.FrameRead{Layer: r.layer, Frame: r.frame}
-	}
-	return out, nil
+	return s.cache.traces.end(request.GetName())
 }
 
-// digestsIn checks and converts the diff_ids of a request.
+// namedLayers checks the start name and the diff_ids of a call.
+func namedLayers(name string, layers []string) ([]imagefs.Digest, error) {
+	if name == "" || len(name) > maxName {
+		return nil, status.Errorf(codes.InvalidArgument, "a name has 1 to %d bytes", maxName)
+	}
+	return digestsIn(layers)
+}
+
+// digestsIn checks and converts the diff_ids of a call.
 func digestsIn(layers []string) ([]imagefs.Digest, error) {
 	if len(layers) > maxGrantsPerCall {
 		return nil, status.Errorf(codes.InvalidArgument, "a call names at most %d layers", maxGrantsPerCall)
@@ -185,11 +160,4 @@ func digestsIn(layers []string) ([]imagefs.Digest, error) {
 		}
 	}
 	return out, nil
-}
-
-func checkName(name string) error {
-	if name == "" || len(name) > maxName {
-		return status.Errorf(codes.InvalidArgument, "a name has 1 to %d bytes", maxName)
-	}
-	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 const (
@@ -36,19 +37,14 @@ const (
 	prefetchMountWait = 30 * time.Second
 )
 
-// frameRead is a frame of the layer at a position in an image's layers.
-type frameRead struct {
-	layer uint32
-	frame uint32
-}
-
-// trace is the frames read from some layers since it started.
+// trace is the frames read from some layers since it started, each by its
+// layer's position in the trace's layers, and whether the trace is
+// complete.
 type trace struct {
-	layers   map[imagefs.Digest]uint32
-	seen     map[frameKey]struct{}
-	reads    []frameRead
-	complete bool
-	expires  time.Time
+	layers  map[imagefs.Digest]uint32
+	seen    map[frameKey]struct{}
+	result  *imagefsproto.EndTraceResponse
+	expires time.Time
 }
 
 // tracer records, for each running trace, the frames read through mounts
@@ -86,14 +82,11 @@ func (t *tracer) record(l *layer, frame int) {
 	k := frameKey{layer: l.digest, frame: frame}
 	for _, tr := range t.traces {
 		position, ok := tr.layers[l.digest]
-		if !ok || len(tr.reads) >= maxTraceReads {
-			continue
-		}
-		if _, read := tr.seen[k]; read {
+		if _, read := tr.seen[k]; !ok || read || len(tr.result.Reads) >= maxTraceReads {
 			continue
 		}
 		tr.seen[k] = struct{}{}
-		tr.reads = append(tr.reads, frameRead{layer: position, frame: uint32(frame)}) //nolint:gosec // frame numbers are below imagefs's frame bound
+		tr.result.Reads = append(tr.result.Reads, &imagefsproto.FrameRead{Layer: position, Frame: uint32(frame)}) //nolint:gosec // frame numbers are below imagefs's frame bound
 	}
 	l.traced[frame].Store(t.gen.Load())
 }
@@ -111,17 +104,21 @@ func (t *tracer) claimLocked(name string, layers []imagefs.Digest) bool {
 	shared := false
 	for other, tr := range t.traces {
 		if other != name && slices.ContainsFunc(layers, func(l imagefs.Digest) bool { _, ok := tr.layers[l]; return ok }) {
-			tr.complete = false
+			tr.result.Complete = false
 			shared = true
 		}
 	}
 	return shared
 }
 
-// start begins the trace name of layers, replacing a running one of that
-// name. complete says no layer is mounted yet; it is also not complete if
-// another running trace shares a layer, and then neither is.
-func (t *tracer) start(name string, layers []imagefs.Digest, complete bool) error {
+// startTrace begins the trace name of layers, replacing a running one of
+// that name. It is complete unless a layer is mounted or another running
+// trace shares one, and then neither is.
+func (c *frameCache) startTrace(name string, layers []imagefs.Digest) error {
+	c.mu.Lock()
+	complete := !slices.ContainsFunc(layers, func(l imagefs.Digest) bool { return c.live[l] != nil })
+	c.mu.Unlock()
+	t := c.traces
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.expireLocked(time.Now())
@@ -129,37 +126,27 @@ func (t *tracer) start(name string, layers []imagefs.Digest, complete bool) erro
 		return status.Errorf(codes.ResourceExhausted, "%d traces are recording", len(t.traces))
 	}
 	delete(t.traces, name)
-	tr := &trace{
-		layers: make(map[imagefs.Digest]uint32, len(layers)), seen: make(map[frameKey]struct{}),
-		expires: time.Now().Add(traceLife),
+	tr := &trace{layers: make(map[imagefs.Digest]uint32, len(layers)), seen: make(map[frameKey]struct{}), expires: time.Now().Add(traceLife)}
+	for i, l := range slices.Backward(layers) {
+		tr.layers[l] = uint32(i) //nolint:gosec // at most maxGrantsPerCall layers
 	}
-	for i, l := range layers {
-		if _, ok := tr.layers[l]; !ok {
-			tr.layers[l] = uint32(i) //nolint:gosec // at most maxGrantsPerCall layers
-		}
-	}
-	tr.complete = !t.claimLocked(name, layers) && complete
+	tr.result = &imagefsproto.EndTraceResponse{Complete: !t.claimLocked(name, layers) && complete}
 	t.traces[name] = tr
 	t.gen.Add(1)
 	return nil
 }
 
-// end stops the trace name and returns it, or false if it is not running.
-func (t *tracer) end(name string) (*trace, bool) {
+// end stops the trace name and returns what it recorded.
+func (t *tracer) end(name string) (*imagefsproto.EndTraceResponse, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.expireLocked(time.Now())
 	tr, ok := t.traces[name]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no trace %q is recording", name)
+	}
 	delete(t.traces, name)
-	return tr, ok
-}
-
-// startTrace begins a trace of layers, complete if none is mounted.
-func (c *frameCache) startTrace(name string, layers []imagefs.Digest) error {
-	c.mu.Lock()
-	complete := !slices.ContainsFunc(layers, func(l imagefs.Digest) bool { return c.live[l] != nil })
-	c.mu.Unlock()
-	return c.traces.start(name, layers, complete)
+	return tr.result, nil
 }
 
 // prefetch fetches reads in order in the background, each once its layer
