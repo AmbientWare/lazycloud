@@ -53,10 +53,10 @@ PostgreSQL on 127.0.0.1:15442 and Garage on 127.0.0.1:15900 (admin API on
 15903), never this stack. Each test makes its own buckets there and deletes
 them when it ends.
 
-Each binary serves Prometheus metrics at `/metrics` on `LAZYCLOUD_METRICS_ADDR`
-when it is set, and exports traces over OTLP/gRPC to `LAZYCLOUD_OTLP_ENDPOINT`
-(`LAZYCLOUD_OTLP_INSECURE=true` for a local collector). Both are off by
-default. `LAZYCLOUD_LOG_FORMAT` picks `text` or `json` logs.
+The server, scheduler and agent serve Prometheus metrics at `/metrics` on
+`LAZYCLOUD_METRICS_ADDR` when it is set. Each binary exports traces over
+OTLP/gRPC to `LAZYCLOUD_OTLP_ENDPOINT` (`LAZYCLOUD_OTLP_INSECURE=true` for a
+local collector). Both are off by default. `LAZYCLOUD_LOG_FORMAT` picks `text` or `json` logs.
 
 run.sh sends traces to the `jaeger` service at http://127.0.0.1:16686; the VM's
 agent and snapshotter send theirs through the server, as fleet hosts do.
