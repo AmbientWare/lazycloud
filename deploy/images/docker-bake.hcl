@@ -20,7 +20,7 @@ variable "SOURCE_DATE_EPOCH" {
 }
 
 group "default" {
-  targets = ["server", "scheduler", "web", "agent"]
+  targets = ["server", "scheduler", "web", "agent", "python"]
 }
 
 # What Ship pushes.
