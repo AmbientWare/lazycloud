@@ -2,10 +2,9 @@ package hostsession_test
 
 import (
 	"context"
+	"regexp"
 	"slices"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,33 +20,56 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
-// writeCounter counts the completion transactions a pool runs: each sets
-// its attempts' states in one statement.
-type writeCounter struct{ n atomic.Int64 }
+var queryName = regexp.MustCompile(`-- name: (\w+)`)
 
-func (c *writeCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "name: SetAttemptStates") {
-		c.n.Add(1)
+// queryCounter counts the named queries a pool runs.
+type queryCounter struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if m := queryName.FindStringSubmatch(data.SQL); m != nil {
+		c.mu.Lock()
+		c.n[m[1]]++
+		c.mu.Unlock()
 	}
 	return ctx
 }
 
-func (*writeCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// countedHarness serves the host service over a pool traced by writes;
+// completions counts the completion transactions: each sets its attempts'
+// states in one statement.
+func (c *queryCounter) completions() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n["SetAttemptStates"]
+}
+
+// take returns the counts since the last take and starts again.
+func (c *queryCounter) take() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.n
+	c.n = map[string]int{}
+	return out
+}
+
+// countedHarness serves the host service over a pool traced by queries;
 // base is the same database untraced.
-func countedHarness(t *testing.T) (h *harness, base *pgxpool.Pool, writes *writeCounter) {
+func countedHarness(t *testing.T) (h *harness, base *pgxpool.Pool, queries *queryCounter) {
 	t.Helper()
 	base = dbtest.New(t)
-	writes = &writeCounter{}
+	queries = &queryCounter{n: map[string]int{}}
 	cfg := base.Config().Copy()
-	cfg.ConnConfig.Tracer = writes
+	cfg.ConnConfig.Tracer = queries
 	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(traced.Close)
-	return serve(t, traced), base, writes
+	return serve(t, traced), base, queries
 }
 
 // runningAttempts makes host's container ready with n running attempts.
@@ -165,11 +187,11 @@ where a.container_id = $1 and a.state = 'succeeded' and t.status = 'succeeded'`,
 		}
 		notes++
 	}
-	t.Logf("%d completions: %d transactions, %d task and execution notifications", n+1, writes.n.Load(), notes)
+	t.Logf("%d completions: %d transactions, %d task and execution notifications", n+1, writes.completions(), notes)
 	if succeeded != n {
 		t.Fatalf("%d attempts succeeded, want %d", succeeded, n)
 	}
-	if got := writes.n.Load(); got > 3 {
+	if got := writes.completions(); got > 3 {
 		t.Fatalf("%d completions took %d transactions, want the burst in one after the first", n+1, got)
 	}
 	if notes >= n {
@@ -186,7 +208,7 @@ func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 	container, attempts := h.runningAttempts(host, 2*n)
 	var direct, queued []time.Duration
 	for i, attempt := range attempts {
-		before := writes.n.Load()
+		before := writes.completions()
 		start := time.Now()
 		if i < n {
 			id := execution.AttemptID(uuid.MustParse(attempt))
@@ -203,7 +225,7 @@ func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 			}
 			queued = append(queued, time.Since(start))
 		}
-		if got := writes.n.Load() - before; got != 1 {
+		if got := writes.completions() - before; got != 1 {
 			t.Fatalf("completion %d took %d transactions, want 1", i, got)
 		}
 	}

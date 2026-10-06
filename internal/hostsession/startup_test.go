@@ -57,7 +57,9 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/library/python:{version}-slim",
 	})
 	srv := hostsession.NewServer(compute.NewCompute(pool, e, compute.Config{}), e, store, im,
-		database.NewListener(pool, logger, database.ChannelImageBuild), hostsession.Config{TouchInterval: time.Second}, logger)
+		database.NewListener(pool, logger, database.ChannelImageBuild), hostsession.Config{
+			TouchInterval: time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
+		}, logger)
 	srv.ConvertAtStart(nil, compute.FleetArchitectures())
 	// With no session open, Wait returns once the start's conversions end.
 	srv.Wait()

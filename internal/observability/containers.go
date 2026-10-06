@@ -231,7 +231,8 @@ const (
 	// StageDisk is leasing and restoring the container's disks.
 	StageDisk StartupStageKind = "disk"
 	// StageConversion is the server holding the start until its image is
-	// converted, before the host gets it.
+	// converted, from the container's assignment until the start is sent or
+	// fails. The server stores it; hosts report the others.
 	StageConversion StartupStageKind = "conversion"
 )
 
@@ -243,9 +244,10 @@ type StartupStage struct {
 	Cached     bool
 }
 
-// RecordStartup stores the stages host reported for container. Only a
+// RecordStartup stores stages of container's start on host. Only a
 // container assigned to host counts, and a stage already stored stays, so
-// reports may restate stages freely.
+// reports may restate stages freely; the conversion stage keeps its latest
+// end.
 func (o *Observability) RecordStartup(ctx context.Context, host compute.HostID, container execution.ContainerID, stages []StartupStage) error {
 	if len(stages) == 0 {
 		return nil
@@ -260,6 +262,17 @@ func (o *Observability) RecordStartup(ctx context.Context, host compute.HostID, 
 	}
 	if err := o.queries.InsertStartupStages(ctx, p); err != nil {
 		return fmt.Errorf("record startup stages: %w", err)
+	}
+	return nil
+}
+
+// ExtendConversion moves the end of container's stored conversion stage to
+// ended, as when a start that waited in an earlier session is sent.
+func (o *Observability) ExtendConversion(ctx context.Context, host compute.HostID, container execution.ContainerID, ended time.Time) error {
+	hostID := uuid.UUID(host)
+	err := o.queries.ExtendConversionStage(ctx, ExtendConversionStageParams{ContainerID: uuid.UUID(container), HostID: &hostID, FinishedAt: ended})
+	if err != nil {
+		return fmt.Errorf("extend the conversion stage: %w", err)
 	}
 	return nil
 }
@@ -316,7 +329,7 @@ func (o *Observability) ContainerLifecycle(ctx context.Context, ws identity.Work
 }
 
 // lifecycleOut builds the stages from the durable transitions (placement
-// and draining) and the stages the host reported.
+// and draining) and the stored start stages.
 func lifecycleOut(r ContainerLifecyclesRow, reported []ContainerStartupStage) apitypes.ContainerLifecycle {
 	out := apitypes.ContainerLifecycle{
 		ContainerId: r.ID, App: &r.AppName, Function: &r.FunctionName,

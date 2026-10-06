@@ -268,9 +268,8 @@ func TestStartCarriesOnlyItsImageLayers(t *testing.T) {
 // fresh grants before then for as long as a container uses the image, then
 // no more.
 func TestLayerGrantsOpenOnlyTheirObjectAndRefreshWhileUsed(t *testing.T) {
-	h := start(t)
 	const lifetime = 3 * time.Second
-	hostsession.SetLayerLifetime(h.server, lifetime)
+	h := start(t, grantsLasting(lifetime))
 	host, ctx := h.enroll()
 	layer, other := h.storeLayer("granted"), h.storeLayer("not granted")
 	ref := reference("a")
@@ -412,9 +411,8 @@ func bucketOf(t *testing.T, raw string) string {
 func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
 	cfg := storagetest.Config(t)
 	cfg.LayerReplicas = map[string]string{cfg.Region: cfg.Bucket}
-	h := serveWith(t, dbtest.New(t), cfg)
 	const recheck = 500 * time.Millisecond
-	hostsession.SetReplicaRecheck(h.server, recheck)
+	h := serveWith(t, dbtest.New(t), cfg, func(c *hostsession.Config) { c.ReplicaRecheck = recheck })
 	host, ctx := h.enroll()
 	h.exec("update hosts set region = $1 where id = $2", cfg.Region, uuid.UUID(host))
 	layer := h.storeLayer("regional")
@@ -429,6 +427,18 @@ func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
 	}
 	for h.count("select count(*) from image_layer_replicas where confirmed_at is null") == 0 {
 		time.Sleep(10 * time.Millisecond)
+	}
+	// Watching the region's confirmations does not sign the grant again.
+	quiet := time.After(2 * recheck)
+	for waiting := true; waiting; {
+		select {
+		case m := <-in:
+			if m.GetLayerGrants() != nil {
+				t.Fatal("the start's grant was signed again before any copy was confirmed")
+			}
+		case <-quiet:
+			waiting = false
+		}
 	}
 	client := s3.New(s3.Options{
 		Region: cfg.Region, BaseEndpoint: aws.String(cfg.Endpoint), UsePathStyle: true,
@@ -451,5 +461,32 @@ func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
 	}
 	if status, body := get(t, copied.GetIndexUrl(), nil); status != http.StatusOK || !bytes.Equal(body, layer.index) {
 		t.Fatalf("the copy's index: %d", status)
+	}
+}
+
+// A running image whose grants cannot be issued when the session opens,
+// here because its layers are not recorded yet, gets them at a later sync,
+// though no other grant is due.
+func TestAFailedLayerGrantIsIssuedAtALaterSync(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ref := reference("late")
+	container := h.startingImage(host, ref)
+	h.exec("update containers set state = 'ready', ready_at = now(), image_reference = $2 where id = $1", container, ref)
+	in := commands(t, open(t, ctx, h.client, &hostproto.ContainerReport{
+		ContainerId: container.String(), Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY, ObservedAt: timestamppb.Now(),
+	}))
+	select {
+	case m := <-in:
+		if m.GetLayerGrants() != nil {
+			t.Fatal("grants were sent for an image with no layers")
+		}
+	case <-time.After(300 * time.Millisecond):
+	}
+	layer := h.storeLayer("late")
+	h.publish(ref, layer)
+	grants := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetLayerGrants() != nil }).GetLayerGrants().GetLayers()
+	if !slices.Equal(diffIDs(grants), []string{string(layer.diffID)}) {
+		t.Fatalf("the later grant names %v", diffIDs(grants))
 	}
 }

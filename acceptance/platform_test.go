@@ -327,8 +327,8 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
-		TouchInterval: 5 * time.Second,
-		Secrets:       vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
+		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
+		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
 	}, logger)
 	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
