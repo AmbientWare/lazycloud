@@ -122,7 +122,7 @@ func (t *tracer) claimLocked(name string, layers []imagefs.Digest) {
 
 // start begins the trace name of layers, replacing a running one of that
 // name. complete says no layer is mounted yet; it is also not complete if
-// another running trace shares a layer, and that trace is no longer.
+// another running trace shares a layer, and then neither is.
 func (t *tracer) start(name string, layers []imagefs.Digest, complete bool) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
