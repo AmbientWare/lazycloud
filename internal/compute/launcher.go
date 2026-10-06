@@ -106,7 +106,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 // read fails. Without tracing it reads no trace.
 func (c *Compute) hostSpan(ctx context.Context, host uuid.UUID, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
 	var parent string
-	if telemetry.Tracing(ctx) {
+	if trace.SpanContextFromContext(ctx).IsValid() {
 		parent, _ = c.queries.HostWaitTrace(ctx, &host)
 	}
 	return telemetry.StartFor(ctx, parent, name, trace.WithAttributes(append(attrs, telemetry.Host(host.String()))...))

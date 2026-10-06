@@ -54,7 +54,7 @@ func traceClaim(ctx context.Context, task ClaimedTask, due time.Time, container 
 		return
 	}
 	_, span := telemetry.StartFor(ctx, task.TraceParent, "execution.queued", trace.WithTimestamp(due),
-		trace.WithLinks(telemetry.Link(containerTrace)), trace.WithAttributes(telemetry.Task(task.Task.String()),
+		trace.WithLinks(trace.Link{SpanContext: telemetry.SpanContextOf(containerTrace)}), trace.WithAttributes(telemetry.Task(task.Task.String()),
 			attribute.String("lazycloud."+telemetry.KeyAttempt, task.Attempt.String()), telemetry.Container(container.String()),
 			attribute.Int("lazycloud.attempt_number", task.Number)))
 	span.End()

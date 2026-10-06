@@ -2,9 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"errors"
-	"net/url"
-	"regexp"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -23,7 +20,6 @@ const scope = "github.com/AmbientWare/lazycloud"
 
 // TracerOf is the tracer of ctx's span. Owners trace under the provider of
 // the request, RPC or pass that called them and hold none of their own.
-// Without a recording span in ctx it records nothing.
 func TracerOf(ctx context.Context) trace.Tracer {
 	return trace.SpanFromContext(ctx).TracerProvider().Tracer(scope)
 }
@@ -51,12 +47,6 @@ func StartFor(ctx context.Context, traceparent, name string, opts ...trace.SpanS
 	return StartIn(ctx, TracerOf(ctx), traceparent, name, opts...) //nolint:spancheck // The caller ends it.
 }
 
-// Tracing reports whether ctx's span comes from a tracer that exports,
-// sampled or not, so a caller can skip reads that only feed spans.
-func Tracing(ctx context.Context) bool {
-	return trace.SpanContextFromContext(ctx).IsValid()
-}
-
 // Record records a finished step from began to now as a child of ctx's
 // span, for steps timed before their span could start.
 func Record(ctx context.Context, name string, began time.Time, attrs ...attribute.KeyValue) {
@@ -72,46 +62,14 @@ func Step(ctx context.Context, name string, fn func(context.Context) error, attr
 	return err
 }
 
-// Link is a link to the span traceparent names; an empty or malformed one
-// is invalid, and spans drop it.
-func Link(traceparent string) trace.Link {
-	return trace.Link{SpanContext: SpanContextOf(traceparent)}
-}
-
 // Fail marks span failed with err, when err is not nil, and ends it. The
-// message keeps no URL query.
+// exporter redacts the message.
 func Fail(span trace.Span, err error) {
 	if err != nil {
-		message := Redact(err.Error())
-		span.RecordError(errors.New(message))
-		span.SetStatus(codes.Error, message)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 	}
 	span.End()
-}
-
-// urlQuery matches the query of a URL in a message.
-var urlQuery = regexp.MustCompile(`(https?://[^\s?"]*)\?[^\s"]*`) //nolint:gochecknoglobals // A compiled constant.
-
-// Redact removes the query of every URL in message, where presigned URLs
-// carry their signature. Span statuses and events take only redacted
-// messages.
-func Redact(message string) string {
-	return urlQuery.ReplaceAllString(message, "$1?<redacted>")
-}
-
-// RedactURL is err with the query of the URL it names removed when it is a
-// *url.Error, as a failed request to a presigned URL returns.
-func RedactURL(err error) error {
-	var failed *url.Error
-	if !errors.As(err, &failed) {
-		return err
-	}
-	stripped := Redact(failed.URL)
-	if u, parseErr := url.Parse(failed.URL); parseErr == nil {
-		u.RawQuery, u.Fragment = "", ""
-		stripped = u.String()
-	}
-	return &url.Error{Op: failed.Op, URL: stripped, Err: failed.Err}
 }
 
 // SpanContextOf is the remote span a W3C traceparent names; invalid when

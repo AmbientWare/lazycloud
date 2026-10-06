@@ -2,6 +2,9 @@ package telemetry
 
 import (
 	"context"
+	"errors"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -60,4 +63,28 @@ func redactAttrs(attrs []attribute.KeyValue) []attribute.KeyValue {
 		return attrs
 	}
 	return out
+}
+
+// urlQuery matches the query of a URL in a message.
+var urlQuery = regexp.MustCompile(`(https?://[^\s?"]*)\?[^\s"]*`) //nolint:gochecknoglobals // A compiled constant.
+
+// Redact removes the query of every URL in message, where presigned URLs
+// carry their signature.
+func Redact(message string) string {
+	return urlQuery.ReplaceAllString(message, "$1?<redacted>")
+}
+
+// RedactURL is err with the query of the URL it names removed when it is a
+// *url.Error, as a failed request to a presigned URL returns.
+func RedactURL(err error) error {
+	var failed *url.Error
+	if !errors.As(err, &failed) {
+		return err
+	}
+	stripped := Redact(failed.URL)
+	if u, parseErr := url.Parse(failed.URL); parseErr == nil {
+		u.RawQuery, u.Fragment = "", ""
+		stripped = u.String()
+	}
+	return &url.Error{Op: failed.Op, URL: stripped, Err: failed.Err}
 }

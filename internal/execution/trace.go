@@ -34,7 +34,7 @@ func traceparent(ctx context.Context) *string {
 // traceparent. Without tracing it reads no trace.
 func (e *Execution) scaleUp(ctx context.Context, q *Queries, release uuid.UUID, count int, rollout bool) (context.Context, trace.Span, error) {
 	var parent string
-	if telemetry.Tracing(ctx) {
+	if trace.SpanContextFromContext(ctx).IsValid() {
 		var err error
 		parent, err = q.ScaleUpTrace(ctx, ScaleUpTraceParams{ReleaseID: release, Rollout: rollout, RolloutSeconds: rolloutTrace.Seconds()})
 		if err != nil {
