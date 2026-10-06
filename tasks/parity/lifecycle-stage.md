@@ -16,8 +16,8 @@ stages. Owns those; one migration file if the stage needs storage.
 ## Progress
 
 - The session records a `conversion` start stage (migration 0005 widens
-  the stage check) from the first sync that derived a waiting start to the
-  start sent, or to its permanent failure. `TestStartWaitsForTheManagedImageConversion`
+  the stage check) for a start that waited for its image, from the
+  container's assignment to the start sent, or to its permanent failure. `TestStartWaitsForTheManagedImageConversion`
   proves it.
 - `LifecycleStageKind` gains `conversion` and `disk` (the host already
   reported disk). Go, Python and TypeScript bindings regenerated; the SDK
@@ -27,8 +27,10 @@ stages. Owns those; one migration file if the stage needs storage.
 
 ## Gaps and unverified boundaries
 
-- A session that ends while a start waits records no conversion; the next
-  session's wait is stored, and the earlier part shows as Queued.
+- A session that ends while a start waits records nothing; the session
+  that sends it stores the whole wait from the assignment. If the image is
+  ready before the next session's first sync, that session sends the start
+  without a wait, nothing is stored and the time shows as Queued.
 - hostsession's object-store tests need the test-store packet's store;
   they fail locally on a missing `lazycloud-layers` bucket, unrelated here.
 - Not seen on a real deployed task page yet; acceptance covers it.

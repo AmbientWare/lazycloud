@@ -403,6 +403,7 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 		if errors.Is(err, images.ErrNotReady) || errors.Is(err, images.ErrNotConverted) {
 			delete(derived, id)
+			sess.waiting(ctx, start.Container, "image", "")
 			continue
 		}
 		if reason, permanent := permanentStartFailure(err); permanent {

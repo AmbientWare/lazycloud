@@ -74,15 +74,16 @@ func (s *Server) recordStartup(ctx context.Context, host compute.HostID, report 
 }
 
 // recordConversion stores the conversion stage of container's start if it
-// waited for its image: from the first sync that derived it until ended,
-// when it was sent or failed. A session that ends while the start waits
-// records nothing, so the next session's wait is the one stored.
+// waited for its image: from the container's assignment until ended, when
+// the start was sent or failed. The stage starts at the durable assignment,
+// so a start whose wait spans sessions is stored whole by the session that
+// ends it.
 func (sess *session) recordConversion(ctx context.Context, container execution.ContainerID, ended time.Time) {
 	p := sess.starts[container]
-	if p == nil || p.wait == nil || sess.server.config.Observability == nil {
+	if p == nil || p.wait == nil || p.assigned == nil || sess.server.config.Observability == nil {
 		return
 	}
-	stage := observability.StartupStage{Kind: observability.StageConversion, StartedAt: p.opened, FinishedAt: ended}
+	stage := observability.StartupStage{Kind: observability.StageConversion, StartedAt: *p.assigned, FinishedAt: ended}
 	if err := sess.server.config.Observability.RecordStartup(ctx, sess.host, container, []observability.StartupStage{stage}); err != nil {
 		sess.server.logger.WarnContext(ctx, "recording the conversion stage failed", "container_id", container.String(), "error", err)
 	}
