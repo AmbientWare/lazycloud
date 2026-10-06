@@ -82,7 +82,7 @@ start() {
   echo $! >"$state/server.pid"
   bin/scheduler >"$state/logs/scheduler.log" 2>&1 &
   echo $! >"$state/scheduler.pid"
-  deploy/local/host-vm.sh up
+  LAZYCLOUD_AGENT_ARCHIVE="$LAZYCLOUD_AGENT_DIST_DIR/$release/lazycloud-agent-linux-amd64.tar.gz" deploy/local/host-vm.sh up
   echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082"
   echo "export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8080 LAZYCLOUD_WORKSPACE=dev LAZYCLOUD_TOKEN=$(cat "$state/token")"
 }

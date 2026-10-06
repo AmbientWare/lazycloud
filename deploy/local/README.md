@@ -16,7 +16,10 @@ lazycloud-snapshotter as its storage driver, gVisor, the disk engine's
 tools. This machine's Docker is left as it is. The first `up` downloads the
 pinned Lima release and image into `.lazycloud/` and builds the host, which
 takes several minutes; later ones start it and install the current agent
-release the way hosts join. It needs KVM (the `kvm` group) and
+release the way hosts join. Agent updates leave a running snapshotter alone,
+so `up` restarts the VM's snapshotter on this tree's build when it changed
+and no container runs there; with containers running it says so, and
+`host-vm.sh reset` gives a fresh host. It needs KVM (the `kvm` group) and
 `qemu-system-x86_64`, not root. `host-vm.sh down` stops the VM and `reset`
 deletes it. Lima's socket paths must stay short: a checkout with a long
 path sets `LAZYCLOUD_LIMA_HOME` to a short directory.
