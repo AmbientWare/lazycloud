@@ -26,6 +26,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -173,7 +174,7 @@ func next(t *testing.T, in <-chan *hostproto.ServerMessage, timeout time.Duratio
 	}
 }
 
-func diffIDs(grants []*hostproto.LayerGrant) []string {
+func diffIDs(grants []*imagefsproto.LayerGrant) []string {
 	out := make([]string, len(grants))
 	for n, g := range grants {
 		out[n] = g.GetDiffId()

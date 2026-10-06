@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
@@ -41,7 +43,7 @@ type layerSources struct {
 
 	mu sync.Mutex
 	// pending holds the newest grant per layer not yet handed over.
-	pending map[imagefs.Digest]layersource.Grant
+	pending map[string]*imagefsproto.LayerGrant
 
 	smu sync.Mutex
 	// startups holds the containers started here that have not exited.
@@ -51,23 +53,13 @@ type layerSources struct {
 func newLayerSources(client *layersource.Client) *layerSources {
 	return &layerSources{
 		client: client, wake: make(chan struct{}, 1),
-		pending: map[imagefs.Digest]layersource.Grant{}, startups: map[string]*startup{},
+		pending: map[string]*imagefsproto.LayerGrant{}, startups: map[string]*startup{},
 	}
-}
-
-func grantsIn(layers []*hostproto.LayerGrant) []layersource.Grant {
-	out := make([]layersource.Grant, len(layers))
-	for n, g := range layers {
-		out[n] = layersource.Grant{
-			Layer: imagefs.Digest(g.GetDiffId()), IndexURL: g.GetIndexUrl(), DataURL: g.GetDataUrl(), ExpiresAt: g.GetExpiresAt().AsTime(),
-		}
-	}
-	return out
 }
 
 // grant hands layers to the snapshotter for the platform image start name
 // and returns once it holds them.
-func (l *layerSources) grant(ctx context.Context, name string, layers []*hostproto.LayerGrant) error {
+func (l *layerSources) grant(ctx context.Context, name string, layers []*imagefsproto.LayerGrant) error {
 	if len(layers) == 0 {
 		return nil
 	}
@@ -76,12 +68,12 @@ func (l *layerSources) grant(ctx context.Context, name string, layers []*hostpro
 	l.smu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	return l.client.Grant(ctx, name, grantsIn(layers)) //nolint:wrapcheck // The client names the call.
+	return l.client.Grant(ctx, name, layers) //nolint:wrapcheck // The client names the call.
 }
 
 // refresh queues fresh grants for refreshLoop.
-func (l *layerSources) refresh(layers []*hostproto.LayerGrant) {
-	l.queue(grantsIn(layers))
+func (l *layerSources) refresh(layers []*imagefsproto.LayerGrant) {
+	l.queue(layers)
 	select {
 	case l.wake <- struct{}{}:
 	default:
@@ -90,28 +82,26 @@ func (l *layerSources) refresh(layers []*hostproto.LayerGrant) {
 
 // queue adds grants to pending, keeping the later of two grants for one
 // layer and dropping expired ones.
-func (l *layerSources) queue(grants []layersource.Grant) {
+func (l *layerSources) queue(grants []*imagefsproto.LayerGrant) {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, g := range grants {
-		if !g.ExpiresAt.After(now) {
+		expires := g.GetExpiresAt().AsTime()
+		if !expires.After(now) {
 			continue
 		}
-		if old, ok := l.pending[g.Layer]; !ok || g.ExpiresAt.After(old.ExpiresAt) {
-			l.pending[g.Layer] = g
+		if old, ok := l.pending[g.GetDiffId()]; !ok || expires.After(old.GetExpiresAt().AsTime()) {
+			l.pending[g.GetDiffId()] = g
 		}
 	}
 }
 
 // take empties pending.
-func (l *layerSources) take() []layersource.Grant {
+func (l *layerSources) take() []*imagefsproto.LayerGrant {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	grants := make([]layersource.Grant, 0, len(l.pending))
-	for _, g := range l.pending {
-		grants = append(grants, g)
-	}
+	grants := slices.Collect(maps.Values(l.pending))
 	clear(l.pending)
 	return grants
 }
@@ -146,7 +136,7 @@ func (l *layerSources) refreshLoop(ctx context.Context, log *slog.Logger) {
 	}
 }
 
-func layersOf(grants []*hostproto.LayerGrant) []imagefs.Digest {
+func layersOf(grants []*imagefsproto.LayerGrant) []imagefs.Digest {
 	out := make([]imagefs.Digest, len(grants))
 	for n, g := range grants {
 		out[n] = imagefs.Digest(g.GetDiffId())
@@ -215,16 +205,12 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 	defer span.End()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	if err := l.client.Grant(ctx, container, grantsIn(spec.GetLayers())); err != nil {
+	if err := l.client.Grant(ctx, container, spec.GetLayers()); err != nil {
 		telemetry.Fail(span, err)
 		return false, err //nolint:wrapcheck // The client names the call.
 	}
 	prefetching := false
-	if trace := spec.GetPrefetch().GetReads(); len(trace) > 0 {
-		reads := make([]layersource.FrameRead, len(trace))
-		for n, r := range trace {
-			reads[n] = layersource.FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
-		}
+	if reads := spec.GetPrefetch().GetReads(); len(reads) > 0 {
 		if err := l.client.Prefetch(ctx, container, layers, reads); err != nil {
 			log.Warn("prefetching the image failed", "error", err)
 		} else {
@@ -298,11 +284,7 @@ func (l *layerSources) end(ctx context.Context, log *slog.Logger, container stri
 	if !complete || shared || len(reads) == 0 {
 		return nil
 	}
-	trace := &hostproto.ImageTrace{Reads: make([]*hostproto.FrameRead, len(reads))}
-	for n, r := range reads {
-		trace.Reads[n] = &hostproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
-	}
-	return trace
+	return &hostproto.ImageTrace{Reads: reads}
 }
 
 // release forgets container once it exited or failed to start, and stops

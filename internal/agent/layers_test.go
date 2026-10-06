@@ -17,6 +17,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
 )
@@ -64,8 +65,8 @@ func testLayerSources(t *testing.T) (*layerSources, *layersource.Client) {
 	return newLayerSources(client), client
 }
 
-func layerGrant(diffID string, at time.Time) *hostproto.LayerGrant {
-	return &hostproto.LayerGrant{
+func layerGrant(diffID string, at time.Time) *imagefsproto.LayerGrant {
+	return &imagefsproto.LayerGrant{
 		DiffId: diffID, IndexUrl: "http://store/" + diffID + "/index", DataUrl: "http://store/" + diffID + "/data",
 		ExpiresAt: timestamppb.New(at),
 	}
@@ -78,7 +79,7 @@ func testDigest() string {
 // startingWith is a start of a container recording its trace, with a
 // prefetch and grants for layers.
 func startingWith(layers ...string) *hostproto.StartContainer {
-	spec := &hostproto.StartContainer{RecordTrace: true, Prefetch: &hostproto.ImageTrace{Reads: []*hostproto.FrameRead{{}}}}
+	spec := &hostproto.StartContainer{RecordTrace: true, Prefetch: &hostproto.ImageTrace{Reads: []*imagefsproto.FrameRead{{}}}}
 	for _, l := range layers {
 		spec.Layers = append(spec.Layers, layerGrant(l, time.Now().Add(time.Hour)))
 	}
@@ -141,7 +142,7 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 	traced := startingWith(base, testDigest())
 
 	l.begin("a", layersOf(traced.GetLayers()))
-	if err := client.Grant(t.Context(), "a", grantsIn(traced.GetLayers())); err != nil {
+	if err := client.Grant(t.Context(), "a", traced.GetLayers()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := l.start(t.Context(), log, "b", startingWith(base)); err != nil {
@@ -165,7 +166,7 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 	l.release(t.Context(), log, "a")
 	l.release(t.Context(), log, "b")
 	l.begin("c", []imagefs.Digest{imagefs.Digest(base)})
-	if err := l.grant(t.Context(), "platform:builder", []*hostproto.LayerGrant{layerGrant(base, time.Now().Add(time.Hour))}); err != nil {
+	if err := l.grant(t.Context(), "platform:builder", []*imagefsproto.LayerGrant{layerGrant(base, time.Now().Add(time.Hour))}); err != nil {
 		t.Fatal(err)
 	}
 	if !shared("c") {
@@ -250,7 +251,7 @@ func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
 		return len(l.pending)
 	}
 
-	l.refresh([]*hostproto.LayerGrant{layerGrant(testDigest(), time.Now().Add(time.Hour))})
+	l.refresh([]*imagefsproto.LayerGrant{layerGrant(testDigest(), time.Now().Add(time.Hour))})
 	time.Sleep(300 * time.Millisecond)
 	if pending() != 1 {
 		t.Fatal("a refresh the snapshotter could not take was dropped")

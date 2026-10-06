@@ -9,6 +9,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -39,9 +40,9 @@ func (s *Server) startTrace(ctx context.Context, cache *syncCache, workspace ide
 	}
 	t := startTrace{record: record}
 	if len(reads) > 0 {
-		t.prefetch = &hostproto.ImageTrace{Reads: make([]*hostproto.FrameRead, len(reads))}
+		t.prefetch = &hostproto.ImageTrace{Reads: make([]*imagefsproto.FrameRead, len(reads))}
 		for n, r := range reads {
-			t.prefetch.Reads[n] = &hostproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
+			t.prefetch.Reads[n] = &imagefsproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
 		}
 	}
 	cache.traces[key] = t

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
@@ -41,7 +42,7 @@ func (g layerGrant) due(now time.Time) bool { return !now.Before(g.renewAt) }
 
 // issuedLayers is one signing of an image's layers, or why it failed.
 type issuedLayers struct {
-	grants []*hostproto.LayerGrant
+	grants []*imagefsproto.LayerGrant
 	grant  layerGrant
 	err    error
 }
@@ -78,9 +79,9 @@ func (sess *session) signLayers(ctx context.Context, cache *syncCache, reference
 			continue
 		}
 		first := issued.Add(lifetime)
-		l := issuedLayers{grants: make([]*hostproto.LayerGrant, len(r.Layers))}
+		l := issuedLayers{grants: make([]*imagefsproto.LayerGrant, len(r.Layers))}
 		for n, u := range r.Layers {
-			l.grants[n] = &hostproto.LayerGrant{DiffId: string(u.DiffID), IndexUrl: u.Index, DataUrl: u.Data, ExpiresAt: timestamppb.New(u.ExpiresAt)}
+			l.grants[n] = &imagefsproto.LayerGrant{DiffId: string(u.DiffID), IndexUrl: u.Index, DataUrl: u.Data, ExpiresAt: timestamppb.New(u.ExpiresAt)}
 			if u.ExpiresAt.Before(first) {
 				first = u.ExpiresAt
 			}
@@ -110,7 +111,7 @@ func (sess *session) signLayers(ctx context.Context, cache *syncCache, reference
 
 // grantLayers returns the grants of reference, signing them unless the sync
 // signed them already.
-func (sess *session) grantLayers(ctx context.Context, cache *syncCache, reference string) ([]*hostproto.LayerGrant, layerGrant, error) {
+func (sess *session) grantLayers(ctx context.Context, cache *syncCache, reference string) ([]*imagefsproto.LayerGrant, layerGrant, error) {
 	sess.signLayers(ctx, cache, []string{reference})
 	l := cache.layers[reference]
 	return l.grants, l.grant, l.err

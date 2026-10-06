@@ -21,7 +21,6 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 // cachedLayers is a frame cache over layers in the test store, without
@@ -321,7 +320,7 @@ func TestTracedFramesPrefetchThroughMounts(t *testing.T) {
 	layers := []imagefs.Digest{base.index.Layer, app.index.Layer}
 	start := func(s *service) (string, string) {
 		t.Helper()
-		if err := s.sources.Grant(t.Context(), "c1", []layersource.Grant{base.grant, app.grant}); err != nil {
+		if err := s.sources.Grant(t.Context(), "c1", []*imagefsproto.LayerGrant{base.grant, app.grant}); err != nil {
 			t.Fatal(err)
 		}
 		return s.view(t, "base", s.pull(t, base, "")), s.view(t, "app", s.pull(t, app, ""))
@@ -352,7 +351,7 @@ func TestTracedFramesPrefetchThroughMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []layersource.FrameRead{{Layer: 1, Frame: 4}, {Layer: 0, Frame: 0}, {Layer: 1, Frame: 1}}; !complete || !slices.Equal(reads, want) {
+	if want := [][2]uint32{{1, 4}, {0, 0}, {1, 1}}; !complete || !slices.Equal(framePairs(reads), want) {
 		t.Fatalf("the first start traced %v, complete %v; want %v", reads, complete, want)
 	}
 	first.stop()
@@ -370,4 +369,12 @@ func TestTracedFramesPrefetchThroughMounts(t *testing.T) {
 	if n := transport.requests.Load(); n != indexes+3 {
 		t.Fatalf("a cold start with its trace made %d store requests, want two indexes and three frames", n)
 	}
+}
+
+func framePairs(reads []*imagefsproto.FrameRead) [][2]uint32 {
+	out := make([][2]uint32, len(reads))
+	for n, r := range reads {
+		out[n] = [2]uint32{r.GetLayer(), r.GetFrame()}
+	}
+	return out
 }

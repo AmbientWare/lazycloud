@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -263,7 +264,7 @@ func (sess *session) syncPlatform(ctx context.Context, cache *syncCache) error {
 	var used []string
 	for _, a := range answer {
 		key, pull := a.key, a.pull
-		var layers []*hostproto.LayerGrant
+		var layers []*imagefsproto.LayerGrant
 		var grant layerGrant
 		err := images.ErrNotConverted
 		if pull.Pull != nil {
