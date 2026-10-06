@@ -2,14 +2,14 @@ package imagefs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -70,12 +70,12 @@ func (o RangeReader) read(ctx context.Context, off int64, p []byte) error {
 	last := off + int64(len(p)) - 1
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.url(), nil)
 	if err != nil {
-		return fmt.Errorf("read object range: %w", redact(err))
+		return fmt.Errorf("read object range: %w", telemetry.RedactURL(err))
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, last))
 	resp, err := o.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("read object range: %w", redact(err))
+		return fmt.Errorf("read object range: %w", telemetry.RedactURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusPartialContent {
@@ -151,11 +151,11 @@ func (r *FrameReader) Read(ctx context.Context, ix Index, data RangeReader, i in
 func FetchIndex(ctx context.Context, client *http.Client, url string) ([]byte, Index, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, Index{}, fmt.Errorf("read index: %w", redact(err))
+		return nil, Index{}, fmt.Errorf("read index: %w", telemetry.RedactURL(err))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, Index{}, fmt.Errorf("read index: %w", redact(err))
+		return nil, Index{}, fmt.Errorf("read index: %w", telemetry.RedactURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -173,19 +173,4 @@ func FetchIndex(ctx context.Context, client *http.Client, url string) ([]byte, I
 		return nil, Index{}, err
 	}
 	return raw, ix, nil
-}
-
-// redact drops the query, which holds a presigned URL's signature, from a
-// request error.
-func redact(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		if u, perr := url.Parse(ue.URL); perr == nil {
-			u.RawQuery = ""
-			ue.URL = u.String()
-		} else {
-			ue.URL = "(unparsed URL)"
-		}
-	}
-	return err
 }
