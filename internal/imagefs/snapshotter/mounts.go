@@ -1,16 +1,15 @@
 package snapshotter
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/core/snapshots/storage"
 	"github.com/containerd/errdefs"
@@ -23,9 +22,6 @@ import (
 )
 
 const (
-	// fuseType is the mounts' filesystem type, which finds those a previous
-	// process left.
-	fuseType = "fuse." + layersource.Snapshotter
 	// maxRead is the largest read the kernel sends.
 	maxRead = 1 << 20
 	// attrTimeout is how long the kernel trusts names and attributes;
@@ -245,22 +241,18 @@ func (s *snapshotter) unmount(id string) error {
 // needed returns the lazy layers some snapshot that is not a lazy layer
 // descends from.
 func (s *snapshotter) needed(ctx context.Context) (map[string]lazyRef, error) {
-	type snapshot struct {
-		id   string
-		info snapshots.Info
-	}
-	byName := make(map[string]snapshot)
+	ids := make(map[string]string)
+	infos := make(map[string]snapshots.Info)
 	err := s.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
-		ids, err := storage.IDMap(ctx)
+		names, err := storage.IDMap(ctx)
 		if err != nil {
 			return err //nolint:wrapcheck // wrapped below
 		}
-		names := make(map[string]string, len(ids))
-		for id, name := range ids {
-			names[name] = id
+		for id, name := range names {
+			ids[name] = id
 		}
 		return storage.WalkInfo(ctx, func(_ context.Context, info snapshots.Info) error { //nolint:wrapcheck // wrapped below
-			byName[info.Name] = snapshot{id: names[info.Name], info: info}
+			infos[info.Name] = info
 			return nil
 		})
 	})
@@ -270,55 +262,26 @@ func (s *snapshotter) needed(ctx context.Context) (map[string]lazyRef, error) {
 	}
 	needed := make(map[string]lazyRef)
 	seen := make(map[string]bool)
-	for _, snap := range byName {
-		if _, lazy := lazyRefOf(snap.id, snap.info); lazy {
+	for name, info := range infos {
+		if _, lazy := lazyRefOf(ids[name], info); lazy {
 			continue
 		}
-		for name := snap.info.Parent; name != "" && !seen[name]; {
+		for name := info.Parent; name != "" && !seen[name]; name = infos[name].Parent {
 			seen[name] = true
-			parent, ok := byName[name]
-			if !ok {
-				break
-			}
-			if ref, lazy := lazyRefOf(parent.id, parent.info); lazy {
+			if ref, lazy := lazyRefOf(ids[name], infos[name]); lazy {
 				needed[ref.id] = ref
 			}
-			name = parent.info.Parent
 		}
 	}
 	return needed, nil
 }
 
-// clearStale detaches the mounts a previous process left under root. Their
-// FUSE connections died with it, so containers still using them get I/O
-// errors, never another layer's files.
+// clearStale detaches the layer mounts a previous process left under root.
+// Their FUSE connections died with it, so containers still using them get
+// I/O errors, never another layer's files.
 func clearStale(root string) error {
-	f, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		return fmt.Errorf("read mounts: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	prefix := filepath.Join(root, "snapshots") + "/"
-	var stale []string
-	lines := bufio.NewScanner(f)
-	for lines.Scan() {
-		fields := strings.Fields(lines.Text())
-		for i, field := range fields {
-			if field == "-" && i+1 < len(fields) && len(fields) > 4 {
-				if fields[i+1] == fuseType && strings.HasPrefix(fields[4], prefix) {
-					stale = append(stale, fields[4])
-				}
-				break
-			}
-		}
-	}
-	if err := lines.Err(); err != nil {
-		return fmt.Errorf("read mounts: %w", err)
-	}
-	for _, path := range stale {
-		if err := unix.Unmount(path, unix.MNT_DETACH); err != nil {
-			return fmt.Errorf("detach stale layer mount %s: %w", path, err)
-		}
+	if err := mount.UnmountRecursive(filepath.Join(root, "snapshots"), unix.MNT_DETACH); err != nil {
+		return fmt.Errorf("detach stale layer mounts: %w", err)
 	}
 	return nil
 }

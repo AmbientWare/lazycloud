@@ -245,7 +245,7 @@ func layerMounts(t *testing.T, root string) []string {
 	}
 	var found []string
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if fields := strings.Fields(line); len(fields) > 4 && strings.HasPrefix(fields[4], root) && strings.Contains(line, fuseType) {
+		if fields := strings.Fields(line); len(fields) > 4 && strings.HasPrefix(fields[4], root) && strings.Contains(line, " fuse."+layersource.Snapshotter+" ") {
 			found = append(found, fields[4])
 		}
 	}
