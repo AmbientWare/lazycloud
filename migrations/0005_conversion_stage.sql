@@ -16,6 +16,8 @@ alter table image_layers drop column index_bytes, drop column data_bytes, drop c
 -- deletes it when it retires a layer of the reference.
 alter table image_traces drop constraint image_traces_reference_fkey;
 
+comment on table image_traces is
+    'The frames a workspace''s containers of a reference read from start until ready; kept while the reference has layer rows.';
 comment on column image_layer_uploads.container_id is
     'The build container, or the server conversion''s lease token, the upload was offered to; null for a pair the sweep retired.';
 comment on column images.ready_at is 'When the image was last published.';

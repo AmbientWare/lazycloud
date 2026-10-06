@@ -734,17 +734,23 @@ func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Only the newest converted managed image of each Python version and
-	// architecture is live without a release.
+	// Without a release, the newest converted managed image of each Python
+	// version and architecture is live, and an older one while a container
+	// runs it.
 	if _, err := f.pool.Exec(ctx, `
 insert into managed_images (python_version, template, source, created_at)
-values ('3.12', 'old/{version}', 'old-source', now() - interval '1 hour'), ('3.12', 'new/{version}', 'new-source', now());
+values ('3.12', 'oldest/{version}', 'oldest-source', now() - interval '2 hours'),
+       ('3.12', 'old/{version}', 'old-source', now() - interval '1 hour'), ('3.12', 'new/{version}', 'new-source', now());
 insert into platform_images (reference, architecture, mirror)
-values ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'),
+values ('oldest-source', 'amd64', 'oldest-amd64'), ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'),
        ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
 		t.Fatal(err)
 	}
-	superseded, newest, onlyArm := pair("old-amd64"), pair("new-amd64"), pair("old-arm64")
+	if _, err := f.pool.Exec(ctx, `insert into containers (workspace_id, state, slots, cpu_millis, memory_bytes, host_id, release_id, image_reference)
+		values ($1, 'ready', 1, 100, 100, $2, $3, 'oldest-amd64')`, uuid.UUID(ws), uuid.UUID(f.host(t)), release); err != nil {
+		t.Fatal(err)
+	}
+	superseded, newest, onlyArm, running := pair("old-amd64"), pair("new-amd64"), pair("old-arm64"), pair("oldest-amd64")
 
 	if err := f.images.SweepLayers(ctx, logger); err != nil {
 		t.Fatal(err)
@@ -756,7 +762,7 @@ values ('old-source', 'amd64', 'old-amd64'), ('old-source', 'arm64', 'old-arm64'
 	if f.count(t, "select count(*) from image_reference_uses where reference = 'old'") != 0 {
 		t.Fatal("a use older than the grace period stays")
 	}
-	if f.count(t, "select count(*) from image_layers where id = any($1) and unreferenced_since is null", []uuid.UUID{live, shared, started, newest, onlyArm}) != 5 {
+	if f.count(t, "select count(*) from image_layers where id = any($1) and unreferenced_since is null", []uuid.UUID{live, shared, started, newest, onlyArm, running}) != 6 {
 		t.Fatal("a pinned, shared or started pair started its grace period")
 	}
 	// stale has been unused past the grace period; recent only just.

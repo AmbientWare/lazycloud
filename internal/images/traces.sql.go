@@ -23,9 +23,14 @@ with layers as (
                              and f.frame >= 0 and f.frame < layers.frames[t.layer + 1]), false) as ok
     from layers, unnest($2::int[]) with ordinality as t (layer, n)
     join unnest($3::int[]) with ordinality as f (frame, n) using (n)
+), touched as (
+    update image_layers set unreferenced_since = null
+    where id in (select layer_id from image_reference_layers where reference = $1) and (select ok from fits)
+    returning id
 ), stored as (
     insert into image_traces (reference, workspace_id, layers, frames)
-    select $1, $4, $2::int[], $3::int[] from fits where fits.ok
+    select $1, $4, $2::int[], $3::int[] from fits, layers
+    where fits.ok and (select count(*) from touched) = cardinality(layers.frames)
     on conflict (reference, workspace_id) do update
     set layers = excluded.layers, frames = excluded.frames, recorded_at = now()
     where image_traces.recorded_at < now() - make_interval(secs => $5::float8)
@@ -42,7 +47,10 @@ type RecordTraceParams struct {
 }
 
 // Whether every read names a frame of reference's layer rows. A trace that
-// fits is stored unless one younger than max_age_seconds is.
+// fits is stored unless one younger than max_age_seconds is. Storing it
+// ends the grace period of the layers it reads and holds their rows, so a
+// concurrent retirement either waits and keeps them or deletes them first
+// and the trace is not stored.
 func (q *Queries) RecordTrace(ctx context.Context, arg RecordTraceParams) (bool, error) {
 	row := q.db.QueryRow(ctx, recordTrace,
 		arg.Reference,

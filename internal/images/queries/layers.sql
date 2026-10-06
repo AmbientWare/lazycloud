@@ -123,10 +123,10 @@ on conflict (reference) do update set used_at = excluded.used_at;
 -- pairs one uses again. Live references are those pinned by releases that
 -- can still start containers (active releases of workloads and apps not
 -- deleted, live previews, releases with containers or tasks under way),
--- the newest converted managed image of each Python version and
--- architecture, and references published or started within the grace
--- period. Each part reads live rows by an index; image history is not
--- read.
+-- the images containers not stopped run, the newest converted managed
+-- image of each Python version and architecture, and references published
+-- or started within the grace period. Each part reads live rows by an
+-- index; image history is not read.
 with live_releases as (
     select w.active_release_id as id from workloads w
     join apps a on a.id = w.app_id
@@ -139,6 +139,8 @@ with live_releases as (
     select release_id from tasks where status in ('queued', 'running')
 ), live as (
     select r.spec -> 'image' ->> 'reference' as reference from releases r join live_releases l on l.id = r.id
+    union
+    select image_reference from containers where state <> 'stopped' and image_reference is not null
     union
     (select distinct on (m.python_version, p.architecture) p.mirror
      from managed_images m join platform_images p on p.reference = m.source
