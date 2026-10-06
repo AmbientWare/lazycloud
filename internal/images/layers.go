@@ -28,10 +28,7 @@ const (
 	// layerGrace is how long a pair stays after the last live image stopped
 	// using it, longer than any build that found it converted takes to
 	// publish.
-	layerGrace = 24 * time.Hour
-	// maxStoredIndex bounds the index the server reads to check an upload;
-	// imagefs decodes no larger index.
-	maxStoredIndex  = 64 << 20
+	layerGrace      = 24 * time.Hour
 	layerSweepBatch = 100
 )
 
@@ -324,13 +321,12 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 	if pushed.target.scoped {
 		scope = &pushed.workspace
 	}
-	owner, reader := scope, scope
 	// Inserts first and in blob order, so concurrent completions wait on
 	// each other's pairs in one order.
 	slices.SortFunc(converted, func(a, b conversion) int { return cmp.Compare(a.blob, b.blob) })
 	for _, c := range converted {
 		n, err := q.RecordLayer(ctx, RecordLayerParams{
-			ID: c.upload, BlobDigest: c.blob, DiffID: c.diffID, WorkspaceID: owner, IndexBytes: c.indexBytes, DataBytes: c.dataBytes,
+			ID: c.upload, BlobDigest: c.blob, DiffID: c.diffID, WorkspaceID: scope, IndexBytes: c.indexBytes, DataBytes: c.dataBytes,
 			Entries: int32(c.entries), Frames: int32(c.frames), //nolint:gosec // imagefs bounds both below 2^31.
 		})
 		if err != nil {
@@ -349,7 +345,7 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 	for n, l := range pushed.layers {
 		blobs[n] = l.blob
 	}
-	rows, err := q.UsableLayers(ctx, UsableLayersParams{Blobs: blobs, WorkspaceID: reader})
+	rows, err := q.UsableLayers(ctx, UsableLayersParams{Blobs: blobs, WorkspaceID: scope})
 	if err != nil {
 		return nil, "", fmt.Errorf("read converted layers: %w", err)
 	}
@@ -400,7 +396,7 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 			if !ok || (row.UploadID != nil && c.DataBytes == o.dataBytes && c.IndexBytes == o.indexBytes) {
 				continue
 			}
-			if c.DataBytes < 0 || c.DataBytes > maxDataBytes(blobBytes[o.blob]) || c.IndexBytes <= 0 || c.IndexBytes > maxStoredIndex {
+			if c.DataBytes < 0 || c.DataBytes > maxDataBytes(blobBytes[o.blob]) || c.IndexBytes <= 0 || c.IndexBytes > imagefs.MaxIndexSize {
 				return nil, fmt.Sprintf("layer %s converted to %d data and %d index bytes, more than a %d byte layer needs",
 					o.blob, c.DataBytes, c.IndexBytes, blobBytes[o.blob]), nil
 			}

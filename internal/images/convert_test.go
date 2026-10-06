@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 
@@ -129,6 +130,16 @@ func mustRef(t *testing.T, ref string) name.Reference {
 	return parsed
 }
 
+// pullImage reads the image ref names.
+func pullImage(t *testing.T, ref string) v1.Image {
+	t.Helper()
+	img, err := remote.Image(mustRef(t, ref), remote.WithContext(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
 func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
@@ -163,14 +174,7 @@ func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
 	if err := f.pool.QueryRow(t.Context(), "select i.id from images i join image_builds b on b.image_digest = i.digest where b.id = $1", waits[0]).Scan(&mirrorID); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := name.ParseReference(old, name.Insecure)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original, err := remote.Image(parsed, remote.WithContext(t.Context()))
-	if err != nil {
-		t.Fatal(err)
-	}
+	original := pullImage(t, old)
 	host := f.host(t)
 	repository := f.imageRepository(t, mirrorID)
 	f.publish(t, host, placeAndStart(t, f, host), repository, pushImage(t, repository+":mirror", original))
@@ -289,14 +293,7 @@ func TestFilesystemImagesPublishConverted(t *testing.T) {
 	host := f.host(t)
 	// A filesystem is the workspace's own: it converts into its repository.
 	repository := f.workspaceImageRepository(t, ws, id)
-	parsed, err := name.ParseReference(pushed, name.Insecure)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := remote.Image(parsed, remote.WithContext(t.Context()))
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := pullImage(t, pushed)
 	digest := pushImage(t, repository+":mirror", snapshot)
 	f.publish(t, host, placeAndStart(t, f, host), repository, digest)
 	if ref, err := f.images.Deployable(t.Context(), ws, id, "3.12"); err != nil || ref != repository+"@"+digest {
@@ -353,14 +350,7 @@ func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
 	if err := f.pool.QueryRow(t.Context(), "select i.id from images i join image_builds b on b.image_digest = i.digest where b.state = 'building'").Scan(&mirrorID); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := name.ParseReference(reference, name.Insecure)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original, err := remote.Image(parsed, remote.WithContext(t.Context()))
-	if err != nil {
-		t.Fatal(err)
-	}
+	original := pullImage(t, reference)
 	repository := f.imageRepository(t, mirrorID)
 	f.publish(t, host, placeAndStart(t, f, host), repository, pushImage(t, repository+":mirror", original))
 	pull, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference)
@@ -447,14 +437,7 @@ func TestAWorkspacesOwnReferenceConvertsOnItsOwnHosts(t *testing.T) {
 	if command.PushRepository != repository {
 		t.Fatalf("the mirror pushes to %s, want %s", command.PushRepository, repository)
 	}
-	parsed, err := name.ParseReference(reference, name.Insecure)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original, err := remote.Image(parsed, remote.WithContext(t.Context()))
-	if err != nil {
-		t.Fatal(err)
-	}
+	original := pullImage(t, reference)
 	f.publish(t, connected, container, repository, pushImage(t, repository+":mirror", original))
 	if pull, err := f.images.ConvertedPull(t.Context(), ws, r.Image.ID, reference); err != nil || pull.Reference != reference {
 		t.Fatalf("the reference converts: %+v %v", pull, err)
@@ -497,14 +480,7 @@ func TestASweptImageReconvertsByMirroringItsReference(t *testing.T) {
 		t.Fatalf("the image's steps ran %d times", n)
 	}
 	mirrorRepository := f.imageRepository(t, mirrorOf(t, f))
-	parsed, err := name.ParseReference(reference, name.Insecure)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original, err := remote.Image(parsed, remote.WithContext(t.Context()))
-	if err != nil {
-		t.Fatal(err)
-	}
+	original := pullImage(t, reference)
 	f.publish(t, host, placeAndStart(t, f, host), mirrorRepository, pushImage(t, mirrorRepository+":mirror", original))
 	if ref, err := f.images.Deployable(t.Context(), ws, r.Image.ID, "3.12"); err != nil || ref != reference {
 		t.Fatalf("the image deploys its own reference again: %s %v", ref, err)

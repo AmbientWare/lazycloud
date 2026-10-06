@@ -91,12 +91,12 @@ func FetchIndex(ctx context.Context, client *http.Client, url string) ([]byte, I
 	}
 	// A stored index is compressed, so it is no larger than its decoded
 	// bound.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexSize+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxIndexSize+1))
 	if err != nil {
 		return nil, Index{}, fmt.Errorf("read index: %w", err)
 	}
-	if len(raw) > maxIndexSize {
-		return nil, Index{}, fmt.Errorf("%w: stored index exceeds %d bytes", ErrInvalidIndex, maxIndexSize)
+	if len(raw) > MaxIndexSize {
+		return nil, Index{}, fmt.Errorf("%w: stored index exceeds %d bytes", ErrInvalidIndex, MaxIndexSize)
 	}
 	ix, err := Unmarshal(raw)
 	if err != nil {

@@ -1,7 +1,6 @@
 package images
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -498,19 +497,12 @@ func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, aut
 		return nil, fmt.Errorf("%w: create layer data file: %w", ErrServerDisk, err)
 	}
 	defer func() { _ = data.Close() }()
-	ix, err := imagefs.Convert(ctx, uncompressed, data)
+	ix, index, err := imagefs.ConvertLayer(ctx, uncompressed, data, imagefs.Digest(diffID))
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
-		return nil, &ConversionError{Reason: err.Error()}
+		return nil, &ConversionError{Reason: fmt.Sprintf("layer %s: %v", blob.DigestStr(), err)}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("convert layer: %w", err)
-	}
-	if string(ix.Layer) != diffID {
-		return nil, &ConversionError{Reason: fmt.Sprintf("layer %s holds %s, but the image config names %s", blob.DigestStr(), ix.Layer, diffID)}
-	}
-	index, err := ix.Marshal()
-	if err != nil {
-		return nil, fmt.Errorf("encode index: %w", err)
 	}
 	return &platformLayer{data: data.Name(), dataBytes: ix.DataSize, index: index}, nil
 }
@@ -588,27 +580,7 @@ func (i *Images) uploadPlatformLayer(ctx context.Context, u LayerUpload, l *plat
 		return nil, fmt.Errorf("open layer data: %w", err)
 	}
 	defer func() { _ = data.Close() }()
-	etags := make([]string, len(u.DataParts))
-	for n, part := range u.DataParts {
-		offset := int64(n) * u.PartBytes
-		length := min(u.PartBytes, l.dataBytes-offset)
-		err := retryPlatform(ctx, func() error {
-			var err error
-			etags[n], err = imagefs.PutObject(ctx, i.transfer, part, io.NewSectionReader(data, offset, length), length)
-			return err
-		})
-		if err != nil {
-			return nil, fmt.Errorf("upload data part %d: %w", n+1, err)
-		}
-	}
-	err = retryPlatform(ctx, func() error {
-		_, err := imagefs.PutObject(ctx, i.transfer, u.Index, bytes.NewReader(l.index), int64(len(l.index)))
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("upload index: %w", err)
-	}
-	return etags, nil
+	return imagefs.UploadPair(ctx, i.transfer, data, l.dataBytes, l.index, u.DataParts, u.PartBytes, u.Index, retryPlatform) //nolint:wrapcheck // The caller names the layer.
 }
 
 // retryPlatform runs fn until it succeeds, fails for the image, the

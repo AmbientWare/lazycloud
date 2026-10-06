@@ -20,9 +20,9 @@ const (
 	// formatVersion is the only stored format this package reads and writes.
 	formatVersion uint32 = 1
 	headerSize           = len(indexMagic) + 4
-	// maxIndexSize bounds a decoded index. The index of a 1 GiB torch layer
+	// MaxIndexSize bounds a decoded index. The index of a 1 GiB torch layer
 	// with 26,516 entries decodes to 3.0 MB.
-	maxIndexSize = 64 << 20
+	MaxIndexSize = 64 << 20
 	// maxEntries and maxFrames bound the records Unmarshal allocates, which
 	// an index of empty records could otherwise multiply far past its size.
 	// maxFrames covers a 256 GiB layer.
@@ -91,7 +91,7 @@ func Unmarshal(b []byte) (Index, error) {
 	if v := binary.BigEndian.Uint32(b[len(indexMagic):headerSize]); v != formatVersion {
 		return Index{}, fmt.Errorf("%w: %d, this reader knows %d", ErrUnsupportedVersion, v, formatVersion)
 	}
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxIndexSize), zstd.IgnoreChecksum(false))
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(MaxIndexSize), zstd.IgnoreChecksum(false))
 	if err != nil {
 		return Index{}, fmt.Errorf("start index decoder: %w", err)
 	}

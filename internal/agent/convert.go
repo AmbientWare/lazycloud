@@ -1,11 +1,9 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -185,19 +183,12 @@ func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, auth a
 			_ = os.Remove(data.Name())
 		}
 	}()
-	ix, err := imagefs.Convert(ctx, tarball, data)
+	ix, index, err := imagefs.ConvertLayer(ctx, tarball, data, imagefs.Digest(diffID))
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
 		return nil, imagefs.Index{}, fmt.Errorf("%w: %w", errLayerContent, err)
 	}
 	if err != nil {
 		return nil, imagefs.Index{}, err //nolint:wrapcheck // The caller names the layer.
-	}
-	if string(ix.Layer) != diffID {
-		return nil, imagefs.Index{}, fmt.Errorf("%w: its content is %s, but the image config names %s", errLayerContent, ix.Layer, diffID)
-	}
-	index, err := ix.Marshal()
-	if err != nil {
-		return nil, imagefs.Index{}, fmt.Errorf("encode index: %w", err)
 	}
 	if err := data.Sync(); err != nil {
 		return nil, imagefs.Index{}, fmt.Errorf("write layer data: %w", err)
@@ -231,37 +222,13 @@ func (p *layerPublish) upload(ctx context.Context, uploads []*hostproto.LayerUpl
 	return out, nil
 }
 
-// uploadLayer PUTs l's data in the parts upload names, then its index:
-// the index's presence marks a complete pair.
+// uploadLayer PUTs l's data in the parts upload names, then its index.
 func (a *Agent) uploadLayer(ctx context.Context, l *convertedLayer, upload *hostproto.LayerUpload) ([]string, error) {
-	parts, size := upload.GetDataPartUrls(), upload.GetDataPartBytes()
-	if size <= 0 || int64(len(parts)) != (l.dataBytes+size-1)/size {
-		return nil, fmt.Errorf("%d parts of %d bytes cannot hold %d bytes", len(parts), size, l.dataBytes)
-	}
 	data, err := os.Open(l.data)
 	if err != nil {
 		return nil, fmt.Errorf("open layer data: %w", err)
 	}
 	defer func() { _ = data.Close() }()
-	etags := make([]string, len(parts))
-	for n, part := range parts {
-		offset := int64(n) * size
-		length := min(size, l.dataBytes-offset)
-		err := retryTransfer(ctx, func() error {
-			var err error
-			etags[n], err = imagefs.PutObject(ctx, a.http, part, io.NewSectionReader(data, offset, length), length)
-			return err
-		})
-		if err != nil {
-			return nil, fmt.Errorf("upload data part %d: %w", n+1, err)
-		}
-	}
-	err = retryTransfer(ctx, func() error {
-		_, err := imagefs.PutObject(ctx, a.http, upload.GetIndexUrl(), bytes.NewReader(l.index), int64(len(l.index)))
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("upload index: %w", err)
-	}
-	return etags, nil
+	return imagefs.UploadPair(ctx, a.http, data, l.dataBytes, l.index, //nolint:wrapcheck // The caller names the layer.
+		upload.GetDataPartUrls(), upload.GetDataPartBytes(), upload.GetIndexUrl(), retryTransfer)
 }
