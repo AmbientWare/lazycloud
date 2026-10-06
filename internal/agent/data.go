@@ -187,6 +187,7 @@ func (d *dataLink) forward(ctx context.Context) {
 			break
 		}
 		forwardHTTP(requestCtx, stream, in, c.requests, "http://container", kind.Http, true)
+		d.a.layers.served(c.id)
 	case *hostproto.RequestHead_Control:
 		if c == nil || !c.reachable() {
 			_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING, "the container does not run on this host"))
@@ -204,6 +205,7 @@ func (d *dataLink) forward(ctx context.Context) {
 			break
 		}
 		forwardHTTP(requestCtx, stream, in, c.ports, "http://127.0.0.1:"+strconv.Itoa(int(port)), kind.Port.GetHttp(), false)
+		d.a.layers.served(c.id)
 	case *hostproto.RequestHead_Sync:
 		d.serveSync(stream, in, c)
 	default:

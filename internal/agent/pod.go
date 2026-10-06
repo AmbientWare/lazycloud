@@ -136,5 +136,6 @@ func (c *container) onCommandExited(exited *hostproto.CommandExited) {
 	c.mu.Lock()
 	c.commandExit = &code
 	c.mu.Unlock()
+	c.a.layers.served(c.id)
 	c.log.Info("pod command exited", "exit_code", code)
 }

@@ -31,10 +31,10 @@ type FrameRead struct {
 }
 
 // StartupTrace returns the frames the workspace's containers of reference
-// read before they were ready, empty when none is stored, and whether the
-// next start should record them again. Traces are kept per workspace: what
-// a container reads says something of its code, so no other workspace's
-// host gets it.
+// read through their first task or request, empty when none is stored, and
+// whether the next start should record them again. Traces are kept per
+// workspace: what a container reads says something of its code, so no
+// other workspace's host gets it.
 func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceID, reference string) ([]FrameRead, bool, error) {
 	row, err := i.queries.StartupTrace(ctx, StartupTraceParams{Reference: reference, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -51,8 +51,8 @@ func (i *Images) StartupTrace(ctx context.Context, workspace identity.WorkspaceI
 }
 
 // RecordTrace stores the frames a container of the workspace read from
-// reference before it was ready, unless a trace younger than traceAge is
-// stored. A trace that does not fit the reference's layers is
+// reference through its first task or request, unless a trace younger than
+// traceAge is stored. A trace that does not fit the reference's layers is
 // ErrInvalidTrace.
 func (i *Images) RecordTrace(ctx context.Context, workspace identity.WorkspaceID, reference string, reads []FrameRead) error {
 	if len(reads) == 0 {
