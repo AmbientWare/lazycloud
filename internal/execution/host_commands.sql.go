@@ -7,6 +7,7 @@ package execution
 
 import (
 	"context"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
@@ -166,7 +167,7 @@ func (q *Queries) RecordImageReference(ctx context.Context, arg RecordImageRefer
 const startingContainersOnHost = `-- name: StartingContainersOnHost :many
 select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
        r.spec, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,
-       r.workload_id, wl.kind as workload_kind, c.traceparent
+       r.workload_id, wl.kind as workload_kind, c.traceparent, c.assigned_at
 from containers c
 join releases r on r.id = c.release_id
 join workloads wl on wl.id = r.workload_id
@@ -191,6 +192,7 @@ type StartingContainersOnHostRow struct {
 	WorkloadID    uuid.UUID
 	WorkloadKind  string
 	Traceparent   *string
+	AssignedAt    *time.Time
 }
 
 func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]StartingContainersOnHostRow, error) {
@@ -218,6 +220,7 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 			&i.WorkloadID,
 			&i.WorkloadKind,
 			&i.Traceparent,
+			&i.AssignedAt,
 		); err != nil {
 			return nil, err
 		}

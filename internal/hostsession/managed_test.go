@@ -1,17 +1,21 @@
 package hostsession_test
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // A start that needs the managed image waits while another server converts
 // it, its syncs writing nothing and building nothing, and is sent with the
-// converted copy once that server records it. The wait is the start's
-// conversion stage.
+// converted copy once that server records it. The wait, across the session
+// that ended during it, is the start's conversion stage from the
+// container's assignment.
 func TestStartWaitsForTheManagedImageConversion(t *testing.T) {
 	h := start(t)
 	host, ctx := h.enroll()
@@ -19,21 +23,25 @@ func TestStartWaitsForTheManagedImageConversion(t *testing.T) {
 	h.exec(`insert into platform_images (reference, architecture, lease_token, leased_until)
 		values ($1, 'amd64', gen_random_uuid(), now() + interval '1 hour')`, managedSource("3.11"))
 	ws, container := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.11"}}`)
-	stream := open(t, ctx, h.client)
-
-	got := make(chan string, 1)
-	go func() {
-		for {
-			msg, err := stream.Recv()
-			if err != nil {
-				return
+	sent := func(stream hostStream) <-chan string {
+		got := make(chan string, 1)
+		go func() {
+			for {
+				msg, err := stream.Recv()
+				if err != nil {
+					return
+				}
+				if start := msg.GetStart(); start.GetContainerId() == container.String() {
+					got <- start.GetImage()
+					return
+				}
 			}
-			if start := msg.GetStart(); start.GetContainerId() == container.String() {
-				got <- start.GetImage()
-				return
-			}
-		}
-	}()
+		}()
+		return got
+	}
+	first, endFirst := context.WithCancel(ctx)
+	defer endFirst()
+	got := sent(open(t, first, h.client))
 	versions := func() string {
 		var v string
 		if err := h.pool.QueryRow(t.Context(), `
@@ -56,6 +64,13 @@ union all select string_agg(xmin::text, ',') from managed_images`).Scan(&v); err
 		t.Fatalf("waiting syncs started %d builds", n)
 	}
 
+	endFirst()
+	got = sent(open(t, ctx, h.client))
+	select {
+	case image := <-got:
+		t.Fatalf("the next session sent the start with %s before its image was converted", image)
+	case <-time.After(500 * time.Millisecond):
+	}
 	convertManagedImage(t, h.pool, "3.11")
 	select {
 	case image := <-got:
@@ -76,8 +91,13 @@ union all select string_agg(xmin::text, ',') from managed_images`).Scan(&v); err
 			return s.Stage == apitypes.LifecycleStageKindConversion
 		})
 		if i >= 0 {
-			if ms := *lifecycle.Stages[i].DurationMs; ms < 900 {
-				t.Fatalf("the conversion stage lasted %d ms of a wait of about a second", ms)
+			var assigned time.Time
+			if err := h.pool.QueryRow(t.Context(), "select assigned_at from containers where id = $1", uuid.UUID(container)).Scan(&assigned); err != nil {
+				t.Fatal(err)
+			}
+			if stage := lifecycle.Stages[i]; !stage.StartedAt.Equal(assigned) || *stage.DurationMs < 900 {
+				t.Fatalf("the conversion stage began at %s, assigned at %s, and lasted %d ms of a wait of over a second",
+					stage.StartedAt, assigned, *stage.DurationMs)
 			}
 			break
 		}

@@ -256,9 +256,6 @@ func (l *layerSources) mark(container string, change func(*startup)) {
 // takeTrace stops counting container's trace and reports whether it ran
 // and whether another start shared a layer with it.
 func (l *layerSources) takeTrace(container string) (tracing, shared bool) {
-	if l == nil {
-		return false, false
-	}
 	l.smu.Lock()
 	defer l.smu.Unlock()
 	s, ok := l.startups[container]

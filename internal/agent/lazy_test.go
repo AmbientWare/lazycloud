@@ -31,7 +31,8 @@ import (
 
 // lazyImages are the workload and platform images the tests start from a
 // registry. Every host reads images through its snapshotter, so TestMain
-// converts their layers into layerBucket, as the server does, and start commands and sessions carry the grants it would send.
+// converts their layers into layerBucket, as the server does, and start
+// commands and sessions carry the grants it would send.
 var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage, platformimages.Builder, platformimages.Mount}
 
 // imageLayers holds the layer grants of each of lazyImages.
