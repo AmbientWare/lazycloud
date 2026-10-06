@@ -47,11 +47,10 @@ func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
 	for range 2 * replicas {
 		next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil })
 	}
-	// The sync that sends the starts resolves each image once: the
-	// workspace image's architecture, the managed image's pin, the host's
-	// architecture and the platform copy, and one signing per image.
+	// The sync that sends the starts resolves each image once, reads the
+	// layers of all of them in one query, and each image's trace once.
 	first := counter.take()
-	for name, want := range map[string]int{"ImageArchitecture": 1, "ManagedSource": 1, "HostArchitecture": 1, "PlatformImagesOf": 1, "LayerReadsFor": 2} {
+	for name, want := range map[string]int{"ImageOf": 2, "ManagedSource": 1, "PlatformImages": 1, "LayerReadsFor": 1, "StartupTrace": 2} {
 		if first[name] != want {
 			t.Errorf("sending %d starts ran %s %d times, want %d", 2*replicas, name, first[name], want)
 		}
@@ -64,7 +63,7 @@ func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
 	if syncs == 0 {
 		t.Fatal("no sync ran")
 	}
-	for _, name := range []string{"ReferenceLayers", "ImageRuntime", "LatestBuild"} {
+	for _, name := range []string{"ImageOf", "LatestBuild"} {
 		// A sync may straddle the window's start.
 		if later[name] > syncs+1 {
 			t.Errorf("%d syncs ran %s %d times for %d waiting replicas", syncs, name, later[name], replicas)

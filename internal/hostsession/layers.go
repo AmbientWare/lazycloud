@@ -1,8 +1,11 @@
 package hostsession
 
 import (
+	"cmp"
 	"context"
+	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -43,36 +46,51 @@ type issuedLayers struct {
 	err    error
 }
 
-// grantLayers signs reads of every layer of reference for the host, once
-// per sync. Layers its region's copy of the layer bucket is not confirmed to
-// hold read from the layer bucket; the session then watches that region's
-// confirmations before a check of the copy starts, so none the check
-// records is missed. One another server records between the read and the
-// watch reaches the host at the grant's renewal.
-func (sess *session) grantLayers(ctx context.Context, cache *syncCache, reference string) ([]*hostproto.LayerGrant, layerGrant, error) {
-	if l, ok := cache.layers[reference]; ok {
-		return l.grants, l.grant, l.err
+// signLayers signs reads of every layer of each of references for the
+// host in one call, skipping those the sync signed already. A reference
+// left out has no converted layers. Layers its region's copy of the layer
+// bucket is not confirmed to hold read from the layer bucket; the session
+// then watches that region's confirmations before a check of the copy
+// starts, so none the check records is missed. One another server records
+// between the read and the watch reaches the host at the grant's renewal.
+func (sess *session) signLayers(ctx context.Context, cache *syncCache, references []string) {
+	references = slices.DeleteFunc(slices.Clone(references), func(r string) bool { _, ok := cache.layers[r]; return ok })
+	if len(references) == 0 {
+		return
 	}
-	issued := time.Now()
-	reads, err := sess.server.images.LayerReadURLs(ctx, reference, sess.host, sess.server.config.LayerLifetime)
-	l := issuedLayers{err: err}
-	if err == nil {
-		first := issued.Add(sess.server.config.LayerLifetime)
-		l.grants = make([]*hostproto.LayerGrant, len(reads.Layers))
-		for n, u := range reads.Layers {
+	slices.Sort(references)
+	references = slices.Compact(references)
+	issued, lifetime := time.Now(), sess.server.config.LayerLifetime
+	reads, err := sess.server.images.LayerReadURLsOf(ctx, references, sess.host, lifetime)
+	for _, reference := range references {
+		r, ok := reads[reference]
+		if err != nil || !ok {
+			cache.layers[reference] = issuedLayers{err: cmp.Or(err, fmt.Errorf("%s: %w", reference, images.ErrNotConverted))}
+			continue
+		}
+		first := issued.Add(lifetime)
+		l := issuedLayers{grants: make([]*hostproto.LayerGrant, len(r.Layers))}
+		for n, u := range r.Layers {
 			l.grants[n] = &hostproto.LayerGrant{DiffId: string(u.DiffID), IndexUrl: u.Index, DataUrl: u.Data, ExpiresAt: timestamppb.New(u.ExpiresAt)}
 			if u.ExpiresAt.Before(first) {
 				first = u.ExpiresAt
 			}
 		}
-		l.grant = layerGrant{renewAt: issued.Add(first.Sub(issued) / 3), unconfirmed: reads.Unconfirmed}
-		if reads.Unconfirmed != "" {
-			sess.replicas.set(sess.server.listener, images.ReplicasConfirmed(reads.Unconfirmed))
-			sess.server.confirmReplicas(reference, reads.Unconfirmed, telemetry.TraceParentOf(ctx)) //nolint:contextcheck // Checks run under the server's lifetime.
+		l.grant = layerGrant{renewAt: issued.Add(first.Sub(issued) / 3), unconfirmed: r.Unconfirmed}
+		if r.Unconfirmed != "" {
+			sess.replicas.set(sess.server.listener, images.ReplicasConfirmed(r.Unconfirmed))
+			sess.server.confirmReplicas(reference, r.Unconfirmed, telemetry.TraceParentOf(ctx)) //nolint:contextcheck // Checks run under the server's lifetime.
 		}
+		cache.layers[reference] = l
 	}
-	cache.layers[reference] = l
-	return l.grants, l.grant, l.err //nolint:wrapcheck // permanentStartFailure matches the owner's error.
+}
+
+// grantLayers returns the grants of reference, signing them unless the sync
+// signed them already.
+func (sess *session) grantLayers(ctx context.Context, cache *syncCache, reference string) ([]*hostproto.LayerGrant, layerGrant, error) {
+	sess.signLayers(ctx, cache, []string{reference})
+	l := cache.layers[reference]
+	return l.grants, l.grant, l.err
 }
 
 // grantFailed logs grants that could not be issued, which the next sync
@@ -102,11 +120,15 @@ func (sess *session) refreshLayers(ctx context.Context, cache *syncCache) error 
 	}
 	sess.layersListed = true
 	live := make(map[string]bool, len(references))
+	var due []string
 	for _, image := range references {
 		live[image] = true
-		if g, ok := sess.layers[image]; ok && !g.due(now) {
-			continue
+		if g, ok := sess.layers[image]; !ok || g.due(now) {
+			due = append(due, image)
 		}
+	}
+	sess.signLayers(ctx, cache, due)
+	for _, image := range due {
 		layers, grant, err := sess.grantLayers(ctx, cache, image)
 		if err != nil {
 			if err := sess.grantFailed(ctx, image, err); err != nil {

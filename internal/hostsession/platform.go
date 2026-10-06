@@ -235,7 +235,12 @@ func (sess *session) syncPlatform(ctx context.Context, cache *syncCache) error {
 			pulls = append(pulls, c)
 		}
 	}
-	var used []string
+	type due struct {
+		key  string
+		pull images.PlatformPull
+	}
+	var answer []due
+	var mirrors []string
 	for n, pull := range pulls {
 		key := pull.Reference
 		if n >= named {
@@ -249,6 +254,15 @@ func (sess *session) syncPlatform(ctx context.Context, cache *syncCache) error {
 		if g, ok := p.answers[key]; ok && !g.due(now) && p.failed[key] == "" {
 			continue
 		}
+		answer = append(answer, due{key, pull})
+		if pull.Pull != nil {
+			mirrors = append(mirrors, pull.Pull.Reference)
+		}
+	}
+	sess.signLayers(ctx, cache, mirrors)
+	var used []string
+	for _, a := range answer {
+		key, pull := a.key, a.pull
 		var layers []*hostproto.LayerGrant
 		var grant layerGrant
 		err := images.ErrNotConverted

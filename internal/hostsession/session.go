@@ -348,6 +348,17 @@ func (sess *session) sync(ctx context.Context) error {
 	if err := sess.syncPlatform(ctx, cache); err != nil {
 		return err
 	}
+	// The images of the starts not sent yet resolve first, so their layers
+	// are signed together.
+	var references []string
+	for _, start := range commands.Start {
+		if !sess.sent["start:"+start.Container.String()] {
+			if pull, err := sess.imagePull(sess.startContext(ctx, start), cache, start.Workspace, start.Spec.Image); err == nil {
+				references = append(references, pull.Reference)
+			}
+		}
+	}
+	sess.signLayers(ctx, cache, references)
 	starting := map[execution.ContainerID]bool{}
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
