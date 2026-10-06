@@ -168,10 +168,9 @@ jobs:
       - name: Export the slowest container start's trace
         if: always()
         run: |
+          # Spans leave the exporters' batches within seconds.
           sleep 10
-          curl -fsS 'http://127.0.0.1:16686/api/traces?service=lazycloud-acceptance&operation=agent.start&limit=200&lookback=2h' |
-            python3 -c 'import json,sys; t=json.load(sys.stdin)["data"]; s=[(sp["duration"],x["traceID"]) for x in t for sp in x["spans"] if sp["operationName"]=="agent.start"]; print(max(s)[1])' >"$RUNNER_TEMP/trace-id"
-          curl -fsS "http://127.0.0.1:16686/api/traces/$(cat "$RUNNER_TEMP/trace-id")" >"$RUNNER_TEMP/cold-start-trace.json"
+          deploy/local/export-trace.sh http://127.0.0.1:16686 lazycloud-acceptance "$RUNNER_TEMP/cold-start-trace.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
