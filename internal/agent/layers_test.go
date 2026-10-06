@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
 )
@@ -229,41 +230,73 @@ func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
 	}
 }
 
-// TestStartupTracesEndWithTheFirstTask: the host's snapshotter still
-// records a start's trace once its container is ready, so a handler's
-// imports are traced, and the agent ends it when the first task ends.
+// TestStartsGrantedBeforeATraceShareIt: the snapshotter leaves complete a
+// trace whose layers another start or a platform image was granted, not
+// yet mounted, before the trace began, so the agent marks the traced start
+// shared and drops its trace.
+func TestStartsGrantedBeforeATraceShareIt(t *testing.T) {
+	l, client := testLayerSources(t)
+	log := slog.New(slog.DiscardHandler)
+	base := testDigest()
+	traced := startingWith(base, testDigest())
+
+	l.begin("a", layersOf(traced.GetLayers()))
+	if err := client.Grant(t.Context(), "a", grantsIn(traced.GetLayers())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.start(t.Context(), log, "b", startingWith(base)); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.StartTrace(t.Context(), "a", layersOf(traced.GetLayers())); err != nil {
+		t.Fatal(err)
+	}
+	if running, complete := traceRunning(t, client, "a"); !running || !complete {
+		t.Fatalf("the snapshotter's trace runs %v, complete %v", running, complete)
+	}
+	shared := func(container string) bool {
+		l.smu.Lock()
+		defer l.smu.Unlock()
+		return l.startups[container].shared
+	}
+	if !shared("a") {
+		t.Fatal("a start a later start shared before its trace began is not marked shared")
+	}
+
+	l.begin("c", []imagefs.Digest{imagefs.Digest(base)})
+	if err := l.grant(t.Context(), "platform:builder", []*hostproto.LayerGrant{layerGrant(base, time.Now().Add(time.Hour))}); err != nil {
+		t.Fatal(err)
+	}
+	if !shared("c") {
+		t.Fatal("a start whose layer a platform image was granted is not marked shared")
+	}
+}
+
+// TestStartupTracesEndWithTheFirstTask: the host's snapshotter traces a
+// start until its first task, request or command ends, the agent reports
+// the frames read, and a later start prefetches them. No other package
+// unpacks this image without the snapshotter, so its layers mount lazily
+// and reads reach FUSE.
 func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
+	const image = "python:3.12-alpine"
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
-	client, err := layersource.Dial(layersource.Socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	tracedStart := func() string {
-		t.Helper()
-		start := e.startCommand("app:handle", 1)
-		start.GetStart().RecordTrace = true
-		s.send(t, start)
-		s.phase(t, start.GetStart().GetContainerId(), ready)
-		return start.GetStart().GetContainerId()
-	}
+	command := &hostproto.PodWorkload{Command: []string{"python3", "-c", "import email, http.client, json, sqlite3"}}
 
-	// Looking at a trace ends it, so one start shows it runs at ready and
-	// a later one, alone on the image again, that it ends with a task.
-	first := tracedStart()
-	time.Sleep(time.Second)
-	if running, _ := traceRunning(t, client, first); !running {
-		t.Fatal("the trace ended when the container was ready, before its first task")
+	start := withImage(e.podCommand(command), image)
+	id := start.GetStart().GetContainerId()
+	start.GetStart().RecordTrace = true
+	s.send(t, start)
+	reported := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) == 0 {
+		t.Fatalf("the host reported %v", reported)
 	}
-	s.send(t, stopCommand(first, 0))
-	s.phase(t, first, exited)
+	s.phase(t, id, exited)
 
-	second := tracedStart()
-	e.completion(e.task(second, `{"args": ["total", [1, 2]]}`))
-	time.Sleep(2 * time.Second)
-	if running, _ := traceRunning(t, client, second); running {
-		t.Fatal("the trace still ran after the first task ended")
+	next := withImage(e.podCommand(command), image)
+	next.GetStart().Prefetch = reported.GetTrace()
+	s.send(t, next)
+	if exit := s.phase(t, next.GetStart().GetContainerId(), exited).GetExit(); exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != 0 {
+		t.Fatalf("a start prefetching the trace exited %v", exit)
 	}
 }
