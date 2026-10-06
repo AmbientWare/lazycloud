@@ -65,12 +65,15 @@ func explain(t *testing.T, pool *pgxpool.Pool, query string, args ...any) string
 	return plan
 }
 
-// summary is a plan's execution time and top-level buffer use.
+// summary is a plan's execution time and top-level buffer use, which is
+// empty when execution touched no buffer.
 func summary(plan string) string {
 	var buffers, timing string
+	planning := false
 	for _, line := range strings.Split(plan, "\n") {
 		line = strings.TrimSpace(line)
-		if buffers == "" && strings.HasPrefix(line, "Buffers:") {
+		planning = planning || line == "Planning:"
+		if buffers == "" && !planning && strings.HasPrefix(line, "Buffers:") {
 			buffers = line
 		}
 		if strings.HasPrefix(line, "Execution Time:") {
@@ -107,16 +110,29 @@ func explainAs(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...any
 	return plan
 }
 
-// buffers is the most shared buffers any node of a plan touched while
-// executing, which a walk over many rows dominates. Planning is left out.
+// buffers is the most shared buffers one relation scan of a plan touched
+// while executing, over all its loops, which a walk over many rows
+// dominates. Planning is left out, and so are the writes and locks of the
+// nodes above the scans: their heap, visibility map and index upkeep per row
+// varies by dozens of pages with what vacuum and B-tree splits left behind.
 func buffers(plan string) int {
-	most := 0
+	relationScans := []string{
+		"Seq Scan", "Index Scan", "Index Only Scan", "Bitmap Heap Scan", "Bitmap Index Scan", "Tid Scan", "Tid Range Scan",
+	}
+	most, scanning := 0, false
 	for _, line := range strings.Split(plan, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "->"))
 		if line == "Planning:" || strings.HasPrefix(line, "Planning Time:") {
 			break
 		}
-		if !strings.HasPrefix(line, "Buffers:") {
+		if strings.Contains(line, "(actual") || strings.Contains(line, "(never executed)") {
+			scanning = false
+			for _, node := range relationScans {
+				scanning = scanning || strings.HasPrefix(line, node+" ")
+			}
+			continue
+		}
+		if !scanning || !strings.HasPrefix(line, "Buffers:") {
 			continue
 		}
 		total := 0
@@ -152,7 +168,7 @@ func costAt(t *testing.T, pool *pgxpool.Pool, scans []scan, label string, limit 
 		for _, mode := range []string{"auto", "force_generic_plan"} {
 			plan := explainAs(t, pool, mode, s.query, s.args...)
 			cost[s.name] = max(cost[s.name], buffers(plan))
-			t.Logf("%s, %s, %s: %s", label, s.name, mode, summary(plan))
+			t.Logf("%s, %s, %s: %s, scans read %d", label, s.name, mode, summary(plan), buffers(plan))
 			if limit <= 0 {
 				continue
 			}
@@ -215,8 +231,8 @@ func planNumber(line, key string) int {
 
 // constantCost fails each scan whose buffers grew from small to large by
 // more than slack and to more than double: a read that walks the grown rows
-// exceeds both many times, while index upkeep on a write varies by a few
-// dozen pages with how the B-trees happen to split.
+// exceeds both many times, while a lookup by key grows by an index level or
+// the dead row versions earlier explained writes left.
 func constantCost(t *testing.T, small, large map[string]int, slack int, grown string) {
 	t.Helper()
 	for name, before := range small {
