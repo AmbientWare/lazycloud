@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     rm -rf /var/lib/apt/lists/* /var/log/*
 ARG PYTHON_VERSION
 ENV UV_PYTHON_INSTALL_DIR=/opt/runtime-python
-# The standard library's bytecode uses unchecked hashes: imports never stat
-# the sources, and clamped file times leave it valid.
+# uv marks its Pythons externally managed; this one is the image's own, so
+# pip installs into it as into a python image's. The standard library's
+# bytecode uses unchecked hashes: imports never stat the sources, and
+# clamped file times leave it valid.
 RUN --mount=from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c,source=/uv,target=/usr/local/bin/uv \
     set -eu; \
     export UV_NO_CACHE=1; \
@@ -20,6 +22,7 @@ RUN --mount=from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e59
     python=$(uv python find "$PYTHON_VERSION" --managed-python --no-project); \
     "$python" -c "import sys; raise SystemExit(sys.version.split()[0] != '$PYTHON_VERSION')"; \
     "$python" -m pip --version >/dev/null 2>&1 || "$python" -m ensurepip; \
+    rm -f "$("$python" -c "import sysconfig; print(sysconfig.get_path('stdlib'))")/EXTERNALLY-MANAGED"; \
     minor=${PYTHON_VERSION%.*}; \
     for link in python python3 "python$minor"; do ln -s "$python" "/usr/local/bin/$link"; done; \
     ln -s "$(dirname "$python")/pip" /usr/local/bin/pip; \

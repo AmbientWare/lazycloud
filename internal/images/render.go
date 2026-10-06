@@ -436,9 +436,15 @@ const compileStdlib = "import compileall, py_compile, sysconfig; " +
 	"raise SystemExit(not compileall.compile_dir(sysconfig.get_path('stdlib'), force=True, quiet=1, " +
 	"invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH))"
 
+// stdlibPath prints where the standard library is, which holds uv's
+// externally managed marker.
+const stdlibPath = "import sysconfig; print(sysconfig.get_path('stdlib'))"
+
 // managedPythonInstall installs exactly version with uv into managedPython,
 // as deploy/images/python builds the managed base, links it as python,
-// python3, python3.X and pip, and compiles its standard library.
+// python3, python3.X and pip, and compiles its standard library. It is the
+// image's own Python, so it drops uv's externally managed marker and pip
+// installs into it as into a python image's.
 func managedPythonInstall(version string) string {
 	quoted := shellQuote(version)
 	return strings.Join([]string{
@@ -448,6 +454,7 @@ func managedPythonInstall(version string) string {
 		"python=$(/usr/local/bin/uv python find " + quoted + " --managed-python --no-project)",
 		`"$python" -c ` + versionCheck(version),
 		`"$python" -m pip --version >/dev/null 2>&1 || "$python" -m ensurepip`,
+		`rm -f "$("$python" -c ` + shellQuote(stdlibPath) + `)/EXTERNALLY-MANAGED"`,
 		"for link in python python3 python" + minorVersion(version) + `; do ln -sf "$python" /usr/local/bin/$link; done`,
 		`ln -sf "$(dirname "$python")/pip" /usr/local/bin/pip`,
 		`"$python" -c ` + shellQuote(compileStdlib),

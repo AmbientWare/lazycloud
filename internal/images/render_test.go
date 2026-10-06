@@ -156,6 +156,7 @@ func TestInstalledPythonIsExactAndLinked(t *testing.T) {
 		"export UV_PYTHON_INSTALL_DIR=/opt/runtime-python UV_NO_CACHE=1",
 		`"$python" -m pip --version >/dev/null 2>&1 || "$python" -m ensurepip`,
 		`ln -sf "$(dirname "$python")/pip" /usr/local/bin/pip`,
+		`/EXTERNALLY-MANAGED"`,
 		`"$python" -c ` + shellQuote(compileStdlib),
 	} {
 		if !strings.Contains(install, want) {
