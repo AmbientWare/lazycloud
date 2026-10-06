@@ -183,11 +183,11 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	references := append(platformimages.All(), source)
-	g, ctx := errgroup.WithContext(ctx)
+	g, converting := errgroup.WithContext(ctx)
 	for _, reference := range references {
 		g.Go(func() error {
 			began := time.Now()
-			if err := im.ConvertPlatformImage(ctx, reference, goruntime.GOARCH); err != nil {
+			if err := im.ConvertPlatformImage(converting, reference, goruntime.GOARCH); err != nil {
 				return err
 			}
 			fmt.Printf("converted %s in %s\n", reference, time.Since(began).Round(time.Millisecond))
