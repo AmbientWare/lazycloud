@@ -9,7 +9,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
-	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
@@ -48,9 +47,8 @@ func openRunning(t *testing.T, ctx context.Context, client hostproto.HostService
 // records that one's copy the session sends it, and grants are renewed
 // before they expire.
 func TestSessionsSendPlatformImagesOnceConverted(t *testing.T) {
-	h := start(t)
 	const lifetime = 3 * time.Second
-	hostsession.SetLayerLifetime(h.server, lifetime)
+	h := start(t, grantsLasting(lifetime))
 	_, ctx := h.enroll()
 	ready, failing := platformimages.Builder, platformimages.Mount
 	readyMirror, failingMirror := reference("builder-copy"), reference("mount-copy")
@@ -190,9 +188,8 @@ func TestAFailedPlatformImageIsReadAgainAfterItsRetryPeriod(t *testing.T) {
 // as long as the session lasts, even when the agent names another image
 // now; a copy the server never recorded gets none.
 func TestRunningPlatformCopiesKeepTheirGrants(t *testing.T) {
-	h := start(t)
 	const lifetime = 3 * time.Second
-	hostsession.SetLayerLifetime(h.server, lifetime)
+	h := start(t, grantsLasting(lifetime))
 	_, ctx := h.enroll()
 	current, old := reference("mount-copy"), reference("old-mount-copy")
 	currentLayer, oldLayer := h.storeLayer("mount"), h.storeLayer("old mount")
@@ -220,5 +217,31 @@ func TestRunningPlatformCopiesKeepTheirGrants(t *testing.T) {
 	}
 	if grants[old] < 2 || grants[current] < 2 || grants[unknown] != 0 {
 		t.Fatalf("grants sent per copy: %v", grants)
+	}
+}
+
+// A copy the host's containers run gets grants though the Hello names no
+// platform image, and grants that cannot be issued at first are issued at
+// a later sync.
+func TestARunningCopyIsGrantedWithNoNamedImages(t *testing.T) {
+	h := start(t)
+	_, ctx := h.enroll()
+	mirror, layer := reference("mount-copy"), h.storeLayer("mount")
+	h.publish(mirror, layer)
+	h.exec(`insert into platform_images (reference, architecture, mirror) values ($1, 'amd64', $2)`, platformimages.Mount, mirror)
+	// Signing reads the layer rows, so hiding them fails it.
+	h.exec("alter table image_layers rename to image_layers_hidden")
+	in := commands(t, openRunning(t, ctx, h.client, nil, []string{mirror}))
+	select {
+	case m := <-in:
+		if m.GetPlatformImages() != nil {
+			t.Fatal("a copy was granted with its layers hidden")
+		}
+	case <-time.After(300 * time.Millisecond):
+	}
+	h.exec("alter table image_layers_hidden rename to image_layers")
+	got := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetPlatformImages() != nil }).GetPlatformImages().GetImages()
+	if len(got) != 1 || got[0].GetImage() != mirror || got[0].GetLayers()[0].GetDiffId() != string(layer.diffID) {
+		t.Fatalf("the running copy's grant: %v", got)
 	}
 }

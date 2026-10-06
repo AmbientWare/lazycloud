@@ -1,25 +1,20 @@
 package snapshotter
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/core/snapshots/storage"
 	"github.com/containerd/errdefs"
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -27,9 +22,6 @@ import (
 )
 
 const (
-	// fuseType is the mounts' filesystem type, which finds those a previous
-	// process left.
-	fuseType = "fuse." + layersource.Snapshotter
 	// maxRead is the largest read the kernel sends.
 	maxRead = 1 << 20
 	// attrTimeout is how long the kernel trusts names and attributes;
@@ -39,63 +31,24 @@ const (
 
 var errClosed = errors.New("snapshotter is closed")
 
-// lazyRef names a committed lazy layer snapshot.
-type lazyRef struct {
-	id     string
-	digest imagefs.Digest
-}
-
 type mountedLayer struct {
-	digest imagefs.Digest
 	layer  *layer
 	dir    string
 	server *fuse.Server
-	// stopFill ends the layer's background fetch and filled closes once
-	// it has.
-	stopFill context.CancelFunc
-	filled   chan struct{}
 }
 
-// mounts owns the FUSE servers of mounted lazy layers. A layer stays
-// mounted while a snapshot that is not a lazy layer descends from it, or a
-// call holds it. One goroutine decides and changes every mount, so a
-// container's Prepare and the unmount of a layer no container uses never
-// interleave.
-type mounts struct {
-	root      string
-	ms        *storage.MetaStore
-	frames    *frameCache
-	grants    *grants
-	http      *http.Client
-	metrics   *metrics
-	log       *slog.Logger
-	fillBytes int64
-	// life ends background fetches when the snapshotter closes.
-	life context.Context
-
-	requests chan func()
-	done     chan struct{}
-	// teardowns waits for the servers of unmounted layers to stop.
-	teardowns sync.WaitGroup
-
-	// Owned by run.
-	mounted map[string]*mountedLayer
-	holds   map[string]int
-}
-
-// run serves requests until ctx ends. Mounts stay in place at exit:
-// containers may still read them while the process lives, and the next
-// start detaches what is left (clearStale).
-func (m *mounts) run(ctx context.Context) {
-	defer close(m.done)
+// run serves the requests that decide and change mounts until ctx ends. A
+// lazy layer stays mounted while a snapshot that is not a lazy layer
+// descends from it, or a call holds it. One goroutine changes every mount,
+// so a container's Prepare and the unmount of a layer no container uses
+// never interleave. Mounts stay in place at exit.
+func (s *snapshotter) run(ctx context.Context) {
+	defer close(s.done)
 	for {
 		select {
-		case fn := <-m.requests:
+		case fn := <-s.requests:
 			fn()
 		case <-ctx.Done():
-			for _, ml := range m.mounted {
-				<-ml.filled
-			}
 			return
 		}
 	}
@@ -103,12 +56,12 @@ func (m *mounts) run(ctx context.Context) {
 
 // do runs fn on the mount goroutine and returns its result. Once accepted,
 // fn runs to completion.
-func (m *mounts) do(ctx context.Context, fn func() error) error {
+func (s *snapshotter) do(ctx context.Context, fn func() error) error {
 	reply := make(chan error, 1)
 	select {
-	case m.requests <- func() { reply <- fn() }:
+	case s.requests <- func() { reply <- fn() }:
 		return <-reply
-	case <-m.done:
+	case <-s.done:
 		return errClosed
 	case <-ctx.Done():
 		return fmt.Errorf("wait for mounts: %w", ctx.Err())
@@ -117,19 +70,23 @@ func (m *mounts) do(ctx context.Context, fn func() error) error {
 
 // hold mounts refs and keeps them mounted until release, which also drops
 // mounts nothing needs any more.
-func (m *mounts) hold(ctx context.Context, refs []lazyRef) (func(), error) {
+func (s *snapshotter) hold(ctx context.Context, refs []lazyRef) (func(), error) {
 	if len(refs) == 0 {
 		return func() {}, nil
 	}
-	err := m.do(ctx, func() error { //nolint:contextcheck // a layer's background fetch lives with its mount, not the call
+	// The release and its reconcile may run after the call's context ended.
+	detached := context.WithoutCancel(ctx)
+	err := s.do(ctx, func() error {
 		for i, r := range refs {
-			if err := m.mount(r); err != nil {
-				for _, held := range refs[:i] {
-					m.unhold(held.id)
-				}
+			if _, ok := s.mounted[r.id]; !ok {
+				s.dirty = true
+			}
+			if err := s.mount(r); err != nil { //nolint:contextcheck // a layer's mount and fill outlive the call
+				s.unhold(refs[:i])
+				s.tidy(detached)
 				return err
 			}
-			m.holds[r.id]++
+			s.holds[r.id]++
 		}
 		return nil
 	})
@@ -137,77 +94,90 @@ func (m *mounts) hold(ctx context.Context, refs []lazyRef) (func(), error) {
 		return nil, err
 	}
 	return func() {
-		_ = m.do(context.WithoutCancel(ctx), func() error {
-			for _, r := range refs {
-				m.unhold(r.id)
-			}
-			m.reconcile(ctx)
+		_ = s.do(detached, func() error {
+			s.unhold(refs)
+			s.tidy(detached)
 			return nil
 		})
 	}, nil
 }
 
-func (m *mounts) unhold(id string) {
-	if m.holds[id]--; m.holds[id] <= 0 {
-		delete(m.holds, id)
+func (s *snapshotter) unhold(refs []lazyRef) {
+	for _, r := range refs {
+		if s.holds[r.id]--; s.holds[r.id] <= 0 {
+			delete(s.holds, r.id)
+		}
+	}
+}
+
+// tidy reconciles when a mounted layer may be one no snapshot needs.
+func (s *snapshotter) tidy(ctx context.Context) {
+	if s.dirty {
+		s.reconcile(ctx)
 	}
 }
 
 // reconcileNow mounts every layer a snapshot needs and unmounts the rest.
 // An unmount the kernel refuses as busy is retried on the next pass.
-func (m *mounts) reconcileNow(ctx context.Context) error {
-	return m.do(ctx, func() error {
-		m.reconcile(ctx)
+func (s *snapshotter) reconcileNow(ctx context.Context) error {
+	return s.do(ctx, func() error {
+		s.reconcile(ctx)
 		return nil
 	})
 }
 
-func (m *mounts) reconcile(ctx context.Context) {
-	needed, err := m.needed(ctx)
+func (s *snapshotter) reconcile(ctx context.Context) {
+	needed, err := s.needed(ctx)
 	if err != nil {
-		m.log.ErrorContext(ctx, "listing the layers snapshots need failed", "error", err)
+		s.log.ErrorContext(ctx, "listing the layers snapshots need failed", "error", err)
 		return
 	}
+	s.dirty = false
 	for _, r := range needed {
-		if err := m.mount(r); err != nil { //nolint:contextcheck // a layer's background fetch lives with its mount, not the call
-			m.log.ErrorContext(ctx, "mounting a layer failed", "snapshot", r.id, "layer", r.digest, "error", err)
+		if err := s.mount(r); err != nil { //nolint:contextcheck // a layer's background fetch lives with its mount, not the call
+			s.log.ErrorContext(ctx, "mounting a layer failed", "snapshot", r.id, "layer", r.digest, "error", err)
 		}
 	}
-	for id := range m.mounted {
-		if _, ok := needed[id]; ok || m.holds[id] > 0 {
+	for id := range s.mounted {
+		if _, ok := needed[id]; ok {
 			continue
 		}
-		if err := m.unmount(id); err != nil {
-			m.log.WarnContext(ctx, "unmounting an unused layer failed", "snapshot", id, "error", err)
+		if s.holds[id] > 0 {
+			s.dirty = true
+			continue
+		}
+		if err := s.unmount(id); err != nil {
+			s.dirty = true
+			s.log.WarnContext(ctx, "unmounting an unused layer failed", "snapshot", id, "error", err)
 		}
 	}
 }
 
 // removeLazy unmounts a lazy layer snapshot and runs remove, which deletes
 // it, with no mount change in between.
-func (m *mounts) removeLazy(ctx context.Context, id string, remove func() error) error {
-	return m.do(ctx, func() error {
-		if m.holds[id] > 0 {
+func (s *snapshotter) removeLazy(ctx context.Context, id string, remove func() error) error {
+	return s.do(ctx, func() error {
+		if s.holds[id] > 0 {
 			return fmt.Errorf("layer snapshot %s is being mounted: %w", id, errdefs.ErrFailedPrecondition)
 		}
-		if _, ok := m.mounted[id]; ok {
-			if err := m.unmount(id); err != nil {
+		if _, ok := s.mounted[id]; ok {
+			if err := s.unmount(id); err != nil {
 				return fmt.Errorf("layer snapshot %s is in use: %w: %w", id, errdefs.ErrFailedPrecondition, err)
 			}
 		}
 		if err := remove(); err != nil {
-			m.reconcile(ctx)
+			s.reconcile(ctx)
 			return err
 		}
 		return nil
 	})
 }
 
-func (m *mounts) mount(r lazyRef) error {
-	if _, ok := m.mounted[r.id]; ok {
+func (s *snapshotter) mount(r lazyRef) error {
+	if _, ok := s.mounted[r.id]; ok {
 		return nil
 	}
-	dir := filepath.Join(m.root, "snapshots", r.id)
+	dir := filepath.Join(s.root, "snapshots", r.id)
 	raw, err := os.ReadFile(filepath.Join(dir, indexFile)) //nolint:gosec // a path under the snapshotter root
 	if err != nil {
 		return fmt.Errorf("read index of layer %s: %w", r.digest, err)
@@ -219,27 +189,17 @@ func (m *mounts) mount(r lazyRef) error {
 	if ix.Layer != r.digest {
 		return fmt.Errorf("%w: snapshot %s holds layer %s, labelled %s", imagefs.ErrInvalidIndex, r.id, ix.Layer, r.digest)
 	}
-	digest := r.digest
-	if span, traced := m.frames.starts.start(digest, "snapshotter.mount"); traced {
+	if span, traced := s.cache.starts.start(r.digest, "snapshotter.mount"); traced {
 		defer span.End()
 	}
-	l := &layer{
-		digest: digest,
-		index:  ix,
-		data: imagefs.HTTPObject(m.http, func() string {
-			g, _ := m.grants.lookup(digest)
-			return g.dataURL
-		}),
-		frames: m.frames,
-		log:    m.log,
-		failed: m.metrics.readFailures.Inc,
-	}
+	l := s.cache.mount(ix)
 	root := newRoot(l)
 	timeout := attrTimeout
-	server, err := gofs.Mount(filepath.Join(dir, "fs"), root, &gofs.Options{
+	fsDir := filepath.Join(dir, "fs")
+	server, err := gofs.Mount(fsDir, root, &gofs.Options{
 		MountOptions: fuse.MountOptions{
 			AllowOther: true,
-			FsName:     string(digest),
+			FsName:     string(r.digest),
 			Name:       layersource.Snapshotter,
 			Options:    []string{"ro", "default_permissions"},
 			// Read-only, keeping setuid files and device nodes as a
@@ -257,67 +217,42 @@ func (m *mounts) mount(r lazyRef) error {
 		OnAdd:           root.build,
 	})
 	if err != nil {
-		return fmt.Errorf("mount layer %s: %w", digest, err)
+		s.cache.unmount(l)
+		return fmt.Errorf("mount layer %s: %w", r.digest, err)
 	}
-	fillCtx, stopFill := context.WithCancel(m.life)
-	ml := &mountedLayer{digest: digest, layer: l, dir: filepath.Join(dir, "fs"), server: server, stopFill: stopFill, filled: make(chan struct{})}
-	fill, traced := m.frames.starts.start(digest, "snapshotter.fill", attribute.Int("lazycloud.frames", len(ix.Frames)),
-		attribute.Bool("lazycloud.fills", ix.StreamSize <= m.fillBytes))
-	go func() {
-		defer close(ml.filled)
-		var fetched int64
-		if ix.StreamSize <= m.fillBytes {
-			fetched = m.frames.fill(fillCtx, l)
-		}
-		if traced {
-			fill.SetAttributes(attribute.Int64("lazycloud.fetches", fetched))
-			fill.End()
-		}
-	}()
-	m.mounted[r.id] = ml
-	m.frames.setMounted(l, 1)
-	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
+	s.mounted[r.id] = &mountedLayer{layer: l, dir: fsDir, server: server}
 	return nil
 }
 
 // unmount detaches a layer no snapshot uses. It never waits on the FUSE
 // connection: a busy mount fails at once and stays, and the server of one
 // that went stops in the background.
-func (m *mounts) unmount(id string) error {
-	ml := m.mounted[id]
+func (s *snapshotter) unmount(id string) error {
+	ml := s.mounted[id]
 	if err := unix.Unmount(ml.dir, 0); err != nil {
-		return fmt.Errorf("unmount layer %s: %w", ml.digest, err)
+		return fmt.Errorf("unmount layer %s: %w", ml.layer.digest, err)
 	}
-	delete(m.mounted, id)
-	m.frames.setMounted(ml.layer, -1)
-	m.metrics.mountedLayers.Set(float64(len(m.mounted)))
-	m.teardowns.Go(func() {
-		ml.server.Wait()
-		ml.stopFill()
-		<-ml.filled
-	})
+	delete(s.mounted, id)
+	s.cache.unmount(ml.layer)
+	s.teardowns.Go(ml.server.Wait)
 	return nil
 }
 
 // needed returns the lazy layers some snapshot that is not a lazy layer
 // descends from.
-func (m *mounts) needed(ctx context.Context) (map[string]lazyRef, error) {
-	type snapshot struct {
-		id   string
-		info snapshots.Info
-	}
-	byName := make(map[string]snapshot)
-	err := m.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
-		ids, err := storage.IDMap(ctx)
+func (s *snapshotter) needed(ctx context.Context) (map[string]lazyRef, error) {
+	ids := make(map[string]string)
+	infos := make(map[string]snapshots.Info)
+	err := s.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
+		names, err := storage.IDMap(ctx)
 		if err != nil {
 			return err //nolint:wrapcheck // wrapped below
 		}
-		names := make(map[string]string, len(ids))
-		for id, name := range ids {
-			names[name] = id
+		for id, name := range names {
+			ids[name] = id
 		}
 		return storage.WalkInfo(ctx, func(_ context.Context, info snapshots.Info) error { //nolint:wrapcheck // wrapped below
-			byName[info.Name] = snapshot{id: names[info.Name], info: info}
+			infos[info.Name] = info
 			return nil
 		})
 	})
@@ -327,55 +262,26 @@ func (m *mounts) needed(ctx context.Context) (map[string]lazyRef, error) {
 	}
 	needed := make(map[string]lazyRef)
 	seen := make(map[string]bool)
-	for _, s := range byName {
-		if isLazy(s.info) {
+	for name, info := range infos {
+		if _, lazy := lazyRefOf(ids[name], info); lazy {
 			continue
 		}
-		for name := s.info.Parent; name != "" && !seen[name]; {
+		for name := info.Parent; name != "" && !seen[name]; name = infos[name].Parent {
 			seen[name] = true
-			parent, ok := byName[name]
-			if !ok {
-				break
+			if ref, lazy := lazyRefOf(ids[name], infos[name]); lazy {
+				needed[ref.id] = ref
 			}
-			if isLazy(parent.info) {
-				needed[parent.id] = lazyRef{id: parent.id, digest: imagefs.Digest(parent.info.Labels[snapshots.LabelSnapshotDiffID])}
-			}
-			name = parent.info.Parent
 		}
 	}
 	return needed, nil
 }
 
-// clearStale detaches the mounts a previous process left under root. Their
-// FUSE connections died with it, so containers still using them get I/O
-// errors, never another layer's files.
+// clearStale detaches the layer mounts a previous process left under root.
+// Their FUSE connections died with it, so containers still using them get
+// I/O errors, never another layer's files.
 func clearStale(root string) error {
-	f, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		return fmt.Errorf("read mounts: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	prefix := filepath.Join(root, "snapshots") + "/"
-	var stale []string
-	lines := bufio.NewScanner(f)
-	for lines.Scan() {
-		fields := strings.Fields(lines.Text())
-		for i, field := range fields {
-			if field == "-" && i+1 < len(fields) && len(fields) > 4 {
-				if fields[i+1] == fuseType && strings.HasPrefix(fields[4], prefix) {
-					stale = append(stale, fields[4])
-				}
-				break
-			}
-		}
-	}
-	if err := lines.Err(); err != nil {
-		return fmt.Errorf("read mounts: %w", err)
-	}
-	for _, path := range stale {
-		if err := unix.Unmount(path, unix.MNT_DETACH); err != nil {
-			return fmt.Errorf("detach stale layer mount %s: %w", path, err)
-		}
+	if err := mount.UnmountRecursive(filepath.Join(root, "snapshots"), unix.MNT_DETACH); err != nil {
+		return fmt.Errorf("detach stale layer mounts: %w", err)
 	}
 	return nil
 }

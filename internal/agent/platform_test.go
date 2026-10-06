@@ -22,6 +22,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
@@ -101,7 +102,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var grants []*hostproto.LayerGrant
+	var grants []*imagefsproto.LayerGrant
 	for _, l := range layers {
 		g, err := convertLayer(ctx, store, s3.NewPresignClient(store), bucket, prefix, l, expires)
 		if err != nil {
@@ -114,7 +115,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = sources.Close() }()
-	if err := sources.Grant(ctx, "tenant", grantsIn(grants)); err != nil {
+	if err := sources.Grant(ctx, "tenant", grants); err != nil {
 		t.Fatal(err)
 	}
 	began := time.Now()

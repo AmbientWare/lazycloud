@@ -6,12 +6,10 @@ package layersource
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
@@ -22,6 +20,9 @@ const (
 	// Socket is where the snapshotter serves containerd's snapshotter API
 	// and LayerSources on a host.
 	Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
+	// Root holds the snapshotter's metadata, snapshots and frame cache on a
+	// host. containerd mounts the snapshots below it.
+	Root = "/var/lib/lazycloud-snapshotter"
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"
@@ -31,14 +32,6 @@ const (
 	// layer is never downloaded. A layer without it unpacks as usual.
 	LazyLabel = "containerd.io/snapshot/lazycloud.lazy"
 )
-
-// Grant is the presigned read URLs of one converted layer.
-type Grant struct {
-	Layer     imagefs.Digest
-	IndexURL  string
-	DataURL   string
-	ExpiresAt time.Time
-}
 
 // Client calls one snapshotter.
 type Client struct {
@@ -59,33 +52,11 @@ func Dial(socket string) (*Client, error) {
 // Grant gives the snapshotter grants. Each replaces its layer's current
 // grant unless that expires later. name is the container whose start they
 // are for, empty for refreshes.
-func (c *Client) Grant(ctx context.Context, name string, grants []Grant) error {
-	request := &imagefsproto.GrantRequest{Name: name, Layers: make([]*imagefsproto.LayerGrant, len(grants))}
-	for i, g := range grants {
-		request.Layers[i] = &imagefsproto.LayerGrant{
-			DiffId:    string(g.Layer),
-			IndexUrl:  g.IndexURL,
-			DataUrl:   g.DataURL,
-			ExpiresAt: timestamppb.New(g.ExpiresAt),
-		}
-	}
-	if _, err := c.sources.Grant(withTrace(ctx), request); err != nil {
+func (c *Client) Grant(ctx context.Context, name string, grants []*imagefsproto.LayerGrant) error {
+	if _, err := c.sources.Grant(withTrace(ctx), &imagefsproto.GrantRequest{Name: name, Layers: grants}); err != nil {
 		return fmt.Errorf("grant layers to the snapshotter: %w", err)
 	}
 	return nil
-}
-
-// FrameRead is one frame of the layer at a position in an image's layers.
-type FrameRead struct {
-	Layer, Frame uint32
-}
-
-func readsOut(reads []FrameRead) []*imagefsproto.FrameRead {
-	out := make([]*imagefsproto.FrameRead, len(reads))
-	for i, r := range reads {
-		out[i] = &imagefsproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
-	}
-	return out
 }
 
 func digestsOut(layers []imagefs.Digest) []string {
@@ -98,8 +69,8 @@ func digestsOut(layers []imagefs.Digest) []string {
 
 // Prefetch has the snapshotter fetch reads of layers, the image's layers
 // base first, in the background as they mount, until StopPrefetch of name.
-func (c *Client) Prefetch(ctx context.Context, name string, layers []imagefs.Digest, reads []FrameRead) error {
-	if _, err := c.sources.Prefetch(withTrace(ctx), &imagefsproto.PrefetchRequest{Name: name, Layers: digestsOut(layers), Reads: readsOut(reads)}); err != nil {
+func (c *Client) Prefetch(ctx context.Context, name string, layers []imagefs.Digest, reads []*imagefsproto.FrameRead) error {
+	if _, err := c.sources.Prefetch(withTrace(ctx), &imagefsproto.PrefetchRequest{Name: name, Layers: digestsOut(layers), Reads: reads}); err != nil {
 		return fmt.Errorf("prefetch layers: %w", err)
 	}
 	return nil
@@ -124,16 +95,12 @@ func (c *Client) StartTrace(ctx context.Context, name string, layers []imagefs.D
 
 // EndTrace stops the trace name and returns the frames read, each the
 // first time, and whether every read reached it.
-func (c *Client) EndTrace(ctx context.Context, name string) ([]FrameRead, bool, error) {
+func (c *Client) EndTrace(ctx context.Context, name string) ([]*imagefsproto.FrameRead, bool, error) {
 	ended, err := c.sources.EndTrace(ctx, &imagefsproto.EndTraceRequest{Name: name})
 	if err != nil {
 		return nil, false, fmt.Errorf("end a layer read trace: %w", err)
 	}
-	reads := make([]FrameRead, len(ended.GetReads()))
-	for i, r := range ended.GetReads() {
-		reads[i] = FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
-	}
-	return reads, ended.GetComplete(), nil
+	return ended.GetReads(), ended.GetComplete(), nil
 }
 
 // withTrace sends the trace of ctx's span, when sampled, so the

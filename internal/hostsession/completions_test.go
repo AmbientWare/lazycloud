@@ -19,35 +19,58 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/hostsession"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// writeCounter counts the completion transactions a pool runs: each sets
-// its attempts' states in one statement.
-type writeCounter struct{ n atomic.Int64 }
+// queryCounter counts the statements a pool runs, and the completion
+// transactions among them: each sets its attempts' states in one statement.
+type queryCounter struct {
+	all, writes atomic.Int64
+	settled     int64
+}
 
-func (c *writeCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	c.all.Add(1)
 	if strings.Contains(data.SQL, "name: SetAttemptStates") {
-		c.n.Add(1)
+		c.writes.Add(1)
 	}
 	return ctx
 }
 
-func (*writeCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// countedHarness serves the host service over a pool traced by writes;
-// base is the same database untraced.
-func countedHarness(t *testing.T) (h *harness, base *pgxpool.Pool, writes *writeCounter) {
+func (c *queryCounter) completions() int64 { return c.writes.Load() }
+
+// settle waits until the pool has run no statement for half a second and
+// returns the statements run since the last settle.
+func (c *queryCounter) settle() int64 {
+	for last := int64(-1); ; time.Sleep(500 * time.Millisecond) {
+		if n := c.all.Load(); n != last {
+			last = n
+			continue
+		}
+		n := c.all.Load()
+		out := n - c.settled
+		c.settled = n
+		return out
+	}
+}
+
+// countedHarness serves the host service, configured by configure, over a
+// pool traced by queries; base is the same database untraced.
+func countedHarness(t *testing.T, configure ...func(*hostsession.Config)) (h *harness, base *pgxpool.Pool, queries *queryCounter) {
 	t.Helper()
 	base = dbtest.New(t)
-	writes = &writeCounter{}
+	queries = &queryCounter{}
 	cfg := base.Config().Copy()
-	cfg.ConnConfig.Tracer = writes
+	cfg.ConnConfig.Tracer = queries
 	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(traced.Close)
-	return serve(t, traced), base, writes
+	return serveWith(t, traced, storagetest.Config(t), configure...), base, queries
 }
 
 // runningAttempts makes host's container ready with n running attempts.
@@ -165,11 +188,11 @@ where a.container_id = $1 and a.state = 'succeeded' and t.status = 'succeeded'`,
 		}
 		notes++
 	}
-	t.Logf("%d completions: %d transactions, %d task and execution notifications", n+1, writes.n.Load(), notes)
+	t.Logf("%d completions: %d transactions, %d task and execution notifications", n+1, writes.completions(), notes)
 	if succeeded != n {
 		t.Fatalf("%d attempts succeeded, want %d", succeeded, n)
 	}
-	if got := writes.n.Load(); got > 3 {
+	if got := writes.completions(); got > 3 {
 		t.Fatalf("%d completions took %d transactions, want the burst in one after the first", n+1, got)
 	}
 	if notes >= n {
@@ -186,7 +209,7 @@ func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 	container, attempts := h.runningAttempts(host, 2*n)
 	var direct, queued []time.Duration
 	for i, attempt := range attempts {
-		before := writes.n.Load()
+		before := writes.completions()
 		start := time.Now()
 		if i < n {
 			id := execution.AttemptID(uuid.MustParse(attempt))
@@ -203,7 +226,7 @@ func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 			}
 			queued = append(queued, time.Since(start))
 		}
-		if got := writes.n.Load() - before; got != 1 {
+		if got := writes.completions() - before; got != 1 {
 			t.Fatalf("completion %d took %d transactions, want 1", i, got)
 		}
 	}

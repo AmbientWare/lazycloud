@@ -34,10 +34,14 @@ func isNotFound(err error) bool {
 	return errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NotFound" || apiErr.ErrorCode() == "NoSuchKey")
 }
 
-// presignPart returns a presigned PUT of one multipart part.
-func (s *Storage) presignPart(ctx context.Context, bucket, key, uploadID string, number int32, lifetime time.Duration) (string, error) {
+// ceilDiv is n/d rounded up, for n >= 0 and d > 0.
+func ceilDiv(n, d int64) int64 { return (n + d - 1) / d }
+
+// presignPart returns a presigned PUT of one multipart part. A part signed
+// with a size fails its signature at any other Content-Length.
+func (s *Storage) presignPart(ctx context.Context, bucket, key, uploadID string, number int32, size *int64, lifetime time.Duration) (string, error) {
 	req, err := s.presign.PresignUploadPart(ctx, &s3.UploadPartInput{
-		Bucket: aws.String(bucket), Key: aws.String(key), UploadId: aws.String(uploadID), PartNumber: aws.Int32(number),
+		Bucket: aws.String(bucket), Key: aws.String(key), UploadId: aws.String(uploadID), PartNumber: aws.Int32(number), ContentLength: size,
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", fmt.Errorf("presign part %d: %w", number, err)
@@ -48,7 +52,7 @@ func (s *Storage) presignPart(ctx context.Context, bucket, key, uploadID string,
 // startMultipart creates a multipart upload of size bytes and presigns every
 // part. size 0 still gets one (empty) part.
 func (s *Storage) startMultipart(ctx context.Context, bucket, key, contentType string, size, partSize int64, lifetime time.Duration) (string, []apitypes.UploadPart, error) {
-	count := max((size+partSize-1)/partSize, 1)
+	count := max(ceilDiv(size, partSize), 1)
 	if count > maxParts {
 		return "", nil, invalid("%d bytes in parts of %d bytes needs more than %d parts", size, partSize, maxParts)
 	}
@@ -64,7 +68,7 @@ func (s *Storage) startMultipart(ctx context.Context, bucket, key, contentType s
 	parts := make([]apitypes.UploadPart, 0, count)
 	for n := range count {
 		offset := n * partSize
-		url, err := s.presignPart(ctx, bucket, key, uploadID, int32(n+1), lifetime) //nolint:gosec // At most maxParts.
+		url, err := s.presignPart(ctx, bucket, key, uploadID, int32(n+1), nil, lifetime) //nolint:gosec // At most maxParts.
 		if err != nil {
 			return "", nil, err
 		}
@@ -121,8 +125,8 @@ type objectInfo struct {
 }
 
 // head returns the object at key, or ErrNotFound.
-func (s *Storage) head(ctx context.Context, bucket, key string) (objectInfo, error) {
-	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+func head(ctx context.Context, client *s3.Client, bucket, key string) (objectInfo, error) {
+	out, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 	if isNotFound(err) {
 		return objectInfo{}, ErrNotFound
 	}

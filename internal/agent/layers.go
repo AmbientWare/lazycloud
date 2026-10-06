@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
@@ -26,9 +28,8 @@ const (
 	maxGrantRetry = 30 * time.Second
 	// traceWindow bounds a startup trace, which ends with the container's
 	// first task or request: a handler's imports run in it, after the
-	// container is ready. A recording start has no prefetch, and a first
-	// task importing torch from the store then ends about 11 s after the
-	// trace began on an m7i.large.
+	// container is ready, and a start that records its trace has no
+	// prefetch to speed them.
 	traceWindow = 60 * time.Second
 )
 
@@ -42,7 +43,7 @@ type layerSources struct {
 
 	mu sync.Mutex
 	// pending holds the newest grant per layer not yet handed over.
-	pending map[imagefs.Digest]layersource.Grant
+	pending map[string]*imagefsproto.LayerGrant
 
 	smu sync.Mutex
 	// startups holds the containers started here that have not exited.
@@ -52,37 +53,27 @@ type layerSources struct {
 func newLayerSources(client *layersource.Client) *layerSources {
 	return &layerSources{
 		client: client, wake: make(chan struct{}, 1),
-		pending: map[imagefs.Digest]layersource.Grant{}, startups: map[string]*startup{},
+		pending: map[string]*imagefsproto.LayerGrant{}, startups: map[string]*startup{},
 	}
 }
 
-func grantsIn(layers []*hostproto.LayerGrant) []layersource.Grant {
-	out := make([]layersource.Grant, len(layers))
-	for n, g := range layers {
-		out[n] = layersource.Grant{
-			Layer: imagefs.Digest(g.GetDiffId()), IndexURL: g.GetIndexUrl(), DataURL: g.GetDataUrl(), ExpiresAt: g.GetExpiresAt().AsTime(),
-		}
-	}
-	return out
-}
-
-// grant hands layers to the snapshotter for the start name and returns
-// once it holds them; l is nil only on hosts that never get layers.
-func (l *layerSources) grant(ctx context.Context, name string, layers []*hostproto.LayerGrant) error {
-	if l == nil || len(layers) == 0 {
+// grant hands layers to the snapshotter for the platform image start name
+// and returns once it holds them.
+func (l *layerSources) grant(ctx context.Context, name string, layers []*imagefsproto.LayerGrant) error {
+	if len(layers) == 0 {
 		return nil
 	}
+	l.smu.Lock()
+	l.shareLocked(name, layersOf(layers))
+	l.smu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	return l.client.Grant(ctx, name, grantsIn(layers)) //nolint:wrapcheck // The client names the call.
+	return l.client.Grant(ctx, name, layers) //nolint:wrapcheck // The client names the call.
 }
 
 // refresh queues fresh grants for refreshLoop.
-func (l *layerSources) refresh(layers []*hostproto.LayerGrant) {
-	if l == nil {
-		return
-	}
-	l.queue(grantsIn(layers))
+func (l *layerSources) refresh(layers []*imagefsproto.LayerGrant) {
+	l.queue(layers)
 	select {
 	case l.wake <- struct{}{}:
 	default:
@@ -91,34 +82,32 @@ func (l *layerSources) refresh(layers []*hostproto.LayerGrant) {
 
 // queue adds grants to pending, keeping the later of two grants for one
 // layer and dropping expired ones.
-func (l *layerSources) queue(grants []layersource.Grant) {
+func (l *layerSources) queue(grants []*imagefsproto.LayerGrant) {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, g := range grants {
-		if !g.ExpiresAt.After(now) {
+		expires := g.GetExpiresAt().AsTime()
+		if !expires.After(now) {
 			continue
 		}
-		if old, ok := l.pending[g.Layer]; !ok || g.ExpiresAt.After(old.ExpiresAt) {
-			l.pending[g.Layer] = g
+		if old, ok := l.pending[g.GetDiffId()]; !ok || expires.After(old.GetExpiresAt().AsTime()) {
+			l.pending[g.GetDiffId()] = g
 		}
 	}
 }
 
 // take empties pending.
-func (l *layerSources) take() []layersource.Grant {
+func (l *layerSources) take() []*imagefsproto.LayerGrant {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	grants := make([]layersource.Grant, 0, len(l.pending))
-	for _, g := range l.pending {
-		grants = append(grants, g)
-	}
+	grants := slices.Collect(maps.Values(l.pending))
 	clear(l.pending)
 	return grants
 }
 
 // refreshLoop hands queued refreshes to the snapshotter until ctx ends.
-func (l *layerSources) refreshLoop(ctx context.Context, a *Agent) {
+func (l *layerSources) refreshLoop(ctx context.Context, log *slog.Logger) {
 	retry := minGrantRetry
 	for {
 		select {
@@ -137,7 +126,7 @@ func (l *layerSources) refreshLoop(ctx context.Context, a *Agent) {
 			if ctx.Err() != nil {
 				return
 			}
-			a.log.Error("refreshing layer grants failed; retrying", "layers", len(grants), "retry_in", retry, "error", err)
+			log.Error("refreshing layer grants failed; retrying", "layers", len(grants), "retry_in", retry, "error", err)
 			l.queue(grants)
 			if !sleep(ctx, retry) {
 				return
@@ -147,7 +136,7 @@ func (l *layerSources) refreshLoop(ctx context.Context, a *Agent) {
 	}
 }
 
-func layersOf(grants []*hostproto.LayerGrant) []imagefs.Digest {
+func layersOf(grants []*imagefsproto.LayerGrant) []imagefs.Digest {
 	out := make([]imagefs.Digest, len(grants))
 	for n, g := range grants {
 		out[n] = imagefs.Digest(g.GetDiffId())
@@ -161,150 +150,123 @@ type startup struct {
 	layers      []imagefs.Digest
 	prefetching bool
 	tracing     bool
-	// shared is set once another start on the host used a traced layer:
-	// the snapshotter cannot tell their reads apart.
+	// began is when the start began; its trace runs at most traceWindow
+	// from then.
+	began time.Time
+	// shared is set once another start or a platform image on the host
+	// names one of its layers.
 	shared bool
-	// traced is when the trace began. over closes once the container's
-	// first task or request ended or the container exited.
-	traced time.Time
-	over   chan struct{}
-	ended  bool
+	// released is closed once the container exited or failed to start.
+	released chan struct{}
 }
 
-// end closes over once.
-func (s *startup) end() {
-	if !s.ended {
-		s.ended = true
-		close(s.over)
+// shareLocked marks shared every live start other than name that uses one
+// of layers, and reports whether there was one.
+func (l *layerSources) shareLocked(name string, layers []imagefs.Digest) bool {
+	shared := false
+	for id, other := range l.startups {
+		if id != name && slices.ContainsFunc(layers, func(d imagefs.Digest) bool { return slices.Contains(other.layers, d) }) {
+			other.shared, shared = true, true
+		}
 	}
+	return shared
 }
 
-// shares reports whether s uses one of layers.
-func (s *startup) shares(layers []imagefs.Digest) bool {
-	return slices.ContainsFunc(layers, func(l imagefs.Digest) bool { return slices.Contains(s.layers, l) })
-}
-
-// begin records that container starts with layers, marks the traces of
-// other starts sharing one as shared, and reports whether one shares.
+// begin records that container starts with layers and reports whether a
+// live start on the host shares one of them.
 func (l *layerSources) begin(container string, layers []imagefs.Digest) bool {
 	l.smu.Lock()
 	defer l.smu.Unlock()
-	shared := false
-	for id, other := range l.startups {
-		if id != container && other.shares(layers) {
-			other.shared = true
-			shared = true
-		}
-	}
-	l.startups[container] = &startup{layers: layers, over: make(chan struct{})}
+	shared := l.shareLocked(container, layers)
+	l.startups[container] = &startup{layers: layers, began: time.Now(), shared: shared, released: make(chan struct{})}
 	return shared
 }
 
 // start hands the start's grants to the snapshotter, which then reads the
 // image's layers only through them, and returns once it holds them. It
-// then starts the start's prefetch and its trace when asked and no other
+// then starts the start's prefetch, and its trace when asked and no live
 // start on the host shares a layer, and reports whether it traces.
 // Prefetching and tracing only speed starts up, so their refusals are
-// logged. A host without a snapshotter fails its preflight check before it
-// runs anything, so l is nil only on hosts that never get layers.
+// logged.
+//
+// The snapshotter cannot tell apart the reads of starts sharing a layer. It
+// leaves incomplete a trace that began with one of its layers mounted or
+// whose layers a later grant names, but not one whose layers another start
+// was granted, unmounted, before it began. The agent marks such a start
+// shared, and end drops its trace.
 func (l *layerSources) start(ctx context.Context, log *slog.Logger, container string, spec *hostproto.StartContainer) (bool, error) {
-	if l == nil || len(spec.GetLayers()) == 0 {
+	if len(spec.GetLayers()) == 0 {
 		return false, nil
 	}
 	layers := layersOf(spec.GetLayers())
 	shared := l.begin(container, layers)
 	ctx, span := telemetry.Start(ctx, "agent.layer_grant", trace.WithAttributes(attribute.Int("lazycloud.layers", len(layers)),
 		attribute.Int("lazycloud.prefetch_frames", len(spec.GetPrefetch().GetReads())), attribute.Bool("lazycloud.shared", shared)))
-	defer span.End()
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	if err := l.client.Grant(ctx, container, grantsIn(spec.GetLayers())); err != nil {
+	if err := l.client.Grant(ctx, container, spec.GetLayers()); err != nil {
 		telemetry.Fail(span, err)
 		return false, err //nolint:wrapcheck // The client names the call.
 	}
-	if trace := spec.GetPrefetch().GetReads(); len(trace) > 0 {
-		reads := make([]layersource.FrameRead, len(trace))
-		for n, r := range trace {
-			reads[n] = layersource.FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
-		}
+	defer span.End()
+	prefetching := false
+	if reads := spec.GetPrefetch().GetReads(); len(reads) > 0 {
 		if err := l.client.Prefetch(ctx, container, layers, reads); err != nil {
 			log.Warn("prefetching the image failed", "error", err)
 		} else {
-			l.mark(container, func(s *startup) { s.prefetching = true })
+			prefetching = true
 		}
 	}
-	if !spec.GetRecordTrace() || shared {
-		return false, nil
+	tracing := spec.GetRecordTrace() && !shared
+	if tracing {
+		if err := l.client.StartTrace(ctx, container, layers); err != nil {
+			log.Warn("tracing the image's startup reads failed", "error", err)
+			tracing = false
+		}
 	}
-	traced := time.Now()
-	if err := l.client.StartTrace(ctx, container, layers); err != nil {
-		log.Warn("tracing the image's startup reads failed", "error", err)
-		return false, nil
-	}
-	l.mark(container, func(s *startup) { s.tracing, s.traced = true, traced })
-	return true, nil
-}
-
-func (l *layerSources) mark(container string, change func(*startup)) {
 	l.smu.Lock()
-	defer l.smu.Unlock()
 	if s, ok := l.startups[container]; ok {
-		change(s)
+		s.prefetching, s.tracing = prefetching, tracing
 	}
+	l.smu.Unlock()
+	return tracing, nil
 }
 
-// takeTrace stops counting container's trace and reports whether it ran
-// and whether another start shared a layer with it.
-func (l *layerSources) takeTrace(container string) (tracing, shared bool) {
-	l.smu.Lock()
-	defer l.smu.Unlock()
-	s, ok := l.startups[container]
-	if !ok || !s.tracing {
-		return false, false
-	}
-	s.tracing = false
-	return true, s.shared
-}
-
-// served ends container's trace at the end of its first task or request.
-func (l *layerSources) served(container string) {
-	if l == nil {
-		return
-	}
-	l.smu.Lock()
-	defer l.smu.Unlock()
-	if s, ok := l.startups[container]; ok {
-		s.end()
-	}
-}
-
-// await waits for container's first task or request to end, at most window
-// from the start of its trace, then ends the trace as end does. It returns
-// nil at once if the container does not trace, exits or ctx ends.
-func (l *layerSources) await(ctx context.Context, log *slog.Logger, container string, window time.Duration) *hostproto.ImageTrace {
+// await waits until served closes, at most traceWindow from container's
+// start, then ends its trace as end does. It returns nil at once if the
+// container does not trace, exits or ctx ends.
+func (l *layerSources) await(ctx context.Context, log *slog.Logger, container string, served <-chan struct{}) *hostproto.ImageTrace {
 	l.smu.Lock()
 	s, ok := l.startups[container]
 	if !ok || !s.tracing {
 		l.smu.Unlock()
 		return nil
 	}
-	traced, over := s.traced, s.over
+	began, released := s.began, s.released
 	l.smu.Unlock()
-	timer := time.NewTimer(time.Until(traced.Add(window)))
+	timer := time.NewTimer(time.Until(began.Add(traceWindow)))
 	defer timer.Stop()
 	select {
-	case <-over:
+	case <-served:
 	case <-timer.C:
+	case <-released:
+		return nil
 	case <-ctx.Done():
 		return nil
 	}
 	return l.end(ctx, log, container)
 }
 
-// end ends container's trace and returns it when every read reached it and
-// only this start used its layers, or nil.
+// end ends container's trace and returns it when the snapshotter counts
+// every read in it as this start's, or nil.
 func (l *layerSources) end(ctx context.Context, log *slog.Logger, container string) *hostproto.ImageTrace {
-	tracing, shared := l.takeTrace(container)
+	l.smu.Lock()
+	s, ok := l.startups[container]
+	tracing := ok && s.tracing
+	if tracing {
+		s.tracing = false
+	}
+	l.smu.Unlock()
 	if !tracing {
 		return nil
 	}
@@ -317,44 +279,37 @@ func (l *layerSources) end(ctx context.Context, log *slog.Logger, container stri
 	}
 	// A start that began while the trace ended shares it too.
 	l.smu.Lock()
-	if s, ok := l.startups[container]; ok && s.shared {
-		shared = true
-	}
+	shared := s.shared
 	l.smu.Unlock()
 	if !complete || shared || len(reads) == 0 {
 		return nil
 	}
-	trace := &hostproto.ImageTrace{Reads: make([]*hostproto.FrameRead, len(reads))}
-	for n, r := range reads {
-		trace.Reads[n] = &hostproto.FrameRead{Layer: r.Layer, Frame: r.Frame}
-	}
-	return trace
+	return &hostproto.ImageTrace{Reads: reads}
 }
 
 // release forgets container once it exited or failed to start, and stops
 // its prefetch and trace.
 func (l *layerSources) release(ctx context.Context, log *slog.Logger, container string) {
-	if l == nil {
-		return
-	}
 	l.smu.Lock()
 	s, ok := l.startups[container]
 	delete(l.startups, container)
+	prefetching, tracing := false, false
 	if ok {
-		s.end()
+		close(s.released)
+		prefetching, tracing = s.prefetching, s.tracing
 	}
 	l.smu.Unlock()
-	if !ok || (!s.prefetching && !s.tracing) {
+	if !prefetching && !tracing {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	if s.prefetching {
+	if prefetching {
 		if err := l.client.StopPrefetch(ctx, container); err != nil {
 			log.Warn("stopping the prefetch failed", "error", err)
 		}
 	}
-	if s.tracing {
+	if tracing {
 		if _, _, err := l.client.EndTrace(ctx, container); err != nil {
 			log.Warn("ending the startup read trace failed", "error", err)
 		}

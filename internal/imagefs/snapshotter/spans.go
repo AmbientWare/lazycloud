@@ -2,6 +2,8 @@ package snapshotter
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,10 +48,6 @@ type startTraces struct {
 	byLayer map[imagefs.Digest]*startTrace
 }
 
-func newStartTraces(tracer oteltrace.Tracer) *startTraces {
-	return &startTraces{tracer: tracer, byName: map[string]*startTrace{}, byLayer: map[imagefs.Digest]*startTrace{}}
-}
-
 // incomingParent is the trace the agent's call carries, if sampled.
 func incomingParent(ctx context.Context) oteltrace.SpanContext {
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -58,6 +56,12 @@ func incomingParent(ctx context.Context) oteltrace.SpanContext {
 		return oteltrace.SpanContext{}
 	}
 	return telemetry.SpanContextOf(values[0])
+}
+
+// span starts a span in the agent's trace parent.
+func (t *startTraces) span(parent oteltrace.SpanContext, name string, opts ...oteltrace.SpanStartOption) oteltrace.Span {
+	_, span := t.tracer.Start(oteltrace.ContextWithRemoteSpanContext(context.Background(), parent), name, opts...)
+	return span
 }
 
 // begin records that the start name, traced under parent, uses layers.
@@ -71,13 +75,7 @@ func (t *startTraces) begin(name string, parent oteltrace.SpanContext, layers []
 		t.removeLocked(old)
 	}
 	if len(t.byName) >= maxTraces {
-		var oldest *startTrace
-		for _, s := range t.byName {
-			if oldest == nil || s.granted.Before(oldest.granted) {
-				oldest = s
-			}
-		}
-		t.removeLocked(oldest)
+		t.removeLocked(slices.MinFunc(slices.Collect(maps.Values(t.byName)), func(a, b *startTrace) int { return a.granted.Compare(b.granted) }))
 	}
 	s := &startTrace{name: name, parent: parent, granted: time.Now()}
 	t.byName[name] = s
@@ -109,9 +107,7 @@ func (t *startTraces) start(layer imagefs.Digest, name string, attrs ...attribut
 	if s == nil {
 		return nil, false
 	}
-	ctx := oteltrace.ContextWithRemoteSpanContext(context.Background(), s.parent)
-	_, span := t.tracer.Start(ctx, name, oteltrace.WithAttributes(append(attrs, attribute.String(telemetry.AttrLayer, string(layer)))...))
-	return span, true
+	return t.span(s.parent, name, oteltrace.WithAttributes(append(attrs, attribute.String(telemetry.AttrLayer, string(layer)))...)), true
 }
 
 // read counts a read of a frame of layer: a cache hit, or a miss that
@@ -158,8 +154,7 @@ func (t *startTraces) flush(now time.Time) {
 		if s.reads == 0 {
 			continue
 		}
-		ctx := oteltrace.ContextWithRemoteSpanContext(context.Background(), s.parent)
-		_, span := t.tracer.Start(ctx, "snapshotter.reads", oteltrace.WithTimestamp(s.first), oteltrace.WithAttributes(
+		span := t.span(s.parent, "snapshotter.reads", oteltrace.WithTimestamp(s.first), oteltrace.WithAttributes(
 			attribute.Int("lazycloud.reads", s.reads), attribute.Int("lazycloud.cache_hits", s.hits),
 			attribute.Int("lazycloud.fetches", s.misses), attribute.Int64("lazycloud.missed_bytes", s.missBytes),
 			attribute.Float64("lazycloud.fetch_wait_seconds", s.missTime.Seconds()),

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -43,8 +44,18 @@ func pipBoundaryFlags() []string {
 	}
 }
 
+// PythonVersions are the Python minor versions images and the managed
+// image support.
+func PythonVersions() []string {
+	return []string{
+		string(apitypes.N310), string(apitypes.N311), string(apitypes.N312), string(apitypes.N313), string(apitypes.N314),
+	}
+}
+
 var (
-	pythonVersionPattern = regexp.MustCompile(`^3\.(10|11|12|13|14)(\.[0-9]{1,3})?$`)
+	// pythonVersionPattern matches a supported minor version or a patch
+	// release of one.
+	pythonVersionPattern = regexp.MustCompile(`^(` + strings.ReplaceAll(strings.Join(PythonVersions(), "|"), ".", `\.`) + `)(\.[0-9]{1,3})?$`)
 	envNamePattern       = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	plainEnvValue        = regexp.MustCompile(`^[A-Za-z0-9_./:@+-]+$`)
 )
@@ -60,7 +71,9 @@ type spec struct {
 	commands     []string
 	env          map[string]string
 	dockerfile   string
-	context      []byte
+	// from is the image the Dockerfile's first FROM names.
+	from    string
+	context []byte
 	// secrets are the workspace secrets rendered steps read, sorted.
 	secrets []string
 	// secretVersionsKey is a digest of the versions of secrets, set once
@@ -78,7 +91,8 @@ func minorVersion(version string) string {
 
 func validate(def apitypes.ImageDefinition) (spec, error) {
 	if !pythonVersionPattern.MatchString(def.PythonVersion) {
-		return spec{}, invalid("python_version %q is not 3.10 to 3.14 or a patch release of them", def.PythonVersion)
+		versions := PythonVersions()
+		return spec{}, invalid("python_version %q is not %s to %s or a patch release of them", def.PythonVersion, versions[0], versions[len(versions)-1])
 	}
 	s := spec{python: def.PythonVersion, architecture: string(apitypes.ImageDefinitionArchitectureAmd64)}
 	if def.Micromamba != nil {
@@ -98,6 +112,9 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 			return spec{}, invalid("dockerfile builds cannot also set a base image")
 		}
 		s.dockerfile = strings.TrimRight(*def.Dockerfile, "\n") + "\n"
+		if s.from = dockerfileBase(s.dockerfile); s.from == "" {
+			return spec{}, invalid("the Dockerfile has no FROM instruction")
+		}
 	}
 	if def.PythonPackages != nil {
 		for _, p := range *def.PythonPackages {
@@ -263,14 +280,17 @@ func cleanStep(step apitypes.ImageStep) (*apitypes.ImageStep, error) {
 	return &out, nil
 }
 
-// baseReference is the base image the definition starts from, or "" for a
-// Dockerfile, which names its own. The managed base has one image per minor
+// managed reports whether the definition starts from the managed base.
+func (s spec) managed() bool { return s.base == "" && s.dockerfile == "" }
+
+// baseReference is the image the definition starts from: its Dockerfile's
+// first, its base image or the managed base, which has one image per minor
 // version.
 func (s spec) baseReference(managedBase string) string {
-	if s.dockerfile != "" {
-		return ""
-	}
-	if s.base != "" {
+	switch {
+	case s.dockerfile != "":
+		return s.from
+	case s.base != "":
 		return s.base
 	}
 	return strings.ReplaceAll(managedBase, "{version}", minorVersion(s.python))
@@ -290,7 +310,7 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 		}
 	}
 	user := len(lines)
-	for _, key := range sortedKeys(s.env) {
+	for _, key := range slices.Sorted(maps.Keys(s.env)) {
 		lines = append(lines, "ENV "+key+"="+dockerValue(s.env[key]))
 	}
 	python, setup := s.pythonSetup()
@@ -370,7 +390,7 @@ func (s spec) pythonSetup() (string, []string) {
 	python, install := "python", ""
 	switch {
 	case s.micromamba:
-	case s.base == "" && s.dockerfile == "":
+	case s.managed():
 		if s.python != minorVersion(s.python) {
 			install = "RUN python -c " + versionCheck(s.python) + " 2>/dev/null || (" + managedPythonInstall(s.python) + ")"
 		}
@@ -408,11 +428,7 @@ func (s spec) stepsUseUV() bool {
 // baseProvidesPython reports whether the user's base is a python image of
 // the requested version.
 func (s spec) baseProvidesPython() bool {
-	ref := s.base
-	if s.dockerfile != "" {
-		ref = dockerfileBase(s.dockerfile)
-	}
-	repository, tag, digest := splitReference(ref)
+	repository, tag, digest := splitReference(s.baseReference(""))
 	if repository[strings.LastIndex(repository, "/")+1:] != "python" {
 		return false
 	}
@@ -756,15 +772,6 @@ func dockerValue(value string) string {
 	return string(quoted)
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 // shellQuote quotes s for sh unless it is plainly safe.
 func shellQuote(s string) string {
 	if s != "" && strings.IndexFunc(s, func(r rune) bool {
@@ -783,17 +790,11 @@ func shellJoin(parts ...string) string {
 	return strings.Join(quoted, " ")
 }
 
+// parseSha256 decodes a sha256 digest in lowercase hex.
 func parseSha256(s string) ([]byte, error) {
-	if len(s) != 64 {
-		return nil, fmt.Errorf("digest has %d characters", len(s))
+	digest, err := hex.DecodeString(s)
+	if err != nil || len(digest) != sha256.Size || strings.ToLower(s) != s {
+		return nil, fmt.Errorf("%q is not a lowercase hex sha256 digest", s)
 	}
-	out := make([]byte, 32)
-	for n := range out {
-		v, err := strconv.ParseUint(s[2*n:2*n+2], 16, 8)
-		if err != nil || strings.ToLower(s[2*n:2*n+2]) != s[2*n:2*n+2] {
-			return nil, fmt.Errorf("digest is not lowercase hex")
-		}
-		out[n] = byte(v)
-	}
-	return out, nil
+	return digest, nil
 }

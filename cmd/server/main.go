@@ -426,8 +426,8 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		return err
 	}
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
-		TouchInterval: 10 * time.Second,
-		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		TouchInterval: 10 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
+		Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
 		Registerer: tel.Registry, Tracer: tel.Tracer(), Traces: hostTraces,
 	}, logger)
 	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures()) //nolint:contextcheck // Conversions run under the host service's lifetime.
@@ -446,7 +446,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	relayServer := grpc.NewServer()
 	hostproto.RegisterEdgeRelayServer(relayServer, edges.RelayServer())
 	probes := &health{}
-	httpServer := &http.Server{Handler: tel.HTTPHandler(handler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Handler: tel.HTTPHandler(handler), ReadHeaderTimeout: 10 * time.Second}
 	logger.InfoContext(ctx, "serving", "version", version, "http", ls.http.Addr().String(), "grpc", ls.grpc.Addr().String(),
 		"edge", ls.edge.Addr().String(), "edge_url", cfg.edgeURL, "edge_relay", ls.relay.Addr().String())
 

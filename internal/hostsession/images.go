@@ -30,18 +30,44 @@ var errImageUnpinned = errors.New("the image has no pinned reference")
 // maxBuildLogLine bounds one stored line of build output.
 const maxBuildLogLine = 16 << 10
 
-// imagePull is how host pulls the image of a container of workspace: the
-// image by digest its release pinned, or the platform's image for its
-// Python version. Either waits while the image converts: the first with
-// images.BuildWaitError, the second with images.PlatformWaitError.
-func (s *Server) imagePull(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID, spec apitypes.ImageSpec) (images.Pull, error) {
-	if spec.ImageId == nil {
-		return s.images.ManagedPull(ctx, host, string(spec.PythonVersion))
+// pullKey names one image pull a sync resolves: a workspace's image by
+// id and pinned reference, or, with no id, the managed image for a Python
+// version, which every workspace shares.
+type pullKey struct {
+	workspace     identity.WorkspaceID
+	id, reference string
+	python        string
+}
+
+type pulled struct {
+	pull images.Pull
+	err  error
+}
+
+// imagePull is how the host pulls the image of a container of workspace,
+// once per sync: the image by digest its release pinned, or the platform's
+// image for its Python version. Either waits while the image converts: the
+// first with images.BuildWaitError, the second with
+// images.PlatformWaitError.
+func (sess *session) imagePull(ctx context.Context, cache *syncCache, workspace identity.WorkspaceID, spec apitypes.ImageSpec) (images.Pull, error) {
+	key := pullKey{python: string(spec.PythonVersion)}
+	if spec.ImageId != nil {
+		key = pullKey{workspace: workspace, id: *spec.ImageId, reference: deref(spec.Reference)}
 	}
-	if spec.Reference == nil {
-		return images.Pull{}, fmt.Errorf("release names image %s: %w", *spec.ImageId, errImageUnpinned)
+	if p, ok := cache.pulls[key]; ok {
+		return p.pull, p.err
 	}
-	return s.images.ConvertedPull(ctx, workspace, *spec.ImageId, *spec.Reference)
+	var p pulled
+	switch {
+	case spec.ImageId == nil:
+		p.pull, p.err = sess.server.images.ManagedPull(ctx, sess.host, key.python)
+	case spec.Reference == nil:
+		p.err = fmt.Errorf("release names image %s: %w", key.id, errImageUnpinned)
+	default:
+		p.pull, p.err = sess.server.images.ConvertedPull(ctx, workspace, key.id, key.reference)
+	}
+	cache.pulls[key] = p
+	return p.pull, p.err //nolint:wrapcheck // permanentStartFailure and the waits match the owner's errors.
 }
 
 func registryAuthOut(auth *images.Auth) *hostproto.RegistryAuth {

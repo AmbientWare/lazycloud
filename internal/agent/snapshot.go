@@ -21,8 +21,6 @@ import (
 	"github.com/moby/moby/client"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -580,31 +578,10 @@ func (a *Agent) releaseOperation(key string) {
 	delete(a.operations, key)
 }
 
-// deliver calls report until the server accepts or refuses it, retrying
-// transient failures until reportGrace past deadline.
+// deliver delivers an operation's outcome, retrying transient failures; no
+// call runs past reportGrace after deadline, when the server stops waiting.
 func (a *Agent) deliver(ctx context.Context, deadline time.Time, what string, report func(context.Context) error) {
 	ctx, cancel := context.WithDeadline(ctx, deadline.Add(reportGrace))
 	defer cancel()
-	delay := 100 * time.Millisecond
-	for {
-		callCtx, callCancel := context.WithTimeout(ctx, completeCallTimeout)
-		err := report(callCtx)
-		callCancel()
-		switch {
-		case err == nil:
-			return
-		case status.Code(err) == codes.FailedPrecondition:
-			a.log.Info("the server no longer wants this outcome", "operation", what, "error", err)
-			return
-		case !retryable(err):
-			a.log.Error("reporting an outcome failed", "operation", what, "error", err)
-			return
-		}
-		a.log.Warn("reporting an outcome failed; retrying", "operation", what, "error", err, "retry_in", delay)
-		if !sleep(ctx, delay) {
-			a.log.Error("gave up reporting an outcome", "operation", what, "error", err)
-			return
-		}
-		delay = min(2*delay, maxCompleteBackoff)
-	}
+	deliverOutcome(ctx, ctx, a.log, what, completeCallTimeout, report)
 }

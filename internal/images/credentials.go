@@ -3,11 +3,9 @@ package images
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 )
@@ -200,12 +198,6 @@ func exchangeECR(ctx context.Context, region, accessKey, secretKey, sessionToken
 		Region:      region,
 		Credentials: credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken),
 	})
-	out, err := client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
-	if err != nil {
-		return nil, fmt.Errorf("get ECR authorization token: %w", err)
-	}
-	if len(out.AuthorizationData) == 0 {
-		return nil, fmt.Errorf("ECR returned no authorization data")
-	}
-	return decodeECRToken(aws.ToString(out.AuthorizationData[0].AuthorizationToken))
+	auth, _, err := ecrLogin(ctx, client)
+	return auth, err
 }

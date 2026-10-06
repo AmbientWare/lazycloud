@@ -29,13 +29,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// Platform images are the images agents run on their own, such as the
-// image builder and the volume mount image. A build runs in the builder,
-// so no build can convert them; the server converts each itself, once per
-// reference and host architecture across its replicas: it copies the image
-// into the platform registry and converts the copy's layers into shared
-// pairs through the same offers and uploads a build's host is given.
-// Sessions ask only for the images package platformimages names.
+// Platform images are the images agents run on their own and the managed
+// images. No build can convert them, so the server converts each itself,
+// once per reference and host architecture across its replicas, through
+// the same offers and uploads a build's host is given.
 
 const (
 	// PlatformConverted is the ChannelImageBuild key a platform image
@@ -94,17 +91,22 @@ type PlatformPull struct {
 // images its agent named, for the host's architecture. A reference that
 // is not a public image by digest is a Failure.
 func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, references []string) ([]PlatformPull, error) {
-	architecture, err := i.queries.HostArchitecture(ctx, uuid.UUID(host))
-	if err != nil {
-		return nil, fmt.Errorf("read host architecture: %w", err)
+	if len(references) == 0 {
+		return nil, nil
 	}
-	rows, err := i.queries.PlatformImagesOf(ctx, PlatformImagesOfParams{Refs: references, Architecture: architecture})
+	rows, err := i.queries.PlatformImages(ctx, PlatformImagesParams{Host: uuid.UUID(host), Refs: references})
 	if err != nil {
 		return nil, fmt.Errorf("read platform images: %w", err)
 	}
-	byReference := make(map[string]PlatformImagesOfRow, len(rows))
+	architecture := deref(rows[0].HostArchitecture)
+	if architecture == "" {
+		return nil, fmt.Errorf("read platform images: host %s does not exist", uuid.UUID(host))
+	}
+	byReference := make(map[string]PlatformImagesRow, len(rows))
 	for _, row := range rows {
-		byReference[row.Reference] = row
+		if row.Reference != nil {
+			byReference[*row.Reference] = row
+		}
 	}
 	out := make([]PlatformPull, len(references))
 	for n, reference := range references {
@@ -113,17 +115,16 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 			out[n].Failure = err.Error()
 			continue
 		}
-		row, ok := byReference[reference]
+		row := byReference[reference]
 		out[n].Traceparent = deref(row.Traceparent)
 		switch {
-		case !ok:
 		case row.Converted:
-			pull, err := i.platformPull(ctx, *row.Mirror, architecture)
+			pull, err := i.pull(ctx, *row.Mirror, architecture, platformPullWindow)
 			if err != nil {
 				return nil, err
 			}
 			out[n].Pull = &pull
-		case row.Failure != nil && !row.FailureTransient && row.FailedAt != nil && time.Since(*row.FailedAt) < platformFailureRetry:
+		case row.Failure != nil && row.FailedAt != nil && !*row.FailureTransient && time.Since(*row.FailedAt) < platformFailureRetry:
 			out[n].Failure, out[n].RetryAt = *row.Failure, row.FailedAt.Add(platformFailureRetry)
 		}
 	}
@@ -138,29 +139,20 @@ func (i *Images) PlatformCopies(ctx context.Context, mirrors []string) ([]Platfo
 	if len(mirrors) == 0 {
 		return nil, nil
 	}
-	rows, err := i.queries.PlatformCopiesOf(ctx, mirrors)
+	rows, err := i.queries.PlatformImages(ctx, PlatformImagesParams{Mirrors: mirrors})
 	if err != nil {
 		return nil, fmt.Errorf("read platform image copies: %w", err)
 	}
-	out := make([]PlatformPull, len(rows))
-	for n, row := range rows {
-		out[n] = PlatformPull{
-			Reference: row.Reference, Architecture: row.Architecture,
-			Pull: &Pull{Reference: row.Mirror, Platform: "linux/" + row.Architecture},
+	var out []PlatformPull
+	for _, row := range rows {
+		if row.Converted {
+			out = append(out, PlatformPull{
+				Reference: *row.Reference, Architecture: *row.Architecture,
+				Pull: &Pull{Reference: *row.Mirror, Platform: "linux/" + *row.Architecture},
+			})
 		}
 	}
 	return out, nil
-}
-
-// platformPull is how a host pulls mirror, the converted copy of a
-// platform image.
-func (i *Images) platformPull(ctx context.Context, mirror, architecture string) (Pull, error) {
-	repository, _ := i.config.repositoryOf(mirror)
-	auth, err := i.login.host(ctx, hostAccess{pull: []string{repository}}, time.Now().Add(platformPullWindow))
-	if err != nil {
-		return Pull{}, err
-	}
-	return Pull{Reference: mirror, Auth: auth, Platform: "linux/" + architecture}, nil
 }
 
 // platformSource parses reference, a platform image an agent named. It
@@ -189,49 +181,53 @@ func (i *Images) platformSource(reference string) (name.Digest, error) {
 	return parsed, nil
 }
 
+// platformConversion is one leased conversion of a platform image for an
+// architecture. Its outcome is recorded only under its token, and every
+// record before that is idempotent, so an owner whose lease lapsed changes
+// nothing another depends on.
+type platformConversion struct {
+	reference, architecture string
+	token                   uuid.UUID
+}
+
 // ConvertPlatformImage converts reference, a platform image, for
 // architecture unless it is converted, another replica's conversion holds
 // its lease, or its last attempt failed within the retry period. The
 // outcome is recorded and announced on ChannelImageBuild under
 // PlatformConverted. A failure of the image is a ConversionError.
 func (i *Images) ConvertPlatformImage(ctx context.Context, reference, architecture string) error {
+	return i.convertPlatformImage(ctx, reference, architecture, platformLease)
+}
+
+func (i *Images) convertPlatformImage(ctx context.Context, reference, architecture string, lease time.Duration) error {
 	source, err := i.platformSource(reference)
 	if err != nil {
 		return err
 	}
-	token := uuid.New()
-	// The lease names the invariant: one conversion of a reference and
-	// architecture at a time. Its outcome is recorded only under the token,
-	// and every record before that is idempotent, so an owner whose lease
-	// lapsed changes nothing another depends on.
-	recorded, err := i.queries.ClaimPlatformImage(ctx, ClaimPlatformImageParams{
-		Reference: reference, Architecture: architecture, Token: token, LeaseSeconds: i.platformLease.Seconds(),
+	// The lease keeps one conversion of a reference and architecture at a
+	// time.
+	c := platformConversion{reference: reference, architecture: architecture, token: uuid.New()}
+	claimed, err := i.queries.ClaimPlatformImage(ctx, ClaimPlatformImageParams{
+		Reference: reference, Architecture: architecture, Token: c.token, LeaseSeconds: lease.Seconds(),
 		TransientRetrySeconds: platformTransientRetry.Seconds(), FailureRetrySeconds: platformFailureRetry.Seconds(),
 		Traceparent: traceparent(ctx),
 	})
-	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attribute.Bool("lazycloud.claimed", err == nil))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("lazycloud.claimed", err == nil))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("claim platform image: %w", err)
 	}
-	if recorded != nil {
-		rows, err := i.queries.ReferenceLayers(ctx, *recorded)
-		if err != nil {
-			return fmt.Errorf("read image layers: %w", err)
-		}
-		if len(rows) > 0 {
-			return i.finishPlatform(ctx, reference, architecture, token, *recorded)
-		}
+	if claimed.Converted {
+		return pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error { return c.finish(ctx, tx, *claimed.Mirror) }) //nolint:wrapcheck // finish names its step.
 	}
 	convertCtx, cancel := context.WithTimeout(ctx, platformConversionTimeout)
 	defer cancel()
 	renewCtx, lost := context.WithCancelCause(convertCtx)
 	var renewals sync.WaitGroup
-	renewals.Go(func() { i.renewPlatform(renewCtx, lost, reference, architecture, token) })
-	err = i.convertPlatform(renewCtx, source, reference, architecture, token)
+	renewals.Go(func() { i.renewPlatform(renewCtx, lost, c, lease) })
+	err = i.convertPlatform(renewCtx, source, c)
 	lost(nil)
 	renewals.Wait()
 	if err == nil {
@@ -243,7 +239,7 @@ func (i *Images) ConvertPlatformImage(ctx context.Context, reference, architectu
 	record := context.WithoutCancel(ctx)
 	failed := pgx.BeginFunc(record, i.pool, func(tx pgx.Tx) error {
 		if err := i.queries.WithTx(tx).FailPlatformImage(record, FailPlatformImageParams{
-			Reference: reference, Architecture: architecture, Token: token, Failure: truncate(err.Error()), Transient: transient,
+			Reference: reference, Architecture: architecture, Token: c.token, Failure: truncate(err.Error()), Transient: transient,
 		}); err != nil {
 			return fmt.Errorf("record platform image failure: %w", err)
 		}
@@ -255,12 +251,12 @@ func (i *Images) ConvertPlatformImage(ctx context.Context, reference, architectu
 // errLeaseLost ends a conversion whose lease another owner took.
 var errLeaseLost = errors.New("another owner took the conversion's lease")
 
-// renewPlatform renews the lease of token's conversion every third of the
-// lease until ctx ends, and ends the conversion with errLeaseLost once
-// the lease is another's. A failed renewal is tried again at the next
-// tick; the lease outlasts two of them.
-func (i *Images) renewPlatform(ctx context.Context, lost context.CancelCauseFunc, reference, architecture string, token uuid.UUID) {
-	ticker := time.NewTicker(i.platformLease / 3)
+// renewPlatform renews c's lease every third of lease until ctx ends, and
+// ends the conversion with errLeaseLost once the lease is another's. A
+// failed renewal is tried again at the next tick; the lease outlasts two
+// of them.
+func (i *Images) renewPlatform(ctx context.Context, lost context.CancelCauseFunc, c platformConversion, lease time.Duration) {
+	ticker := time.NewTicker(lease / 3)
 	defer ticker.Stop()
 	for {
 		select {
@@ -269,7 +265,7 @@ func (i *Images) renewPlatform(ctx context.Context, lost context.CancelCauseFunc
 		case <-ticker.C:
 		}
 		n, err := i.queries.RenewPlatformImage(ctx, RenewPlatformImageParams{
-			Reference: reference, Architecture: architecture, Token: token, LeaseSeconds: i.platformLease.Seconds(),
+			Reference: c.reference, Architecture: c.architecture, Token: c.token, LeaseSeconds: lease.Seconds(),
 		})
 		if err == nil && n == 0 {
 			lost(errLeaseLost)
@@ -278,61 +274,52 @@ func (i *Images) renewPlatform(ctx context.Context, lost context.CancelCauseFunc
 	}
 }
 
-// finishPlatform records mirror as the converted copy of reference under
-// token and announces it.
-func (i *Images) finishPlatform(ctx context.Context, reference, architecture string, token uuid.UUID, mirror string) error {
-	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
-		return i.finishPlatformTx(ctx, i.queries.WithTx(tx), tx, reference, architecture, token, mirror)
-	})
-	if err != nil {
-		return fmt.Errorf("finish platform image: %w", err)
-	}
-	return nil
-}
-
-func (i *Images) finishPlatformTx(ctx context.Context, q *Queries, tx pgx.Tx, reference, architecture string, token uuid.UUID, mirror string) error {
-	if _, err := q.FinishPlatformImage(ctx, FinishPlatformImageParams{Reference: reference, Architecture: architecture, Token: token, Mirror: mirror}); err != nil {
+// finish records mirror as the converted copy under c's token, in tx, and
+// announces it.
+func (c platformConversion) finish(ctx context.Context, tx pgx.Tx, mirror string) error {
+	if err := New(tx).FinishPlatformImage(ctx, FinishPlatformImageParams{
+		Reference: c.reference, Architecture: c.architecture, Token: c.token, Mirror: mirror,
+	}); err != nil {
 		return fmt.Errorf("record platform image: %w", err)
 	}
 	return database.Notify(ctx, tx, database.ChannelImageBuild, PlatformConverted)
 }
 
-// convertPlatform copies source's image for architecture into the platform
-// registry, converts and uploads each layer no shared pair holds yet, and
-// records the copy's layers. The uploads are keyed by token as a build's
-// are by its container.
-func (i *Images) convertPlatform(ctx context.Context, source name.Digest, reference, architecture string, token uuid.UUID) (err error) {
-	var sourceAuth *Auth
-	if source.RegistryStr() == i.config.Registry {
-		if sourceAuth, err = i.login.auth(ctx); err != nil {
-			return err
-		}
+// convertPlatform copies source's image for c's architecture into the
+// platform registry, converts and uploads each layer no shared pair holds
+// yet, and records the copy's layers. The uploads are keyed by c's token
+// as a build's are by its container.
+func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c platformConversion) (err error) {
+	sourceAuth, _, err := i.registryLogin(ctx, source.RegistryStr())
+	if err != nil {
+		return err
 	}
 	img, err := remote.Image(source, remote.WithContext(ctx), remote.WithAuth(sourceAuth.authenticator()), remote.WithTransport(i.resolver.transport),
-		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: architecture}))
+		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: c.architecture}))
 	if err != nil {
-		return registryError(reference, err)
+		return registryError(c.reference, err)
 	}
-	manifest, err := img.Manifest()
+	// The copy has the same manifest, so these are its layers too.
+	layers, err := imageLayers(c.reference, img)
+	var rejected *InvalidError
+	if errors.As(err, &rejected) {
+		return &ConversionError{Reason: rejected.Reason}
+	}
 	if err != nil {
-		return fmt.Errorf("%w: read the manifest of %s: %w", ErrRegistryUnavailable, reference, err)
+		return err
 	}
 	var size int64
-	for _, l := range manifest.Layers {
-		size += l.Size
+	for _, l := range layers {
+		size += l.size
 	}
 	if size > maxPlatformImageBytes {
-		return &ConversionError{Reason: fmt.Sprintf("%s has %d bytes of layers, more than %d", reference, size, int64(maxPlatformImageBytes))}
+		return &ConversionError{Reason: fmt.Sprintf("%s has %d bytes of layers, more than %d", c.reference, size, int64(maxPlatformImageBytes))}
 	}
 	digest, err := img.Digest()
 	if err != nil {
-		return fmt.Errorf("digest %s: %w", reference, err)
+		return fmt.Errorf("digest %s: %w", c.reference, err)
 	}
-	host := source.RegistryStr()
-	if host == name.DefaultRegistry {
-		host = "docker.io"
-	}
-	repository := i.config.Repository + "/platform/" + strings.ReplaceAll(host, ":", "-") + "/" + source.RepositoryStr()
+	repository := i.config.Repository + "/platform/" + strings.ReplaceAll(hostOf(source.Context()), ":", "-") + "/" + source.RepositoryStr()
 	mirror := i.config.Registry + "/" + repository + "@" + digest.String()
 	auth, err := i.login.auth(ctx)
 	if err != nil {
@@ -353,28 +340,14 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 		})
 		telemetry.Fail(span, err)
 		if err != nil {
-			return fmt.Errorf("%w: copy %s into the platform registry: %w", ErrRegistryUnavailable, reference, err)
+			return fmt.Errorf("%w: copy %s into the platform registry: %w", ErrRegistryUnavailable, c.reference, err)
 		}
 	}
-	pushed := publication{
-		reference: mirror, target: buildTarget{repository: repository}, container: token,
-		deadline: time.Now().Add(platformConversionTimeout),
-	}
-	pushed.layers, err = i.resolver.layers(ctx, mirror, auth, i.config.Insecure, "linux/"+architecture)
-	var rejected *InvalidError
-	if errors.As(err, &rejected) {
-		return &ConversionError{Reason: rejected.Reason}
-	}
-	if err != nil {
-		return err
-	}
+	pushed := publication{reference: mirror, owner: c.token, deadline: time.Now().Add(platformConversionTimeout), layers: layers}
 	// What the conversion's uploads stored and no pair recorded is deleted
 	// by the sweep once their URLs lapse.
-	defer func() { err = errors.Join(err, i.endUploads(context.WithoutCancel(ctx), token)) }()
-	finish := func(q *Queries, tx pgx.Tx) error {
-		return i.finishPlatformTx(ctx, q, tx, reference, architecture, token, mirror)
-	}
-	offers, err := i.platformRound(ctx, pushed, nil, nil, finish)
+	defer func() { err = errors.Join(err, i.endUploads(context.WithoutCancel(ctx), c.token)) }()
+	offers, err := i.platformRound(ctx, c, pushed, nil, nil)
 	if err != nil || len(offers) == 0 {
 		return err
 	}
@@ -383,21 +356,20 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 		return fmt.Errorf("%w: create conversion directory: %w", ErrServerDisk, err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	blobBytes := make(map[string]int64, len(pushed.layers))
-	for _, l := range pushed.layers {
+	blobBytes := make(map[string]int64, len(layers))
+	for _, l := range layers {
 		blobBytes[l.blob] = l.size
 	}
-	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attribute.Int("lazycloud.layers", len(pushed.layers)), attribute.Int("lazycloud.layers_converted", len(offers)))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("lazycloud.layers", len(layers)), attribute.Int("lazycloud.layers_converted", len(offers)))
 	files, err := i.convertPlatformLayers(ctx, target, auth, dir, offers, blobBytes)
 	if err != nil {
 		return err
 	}
 	sizes := make([]ConvertedLayer, 0, len(files))
 	for blob, f := range files {
-		sizes = append(sizes, ConvertedLayer{Blob: blob, DataBytes: f.dataBytes, IndexBytes: int64(len(f.index))})
+		sizes = append(sizes, ConvertedLayer{Blob: blob, DataBytes: f.DataBytes, IndexBytes: int64(len(f.Index))})
 	}
-	if offers, err = i.platformRound(ctx, pushed, nil, sizes, finish); err != nil || len(offers) == 0 {
+	if offers, err = i.platformRound(ctx, c, pushed, nil, sizes); err != nil || len(offers) == 0 {
 		return err
 	}
 	uploads, err := i.presignUploads(ctx, offers)
@@ -416,32 +388,31 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 		return &ConversionError{Reason: failure}
 	}
 	publishCtx, publish := telemetry.Start(ctx, "images.publish_platform_image")
-	offers, err = i.platformRound(publishCtx, pushed, converted, nil, finish)
+	offers, err = i.platformRound(publishCtx, c, pushed, converted, nil)
 	telemetry.Fail(publish, err)
 	if err != nil {
 		return err
 	}
 	if len(offers) > 0 {
-		return fmt.Errorf("%d layers of %s are still not converted", len(offers), reference)
+		return fmt.Errorf("%d layers of %s are still not converted", len(offers), c.reference)
 	}
 	return nil
 }
 
 // platformRound records the checked conversions and the reported sizes of
 // pushed's layers, as a build's completion does, and returns the uploads
-// still missing. With none, the reference's layers are recorded and
-// finish records the conversion in the same transaction.
-func (i *Images) platformRound(ctx context.Context, pushed publication, converted []conversion, sizes []ConvertedLayer, finish func(*Queries, pgx.Tx) error) ([]offer, error) {
+// still missing. With none, the reference's layers are recorded and c
+// finishes in the same transaction.
+func (i *Images) platformRound(ctx context.Context, c platformConversion, pushed publication, converted []RecordLayerParams, sizes []ConvertedLayer) ([]offer, error) {
 	var offers []offer
 	var failure string
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
-		q := i.queries.WithTx(tx)
 		var err error
-		offers, failure, err = i.recordLayers(ctx, q, pushed, converted, sizes)
+		offers, failure, err = i.recordLayers(ctx, i.queries.WithTx(tx), pushed, converted, sizes)
 		if err != nil || failure != "" || len(offers) > 0 {
 			return err
 		}
-		return finish(q, tx)
+		return c.finish(ctx, tx, pushed.reference)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("record platform image layers: %w", err)
@@ -452,18 +423,10 @@ func (i *Images) platformRound(ctx context.Context, pushed publication, converte
 	return offers, nil
 }
 
-// platformLayer is a layer the server converted: its data in a file under
-// the conversion's directory, and its index.
-type platformLayer struct {
-	data      string
-	dataBytes int64
-	index     []byte
-}
-
 // convertPlatformLayers converts the layers offers name, read from image's
-// repository, a few at a time.
-func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, auth *Auth, dir string, offers []offer, blobBytes map[string]int64) (map[string]*platformLayer, error) {
-	out := make([]*platformLayer, len(offers))
+// repository, a few at a time, into data files under dir.
+func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, auth *Auth, dir string, offers []offer, blobBytes map[string]int64) (map[string]*imagefs.ConvertedFile, error) {
+	out := make([]*imagefs.ConvertedFile, len(offers))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(platformLayerParallelism)
 	for n, o := range offers {
@@ -486,7 +449,7 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 	if err := g.Wait(); err != nil {
 		return nil, err //nolint:wrapcheck // Each conversion's error names its layer.
 	}
-	files := make(map[string]*platformLayer, len(offers))
+	files := make(map[string]*imagefs.ConvertedFile, len(offers))
 	for n, o := range offers {
 		files[o.blob] = out[n]
 	}
@@ -496,7 +459,7 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 // convertPlatformLayer downloads blob, of size bytes, and converts it once
 // its digest checks. A download cut short is the registry's failure; only
 // a blob that holds its digest's bytes can fail as content.
-func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string, size int64) (*platformLayer, error) {
+func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string, size int64) (*imagefs.ConvertedFile, error) {
 	fetchCtx, fetch := telemetry.Start(ctx, "images.download_layer")
 	path, mediaType, err := i.fetchPlatformBlob(fetchCtx, blob, auth, dir, size)
 	telemetry.Fail(fetch, err)
@@ -515,19 +478,16 @@ func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, aut
 		return nil, fmt.Errorf("open layer %s: %w", blob.DigestStr(), err)
 	}
 	defer func() { _ = uncompressed.Close() }()
-	data, err := os.CreateTemp(dir, "layer-*.data")
-	if err != nil {
-		return nil, fmt.Errorf("%w: create layer data file: %w", ErrServerDisk, err)
-	}
-	defer func() { _ = data.Close() }()
-	ix, index, err := imagefs.ConvertLayer(ctx, uncompressed, data, imagefs.Digest(diffID))
-	if errors.Is(err, imagefs.ErrInvalidLayer) {
+	l, err := imagefs.ConvertFile(ctx, uncompressed, dir, imagefs.Digest(diffID))
+	switch {
+	case errors.Is(err, imagefs.ErrInvalidLayer):
 		return nil, &ConversionError{Reason: fmt.Sprintf("layer %s: %v", blob.DigestStr(), err)}
-	}
-	if err != nil {
+	case errors.Is(err, imagefs.ErrDataFile):
+		return nil, fmt.Errorf("%w: %w", ErrServerDisk, err)
+	case err != nil:
 		return nil, fmt.Errorf("convert layer: %w", err)
 	}
-	return &platformLayer{data: data.Name(), dataBytes: ix.DataSize, index: index}, nil
+	return l, nil
 }
 
 // fetchPlatformBlob downloads blob, of size bytes, into a file under dir
@@ -571,7 +531,7 @@ func (i *Images) fetchPlatformBlob(ctx context.Context, blob name.Digest, auth *
 
 // uploadPlatformLayers PUTs each layer's data parts, then its index, to
 // the URLs uploads carry, and returns the parts' ETags.
-func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload, files map[string]*platformLayer) ([]UploadedLayer, error) {
+func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload, files map[string]*imagefs.ConvertedFile) ([]UploadedLayer, error) {
 	for _, u := range uploads {
 		if files[u.Blob] == nil || u.Index == "" {
 			return nil, fmt.Errorf("layer %s has no converted data or no upload", u.Blob)
@@ -584,8 +544,8 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 		l := files[u.Blob]
 		g.Go(func() error {
 			uploadCtx, span := telemetry.Start(ctx, "images.upload_layer", trace.WithAttributes(
-				attribute.String(telemetry.AttrLayer, u.DiffID), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
-			etags, err := i.uploadPlatformLayer(uploadCtx, u, l)
+				attribute.String(telemetry.AttrLayer, u.DiffID), attribute.Int64("lazycloud.bytes", l.DataBytes+int64(len(l.Index)))))
+			etags, err := l.Upload(uploadCtx, i.transfer, u.DataParts, u.PartBytes, u.Index, retryPlatform)
 			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("upload layer %s: %w", u.Blob, err)
@@ -598,15 +558,6 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 		return nil, err //nolint:wrapcheck // Each upload's error names its layer.
 	}
 	return out, nil
-}
-
-func (i *Images) uploadPlatformLayer(ctx context.Context, u LayerUpload, l *platformLayer) ([]string, error) {
-	data, err := os.Open(l.data)
-	if err != nil {
-		return nil, fmt.Errorf("open layer data: %w", err)
-	}
-	defer func() { _ = data.Close() }()
-	return imagefs.UploadPair(ctx, i.transfer, data, l.dataBytes, l.index, u.DataParts, u.PartBytes, u.Index, retryPlatform) //nolint:wrapcheck // The caller names the layer.
 }
 
 // retryPlatform runs fn until it succeeds, fails for the image, the

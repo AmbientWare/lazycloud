@@ -57,23 +57,35 @@ func (s *sourceCache) fetch(ctx context.Context, src *hostproto.Source) (string,
 		return "", fmt.Errorf("source digest %q is not a lowercase SHA-256", digest)
 	}
 	path := filepath.Join(s.dir, digest+".zip")
+	_, err := shared(ctx, &s.group, digest, func() (struct{}, error) {
+		if _, err := os.Stat(path); err == nil {
+			return struct{}{}, nil
+		}
+		return struct{}{}, s.download(ctx, src.GetUrl(), digest, path)
+	})
+	if err != nil {
+		return "", fmt.Errorf("fetch source %s: %w", digest, err)
+	}
+	now := time.Now()
+	_ = os.Chtimes(path, now, now)
+	return path, nil
+}
+
+// shared runs fn once for the concurrent callers of key and gives each its
+// result. A caller that joined a call another caller's cancellation or
+// deadline ended, while its own context is live, calls again.
+func shared[T any](ctx context.Context, group *singleflight.Group, key string, fn func() (T, error)) (T, error) {
 	for {
-		_, err, _ := s.group.Do(digest, func() (any, error) {
-			if _, err := os.Stat(path); err == nil {
-				return nil, nil
-			}
-			return nil, s.download(ctx, src.GetUrl(), digest, path)
+		led := false
+		v, err, _ := group.Do(key, func() (any, error) {
+			led = true
+			return fn()
 		})
-		// Another start's cancellation must not fail this one.
-		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+		if err != nil && !led && ctx.Err() == nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			continue
 		}
-		if err != nil {
-			return "", fmt.Errorf("fetch source %s: %w", digest, err)
-		}
-		now := time.Now()
-		_ = os.Chtimes(path, now, now)
-		return path, nil
+		result, _ := v.(T)
+		return result, err //nolint:wrapcheck // fn's error.
 	}
 }
 
@@ -195,7 +207,8 @@ func extractFile(root *os.Root, name string, entry *zip.File, budget int64) (int
 	return n, nil
 }
 
-// imageCache pulls each image reference once at a time.
+// imageCache makes images present; concurrent starts of one reference share
+// its pull.
 type imageCache struct {
 	// containerd is Docker's containerd, which every pull goes through.
 	containerd *containerd.Client
@@ -229,32 +242,23 @@ func (c *imageCache) ensure(ctx context.Context, image string, auth *hostproto.R
 		matcher = platforms.Only(p)
 		opts = append(opts, containerd.WithPlatform(platform))
 	}
-	for {
-		pulled, err, _ := c.group.Do(ref, func() (any, error) {
-			if img, err := c.containerd.GetImage(ctx, ref); err == nil {
-				unpacked, err := containerd.NewImageWithPlatform(c.containerd, img.Metadata(), matcher).IsUnpacked(ctx, layersource.Snapshotter)
-				if err != nil {
-					return false, fmt.Errorf("inspect image %s: %w", ref, err)
-				}
-				if unpacked {
-					return false, nil
-				}
-			} else if !cerrdefs.IsNotFound(err) {
+	return shared(ctx, &c.group, ref, func() (bool, error) {
+		if img, err := c.containerd.GetImage(ctx, ref); err == nil {
+			unpacked, err := containerd.NewImageWithPlatform(c.containerd, img.Metadata(), matcher).IsUnpacked(ctx, layersource.Snapshotter)
+			if err != nil {
 				return false, fmt.Errorf("inspect image %s: %w", ref, err)
 			}
-			if _, err := c.containerd.Pull(ctx, ref, opts...); err != nil {
-				return false, fmt.Errorf("pull image %s: %w", ref, err)
+			if unpacked {
+				return false, nil
 			}
-			return true, nil
-		})
-		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
-			continue
+		} else if !cerrdefs.IsNotFound(err) {
+			return false, fmt.Errorf("inspect image %s: %w", ref, err)
 		}
-		if err != nil {
-			return false, err //nolint:wrapcheck // wrapped inside the call
+		if _, err := c.containerd.Pull(ctx, ref, opts...); err != nil {
+			return false, fmt.Errorf("pull image %s: %w", ref, err)
 		}
-		return pulled.(bool), nil //nolint:forcetypeassert // the function returns bool
-	}
+		return true, nil
+	})
 }
 
 // markLayersLazy labels each layer of a manifest for the snapshotter.

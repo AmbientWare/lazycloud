@@ -212,7 +212,7 @@ func traceAssignment(ctx context.Context, a AssignContainersRow) {
 	if a.HostID != nil {
 		attrs = append(attrs, telemetry.Host(a.HostID.String()))
 	}
-	_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), *a.Traceparent, "scheduling.placement",
-		trace.WithTimestamp(a.CreatedAt), trace.WithAttributes(attrs...), telemetry.LinkTo(telemetry.TraceParentOf(ctx)))
+	_, span := telemetry.StartFor(ctx, *a.Traceparent, "scheduling.placement",
+		trace.WithTimestamp(a.CreatedAt), trace.WithAttributes(attrs...))
 	span.End()
 }

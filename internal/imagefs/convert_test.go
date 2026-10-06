@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
@@ -24,18 +25,28 @@ import (
 	"time"
 )
 
-// memObject is a data object held in memory.
-type memObject []byte
-
-func (m memObject) ReadRange(_ context.Context, off, n int64) (io.ReadCloser, error) {
-	if off < 0 || n < 0 || off+n > int64(len(m)) {
-		return nil, fmt.Errorf("range [%d, +%d) outside %d bytes", off, n, len(m))
+func frameReader(t *testing.T) *FrameReader {
+	t.Helper()
+	r, err := NewFrameReader(1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return io.NopCloser(bytes.NewReader(m[off : off+n])), nil
+	return r
 }
 
-// roundTrip converts a layer and returns the index as a reader decodes it.
-func roundTrip(t *testing.T, layer []byte) (Index, memObject) {
+// serve is a RangeReader of object, served over HTTP.
+func serve(t *testing.T, object []byte) RangeReader {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(object))
+	}))
+	t.Cleanup(server.Close)
+	return HTTPObject(server.Client(), func() string { return server.URL })
+}
+
+// roundTrip converts a layer and returns the index as a reader decodes it,
+// and the data object.
+func roundTrip(t *testing.T, layer []byte) (Index, []byte) {
 	t.Helper()
 	var data bytes.Buffer
 	ix, err := Convert(t.Context(), bytes.NewReader(layer), &data)
@@ -60,22 +71,25 @@ func roundTrip(t *testing.T, layer []byte) (Index, memObject) {
 	if !reflect.DeepEqual(got, ix) {
 		t.Fatal("the decoded index differs from the converted one")
 	}
-	return got, memObject(data.Bytes())
+	return got, data.Bytes()
 }
 
 // contents reads e's bytes frame by frame, keeping decoded frames in frames.
 func contents(t *testing.T, ix Index, data RangeReader, frames map[int][]byte, e Entry) []byte {
 	t.Helper()
-	first, last := ix.FrameSpan(e, 0, e.Size)
-	if e.Size > 0 && e.Size <= FrameSize && first != last {
+	if e.Size == 0 {
+		return nil
+	}
+	first, last := e.Offset/FrameSize, (e.Offset+e.Size-1)/FrameSize
+	if e.Size <= FrameSize && first != last {
 		t.Fatalf("%s of %d bytes spans frames %d-%d", e.Path, e.Size, first, last)
 	}
 	var out []byte
-	for i := first; i <= last; i++ {
+	for i := int(first); i <= int(last); i++ {
 		frame, ok := frames[i]
 		if !ok {
 			var err error
-			if frame, err = ix.ReadFrame(t.Context(), data, i); err != nil {
+			if frame, err = frameReader(t).Read(t.Context(), ix, data, i); err != nil {
 				t.Fatal(err)
 			}
 			frames[i] = frame
@@ -210,7 +224,7 @@ func TestPythonLayersRoundTrip(t *testing.T) {
 		if ix.Layer != config.RootFS.DiffIDs[i] {
 			t.Fatalf("layer %d digest %s, image diff_id %s", i, ix.Layer, config.RootFS.DiffIDs[i])
 		}
-		checkAgainstTar(t, layer, ix, data)
+		checkAgainstTar(t, layer, ix, serve(t, data))
 		t.Logf("layer %d: %d bytes tar, %d entries, %d frames, %d data bytes", i, len(layer), len(ix.Entries), len(ix.Frames), ix.DataSize)
 	}
 }
@@ -290,7 +304,8 @@ func TestConvertKeepsEveryEntryKind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ix, data := roundTrip(t, layer.Bytes())
+	ix, stored := roundTrip(t, layer.Bytes())
+	object := serve(t, stored)
 	toolSize := int64(len(tool))
 	// big would cross the frame boundary after tool, so it starts the next
 	// frame; the later members follow it.
@@ -339,7 +354,7 @@ func TestConvertKeepsEveryEntryKind(t *testing.T) {
 		"etc/hosts": []byte("second\n"), "usr/bin/tool": tool, "usr/bin/tool-link2": tool, "big": big, "empty": nil, "gone": []byte("now a file"),
 	} {
 		e := ix.Entries[slices.IndexFunc(ix.Entries, func(e Entry) bool { return e.Path == path })]
-		if got := contents(t, ix, data, frames, e); !bytes.Equal(got, body) {
+		if got := contents(t, ix, object, frames, e); !bytes.Equal(got, body) {
 			t.Fatalf("%s reads back %d bytes, want %d", path, len(got), len(body))
 		}
 	}
@@ -348,51 +363,13 @@ func TestConvertKeepsEveryEntryKind(t *testing.T) {
 // Convert refuses a layer it cannot index faithfully rather than storing a
 // tree that differs from extraction.
 func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
-	layers := map[string][]tar.Header{
-		"a hard link to a missing file": {{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}},
-		"a hard link target replaced": {
-			{Name: "a", Typeflag: tar.TypeReg}, {Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}, {Name: "a", Typeflag: tar.TypeReg},
-		},
-		"a file below a file": {{Name: "a", Typeflag: tar.TypeReg}, {Name: "a/b", Typeflag: tar.TypeReg}},
-	}
-	for name, headers := range layers {
-		var layer bytes.Buffer
-		tw := tar.NewWriter(&layer)
-		for _, hdr := range headers {
-			hdr.Mode = 0o644
-			if err := tw.WriteHeader(&hdr); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := tw.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Convert(t.Context(), &layer, io.Discard); !errors.Is(err, ErrInvalidLayer) {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	var truncated bytes.Buffer
-	tw := tar.NewWriter(&truncated)
-	if err := tw.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1000}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(make([]byte, 100)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Convert(t.Context(), &truncated, io.Discard); !errors.Is(err, ErrInvalidLayer) {
-		t.Errorf("a truncated layer: %v", err)
-	}
-	// A stream cut inside a header, and a header that is not one.
-	var whole bytes.Buffer
-	tw = tar.NewWriter(&whole)
-	if err := tw.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
 	streams := map[string][]byte{
-		"a stream cut inside a header": whole.Bytes()[:100],
+		"a hard link to a missing file": headersTar(t, tar.Header{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}),
+		"a hard link target replaced": headersTar(t,
+			tar.Header{Name: "a", Typeflag: tar.TypeReg}, tar.Header{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}, tar.Header{Name: "a", Typeflag: tar.TypeReg}),
+		"a file below a file":          headersTar(t, tar.Header{Name: "a", Typeflag: tar.TypeReg}, tar.Header{Name: "a/b", Typeflag: tar.TypeReg}),
+		"a truncated layer":            fileTar(t, "a", make([]byte, 1000))[:512+100],
+		"a stream cut inside a header": fileTar(t, "a", nil)[:100],
 		"a malformed header":           bytes.Repeat([]byte("not a tar header"), 32),
 	}
 	for name, stream := range streams {
@@ -406,9 +383,7 @@ func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
 // of the same layer: a file stays, and a directory stays and turns opaque.
 func TestWhiteoutsHideOnlyLowerLayers(t *testing.T) {
 	mtime := time.Date(2026, 10, 5, 12, 30, 0, 0, time.UTC)
-	var layer bytes.Buffer
-	tw := tar.NewWriter(&layer)
-	for _, hdr := range []tar.Header{
+	headers := []tar.Header{
 		{Name: "file-first", Typeflag: tar.TypeReg},
 		{Name: ".wh.file-first", Typeflag: tar.TypeReg},
 		{Name: "dir-first/", Typeflag: tar.TypeDir},
@@ -419,16 +394,11 @@ func TestWhiteoutsHideOnlyLowerLayers(t *testing.T) {
 		{Name: "dir-later/", Typeflag: tar.TypeDir},
 		{Name: ".wh.parent", Typeflag: tar.TypeReg},
 		{Name: "parent/child", Typeflag: tar.TypeReg},
-	} {
-		hdr.Mode, hdr.ModTime = 0o755, mtime
-		if err := tw.WriteHeader(&hdr); err != nil {
-			t.Fatal(err)
-		}
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
+	for i := range headers {
+		headers[i].Mode, headers[i].ModTime = 0o755, mtime
 	}
-	ix, _ := roundTrip(t, layer.Bytes())
+	ix, _ := roundTrip(t, headersTar(t, headers...))
 	want := []Entry{
 		{Path: "file-first", Type: TypeRegular, Mode: 0o755, ModTime: mtime},
 		{Path: "dir-first", Type: TypeDirectory, Mode: fs.ModeDir | 0o755, ModTime: mtime, Opaque: true},
@@ -474,7 +444,7 @@ func TestConvertFillsSparseFiles(t *testing.T) {
 	if len(ix.Entries) != 1 || ix.Entries[0].Type != TypeRegular {
 		t.Fatalf("entries %+v", ix.Entries)
 	}
-	if got := contents(t, ix, object, map[int][]byte{}, ix.Entries[0]); !bytes.Equal(got, want) {
+	if got := contents(t, ix, serve(t, object), map[int][]byte{}, ix.Entries[0]); !bytes.Equal(got, want) {
 		t.Fatalf("read back %d bytes, want the %d of the filled file", len(got), len(want))
 	}
 }
@@ -484,9 +454,27 @@ func TestConvertFillsSparseFiles(t *testing.T) {
 func TestReadFrameRefusesCorruptFrames(t *testing.T) {
 	body := make([]byte, FrameSize)
 	_, _ = rand.Read(body)
+	ix, data := roundTrip(t, fileTar(t, "weights", body))
+	for _, at := range []int{len(data) / 3, len(data) / 2, len(data) - 100} {
+		corrupt := append([]byte(nil), data...)
+		corrupt[at] ^= 0x40
+		if got, err := frameReader(t).Read(t.Context(), ix, serve(t, corrupt), 0); !errors.Is(err, ErrInvalidIndex) {
+			t.Fatalf("a frame changed at byte %d: %d bytes, %v", at, len(got), err)
+		}
+	}
+}
+
+// fileTar is a layer of one regular file, after the headers before it.
+func fileTar(t *testing.T, name string, body []byte, before ...tar.Header) []byte {
+	t.Helper()
 	var layer bytes.Buffer
 	tw := tar.NewWriter(&layer)
-	if err := tw.WriteHeader(&tar.Header{Name: "weights", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+	for _, hdr := range before {
+		if err := tw.WriteHeader(&hdr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tw.Write(body); err != nil {
@@ -495,12 +483,69 @@ func TestReadFrameRefusesCorruptFrames(t *testing.T) {
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ix, data := roundTrip(t, layer.Bytes())
-	for _, at := range []int{len(data) / 3, len(data) / 2, len(data) - 100} {
-		corrupt := append(memObject(nil), data...)
-		corrupt[at] ^= 0x40
-		if got, err := ix.ReadFrame(t.Context(), corrupt, 0); !errors.Is(err, ErrInvalidIndex) {
-			t.Fatalf("a frame changed at byte %d: %d bytes, %v", at, len(got), err)
+	return layer.Bytes()
+}
+
+// headersTar is a layer of the members hdrs describe, each empty.
+func headersTar(t *testing.T, hdrs ...tar.Header) []byte {
+	t.Helper()
+	var layer bytes.Buffer
+	tw := tar.NewWriter(&layer)
+	for _, hdr := range hdrs {
+		if err := tw.WriteHeader(&hdr); err != nil {
+			t.Fatal(err)
 		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return layer.Bytes()
+}
+
+// A PAX global header, which git archive and some image builders write,
+// describes no file: conversion skips it as extraction does.
+func TestConvertSkipsPAXGlobalHeaders(t *testing.T) {
+	global := tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "build 7"}}
+	ix, _ := roundTrip(t, fileTar(t, "app", []byte("hi"), global))
+	if len(ix.Entries) != 1 || ix.Entries[0].Path != "app" {
+		t.Fatalf("entries %+v, want only app", ix.Entries)
+	}
+}
+
+// ConvertFile keeps the data file of a layer it converts and leaves none
+// behind for one it refuses, for its tar or for its diff_id.
+func TestConvertFileLeavesNoFileOnFailure(t *testing.T) {
+	layer := fileTar(t, "app", []byte("hi"))
+	sum := sha256.Sum256(layer)
+	diffID := Digest("sha256:" + hex.EncodeToString(sum[:]))
+	dir := t.TempDir()
+	refused := map[string]struct {
+		layer  []byte
+		diffID Digest
+	}{
+		"another diff_id": {layer, Digest("sha256:" + strings.Repeat("0", 64))},
+		"a truncated tar": {layer[:600], diffID},
+	}
+	for name, r := range refused {
+		if _, err := ConvertFile(t.Context(), bytes.NewReader(r.layer), dir, r.diffID); !errors.Is(err, ErrInvalidLayer) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if left, _ := os.ReadDir(dir); len(left) != 0 {
+			t.Fatalf("%s left %d files", name, len(left))
+		}
+	}
+	if _, err := ConvertFile(t.Context(), bytes.NewReader(layer), filepath.Join(dir, "missing"), diffID); !errors.Is(err, ErrDataFile) {
+		t.Fatalf("a directory without room for the data file: %v", err)
+	}
+	f, err := ConvertFile(t.Context(), bytes.NewReader(layer), dir, diffID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(f.Path)
+	if err != nil || int64(len(data)) != f.DataBytes || f.Entries != 1 {
+		t.Fatalf("converted %+v, a file of %d bytes: %v", f, len(data), err)
+	}
+	if ix, err := Unmarshal(f.Index); err != nil || ix.Layer != diffID || ix.DataSize != f.DataBytes {
+		t.Fatalf("index %+v: %v", ix, err)
 	}
 }

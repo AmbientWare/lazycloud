@@ -125,6 +125,11 @@ constraints. Keep task plans and progress with the task, not in the tree.
 - Retain tests only for unique proof of authorization, integrity, durability,
   concurrency, cleanup or public behavior. Do not test implementation shape,
   mock call order, wiring, snapshots or behavior already proven elsewhere.
+- A test states behavior the product keeps after the change that added it.
+  Do not add tests that only prove a refactor, a PR or a migration step
+  happened: that a call is gone, which queries run by name, or that an
+  internal type keeps its shape. Guard costs by how they scale with
+  replicas, history or backlog, not by exact counts.
 - Owner tests live beside code; `acceptance/` covers cross-owner workflows
   against real PostgreSQL, Docker and the managed runtime.
 - Run focused checks with visible output. Use gofmt, go vet, golangci-lint and

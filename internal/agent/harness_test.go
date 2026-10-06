@@ -30,7 +30,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
@@ -334,18 +333,26 @@ func newEnv(t *testing.T) *env {
 	}
 	e := &env{t: t, id: "agent-test-" + uuid.NewString()[:8], server: newHostServer(), docker: docker}
 	e.grpc, e.address = e.server.serve(t, "127.0.0.1:0")
-	// A short path keeps container sockets under the Unix socket limit.
-	if e.stateDir, err = os.MkdirTemp("", "lca"); err != nil {
-		t.Fatal(err)
-	}
+	e.stateDir = shortDir(t)
 	e.source = serveSource(t, "../supervisor/testdata/workspace")
 	t.Cleanup(func() {
 		e.grpc.Stop()
 		e.removeContainers()
-		_ = os.RemoveAll(e.stateDir)
 		_ = docker.Close()
 	})
 	return e
+}
+
+// shortDir is a directory removed when the test ends, short enough to hold
+// Unix sockets, which a test's own directory may not be.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "lca")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 // removeContainers deletes every container this test created.
@@ -405,7 +412,6 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		SupervisorPath:  supervisorBinary,
 		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
-		Snapshotter:     layersource.Socket,
 		BuildNetwork:    "host",
 		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},
 		Labels:          map[string]string{"lazycloud.agent": e.id},
