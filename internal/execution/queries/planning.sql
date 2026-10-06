@@ -107,10 +107,24 @@ order by r.id;
 
 -- name: CreatePendingContainers :many
 -- Placement records the GPU model and whose machine a container got.
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class)
-select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent)
+select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class, sqlc.narg('traceparent')::text
 from generate_series(1, @count::int)
 returning id;
+
+-- name: ScaleUpTrace :one
+-- The trace a scale-up of the release joins: the queued task that has
+-- waited longest, read through tasks_queued; else, while the release rolls
+-- out (no live container, created within rollout_seconds), its deploy's.
+select coalesce(
+    (select t.traceparent from tasks t
+     where t.release_id = @release_id::uuid and t.status = 'queued' and t.available_at <= now()
+     order by t.available_at, t.id limit 1),
+    (select r.traceparent from releases r
+     where r.id = @release_id::uuid and @rollout::bool
+       and r.created_at > now() - make_interval(secs => @rollout_seconds::float8)),
+    ''
+)::text as traceparent;
 
 -- name: StopPendingContainers :many
 -- Newest first, because the oldest are closest to placement. The state check

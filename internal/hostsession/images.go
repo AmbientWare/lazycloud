@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -18,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // errImageUnpinned means a release names an image without the reference
@@ -106,8 +109,12 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)}
 	}
 	reserved, memory, memoryLimit := images.BuildResources()
+	ctx, span := telemetry.StartIn(ctx, s.tracer, start.Traceparent, "hostsession.start_build", trace.WithAttributes(
+		telemetry.Container(start.Container.String()), telemetry.Host(host.String()), attribute.String(telemetry.AttrBuild, command.Build.String())))
+	span.End()
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId: start.Container.String(),
+		Traceparent: telemetry.TraceParentOf(ctx),
 		Resources: &hostproto.Resources{
 			CpuMillis: int64(reserved), MemoryBytes: memory, MemoryLimitBytes: memoryLimit,
 			GpuCount: int32(command.GPUs), //nolint:gosec // A build holds at most one GPU.

@@ -11,10 +11,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // placementBatch bounds the pending containers one placement transaction
@@ -60,6 +63,7 @@ func (s *Scheduling) Place(ctx context.Context) (PlacementResult, error) {
 		result.Assigned += len(batch.assigned)
 		for _, a := range batch.assigned {
 			s.logger.InfoContext(ctx, "container assigned", "container_id", a.ID, "release_id", a.ReleaseID, "host_id", a.HostID)
+			traceAssignment(ctx, a)
 		}
 		// Another batch helps only if this one was full and made progress.
 		if batch.considered < placementBatch || len(batch.assigned) == 0 {
@@ -196,4 +200,19 @@ func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, ho
 		hostIDs = append(hostIDs, uuid.UUID(free[best].Host))
 	}
 	return ids, hostIDs
+}
+
+// traceAssignment records the container's wait for placement, from its
+// creation to its assignment, in the container's trace.
+func traceAssignment(ctx context.Context, a AssignContainersRow) {
+	if a.Traceparent == nil {
+		return
+	}
+	attrs := []attribute.KeyValue{telemetry.Container(a.ID.String())}
+	if a.HostID != nil {
+		attrs = append(attrs, telemetry.Host(a.HostID.String()))
+	}
+	_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), *a.Traceparent, "scheduling.placement",
+		trace.WithTimestamp(a.CreatedAt), trace.WithAttributes(attrs...), telemetry.LinkTo(telemetry.TraceParentOf(ctx)))
+	span.End()
 }

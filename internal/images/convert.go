@@ -24,8 +24,11 @@ const conversionRetry = time.Minute
 
 // BuildWaitError means a start or deploy needs an image whose mirror build
 // is under way. The build announces each change on database.ChannelImageBuild
-// with its id. It is also ErrNotReady.
-type BuildWaitError struct{ Build uuid.UUID }
+// with its id. It is also ErrNotReady. Traceparent is the build's trace.
+type BuildWaitError struct {
+	Build       uuid.UUID
+	Traceparent string
+}
 
 func (e *BuildWaitError) Error() string {
 	return "the image is converting in build " + e.Build.String()
@@ -200,8 +203,9 @@ func (i *Images) adoptLayers(ctx context.Context, workspace identity.WorkspaceID
 // PlatformWaitError means a start needs a platform image, such as the
 // managed Python image, that the server has not converted for the host's
 // architecture yet. ConvertPlatformImage converts it, and its outcome is
-// announced under PlatformConverted. It is also ErrNotReady.
-type PlatformWaitError struct{ Reference, Architecture string }
+// announced under PlatformConverted. It is also ErrNotReady. Traceparent is
+// the trace of the conversion last claimed, if any.
+type PlatformWaitError struct{ Reference, Architecture, Traceparent string }
 
 func (e *PlatformWaitError) Error() string {
 	return "the image " + e.Reference + " is converting for " + e.Architecture
@@ -229,7 +233,7 @@ func (i *Images) ManagedPull(ctx context.Context, host compute.HostID, python st
 	case p.Failure != "":
 		return Pull{}, &ConversionError{Reason: p.Failure}
 	default:
-		return Pull{}, &PlatformWaitError{Reference: source, Architecture: p.Architecture}
+		return Pull{}, &PlatformWaitError{Reference: source, Architecture: p.Architecture, Traceparent: p.Traceparent}
 	}
 }
 
@@ -295,7 +299,7 @@ func (i *Images) buildOrWait(ctx context.Context, workspace identity.WorkspaceID
 	case err != nil:
 		return Image{}, fmt.Errorf("read latest build: %w", err)
 	case BuildStatus(latest.State) == BuildBuilding:
-		return Image{}, &BuildWaitError{Build: latest.ID}
+		return Image{}, &BuildWaitError{Build: latest.ID, Traceparent: deref(latest.Traceparent)}
 	case BuildStatus(latest.State) == BuildFailed && !latest.FailureTransient &&
 		latest.FinishedAt != nil && time.Since(*latest.FinishedAt) < conversionRetry:
 		reason := "its build failed"
@@ -319,5 +323,5 @@ func (i *Images) buildOrWait(ctx context.Context, workspace identity.WorkspaceID
 	if r.Build == nil {
 		return Image{}, fmt.Errorf("image %s is neither published nor building", r.Image.ID)
 	}
-	return Image{}, &BuildWaitError{Build: r.Build.ID}
+	return Image{}, &BuildWaitError{Build: r.Build.ID, Traceparent: r.Build.traceparent}
 }

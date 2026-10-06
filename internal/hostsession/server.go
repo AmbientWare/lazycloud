@@ -15,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
@@ -60,6 +62,9 @@ type Config struct {
 	// Registerer takes the host service's metrics; nil leaves them
 	// unregistered.
 	Registerer prometheus.Registerer
+	// Tracer traces the work sessions and the server's own goroutines do;
+	// nil records nothing.
+	Tracer trace.Tracer
 }
 
 // Server implements hostproto.HostService.
@@ -73,6 +78,7 @@ type Server struct {
 	listener  *database.Listener
 	config    Config
 	logger    *slog.Logger
+	tracer    trace.Tracer
 	// layerLifetime is layerLifetime; tests shorten it.
 	layerLifetime time.Duration
 
@@ -98,8 +104,12 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 	if config.Registerer != nil {
 		config.Registerer.MustRegister(failures)
 	}
+	tracer := config.Tracer
+	if tracer == nil {
+		tracer = noop.NewTracerProvider().Tracer("")
+	}
 	return &Server{
-		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger,
+		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger, tracer: tracer,
 		layerLifetime: layerLifetime, lifetime: lifetime, shutdown: shutdown,
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
 		platform:    platformConversions{running: map[string]bool{}, slots: make(chan struct{}, maxPlatformConversions), failures: failures},

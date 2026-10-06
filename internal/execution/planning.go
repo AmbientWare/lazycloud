@@ -191,6 +191,11 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		if count = grant.Start; count == 0 {
 			return nil
 		}
+		ctx, span, err := e.scaleUp(ctx, q, release.ReleaseID, count, live)
+		if err != nil {
+			return err
+		}
+		defer span.End()
 		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{
 			WorkspaceID: release.WorkspaceID,
 			ReleaseID:   release.ReleaseID,
@@ -200,6 +205,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 			GpuCount:    release.GpuCount,
 			RateClass:   string(billing.RateClassFor(release.Pinned, release.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
+			Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("create containers: %w", err)

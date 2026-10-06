@@ -234,6 +234,11 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if count = grant.Start; count == 0 {
 			return nil
 		}
+		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, live)
+		if err != nil {
+			return err
+		}
+		defer span.End()
 		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{
 			WorkspaceID: row.WorkspaceID,
 			ReleaseID:   row.ReleaseID,
@@ -243,6 +248,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 			GpuCount:    row.GpuCount,
 			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
+			Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("create containers: %w", err)

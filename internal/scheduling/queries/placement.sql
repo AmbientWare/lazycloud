@@ -61,4 +61,4 @@ set state = 'starting', host_id = a.host_id, assigned_at = now(), capacity_wait 
 from (select unnest(@ids::uuid[]) as id, unnest(@host_ids::uuid[]) as host_id) a
 join online on online.id = a.host_id
 where c.id = a.id and c.state = 'pending'
-returning c.id, c.host_id, c.release_id;
+returning c.id, c.host_id, c.release_id, c.created_at, c.traceparent;

@@ -87,7 +87,7 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))),
+		sdktrace.WithSampler(sdktrace.ParentBased(rootSampler{ratio: sdktrace.TraceIDRatioBased(ratio)})),
 	)
 	t.provider = provider
 	t.shutdown = provider.Shutdown

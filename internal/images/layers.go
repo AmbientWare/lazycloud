@@ -11,11 +11,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -67,7 +71,12 @@ func ReplicasConfirmed(region string) string { return "layer-replicas:" + region
 // Layers belong to the reference rather than the image id: a workspace's
 // rebuild gives an image a new reference while releases that pinned the old
 // one keep running it.
-func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compute.HostID, ttl time.Duration) (LayerReads, error) {
+func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compute.HostID, ttl time.Duration) (out LayerReads, err error) {
+	ctx, span := telemetry.Start(ctx, "images.grant_layers", trace.WithAttributes(attribute.String(telemetry.AttrImage, reference)))
+	defer func() {
+		span.SetAttributes(attribute.Int("lazycloud.layers", len(out.Layers)), attribute.String("lazycloud.unconfirmed_region", out.Unconfirmed))
+		telemetry.Fail(span, err)
+	}()
 	rows, err := i.queries.LayerReadsFor(ctx, LayerReadsForParams{Reference: reference, Host: uuid.UUID(host)})
 	if err != nil {
 		return LayerReads{}, fmt.Errorf("read image layers: %w", err)
@@ -75,7 +84,7 @@ func (i *Images) LayerReadURLs(ctx context.Context, reference string, host compu
 	if len(rows) == 0 {
 		return LayerReads{}, fmt.Errorf("%s: %w", reference, ErrNotConverted)
 	}
-	out := LayerReads{Layers: make([]LayerURLs, len(rows))}
+	out = LayerReads{Layers: make([]LayerURLs, len(rows))}
 	for n, row := range rows {
 		region := ""
 		if i.storage.HasLayerReplica(row.Region) {
@@ -125,6 +134,10 @@ func (i *Images) ConfirmReplicas(ctx context.Context, reference, region string, 
 		return ReplicaCheck{}, fmt.Errorf("claim layer replica checks: %w", err)
 	}
 	out := ReplicaCheck{Checked: len(ids)}
+	defer func() {
+		trace.SpanFromContext(ctx).AddEvent("checked", trace.WithAttributes(
+			attribute.Int("lazycloud.layers", out.Checked), attribute.Bool("lazycloud.pending", out.Pending)))
+	}()
 	var errs []error
 	held := make([]uuid.UUID, 0, len(ids))
 	for _, id := range ids {
@@ -539,4 +552,34 @@ func (i *Images) SweepLayers(ctx context.Context, logger *slog.Logger) (LayerSwe
 	}
 	out.Deleted = len(gone)
 	return out, nil
+}
+
+// traceparent is the trace of ctx's span, stored with a build or a
+// conversion; nil when it was not sampled.
+func traceparent(ctx context.Context) *string {
+	if tp := telemetry.TraceParentOf(ctx); tp != "" {
+		return &tp
+	}
+	return nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// traceBuild records a finished build as a span from its creation in the
+// trace that asked for it.
+func traceBuild(ctx context.Context, build LockBuildRow, failure string) {
+	if build.Traceparent == nil {
+		return
+	}
+	_, span := telemetry.StartIn(ctx, telemetry.TracerOf(ctx), *build.Traceparent, "images.build",
+		trace.WithTimestamp(build.CreatedAt), trace.WithAttributes(attribute.String(telemetry.AttrBuild, build.ID.String()), attribute.Bool("lazycloud.mirror", build.Mirror)))
+	if failure != "" {
+		span.SetStatus(codes.Error, failure)
+	}
+	span.End()
 }

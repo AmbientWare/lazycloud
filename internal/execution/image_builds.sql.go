@@ -55,8 +55,8 @@ func (q *Queries) BuildContainers(ctx context.Context, imageBuildID *uuid.UUID) 
 }
 
 const createBuildContainer = `-- name: CreateBuildContainer :one
-insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, gpu_count)
-values ($1, $2, 'pending', 1, $3, $4, $5)
+insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, gpu_count, traceparent)
+values ($1, $2, 'pending', 1, $3, $4, $5, $6::text)
 returning id
 `
 
@@ -66,6 +66,7 @@ type CreateBuildContainerParams struct {
 	CpuMillis    cpu.Millis
 	MemoryBytes  int64
 	GpuCount     int32
+	Traceparent  *string
 }
 
 func (q *Queries) CreateBuildContainer(ctx context.Context, arg CreateBuildContainerParams) (uuid.UUID, error) {
@@ -75,6 +76,7 @@ func (q *Queries) CreateBuildContainer(ctx context.Context, arg CreateBuildConta
 		arg.CpuMillis,
 		arg.MemoryBytes,
 		arg.GpuCount,
+		arg.Traceparent,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)
@@ -140,7 +142,7 @@ func (q *Queries) LiveBuildContainer(ctx context.Context, arg LiveBuildContainer
 }
 
 const startingBuildContainersOnHost = `-- name: StartingBuildContainersOnHost :many
-select c.id, c.image_build_id::uuid as image_build_id, c.cpu_millis, c.memory_bytes,
+select c.id, c.image_build_id::uuid as image_build_id, c.cpu_millis, c.memory_bytes, c.traceparent,
        (select count(*) from containers p where p.image_build_id = c.image_build_id and p.created_at <= c.created_at)::int as attempt
 from containers c
 where c.host_id = $1 and c.state = 'starting' and c.image_build_id is not null
@@ -152,6 +154,7 @@ type StartingBuildContainersOnHostRow struct {
 	ImageBuildID uuid.UUID
 	CpuMillis    cpu.Millis
 	MemoryBytes  int64
+	Traceparent  *string
 	Attempt      int32
 }
 
@@ -169,6 +172,7 @@ func (q *Queries) StartingBuildContainersOnHost(ctx context.Context, hostID *uui
 			&i.ImageBuildID,
 			&i.CpuMillis,
 			&i.MemoryBytes,
+			&i.Traceparent,
 			&i.Attempt,
 		); err != nil {
 			return nil, err

@@ -2916,7 +2916,10 @@ type StartContainer struct {
 	Prefetch *ImageTrace `protobuf:"bytes,120,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
 	// Record the frames this container reads before it is ready and report
 	// them in a StartupTrace.
-	RecordTrace   bool `protobuf:"varint,121,opt,name=record_trace,json=recordTrace,proto3" json:"record_trace,omitempty"`
+	RecordTrace bool `protobuf:"varint,121,opt,name=record_trace,json=recordTrace,proto3" json:"record_trace,omitempty"`
+	// The W3C traceparent of the server's span that sent the start, when it
+	// was sampled. The host's spans of the start are its children.
+	Traceparent   string `protobuf:"bytes,130,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3103,6 +3106,13 @@ func (x *StartContainer) GetRecordTrace() bool {
 		return x.RecordTrace
 	}
 	return false
+}
+
+func (x *StartContainer) GetTraceparent() string {
+	if x != nil {
+		return x.Traceparent
+	}
+	return ""
 }
 
 // LayerGrant is presigned GET URLs for one image layer's index and data
@@ -7153,7 +7163,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\x12\x12\n" +
 	"\x04gpus\x18\x05 \x01(\x05R\x04gpus\x12\x18\n" +
 	"\arefused\x18\x06 \x01(\tR\arefused\x12\x1a\n" +
-	"\bupdating\x18\a \x01(\bR\bupdating\"\xe2\t\n" +
+	"\bupdating\x18\a \x01(\bR\bupdating\"\x85\n" +
+	"\n" +
 	"\x0eStartContainer\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12%\n" +
@@ -7178,7 +7189,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x0echeckpointable\x18] \x01(\bR\x0echeckpointable\x125\n" +
 	"\x06layers\x18d \x03(\v2\x1d.lazycloud.host.v1.LayerGrantR\x06layers\x129\n" +
 	"\bprefetch\x18x \x01(\v2\x1d.lazycloud.host.v1.ImageTraceR\bprefetch\x12!\n" +
-	"\frecord_trace\x18y \x01(\bR\vrecordTrace\x1a>\n" +
+	"\frecord_trace\x18y \x01(\bR\vrecordTrace\x12!\n" +
+	"\vtraceparent\x18\x82\x01 \x01(\tR\vtraceparent\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
