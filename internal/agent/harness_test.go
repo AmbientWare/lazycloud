@@ -30,7 +30,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
@@ -405,7 +404,6 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		SupervisorPath:  supervisorBinary,
 		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
-		Snapshotter:     layersource.Socket,
 		BuildNetwork:    "host",
 		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},
 		Labels:          map[string]string{"lazycloud.agent": e.id},

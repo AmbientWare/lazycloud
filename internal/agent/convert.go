@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -49,13 +50,13 @@ func retryTransfer(ctx context.Context, fn func() error) error {
 }
 
 // layerPublish converts and uploads the layers the server names for one
-// build, each in a goroutine of its own that wait waits for, so layers
+// build, each in a goroutine of its own that publish waits for, so layers
 // upload while others convert. Only the build's publishBuild uses it.
 type layerPublish struct {
-	a       *Agent
+	c       *container
 	build   *hostproto.ImageBuild
 	dir     string
-	logs    *buildLogs
+	logs    buildLogs
 	options []name.Option
 	auth    authn.Authenticator
 	// converting and uploading hold a token for each conversion and each
@@ -84,10 +85,10 @@ type publishedLayer struct {
 	uploaded *hostproto.UploadedLayer
 }
 
-func newLayerPublish(a *Agent, build *hostproto.ImageBuild, dir string, logs *buildLogs) *layerPublish {
+func newLayerPublish(c *container, build *hostproto.ImageBuild, dir string, logs buildLogs) *layerPublish {
 	options, auth := registryAccess(build)
 	return &layerPublish{
-		a: a, build: build, dir: dir, logs: logs, options: options, auth: auth,
+		c: c, build: build, dir: dir, logs: logs, options: options, auth: auth,
 		converting: make(chan struct{}, maxConversions), uploading: make(chan struct{}, maxConversions),
 		ready: make(chan struct{}, 1), layers: map[string]*publishedLayer{},
 	}
@@ -107,22 +108,23 @@ func registryAccess(build *hostproto.ImageBuild) ([]name.Option, authn.Authentic
 	return options, auth
 }
 
-// publish sends request through complete, then acts on the layers each
+// publish completes the build with request, then acts on the layers each
 // answer names and sends what that produced, until an answer names none.
 // It returns once its conversions and uploads end.
-func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteImageBuildRequest,
-	complete func(*hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse,
-) error {
+func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteImageBuildRequest) error {
 	ctx, cancel := context.WithCancel(ctx)
-	defer p.wait()
+	defer p.running.Wait()
 	defer cancel()
 	began := time.Now()
 	for {
-		resp := complete(request)
+		resp := p.c.completeBuild(ctx, request)
 		uploads := resp.GetLayerUploads()
 		if len(uploads) == 0 {
-			if n := p.count(); resp != nil && n > 0 {
-				p.logs.add(fmt.Sprintf("converted and stored %d layers in %s", n, time.Since(began).Round(time.Millisecond)))
+			p.mu.Lock()
+			n := len(p.layers)
+			p.mu.Unlock()
+			if resp != nil && n > 0 {
+				p.logs.add(ctx, fmt.Sprintf("converted and stored %d layers in %s", n, time.Since(began).Round(time.Millisecond)))
 			}
 			return nil
 		}
@@ -142,9 +144,8 @@ func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteI
 // converted one the server sent URLs for, and sizes the others again. A
 // layer named more than maxPublishRounds times is an error.
 func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUpload) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	conversions := 0
+	p.mu.Lock()
 	for _, u := range uploads {
 		l := p.layers[u.GetBlobDigest()]
 		if l == nil {
@@ -155,6 +156,7 @@ func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUplo
 			continue
 		}
 		if l.rounds++; l.rounds > maxPublishRounds {
+			p.mu.Unlock()
 			return fmt.Errorf("layer %s was still not stored after %d rounds", u.GetBlobDigest(), maxPublishRounds)
 		}
 		switch {
@@ -176,8 +178,11 @@ func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUplo
 			l.sized = sizes(u, l.converted)
 		}
 	}
+	p.mu.Unlock()
+	// Logging waits while the build's output is backed up, so it runs
+	// outside the lock finishing conversions take.
 	if conversions > 0 {
-		p.logs.add(fmt.Sprintf("converting %d layers", conversions))
+		p.logs.add(ctx, fmt.Sprintf("converting %d layers", conversions))
 	}
 	return nil
 }
@@ -236,16 +241,6 @@ func (p *layerPublish) next(ctx context.Context) ([]*hostproto.ConvertedLayer, [
 	}
 }
 
-// wait waits for every conversion and upload to end.
-func (p *layerPublish) wait() { p.running.Wait() }
-
-// count is how many layers the server named.
-func (p *layerPublish) count() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.layers)
-}
-
 // acquire takes one of tokens, or fails when ctx ends first.
 func acquire(ctx context.Context, tokens chan struct{}) error {
 	select {
@@ -280,7 +275,7 @@ func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*
 		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
 	}
 	span.SetAttributes(attribute.Int64("lazycloud.bytes", l.DataBytes), attribute.Int("lazycloud.files", l.Entries))
-	p.logs.add(fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
+	p.logs.add(ctx, fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
 		u.GetBlobDigest(), l.Entries, l.DataBytes>>20, time.Since(start).Round(time.Millisecond)))
 	return l, nil
 }
@@ -298,11 +293,31 @@ func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, diffID
 		return nil, fmt.Errorf("read layer: %w", err)
 	}
 	defer func() { _ = tarball.Close() }()
-	l, err := imagefs.ConvertFile(ctx, tarball, p.dir, imagefs.Digest(diffID))
+	source := &sourceRead{r: tarball}
+	l, err := imagefs.ConvertFile(ctx, source, p.dir, imagefs.Digest(diffID))
+	// A stream the registry cut off reads as a truncated tar, but reading
+	// it again can succeed.
+	if err != nil && source.err != nil {
+		return nil, fmt.Errorf("read layer: %w", source.err)
+	}
 	if errors.Is(err, imagefs.ErrInvalidLayer) {
 		return nil, fmt.Errorf("%w: %w", errLayerContent, err)
 	}
 	return l, err //nolint:wrapcheck // The caller names the layer.
+}
+
+// sourceRead reads r and keeps the first error other than io.EOF it gave.
+type sourceRead struct {
+	r   io.Reader
+	err error
+}
+
+func (s *sourceRead) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && s.err == nil {
+		s.err = err
+	}
+	return n, err //nolint:wrapcheck // A reader passes its source's errors.
 }
 
 // upload stores l's data parts, then its index, and returns the parts'
@@ -316,11 +331,11 @@ func (p *layerPublish) upload(ctx context.Context, l *imagefs.ConvertedFile, u *
 	uploadCtx, span := telemetry.Start(ctx, "agent.upload_layer", trace.WithAttributes(
 		attribute.String(telemetry.AttrLayer, u.GetDiffId()), attribute.Int64("lazycloud.bytes", l.DataBytes+int64(len(l.Index)))))
 	defer span.End()
-	etags, err := l.Upload(uploadCtx, p.a.http, u.GetDataPartUrls(), u.GetDataPartBytes(), u.GetIndexUrl(), retryTransfer)
+	etags, err := l.Upload(uploadCtx, p.c.a.http, u.GetDataPartUrls(), u.GetDataPartBytes(), u.GetIndexUrl(), retryTransfer)
 	telemetry.Fail(span, err)
 	if err != nil {
 		return nil, fmt.Errorf("upload layer %s: %w", u.GetBlobDigest(), err)
 	}
-	p.logs.add(fmt.Sprintf("uploaded %s in %s", u.GetBlobDigest(), time.Since(start).Round(time.Millisecond)))
+	p.logs.add(ctx, fmt.Sprintf("uploaded %s in %s", u.GetBlobDigest(), time.Since(start).Round(time.Millisecond)))
 	return &hostproto.UploadedLayer{BlobDigest: u.GetBlobDigest(), PartEtags: etags}, nil
 }

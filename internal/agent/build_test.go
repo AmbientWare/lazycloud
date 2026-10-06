@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -124,7 +125,7 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	// The pushed image is reported while the builder still exports the
 	// build cache, which a second BuildKit daemon starts for.
 	builders, err := e.docker.ContainerList(t.Context(), client.ContainerListOptions{
-		Filters: client.Filters{}.Add("label", labelBuildContainer+"="+container).Add("status", "running"),
+		Filters: client.Filters{}.Add("name", "lazycloud-"+container).Add("status", "running"),
 	})
 	if err != nil || len(builders.Items) != 1 {
 		t.Fatalf("the builder was not running when the image was reported: %v %v", builders.Items, err)
@@ -350,5 +351,16 @@ func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {
 	case outcome := <-e.server.builds:
 		t.Fatalf("a stopped build reports no outcome, got %v", outcome)
 	default:
+	}
+}
+
+// Build output keeps streaming past a line longer than any batch, so the
+// lines after it, such as the push, still arrive.
+func TestBuildOutputReadsPastAnOverlongLine(t *testing.T) {
+	long := strings.Repeat("x", 2<<20)
+	var lines []string
+	err := readBuildLines(strings.NewReader("first\r\n"+long+"\n\n"+imagePushed), func(line string) { lines = append(lines, line) })
+	if want := []string{"first", long[:maxBuildLine], "", imagePushed}; err != nil || !slices.Equal(lines, want) {
+		t.Fatalf("read %d lines (%v), want %d", len(lines), err, len(want))
 	}
 }

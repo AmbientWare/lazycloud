@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -112,10 +113,25 @@ func (s *layerServer) complete(r *hostproto.CompleteImageBuildRequest) *hostprot
 	return resp
 }
 
-func testPublish(t *testing.T, repository string) *layerPublish {
+// testPublish is a publish of a build pushed to repository, completed on a
+// test server that answers as layers does. Its output is never sent.
+func testPublish(t *testing.T, repository string, layers *layerServer) *layerPublish {
 	t.Helper()
+	server := newHostServer()
+	server.answerBuild = layers.complete
+	ctx, stop := context.WithCancel(context.Background())
+	go func() {
+		for {
+			select {
+			case <-server.builds:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	t.Cleanup(stop)
 	build := &hostproto.ImageBuild{PushRepository: repository, InsecureRegistry: true}
-	return newLayerPublish(&Agent{http: http.DefaultClient}, build, t.TempDir(), newBuildLogs(nil, "build", nil))
+	return newLayerPublish(newTestContainer(t, server), build, t.TempDir(), newBuildLogs(nil, "build", nil))
 }
 
 // A converted layer uploads while another still converts: here the large
@@ -156,7 +172,7 @@ func TestLayerPublishUploadsALayerWhileAnotherConverts(t *testing.T) {
 	large.Store(digest.String())
 	server := newLayerServer(t, store.URL, layers)
 	start := time.Now()
-	if err := testPublish(t, repository).publish(t.Context(), pushedBuild("build", "sha256:"+strings.Repeat("0", 64)), server.complete); err != nil {
+	if err := testPublish(t, repository, server).publish(t.Context(), pushedBuild("build", "sha256:"+strings.Repeat("0", 64))); err != nil {
 		t.Fatal(err)
 	}
 	if time.Since(start) > 15*time.Second {
@@ -167,6 +183,38 @@ func TestLayerPublishUploadsALayerWhileAnotherConverts(t *testing.T) {
 			t.Fatalf("layer %d was not uploaded once: %v", n, puts)
 		}
 	}
+}
+
+// A publish waiting on backed-up build output holds no lock, so a layer
+// whose conversion or upload ends meanwhile still records its result.
+func TestLayerPublishRecordsResultsWhileItsOutputWaits(t *testing.T) {
+	repository, layers := pushLayers(t, func(h http.Handler) http.Handler { return h }, 2<<10)
+	server := newLayerServer(t, "http://store", layers)
+	p := testPublish(t, repository, server)
+	// Nothing sends this output, so one line fills its buffer.
+	p.logs.add(t.Context(), strings.Repeat("x", logBufferBytes))
+	ctx, cancel := context.WithCancel(t.Context())
+	started := make(chan error, 1)
+	go func() {
+		started <- p.start(ctx, server.complete(&hostproto.CompleteImageBuildRequest{}).GetLayerUploads())
+	}()
+	time.Sleep(200 * time.Millisecond)
+	recorded := make(chan struct{})
+	go func() {
+		p.finish(&publishedLayer{busy: true}, nil, func() {})
+		close(recorded)
+	}()
+	select {
+	case <-recorded:
+	case <-time.After(10 * time.Second):
+		t.Error("a layer could not record its result while the publish waited on its output")
+	}
+	cancel()
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	<-recorded
+	p.running.Wait()
 }
 
 // A layer the server keeps naming after its upload fails the build for
@@ -187,12 +235,48 @@ func TestLayerPublishBoundsTheRoundsOfALayer(t *testing.T) {
 	repository, layers := pushLayers(t, func(h http.Handler) http.Handler { return h }, 2<<10)
 	server := newLayerServer(t, store.URL, layers)
 	server.again = true
-	err := testPublish(t, repository).publish(t.Context(), pushedBuild("build", "sha256:"+strings.Repeat("0", 64)), server.complete)
+	err := testPublish(t, repository, server).publish(t.Context(), pushedBuild("build", "sha256:"+strings.Repeat("0", 64)))
 	if err == nil || errors.Is(err, errLayerContent) || !strings.Contains(err.Error(), "rounds") {
 		t.Fatalf("a layer named without end gave %v, want a bounded failure of the build", err)
 	}
 	if indexPuts != maxPublishRounds-1 {
 		t.Fatalf("the layer was uploaded %d times, want %d", indexPuts, maxPublishRounds-1)
+	}
+}
+
+// cutWriter passes on the first n bytes of a response and drops the rest.
+type cutWriter struct {
+	http.ResponseWriter
+	n int
+}
+
+func (w *cutWriter) Write(p []byte) (int, error) {
+	if len(p) > w.n {
+		_, _ = w.ResponseWriter.Write(p[:w.n])
+		w.n = 0
+		return 0, errors.New("cut off")
+	}
+	w.n -= len(p)
+	return w.ResponseWriter.Write(p)
+}
+
+// A registry that cuts a layer's stream off once only delays its
+// conversion: the cut reads as a truncated tar, which is the read's
+// failure, not the layer's.
+func TestLayerConversionRetriesACutOffRead(t *testing.T) {
+	var cut atomic.Bool
+	repository, layers := pushLayers(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") && cut.CompareAndSwap(false, true) {
+				w = &cutWriter{ResponseWriter: w, n: 4 << 10}
+			}
+			h.ServeHTTP(w, r)
+		})
+	}, 64<<10)
+	server := newLayerServer(t, "http://store", layers)
+	upload := server.complete(&hostproto.CompleteImageBuildRequest{}).GetLayerUploads()[0]
+	if _, err := testPublish(t, repository, server).convert(t.Context(), upload); err != nil || !cut.Load() {
+		t.Fatalf("a layer whose first read was cut off gave %v (cut %v)", err, cut.Load())
 	}
 }
 

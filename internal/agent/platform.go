@@ -97,37 +97,46 @@ func (a *Agent) runningPlatformImages(ctx context.Context) ([]string, error) {
 // snapshotter, pulled lazily. It waits for the server to send it until
 // ctx ends.
 func (a *Agent) platformImage(ctx context.Context, reference string) (string, error) {
+	image, err := a.platform.await(ctx, reference)
+	if err != nil {
+		return "", err
+	}
+	// A start of the copy, named by its digest: its reads are not a
+	// container's startup.
+	_, digest, _ := strings.Cut(image.GetImage(), "@")
+	err = telemetry.Step(ctx, "agent.layer_grant", func(ctx context.Context) error {
+		return a.layers.grant(ctx, "platform:"+digest, image.GetLayers())
+	}, attribute.Int("lazycloud.layers", len(image.GetLayers())))
+	if err != nil {
+		return "", err
+	}
+	pullCtx, pull := telemetry.Start(ctx, "agent.image_pull", trace.WithAttributes(attribute.String(telemetry.AttrImage, reference)))
+	pulled, err := a.images.ensure(pullCtx, image.GetImage(), image.GetAuth(), image.GetPlatform())
+	pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))
+	telemetry.Fail(pull, err)
+	if err != nil {
+		return "", err
+	}
+	return image.GetImage(), nil
+}
+
+// await returns the image the server sent for reference, waiting for it
+// until ctx ends; one the server could not convert is an error.
+func (p *platformImages) await(ctx context.Context, reference string) (*hostproto.PlatformImage, error) {
 	for {
-		a.platform.mu.Lock()
-		image, changed := a.platform.images[reference], a.platform.changed
-		a.platform.mu.Unlock()
-		if image == nil {
-			select {
-			case <-changed:
-				continue
-			case <-ctx.Done():
-				return "", fmt.Errorf("wait for platform image %s: %w", reference, ctx.Err())
-			}
-		}
+		p.mu.Lock()
+		image, changed := p.images[reference], p.changed
+		p.mu.Unlock()
 		if image.GetFailure() != "" {
-			return "", fmt.Errorf("platform image %s cannot be converted: %s", reference, image.GetFailure())
+			return nil, fmt.Errorf("platform image %s cannot be converted: %s", reference, image.GetFailure())
 		}
-		// A start of the copy, named by its digest: its reads are not a
-		// container's startup.
-		_, digest, _ := strings.Cut(image.GetImage(), "@")
-		err := telemetry.Step(ctx, "agent.layer_grant", func(ctx context.Context) error {
-			return a.layers.grant(ctx, "platform:"+digest, image.GetLayers())
-		}, attribute.Int("lazycloud.layers", len(image.GetLayers())))
-		if err != nil {
-			return "", err
+		if image != nil {
+			return image, nil
 		}
-		pullCtx, pull := telemetry.Start(ctx, "agent.image_pull", trace.WithAttributes(attribute.String(telemetry.AttrImage, reference)))
-		pulled, err := a.images.ensure(pullCtx, image.GetImage(), image.GetAuth(), image.GetPlatform())
-		pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))
-		telemetry.Fail(pull, err)
-		if err != nil {
-			return "", err
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("wait for platform image %s: %w", reference, ctx.Err())
 		}
-		return image.GetImage(), nil
 	}
 }
