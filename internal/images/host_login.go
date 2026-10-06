@@ -77,21 +77,12 @@ func (l *platformLogin) host(ctx context.Context, access hostAccess, until time.
 	cfg := l.ecrConfig.Copy()
 	cfg.Credentials = credentials.NewStaticCredentialsProvider(
 		aws.ToString(creds.AccessKeyId), aws.ToString(creds.SecretAccessKey), aws.ToString(creds.SessionToken))
-	out, err := ecr.NewFromConfig(cfg).GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
+	auth, expires, err := ecrLogin(ctx, ecr.NewFromConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("get host registry login: %w", err)
 	}
-	if len(out.AuthorizationData) == 0 {
-		return nil, fmt.Errorf("ECR returned no authorization data")
-	}
-	data := out.AuthorizationData[0]
-	auth, err := decodeECRToken(aws.ToString(data.AuthorizationToken))
-	if err != nil {
-		return nil, err
-	}
 	// The token may be bound to the session, so it is trusted no longer
 	// than the session lasts.
-	expires := aws.ToTime(data.ExpiresAt)
 	if ends := aws.ToTime(creds.Expiration); ends.Before(expires) {
 		expires = ends
 	}

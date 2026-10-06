@@ -147,11 +147,11 @@ type buildTarget struct {
 	scoped bool
 }
 
-// buildTarget is where a build of digest pushes. A build on a connected
+// targetOf is where a build of digest pushes. A build on a connected
 // account's or joined machine's host runs where the customer controls it, so
 // only the shared image a platform host built may be published for every
 // workspace.
-func (c Config) buildTarget(platformHost bool, workspace uuid.UUID, digest []byte, forced bool) buildTarget {
+func (c Config) targetOf(platformHost bool, workspace uuid.UUID, digest []byte, forced bool) buildTarget {
 	if forced || !platformHost {
 		return buildTarget{repository: c.workspaceImageRepository(workspace, digest), scoped: true}
 	}
@@ -853,7 +853,7 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	// one: a build could write any cache entry it can push, and caches hold
 	// the workspace's build contexts.
 	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + base))
-	image := i.config.buildTarget(row.PlatformHost, row.WorkspaceID, row.Digest, row.Forced).repository
+	image := i.config.targetOf(row.PlatformHost, row.WorkspaceID, row.Digest, row.Forced).repository
 	cache := i.config.cacheRepository(row.WorkspaceID)
 	// The build pushes only its image and its workspace's cache, until its
 	// deadline.
@@ -924,7 +924,7 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 	if !manifestDigest.MatchString(outcome.Digest) {
 		return nil, invalid("digest %q is not sha256:<hex>", outcome.Digest)
 	}
-	target := i.config.buildTarget(started.PlatformHost, started.WorkspaceID, started.Digest, started.Forced)
+	target := i.config.targetOf(started.PlatformHost, started.WorkspaceID, started.Digest, started.Forced)
 	pushed := publication{
 		reference: i.config.Registry + "/" + target.repository + "@" + outcome.Digest,
 		target:    target, workspace: started.WorkspaceID, container: uuid.UUID(container), deadline: started.DeadlineAt,
