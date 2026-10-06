@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -188,7 +190,7 @@ type prefetchRun struct {
 // is mounted, sharing fetches with reads and fills, until stopPrefetch of
 // name. It holds at most a quarter of the cache, so it never evicts most of
 // what containers use.
-func (c *frameCache) prefetch(name string, reads []prefetchRead) error {
+func (c *frameCache) prefetch(name string, reads []prefetchRead, parent oteltrace.SpanContext) error {
 	reads = reads[:min(len(reads), int(c.limit/imagefs.FrameSize/4))]
 	ctx, cancel := context.WithTimeout(c.life, prefetchLife)
 	run := &prefetchRun{stop: cancel}
@@ -212,8 +214,17 @@ func (c *frameCache) prefetch(name string, reads []prefetchRead) error {
 			c.pmu.Unlock()
 		}()
 		began := time.Now()
-		c.runPrefetch(ctx, reads)
-		c.log.Info("prefetch ended", "frames", len(reads), "seconds", time.Since(began).Seconds(), "error", ctx.Err())
+		var span oteltrace.Span
+		if parent.IsSampled() {
+			_, span = c.starts.tracer.Start(oteltrace.ContextWithRemoteSpanContext(context.Background(), parent), "snapshotter.prefetch",
+				oteltrace.WithAttributes(attribute.Int("lazycloud.frames", len(reads))))
+		}
+		fetched := c.runPrefetch(ctx, reads)
+		if span != nil {
+			span.SetAttributes(attribute.Int64("lazycloud.fetches", fetched), attribute.Bool("lazycloud.stopped", ctx.Err() != nil))
+			span.End()
+		}
+		c.log.Info("prefetch ended", "frames", len(reads), "fetched", fetched, "seconds", time.Since(began).Seconds(), "error", ctx.Err())
 	})
 	return nil
 }
@@ -228,7 +239,9 @@ func (c *frameCache) stopPrefetch(name string) {
 	}
 }
 
-func (c *frameCache) runPrefetch(ctx context.Context, reads []prefetchRead) {
+// runPrefetch fetches reads and returns how many frames it fetched.
+func (c *frameCache) runPrefetch(ctx context.Context, reads []prefetchRead) int64 {
+	var fetched atomic.Int64
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	mounting, stopWaiting := context.WithTimeout(ctx, prefetchMountWait)
@@ -238,7 +251,8 @@ func (c *frameCache) runPrefetch(ctx context.Context, reads []prefetchRead) {
 	for _, r := range reads {
 		l := c.awaitMount(mounting, r.layer, seen)
 		if ctx.Err() != nil {
-			return
+			wg.Wait()
+			return fetched.Load()
 		}
 		if l == nil || r.frame >= len(l.index.Frames) {
 			continue
@@ -252,7 +266,8 @@ func (c *frameCache) runPrefetch(ctx context.Context, reads []prefetchRead) {
 		select {
 		case c.filling <- struct{}{}:
 		case <-ctx.Done():
-			return
+			wg.Wait()
+			return fetched.Load()
 		}
 		wg.Go(func() { //nolint:contextcheck // a shared fetch runs under the cache's life
 			defer func() { <-c.filling }()
@@ -260,9 +275,12 @@ func (c *frameCache) runPrefetch(ctx context.Context, reads []prefetchRead) {
 				c.log.Debug("prefetch failed", "layer", l.digest, "frame", r.frame, "error", err)
 				return
 			}
+			fetched.Add(1)
 			c.metrics.framesPrefetched.Inc()
 		})
 	}
+	wg.Wait()
+	return fetched.Load()
 }
 
 // awaitMount returns a mounted layer of digest, waiting for it to mount
@@ -309,7 +327,7 @@ func checkName(name string) error {
 	return nil
 }
 
-func (s layerSources) Prefetch(_ context.Context, request *imagefsproto.PrefetchRequest) (*imagefsproto.PrefetchResponse, error) {
+func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.PrefetchRequest) (*imagefsproto.PrefetchResponse, error) {
 	if err := checkName(request.GetName()); err != nil {
 		return nil, err
 	}
@@ -328,7 +346,7 @@ func (s layerSources) Prefetch(_ context.Context, request *imagefsproto.Prefetch
 		reads[i] = prefetchRead{layer: layers[r.GetLayer()], frame: int(r.GetFrame())}
 	}
 	s.frames.traces.claim(request.GetName(), layers)
-	if err := s.frames.prefetch(request.GetName(), reads); err != nil { //nolint:contextcheck // a prefetch lives with the cache, not the call
+	if err := s.frames.prefetch(request.GetName(), reads, incomingParent(ctx)); err != nil { //nolint:contextcheck // a prefetch lives with the cache, not the call
 		return nil, err
 	}
 	return &imagefsproto.PrefetchResponse{}, nil

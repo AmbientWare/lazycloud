@@ -41,9 +41,9 @@ func (q *Queries) CancelQueuedTasks(ctx context.Context, ids []uuid.UUID) ([]uui
 }
 
 const createPendingContainers = `-- name: CreatePendingContainers :many
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class)
-select $1, $2::uuid, 'pending', $3, $4, $5, $6, $7
-from generate_series(1, $8::int)
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent)
+select $1, $2::uuid, 'pending', $3, $4, $5, $6, $7, $8::text
+from generate_series(1, $9::int)
 returning id
 `
 
@@ -55,6 +55,7 @@ type CreatePendingContainersParams struct {
 	MemoryBytes int64
 	GpuCount    int32
 	RateClass   string
+	Traceparent *string
 	Count       int32
 }
 
@@ -68,6 +69,7 @@ func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePending
 		arg.MemoryBytes,
 		arg.GpuCount,
 		arg.RateClass,
+		arg.Traceparent,
 		arg.Count,
 	)
 	if err != nil {
@@ -439,6 +441,35 @@ func (q *Queries) RunningTasksOfRelease(ctx context.Context, arg RunningTasksOfR
 		return nil, err
 	}
 	return items, nil
+}
+
+const scaleUpTrace = `-- name: ScaleUpTrace :one
+select coalesce(
+    (select t.traceparent from tasks t
+     where t.release_id = $1::uuid and t.status = 'queued' and t.available_at <= now()
+     order by t.available_at, t.id limit 1),
+    (select r.traceparent from releases r
+     where r.id = $1::uuid and $2::bool
+       and r.created_at > now() - make_interval(secs => $3::float8)),
+    ''
+)::text as traceparent
+`
+
+type ScaleUpTraceParams struct {
+	ReleaseID      uuid.UUID
+	Rollout        bool
+	RolloutSeconds float64
+}
+
+// The trace a scale-up of the release joins: the queued task that has
+// waited longest, read through tasks_queued. Else, when @rollout says only
+// the warm minimum asks for containers, the deploy's, for a release created
+// within rollout_seconds.
+func (q *Queries) ScaleUpTrace(ctx context.Context, arg ScaleUpTraceParams) (string, error) {
+	row := q.db.QueryRow(ctx, scaleUpTrace, arg.ReleaseID, arg.Rollout, arg.RolloutSeconds)
+	var traceparent string
+	err := row.Scan(&traceparent)
+	return traceparent, err
 }
 
 const stopAllPendingContainers = `-- name: StopAllPendingContainers :many

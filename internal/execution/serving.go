@@ -79,6 +79,8 @@ type EndpointContainer struct {
 	Version   int
 	Container ContainerID
 	Host      uuid.UUID
+	// Traceparent is the trace of the container's start.
+	Traceparent string
 }
 
 // EndpointContainers lists the ready containers of every release of
@@ -93,7 +95,10 @@ func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) 
 		if row.HostID == nil || row.Version == nil {
 			continue
 		}
-		out = append(out, EndpointContainer{Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID})
+		out = append(out, EndpointContainer{
+			Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID,
+			Traceparent: deref(row.Traceparent),
+		})
 	}
 	return out, nil
 }
@@ -234,6 +239,11 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if count = grant.Start; count == 0 {
 			return nil
 		}
+		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, live == 0 && row.Demand == 0 && row.Peak == 0)
+		if err != nil {
+			return err
+		}
+		defer span.End()
 		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{
 			WorkspaceID: row.WorkspaceID,
 			ReleaseID:   row.ReleaseID,
@@ -243,6 +253,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 			GpuCount:    row.GpuCount,
 			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
+			Traceparent: traceparent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("create containers: %w", err)

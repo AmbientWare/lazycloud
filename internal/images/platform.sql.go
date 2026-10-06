@@ -13,13 +13,13 @@ import (
 )
 
 const claimPlatformImage = `-- name: ClaimPlatformImage :one
-insert into platform_images (reference, architecture, lease_token, leased_until)
-values ($1, $2, $3::uuid, now() + make_interval(secs => $4::float8))
+insert into platform_images (reference, architecture, lease_token, leased_until, traceparent)
+values ($1, $2, $3::uuid, now() + make_interval(secs => $4::float8), $5::text)
 on conflict (reference, architecture) do update
-set lease_token = excluded.lease_token, leased_until = excluded.leased_until
+set lease_token = excluded.lease_token, leased_until = excluded.leased_until, traceparent = excluded.traceparent
 where (platform_images.leased_until is null or platform_images.leased_until < now())
   and (platform_images.failed_at is null or platform_images.failed_at < now() - make_interval(secs => case
-      when platform_images.failure_transient then $5::float8 else $6::float8 end))
+      when platform_images.failure_transient then $6::float8 else $7::float8 end))
 returning mirror
 `
 
@@ -28,6 +28,7 @@ type ClaimPlatformImageParams struct {
 	Architecture          string
 	Token                 uuid.UUID
 	LeaseSeconds          float64
+	Traceparent           *string
 	TransientRetrySeconds float64
 	FailureRetrySeconds   float64
 }
@@ -41,6 +42,7 @@ func (q *Queries) ClaimPlatformImage(ctx context.Context, arg ClaimPlatformImage
 		arg.Architecture,
 		arg.Token,
 		arg.LeaseSeconds,
+		arg.Traceparent,
 		arg.TransientRetrySeconds,
 		arg.FailureRetrySeconds,
 	)
@@ -136,7 +138,7 @@ func (q *Queries) PlatformCopiesOf(ctx context.Context, mirrors []string) ([]Pla
 }
 
 const platformImagesOf = `-- name: PlatformImagesOf :many
-select p.reference, p.mirror, p.failure, p.failure_transient, p.failed_at,
+select p.reference, p.mirror, p.failure, p.failure_transient, p.failed_at, p.traceparent,
        (p.mirror is not null and exists (select 1 from image_reference_layers r where r.reference = p.mirror))::bool as converted
 from platform_images p
 where p.reference = any($1::text[]) and p.architecture = $2
@@ -153,6 +155,7 @@ type PlatformImagesOfRow struct {
 	Failure          *string
 	FailureTransient bool
 	FailedAt         *time.Time
+	Traceparent      *string
 	Converted        bool
 }
 
@@ -173,6 +176,7 @@ func (q *Queries) PlatformImagesOf(ctx context.Context, arg PlatformImagesOfPara
 			&i.Failure,
 			&i.FailureTransient,
 			&i.FailedAt,
+			&i.Traceparent,
 			&i.Converted,
 		); err != nil {
 			return nil, err

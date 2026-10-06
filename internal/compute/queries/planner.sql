@@ -37,7 +37,7 @@ order by h.id;
 -- whole backlog created in one statement. A mirror build runs on the
 -- platform, as placement puts it, whatever its workspace's connection.
 with batch as (
-    select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id
+    select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent
     from containers c
     where c.state = 'pending'
     order by c.created_at
@@ -52,7 +52,8 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
-           as bought
+           as bought,
+       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents
 from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
@@ -211,3 +212,12 @@ set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = exc
 -- name: NotifyHosts :exec
 -- Wakes the sessions of hosts the pass moved, once it commits.
 select pg_notify(@channel::text, v.id) from unnest(@ids::text[]) as v(id);
+
+-- name: HostWaitTrace :one
+-- The trace of the longest-waiting pending container the fleet bought or
+-- resumed the host for, read through the pending containers.
+select coalesce((
+    select c.traceparent from containers c
+    where c.state = 'pending' and c.capacity_host_id = @host_id and c.traceparent is not null
+    order by c.created_at limit 1
+), '')::text as traceparent;

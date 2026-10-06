@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,7 +62,7 @@ func (l *link) API(stream hostproto.ContainerLink_APIServer) error {
 	if len(first.GetBody()) > maxContainerAPIBody {
 		return status.Error(codes.ResourceExhausted, "the request body is too large")
 	}
-	ctx, cancel := context.WithCancel(stream.Context())
+	ctx, cancel := context.WithCancel(l.c.taskContext(stream.Context(), taskOf(first.GetHead())))
 	defer cancel()
 	up, err := l.c.a.host.ContainerAPI(ctx)
 	if err != nil {
@@ -105,4 +106,18 @@ func (l *link) API(stream hostproto.ContainerLink_APIServer) error {
 			return fmt.Errorf("forward response: %w", err)
 		}
 	}
+}
+
+// taskHeader names the task whose attempt makes a container API call, as
+// the server reads it.
+const taskHeader = "LazyCloud-Task"
+
+// taskOf is the task head names, or "".
+func taskOf(head *hostproto.APIRequestHead) string {
+	for _, h := range head.GetHeaders() {
+		if strings.EqualFold(h.GetName(), taskHeader) {
+			return h.GetValue()
+		}
+	}
+	return ""
 }

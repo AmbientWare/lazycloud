@@ -14,6 +14,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // TCP pods answer raw TCP at tls://<release or container>-<port>.<tcp host>:
@@ -37,6 +42,8 @@ type TCPConfig struct {
 	URL string
 	// Certificate covers *.<host>.
 	Certificate tls.Certificate
+	// Tracer traces each relayed connection; nil records nothing.
+	Tracer trace.Tracer
 }
 
 type tcpURLs struct {
@@ -66,6 +73,10 @@ func (e *Edge) tcpURL(id uuid.UUID, port int) string {
 // ServeTCP relays TLS connections on listener to TCP pods until ctx ends.
 func (e *Edge) ServeTCP(ctx context.Context, listener net.Listener, cfg TCPConfig) error {
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cfg.Certificate}, MinVersion: tls.VersionTLS12}
+	tracer := cfg.Tracer
+	if tracer == nil {
+		tracer = noop.NewTracerProvider().Tracer("")
+	}
 	slots := make(chan struct{}, maxTCPConnections)
 	var conns sync.WaitGroup
 	defer conns.Wait()
@@ -87,12 +98,12 @@ func (e *Edge) ServeTCP(ctx context.Context, listener net.Listener, cfg TCPConfi
 		}
 		conns.Go(func() {
 			defer func() { <-slots }()
-			e.relayTCP(ctx, tls.Server(raw, tlsConfig))
+			e.relayTCP(ctx, tls.Server(raw, tlsConfig), tracer)
 		})
 	}
 }
 
-func (e *Edge) relayTCP(ctx context.Context, conn *tls.Conn) {
+func (e *Edge) relayTCP(ctx context.Context, conn *tls.Conn, tracer trace.Tracer) {
 	defer func() { _ = conn.Close() }()
 	handshake, cancel := context.WithTimeout(ctx, tcpHandshakeTimeout)
 	err := conn.HandshakeContext(handshake)
@@ -113,6 +124,8 @@ func (e *Edge) relayTCP(ctx context.Context, conn *tls.Conn) {
 		return
 	}
 	defer e.tcpTargets.give(id)
+	ctx, span := telemetry.StartIn(ctx, tracer, "", "edge.tcp", trace.WithAttributes(attribute.Int("lazycloud.port", port)))
+	defer span.End()
 	t, err := e.resolvePod(ctx, id, port)
 	if err != nil || t.authorized() || t.spec.Pod == nil || t.spec.Pod.Tcp == nil || !*t.spec.Pod.Tcp {
 		return

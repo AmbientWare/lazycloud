@@ -20,8 +20,8 @@ returning id, active_release_id, next_version;
 select id, version, spec_digest, created_at from releases where id = @id;
 
 -- name: InsertRelease :one
-insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-values (@workload_id, sqlc.narg(version), @spec, @spec_digest, @source_sha256)
+insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
+values (@workload_id, sqlc.narg(version), @spec, @spec_digest, @source_sha256, sqlc.narg(traceparent)::text)
 returning id, version, created_at;
 
 -- name: ActivateRelease :exec

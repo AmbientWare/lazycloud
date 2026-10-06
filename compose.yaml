@@ -66,6 +66,14 @@ services:
     volumes:
       - registry-data:/var/lib/registry
 
+  # Receives the stack's traces over OTLP/gRPC and shows them at
+  # http://127.0.0.1:16686. Spans live in memory until it restarts.
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0@sha256:3d0ac795ff98aa04d1be04311d2dac6c25b4bfc8322dc02e53bc5b170c5018c3
+    ports:
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:24317:4317"
+
 volumes:
   postgres-data:
   garage-data:

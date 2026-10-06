@@ -68,7 +68,7 @@ func (q *Queries) DrainNewestContainers(ctx context.Context, arg DrainNewestCont
 }
 
 const endpointContainers = `-- name: EndpointContainers :many
-select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state
+select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state, c.traceparent
 from releases r
 join containers c on c.release_id = r.id
 where r.workload_id = $1 and c.state = 'ready' and c.purpose = 'serve' and r.version is not null
@@ -81,6 +81,7 @@ type EndpointContainersRow struct {
 	ContainerID uuid.UUID
 	HostID      *uuid.UUID
 	State       string
+	Traceparent *string
 }
 
 // Ready containers of every release of the workload, newest version first.
@@ -99,6 +100,7 @@ func (q *Queries) EndpointContainers(ctx context.Context, workloadID uuid.UUID) 
 			&i.ContainerID,
 			&i.HostID,
 			&i.State,
+			&i.Traceparent,
 		); err != nil {
 			return nil, err
 		}

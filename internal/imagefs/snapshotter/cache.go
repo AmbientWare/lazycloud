@@ -14,8 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -65,8 +67,10 @@ type frameCache struct {
 	// and prefetches. They hold at most half of slots, so containers' reads
 	// always find a slot free.
 	filling chan struct{}
-	// traces records the frames read through mounts for the agent.
+	// traces records the frames read through mounts for the agent, and
+	// starts sums them into the traces of the starts that read them.
 	traces *tracer
+	starts *startTraces
 	// prefetches holds the running prefetches by name, at most
 	// maxPrefetches, and background waits for them.
 	pmu        sync.Mutex
@@ -90,7 +94,7 @@ type frameCache struct {
 	mountWake chan struct{}
 }
 
-func newFrameCache(life context.Context, dir string, limit int64, fetches int, g *grants, m *metrics, log *slog.Logger) (*frameCache, error) {
+func newFrameCache(life context.Context, dir string, limit int64, fetches int, g *grants, m *metrics, log *slog.Logger, tracer oteltrace.Tracer) (*frameCache, error) {
 	if limit < minCacheBytes {
 		return nil, fmt.Errorf("frame cache bound %d is under %d bytes", limit, minCacheBytes)
 	}
@@ -108,6 +112,7 @@ func newFrameCache(life context.Context, dir string, limit int64, fetches int, g
 		slots:      make(chan struct{}, fetches),
 		filling:    make(chan struct{}, max(1, fetches/2)),
 		traces:     newTracer(traceLife),
+		starts:     newStartTraces(tracer),
 		prefetches: make(map[string]*prefetchRun),
 		life:       life,
 		lru:        list.New(),
@@ -129,12 +134,15 @@ func (c *frameCache) read(l *layer, frame int, p []byte, off int64) error {
 	// A frame evicted since the lookup, or unreadable, is fetched again.
 	if c.touch(k) && readAt(c.path(k), p, off) == nil {
 		c.metrics.cacheHits.Inc()
+		c.starts.read(l.digest, true, 0, 0)
 		return nil
 	}
+	began := time.Now()
 	data, err := c.load(l, frame) //nolint:contextcheck // a shared fetch runs under the cache's life
 	if err != nil {
 		return err
 	}
+	c.starts.read(l.digest, false, time.Since(began), len(data))
 	if off+int64(len(p)) > int64(len(data)) {
 		return fmt.Errorf("%w: read past frame %d of layer %s", imagefs.ErrInvalidIndex, frame, l.digest)
 	}
@@ -145,8 +153,10 @@ func (c *frameCache) read(l *layer, frame int, p []byte, off int64) error {
 // fill fetches every frame of l the cache lacks, a few at a time and
 // sharing fetches with reads. Once ctx ends it starts no more; the fetches
 // under way finish, since reads may be waiting on them. A cold read
-// otherwise waits one store round trip per frame it touches.
-func (c *frameCache) fill(ctx context.Context, l *layer) {
+// otherwise waits one store round trip per frame it touches. It returns
+// how many frames it loaded.
+func (c *frameCache) fill(ctx context.Context, l *layer) int64 {
+	var loaded atomic.Int64
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for i := range l.index.Frames {
@@ -159,15 +169,20 @@ func (c *frameCache) fill(ctx context.Context, l *layer) {
 		select {
 		case c.filling <- struct{}{}:
 		case <-ctx.Done():
-			return
+			wg.Wait()
+			return loaded.Load()
 		}
 		wg.Go(func() { //nolint:contextcheck // a shared fetch runs under the cache's life
 			defer func() { <-c.filling }()
 			if _, err := c.load(l, i); err != nil {
 				c.log.Debug("background fetch failed", "layer", l.digest, "frame", i, "error", err)
+				return
 			}
+			loaded.Add(1)
 		})
 	}
+	wg.Wait()
+	return loaded.Load()
 }
 
 // load returns frame's bytes, fetching it once however many reads wait.

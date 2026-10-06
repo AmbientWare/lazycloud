@@ -166,7 +166,7 @@ func (q *Queries) RecordImageReference(ctx context.Context, arg RecordImageRefer
 const startingContainersOnHost = `-- name: StartingContainersOnHost :many
 select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
        r.spec, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,
-       r.workload_id, wl.kind as workload_kind
+       r.workload_id, wl.kind as workload_kind, c.traceparent
 from containers c
 join releases r on r.id = c.release_id
 join workloads wl on wl.id = r.workload_id
@@ -190,6 +190,7 @@ type StartingContainersOnHostRow struct {
 	AllowList     []string
 	WorkloadID    uuid.UUID
 	WorkloadKind  string
+	Traceparent   *string
 }
 
 func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]StartingContainersOnHostRow, error) {
@@ -216,6 +217,7 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 			&i.AllowList,
 			&i.WorkloadID,
 			&i.WorkloadKind,
+			&i.Traceparent,
 		); err != nil {
 			return nil, err
 		}

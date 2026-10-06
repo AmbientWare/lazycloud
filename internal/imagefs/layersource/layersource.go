@@ -10,10 +10,12 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -67,7 +69,7 @@ func (c *Client) Grant(ctx context.Context, name string, grants []Grant) error {
 			ExpiresAt: timestamppb.New(g.ExpiresAt),
 		}
 	}
-	if _, err := c.sources.Grant(ctx, request); err != nil {
+	if _, err := c.sources.Grant(withTrace(ctx), request); err != nil {
 		return fmt.Errorf("grant layers to the snapshotter: %w", err)
 	}
 	return nil
@@ -97,7 +99,7 @@ func digestsOut(layers []imagefs.Digest) []string {
 // Prefetch has the snapshotter fetch reads of layers, the image's layers
 // base first, in the background as they mount, until StopPrefetch of name.
 func (c *Client) Prefetch(ctx context.Context, name string, layers []imagefs.Digest, reads []FrameRead) error {
-	if _, err := c.sources.Prefetch(ctx, &imagefsproto.PrefetchRequest{Name: name, Layers: digestsOut(layers), Reads: readsOut(reads)}); err != nil {
+	if _, err := c.sources.Prefetch(withTrace(ctx), &imagefsproto.PrefetchRequest{Name: name, Layers: digestsOut(layers), Reads: readsOut(reads)}); err != nil {
 		return fmt.Errorf("prefetch layers: %w", err)
 	}
 	return nil
@@ -132,6 +134,15 @@ func (c *Client) EndTrace(ctx context.Context, name string) ([]FrameRead, bool, 
 		reads[i] = FrameRead{Layer: r.GetLayer(), Frame: r.GetFrame()}
 	}
 	return reads, ended.GetComplete(), nil
+}
+
+// withTrace sends the trace of ctx's span, when sampled, so the
+// snapshotter's work for the call's layers joins it.
+func withTrace(ctx context.Context) context.Context {
+	if tp := telemetry.TraceParentOf(ctx); tp != "" {
+		return metadata.AppendToOutgoingContext(ctx, "traceparent", tp)
+	}
+	return ctx
 }
 
 // Close closes the connection.

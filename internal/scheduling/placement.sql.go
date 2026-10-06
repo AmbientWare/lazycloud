@@ -7,6 +7,7 @@ package scheduling
 
 import (
 	"context"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
@@ -30,7 +31,7 @@ set state = 'starting', host_id = a.host_id, assigned_at = now(), capacity_wait 
 from (select unnest($1::uuid[]) as id, unnest($2::uuid[]) as host_id) a
 join online on online.id = a.host_id
 where c.id = a.id and c.state = 'pending'
-returning c.id, c.host_id, c.release_id
+returning c.id, c.host_id, c.release_id, c.created_at, c.traceparent
 `
 
 type AssignContainersParams struct {
@@ -39,9 +40,11 @@ type AssignContainersParams struct {
 }
 
 type AssignContainersRow struct {
-	ID        uuid.UUID
-	HostID    *uuid.UUID
-	ReleaseID *uuid.UUID
+	ID          uuid.UUID
+	HostID      *uuid.UUID
+	ReleaseID   *uuid.UUID
+	CreatedAt   time.Time
+	Traceparent *string
 }
 
 // The state check loses to a planner that stopped the container meanwhile.
@@ -58,7 +61,13 @@ func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersPara
 	var items []AssignContainersRow
 	for rows.Next() {
 		var i AssignContainersRow
-		if err := rows.Scan(&i.ID, &i.HostID, &i.ReleaseID); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
+			&i.ReleaseID,
+			&i.CreatedAt,
+			&i.Traceparent,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

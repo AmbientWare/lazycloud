@@ -42,6 +42,8 @@ type StartCommand struct {
 	// Command replaces the pod's command for an instance.
 	Command []string
 	Network NetworkPolicy
+	// Traceparent is the trace of the decision that created the container.
+	Traceparent string
 }
 
 // StopCommand asks a host to stop a container.
@@ -97,6 +99,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 			MemoryLimitBytes: memoryLimitMiB(spec.Resources) << 20,
 			Purpose:          ContainerPurpose(row.Purpose), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.WorkloadKind),
 			Command: row.Command, Network: NetworkPolicy{Block: row.BlockNetwork, Allow: row.AllowList},
+			Traceparent: deref(row.Traceparent),
 		})
 	}
 	idle, err := e.queries.IdleDrainingContainersOnHost(ctx, hostUUID(host))

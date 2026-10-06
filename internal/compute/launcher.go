@@ -15,6 +15,10 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -87,7 +91,28 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 	return launched, nil
 }
 
+// launch launches h in the trace of the container it was bought for.
 func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
+	ctx, span := c.hostSpan(ctx, h.ID, "compute.launch", attribute.String("lazycloud.instance_type", h.InstanceType),
+		attribute.String("lazycloud.market", deref(h.Market)), attribute.String("lazycloud.region", h.Region))
+	started, err := c.launchHost(ctx, logger, h)
+	span.SetAttributes(attribute.Bool("lazycloud.started", started))
+	telemetry.Fail(span, err)
+	return started, err
+}
+
+// hostSpan starts a span of work on host in the trace of the container
+// waiting longest for it, linked to ctx's span.
+func (c *Compute) hostSpan(ctx context.Context, host uuid.UUID, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	parent, err := c.queries.HostWaitTrace(ctx, &host)
+	if err != nil {
+		parent = ""
+	}
+	return telemetry.StartIn(ctx, telemetry.TracerOf(ctx), parent, name, telemetry.LinkTo(telemetry.TraceParentOf(ctx)),
+		trace.WithAttributes(append(attrs, telemetry.Host(host.String()))...))
+}
+
+func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
 	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
 	if err != nil {
 		return false, c.failLaunch(ctx, h, err.Error(), false, false)

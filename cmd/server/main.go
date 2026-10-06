@@ -394,7 +394,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		if err != nil {
 			return fmt.Errorf("load TCP pod certificate: %w", err)
 		}
-		tcpConfig = edge.TCPConfig{URL: cfg.tcp.url, Certificate: cert}
+		tcpConfig = edge.TCPConfig{URL: cfg.tcp.url, Certificate: cert, Tracer: tel.Tracer()}
 	}
 	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
 		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)
@@ -418,12 +418,16 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	if err != nil {
 		return err
 	}
+	hostTraces, err := tel.HostTraces(logger)
+	if err != nil {
+		return err
+	}
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		TouchInterval: 10 * time.Second,
 		Secrets:       vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
-		Registerer: tel.Registry,
+		Registerer: tel.Registry, Tracer: tel.Tracer(), Traces: hostTraces,
 	}, logger)
-	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures())
+	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures()) //nolint:contextcheck // Conversions run under the host service's lifetime.
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {
 		creds, err := credentials.NewServerTLSFromFile(cfg.grpcCert, cfg.grpcKey)
@@ -435,7 +439,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	grpcServer := grpc.NewServer(grpcOptions...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	hostproto.RegisterHostDataServer(grpcServer, edges.DataServer(hostsession.HostFrom))
-	edgeServer := &http.Server{Handler: edges, ReadHeaderTimeout: 10 * time.Second}
+	edgeServer := &http.Server{Handler: tel.EdgeHandler(edges), ReadHeaderTimeout: 10 * time.Second}
 	relayServer := grpc.NewServer()
 	hostproto.RegisterEdgeRelayServer(relayServer, edges.RelayServer())
 	probes := &health{}
@@ -454,6 +458,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	g.Go(func() error { return obs.RunIngest(background) })
 	g.Go(func() error { return obs.RunStartedPublisher(background) })
 	g.Go(func() error { return tel.ServeMetrics(background, logger) })
+	g.Go(func() error { return hostTraces.Run(background) })
 	g.Go(func() error { return ident.RunTokenUse(background, logger) })
 	// The edge's route table, demand and request records keep running until
 	// its requests are done; then it forgets its registration and writes the

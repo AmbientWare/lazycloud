@@ -7,6 +7,11 @@ import (
 	"os"
 	"slices"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // flattenDepth is the committed chain depth at which the next publish
@@ -53,7 +58,7 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store) (*Publ
 		if err := requireLiveAttachment(p, state); err != nil {
 			return nil, err
 		}
-		if err := seal(ctx, p, state); err != nil {
+		if err := telemetry.Step(ctx, "diskengine.seal", func(ctx context.Context) error { return seal(ctx, p, state) }); err != nil {
 			return nil, err
 		}
 	}
@@ -61,7 +66,12 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store) (*Publ
 	if err != nil {
 		return nil, err
 	}
-	published, err := publishOldest(ctx, p, state, store, depth >= flattenDepth)
+	uploadCtx, span := telemetry.Start(ctx, "diskengine.upload_layer", trace.WithAttributes(attribute.Bool("lazycloud.flat", depth >= flattenDepth)))
+	published, err := publishOldest(uploadCtx, p, state, store, depth >= flattenDepth)
+	if published != nil {
+		span.SetAttributes(attribute.Int64("lazycloud.bytes", published.AddedBytes), attribute.Int64("lazycloud.generation", published.Generation))
+	}
+	telemetry.Fail(span, err)
 	if err != nil || published == nil {
 		return published, err
 	}

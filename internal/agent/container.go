@@ -14,6 +14,7 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/codes"
@@ -119,8 +120,11 @@ type container struct {
 	// container process started, which begins the runtime stage.
 	startup []*hostproto.StartupStage
 	created time.Time
-	// traces holds, per running attempt, its start and the trace of the
-	// request that submitted it.
+	// startSpan is the start's span, open until the container is ready or
+	// its start fails.
+	startSpan trace.Span
+	// traces holds, per running attempt, its task and its span, open from
+	// dispatch to completion in the trace of the request that submitted it.
 	traces map[string]attemptTrace
 
 	// usage is where the sampler reads the container's use, once known.
@@ -128,9 +132,8 @@ type container struct {
 }
 
 type attemptTrace struct {
-	task        string
-	traceparent string
-	started     time.Time
+	task string
+	span trace.Span
 }
 
 func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostproto.HttpServing, phase hostproto.ContainerPhase) *container {
@@ -244,7 +247,13 @@ func (c *container) report() {
 
 // launch prepares and starts the container, then watches it until it exits.
 func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) {
-	if err := c.prepare(c.work, spec); err != nil { //nolint:contextcheck // stopping cancels preparation, not the watch
+	startCtx, span := telemetry.StartIn(c.work, c.a.tracer(), spec.GetTraceparent(), "agent.start", trace.WithAttributes( //nolint:contextcheck // as prepare
+		telemetry.Container(c.id), telemetry.Host(c.a.identity.HostID), attribute.String(telemetry.AttrImage, spec.GetImage())))
+	c.mu.Lock()
+	c.startSpan = span
+	c.mu.Unlock()
+	if err := c.prepare(startCtx, spec); err != nil { //nolint:contextcheck // stopping cancels preparation, not the watch
+		c.endStart(err)
 		reason := hostproto.ExitReason_EXIT_REASON_START_FAILED
 		if c.isStopping() {
 			reason = hostproto.ExitReason_EXIT_REASON_STOPPED
@@ -291,7 +300,9 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if c.checkpointable {
 		holderCtx, cancelHolder := context.WithCancel(ctx)
 		holder = make(chan error, 1)
-		go func() { holder <- c.a.startHolder(holderCtx, c) }()
+		go func() {
+			holder <- telemetry.Step(holderCtx, "agent.network_holder", func(ctx context.Context) error { return c.a.startHolder(ctx, c) })
+		}()
 		defer func() {
 			if err != nil {
 				cancelHolder()
@@ -323,7 +334,10 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if err := c.a.layers.start(ctx, c.log, c.id, spec); err != nil {
 		return err
 	}
-	pulled, err := c.a.images.ensure(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
+	pullCtx, pull := telemetry.Start(ctx, "agent.image_pull")
+	pulled, err := c.a.images.ensure(pullCtx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
+	pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))
+	telemetry.Fail(pull, err)
 	if err != nil {
 		return err
 	}
@@ -341,7 +355,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 
 	// A devbox's root disk is its filesystem; it gets no source.
 	if !pod.GetDevbox() {
-		if err := c.prepareWorkspace(ctx, spec.GetSource()); err != nil {
+		if err := telemetry.Step(ctx, "agent.source", func(ctx context.Context) error { return c.prepareWorkspace(ctx, spec.GetSource()) }); err != nil {
 			return err
 		}
 	}
@@ -355,7 +369,12 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	var workspaces []string
 	if len(spec.GetDisks()) > 0 {
 		diskStart := stageEnd
-		if diskBinds, workspaces, err = c.attachDisks(ctx, spec.GetDisks(), pod.GetDevbox()); err != nil {
+		err := telemetry.Step(ctx, "agent.disks", func(ctx context.Context) error {
+			var err error
+			diskBinds, workspaces, err = c.attachDisks(ctx, spec.GetDisks(), pod.GetDevbox())
+			return err
+		}, attribute.Int("lazycloud.disks", len(spec.GetDisks())), attribute.Bool("lazycloud.devbox", pod.GetDevbox()))
+		if err != nil {
 			return err
 		}
 		stageEnd = time.Now()
@@ -369,7 +388,13 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
-	binds, volumeWorkspaces, err := c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+	var binds []mount.Mount
+	var volumeWorkspaces []string
+	err = telemetry.Step(ctx, "agent.volumes", func(ctx context.Context) error {
+		var err error
+		binds, volumeWorkspaces, err = c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+		return err
+	}, attribute.Int("lazycloud.volumes", len(spec.GetVolumes())))
 	if err != nil {
 		return err
 	}
@@ -379,7 +404,16 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			workspaces = append(workspaces, ws)
 		}
 	}
-	restore, err := c.prepareRestore(ctx, spec.GetRestore())
+	var restore *restorePoint
+	if spec.GetRestore() != nil {
+		err = telemetry.Step(ctx, "agent.restore_fetch", func(ctx context.Context) error {
+			var err error
+			restore, err = c.prepareRestore(ctx, spec.GetRestore())
+			return err
+		})
+	} else {
+		restore, err = c.prepareRestore(ctx, nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -395,7 +429,10 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			return err
 		}
 	}
-	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus, restore); err != nil {
+	err = telemetry.Step(ctx, "agent.create", func(ctx context.Context) error {
+		return c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus, restore)
+	}, attribute.Bool("lazycloud.restore", restore != nil))
+	if err != nil {
 		return err
 	}
 	// The supervisor waits for Configure, which the link serves only after
@@ -539,7 +576,18 @@ func (c *container) exited(exit *hostproto.ContainerExit) {
 	c.exitedAt = time.Now()
 	c.running = map[string]struct{}{}
 	l := c.link
+	span := c.startSpan
+	c.startSpan = nil
+	for attempt, t := range c.traces {
+		t.span.SetStatus(otelcodes.Error, "the container exited")
+		t.span.End()
+		delete(c.traces, attempt)
+	}
 	c.mu.Unlock()
+	if span != nil {
+		span.SetStatus(otelcodes.Error, telemetry.Redact("exited before it was ready: "+exit.GetMessage()))
+		span.End()
+	}
 	if c.a.layers != nil {
 		c.a.goOwned(func(ctx context.Context) { c.a.layers.release(ctx, c.log, c.id) })
 	}
@@ -697,7 +745,7 @@ func (c *container) stopRunning(ctx context.Context) {
 func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.SupervisorMessage) {
 	switch body := m.GetBody().(type) {
 	case *hostproto.SupervisorMessage_Ready:
-		c.onReady(body.Ready)
+		c.onReady(ctx, body.Ready)
 	case *hostproto.SupervisorMessage_LoadFailed:
 		c.mu.Lock()
 		c.loadError = body.LoadFailed.GetError()
@@ -727,7 +775,7 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 // onReady marks the container ready. After an agent restart the supervisor
 // restates its running attempts, including finished ones it has not yet
 // reported, which then occupy slots.
-func (c *container) onReady(ready *hostproto.SlotsReady) {
+func (c *container) onReady(ctx context.Context, ready *hostproto.SlotsReady) {
 	c.mu.Lock()
 	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
 		c.mu.Unlock()
@@ -751,15 +799,22 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	c.running = running
 	changed := c.phase != hostproto.ContainerPhase_CONTAINER_PHASE_READY
 	c.phase = hostproto.ContainerPhase_CONTAINER_PHASE_READY
+	var span trace.Span
 	if changed && !c.created.IsZero() {
 		c.startup = append(c.startup, &hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_RUNTIME,
 			StartedAt: timestamppb.New(c.created), FinishedAt: timestamppb.New(now)})
+		span, c.startSpan = c.startSpan, nil
 	}
 	// HTTP workers take requests from the data connection instead, and
 	// pods run a command.
 	startClaims := !c.claiming && !c.stopping && c.http == nil && c.pod == nil
 	c.claiming = c.claiming || startClaims
+	created := c.created
 	c.mu.Unlock()
+	if span != nil {
+		telemetry.Record(trace.ContextWithSpan(ctx, span), "agent.runtime", created)
+		span.End()
+	}
 	if changed && c.a.layers != nil {
 		c.a.goOwned(func(ctx context.Context) {
 			if trace := c.a.layers.ready(ctx, c.log, c.id); trace != nil {
@@ -849,7 +904,10 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		return
 	}
 	c.running[attempt] = struct{}{}
-	c.traces[attempt] = attemptTrace{task: task.GetTaskId(), traceparent: task.GetTraceparent(), started: time.Now()}
+	_, span := telemetry.StartIn(c.work, c.a.tracer(), task.GetTraceparent(), "attempt", trace.WithAttributes( //nolint:spancheck // Completion or cancel ends it.
+		telemetry.Task(task.GetTaskId()), attribute.String("lazycloud."+telemetry.KeyAttempt, attempt),
+		telemetry.Container(c.id), telemetry.Host(c.a.identity.HostID)))
+	c.traces[attempt] = attemptTrace{task: task.GetTaskId(), span: span}
 	l := c.link
 	c.mu.Unlock()
 	l.enqueue(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Run{Run: &hostproto.RunAttempt{
@@ -873,7 +931,11 @@ func (c *container) cancelAttempt(attempt string) {
 	c.mu.Lock()
 	c.cancelled.add(attempt, time.Now())
 	delete(c.running, attempt)
-	delete(c.traces, attempt)
+	if t, ok := c.traces[attempt]; ok {
+		t.span.SetStatus(otelcodes.Error, "cancelled")
+		t.span.End()
+		delete(c.traces, attempt)
+	}
 	l := c.link
 	c.mu.Unlock()
 	c.signalSlotFree()
@@ -951,24 +1013,46 @@ func (c *container) complete(ctx context.Context, seq uint64, finished *hostprot
 	}
 }
 
-// attemptSpan records the attempt as a span from its dispatch, in the trace
-// of the request that submitted it, so the completion call and the server's
-// handling of it join that trace.
+// endStart ends the start's span, failed with err.
+func (c *container) endStart(err error) {
+	c.mu.Lock()
+	span := c.startSpan
+	c.startSpan = nil
+	c.mu.Unlock()
+	if span != nil {
+		telemetry.Fail(span, err)
+	}
+}
+
+// attemptSpan takes the attempt's span for its completion, so the
+// completion call and the server's handling of it join its trace.
 func (c *container) attemptSpan(ctx context.Context, attempt string) (context.Context, trace.Span) {
 	c.mu.Lock()
 	t, ok := c.traces[attempt]
 	delete(c.traces, attempt)
 	c.mu.Unlock()
-	if !ok || c.a.cfg.Telemetry == nil {
+	if !ok {
 		return ctx, noop.Span{}
 	}
-	ctx = telemetry.WithTraceParent(ctx, t.traceparent)
-	return c.a.cfg.Telemetry.Tracer().Start(ctx, "attempt", trace.WithTimestamp(t.started), trace.WithAttributes(
-		attribute.String("lazycloud."+telemetry.KeyTask, t.task),
-		attribute.String("lazycloud."+telemetry.KeyAttempt, attempt),
-		attribute.String("lazycloud."+telemetry.KeyContainer, c.id),
-		attribute.String("lazycloud."+telemetry.KeyHost, c.a.identity.HostID),
-	))
+	return trace.ContextWithSpan(ctx, t.span), t.span
+}
+
+// taskContext is ctx under the span of the running attempt of task, so a
+// container API call the attempt makes, and what the server does for it,
+// join the attempt's trace. Another task's id, or none, leaves ctx as it
+// is. The server still decides what the call may do.
+func (c *container) taskContext(ctx context.Context, task string) context.Context {
+	if task == "" {
+		return ctx
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, t := range c.traces {
+		if t.task == task {
+			return trace.ContextWithSpan(ctx, t.span)
+		}
+	}
+	return ctx
 }
 
 // cancelledAttempts remembers recent cancels, oldest first.

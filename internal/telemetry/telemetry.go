@@ -38,6 +38,9 @@ type Config struct {
 	// SampleRatio is the share of new traces recorded, 0 to 1. A trace
 	// that arrives sampled from another process is always recorded.
 	SampleRatio float64
+	// EdgeSampleRatio is the share of workload requests through the edge
+	// traced, which anyone may send.
+	EdgeSampleRatio float64
 	// MetricsAddr is where /metrics listens. Empty serves nothing.
 	MetricsAddr string
 }
@@ -80,14 +83,17 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("describe telemetry resource: %w", err)
 	}
-	ratio := cfg.SampleRatio
-	if ratio < 0 || ratio > 1 {
-		return nil, fmt.Errorf("trace sample ratio %v is outside 0 to 1", ratio)
+	for _, ratio := range []float64{cfg.SampleRatio, cfg.EdgeSampleRatio} {
+		if ratio < 0 || ratio > 1 {
+			return nil, fmt.Errorf("trace sample ratio %v is outside 0 to 1", ratio)
+		}
 	}
 	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithBatcher(redacting{exporter}),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))),
+		sdktrace.WithSampler(sdktrace.ParentBased(rootSampler{
+			ratio: sdktrace.TraceIDRatioBased(cfg.SampleRatio), edge: sdktrace.TraceIDRatioBased(cfg.EdgeSampleRatio),
+		})),
 	)
 	t.provider = provider
 	t.shutdown = provider.Shutdown

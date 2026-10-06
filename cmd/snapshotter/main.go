@@ -52,6 +52,11 @@ func run(args []string) int {
 		logger.Error("invalid configuration", "error", err)
 		return 2
 	}
+	if telemetryConfig.OTLPEndpoint == "" {
+		// The agent sends the snapshotter's spans, all in traces the server
+		// sampled, to the server over its session.
+		telemetryConfig.OTLPEndpoint, telemetryConfig.OTLPInsecure = "unix://"+telemetry.HostTraceSocket, true
+	}
 	tel, err := telemetry.New(ctx, telemetryConfig)
 	if err != nil {
 		logger.Error("telemetry failed", "error", err)
@@ -62,7 +67,7 @@ func run(args []string) int {
 	go func() { metricsDone <- tel.ServeMetrics(ctx, logger) }()
 	cfg := snapshotter.Config{
 		Root: *root, CacheBytes: *cacheBytes, Fetches: *fetches, FillBytes: *fillBytes,
-		HTTP: &http.Client{}, Registry: tel.Registry, Logger: logger,
+		HTTP: &http.Client{}, Registry: tel.Registry, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, *socket, func() {
 		logger.Info("serving", "socket", *socket)

@@ -19,11 +19,14 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Platform images are the images agents run on their own, such as the
@@ -83,6 +86,8 @@ type PlatformPull struct {
 	// RetryAt is when a recorded failure may be converted again; zero for
 	// a reference no conversion accepts.
 	RetryAt time.Time
+	// Traceparent is the trace of the conversion last claimed.
+	Traceparent string
 }
 
 // PlatformPulls returns how host pulls each of references, the platform
@@ -109,6 +114,7 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 			continue
 		}
 		row, ok := byReference[reference]
+		out[n].Traceparent = deref(row.Traceparent)
 		switch {
 		case !ok:
 		case row.Converted:
@@ -201,7 +207,10 @@ func (i *Images) ConvertPlatformImage(ctx context.Context, reference, architectu
 	recorded, err := i.queries.ClaimPlatformImage(ctx, ClaimPlatformImageParams{
 		Reference: reference, Architecture: architecture, Token: token, LeaseSeconds: i.platformLease.Seconds(),
 		TransientRetrySeconds: platformTransientRetry.Seconds(), FailureRetrySeconds: platformFailureRetry.Seconds(),
+		Traceparent: traceparent(ctx),
 	})
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.Bool("lazycloud.claimed", err == nil))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -338,9 +347,11 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 		return fmt.Errorf("mirror reference %q: %w", mirror, err)
 	}
 	if _, err := remote.Head(target, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport)); err != nil {
-		err = retryPlatform(ctx, func() error {
-			return remote.Write(target, img, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport))
+		copyCtx, span := telemetry.Start(ctx, "images.copy_platform_image", trace.WithAttributes(attribute.Int64("lazycloud.bytes", size)))
+		err = retryPlatform(copyCtx, func() error {
+			return remote.Write(target, img, remote.WithContext(copyCtx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport))
 		})
+		telemetry.Fail(span, err)
 		if err != nil {
 			return fmt.Errorf("%w: copy %s into the platform registry: %w", ErrRegistryUnavailable, reference, err)
 		}
@@ -376,6 +387,8 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 	for _, l := range pushed.layers {
 		blobBytes[l.blob] = l.size
 	}
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.Int("lazycloud.layers", len(pushed.layers)), attribute.Int("lazycloud.layers_converted", len(offers)))
 	files, err := i.convertPlatformLayers(ctx, target, auth, dir, offers, blobBytes)
 	if err != nil {
 		return err
@@ -402,7 +415,10 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, refere
 	if failure != "" {
 		return &ConversionError{Reason: failure}
 	}
-	if offers, err = i.platformRound(ctx, pushed, converted, nil, finish); err != nil {
+	publishCtx, publish := telemetry.Start(ctx, "images.publish_platform_image")
+	offers, err = i.platformRound(publishCtx, pushed, converted, nil, finish)
+	telemetry.Fail(publish, err)
+	if err != nil {
 		return err
 	}
 	if len(offers) > 0 {
@@ -453,11 +469,14 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 	for n, o := range offers {
 		g.Go(func() error {
 			blob := image.Context().Digest(o.blob)
-			err := retryPlatform(ctx, func() error {
-				l, err := i.convertPlatformLayer(ctx, blob, auth, dir, o.diffID, blobBytes[o.blob])
+			layerCtx, span := telemetry.Start(ctx, "images.convert_layer", trace.WithAttributes(
+				attribute.String(telemetry.AttrLayer, o.diffID), attribute.Int64("lazycloud.bytes", blobBytes[o.blob])))
+			err := retryPlatform(layerCtx, func() error {
+				l, err := i.convertPlatformLayer(layerCtx, blob, auth, dir, o.diffID, blobBytes[o.blob])
 				out[n] = l
 				return err
 			})
+			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("convert layer %s: %w", o.blob, err)
 			}
@@ -478,10 +497,14 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 // its digest checks. A download cut short is the registry's failure; only
 // a blob that holds its digest's bytes can fail as content.
 func (i *Images) convertPlatformLayer(ctx context.Context, blob name.Digest, auth *Auth, dir, diffID string, size int64) (*platformLayer, error) {
-	path, mediaType, err := i.fetchPlatformBlob(ctx, blob, auth, dir, size)
+	fetchCtx, fetch := telemetry.Start(ctx, "images.download_layer")
+	path, mediaType, err := i.fetchPlatformBlob(fetchCtx, blob, auth, dir, size)
+	telemetry.Fail(fetch, err)
 	if err != nil {
 		return nil, err
 	}
+	ctx, convert := telemetry.Start(ctx, "images.convert_layer_data")
+	defer convert.End()
 	defer func() { _ = os.Remove(path) }()
 	layer, err := tarball.LayerFromFile(path, tarball.WithMediaType(mediaType))
 	if err != nil {
@@ -560,7 +583,10 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 	for n, u := range uploads {
 		l := files[u.Blob]
 		g.Go(func() error {
-			etags, err := i.uploadPlatformLayer(ctx, u, l)
+			uploadCtx, span := telemetry.Start(ctx, "images.upload_layer", trace.WithAttributes(
+				attribute.String(telemetry.AttrLayer, u.DiffID), attribute.Int64("lazycloud.bytes", l.dataBytes+int64(len(l.index)))))
+			etags, err := i.uploadPlatformLayer(uploadCtx, u, l)
+			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("upload layer %s: %w", u.Blob, err)
 			}

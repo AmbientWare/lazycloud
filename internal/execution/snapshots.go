@@ -76,7 +76,7 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 			return &InvalidError{Reason: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
 		}
 		inserted, err := q.InsertSnapshot(ctx, InsertSnapshotParams{
-			ID: id, WorkspaceID: uuid.UUID(workspace), ReleaseID: row.ReleaseID, ContainerID: &row.ID,
+			ID: id, WorkspaceID: uuid.UUID(workspace), ReleaseID: row.ReleaseID, ContainerID: &row.ID, Traceparent: traceparent(ctx),
 		})
 		if isUniqueViolation(err) {
 			return &ConflictError{Reason: "a snapshot with that id exists"}
@@ -205,6 +205,8 @@ type SnapshotCommand struct {
 	Deadline  time.Time
 	// Ready is the probe a pod's automatic snapshot waits for.
 	Ready *apitypes.CheckpointSpec
+	// Traceparent is the trace of the request that asked for it.
+	Traceparent string
 }
 
 // PublishCommand asks a host to publish a container's filesystem as an
@@ -233,7 +235,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 	for _, row := range snapshots {
 		cmd := SnapshotCommand{
 			Snapshot: row.ID, Workspace: identity.WorkspaceID(row.WorkspaceID), Container: ContainerID(row.ContainerID),
-			Deadline: row.CreatedAt.Add(SnapshotDeadline),
+			Deadline: row.CreatedAt.Add(SnapshotDeadline), Traceparent: deref(row.Traceparent),
 		}
 		if row.Automatic {
 			var spec apitypes.WorkloadSpec
@@ -310,7 +312,7 @@ func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, logger *slog.Log
 		err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 			q := e.queries.WithTx(tx)
 			n, err := q.InsertAutomaticSnapshot(ctx, InsertAutomaticSnapshotParams{
-				WorkspaceID: c.WorkspaceID, ReleaseID: c.ReleaseID, ContainerID: &c.ID,
+				WorkspaceID: c.WorkspaceID, ReleaseID: c.ReleaseID, ContainerID: &c.ID, Traceparent: traceparent(ctx),
 			})
 			if err != nil || n == 0 {
 				return err //nolint:wrapcheck // Wrapped below.

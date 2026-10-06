@@ -24,6 +24,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -69,6 +70,8 @@ type session struct {
 	// replicaStop ends the subscription.
 	replicaWake <-chan struct{}
 	replicaStop func()
+	// starts holds the open spans of starts not sent yet.
+	starts map[execution.ContainerID]*pendingStart
 }
 
 // buildWaits subscribes to the ChannelImageBuild keys the session waits
@@ -182,8 +185,10 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
 			running: slices.Compact(slices.Sorted(slices.Values(hello.GetRunningPlatformImages()))),
 			sent:    map[string]layerGrant{}, failed: map[string]platformFailure{},
-		}}
+		},
+		starts: map[execution.ContainerID]*pendingStart{}}
 	defer sess.builds.close()
+	defer sess.endStarts(nil)
 	defer func() {
 		if sess.replicaStop != nil {
 			sess.replicaStop()
@@ -338,6 +343,9 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 	case *hostproto.HostMessage_StartupTrace:
 		sess.recordTrace(ctx, body.StartupTrace)
 		return nil
+	case *hostproto.HostMessage_Traces:
+		sess.server.config.Traces.Offer(sess.host.String(), body.Traces.GetOtlp())
+		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
 		// outcome.
@@ -364,13 +372,16 @@ func (sess *session) sync(ctx context.Context) error {
 	if err := sess.syncPlatform(ctx, cache, waiting); err != nil {
 		return err
 	}
+	starting := map[execution.ContainerID]bool{}
 	for _, start := range commands.Start {
 		id := "start:" + start.Container.String()
 		derived[id] = true
 		if sess.sent[id] {
 			continue
 		}
-		msg, err := sess.server.startMessage(ctx, sess.host, id, start, cache, traces)
+		starting[start.Container] = true
+		startCtx := sess.startContext(ctx, start)
+		msg, err := sess.server.startMessage(startCtx, sess.host, id, start, cache, traces)
 		// The start is sent once its image is published with converted
 		// layers, so a waiting start does not count as sent. A wait with no
 		// build to follow retries at the next touch, whose pull starts or
@@ -378,13 +389,15 @@ func (sess *session) sync(ctx context.Context) error {
 		var building *images.BuildWaitError
 		if errors.As(err, &building) {
 			delete(derived, id)
+			sess.waiting(ctx, start.Container, "build", building.Traceparent)
 			waiting[building.Build.String()] = true
 			continue
 		}
 		var converting *images.PlatformWaitError
 		if errors.As(err, &converting) {
 			delete(derived, id)
-			sess.server.convertPlatform(converting.Reference, converting.Architecture)
+			sess.waiting(ctx, start.Container, "platform_conversion", converting.Traceparent)
+			sess.server.convertPlatform(converting.Reference, converting.Architecture, telemetry.TraceParentOf(startCtx)) //nolint:contextcheck // Conversions run under the server's lifetime.
 			waiting[images.PlatformConverted] = true
 			continue
 		}
@@ -398,6 +411,7 @@ func (sess *session) sync(ctx context.Context) error {
 			// containers are unaffected.
 			sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(),
 				"container", start.Container.String(), "error", err)
+			sess.endStart(start.Container, reason)
 			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, reason); err != nil {
 				return sess.server.grpcError(ctx, err)
 			}
@@ -408,11 +422,12 @@ func (sess *session) sync(ctx context.Context) error {
 			return sess.server.grpcError(ctx, err)
 		}
 		// The host may read the image's layers while the container is live.
-		starting, err := sess.server.execution.RecordImageReference(ctx, sess.host, start.Container, msg.GetStart().GetImage())
+		recorded, err := sess.server.execution.RecordImageReference(ctx, sess.host, start.Container, msg.GetStart().GetImage())
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
-		if !starting {
+		if !recorded {
+			sess.endStart(start.Container, "")
 			continue
 		}
 		if usesWorkspaceBucket(msg.GetStart()) {
@@ -421,13 +436,16 @@ func (sess *session) sync(ctx context.Context) error {
 			}
 		}
 		issued := time.Now()
+		msg.GetStart().Traceparent = telemetry.TraceParentOf(startCtx)
 		if err := sess.send(msg); err != nil {
 			return err
 		}
+		sess.endStart(start.Container, "")
 		sess.live[start.Container] = true
 		started = append(started, msg.GetStart().GetImage())
 		sess.layers[msg.GetStart().GetImage()] = sess.server.grantOf(cache, msg.GetStart().GetImage(), issued)
 	}
+	sess.endStarts(starting)
 	sess.builds.await(sess.server.listener, waiting)
 	if err := sess.server.images.RecordUses(ctx, started); err != nil {
 		return sess.server.grpcError(ctx, err)

@@ -67,7 +67,8 @@ func (e *Execution) CreatePlatformBuildContainer(ctx context.Context, tx pgx.Tx,
 func (e *Execution) createBuildContainer(ctx context.Context, tx pgx.Tx, workspace identity.WorkspaceID, build uuid.UUID, cpuMillis cpu.Millis, memoryBytes int64, gpus int) (ContainerID, error) {
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
-		GpuCount: int32(gpus), //nolint:gosec // At most one GPU.
+		GpuCount:    int32(gpus), //nolint:gosec // At most one GPU.
+		Traceparent: traceparent(ctx),
 	})
 	if err != nil {
 		return ContainerID{}, fmt.Errorf("create build container: %w", err)
@@ -128,6 +129,8 @@ type BuildStart struct {
 	Attempt     int
 	CPUMillis   cpu.Millis
 	MemoryBytes int64
+	// Traceparent is the trace of the build that asked for the container.
+	Traceparent string
 }
 
 // BuildStarts are the build containers starting on host. Like HostCommands
@@ -141,7 +144,7 @@ func (e *Execution) BuildStarts(ctx context.Context, host compute.HostID) ([]Bui
 	for n, row := range rows {
 		out[n] = BuildStart{
 			Container: ContainerID(row.ID), Build: row.ImageBuildID, Attempt: int(row.Attempt),
-			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
+			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, Traceparent: deref(row.Traceparent),
 		}
 	}
 	return out, nil

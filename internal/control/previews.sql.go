@@ -71,8 +71,8 @@ func (q *Queries) InsertPreview(ctx context.Context, arg InsertPreviewParams) (I
 }
 
 const insertPreviewRelease = `-- name: InsertPreviewRelease :one
-insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-values ($1, -nextval('preview_versions'), $2, $3, $4)
+insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
+values ($1, -nextval('preview_versions'), $2, $3, $4, $5::text)
 returning id, version, created_at
 `
 
@@ -81,6 +81,7 @@ type InsertPreviewReleaseParams struct {
 	Spec         []byte
 	SpecDigest   []byte
 	SourceSha256 []byte
+	Traceparent  *string
 }
 
 type InsertPreviewReleaseRow struct {
@@ -95,6 +96,7 @@ func (q *Queries) InsertPreviewRelease(ctx context.Context, arg InsertPreviewRel
 		arg.Spec,
 		arg.SpecDigest,
 		arg.SourceSha256,
+		arg.Traceparent,
 	)
 	var i InsertPreviewReleaseRow
 	err := row.Scan(&i.ID, &i.Version, &i.CreatedAt)

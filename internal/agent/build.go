@@ -28,12 +28,15 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Labels on build containers. They differ from workload labels, so adopt
@@ -91,13 +94,20 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 	c.a.goOwned(func(context.Context) { logs.run(c.work) }) //nolint:contextcheck // output lives as long as the container's work
 	work, cancel := context.WithDeadline(c.work, build.GetDeadline().AsTime())
 	defer cancel()
+	work, span := telemetry.StartIn(work, c.a.tracer(), spec.GetTraceparent(), "agent.build", trace.WithAttributes( //nolint:contextcheck // as runBuilder
+		telemetry.Container(c.id), telemetry.Host(c.a.identity.HostID), attribute.String(telemetry.AttrBuild, build.GetBuildId()),
+		attribute.Int("lazycloud.attempt", int(build.GetAttempt()))))
+	defer span.End()
 
 	outcome, exit := c.runBuilder(work, spec, logs) //nolint:contextcheck // stopping the container ends its build
+	span.SetAttributes(attribute.String("lazycloud.exit", exit.GetMessage()))
 	if ctx.Err() != nil {
 		return
 	}
 	if outcome != nil && !c.isStopping() {
-		c.publishBuild(ctx, work, build, outcome, logs) //nolint:contextcheck // as above
+		publishCtx, publish := telemetry.Start(work, "agent.build_publish")
+		c.publishBuild(trace.ContextWithSpan(ctx, publish), publishCtx, build, outcome, logs) //nolint:contextcheck // as above
+		publish.End()
 	}
 	logs.close()
 	c.exited(exit)
@@ -117,8 +127,11 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	}
 	logs.add("preparing build container")
 	began := time.Now()
-	builder, err := c.a.platformImage(ctx, platformimages.Builder)
+	prepareCtx, prepare := telemetry.Start(ctx, "agent.build_prepare")
+	defer prepare.End()
+	builder, err := c.a.platformImage(prepareCtx, platformimages.Builder)
 	if err != nil {
+		telemetry.Fail(prepare, err)
 		return startFailed(err)
 	}
 	// The secrets leave the host when the build ends, whatever its outcome.
@@ -144,6 +157,9 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	c.phase = hostproto.ContainerPhase_CONTAINER_PHASE_READY
 	c.mu.Unlock()
 	c.report()
+	prepare.End()
+	ctx, run := telemetry.Start(ctx, "agent.build_run")
+	defer run.End()
 	c.log.Info("build container started", "build_id", build.GetBuildId(), "attempt", build.GetAttempt(), "prepare_ms", time.Since(began).Milliseconds())
 
 	tail := c.a.followBuildOutput(ctx, c.dockerName(), logs)

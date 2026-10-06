@@ -109,7 +109,7 @@ delete from endpoint_loads where expires_at < now() - interval '1 hour';
 
 -- name: EndpointContainers :many
 -- Ready containers of every release of the workload, newest version first.
-select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state
+select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state, c.traceparent
 from releases r
 join containers c on c.release_id = r.id
 where r.workload_id = @workload_id and c.state = 'ready' and c.purpose = 'serve' and r.version is not null

@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/errdefs"
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -219,6 +220,9 @@ func (m *mounts) mount(r lazyRef) error {
 		return fmt.Errorf("%w: snapshot %s holds layer %s, labelled %s", imagefs.ErrInvalidIndex, r.id, ix.Layer, r.digest)
 	}
 	digest := r.digest
+	if span, traced := m.frames.starts.start(digest, "snapshotter.mount"); traced {
+		defer span.End()
+	}
 	l := &layer{
 		digest: digest,
 		index:  ix,
@@ -257,10 +261,17 @@ func (m *mounts) mount(r lazyRef) error {
 	}
 	fillCtx, stopFill := context.WithCancel(m.life)
 	ml := &mountedLayer{digest: digest, layer: l, dir: filepath.Join(dir, "fs"), server: server, stopFill: stopFill, filled: make(chan struct{})}
+	fill, traced := m.frames.starts.start(digest, "snapshotter.fill", attribute.Int("lazycloud.frames", len(ix.Frames)),
+		attribute.Bool("lazycloud.fills", ix.StreamSize <= m.fillBytes))
 	go func() {
 		defer close(ml.filled)
+		var fetched int64
 		if ix.StreamSize <= m.fillBytes {
-			m.frames.fill(fillCtx, l)
+			fetched = m.frames.fill(fillCtx, l)
+		}
+		if traced {
+			fill.SetAttributes(attribute.Int64("lazycloud.fetches", fetched))
+			fill.End()
 		}
 	}()
 	m.mounted[r.id] = ml

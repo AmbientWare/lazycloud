@@ -53,6 +53,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -214,6 +215,17 @@ func startPlatform(t *testing.T) *platform {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// Each platform traces to LAZYCLOUD_OTLP_ENDPOINT when it is set, with
+	// its own registry for the agent's and the API's metrics.
+	telemetryConfig, err := telemetry.ConfigFromEnv("acceptance", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tel, err := telemetry.New(ctx, telemetryConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
@@ -280,22 +292,22 @@ func startPlatform(t *testing.T) *platform {
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second,
-		Secrets:       vault, ContainerAPI: containerAPI,
+		Secrets:       vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
 	}, logger)
-	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
+	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	hostproto.RegisterHostDataServer(grpcServer, p.edge.DataServer(hostsession.HostFrom))
 	grpcListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	edgeServer := &http.Server{Handler: p.edge, ReadHeaderTimeout: 10 * time.Second}
+	edgeServer := &http.Server{Handler: tel.EdgeHandler(p.edge), ReadHeaderTimeout: 10 * time.Second}
 	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.api = "http://" + apiListener.Addr().String()
-	apiServer := &http.Server{Handler: apiHandler, ReadHeaderTimeout: 10 * time.Second}
+	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
@@ -310,15 +322,17 @@ func startPlatform(t *testing.T) *platform {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
-			if _, err := p.execution.Plan(ctx, logger); err != nil && ctx.Err() == nil {
+			passCtx, span := tel.Tracer().Start(ctx, telemetry.PassPrefix+"passes")
+			if _, err := p.execution.Plan(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan: %v", err)
 			}
-			if _, err := p.execution.PlanServing(ctx, logger); err != nil && ctx.Err() == nil {
+			if _, err := p.execution.PlanServing(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan serving: %v", err)
 			}
-			if _, err := sched.Place(ctx); err != nil && ctx.Err() == nil {
+			if _, err := sched.Place(passCtx); err != nil && ctx.Err() == nil {
 				t.Logf("place: %v", err)
 			}
+			span.End()
 			select {
 			case <-ctx.Done():
 				return
@@ -371,7 +385,7 @@ func startPlatform(t *testing.T) *platform {
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
 			GeeseFSPath: geesefs, ServerPlaintext: true, Snapshotter: layersource.Socket, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
+			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger, Telemetry: tel,
 		})
 		if err != nil && ctx.Err() == nil {
 			t.Errorf("agent: %v", err)

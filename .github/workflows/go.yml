@@ -108,6 +108,11 @@ jobs:
   # workloads start through the snapshotter. A skipped test fails the job.
   acceptance:
     runs-on: ubuntu-26.04
+    # The tests and the snapshotter trace into Jaeger; the job keeps the
+    # trace of the slowest container start.
+    env:
+      LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:24317
+      LAZYCLOUD_OTLP_INSECURE: "true"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -128,10 +133,19 @@ jobs:
           sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
           sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock /run/containerd/containerd.sock
           docker info --format 'storage driver {{.Driver}}'
+          sudo mkdir -p /etc/systemd/system/lazycloud-snapshotter.service.d
+          printf '[Service]\nEnvironment=LAZYCLOUD_OTLP_ENDPOINT=%s LAZYCLOUD_OTLP_INSECURE=true\n' "$LAZYCLOUD_OTLP_ENDPOINT" |
+            sudo tee /etc/systemd/system/lazycloud-snapshotter.service.d/traces.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart lazycloud-snapshotter
+          sudo chmod 0755 /run/lazycloud-snapshotter
+          sudo chgrp docker /run/lazycloud-snapshotter/snapshotter.sock
+          sudo chmod g+rw /run/lazycloud-snapshotter/snapshotter.sock
       # Started after the snapshotter install, which restarts Docker.
-      - name: PostgreSQL and the object store
+      - name: PostgreSQL, the object store and Jaeger
         run: |
           docker compose -f compose.test.yaml up -d --wait postgres
+          docker compose up -d --wait jaeger
           docker compose up -d --wait object-store
           docker compose run --rm object-store-bootstrap
       - name: GeeseFS and the managed runtime
@@ -146,3 +160,15 @@ jobs:
             echo "acceptance tests skipped" >&2
             exit 1
           fi
+      - name: Export the slowest container start's trace
+        if: always()
+        run: |
+          # Spans leave the exporters' batches within seconds.
+          sleep 10
+          deploy/local/export-trace.sh http://127.0.0.1:16686 lazycloud-acceptance "$RUNNER_TEMP/cold-start-trace.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cold-start-trace
+          path: ${{ runner.temp }}/cold-start-trace.json
+          if-no-files-found: ignore

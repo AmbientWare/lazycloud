@@ -70,7 +70,7 @@ with candidate as (
 )
 select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
        i.encoding, i.data, t.max_attempts, t.parent_task_id,
-       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.traceparent, t.available_at
 from attempt
 join task_inputs i on i.task_id = attempt.task_id
 join tasks t on t.id = attempt.task_id
@@ -96,6 +96,7 @@ type ClaimQueuedTasksRow struct {
 	ParentTaskID *uuid.UUID
 	RootTaskID   uuid.UUID
 	Traceparent  *string
+	AvailableAt  time.Time
 }
 
 // Due queued tasks of the release become running attempts on the container.
@@ -128,6 +129,7 @@ func (q *Queries) ClaimQueuedTasks(ctx context.Context, arg ClaimQueuedTasksPara
 			&i.ParentTaskID,
 			&i.RootTaskID,
 			&i.Traceparent,
+			&i.AvailableAt,
 		); err != nil {
 			return nil, err
 		}
@@ -151,7 +153,7 @@ func (q *Queries) CountRunningAttemptsOnContainer(ctx context.Context, container
 }
 
 const lockContainerForClaim = `-- name: LockContainerForClaim :one
-select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec
+select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec, c.traceparent
 from containers c
 join releases r on r.id = c.release_id
 where c.id = $1
@@ -159,12 +161,13 @@ for no key update of c
 `
 
 type LockContainerForClaimRow struct {
-	State     string
-	HostID    *uuid.UUID
-	Slots     int32
-	Purpose   string
-	ReleaseID uuid.UUID
-	Spec      []byte
+	State       string
+	HostID      *uuid.UUID
+	Slots       int32
+	Purpose     string
+	ReleaseID   uuid.UUID
+	Spec        []byte
+	Traceparent *string
 }
 
 // Claims of one container run one at a time, so its slot count holds.
@@ -179,6 +182,7 @@ func (q *Queries) LockContainerForClaim(ctx context.Context, id uuid.UUID) (Lock
 		&i.Purpose,
 		&i.ReleaseID,
 		&i.Spec,
+		&i.Traceparent,
 	)
 	return i, err
 }
