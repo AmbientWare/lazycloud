@@ -927,7 +927,10 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 	target := i.config.targetOf(started.PlatformHost, started.WorkspaceID, started.Digest, started.Forced)
 	pushed := publication{
 		reference: i.config.Registry + "/" + target.repository + "@" + outcome.Digest,
-		target:    target, workspace: started.WorkspaceID, container: uuid.UUID(container), deadline: started.DeadlineAt,
+		owner:     uuid.UUID(container), deadline: started.DeadlineAt,
+	}
+	if target.scoped {
+		pushed.scope = &started.WorkspaceID
 	}
 	pushed.layers, err = i.layersOf(ctx, pushed.reference, started.Architecture)
 	var rejected *InvalidError

@@ -204,9 +204,9 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 	if err != nil {
 		return err
 	}
+	// The lease keeps one conversion of a reference and architecture at a
+	// time.
 	c := platformConversion{reference: reference, architecture: architecture, token: uuid.New()}
-	// The lease names the invariant: one conversion of a reference and
-	// architecture at a time.
 	claimed, err := i.queries.ClaimPlatformImage(ctx, ClaimPlatformImageParams{
 		Reference: reference, Architecture: architecture, Token: c.token, LeaseSeconds: lease.Seconds(),
 		TransientRetrySeconds: platformTransientRetry.Seconds(), FailureRetrySeconds: platformFailureRetry.Seconds(),
@@ -220,11 +220,7 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 		return fmt.Errorf("claim platform image: %w", err)
 	}
 	if claimed.Converted {
-		err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error { return c.finish(ctx, tx, *claimed.Mirror) })
-		if err != nil {
-			return fmt.Errorf("finish platform image: %w", err)
-		}
-		return nil
+		return pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error { return c.finish(ctx, tx, *claimed.Mirror) }) //nolint:wrapcheck // finish names its step.
 	}
 	convertCtx, cancel := context.WithTimeout(ctx, platformConversionTimeout)
 	defer cancel()
@@ -303,7 +299,7 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c plat
 	if err != nil {
 		return registryError(c.reference, err)
 	}
-	// The copy holds the same manifest, so its layers are these.
+	// The copy has the same manifest, so these are its layers too.
 	layers, err := imageLayers(c.reference, img)
 	var rejected *InvalidError
 	if errors.As(err, &rejected) {
@@ -347,10 +343,7 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c plat
 			return fmt.Errorf("%w: copy %s into the platform registry: %w", ErrRegistryUnavailable, c.reference, err)
 		}
 	}
-	pushed := publication{
-		reference: mirror, target: buildTarget{repository: repository}, container: c.token,
-		deadline: time.Now().Add(platformConversionTimeout), layers: layers,
-	}
+	pushed := publication{reference: mirror, owner: c.token, deadline: time.Now().Add(platformConversionTimeout), layers: layers}
 	// What the conversion's uploads stored and no pair recorded is deleted
 	// by the sweep once their URLs lapse.
 	defer func() { err = errors.Join(err, i.endUploads(context.WithoutCancel(ctx), c.token)) }()
@@ -410,7 +403,7 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c plat
 // pushed's layers, as a build's completion does, and returns the uploads
 // still missing. With none, the reference's layers are recorded and c
 // finishes in the same transaction.
-func (i *Images) platformRound(ctx context.Context, c platformConversion, pushed publication, converted []conversion, sizes []ConvertedLayer) ([]offer, error) {
+func (i *Images) platformRound(ctx context.Context, c platformConversion, pushed publication, converted []RecordLayerParams, sizes []ConvertedLayer) ([]offer, error) {
 	var offers []offer
 	var failure string
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {

@@ -156,9 +156,9 @@ where (id in (select layer_id from used)) = (unreferenced_since is not null);
 
 -- name: RecordUses :exec
 -- Records that references were published or started, at most once a minute
--- per reference.
+-- per reference, taking the rows in one order.
 insert into image_reference_uses (reference, used_at)
-select unnest(@refs::text[]), now()
+select distinct r, now() from unnest(@refs::text[]) r order by r
 on conflict (reference) do update set used_at = excluded.used_at
 where image_reference_uses.used_at < now() - interval '1 minute';
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -192,9 +193,7 @@ func (i *Images) RecordUses(ctx context.Context, references []string) error {
 	if len(references) == 0 {
 		return nil
 	}
-	references = slices.Clone(references)
-	slices.Sort(references)
-	if err := i.queries.RecordUses(ctx, slices.Compact(references)); err != nil {
+	if err := i.queries.RecordUses(ctx, references); err != nil {
 		return fmt.Errorf("record image uses: %w", err)
 	}
 	return nil
@@ -224,42 +223,34 @@ type UploadedLayer struct {
 	ETags []string
 }
 
-// publication is a pushed image a build reported.
+// publication is a pushed image whose layers a build container, or the
+// server conversion leased as owner, converts.
 type publication struct {
 	reference string
-	target    buildTarget
-	workspace uuid.UUID
-	container uuid.UUID
-	deadline  time.Time
-	layers    []registryLayer
+	// scope is the workspace a scoped build's pairs serve alone: its content
+	// is the workspace's, and a customer's host could upload anything. Pairs
+	// a platform host or the server converted serve everyone, since the
+	// blob they were read from is the registry's.
+	scope    *uuid.UUID
+	owner    uuid.UUID
+	deadline time.Time
+	layers   []registryLayer
 }
 
-// conversion is a pair a host reported uploaded, as the store holds it.
-type conversion struct {
-	upload uuid.UUID
-	blob   string
-	diffID string
-	frames int
-}
-
-// offer is an upload a completion hands its host. uploadID is set once the
-// data upload started, for dataBytes and indexBytes.
+// offer is an upload a completion hands its host. start holds the sizes
+// the host reported when they differ from those of the data upload started
+// so far, which a new upload replaces.
 type offer struct {
-	upload                uuid.UUID
-	blob                  string
-	diffID                string
-	uploadID              *string
-	dataBytes, indexBytes int64
-	// previous is the data upload sized differently that this one replaces.
-	previous *string
-	start    bool
+	OfferUploadRow
+	blob, diffID string
+	start        *ConvertedLayer
 }
 
 // checkConversions completes the data uploads of the pairs the host
 // reported uploaded for pushed and reads what the store holds. A pair not
 // stored yet is left out and offered again. A pair that does not hold its
 // layer is a failure of the build, returned as its reason.
-func (i *Images) checkConversions(ctx context.Context, pushed publication, reported []UploadedLayer) ([]conversion, string, error) {
+func (i *Images) checkConversions(ctx context.Context, pushed publication, reported []UploadedLayer) ([]RecordLayerParams, string, error) {
 	if len(reported) == 0 {
 		return nil, "", nil
 	}
@@ -268,27 +259,24 @@ func (i *Images) checkConversions(ctx context.Context, pushed publication, repor
 		diffIDs[l.blob] = l.diffID
 	}
 	etags := map[string][]string{}
-	blobs := make([]string, 0, len(reported))
 	for _, r := range reported {
-		if _, ok := diffIDs[r.Blob]; ok {
-			etags[r.Blob] = r.ETags
-			blobs = append(blobs, r.Blob)
-		}
+		etags[r.Blob] = r.ETags
 	}
-	uploads, err := i.queries.UploadsOf(ctx, UploadsOfParams{ContainerID: &pushed.container, Blobs: blobs})
+	uploads, err := i.queries.UploadsOf(ctx, UploadsOfParams{ContainerID: &pushed.owner, Blobs: slices.Collect(maps.Keys(etags))})
 	if err != nil {
 		return nil, "", fmt.Errorf("read layer uploads: %w", err)
 	}
-	var out []conversion
+	var out []RecordLayerParams
 	for _, u := range uploads {
-		if u.UploadID == nil {
+		want, ok := diffIDs[u.BlobDigest]
+		if !ok || u.UploadID == nil {
 			continue
 		}
-		dataBytes, indexBytes := *u.DataBytes, *u.IndexBytes
-		if parts := storage.LayerDataParts(dataBytes); int64(len(etags[u.BlobDigest])) != parts {
-			return nil, fmt.Sprintf("layer %s was uploaded in %d parts, not %d", u.BlobDigest, len(etags[u.BlobDigest]), parts), nil
+		parts := etags[u.BlobDigest]
+		if n := storage.LayerDataParts(*u.DataBytes); int64(len(parts)) != n {
+			return nil, fmt.Sprintf("layer %s was uploaded in %d parts, not %d", u.BlobDigest, len(parts), n), nil
 		}
-		err := i.storage.CompleteLayerUpload(ctx, u.ID, *u.UploadID, etags[u.BlobDigest])
+		err := i.storage.CompleteLayerUpload(ctx, u.ID, *u.UploadID, parts)
 		var refused *storage.InvalidError
 		switch {
 		case errors.As(err, &refused):
@@ -298,13 +286,10 @@ func (i *Images) checkConversions(ctx context.Context, pushed publication, repor
 		}
 		// A completed upload is gone, so a repeated report finds the object.
 		size, err := i.storage.LayerSize(ctx, u.ID, storage.LayerData)
-		if errors.Is(err, storage.ErrNotFound) {
-			continue
+		var raw []byte
+		if err == nil {
+			raw, err = i.storage.ReadLayer(ctx, u.ID, storage.LayerIndex, *u.IndexBytes)
 		}
-		if err != nil {
-			return nil, "", err
-		}
-		raw, err := i.storage.ReadLayer(ctx, u.ID, storage.LayerIndex, indexBytes)
 		if errors.Is(err, storage.ErrNotFound) {
 			continue
 		}
@@ -312,16 +297,18 @@ func (i *Images) checkConversions(ctx context.Context, pushed publication, repor
 			return nil, "", err
 		}
 		ix, err := imagefs.Unmarshal(raw)
-		if err != nil {
+		switch {
+		case err != nil:
 			return nil, fmt.Sprintf("the converted index of layer %s is unreadable: %v", u.BlobDigest, err), nil
-		}
-		if want := diffIDs[u.BlobDigest]; string(ix.Layer) != want {
+		case string(ix.Layer) != want:
 			return nil, fmt.Sprintf("layer %s holds %s, but the image config names %s", u.BlobDigest, ix.Layer, want), nil
-		}
-		if size != dataBytes || size != ix.DataSize {
+		case size != *u.DataBytes || size != ix.DataSize:
 			return nil, fmt.Sprintf("the converted data of layer %s has %d bytes, its index %d", u.BlobDigest, size, ix.DataSize), nil
 		}
-		out = append(out, conversion{upload: u.ID, blob: u.BlobDigest, diffID: string(ix.Layer), frames: len(ix.Frames)})
+		out = append(out, RecordLayerParams{
+			ID: u.ID, BlobDigest: u.BlobDigest, DiffID: want, WorkspaceID: pushed.scope,
+			Frames: int32(len(ix.Frames)), //nolint:gosec // imagefs bounds it below 2^31.
+		})
 	}
 	return out, "", nil
 }
@@ -333,43 +320,29 @@ func maxDataBytes(blobBytes int64) int64 { return 2*blobBytes + 64<<20 }
 
 // recordLayers records the checked conversions and, when every layer of
 // pushed has a pair it may use, the reference's layers. Otherwise it returns
-// the uploads its host makes next. A config whose diff_id differs from what
-// a blob holds fails the build with the returned reason.
-//
-// A scoped build's pairs serve only its workspace: its content is the
-// workspace's, and a customer's host could upload anything. Other builds run
-// on platform hosts, whose pairs serve everyone, since the blob they were
-// read from is the registry's.
-func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publication, converted []conversion, sizes []ConvertedLayer) ([]offer, string, error) {
-	var scope *uuid.UUID
-	if pushed.target.scoped {
-		scope = &pushed.workspace
-	}
+// the uploads its host makes next, sized by what the host reported. A pair
+// whose diff_id differs from the config's, or a size no layer of its blob
+// converts to, fails the build with the returned reason.
+func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publication, converted []RecordLayerParams, sizes []ConvertedLayer) ([]offer, string, error) {
 	// Inserts first and in blob order, so concurrent completions wait on
 	// each other's pairs in one order.
-	slices.SortFunc(converted, func(a, b conversion) int { return cmp.Compare(a.blob, b.blob) })
+	slices.SortFunc(converted, func(a, b RecordLayerParams) int { return cmp.Compare(a.BlobDigest, b.BlobDigest) })
 	for _, c := range converted {
-		n, err := q.RecordLayer(ctx, RecordLayerParams{
-			ID: c.upload, BlobDigest: c.blob, DiffID: c.diffID, WorkspaceID: scope,
-			Frames: int32(c.frames), //nolint:gosec // imagefs bounds it below 2^31.
-		})
+		n, err := q.RecordLayer(ctx, c)
+		if err == nil && n > 0 {
+			err = q.ClaimUpload(ctx, c.ID)
+		} else if err == nil {
+			err = q.AbandonUpload(ctx, AbandonUploadParams{ID: c.ID, UrlSeconds: uploadURLLifetime.Seconds()})
+		}
 		if err != nil {
 			return nil, "", fmt.Errorf("record layer: %w", err)
-		}
-		if n > 0 {
-			err = q.ClaimUpload(ctx, c.upload)
-		} else {
-			err = q.AbandonUpload(ctx, AbandonUploadParams{ID: c.upload, UrlSeconds: uploadURLLifetime.Seconds()})
-		}
-		if err != nil {
-			return nil, "", fmt.Errorf("settle layer upload: %w", err)
 		}
 	}
 	blobs := make([]string, len(pushed.layers))
 	for n, l := range pushed.layers {
 		blobs[n] = l.blob
 	}
-	rows, err := q.UsableLayers(ctx, UsableLayersParams{Blobs: blobs, WorkspaceID: scope})
+	rows, err := q.UsableLayers(ctx, UsableLayersParams{Blobs: blobs, WorkspaceID: pushed.scope})
 	if err != nil {
 		return nil, "", fmt.Errorf("read converted layers: %w", err)
 	}
@@ -379,52 +352,38 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 			usable[row.BlobDigest] = row
 		}
 	}
+	reported := map[string]ConvertedLayer{}
+	for _, c := range sizes {
+		reported[c.Blob] = c
+	}
 	ids := make([]uuid.UUID, len(pushed.layers))
 	var offers []offer
 	for n, l := range pushed.layers {
-		row, ok := usable[l.blob]
-		if !ok {
-			if !slices.ContainsFunc(offers, func(o offer) bool { return o.blob == l.blob }) {
-				offers = append(offers, offer{blob: l.blob, diffID: l.diffID})
+		if row, ok := usable[l.blob]; ok {
+			if row.DiffID != l.diffID {
+				return nil, fmt.Sprintf("layer %d (%s) holds %s, but the image config names %s", n, l.blob, row.DiffID, l.diffID), nil
 			}
+			ids[n] = row.ID
 			continue
 		}
-		if row.DiffID != l.diffID {
-			return nil, fmt.Sprintf("layer %d (%s) holds %s, but the image config names %s", n, l.blob, row.DiffID, l.diffID), nil
+		if slices.ContainsFunc(offers, func(o offer) bool { return o.blob == l.blob }) {
+			continue
 		}
-		ids[n] = row.ID
+		row, err := q.OfferUpload(ctx, OfferUploadParams{ContainerID: &pushed.owner, BlobDigest: l.blob, ExpiresAt: pushed.deadline.Add(uploadGrace)})
+		if err != nil {
+			return nil, "", fmt.Errorf("offer layer upload: %w", err)
+		}
+		o := offer{OfferUploadRow: row, blob: l.blob, diffID: l.diffID}
+		if c, ok := reported[l.blob]; ok && (row.UploadID == nil || c.DataBytes != *row.DataBytes || c.IndexBytes != *row.IndexBytes) {
+			if c.DataBytes < 0 || c.DataBytes > maxDataBytes(l.size) || c.IndexBytes <= 0 || c.IndexBytes > imagefs.MaxIndexSize {
+				return nil, fmt.Sprintf("layer %s converted to %d data and %d index bytes, more than a %d byte layer needs",
+					l.blob, c.DataBytes, c.IndexBytes, l.size), nil
+			}
+			o.start = &c
+		}
+		offers = append(offers, o)
 	}
 	if len(offers) > 0 {
-		blobBytes := map[string]int64{}
-		for _, l := range pushed.layers {
-			blobBytes[l.blob] = l.size
-		}
-		reported := map[string]ConvertedLayer{}
-		for _, c := range sizes {
-			reported[c.Blob] = c
-		}
-		for n := range offers {
-			o := &offers[n]
-			row, err := q.OfferUpload(ctx, OfferUploadParams{
-				ContainerID: &pushed.container, BlobDigest: o.blob, ExpiresAt: pushed.deadline.Add(uploadGrace),
-			})
-			if err != nil {
-				return nil, "", fmt.Errorf("offer layer upload: %w", err)
-			}
-			o.upload, o.uploadID = row.ID, row.UploadID
-			if row.UploadID != nil {
-				o.dataBytes, o.indexBytes = *row.DataBytes, *row.IndexBytes
-			}
-			c, ok := reported[o.blob]
-			if !ok || (row.UploadID != nil && c.DataBytes == o.dataBytes && c.IndexBytes == o.indexBytes) {
-				continue
-			}
-			if c.DataBytes < 0 || c.DataBytes > maxDataBytes(blobBytes[o.blob]) || c.IndexBytes <= 0 || c.IndexBytes > imagefs.MaxIndexSize {
-				return nil, fmt.Sprintf("layer %s converted to %d data and %d index bytes, more than a %d byte layer needs",
-					o.blob, c.DataBytes, c.IndexBytes, blobBytes[o.blob]), nil
-			}
-			o.previous, o.uploadID, o.dataBytes, o.indexBytes, o.start = row.UploadID, nil, c.DataBytes, c.IndexBytes, true
-		}
 		return offers, "", nil
 	}
 	if err := q.RecordReference(ctx, RecordReferenceParams{Reference: pushed.reference, LayerIds: ids}); err != nil {
@@ -433,40 +392,40 @@ func (i *Images) recordLayers(ctx context.Context, q *Queries, pushed publicatio
 	return nil, "", nil
 }
 
-// presignUploads starts the data uploads of offers whose sizes the host
-// reported, replacing one started for other sizes, and signs the URLs of
-// every offer with a started upload. The others go out without URLs, to be
+// presignUploads starts the data uploads of offers whose host reported new
+// sizes, replacing the one started before, and signs the URLs of every
+// offer with a started upload. The others go out without URLs, to be
 // converted and sized first.
 func (i *Images) presignUploads(ctx context.Context, offers []offer) ([]LayerUpload, error) {
 	out := make([]LayerUpload, len(offers))
 	for n, o := range offers {
 		out[n] = LayerUpload{Blob: o.blob, DiffID: o.diffID}
-		if o.start {
-			uploadID, err := i.storage.CreateLayerUpload(ctx, o.upload, o.dataBytes)
+		if o.start != nil {
+			uploadID, err := i.storage.CreateLayerUpload(ctx, o.ID, o.start.DataBytes)
 			if err != nil {
 				return nil, err
 			}
 			started, err := i.queries.StartUpload(ctx, StartUploadParams{
-				ID: o.upload, Previous: o.previous, UploadID: uploadID, DataBytes: o.dataBytes, IndexBytes: o.indexBytes,
+				ID: o.ID, Previous: o.UploadID, UploadID: uploadID, DataBytes: o.start.DataBytes, IndexBytes: o.start.IndexBytes,
 			})
 			if err == nil && started == 0 {
 				err = errors.New("another report started this layer's upload; report again")
 			}
 			if err != nil {
-				_ = i.storage.AbortLayerUpload(ctx, o.upload, uploadID)
+				_ = i.storage.AbortLayerUpload(ctx, o.ID, uploadID)
 				return nil, fmt.Errorf("start layer upload: %w", err)
 			}
-			if o.previous != nil {
-				if err := i.storage.AbortLayerUpload(ctx, o.upload, *o.previous); err != nil {
+			if o.UploadID != nil {
+				if err := i.storage.AbortLayerUpload(ctx, o.ID, *o.UploadID); err != nil {
 					return nil, err
 				}
 			}
-			o.uploadID = &uploadID
+			o.UploadID, o.DataBytes, o.IndexBytes = &uploadID, &o.start.DataBytes, &o.start.IndexBytes
 		}
-		if o.uploadID == nil {
+		if o.UploadID == nil {
 			continue
 		}
-		urls, err := i.storage.PresignLayerUpload(ctx, o.upload, *o.uploadID, o.dataBytes, o.indexBytes, uploadURLLifetime)
+		urls, err := i.storage.PresignLayerUpload(ctx, o.ID, *o.UploadID, *o.DataBytes, *o.IndexBytes, uploadURLLifetime)
 		if err != nil {
 			return nil, err
 		}
