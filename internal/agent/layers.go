@@ -26,8 +26,9 @@ const (
 	maxGrantRetry = 30 * time.Second
 	// traceWindow bounds a startup trace, which ends with the container's
 	// first task or request: a handler's imports run in it, after the
-	// container is ready. A recording start has no prefetch, and torch's
-	// import from the store then ends about 15 s after its start.
+	// container is ready. A recording start has no prefetch, and a first
+	// task importing torch from the store then ends about 11 s after the
+	// trace began on an m7i.large.
 	traceWindow = 60 * time.Second
 )
 
