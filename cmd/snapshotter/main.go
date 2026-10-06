@@ -67,7 +67,7 @@ func run(args []string) int {
 	err = snapshotter.Serve(ctx, cfg, *socket, func() {
 		logger.Info("serving", "socket", *socket)
 		if err := notifyReady(); err != nil {
-			logger.Warn("tell systemd the snapshotter is ready", "error", err)
+			logger.Warn("telling systemd the snapshotter is ready failed", "error", err)
 		}
 	})
 	stop()

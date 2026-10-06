@@ -164,12 +164,12 @@ func (m *mounts) reconcileNow(ctx context.Context) error {
 func (m *mounts) reconcile(ctx context.Context) {
 	needed, err := m.needed(ctx)
 	if err != nil {
-		m.log.ErrorContext(ctx, "list the layers snapshots need", "error", err)
+		m.log.ErrorContext(ctx, "listing the layers snapshots need failed", "error", err)
 		return
 	}
 	for _, r := range needed {
 		if err := m.mount(r); err != nil { //nolint:contextcheck // a layer's background fetch lives with its mount, not the call
-			m.log.ErrorContext(ctx, "mount layer", "snapshot", r.id, "layer", r.digest, "error", err)
+			m.log.ErrorContext(ctx, "mounting a layer failed", "snapshot", r.id, "layer", r.digest, "error", err)
 		}
 	}
 	for id := range m.mounted {
@@ -177,7 +177,7 @@ func (m *mounts) reconcile(ctx context.Context) {
 			continue
 		}
 		if err := m.unmount(id); err != nil {
-			m.log.WarnContext(ctx, "unmount unused layer", "snapshot", id, "error", err)
+			m.log.WarnContext(ctx, "unmounting an unused layer failed", "snapshot", id, "error", err)
 		}
 	}
 }

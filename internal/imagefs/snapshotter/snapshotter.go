@@ -220,7 +220,7 @@ func (s *Snapshotter) Remove(ctx context.Context, key string) error {
 		return err //nolint:wrapcheck // containerd's typed errors pass through
 	}
 	if err := s.mounts.reconcileNow(ctx); err != nil {
-		s.log.WarnContext(ctx, "unmount unused layers", "error", err)
+		s.log.WarnContext(ctx, "unmounting unused layers failed", "error", err)
 	}
 	return nil
 }

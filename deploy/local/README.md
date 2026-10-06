@@ -1,42 +1,42 @@
 # Local stack
 
 `deploy/local/run.sh start` starts the services below, builds the binaries
-and the agent release with the managed Python runtime, migrates, creates
-the `dev` user, workspace and token, runs the server and scheduler on this
-machine and the agent on the host VM. It prints the SDK environment to
+and the agent release with the managed Python runtime, migrates, and creates
+the `dev` user, workspace and token. The server and scheduler run on this
+machine and the agent runs on the host VM. It prints the SDK environment to
 export; `deploy/local/run.sh stop` ends them and stops the VM. State, logs
 and credentials live in `.lazycloud/`.
 
 ## Host VM
 
-Workloads run in a Lima VM from Amazon Linux 2023 that
-`deploy/local/host-vm.sh` sets up with the node image recipe
-(`deploy/ami/node-setup.sh`): Docker on the containerd image store with
-lazycloud-snapshotter as its storage driver, gVisor, the disk engine's
-tools. This machine's Docker is left as it is. The first `up` downloads the
-pinned Lima release and image into `.lazycloud/` and builds the host, which
-takes several minutes; later ones start it and install the current agent
-release the way hosts join. Agent updates leave a running snapshotter alone,
-so `up` restarts the VM's snapshotter on this tree's build when it changed
-and no container runs there; with containers running it says so, and
-`host-vm.sh reset` gives a fresh host. It needs KVM (the `kvm` group) and
-`qemu-system-x86_64`, not root. `host-vm.sh down` stops the VM and `reset`
-deletes it. Lima's socket paths must stay short: a checkout with a long
-path sets `LAZYCLOUD_LIMA_HOME` to a short directory.
+Workloads run in a Lima VM that `deploy/local/host-vm.sh` builds from Amazon
+Linux 2023 with the node image recipe (`deploy/ami/node-setup.sh`), so it
+runs the same Docker, gVisor and lazycloud-snapshotter as fleet hosts. This
+machine's Docker stays as it is. The script needs KVM (the `kvm` group) and
+`qemu-system-x86_64`, not root.
 
-The VM reaches the server, registry and Garage on this machine through
-forwards to Lima's host address; presigned URLs name the Docker bridge
-address, which the VM answers too.
+- `up` creates or starts the VM and installs the current agent release the
+  way hosts join. The first one downloads Lima and the image into
+  `.lazycloud/` and takes several minutes.
+- `down` stops the VM; `reset` deletes it.
+- Agent updates leave a running snapshotter alone. `up` replaces the VM's
+  snapshotter with this tree's build only while no container runs there;
+  otherwise `reset` gives a fresh host.
+- Lima's socket paths must stay short. In a deep checkout, point
+  `LAZYCLOUD_LIMA_HOME` at a short directory.
+
+The VM reaches the server, registry and Garage through forwards to Lima's
+host address. Presigned URLs name the Docker bridge address, which the VM
+answers too.
 
 With that environment exported, `lazycloud deploy` and the SDK work against
 the stack, and `lazycloud machine join --name m1 --workspaces dev` enrolls
-another machine from the agent release run.sh published. The join runs as
-root and reconfigures that machine's Docker for the snapshotter, restarting
-it (docs/platform/compute.mdx says how to revert), so the VM is the easier
-host. The end-to-end
-Python checks run with `LAZYCLOUD_TEST_ENDPOINT`, `LAZYCLOUD_TEST_TOKEN` and
-`LAZYCLOUD_TEST_WORKSPACE` set to the exported values: `uv run --group dev
-pytest -x -s python/tests/acceptance`.
+another machine from the agent release run.sh published. A join runs as root
+and switches that machine's Docker to the snapshotter, restarting it
+(docs/platform/compute.mdx says how to revert), so the VM is the easier host.
+The end-to-end Python checks run with `LAZYCLOUD_TEST_ENDPOINT`,
+`LAZYCLOUD_TEST_TOKEN` and `LAZYCLOUD_TEST_WORKSPACE` set to the exported
+values: `uv run --group dev pytest -x -s python/tests/acceptance`.
 
 ## Services
 
@@ -45,8 +45,8 @@ pytest -x -s python/tests/acceptance`.
 bridge gateway (`LAZYCLOUD_DOCKER_BRIDGE_IP`, 172.17.0.1 by default). The
 platform presigns URLs for the gateway address, which workload containers can
 reach.
-`docker compose run --rm object-store-bootstrap` creates the `lazycloud` bucket
-and the development key. Both steps are idempotent.
+`docker compose run --rm object-store-bootstrap` creates the `lazycloud` and
+`lazycloud-layers` buckets and the development key. Both steps are idempotent.
 
 Owner tests use `docker compose -f compose.test.yaml up -d --wait`, a disposable
 PostgreSQL on 127.0.0.1:15442.

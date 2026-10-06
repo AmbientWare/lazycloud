@@ -2,9 +2,8 @@
 # Builds the agent release archives the install script and self-update
 # download: <out_dir>/<version>/lazycloud-agent-linux-<arch>.tar.gz, each
 # holding lazycloud-agent, lazycloud-snapshotter, supervisor,
-# runtime/<python> and, on amd64,
-# geesefs at its root. Prints
-# one "<arch> <sha256>" line per archive.
+# runtime/<python> and, on amd64, geesefs at its root. Prints one
+# "<arch> <sha256>" line per archive.
 #
 # Usage: deploy/agent/build-bundle.sh [--arch amd64,arm64] [--python "3.12 3.13"] <out_dir> <version>
 set -euo pipefail
