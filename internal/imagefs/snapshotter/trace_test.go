@@ -149,9 +149,9 @@ func TestTracesAreBounded(t *testing.T) {
 }
 
 // A FUSE read cannot be told apart by container, so another start naming
-// one of a trace's layers, by its grant, prefetch or own trace, or a
-// refresh naming none, leaves no complete trace; a trace's own start's
-// grant keeps it complete.
+// one of a trace's layers, by its grant, prefetch or own trace, leaves no
+// complete trace; a trace's own start's grant and a refresh naming no start
+// keep it complete.
 func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
 	c := newCachedLayers(t, http.DefaultTransport)
 	sources := layerSources{grants: newGrants(time.Now), frames: c.frames}
@@ -183,7 +183,6 @@ func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
 	}
 	others := map[string]func(){
 		"another start's grant": func() { grant("c2", base, appB) },
-		"a refresh":             func() { grant("", base) },
 		"another start's prefetch": func() {
 			if _, err := sources.Prefetch(t.Context(), &imagefsproto.PrefetchRequest{Name: "c2", Layers: []string{base, appB}}); err != nil {
 				t.Fatal(err)
@@ -205,8 +204,9 @@ func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
 	trace("c1", base, appA)
 	grant("c1", base, appA)
 	grant("c2", appB)
+	grant("", base, appA)
 	if !complete("c1") {
-		t.Fatal("a trace's own grant, or another start's of other layers, left it incomplete")
+		t.Fatal("a trace's own grant, a refresh, or another start's grant of other layers left it incomplete")
 	}
 }
 

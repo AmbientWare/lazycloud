@@ -105,7 +105,12 @@ func (s layerSources) Grant(ctx context.Context, request *imagefsproto.GrantRequ
 		layers[layer] = next
 	}
 	s.grants.put(layers)
-	s.frames.traces.claim(request.GetName(), slices.Collect(maps.Keys(layers)))
+	// A refresh names no start and brings no new reader: every start grants
+	// its layers under its name first, and a layer already mounted when a
+	// trace begins leaves that trace incomplete.
+	if request.GetName() != "" {
+		s.frames.traces.claim(request.GetName(), slices.Collect(maps.Keys(layers)))
+	}
 	s.frames.starts.begin(request.GetName(), incomingParent(ctx), slices.Collect(maps.Keys(layers)))
 	return &imagefsproto.GrantResponse{}, nil
 }

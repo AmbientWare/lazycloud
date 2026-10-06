@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
@@ -66,6 +67,9 @@ func applySync(dir string, r io.Reader) (written, removed int, err error) {
 			if err := root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return written, removed, fmt.Errorf("remove %s: %w", header.Name, err)
 			}
+			if err := dropBytecode(root, name); err != nil {
+				return written, removed, fmt.Errorf("remove %s: %w", header.Name, err)
+			}
 			removed++
 			continue
 		}
@@ -80,6 +84,9 @@ func applySync(dir string, r io.Reader) (written, removed int, err error) {
 			return written, removed, fmt.Errorf("sync entry %q is not a regular file", header.Name)
 		}
 		if err := writeSynced(root, name, header.FileInfo().Mode().Perm(), archive); err != nil {
+			return written, removed, fmt.Errorf("write %s: %w", header.Name, err)
+		}
+		if err := dropBytecode(root, name); err != nil {
 			return written, removed, fmt.Errorf("write %s: %w", header.Name, err)
 		}
 		written++
@@ -109,6 +116,38 @@ func writeSynced(root *os.Root, name string, perm fs.FileMode, content io.Reader
 	if err := root.Rename(temp, name); err != nil {
 		_ = root.Remove(temp)
 		return fmt.Errorf("replace: %w", err)
+	}
+	return nil
+}
+
+// dropBytecode removes the bytecode Python cached for the module name. Python
+// trusts a cache whose source has the same size and modification second, so
+// an edit synced within the second the old file was written would otherwise
+// leave the old module running.
+func dropBytecode(root *os.Root, name string) error {
+	stem, ok := strings.CutSuffix(filepath.Base(name), ".py")
+	if !ok {
+		return nil
+	}
+	cache := filepath.Join(filepath.Dir(name), "__pycache__")
+	dir, err := root.Open(cache)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open bytecode cache: %w", err)
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		return fmt.Errorf("read bytecode cache: %w", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), stem+".") && strings.HasSuffix(e.Name(), ".pyc") {
+			if err := root.Remove(filepath.Join(cache, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("remove cached bytecode: %w", err)
+			}
+		}
 	}
 	return nil
 }
