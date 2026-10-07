@@ -471,6 +471,49 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 	}
 }
 
+// A reserve shortfall held for a host that may return names the hold, not
+// an offer exclusion; with no host that could return it is bought at once.
+func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {
+	back := planHost(1, planSmall, FleetServing)
+	back.PhaseAt, back.Load, back.Containers = offerNow, cpuGiB(1000, 1), 1
+	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, back))
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonReturning || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+		t.Fatalf("a host may return: reason %q, actions %+v", mp.Reason, plan.Actions)
+	}
+	plan = PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t))
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonNone || len(actionsOf(plan, ActionBuyReserve)) != 1 {
+		t.Fatalf("no host could return: reason %q, actions %+v", mp.Reason, plan.Actions)
+	}
+}
+
+// A warm slot no offer covers names what keeps the offers out: a cooldown,
+// a vCPU quota, the purchase margin, or none at all.
+func TestAnUncoveredSlotNamesTheExclusion(t *testing.T) {
+	for _, c := range []struct {
+		want    MarketReason
+		exclude func(*Policy, *OfferInputs)
+	}{
+		{ReasonCooldown, func(_ *Policy, in *OfferInputs) {
+			for _, typ := range in.Catalog {
+				in.Cooldowns = append(in.Cooldowns, OfferCooldown{Region: "us-east-2", InstanceType: typ.Name, Market: MarketOnDemand, Until: offerNow.Add(time.Hour)})
+			}
+		}},
+		{ReasonQuota, func(_ *Policy, in *OfferInputs) {
+			in.Quotas = []VCPUQuota{{Key: QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketOnDemand}}}
+		}},
+		{ReasonMargin, func(p *Policy, _ *OfferInputs) { p.MarginPercent = 100 }},
+		{ReasonNoOffer, func(_ *Policy, in *OfferInputs) { in.Networks = nil }},
+	} {
+		p := planPolicy(small, FleetCapacity{})
+		s := planSnapshot(t)
+		c.exclude(&p, &s.Offers)
+		plan := PlanFleet(p, s)
+		if mp := marketPlan(t, plan, onDemand); mp.Reason != c.want || len(plan.Actions) > 0 {
+			t.Errorf("want %q: reason %q, actions %+v", c.want, mp.Reason, plan.Actions)
+		}
+	}
+}
+
 // While containers keep arriving a pass buys nothing and says how long the
 // batch stays open, then buys once it closes. A container a stopped reserve
 // fits resumes it, and one a starting host fits waits for that host, at
