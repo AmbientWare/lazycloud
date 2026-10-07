@@ -134,7 +134,7 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 		}
 		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)}
 	}
-	reserved, memory, memoryLimit := images.BuildResources()
+	reserved, memory, memoryLimit := s.images.BuildResources()
 	ctx, span := telemetry.StartIn(ctx, s.tracer, start.Traceparent, "hostsession.start_build", trace.WithAttributes(
 		telemetry.Container(start.Container.String()), telemetry.Host(host.String()), attribute.String(telemetry.AttrBuild, command.Build.String())))
 	span.End()

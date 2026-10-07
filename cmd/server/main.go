@@ -39,6 +39,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -165,6 +166,7 @@ type serveConfig struct {
 	identity      identity.Config
 	api           api.Config
 	images        images.Config
+	buildCPU      string
 	billing       billing.Config
 	compute       compute.Config
 	grpcCert      string
@@ -199,6 +201,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.Workspaces.Prefix, "workspace-bucket-prefix", env("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX", "lazycloud-ws"), "prefix of workspace bucket names (LAZYCLOUD_WORKSPACE_BUCKET_PREFIX)")
 	fs.StringVar(&cfg.objectStore.Workspaces.GarageAdminURL, "garage-admin-url", env("LAZYCLOUD_GARAGE_ADMIN_URL", ""), "Garage admin API URL (LAZYCLOUD_GARAGE_ADMIN_URL)")
 	fs.StringVar(&cfg.objectStore.Workspaces.RoleARN, "workspace-bucket-role-arn", env("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN", ""), "role STS issues host credentials for (LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN)")
+	fs.StringVar(&cfg.buildCPU, "build-cpu", env("LAZYCLOUD_BUILD_CPU", "4"), "CPUs a build container reserves (LAZYCLOUD_BUILD_CPU)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", ""), "the platform's Python base image, {version} replaced with a minor version (LAZYCLOUD_IMAGE_TEMPLATE)")
 	fs.StringVar(&cfg.secretsKey, "secrets-key-file", env("LAZYCLOUD_SECRETS_KEY_FILE", ""), "32-byte master key file that wraps secret data keys (LAZYCLOUD_SECRETS_KEY_FILE)")
 	fs.StringVar(&cfg.identity.PublicURL, "public-url", env("LAZYCLOUD_PUBLIC_URL", "http://127.0.0.1:8080"), "dashboard origin for sign-in, device login and invitation links (LAZYCLOUD_PUBLIC_URL)")
@@ -253,6 +256,11 @@ func serve(ctx context.Context, args []string) error {
 		return errors.New("the managed image template is required: set LAZYCLOUD_IMAGE_TEMPLATE or -image-template to the Python base images deploy/images/python builds, with {version} for the minor version")
 	}
 	cfg.images.ManagedBase = cfg.imageTemplate
+	buildCPU, err := cpu.ParseCores(cfg.buildCPU)
+	if err != nil {
+		return fmt.Errorf("build CPU: %w", err)
+	}
+	cfg.images.BuildCPU = buildCPU
 	// An ECR registry without a static login takes tokens minted from the
 	// AWS default credential chain, such as the pod's identity.
 	switch user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); {

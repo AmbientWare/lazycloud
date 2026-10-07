@@ -195,10 +195,12 @@ func pushPythonBase() error {
 }
 
 // newImages is the images owner every test's server runs over pool. Its
-// managed template names the bases pushPythonBase pushed.
+// managed template names the bases pushPythonBase pushed, and its builds
+// fit the test host.
 func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
 	return images.NewImages(pool, exec, vault, store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
+		BuildCPU: 500,
 	})
 }
 
