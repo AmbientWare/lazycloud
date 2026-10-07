@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -142,17 +143,26 @@ func parseDiskCall(containerID, diskID string) (uuid.UUID, uuid.UUID, error) {
 	return container, disk, nil
 }
 
+// diskError maps disk refusals to status codes. Plan and payment refusals
+// keep their message, which the host reports as the container's start failure.
 func (s *Server) diskError(ctx context.Context, err error) error {
-	var held *storage.ConflictError
+	var (
+		held    *storage.ConflictError
+		invalid *storage.InvalidError
+		limit   *billing.LimitError
+		unpaid  *billing.PaymentRequiredError
+	)
 	switch {
 	case errors.Is(err, storage.ErrStaleLease):
 		return status.Error(codes.FailedPrecondition, "the container does not hold the disk")
 	case errors.As(err, &held):
 		return status.Error(codes.Aborted, held.Error())
-	}
-	var invalid *storage.InvalidError
-	if errors.As(err, &invalid) {
+	case errors.As(err, &invalid):
 		return status.Error(codes.InvalidArgument, invalid.Error())
+	case errors.As(err, &limit):
+		return status.Error(codes.FailedPrecondition, limit.Error())
+	case errors.As(err, &unpaid):
+		return status.Error(codes.FailedPrecondition, unpaid.Error())
 	}
 	return s.grpcError(ctx, err)
 }
