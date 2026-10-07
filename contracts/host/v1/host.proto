@@ -641,6 +641,13 @@ message ImageBuild {
   // They reach the builder as files of its secret mount, never as its
   // environment or a build argument.
   map<string, string> secrets = 11;
+  // The workspace whose local build cache on the host the build uses, set
+  // only when the image is that workspace's alone. Its builds there share
+  // the cache, which no other build reads. Empty, the build starts from an
+  // empty state and keeps nothing: an image every workspace may use must
+  // not read state one workspace's builds wrote, which cache mounts carry
+  // outside BuildKit's cache keys.
+  string cache_workspace_id = 12;
 }
 
 message Source {

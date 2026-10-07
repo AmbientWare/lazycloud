@@ -157,7 +157,8 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 			DeviceName: aws.String("/dev/xvda"),
 			Ebs: &ec2types.EbsBlockDevice{
 				VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
-				Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true),
+				Throughput: aws.Int32(opts.rootMiBps),
+				Encrypted:  aws.Bool(true), DeleteOnTermination: aws.Bool(true),
 			},
 		}},
 		TagSpecifications: []ec2types.TagSpecification{
@@ -237,7 +238,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 
 // launchOptions are the parts of a launch a reserve changes.
 type launchOptions struct {
-	rootGiB int32
+	rootGiB, rootMiBps int32
 	// hibernate launches the instance able to hibernate.
 	hibernate bool
 	// persistent buys Spot on a persistent request that stops instead of
@@ -245,17 +246,18 @@ type launchOptions struct {
 	persistent bool
 }
 
-// launchOptionsFor sizes a launch. A platform host bought for the reserve
-// hibernates when it asks to and its catalog type can, with its root grown
-// for the image. A Spot reserve keeps its request across stops. Serving and
-// connection hosts launch with the plain root.
+// launchOptionsFor sizes a launch. Its root has the throughput its type is
+// priced with. A platform host bought for the reserve hibernates when it
+// asks to and its catalog type can, with its root grown for the image. A
+// Spot reserve keeps its request across stops. Serving and connection
+// hosts launch with the plain root.
 func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
-	opts := launchOptions{rootGiB: rootVolumeGiB}
+	t, _ := CatalogTypeNamed(h.InstanceType)
+	opts := launchOptions{rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps(h.ReserveMode != nil))} //nolint:gosec // At most buildMiBps.
 	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
 		return opts
 	}
 	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot
-	t, _ := CatalogTypeNamed(h.InstanceType)
 	opts.hibernate = ReserveMode(*h.ReserveMode) == ReserveHibernate && t.Hibernates
 	opts.rootGiB = int32(t.RootGiB(opts.hibernate)) //nolint:gosec // At most 250: only types under 150 GiB of RAM hibernate.
 	return opts

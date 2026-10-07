@@ -268,7 +268,7 @@ func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing
 	for _, preemptible := range []bool{false, true} {
 		need.Preemptible = preemptible
 		offers := RankOffers(DefaultPolicy(), need, true, in)
-		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true)) {
+		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true), offers[0].Type.RootMiBps(true)) {
 			t.Errorf("preemptible %v: reserve offers %v, want one that hibernates", preemptible, offerKeys(offers))
 		}
 	}
@@ -283,7 +283,7 @@ func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
 		typ := mustType(t, name)
 		in.Catalog = []CatalogType{typ}
 		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
-		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want)) {
+		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want), typ.RootMiBps(true)) {
 			t.Errorf("%s: reserve offers %v, want one that hibernates %v", name, offerKeys(offers), want)
 		}
 	}

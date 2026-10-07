@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,8 @@ const (
 	buildDockerConfig  = "/build/docker"
 	buildSecretsDir    = "/build/secrets"
 	buildCDIDir        = "/build/cdi"
+	// buildCacheDir is the workspace's build cache state the builder holds.
+	buildCacheDir = "/build/cache"
 )
 
 // layerCompression is how BuildKit compresses the layers and cache it
@@ -52,20 +55,51 @@ const (
 // conversion reads it faster too.
 const layerCompression = "zstd"
 
+// builderHostFailed is the exit code of a builder that could not run
+// BuildKit on this host, a failure of the host rather than the image.
+const builderHostFailed = "75"
+
 // imagePushed is the line builderScript prints once the image is in the
 // registry and its metadata file is written.
 const imagePushed = "lazycloud: image pushed; exporting the build cache"
 
-// builderScript runs in the builder: one solve builds and pushes the image
-// and writes its metadata, then a second exports the build cache. The
-// second finds every step in the builder's local cache, so it costs about
-// the export, and the agent converts the image while it runs. The
-// positional arguments are the flags both solves take.
+// builderScript runs in the builder. It starts one BuildKit daemon on the
+// build's cache state and refuses any snapshotter but overlayfs, the one
+// that diffs layers without copying them; either failure is the host's, and
+// the script exits with builderHostFailed. One solve builds and pushes the
+// image and writes its metadata, then a second exports the build cache. The
+// second finds every step in the daemon's state, so it costs about the
+// export, and the agent converts the image while it runs. A prune bounds
+// the state when the script ends; a builder stopped from outside leaves
+// that to the state's next build. The positional arguments are the flags
+// both solves take.
 const builderScript = `set -eu
-buildctl-daemonless.sh "$@" --progress plain --output "$LAZYCLOUD_IMAGE_OUTPUT" --metadata-file ` + buildOutDir + `/metadata.json
+addr=unix://$XDG_RUNTIME_DIR/buildkit/buildkitd.sock
+rootlesskit buildkitd --root ` + buildCacheDir + `/buildkit --addr "$addr" ${BUILDKITD_FLAGS:-} >/tmp/buildkitd.log 2>&1 &
+daemon=$!
+trap 'status=$?; buildctl --addr "$addr" prune --keep-storage ` + buildStateKeepMB + ` >/dev/null 2>&1 || true; kill $daemon 2>/dev/null || true; wait $daemon 2>/dev/null || true; exit $status' EXIT
+tries=0
+until buildctl --addr "$addr" debug workers >/dev/null 2>&1; do
+  tries=$((tries + 1))
+  if [ $tries -gt 200 ] || ! kill -0 $daemon 2>/dev/null; then
+    echo "BuildKit did not start:" >&2
+    cat /tmp/buildkitd.log >&2
+    exit ` + builderHostFailed + `
+  fi
+  sleep 0.05
+done
+snapshotter=$(buildctl --addr "$addr" debug workers --verbose | sed -n 's/.*worker\.snapshotter:[[:space:]]*//p')
+if [ "$snapshotter" != overlayfs ]; then
+  echo "BuildKit chose the ${snapshotter:-unknown} snapshotter; builds need overlayfs on the build cache's filesystem" >&2
+  cat /tmp/buildkitd.log >&2
+  exit ` + builderHostFailed + `
+fi
+# The agent reads the content store's blobs as its own user.
+chmod 0711 ` + buildCacheDir + `/buildkit ` + buildCacheDir + `/buildkit/runc-overlayfs
+buildctl --addr "$addr" "$@" --progress plain --output "$LAZYCLOUD_IMAGE_OUTPUT" --metadata-file ` + buildOutDir + `/metadata.json
 echo "` + imagePushed + `"
 if [ -n "$LAZYCLOUD_CACHE_EXPORT" ]; then
-  exec buildctl-daemonless.sh "$@" --progress quiet --export-cache "$LAZYCLOUD_CACHE_EXPORT"
+  buildctl --addr "$addr" "$@" --progress quiet --export-cache "$LAZYCLOUD_CACHE_EXPORT"
 fi
 `
 
@@ -88,7 +122,10 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 	a.mu.Unlock()
 	c.report()
 	if !known {
-		a.goOwned(func(ctx context.Context) { c.runBuild(ctx, spec) })
+		a.goOwned(func(ctx context.Context) {
+			c.runBuild(ctx, spec)
+			a.buildCaches.evict(ctx)
+		})
 	}
 }
 
@@ -96,8 +133,9 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 // and reports the outcome, converting the layers the server asks for, then
 // the exit. If the agent stops first, the build is abandoned: the next agent
 // removes its container and the server gives the build a new one.
-func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer) {
+func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer) { //nolint:contextcheck // The build works within the container's work, which outlives ctx.
 	build := spec.GetBuild()
+	began := time.Now()
 	logs := newBuildLogs(c.a.host, c.id, c.log)
 	c.a.goOwned(func(context.Context) { logs.run(c.work) }) //nolint:contextcheck // output lives as long as the container's work
 	work, cancel := context.WithDeadline(c.work, build.GetDeadline().AsTime())
@@ -107,27 +145,65 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 		attribute.Int("lazycloud.attempt", int(build.GetAttempt()))))
 	defer span.End()
 
+	exit := c.buildAndPublish(ctx, work, spec, logs, began)
+	if exit == nil {
+		return
+	}
+	span.SetAttributes(attribute.String("lazycloud.exit", exit.GetMessage()))
+	logs.waitFlushed(c.work, logs.mark()) //nolint:contextcheck // output lives as long as the container's work
+	c.exited(exit)
+}
+
+// buildAndPublish holds a cache state for the build, runs the builder and
+// publishes the outcome within work, and returns the container's exit, or
+// nil when the agent stops first. Its conversions end and the state is
+// released before it returns, so the workspace's next build finds it free.
+func (c *container) buildAndPublish(ctx, work context.Context, spec *hostproto.StartContainer, logs buildLogs, began time.Time) *hostproto.ContainerExit {
+	build := spec.GetBuild()
+	cache, err := c.a.buildCaches.acquire(work, build.GetCacheWorkspaceId())
+	if err != nil {
+		return c.buildStartFailure(err)
+	}
+	defer c.a.buildCaches.release(ctx, cache)
+	layers, err := c.newBuildLayers(work, build, cache, logs)
+	if err != nil {
+		return c.buildStartFailure(err)
+	}
+	defer layers.close()
 	// An early publish converts the pushed image while the builder exports
 	// its cache.
 	var early sync.WaitGroup
 	publish := func(outcome *hostproto.CompleteImageBuildRequest) {
 		publishCtx, publish := telemetry.Start(work, "agent.build_publish")
-		c.publishBuild(trace.ContextWithSpan(ctx, publish), publishCtx, build, outcome, logs) //nolint:contextcheck // as runBuilder
+		c.publishBuild(trace.ContextWithSpan(ctx, publish), publishCtx, layers, outcome, logs) //nolint:contextcheck // as runBuilder
 		publish.End()
 	}
-	outcome, exit := c.runBuilder(work, spec, logs, func(pushed *hostproto.CompleteImageBuildRequest) { //nolint:contextcheck // stopping the container ends its build
+	exported := func(manifest string) { layers.ahead(manifest, began) } //nolint:contextcheck // Conversions ahead run within the publish's own context.
+	outcome, exit := c.runBuilder(work, spec, cache, logs, exported, func(pushed *hostproto.CompleteImageBuildRequest) {
 		early.Go(func() { publish(pushed) })
 	})
 	early.Wait()
-	span.SetAttributes(attribute.String("lazycloud.exit", exit.GetMessage()))
 	if ctx.Err() != nil {
-		return
+		return nil
 	}
 	if outcome != nil && !c.isStopping() {
 		publish(outcome)
 	}
-	logs.waitFlushed(c.work, logs.mark()) //nolint:contextcheck // output lives as long as the container's work
-	c.exited(exit)
+	return exit
+}
+
+// newBuildLayers returns the build's layer publish, reading the content
+// store of the BuildKit state in cache, with conversions ahead within ctx.
+func (c *container) newBuildLayers(ctx context.Context, build *hostproto.ImageBuild, cache string, logs buildLogs) (*layerPublish, error) {
+	if err := os.MkdirAll(c.dir, 0o755); err != nil { //nolint:gosec // The builder reads the build's files as another user.
+		return nil, fmt.Errorf("create the build directory: %w", err)
+	}
+	dir, err := os.MkdirTemp(c.dir, "layers")
+	if err != nil {
+		return nil, fmt.Errorf("create the layer directory: %w", err)
+	}
+	blobs := filepath.Join(cache, "buildkit", "runc-overlayfs", "content", "blobs", "sha256")
+	return newLayerPublish(ctx, c, build, dir, blobs, logs), nil
 }
 
 // runBuilder runs the builder and returns what to report: an outcome unless
@@ -135,17 +211,12 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 // container's exit. pushed takes the outcome as soon as the image is in the registry,
 // while the builder exports its cache, and returns at once; runBuilder calls
 // it at most once, before it returns.
-func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContainer, logs buildLogs,
-	pushed func(*hostproto.CompleteImageBuildRequest),
+func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContainer, cache string, logs buildLogs,
+	exported func(manifest string), pushed func(*hostproto.CompleteImageBuildRequest),
 ) (*hostproto.CompleteImageBuildRequest, *hostproto.ContainerExit) {
 	build := spec.GetBuild()
 	startFailed := func(err error) (*hostproto.CompleteImageBuildRequest, *hostproto.ContainerExit) {
-		reason := hostproto.ExitReason_EXIT_REASON_START_FAILED
-		if c.isStopping() {
-			reason = hostproto.ExitReason_EXIT_REASON_STOPPED
-		}
-		c.log.Warn("build container did not start", "error", err)
-		return nil, &hostproto.ContainerExit{Reason: reason, Message: err.Error()}
+		return nil, c.buildStartFailure(err)
 	}
 	logs.add(ctx, "preparing build container")
 	began := time.Now()
@@ -169,7 +240,7 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 				return err
 			}
 		}
-		return c.a.createBuilder(ctx, c, builder, spec, gpu)
+		return c.a.createBuilder(ctx, c, builder, spec, cache, gpu)
 	}); err != nil {
 		return startFailed(err)
 	}
@@ -193,7 +264,19 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 		return early
 	}
 	metadata := filepath.Join(c.dir, "out", "metadata.json")
+	// manifest is the exported image's, once named; the output is read by
+	// one goroutine.
+	manifest := ""
 	tail := c.a.followBuildOutput(ctx, c.dockerName(), logs, func(line string) {
+		if m := exportedManifest.FindStringSubmatch(line); m != nil {
+			manifest = m[1]
+			return
+		}
+		if manifest != "" && exportedConfig.MatchString(line) {
+			exported(manifest)
+			manifest = ""
+			return
+		}
 		if line != imagePushed || c.isStopping() {
 			return
 		}
@@ -245,6 +328,11 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 			logs.add(ctx, exit.Message)
 		}
 		return nil, exit
+	case strconv.Itoa(state.ExitCode) == builderHostFailed:
+		exit.Message = "BuildKit could not run on this host"
+		failure := failedBuild(c.id, exit.Message, lines)
+		failure.FailureTransient = true
+		return failure, exit
 	case state.ExitCode != 0:
 		exit.Message = fmt.Sprintf("the build failed with exit code %d", state.ExitCode)
 		return failedBuild(c.id, exit.Message, lines), exit
@@ -257,6 +345,16 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	logs.add(ctx, "pushed "+build.GetPushRepository()+"@"+digest)
 	exit.Message = "build finished"
 	return pushedBuild(c.id, digest), exit
+}
+
+// buildStartFailure is the exit of a build that err kept from starting.
+func (c *container) buildStartFailure(err error) *hostproto.ContainerExit {
+	reason := hostproto.ExitReason_EXIT_REASON_START_FAILED
+	if c.isStopping() {
+		reason = hostproto.ExitReason_EXIT_REASON_STOPPED
+	}
+	c.log.Warn("build container did not start", "error", err)
+	return &hostproto.ContainerExit{Reason: reason, Message: err.Error()}
 }
 
 func pushedBuild(container, digest string) *hostproto.CompleteImageBuildRequest {
@@ -521,7 +619,7 @@ func dockerConfig(auths map[string]*hostproto.RegistryAuth) ([]byte, error) {
 	return encoded, nil
 }
 
-func (a *Agent) createBuilder(ctx context.Context, c *container, image string, spec *hostproto.StartContainer, gpu *buildGPU) error {
+func (a *Agent) createBuilder(ctx context.Context, c *container, image string, spec *hostproto.StartContainer, cache string, gpu *buildGPU) error {
 	build := spec.GetBuild()
 	insecure := ""
 	if build.GetInsecureRegistry() {
@@ -543,6 +641,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, image string, s
 		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "dockerfile"), Target: buildDockerfileDir, ReadOnly: true},
 		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "out"), Target: buildOutDir},
 		{Type: mount.TypeBind, Source: filepath.Join(c.dir, "docker"), Target: buildDockerConfig, ReadOnly: true},
+		{Type: mount.TypeBind, Source: cache, Target: buildCacheDir},
 	}
 	// Secrets reach BuildKit as files of the builder's secret mount; the
 	// Dockerfile mounts each into the steps that read it.
@@ -710,23 +809,15 @@ func readBuildDigest(path string) (string, error) {
 // signed for those sizes and reports it uploaded, within the build's
 // deadline (work). A layer that cannot be converted or stored, or one still
 // missing after a few rounds, fails the build.
-func (c *container) publishBuild(ctx, work context.Context, build *hostproto.ImageBuild, request *hostproto.CompleteImageBuildRequest, logs buildLogs) {
-	fail := func(reason string, transient bool) {
-		logs.add(ctx, reason)
-		request := failedBuild(c.id, reason, nil)
-		request.FailureTransient = transient
-		c.completeBuild(ctx, request)
-	}
-	dir, err := os.MkdirTemp(c.dir, "layers")
-	if err != nil {
-		fail(fmt.Sprintf("create the layer directory: %v", err), true)
-		return
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	if err := newLayerPublish(c, build, dir, logs).publish(work, request); err != nil {
+func (c *container) publishBuild(ctx, work context.Context, layers *layerPublish, request *hostproto.CompleteImageBuildRequest, logs buildLogs) {
+	if err := layers.publish(work, request); err != nil {
 		// Only a layer's content fails the image; a store or registry that
 		// stayed unreachable fails this build alone.
-		fail(err.Error(), !errors.Is(err, errLayerContent))
+		reason := err.Error()
+		logs.add(ctx, reason)
+		request := failedBuild(c.id, reason, nil)
+		request.FailureTransient = !errors.Is(err, errLayerContent)
+		c.completeBuild(ctx, request)
 	}
 }
 

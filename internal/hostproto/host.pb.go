@@ -4100,9 +4100,16 @@ type ImageBuild struct {
 	// Workspace secrets by name that the Dockerfile mounts as build secrets.
 	// They reach the builder as files of its secret mount, never as its
 	// environment or a build argument.
-	Secrets       map[string]string `protobuf:"bytes,11,rep,name=secrets,proto3" json:"secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Secrets map[string]string `protobuf:"bytes,11,rep,name=secrets,proto3" json:"secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The workspace whose local build cache on the host the build uses, set
+	// only when the image is that workspace's alone. Its builds there share
+	// the cache, which no other build reads. Empty, the build starts from an
+	// empty state and keeps nothing: an image every workspace may use must
+	// not read state one workspace's builds wrote, which cache mounts carry
+	// outside BuildKit's cache keys.
+	CacheWorkspaceId string `protobuf:"bytes,12,opt,name=cache_workspace_id,json=cacheWorkspaceId,proto3" json:"cache_workspace_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ImageBuild) Reset() {
@@ -4210,6 +4217,13 @@ func (x *ImageBuild) GetSecrets() map[string]string {
 		return x.Secrets
 	}
 	return nil
+}
+
+func (x *ImageBuild) GetCacheWorkspaceId() string {
+	if x != nil {
+		return x.CacheWorkspaceId
+	}
+	return ""
 }
 
 type Source struct {
@@ -7215,7 +7229,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\fRegistryAuth\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12%\n" +
-	"\x0eidentity_token\x18\x03 \x01(\tR\ridentityToken\"\x97\x05\n" +
+	"\x0eidentity_token\x18\x03 \x01(\tR\ridentityToken\"\xc5\x05\n" +
 	"\n" +
 	"ImageBuild\x12\x19\n" +
 	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12\x18\n" +
@@ -7231,7 +7245,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\rregistry_auth\x18\t \x03(\v2/.lazycloud.host.v1.ImageBuild.RegistryAuthEntryR\fregistryAuth\x126\n" +
 	"\bdeadline\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12D\n" +
-	"\asecrets\x18\v \x03(\v2*.lazycloud.host.v1.ImageBuild.SecretsEntryR\asecrets\x1a`\n" +
+	"\asecrets\x18\v \x03(\v2*.lazycloud.host.v1.ImageBuild.SecretsEntryR\asecrets\x12,\n" +
+	"\x12cache_workspace_id\x18\f \x01(\tR\x10cacheWorkspaceId\x1a`\n" +
 	"\x11RegistryAuthEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
 	"\x05value\x18\x02 \x01(\v2\x1f.lazycloud.host.v1.RegistryAuthR\x05value:\x028\x01\x1a:\n" +

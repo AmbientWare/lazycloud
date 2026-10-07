@@ -120,8 +120,7 @@ def agent_install_commands(
         '-o "$agent_install_dir/node.tar.xz"; '
         f'echo "{checksum}  $agent_install_dir/node.tar.xz" | sha256sum --check; '
         'tar -xJf "$agent_install_dir/node.tar.xz" -C /usr/local --strip-components=1',
-        f"npm install --global --no-audit --no-fund {' '.join(packages)} "
-        "&& npm cache clean --force",
+        f"npm install --global --no-audit --no-fund {' '.join(packages)}",
     ]
 
 

@@ -40,7 +40,7 @@ func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
 	h := FleetHost{
 		ID: HostID{id}, InstanceType: typ.Name, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1",
 		Market: MarketOnDemand, Usable: typ.Usable(0), State: state, Current: true, Stoppable: true,
-		HourlyMicros: ptr(price + rootDiskMicros("us-east-2", rootVolumeGiB) + 5000),
+		HourlyMicros: ptr(price + rootDiskMicros("us-east-2", rootVolumeGiB, baselineMiBps) + 5000),
 	}
 	if h.reserve() {
 		h.ReserveMode = ptr(ReserveStop)

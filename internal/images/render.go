@@ -535,8 +535,10 @@ func (s spec) installCommands(python string) ([][]string, error) {
 }
 
 // installCommand installs args with micromamba or, for a pip step, with uv
-// into python's environment. uv's cache would stay in the layer, so the
-// install runs without one.
+// into python's environment. uv's cache would stay in the layer, and in a
+// cache mount uv must copy each file instead of linking it, which slows a
+// first build more than the cache speeds the next; so the install runs
+// without one.
 func installCommand(kind apitypes.ImageStepKind, args []string, python string) string {
 	var tokens []string
 	for _, a := range args {
@@ -613,6 +615,11 @@ func projectInstall(step apitypes.ImageStep, python string) []string {
 	}
 }
 
+// npmCache is the cache mount shell steps keep npm's cache in, at its
+// default for root. It persists in the workspace's build cache on the host
+// and never reaches a layer.
+const npmCache = "--mount=type=cache,id=lazycloud-npm,target=/root/.npm"
+
 // runShell writes a shell step as a heredoc, so the Dockerfile parser never
 // reads the command. The delimiter derives from the command, which keeps the
 // rendering deterministic; a command holding that line is refused.
@@ -622,7 +629,7 @@ func runShell(command string) (string, error) {
 	if slices.Contains(strings.Split(command, "\n"), delimiter) {
 		return "", invalid("a command contains the line %s", delimiter)
 	}
-	return "RUN <<'" + delimiter + "'\n" + command + "\n" + delimiter, nil
+	return "RUN " + npmCache + " <<'" + delimiter + "'\n" + command + "\n" + delimiter, nil
 }
 
 // toolImages are the images rendered steps copy tools from. They are pinned

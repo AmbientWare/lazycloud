@@ -354,7 +354,7 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionReturnToReserve:
 			h := s.host(*a.Host)
 			h.State, h.ReserveMode, h.Current, h.until = FleetPreparing, a.Mode, false, s.now.Add(simPrepare)
-			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB)
+			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB, baselineMiBps)
 		case ActionDrain:
 			s.host(*a.Host).State = FleetDraining
 		case ActionRetireReserve:

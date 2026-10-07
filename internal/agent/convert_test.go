@@ -5,9 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,9 +26,28 @@ import (
 // its sizes, uploads the data in the parts it is given and the index, and
 // reports the parts' ETags, until the server names none. The server here
 // signs a layer's URLs once its sizes arrive, as the images owner does.
+// The layers come from the builder's own store, the one the build made
+// converted while the image pushes, so no blob is read back from the
+// registry.
 func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	e := newEnv(t)
-	registry := startTestRegistry(t)
+	backend := startTestRegistry(t)
+	var blobReads atomic.Int32
+	target, err := url.Parse("http://" + backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
+			blobReads.Add(1)
+			http.Error(w, "blobs are not read back", http.StatusForbidden)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	registry := strings.TrimPrefix(front.URL, "http://")
 	const partBytes = 1 << 20
 
 	var mu sync.Mutex
@@ -59,7 +81,7 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 		defer mu.Unlock()
 		if server == nil && r.GetDigest() != "" {
 			var layers []v1.Layer
-			ref, err := name.NewDigest(registry+"/lazycloud/images@"+r.GetDigest(), name.Insecure)
+			ref, err := name.NewDigest(backend+"/lazycloud/images@"+r.GetDigest(), name.Insecure)
 			if err == nil {
 				var img v1.Image
 				if img, err = remote.Image(ref); err == nil {
@@ -83,6 +105,7 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	session := e.session()
 
 	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\nhead -c 3000000 /dev/urandom > /proof\nLAZYCLOUD_STEP\n")
+	start.GetStart().GetBuild().CacheRef = ""
 	container := start.GetStart().GetContainerId()
 	// The build reports once per conversion or upload that ends between
 	// two answers; the reports are drained until it exits.
@@ -150,5 +173,11 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	}
 	if out := e.server.buildOutput(); !strings.Contains(out, "converted and stored "+strconv.Itoa(len(server.layers))+" layers") || strings.Contains(out, "secret") {
 		t.Fatalf("the output names the conversion and no signature:\n%s", out)
+	}
+	if out := e.server.buildOutput(); !strings.Contains(out, "converting 1 new layers while the image pushes") {
+		t.Fatalf("the layer the build made was not converted ahead:\n%s", out)
+	}
+	if n := blobReads.Load(); n > 0 {
+		t.Fatalf("the agent read %d blobs back from the registry", n)
 	}
 }

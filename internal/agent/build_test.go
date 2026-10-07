@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,6 +27,8 @@ import (
 const (
 	testRegistryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 	testBuildBase     = platformimages.Mount
+	// testWorkspace is the workspace test builds run for.
+	testWorkspace = "6f0c2b7e-3f4a-4c1d-9b8e-2a5d7c9e1f30"
 )
 
 func (s *hostServer) CompleteImageBuild(_ context.Context, r *hostproto.CompleteImageBuildRequest) (*hostproto.CompleteImageBuildResponse, error) {
@@ -97,6 +100,7 @@ func buildCommand(registry, dockerfile string) *hostproto.ServerMessage {
 			BuildId: uuid.NewString(), Attempt: 1, Dockerfile: dockerfile, Platform: "linux/amd64",
 			PushRepository: registry + "/lazycloud/images", CacheRef: registry + "/lazycloud/cache:test",
 			InsecureRegistry: true, Deadline: timestamppb.New(time.Now().Add(10 * time.Minute)),
+			CacheWorkspaceId: testWorkspace,
 		},
 	}}}
 }
@@ -330,6 +334,36 @@ func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 	if got := build("v2", "second"); got != "second" {
 		t.Fatalf("new versions run the step again: %q", got)
 	}
+}
+
+// A workspace's builds on a host share a cache that no other workspace's
+// build reads, cache mounts included, and that no build of an image every
+// workspace may use reads either.
+func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
+	e := newEnv(t)
+	registry := startTestRegistry(t)
+	e.startAgent()
+	session := e.session()
+	build := func(workspace, step string) {
+		t.Helper()
+		start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN --mount=type=cache,id=probe,target=/probe "+step+"\n")
+		b := start.GetStart().GetBuild()
+		b.CacheWorkspaceId, b.CacheRef = workspace, registry+"/lazycloud/cache:"+cmp.Or(workspace, "shared")
+		session.send(t, start)
+		select {
+		case outcome := <-e.server.builds:
+			if outcome.GetDigest() == "" {
+				t.Fatalf("workspace %s: %q failed: %s", workspace, step, outcome.GetFailure())
+			}
+		case <-time.After(5 * time.Minute):
+			t.Fatal("the build reported no outcome")
+		}
+		session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+	}
+	build(testWorkspace, "echo kept > /probe/marker")
+	build("", "test ! -e /probe/marker")
+	build(uuid.NewString(), "test ! -e /probe/marker")
+	build(testWorkspace, "test -e /probe/marker")
 }
 
 func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {

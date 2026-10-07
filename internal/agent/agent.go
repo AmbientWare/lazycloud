@@ -91,8 +91,8 @@ type Config struct {
 	Server          string
 	ServerCA        string
 	ServerPlaintext bool
-	// StateDir holds the host identity, the source cache and per-container
-	// workspaces and sockets.
+	// StateDir holds the host identity, the source and build caches and
+	// per-container workspaces and sockets.
 	StateDir string
 	// SocketDir holds one directory per container with its link socket. Unix
 	// socket paths are limited to 107 bytes, so it must be short.
@@ -168,6 +168,8 @@ type Agent struct {
 	volumes  *volumes
 	// layers hands layer grants to the snapshotter.
 	layers *layerSources
+	// buildCaches holds each workspace's BuildKit state on this host.
+	buildCaches *buildCaches
 	// diskQuota is whether Docker enforces writable layer limits here.
 	diskQuota bool
 	// diskEngine attaches durable disks; diskErr says why it cannot here.
@@ -336,6 +338,7 @@ func Run(ctx context.Context, cfg Config) error {
 		gpus:            offered.gpus,
 		bootID:          bootID(),
 		sources:         &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: httpClient},
+		buildCaches:     newBuildCaches(filepath.Join(cfg.StateDir, "build-cache"), buildCacheBytes, cfg.Logger.With("component", "build-cache")),
 		images:          &imageCache{containerd: ctrd},
 		platform:        newPlatformImages(platformimages.All()...),
 		host:            hostproto.NewHostServiceClient(payload),
