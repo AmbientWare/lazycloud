@@ -76,10 +76,11 @@ type sim struct {
 	// knowQuota.
 	quotas    map[QuotaKey]int64
 	knowQuota bool
-	// recent is the largest recent shape per market the planner reads.
-	recent map[ReserveMarket]FleetCapacity
-	// floorShortSince carries each market's floor shortfall from one pass to
-	// the next, as the published plan does.
+	// recent and builds are the largest recent shapes per market the
+	// planner reads.
+	recent, builds map[ReserveMarket]FleetCapacity
+	// floorShortSince carries each market's reserve shortfall from one pass
+	// to the next, as the published plan does.
 	floorShortSince map[ReserveMarket]time.Time
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
@@ -212,8 +213,13 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 }
 
 func (s *sim) plan() {
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Offers: s.in}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: s.builds, Offers: s.in}
 	snapshot.Offers.Now = s.now
+	// The scheduler refreshes Spot quotes far more often than they age out.
+	snapshot.Offers.Spot = slices.Clone(s.in.Spot)
+	for i := range snapshot.Offers.Spot {
+		snapshot.Offers.Spot[i].ObservedAt = s.now
+	}
 	if s.knowQuota {
 		for key, vcpus := range s.quotas {
 			snapshot.Offers.Quotas = append(snapshot.Offers.Quotas, VCPUQuota{Key: key, VCPUs: vcpus})
@@ -465,9 +471,7 @@ func TestFleetScenarios(t *testing.T) {
 func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 	s := newSim(t, DefaultPolicy())
 	r := s.run(6*time.Hour, nil)
-	due := offerNow.Add(-time.Hour)
-	first := PlanFleet(DefaultPolicy(), FleetSnapshot{Now: offerNow, Offers: s.in, HostRoom: simMaxHosts, ReserveRoom: simMaxHosts,
-		FloorShortSince: map[ReserveMarket]time.Time{{}: due, {Preemptible: true}: due}})
+	first := PlanFleet(DefaultPolicy(), FleetSnapshot{Now: offerNow, Offers: s.in, HostRoom: simMaxHosts, ReserveRoom: simMaxHosts})
 	var want int64
 	for _, a := range first.Actions {
 		switch a.Kind {

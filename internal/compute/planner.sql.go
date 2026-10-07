@@ -13,6 +13,49 @@ import (
 	"github.com/google/uuid"
 )
 
+const batchWait = `-- name: BatchWait :one
+with recent as (
+    select c.created_at
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => $3::float8)))
+    order by c.id desc
+    limit $1
+), arrivals as (
+    select created_at,
+           coalesce(created_at - lag(created_at) over (order by created_at),
+                    created_at - (now() - make_interval(secs => $3::float8)))
+               >= make_interval(secs => $2::float8) as opens
+    from recent
+), batch as (
+    select max(created_at) as newest, max(created_at) filter (where opens) as began, count(*) as seen
+    from arrivals
+)
+select coalesce(case when began is not null and seen < $1::int then
+           greatest(extract(epoch from least(newest + make_interval(secs => $2::float8),
+                                             began + make_interval(secs => $3::float8)) - now()), 0)
+       end, 0)::float8 as wait_seconds
+from batch
+`
+
+type BatchWaitParams struct {
+	SampleSize   int32
+	QuietSeconds float64
+	MaxSeconds   float64
+}
+
+// How long, in seconds, the arrival batch stays open: until quiet passes
+// after its newest container, and at most max_seconds after the first. The
+// batch runs back from the newest container through arrivals less than
+// quiet apart; one that may have begun before the lookback, or fills the
+// sample, has closed. The sample follows the primary key, so it reads at
+// most sample_size rows whatever the history or backlog.
+func (q *Queries) BatchWait(ctx context.Context, arg BatchWaitParams) (float64, error) {
+	row := q.db.QueryRow(ctx, batchWait, arg.SampleSize, arg.QuietSeconds, arg.MaxSeconds)
+	var wait_seconds float64
+	err := row.Scan(&wait_seconds)
+	return wait_seconds, err
+}
+
 const coolOffers = `-- name: CoolOffers :exec
 insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
 select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => $1::float8),
@@ -498,21 +541,34 @@ with recent as (
     where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
     order by c.id desc
     limit $2
+), builds as (
+    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
+    from image_builds b
+    join containers c on c.image_build_id = b.id
+    where b.id > (select uuidv7(- make_interval(secs => $3::float8)))
+      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null
 )
-select (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select false::bool as build, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
-group by 1, 2
-order by 1, 2
+group by 2, 3
+union all
+select true, (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
+from builds
+group by 2, 3
+order by 1, 2, 3
 `
 
 type RecentShapesParams struct {
-	WindowSeconds float64
-	SampleSize    int32
+	WindowSeconds      float64
+	SampleSize         int32
+	BuildWindowSeconds float64
 }
 
 type RecentShapesRow struct {
+	Build       bool
 	Preemptible bool
 	GpuType     string
 	CpuMillis   int64
@@ -521,12 +577,14 @@ type RecentShapesRow struct {
 }
 
 // The largest CPU, memory and GPUs placed platform containers reserved, by
-// purchase market and GPU model, among the newest containers created within
-// the window, up to the sample. The sample follows the primary key, so it
-// reads at most sample_size rows whatever the history; the subquery makes
-// its bound a constant the index can use.
+// purchase market and GPU model: among the newest containers created within
+// the window, up to the sample, and, marked build, among the containers of
+// builds created within the build window. Both reads follow primary keys,
+// so they read at most sample_size containers and the window's builds
+// whatever the history; the subqueries make their bounds constants the
+// indexes can use.
 func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
-	rows, err := q.db.Query(ctx, recentShapes, arg.WindowSeconds, arg.SampleSize)
+	rows, err := q.db.Query(ctx, recentShapes, arg.WindowSeconds, arg.SampleSize, arg.BuildWindowSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -535,6 +593,7 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 	for rows.Next() {
 		var i RecentShapesRow
 		if err := rows.Scan(
+			&i.Build,
 			&i.Preemptible,
 			&i.GpuType,
 			&i.CpuMillis,

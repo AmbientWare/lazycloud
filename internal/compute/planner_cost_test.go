@@ -190,6 +190,8 @@ select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, 'stoppe
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
 join apps a on a.id = w.app_id`, toHistory-history)
+		// The pass measures a settled backlog, not one still arriving.
+		costExec(t, pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
 		costExec(t, pool, "analyze")
 		pending, history = toPending, toHistory
 	}
@@ -201,7 +203,8 @@ join apps a on a.id = w.app_id`, toHistory-history)
 	}{
 		{"hosts", plannerHosts, nil},
 		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
-		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch)}},
+		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), p.BuildWindow.Seconds()}},
+		{"arrival batch", batchWait, []any{int32(demandBatch), p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds()}},
 		{"cooldowns", plannerCooldowns, []any{p.RegionFailureWindow.Seconds()}},
 		{"markets", fleetMarkets, nil},
 	}

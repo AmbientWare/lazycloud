@@ -63,23 +63,65 @@ order by 4, 5, 6, 2 desc, 3 desc;
 
 -- name: RecentShapes :many
 -- The largest CPU, memory and GPUs placed platform containers reserved, by
--- purchase market and GPU model, among the newest containers created within
--- the window, up to the sample. The sample follows the primary key, so it
--- reads at most sample_size rows whatever the history; the subquery makes
--- its bound a constant the index can use.
+-- purchase market and GPU model: among the newest containers created within
+-- the window, up to the sample, and, marked build, among the containers of
+-- builds created within the build window. Both reads follow primary keys,
+-- so they read at most sample_size containers and the window's builds
+-- whatever the history; the subqueries make their bounds constants the
+-- indexes can use.
 with recent as (
     select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
     from containers c
     where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
     order by c.id desc
     limit @sample_size
+), builds as (
+    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
+    from image_builds b
+    join containers c on c.image_build_id = b.id
+    where b.id > (select uuidv7(- make_interval(secs => @build_window_seconds::float8)))
+      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null
 )
-select (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select false::bool as build, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
-group by 1, 2
-order by 1, 2;
+group by 2, 3
+union all
+select true, (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
+from builds
+group by 2, 3
+order by 1, 2, 3;
+
+-- name: BatchWait :one
+-- How long, in seconds, the arrival batch stays open: until quiet passes
+-- after its newest container, and at most max_seconds after the first. The
+-- batch runs back from the newest container through arrivals less than
+-- quiet apart; one that may have begun before the lookback, or fills the
+-- sample, has closed. The sample follows the primary key, so it reads at
+-- most sample_size rows whatever the history or backlog.
+with recent as (
+    select c.created_at
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => @max_seconds::float8)))
+    order by c.id desc
+    limit @sample_size
+), arrivals as (
+    select created_at,
+           coalesce(created_at - lag(created_at) over (order by created_at),
+                    created_at - (now() - make_interval(secs => @max_seconds::float8)))
+               >= make_interval(secs => @quiet_seconds::float8) as opens
+    from recent
+), batch as (
+    select max(created_at) as newest, max(created_at) filter (where opens) as began, count(*) as seen
+    from arrivals
+)
+select coalesce(case when began is not null and seen < @sample_size::int then
+           greatest(extract(epoch from least(newest + make_interval(secs => @quiet_seconds::float8),
+                                             began + make_interval(secs => @max_seconds::float8)) - now()), 0)
+       end, 0)::float8 as wait_seconds
+from batch;
 
 -- name: PlannerCooldowns :many
 -- Offers cooling now, and refusals recent enough to cool their region. A

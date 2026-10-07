@@ -60,6 +60,9 @@ type PlanResult struct {
 	Requested, Resumed, Returned, Drained, Retired, Failed int
 	// Limited counts containers the fleet limit holds back.
 	Limited int
+	// BatchWait is how long the purchases the pass held wait for arrivals
+	// to settle; the planner runs again once it passes.
+	BatchWait time.Duration
 }
 
 // Plan is the fleet planning pass. Under the capacity lock and in one
@@ -323,9 +326,10 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			held++
 		}
 	}
+	recent, builds := largestShapes(ps.r.recent)
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: largestShapes(ps.r.recent), Offers: in,
-		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves),
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Offers: in,
+		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 		FloorShortSince: ps.floorShortSince(),
 	}
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
@@ -336,6 +340,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	}
 	ps.settleWaits(plan, bought)
 	ps.settleIdle(hosts, plan)
+	ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
 	return ps.publish(plan)
 }
 
@@ -373,7 +378,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 				held++
 			}
 		}
-		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held)}
+		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held), BatchWait: ps.r.batchWait}
 		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
 		ps.cool(conn.ID.String(), cools, "offer cooled: its host could not take the container bought for")
 		bought, err := ps.apply(plan, &conn.ID)
@@ -382,6 +387,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		}
 		ps.settleWaits(plan, bought)
 		ps.settleIdle(hosts, plan)
+		ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
 	}
 	return nil
 }
@@ -536,7 +542,7 @@ func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
 	}
 }
 
-// floorShortSince is when each market's stopped floor went short, from the
+// floorShortSince is when each market's stopped target went short, from the
 // published plans; an unreadable plan reads as never short.
 func (ps *fleetPass) floorShortSince() map[ReserveMarket]time.Time {
 	out := map[ReserveMarket]time.Time{}
@@ -551,8 +557,8 @@ func (ps *fleetPass) floorShortSince() map[ReserveMarket]time.Time {
 }
 
 // publish writes every platform market's plan when the pass acted, a
-// market's floor shortfall began or ended, or the last plan is planRefresh
-// old, and logs each decision that changed.
+// market's reserve shortfall began or ended, or the last plan is
+// planRefresh old, and logs each decision that changed.
 func (ps *fleetPass) publish(plan FleetPlan) error {
 	var last time.Time
 	for _, m := range ps.r.markets {

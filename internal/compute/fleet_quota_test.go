@@ -69,7 +69,9 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 	s := planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetStopped))
 	s.Offers.Quotas = []VCPUQuota{{Key: key, VCPUs: 48}}
 	s.Hosts[0].Load = small
-	plan := PlanFleet(planPolicy(small.Times(3), FleetCapacity{}), s)
+	whole := Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}
+	s.Pending = []DemandGroup{{Need: whole, Containers: []PendingContainer{{ID: uuid.New()}, {ID: uuid.New()}, {ID: uuid.New()}}}}
+	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
 	// 16 vCPUs run; the stopped reserve resumes into 16 more and one host
 	// is bought with the last 16.
 	if len(actionsOf(plan, ActionResume)) != 1 || len(actionsOf(plan, ActionBuy)) != 1 {

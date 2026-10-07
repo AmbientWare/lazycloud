@@ -39,9 +39,17 @@ func fleetConfig(f compute.Fleet) compute.Config {
 	return compute.Config{InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: f}
 }
 
-// plan runs one fleet planning pass.
+// settle ages the containers created within the last minute past the
+// arrival batch, as waiting out its window would.
+func settle(t *testing.T, o owners) {
+	t.Helper()
+	run(t, o.pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
+}
+
+// plan runs one fleet planning pass once arrivals have settled.
 func plan(t *testing.T, o owners) compute.PlanResult {
 	t.Helper()
+	settle(t, o)
 	result, err := o.compute.Plan(t.Context(), discard())
 	if err != nil {
 		t.Fatalf("plan: %v", err)

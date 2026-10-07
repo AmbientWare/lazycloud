@@ -83,6 +83,17 @@ func boughtTypes(plan FleetPlan) []string {
 	return names
 }
 
+// boughtForWork are the types bought for pending containers.
+func boughtForWork(plan FleetPlan) []string {
+	var names []string
+	for _, a := range actionsOf(plan, ActionBuy) {
+		if len(a.Containers) > 0 {
+			names = append(names, a.Offer.Type.Name)
+		}
+	}
+	return names
+}
+
 func hostsOf(actions []FleetAction) []HostID {
 	var ids []HostID
 	for _, a := range actions {
@@ -234,7 +245,7 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 
 	s.HostRoom = 0
 	plan = PlanFleet(p, s)
-	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != ReasonDemand {
+	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != ReasonFleetLimit {
 		t.Fatalf("fleet limit: %+v %+v", plan.Actions, w)
 	}
 }
@@ -296,7 +307,7 @@ func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *t
 		g, _ := pendingOne(need, nil)
 		s.Pending = []DemandGroup{g}
 		plan := PlanFleet(p, s)
-		if got := boughtTypes(plan); !slices.Equal(got, []string{c.want}) {
+		if got := boughtForWork(plan); !slices.Equal(got, []string{c.want}) {
 			t.Errorf("%s: bought %v", c.name, got)
 		}
 	}
