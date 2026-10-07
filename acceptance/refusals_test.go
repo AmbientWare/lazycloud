@@ -36,7 +36,13 @@ func TestDeployPastThePlanIsRefusedBeforeAnythingChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := p.request(http.MethodPost, p.api+"/v1/workspaces/ws/apps/demo/deployments", p.token, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, p.api+"/v1/workspaces/ws/apps/demo/deployments", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
