@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from functools import cache
 from urllib.parse import quote
 
-import httpx
-
 from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.image_building.authoring import LinuxArchitecture
 
@@ -71,6 +69,8 @@ def latest_version(package: str) -> str:
     A build installs the release current when it is deployed. Pinning it in
     the step keeps that build's cache, and a later release changes the step,
     so the next build installs that one."""
+    import httpx  # containers import this module at startup; only deploys look up releases
+
     url = f"https://registry.npmjs.org/{quote(package, safe='@')}/latest"
     try:
         response = httpx.get(url, timeout=10, follow_redirects=True)
