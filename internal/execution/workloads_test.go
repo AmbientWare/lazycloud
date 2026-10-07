@@ -248,7 +248,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if n := len(serve()); n != 0 {
 		t.Fatalf("an unconnected pod has %d containers", n)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
 		t.Fatal(err)
 	}
 	plan()
@@ -309,7 +309,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if err != nil || view.Phase != apitypes.DevboxPhaseStopped {
 		t.Fatalf("parked view = %+v, %v", view, err)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
 		t.Fatal(err)
 	}
 	if view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil }); err != nil || view.Phase != apitypes.DevboxPhaseQueued {
@@ -318,6 +318,84 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	plan()
 	if n := len(serve()); n != 1 {
 		t.Fatalf("a woken pod has %d", n)
+	}
+}
+
+// TestStartRetriesAPodWhoseStartsFailed: a release that reached the start
+// failure limit says so with its last failure, stays down for connections,
+// and starting the pod retries it.
+func TestStartRetriesAPodWhoseStartsFailed(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedPod(t, pool, "devbox", 600)
+	pending := func(cause WakeCause) int {
+		t.Helper()
+		if err := e.WakePod(t.Context(), f.workspace, f.workload, cause); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.PlanPods(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := pool.QueryRow(t.Context(), "select count(*) from containers where release_id = $1 and state = 'pending'", f.release).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := pending(WakeConnection); n != 1 {
+		t.Fatalf("a woken pod has %d pending containers", n)
+	}
+	// The last start the limit allows failed an hour ago.
+	if _, err := pool.Exec(t.Context(), `
+with failed as (
+    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() - interval '1 hour',
+           exit_message = 'the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB'
+    where release_id = $1
+), counted as (update releases set start_failures = $2 where id = $1)
+update pod_states set woken_at = now() - interval '1 hour'`, f.release, startFailureLimit); err != nil {
+		t.Fatal(err)
+	}
+	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
+	want := "stopped after 3 failed starts: the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB"
+	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || view.Reason != want || view.Failed == nil {
+		t.Fatalf("view of a release past the start failure limit = %+v, %v", view, err)
+	}
+	if n := pending(WakeConnection); n != 0 {
+		t.Fatalf("a connection started %d containers of a failed release", n)
+	}
+	if n := pending(WakeStart); n != 1 {
+		t.Fatalf("a start left %d containers of a failed release", n)
+	}
+
+	// Below the limit a start waits out the backoff like any other.
+	if _, err := pool.Exec(t.Context(), `
+with failed as (
+    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() where release_id = $1
+)
+update releases set start_failures = 1 where id = $1`, f.release); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if n := pending(WakeStart); n != 0 {
+			t.Fatalf("a start during the backoff started %d containers", n)
+		}
+	}
+}
+
+// A woken devbox that billing will not start says why instead of queueing.
+func TestAWokenDevboxBillingRefusesSaysWhy(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedPod(t, pool, "devbox", 600)
+	if _, err := pool.Exec(t.Context(), "update billing_accounts set status = 'past_due', complimentary_since = null"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeStart); err != nil {
+		t.Fatal(err)
+	}
+	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
+	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || !strings.HasPrefix(view.Reason, "a payment for this account did not go through") {
+		t.Fatalf("view of a refused devbox = %+v, %v", view, err)
 	}
 }
 

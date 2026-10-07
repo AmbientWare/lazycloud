@@ -271,6 +271,34 @@ func (q *Queries) ImageBuildGPU(ctx context.Context, digest []byte) (string, err
 	return build_gpu, err
 }
 
+const imageFrames = `-- name: ImageFrames :one
+select coalesce(sum(l.frames), 0)::bigint as frames, count(l.id)::int as layers
+from images i
+join workspace_images w on w.image_digest = i.digest
+join image_reference_layers r on r.reference = coalesce(w.reference, i.reference)
+join image_layers l on l.id = r.layer_id
+where w.workspace_id = $1 and i.id = $2
+`
+
+type ImageFramesParams struct {
+	WorkspaceID uuid.UUID
+	ID          string
+}
+
+type ImageFramesRow struct {
+	Frames int64
+	Layers int32
+}
+
+// The data frames of the converted layers of the image as the workspace
+// runs it. A reference has no layers until every layer is converted.
+func (q *Queries) ImageFrames(ctx context.Context, arg ImageFramesParams) (ImageFramesRow, error) {
+	row := q.db.QueryRow(ctx, imageFrames, arg.WorkspaceID, arg.ID)
+	var i ImageFramesRow
+	err := row.Scan(&i.Frames, &i.Layers)
+	return i, err
+}
+
 const imageOf = `-- name: ImageOf :one
 select digest, python_version, architecture,
        exists (select 1 from image_reference_layers r where r.reference = $1)::bool as converted

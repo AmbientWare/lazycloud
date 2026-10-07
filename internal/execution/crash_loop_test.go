@@ -111,7 +111,7 @@ func TestFailedStartsBackOff(t *testing.T) {
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "pod", 600)
 	host := newHost(t, pool)
-	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +176,7 @@ where id = (select id from containers where state = 'pending' order by id limit 
 	if created := planPods(t, e).Created; created != 0 {
 		t.Fatalf("a stopped pod started %d containers", created)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
 		t.Fatal(err)
 	}
 	if created := planPods(t, e).Created; created != 1 {

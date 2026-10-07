@@ -312,6 +312,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		invalidSpec     *control.InvalidSpecError
 		sourceMissing   *control.SourceMissingError
 		routeConflict   *control.RouteConflictError
+		refused         *control.RefusedError
 		tooLarge        *http.MaxBytesError
 		invalidImage    *images.InvalidError
 		unconvertible   *images.ConversionError
@@ -369,6 +370,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
+	case errors.As(err, &refused):
+		writeRefused(w, refused)
 	case errors.As(err, &routeConflict):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, routeConflict.Error())
 	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
@@ -447,4 +450,35 @@ func writeJSONError(w http.ResponseWriter, status int, code apitypes.ErrorCode, 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(apitypes.Error{Code: code, Message: message}) //nolint:errchkjson // The client is gone if this fails.
+}
+
+// writeRefused answers a refused deploy with every refusal. Its code is the
+// one the account most needs to act on: a payment or plan change, then a
+// limit, then a GPU model the fleet does not offer, then the definition.
+func writeRefused(w http.ResponseWriter, refused *control.RefusedError) {
+	type answer struct {
+		rank   int
+		status int
+		code   apitypes.ErrorCode
+	}
+	out := answer{0, http.StatusBadRequest, apitypes.InvalidRequest}
+	for _, r := range refused.Refusals {
+		gate := answer{0, http.StatusBadRequest, apitypes.InvalidRequest}
+		switch r.Gate {
+		case apitypes.RegionSelection, apitypes.GpuModel:
+			gate = answer{3, http.StatusPaymentRequired, apitypes.PaymentRequired}
+		case apitypes.DiskAllowance, apitypes.GpuCount, apitypes.WarmFloor:
+			gate = answer{2, http.StatusConflict, apitypes.LimitReached}
+		case apitypes.GpuUnavailable:
+			gate = answer{1, http.StatusBadRequest, apitypes.Unsupported}
+		case apitypes.DiskImage, apitypes.DiskMinimum, apitypes.MissingSecrets:
+		}
+		if gate.rank > out.rank {
+			out = gate
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(out.status)
+	//nolint:errchkjson // The client is gone if this fails.
+	_ = json.NewEncoder(w).Encode(apitypes.Error{Code: out.code, Message: refused.Error(), Refusals: &refused.Refusals})
 }

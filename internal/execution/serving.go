@@ -12,7 +12,6 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
@@ -323,10 +322,8 @@ func clampInt32(n int) int32 {
 // It returns billing's GPUUnavailableError, PaymentRequiredError or
 // LimitError.
 func (e *Execution) AdmitCold(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) error {
-	req := billing.Request{
-		Workspace: workspace, Cold: true, GPUs: gpuCount(spec.Resources), GPUModels: gpuModels(spec),
-		Pinned: pinned(spec), Machine: compute.PinnedMachine(spec) != "",
-	}
+	req := billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler).Request(workspace)
+	req.Cold = true
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		_, err := billing.Admit(ctx, tx, req)
 		return err //nolint:wrapcheck // billing's refusal passes through typed

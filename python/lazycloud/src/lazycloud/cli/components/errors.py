@@ -33,7 +33,11 @@ from lazycloud.exceptions import (
     UnsupportedFeatureError,
 )
 from lazycloud.json_contracts import parse_json_value
-from lazycloud.session.deployment import DeploymentOperationError, ImageBuildError
+from lazycloud.session.deployment import (
+    DeploymentOperationError,
+    DeploymentRefusedError,
+    ImageBuildError,
+)
 
 _TOKEN_PATTERN = re.compile(r"\b(?:rt|lc)_[A-Za-z0-9_-]{8,}\b")
 _BEARER_PATTERN = re.compile(r"(Bearer\s+)([A-Za-z0-9._~+/=-]{12,})", re.IGNORECASE)
@@ -126,6 +130,17 @@ def normalize_exception(
             title="Image build failed",
             message=message,
             hint="Fix the failing build step shown above, then run the command again.",
+        )
+
+    refused = next(
+        (item for item in exception_chain(exc) if isinstance(item, DeploymentRefusedError)), None
+    )
+    if refused is not None:
+        return ClientErrorDetails(
+            type="deploy_refused",
+            title="Deploy refused",
+            message=str(refused),
+            hint="Nothing was deployed. Lift each limit above, then deploy again.",
         )
 
     if _is_forbidden_error(exc):

@@ -32,7 +32,7 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 		{"sandbox", func() apitypes.WorkloadSpec { return pod("box", apitypes.PodKindSandbox) }, 600, false, false},
 		{"devbox", func() apitypes.WorkloadSpec {
 			s := pod("dev", apitypes.PodKindDevbox)
-			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 1 << 30, MountPath: "/"}}
+			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 10 << 30, MountPath: "/"}}
 			return s
 		}, 1800, false, true},
 	}
@@ -55,7 +55,7 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 
 func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 	withDisk := func(s apitypes.WorkloadSpec, name, path string) apitypes.WorkloadSpec {
-		s.Disks = &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: 1 << 30, MountPath: path}}
+		s.Disks = &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: 10 << 30, MountPath: path}}
 		return s
 	}
 	cases := map[string]struct {

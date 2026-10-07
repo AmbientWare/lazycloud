@@ -232,6 +232,13 @@ on conflict (workload_id) do update set replicas = excluded.replicas;
 insert into pod_states (workload_id, woken_at, parked) values (@workload_id, now(), false)
 on conflict (workload_id) do update set woken_at = now(), parked = false;
 
+-- name: RetryFailedRelease :exec
+-- A start retries a release that stopped starting or failed to load. One
+-- still backing off between failed starts keeps its count, so repeated
+-- starts wait out the backoff.
+update releases set start_failures = 0, load_error = null
+where id = @id and (start_failures >= @start_failure_limit::int or load_error is not null);
+
 -- name: ParkPod :exec
 -- A stop overrides an earlier scale.
 insert into pod_states (workload_id, woken_at, parked) values (@workload_id, null, true)

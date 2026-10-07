@@ -136,3 +136,13 @@ select digest, python_version, architecture,
        exists (select 1 from image_reference_layers r where r.reference = @reference)::bool as converted
 from images where id = @id;
 
+
+-- name: ImageFrames :one
+-- The data frames of the converted layers of the image as the workspace
+-- runs it. A reference has no layers until every layer is converted.
+select coalesce(sum(l.frames), 0)::bigint as frames, count(l.id)::int as layers
+from images i
+join workspace_images w on w.image_digest = i.digest
+join image_reference_layers r on r.reference = coalesce(w.reference, i.reference)
+join image_layers l on l.id = r.layer_id
+where w.workspace_id = @workspace_id and i.id = @id;

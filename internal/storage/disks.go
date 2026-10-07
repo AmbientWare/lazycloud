@@ -84,6 +84,31 @@ type DiskLease struct {
 	Bucket string
 }
 
+// DiskGrowth is what declaring disks would do to a workspace's disks.
+type DiskGrowth struct {
+	// TotalBytes is what the workspace's live disks would declare, counted
+	// as AcquireDisk counts them against the plan.
+	TotalBytes int64
+	// Growing are the declared disks that would be created or grown.
+	Growing []string
+}
+
+// DeclaredDiskGrowth is what declared, sizes by disk name, would do to the
+// workspace's live disks. Disks grow and never shrink, so a declaration at
+// or below a disk's size changes nothing.
+func DeclaredDiskGrowth(ctx context.Context, db DBTX, workspace uuid.UUID, declared map[string]int64) (DiskGrowth, error) {
+	params := DeclaredDiskGrowthParams{WorkspaceID: workspace}
+	for name, size := range declared {
+		params.Names = append(params.Names, name)
+		params.Sizes = append(params.Sizes, size)
+	}
+	row, err := New(db).DeclaredDiskGrowth(ctx, params)
+	if err != nil {
+		return DiskGrowth{}, fmt.Errorf("read declared disk growth: %w", err)
+	}
+	return DiskGrowth(row), nil
+}
+
 // AcquireDisk gives container the disk its release declares by name,
 // creating the disk on first use and growing it to the declared size. The
 // same container acquiring again gets its lease back. Another holder that

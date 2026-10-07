@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -86,11 +87,21 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 		return PodView{}, fmt.Errorf("read pod state: %w", err)
 	}
 	woken := err == nil && !state.Parked && state.WokenAt != nil && time.Since(*state.WokenAt) < podWakeWindow
-	failure, err := e.queries.DevboxFailure(ctx, workload)
+	// A failed start shows for the wake window, and a release that stopped
+	// starting keeps its failure until a start or a redeploy retries it.
+	exhausted := row.StartFailures >= startFailureLimit
+	since := new(time.Now().Add(-podWakeWindow))
+	if exhausted || row.LoadFailed {
+		since = nil
+	}
+	failure, err := e.queries.PodFailure(ctx, PodFailureParams{WorkloadID: workload, Since: since})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return PodView{}, fmt.Errorf("read pod failure: %w", err)
 	}
 	failed := err == nil
+	if failed && exhausted {
+		failure.Reason = fmt.Sprintf("stopped after %d failed starts: %s", row.StartFailures, failure.Reason)
+	}
 	switch {
 	case saving:
 		out.Phase = apitypes.DevboxPhaseStopping
@@ -98,6 +109,14 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 		out.Phase, out.Reason = apitypes.DevboxPhaseFailed, failure.Reason
 	case woken && out.Active:
 		out.Phase = apitypes.DevboxPhaseQueued
+		// Planning waits on work billing refuses; say why.
+		refusal, err := e.admissionRefusal(ctx, uuid.UUID(workspace), out.Spec)
+		if err != nil {
+			return PodView{}, err
+		}
+		if refusal != "" {
+			out.Phase, out.Reason = apitypes.DevboxPhaseFailed, refusal
+		}
 	case failed:
 		out.Phase, out.Reason = apitypes.DevboxPhaseFailed, failure.Reason
 	default:
@@ -110,17 +129,35 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 	return out, nil
 }
 
-// PodStartFailure says why a container of the pod created since since
+// admissionRefusal is why billing refuses to start a container of spec in
+// workspace now, or "".
+func (e *Execution) admissionRefusal(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) (string, error) {
+	var refusal string
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		_, err := billing.Admit(ctx, tx, billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler).Request(workspace))
+		if refusedToWait(err) {
+			refusal = err.Error()
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("check admission: %w", err)
+	}
+	return refusal, nil
+}
+
+// PodStartFailure says why a container of the pod that stopped since since
 // failed to start, or "" when none has.
 func (e *Execution) PodStartFailure(ctx context.Context, workload uuid.UUID, since time.Time) (string, error) {
-	reason, err := e.queries.PodStartFailedSince(ctx, PodStartFailedSinceParams{WorkloadID: workload, Since: since})
+	failure, err := e.queries.PodFailure(ctx, PodFailureParams{WorkloadID: workload, Since: &since})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("read pod start failure: %w", err)
 	}
-	return reason, nil
+	return failure.Reason, nil
 }
 
 // livePhase is what a live container is doing: placed or not, then the

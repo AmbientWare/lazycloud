@@ -168,13 +168,13 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 		return Grant{}, err
 	}
 	if req.Pinned && !s.entitlements.RegionSelection {
-		return Grant{}, &PaymentRequiredError{Message: "region or availability zone selection requires the Team plan"}
+		return Grant{}, &PaymentRequiredError{Message: s.regionRefusal().sentence()}
 	}
 	var grant Grant
 	if req.GPUs > 0 {
-		models, err := s.entitlements.gpuModels(req.GPUModels, fleet)
-		if err != nil {
-			return Grant{}, err
+		models, refused := s.entitlements.gpuModels(req.GPUModels, fleet)
+		if refused != nil {
+			return Grant{}, &PaymentRequiredError{Message: s.gpuModelRefusal(*refused).sentence()}
 		}
 		grant.GPUModels = models
 	}
@@ -204,24 +204,6 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	return grant, nil
 }
 
-// CheckFleetGPUs refuses, with a GPUUnavailableError, GPU work only the
-// platform fleet can serve when every model it names is one the fleet does
-// not offer. machine marks work pinned to a joined machine.
-func CheckFleetGPUs(ctx context.Context, db DBTX, workspace uuid.UUID, machine bool, models []GPUType) error {
-	refusal := unoffered(models)
-	if refusal == nil || machine {
-		return nil
-	}
-	ws, err := New(db).AdmissionWorkspace(ctx, workspace)
-	if err != nil {
-		return fmt.Errorf("read workspace owner: %w", err)
-	}
-	if ws.Connected {
-		return nil
-	}
-	return refusal
-}
-
 // unoffered refuses a GPU preference that names models and none the fleet
 // offers. Any, or no model by name, takes whatever the fleet offers.
 func unoffered(requested []GPUType) error {
@@ -240,9 +222,9 @@ func unoffered(requested []GPUType) error {
 
 // gpuModels narrows requested models to the ones the account may use, and
 // on the platform fleet to the ones it offers. A request for any model, or
-// for none by name, gets every model left; a named model the account may
-// not use is refused.
-func (e Entitlements) gpuModels(requested []GPUType, fleet bool) ([]GPUType, error) {
+// for none by name, gets every model left; the first named model the
+// account may not use refuses the request.
+func (e Entitlements) gpuModels(requested []GPUType, fleet bool) ([]GPUType, *GPUType) {
 	allowed := e.GPUTypes
 	if fleet {
 		allowed = slices.DeleteFunc(slices.Clone(allowed), func(m GPUType) bool { return !GPUEnabled(string(m)) })
@@ -256,8 +238,7 @@ func (e Entitlements) gpuModels(requested []GPUType, fleet bool) ([]GPUType, err
 			continue
 		}
 		if !slices.Contains(e.GPUTypes, m) {
-			return nil, &PaymentRequiredError{Message: fmt.Sprintf(
-				"add a payment method to use %s; without a saved card, this account can use %s", m, joinModels(e.GPUTypes))}
+			return nil, &m
 		}
 		named = append(named, m)
 	}
@@ -394,10 +375,8 @@ func AdmitDisk(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, declaredByte
 	if err := s.fundsRefusal(); err != nil {
 		return err
 	}
-	limit := int64(s.entitlements.MaxWorkspaceDiskGiB) * bytesPerGiB
-	if declaredBytes > limit {
-		return &LimitError{Message: fmt.Sprintf("this workspace's disks would declare %s GiB, more than its plan allows (%d GiB)",
-			strings.TrimSuffix(fmt.Sprintf("%.1f", float64(declaredBytes)/float64(bytesPerGiB)), ".0"), s.entitlements.MaxWorkspaceDiskGiB)}
+	if r := s.diskRefusal(declaredBytes); r != nil {
+		return &LimitError{Message: r.sentence()}
 	}
 	return nil
 }

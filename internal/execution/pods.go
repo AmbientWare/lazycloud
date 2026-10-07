@@ -268,9 +268,21 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 	return nil
 }
 
+// WakeCause is what asks a pod for a container.
+type WakeCause string
+
+const (
+	// WakeConnection is a connection arriving at the pod.
+	WakeConnection WakeCause = "connection"
+	// WakeStart is someone starting the pod, which retries a release that
+	// stopped after failed starts or failed to load: the cause may have
+	// been fixed outside a redeploy.
+	WakeStart WakeCause = "start"
+)
+
 // WakePod asks for a container of an active pod now, as a connection or a
 // devbox start does.
-func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) error {
+func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, cause WakeCause) error {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		row, _, err := e.lockPod(ctx, q, workspace, workload)
@@ -285,6 +297,13 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 		}
 		if row.ActiveReleaseID == nil {
 			return nil
+		}
+		switch cause {
+		case WakeStart:
+			if err := q.RetryFailedRelease(ctx, RetryFailedReleaseParams{ID: *row.ActiveReleaseID, StartFailureLimit: startFailureLimit}); err != nil {
+				return fmt.Errorf("reset start failures: %w", err)
+			}
+		case WakeConnection:
 		}
 		return database.Notify(ctx, tx, database.ChannelExecution, row.ActiveReleaseID.String())
 	})

@@ -18,11 +18,12 @@ from lazycloud.abstractions.sandbox import (
     SandboxFileSystemError,
     SandboxInstance,
 )
-from lazycloud.cli.main import build_public_cli
+from lazycloud.cli.main import build_public_cli, start
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.workloads import WorkloadsClient
 from typer.testing import CliRunner, Result
 
+import lazycloud
 from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, error_reply, json_reply
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
@@ -167,6 +168,15 @@ def _serve_releases(api: FakeApi, stored: set[str]) -> None:
         stored.add(request.path.rsplit("/", 1)[1])
         return 200, {}, b""
 
+    @api.route("POST", f"{TEAM}/apps/tools/deployment-plan")
+    def plan(request: ApiRequest) -> Reply:
+        listed: list[dict[str, Any]] = request.json()["workloads"]
+        items: list[dict[str, object]] = [
+            {"kind": item["kind"], "name": item["name"], "action": "add", "versions": 0}
+            for item in listed
+        ]
+        return json_reply({"app": "tools", "prune": False, "items": items})
+
     @api.route("POST", f"{TEAM}/apps/tools/deployments")
     def deploy(request: ApiRequest) -> Reply:
         workloads: list[dict[str, Any]] = request.json()["workloads"]
@@ -203,6 +213,8 @@ def test_app_deploy_sends_pods_and_devboxes_with_their_defaults_and_never_sandbo
     result = _cli("deploy", "tools.py")
 
     assert result.exit_code == 0, result.output
+    (plan,) = fake_api.calls("POST", f"{TEAM}/apps/tools/deployment-plan")
+    assert [item.get("pod_kind") for item in plan.json()["workloads"]] == ["pod", "devbox"]
     (request,) = fake_api.calls("POST", f"{TEAM}/apps/tools/deployments")
     web, box = request.json()["workloads"]
     assert (web["kind"], box["kind"]) == ("pod", "pod")
@@ -234,6 +246,49 @@ def test_app_deploy_sends_pods_and_devboxes_with_their_defaults_and_never_sandbo
     assert web["source"] == box["source"]
     assert "Devboxes" in result.output
     assert "box" in result.output
+
+
+def test_a_deploy_refused_after_its_builds_prints_each_refusal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_api: FakeApi,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _project(tmp_path, monkeypatch)
+    _serve_releases(fake_api, set())
+    refusal = {
+        "kind": "pod",
+        "name": "box",
+        "gate": "disk_image",
+        "message": (
+            "the root disk box of 10 GiB is too small for its image's unpacked root of up to 11 GiB"
+        ),
+        "remedy": "set disk to at least 13 GiB",
+    }
+    fake_api.route("POST", f"{TEAM}/apps/tools/deployments")(
+        lambda request: json_reply(
+            {"code": "invalid_request", "message": "refused", "refusals": [refusal]}, 400
+        )
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        start(["deploy", "tools.py"])
+    captured = capsys.readouterr()
+    # The error card wraps long lines between its borders.
+    output = " ".join(line.strip("│╭╮╰╯─ ") for line in captured.err.splitlines())
+
+    assert exited.value.code == 1, output
+    assert "Deploy refused" in output
+    assert (
+        "pod box: the root disk box of 10 GiB is too small for its image's unpacked root of"
+        " up to 11 GiB; set disk to at least 13 GiB" in output
+    )
+
+
+def test_a_devbox_disk_below_the_minimum_fails_where_it_is_written() -> None:
+    app = lazycloud.App("tools")
+    with pytest.raises(ValueError, match="a devbox's disk must be at least 10Gi, not '1Gi'"):
+        app.devbox("box", image=lazycloud.Image(), disk="1Gi", memory="1Gi", agent_harnesses=[])
 
 
 def test_single_pod_deploy_card_shows_role_keep_warm_and_preemptible(

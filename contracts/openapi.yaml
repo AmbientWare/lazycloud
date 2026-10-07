@@ -3193,6 +3193,7 @@ paths:
       operationId: startDevbox
       tags: [workloads]
       summary: Start the devbox now, activating its workload if it is stopped
+      description: A start also retries a release that stopped after failed starts.
       responses:
         "200":
           description: The devbox after the request
@@ -4006,6 +4007,10 @@ components:
       properties:
         code: { $ref: "#/components/schemas/ErrorCode" }
         message: { type: string }
+        refusals:
+          description: Every reason a refused deploy failed, by workload and gate.
+          type: array
+          items: { $ref: "#/components/schemas/DeploymentRefusal" }
 
     ErrorCode:
       type: string
@@ -5688,17 +5693,64 @@ components:
         workloads:
           type: array
           maxItems: 200
-          items: { $ref: "#/components/schemas/WorkloadIdentity" }
+          items: { $ref: "#/components/schemas/DeploymentPlanWorkload" }
         prune:
           type: boolean
           default: false
 
-    WorkloadIdentity:
+    DeploymentPlanWorkload:
+      description: >-
+        A workload the deploy lists, with the parts of its definition that the
+        account's plan and the workspace must allow, so the plan reports what
+        would refuse it before any image builds.
       type: object
       required: [kind, name]
       properties:
         kind: { $ref: "#/components/schemas/WorkloadKind" }
         name: { $ref: "#/components/schemas/WorkloadName" }
+        pod_kind: { $ref: "#/components/schemas/PodKind" }
+        resources: { $ref: "#/components/schemas/Resources" }
+        autoscaler: { $ref: "#/components/schemas/Autoscaler" }
+        placement: { $ref: "#/components/schemas/Placement" }
+        disks:
+          type: array
+          maxItems: 8
+          items: { $ref: "#/components/schemas/DiskMountSpec" }
+        secrets:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/SecretName" }
+
+    DeploymentRefusal:
+      description: >-
+        A reason a deploy fails before it changes anything: a plan limit, a
+        secret it names that the workspace lacks, or a disk too small.
+      type: object
+      required: [kind, name, gate, message, remedy]
+      properties:
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        gate: { $ref: "#/components/schemas/DeploymentGate" }
+        message:
+          description: The limit or requirement the workload breaks.
+          type: string
+        remedy:
+          description: How to lift it.
+          type: string
+
+    DeploymentGate:
+      type: string
+      enum:
+        - disk_allowance
+        - disk_minimum
+        - disk_image
+        - region_selection
+        - gpu_model
+        - gpu_count
+        - gpu_unavailable
+        - warm_floor
+        - missing_secrets
 
     DeploymentPlan:
       type: object
@@ -5721,6 +5773,10 @@ components:
         versions:
           description: Versions the workload has now.
           type: integer
+        refusals:
+          description: Why a deploy of the workload would fail before it changed anything.
+          type: array
+          items: { $ref: "#/components/schemas/DeploymentRefusal" }
 
     Workload:
       description: >-
@@ -7933,7 +7989,7 @@ components:
       properties:
         name: { $ref: "#/components/schemas/DiskName" }
         size_bytes:
-          description: Whole 4096-byte blocks from 1 GiB to 1 TiB.
+          description: Whole 4096-byte blocks from 1 GiB to 1 TiB; a devbox root needs 10 GiB.
           type: integer
           format: int64
           minimum: 1073741824

@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
@@ -227,6 +226,13 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 
 	var out apitypes.Deployment
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+		specs := make([]apitypes.WorkloadSpec, len(functions))
+		for n, f := range functions {
+			specs[n] = f.spec
+		}
+		if err := checkDeploy(ctx, tx, uuid.UUID(workspace), specs); err != nil {
+			return err
+		}
 		q := c.queries.WithTx(tx)
 		appRow, err := q.UpsertApp(ctx, UpsertAppParams{WorkspaceID: uuid.UUID(workspace), Name: app})
 		if err != nil {
@@ -286,31 +292,10 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 	return out, nil
 }
 
-// checkFleetGPUs refuses, with billing's GPUUnavailableError, a workload
-// only the platform fleet can serve that names only GPU models the fleet
-// does not offer.
-func checkFleetGPUs(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, spec apitypes.WorkloadSpec) error {
-	if spec.Resources.Gpu == nil {
-		return nil
-	}
-	models := make([]billing.GPUType, len(*spec.Resources.Gpu))
-	for n, g := range *spec.Resources.Gpu {
-		models[n] = billing.GPUType(g)
-	}
-	machine := spec.Placement != nil && spec.Placement.Machine != nil && *spec.Placement.Machine != ""
-	if err := billing.CheckFleetGPUs(ctx, tx, workspace, machine, models); err != nil {
-		return fmt.Errorf("function %s: %w", spec.Name, err)
-	}
-	return nil
-}
-
 // deployFunction upserts and locks the workload, then keeps or replaces its
 // active release. Execution is woken for the new release and for the one it
 // replaces, which drains once its work finishes.
 func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, workspace, app uuid.UUID, appName string, f resolvedFunction) (apitypes.Release, error) {
-	if err := checkFleetGPUs(ctx, tx, workspace, f.spec); err != nil {
-		return apitypes.Release{}, err
-	}
 	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Kind: string(f.spec.Kind), Name: f.spec.Name})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)

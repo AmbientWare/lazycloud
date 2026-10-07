@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/rootdisk"
 )
 
 // seededMarker, inside a devbox root, records that seeding finished; a seed
@@ -40,6 +42,13 @@ func enterRoot(root string) error {
 	if _, err := os.Stat(filepath.Join(root, seededMarker)); errors.Is(err, fs.ErrNotExist) {
 		started := time.Now()
 		if err := seedRoot(root, skip); err != nil {
+			if errors.Is(err, syscall.ENOSPC) {
+				var st unix.Statfs_t
+				if statErr := unix.Statfs(root, &st); statErr != nil {
+					return fmt.Errorf("%w; read the devbox root's size: %w", err, statErr)
+				}
+				return rootTooSmall(int64(st.Blocks)*st.Bsize, treeBytes("/", skip)) //nolint:gosec // a filesystem's size fits
+			}
 			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, seededMarker)), 0o755); err != nil { //nolint:gosec // a system directory
@@ -165,6 +174,34 @@ func bindInto(root string, m mountPoint) error {
 		}
 	}
 	return nil
+}
+
+// rootTooSmall describes a seed that ran out of space by the sizes the
+// devbox's owner changes: its root disk's and its image's.
+func rootTooSmall(diskBytes, imageBytes int64) error {
+	return fmt.Errorf("the root disk of %s GiB is too small for its image of %s GiB; set disk to at least %s GiB",
+		rootdisk.GiB(diskBytes), rootdisk.GiB(imageBytes), rootdisk.GiB(rootdisk.Needed(imageBytes)))
+}
+
+// treeBytes is the size of the regular files under base, except skip and
+// what cannot be read.
+func treeBytes(base string, skip map[string]bool) int64 {
+	var total int64
+	_ = filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return nil //nolint:nilerr // an unreadable entry adds nothing
+		case skip[path] && entry.IsDir():
+			return filepath.SkipDir
+		case skip[path] || !entry.Type().IsRegular():
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // seedRoot copies the image's root filesystem into root, except mount
