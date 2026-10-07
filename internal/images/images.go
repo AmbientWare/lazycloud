@@ -44,9 +44,8 @@ const (
 	// maxAttempts is how many containers a build may use. Only a container
 	// lost without an outcome earns another; a failed build step does not.
 	maxAttempts = 2
-	// Build containers reserve this much and may use the host's CPU and up
-	// to buildMemoryLimit.
-	buildCPUMillis   = cpu.Millis(500)
+	// Build containers reserve Config.BuildCPU and buildMemoryBytes and may
+	// use the host's CPU and up to buildMemoryLimit.
 	buildMemoryBytes = 2 << 30
 	buildMemoryLimit = 8 << 30
 	maxFailureBytes  = 64 << 10
@@ -102,6 +101,10 @@ type Config struct {
 	// ManagedBase is the image a definition without a base starts from;
 	// {version} is replaced with its Python version.
 	ManagedBase string
+	// BuildCPU is what a build container reserves. Package installs,
+	// bytecode compiles and layer compression scale with cores, and a build
+	// lands only on a host with this much free.
+	BuildCPU cpu.Millis
 }
 
 // Repositories under Repository, by what they hold. A built image has a
@@ -528,9 +531,9 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 			return fmt.Errorf("insert build: %w", err)
 		}
 		if kind == buildSharedMirror {
-			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes)
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, workspace, row.ID, i.config.BuildCPU, buildMemoryBytes)
 		} else {
-			_, err = i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, buildCPUMillis, buildMemoryBytes, p.spec.gpu)
+			_, err = i.execution.CreateBuildContainer(ctx, tx, workspace, row.ID, i.config.BuildCPU, buildMemoryBytes, p.spec.gpu)
 		}
 		if err != nil {
 			return err
@@ -885,8 +888,8 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 }
 
 // BuildResources are the reservations and ceilings of a build container.
-func BuildResources() (cpuMillis cpu.Millis, memoryBytes, memoryLimitBytes int64) {
-	return buildCPUMillis, buildMemoryBytes, buildMemoryLimit
+func (i *Images) BuildResources() (cpuMillis cpu.Millis, memoryBytes, memoryLimitBytes int64) {
+	return i.config.BuildCPU, buildMemoryBytes, buildMemoryLimit
 }
 
 // BuildOutcome is what a build attempt produced: a pushed manifest digest or
@@ -1180,14 +1183,14 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		// The next attempt's container joins the build's trace.
 		ctx := telemetry.WithTraceParent(ctx, deref(build.Traceparent))
 		if build.Mirror {
-			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
+			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, i.config.BuildCPU, buildMemoryBytes)
 			return nil, err
 		}
 		gpu, err := q.ImageBuildGPU(ctx, digest)
 		if err != nil {
 			return nil, fmt.Errorf("read build GPU: %w", err)
 		}
-		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes, gpu)
+		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, i.config.BuildCPU, buildMemoryBytes, gpu)
 		var unpaid *billing.PaymentRequiredError
 		var limit *billing.LimitError
 		var unoffered *billing.GPUUnavailableError

@@ -32,6 +32,8 @@ export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 # The Python bases, pushed by start outside the workload repositories as
 # Ship pushes them.
 export LAZYCLOUD_IMAGE_TEMPLATE="$LAZYCLOUD_IMAGE_REGISTRY/release/python:{version}-local"
+# Local hosts can be small; builds reserve one CPU there.
+export LAZYCLOUD_BUILD_CPU="${LAZYCLOUD_BUILD_CPU:-1}"
 # Agent release archives `lazycloud machine join` installs from.
 export LAZYCLOUD_AGENT_DIST_DIR="$PWD/$state/agent-dist"
 # The server and scheduler trace into Jaeger; the VM's agent and

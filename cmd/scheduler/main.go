@@ -14,6 +14,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -175,7 +177,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}, logger)
 	// Build recovery and the layer sweep need no registry: they read and move
 	// build state and delete layer pairs.
-	im := images.NewImages(pool, exec, vault, store, images.Config{})
+	buildCPU, err := cpu.ParseCores(cmp.Or(os.Getenv("LAZYCLOUD_BUILD_CPU"), "4"))
+	if err != nil {
+		return fmt.Errorf("LAZYCLOUD_BUILD_CPU: %w", err)
+	}
+	im := images.NewImages(pool, exec, vault, store, images.Config{BuildCPU: buildCPU})
 	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel, database.ChannelCallback)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
