@@ -1,7 +1,8 @@
 -- name: DevboxWorkload :one
 -- A pod deployment with its active release and app, in the workspace.
 select w.id, w.name, w.kind, w.desired_state, a.name as app_name, a.state as app_state, a.id as app_id,
-       w.active_release_id, r.spec,
+       w.active_release_id, r.spec, coalesce(r.start_failures, 0)::int as start_failures,
+       (r.load_error is not null)::bool as load_failed,
        (select count(*) from workloads o join apps oa on oa.id = o.app_id
         where oa.workspace_id = a.workspace_id and o.kind = 'pod' and o.name = w.name
           and o.desired_state <> 'deleted' and oa.state <> 'deleted')::int as same_name
@@ -44,5 +45,14 @@ from containers c
 join releases r on r.id = c.release_id
 where r.workload_id = @workload_id and c.purpose = 'serve' and c.created_at >= @since
   and c.state = 'stopped' and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
+order by c.stopped_at desc
+limit 1;
+
+-- name: ReleaseLastFailure :one
+-- The newest container of the release that failed to start, and why.
+select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
+from containers c
+where c.release_id = @release_id and c.state = 'stopped'
+  and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
 order by c.stopped_at desc
 limit 1;

@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -91,6 +93,21 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 		return PodView{}, fmt.Errorf("read pod failure: %w", err)
 	}
 	failed := err == nil
+	// A release that stopped starting keeps its failure until a start or
+	// a redeploy retries it, however long ago its last container failed.
+	if exhausted := row.StartFailures >= startFailureLimit; (exhausted || row.LoadFailed) && row.ActiveReleaseID != nil {
+		last, err := e.queries.ReleaseLastFailure(ctx, row.ActiveReleaseID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return PodView{}, fmt.Errorf("read release failure: %w", err)
+		default:
+			failed, failure.ID, failure.Reason = true, last.ID, last.Reason
+			if exhausted {
+				failure.Reason = fmt.Sprintf("stopped after %d failed starts: %s", row.StartFailures, last.Reason)
+			}
+		}
+	}
 	switch {
 	case saving:
 		out.Phase = apitypes.DevboxPhaseStopping
@@ -98,6 +115,14 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 		out.Phase, out.Reason = apitypes.DevboxPhaseFailed, failure.Reason
 	case woken && out.Active:
 		out.Phase = apitypes.DevboxPhaseQueued
+		// Planning waits on work billing refuses; say why.
+		refusal, err := e.admissionRefusal(ctx, uuid.UUID(workspace), out.Spec)
+		if err != nil {
+			return PodView{}, err
+		}
+		if refusal != "" {
+			out.Phase, out.Reason = apitypes.DevboxPhaseFailed, refusal
+		}
 	case failed:
 		out.Phase, out.Reason = apitypes.DevboxPhaseFailed, failure.Reason
 	default:
@@ -108,6 +133,27 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 		out.Failed = &id
 	}
 	return out, nil
+}
+
+// admissionRefusal is why billing refuses to start a container of spec in
+// workspace now, or "".
+func (e *Execution) admissionRefusal(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) (string, error) {
+	var refusal string
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		_, err := billing.Admit(ctx, tx, billing.Request{
+			Workspace: workspace, GPUs: gpuCount(spec.Resources), GPUModels: gpuModels(spec),
+			Pinned: pinned(spec), Machine: compute.PinnedMachine(spec) != "",
+		})
+		if refusedToWait(err) {
+			refusal = err.Error()
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("check admission: %w", err)
+	}
+	return refusal, nil
 }
 
 // PodStartFailure says why a container of the pod created since since

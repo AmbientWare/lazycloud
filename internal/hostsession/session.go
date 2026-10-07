@@ -743,7 +743,9 @@ func reportIn(c *hostproto.ContainerReport) (execution.ContainerReport, error) {
 
 func exitIn(e *hostproto.ContainerExit) execution.ContainerExit {
 	message := e.GetMessage()
-	if e.GetExitCode() != 0 {
+	// A load error's message is the supervisor's own account of it, which
+	// the exit code adds nothing to.
+	if e.GetExitCode() != 0 && e.GetReason() != hostproto.ExitReason_EXIT_REASON_LOAD_ERROR {
 		message = fmt.Sprintf("exit code %d: %s", e.GetExitCode(), message)
 	}
 	exit := execution.ContainerExit{Message: message}

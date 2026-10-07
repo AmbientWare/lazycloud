@@ -40,6 +40,13 @@ func enterRoot(root string) error {
 	if _, err := os.Stat(filepath.Join(root, seededMarker)); errors.Is(err, fs.ErrNotExist) {
 		started := time.Now()
 		if err := seedRoot(root, skip); err != nil {
+			if errors.Is(err, syscall.ENOSPC) {
+				var st unix.Statfs_t
+				if statErr := unix.Statfs(root, &st); statErr != nil {
+					return fmt.Errorf("%w; read the devbox root's size: %w", err, statErr)
+				}
+				return rootTooSmall(int64(st.Blocks)*st.Bsize, treeBytes("/", skip)) //nolint:gosec // a filesystem's size fits
+			}
 			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, seededMarker)), 0o755); err != nil { //nolint:gosec // a system directory
@@ -165,6 +172,48 @@ func bindInto(root string, m mountPoint) error {
 		}
 	}
 	return nil
+}
+
+// Root disk sizing as the deploy check in internal/control suggests it: the
+// image's unpacked root rounded up to whole GiB plus headroom, and at least
+// the devbox minimum.
+const (
+	gib             = int64(1) << 30
+	rootHeadroomGiB = 2
+	minRootDiskGiB  = 10
+)
+
+// rootTooSmall describes a seed that ran out of space by the sizes the
+// devbox's owner changes: its root disk's and its image's.
+func rootTooSmall(diskBytes, imageBytes int64) error {
+	need := max((imageBytes+gib-1)/gib+rootHeadroomGiB, minRootDiskGiB)
+	return fmt.Errorf("the root disk of %s GiB is too small for its image of %s GiB; set disk to at least %d GiB",
+		gibOf(diskBytes), gibOf(imageBytes), need)
+}
+
+func gibOf(bytes int64) string {
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(bytes)/float64(gib)), ".0")
+}
+
+// treeBytes is the size of the regular files under base, except skip and
+// what cannot be read.
+func treeBytes(base string, skip map[string]bool) int64 {
+	var total int64
+	_ = filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return nil //nolint:nilerr // an unreadable entry adds nothing
+		case skip[path] && entry.IsDir():
+			return filepath.SkipDir
+		case skip[path] || !entry.Type().IsRegular():
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // seedRoot copies the image's root filesystem into root, except mount

@@ -322,14 +322,12 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 }
 
 // TestStartRetriesAPodWhoseStartsFailed: a release that reached the start
-// failure limit stays down for connections, and starting the pod retries it.
+// failure limit says so with its last failure, stays down for connections,
+// and starting the pod retries it.
 func TestStartRetriesAPodWhoseStartsFailed(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", 600)
-	if _, err := pool.Exec(t.Context(), "update releases set start_failures = $1 where id = $2", startFailureLimit, f.release); err != nil {
-		t.Fatal(err)
-	}
 	pending := func(cause WakeCause) int {
 		t.Helper()
 		if err := e.WakePod(t.Context(), f.workspace, f.workload, cause); err != nil {
@@ -344,11 +342,46 @@ func TestStartRetriesAPodWhoseStartsFailed(t *testing.T) {
 		}
 		return n
 	}
+	if n := pending(WakeConnection); n != 1 {
+		t.Fatalf("a woken pod has %d pending containers", n)
+	}
+	// The last start the limit allows failed an hour ago.
+	if _, err := pool.Exec(t.Context(), `
+with failed as (
+    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() - interval '1 hour',
+           exit_message = 'the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB'
+    where release_id = $1
+), counted as (update releases set start_failures = $2 where id = $1)
+update pod_states set woken_at = now() - interval '1 hour'`, f.release, startFailureLimit); err != nil {
+		t.Fatal(err)
+	}
+	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
+	want := "stopped after 3 failed starts: the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB"
+	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || view.Reason != want || view.Failed == nil {
+		t.Fatalf("view of a release past the start failure limit = %+v, %v", view, err)
+	}
 	if n := pending(WakeConnection); n != 0 {
 		t.Fatalf("a connection started %d containers of a failed release", n)
 	}
 	if n := pending(WakeStart); n != 1 {
 		t.Fatalf("a start left %d containers of a failed release", n)
+	}
+}
+
+// A woken devbox that billing will not start says why instead of queueing.
+func TestAWokenDevboxBillingRefusesSaysWhy(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedPod(t, pool, "devbox", 600)
+	if _, err := pool.Exec(t.Context(), "update billing_accounts set status = 'past_due', complimentary_since = null"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeStart); err != nil {
+		t.Fatal(err)
+	}
+	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
+	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || !strings.HasPrefix(view.Reason, "a payment for this account did not go through") {
+		t.Fatalf("view of a refused devbox = %+v, %v", view, err)
 	}
 }
 

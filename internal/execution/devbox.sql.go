@@ -81,7 +81,8 @@ func (q *Queries) DevboxFailure(ctx context.Context, workloadID uuid.UUID) (Devb
 
 const devboxWorkload = `-- name: DevboxWorkload :one
 select w.id, w.name, w.kind, w.desired_state, a.name as app_name, a.state as app_state, a.id as app_id,
-       w.active_release_id, r.spec,
+       w.active_release_id, r.spec, coalesce(r.start_failures, 0)::int as start_failures,
+       (r.load_error is not null)::bool as load_failed,
        (select count(*) from workloads o join apps oa on oa.id = o.app_id
         where oa.workspace_id = a.workspace_id and o.kind = 'pod' and o.name = w.name
           and o.desired_state <> 'deleted' and oa.state <> 'deleted')::int as same_name
@@ -106,6 +107,8 @@ type DevboxWorkloadRow struct {
 	AppID           uuid.UUID
 	ActiveReleaseID *uuid.UUID
 	Spec            []byte
+	StartFailures   int32
+	LoadFailed      bool
 	SameName        int32
 }
 
@@ -123,6 +126,8 @@ func (q *Queries) DevboxWorkload(ctx context.Context, arg DevboxWorkloadParams) 
 		&i.AppID,
 		&i.ActiveReleaseID,
 		&i.Spec,
+		&i.StartFailures,
+		&i.LoadFailed,
 		&i.SameName,
 	)
 	return i, err
@@ -150,4 +155,26 @@ func (q *Queries) PodStartFailedSince(ctx context.Context, arg PodStartFailedSin
 	var reason string
 	err := row.Scan(&reason)
 	return reason, err
+}
+
+const releaseLastFailure = `-- name: ReleaseLastFailure :one
+select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
+from containers c
+where c.release_id = $1 and c.state = 'stopped'
+  and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
+order by c.stopped_at desc
+limit 1
+`
+
+type ReleaseLastFailureRow struct {
+	ID     uuid.UUID
+	Reason string
+}
+
+// The newest container of the release that failed to start, and why.
+func (q *Queries) ReleaseLastFailure(ctx context.Context, releaseID *uuid.UUID) (ReleaseLastFailureRow, error) {
+	row := q.db.QueryRow(ctx, releaseLastFailure, releaseID)
+	var i ReleaseLastFailureRow
+	err := row.Scan(&i.ID, &i.Reason)
+	return i, err
 }
