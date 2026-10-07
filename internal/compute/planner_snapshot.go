@@ -28,8 +28,10 @@ type fleetRead struct {
 	spot        []SpotQuote
 	zoneTypes   map[string]map[string][]string
 	quotas      []QuotaRoom
-	// batchWait is how long the arrival batch stays open.
-	batchWait time.Duration
+	// batchWait is how long the platform's arrival batch stays open, and
+	// connectionWaits each connection's.
+	batchWait       time.Duration
+	connectionWaits map[uuid.UUID]time.Duration
 }
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
@@ -48,14 +50,22 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
-	wait, err := q.BatchWait(ctx, BatchWaitParams{
+	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
 		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
 		LookbackSeconds: (p.Batch.Max + p.Batch.Quiet).Seconds(),
 	})
 	if err != nil {
-		return r, fmt.Errorf("read the arrival batch: %w", err)
+		return r, fmt.Errorf("read the arrival batches: %w", err)
 	}
-	r.batchWait = time.Duration(wait * float64(time.Second))
+	r.connectionWaits = map[uuid.UUID]time.Duration{}
+	for _, w := range waits {
+		wait := time.Duration(w.WaitSeconds * float64(time.Second))
+		if w.ConnectionID == nil {
+			r.batchWait = wait
+			continue
+		}
+		r.connectionWaits[*w.ConnectionID] = wait
+	}
 	if r.cooldowns, err = q.PlannerCooldowns(ctx, p.RegionFailureWindow.Seconds()); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
 	}

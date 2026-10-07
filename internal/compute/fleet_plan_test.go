@@ -471,6 +471,38 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 	}
 }
 
+// A warm slot that resumes a reserve on its own takes one whose absence
+// leaves a reserve that fits the largest shape, though it is not the
+// smallest.
+func TestAWarmSlotResumesAReserveThatLeavesTheLargeOneStopped(t *testing.T) {
+	narrow := CatalogType{Name: "narrow", Topology: twoPerCore(8), MemoryBytes: 32 * gib, prices: [4]int64{90_000, 90_000, 90_000, 90_000}}
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
+	p.LargestShape.Default = cpuGiB(8000, 8)
+	large := planHost(1, planSmall, FleetStopped)
+	s := planSnapshot(t, large, planHost(2, narrow, FleetStopped))
+	s.Offers.Catalog = append(s.Offers.Catalog, narrow)
+	plan := PlanFleet(p, s)
+	if got := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(got, []HostID{{2}}) {
+		t.Fatalf("resumed %v, want the reserve that leaves the large one stopped: %+v", got, plan.Actions)
+	}
+}
+
+// A market without a stopped floor holds its largest shape within its
+// share of load: one running T4 keeps a stopped target of one card.
+func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	h := planHost(1, mustType(t, "g4dn.xlarge"), FleetServing)
+	h.GPU, h.Load, h.Containers = "T4", FleetCapacity{CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}, 1
+	s := planSnapshot(t, h)
+	s.Offers.Catalog = FleetCatalog()
+	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: h.Load}
+	if target := marketPlan(t, PlanFleet(p, s), ReserveMarket{GPU: "T4"}).StoppedTarget; target.GPUs != 1 {
+		t.Fatalf("T4 stopped target %+v, want one card", target)
+	}
+}
+
 // A reserve shortfall held for a host that may return names the hold, not
 // an offer exclusion; with no host that could return it is bought at once.
 func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {

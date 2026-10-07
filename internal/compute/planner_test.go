@@ -333,3 +333,49 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 		})
 	}
 }
+
+// Only arrivals that may need a platform purchase hold one: work arriving
+// on a connected account, work pinned to a joined machine and work that
+// ready room took at once leave a settled platform container's purchase
+// alone.
+func TestArrivalsElsewhereDoNotHoldAPlatformPurchase(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		arrive func(t *testing.T, o owners, owner identity.UserID)
+	}{
+		{"a connected account", func(t *testing.T, o owners, owner identity.UserID) {
+			ws := newWorkspace(t, o.pool, "connected", owner)
+			run(t, o.pool, `
+with conn as (insert into cloud_connections (account_id, aws_account_id, phase) values ($1, '123456789012', 'ready') returning id)
+update workspaces set connection_id = (select id from conn) where id = $2`, uuid.UUID(owner), ws)
+			pendingContainer(t, o.pool, ws, newRelease(t, o.pool, ws, `{}`), 1000, gib)
+		}},
+		{"a joined machine", func(t *testing.T, o owners, owner identity.UserID) {
+			ws := newWorkspace(t, o.pool, "pinned", owner)
+			pendingContainer(t, o.pool, ws, newRelease(t, o.pool, ws, `{"placement": {"machine": "box"}}`), 1000, gib)
+		}},
+		{"ready room", func(t *testing.T, o owners, owner identity.UserID) {
+			ws := newWorkspace(t, o.pool, "warm", owner)
+			host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Region: "us-east-2", CPU: 4000, Memory: 16 * gib})
+			run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t, o.pool, ws, `{}`), uuid.UUID(host))
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := newOwners(t, fleetConfig(compute.Fleet{}))
+			spotPrices(t, o)
+			alice := newUser(t, o.pool, "alice@example.com")
+			dev := newWorkspace(t, o.pool, "dev", alice)
+			settled := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 1000, gib)
+			run(t, o.pool, "update containers set created_at = now() - interval '2 seconds' where id = $1", settled)
+			c.arrive(t, o, alice)
+			r, err := o.compute.Plan(t.Context(), discard())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bought := capacityWait(t, o, settled); r.BatchWait != 0 || bought != string(compute.WaitProvisioning) {
+				t.Fatalf("plan %+v, settled container waits %q; want its purchase made at once", r, bought)
+			}
+		})
+	}
+}

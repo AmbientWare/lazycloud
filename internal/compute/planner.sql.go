@@ -13,54 +13,87 @@ import (
 	"github.com/google/uuid"
 )
 
-const batchWait = `-- name: BatchWait :one
-with recent as (
-    select c.created_at
+const batchWaits = `-- name: BatchWaits :many
+with sample as (
+    select c.created_at, c.workspace_id, c.release_id, c.image_build_id, c.state, c.capacity_host_id, c.billing_owner
     from containers c
     where c.id > (select uuidv7(- make_interval(secs => $4::float8)))
     order by c.id desc
-    limit $1
+    limit $3
+), recent as (
+    select s.created_at, ws.connection_id
+    from sample s
+    left join image_builds ib on ib.id = s.image_build_id
+    left join workspaces ws on ws.id = s.workspace_id and ib.mirror is not true
+    left join releases r on r.id = s.release_id
+    where (s.state = 'pending' or s.capacity_host_id is not null) and s.billing_owner <> 'self_hosted'
+      and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
 ), arrivals as (
-    select created_at,
-           coalesce(created_at - lag(created_at) over (order by created_at),
+    select connection_id, created_at,
+           coalesce(created_at - lag(created_at) over (partition by connection_id order by created_at),
                     created_at - (now() - make_interval(secs => $4::float8)))
-               >= make_interval(secs => $2::float8) as opens
+               >= make_interval(secs => $1::float8) as opens
     from recent
 ), batch as (
-    select max(created_at) as newest, max(created_at) filter (where opens) as began, count(*) as seen
+    select connection_id, max(created_at) as newest, max(created_at) filter (where opens) as began
     from arrivals
+    group by connection_id
 )
-select coalesce(case when began is not null and seen < $1::int then
-           greatest(extract(epoch from least(newest + make_interval(secs => $2::float8),
-                                             began + make_interval(secs => $3::float8)) - now()), 0)
-       end, 0)::float8 as wait_seconds
+select connection_id,
+       greatest(extract(epoch from least(newest + make_interval(secs => $1::float8),
+                                         began + make_interval(secs => $2::float8)) - now()), 0)::float8
+           as wait_seconds
 from batch
+where began is not null and (select count(*) from sample) < $3::int
+order by connection_id
 `
 
-type BatchWaitParams struct {
-	SampleSize      int32
+type BatchWaitsParams struct {
 	QuietSeconds    float64
 	MaxSeconds      float64
+	SampleSize      int32
 	LookbackSeconds float64
 }
 
-// How long, in seconds, the arrival batch stays open: until quiet passes
-// after its newest container, and at most max_seconds after the first. The
-// batch runs back from the newest container through arrivals less than
-// quiet apart, among those of the lookback, max and quiet seconds; one that
-// may have begun before it, or fills the sample, has closed. The sample
-// follows the primary key, so it reads at most sample_size rows whatever
-// the history or backlog.
-func (q *Queries) BatchWait(ctx context.Context, arg BatchWaitParams) (float64, error) {
-	row := q.db.QueryRow(ctx, batchWait,
-		arg.SampleSize,
+type BatchWaitsRow struct {
+	ConnectionID *uuid.UUID
+	WaitSeconds  float64
+}
+
+// How long, in seconds, each owner's arrival batch stays open: until quiet
+// passes after its newest container, and at most max_seconds after its
+// first. An arrival is a container of the lookback, max and quiet seconds
+// that may need a purchase: still pending, or placed on a host bought for
+// it. It belongs to its workspace's connection, a mirror build to the
+// platform (a null connection), as pending demand does; work pinned to a
+// joined machine buys nothing. A batch runs back from its newest arrival
+// through arrivals less than quiet apart; one that may have begun before
+// the lookback, or a sample that fills, holds nothing. The sample follows
+// the primary key, so it reads at most sample_size rows whatever the
+// history or backlog.
+func (q *Queries) BatchWaits(ctx context.Context, arg BatchWaitsParams) ([]BatchWaitsRow, error) {
+	rows, err := q.db.Query(ctx, batchWaits,
 		arg.QuietSeconds,
 		arg.MaxSeconds,
+		arg.SampleSize,
 		arg.LookbackSeconds,
 	)
-	var wait_seconds float64
-	err := row.Scan(&wait_seconds)
-	return wait_seconds, err
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BatchWaitsRow
+	for rows.Next() {
+		var i BatchWaitsRow
+		if err := rows.Scan(&i.ConnectionID, &i.WaitSeconds); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const coolOffers = `-- name: CoolOffers :exec

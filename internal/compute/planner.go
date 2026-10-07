@@ -378,7 +378,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 				held++
 			}
 		}
-		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held), BatchWait: ps.r.batchWait}
+		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held), BatchWait: ps.r.connectionWaits[conn.ID]}
 		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
 		ps.cool(conn.ID.String(), cools, "offer cooled: its host could not take the container bought for")
 		bought, err := ps.apply(plan, &conn.ID)

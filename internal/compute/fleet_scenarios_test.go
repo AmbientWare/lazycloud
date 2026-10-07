@@ -133,7 +133,14 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 			}
 		}
 		s.place()
-		s.plan()
+		// A pass that held purchases for arrivals runs again once they
+		// settle, as the planner loop does.
+		if wait := s.plan(); wait > 0 {
+			tick := s.now
+			s.now = s.now.Add(wait)
+			s.plan()
+			s.now = tick
+		}
 		s.account()
 		s.now = s.now.Add(simTick)
 	}
@@ -212,8 +219,43 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 	return fh
 }
 
-func (s *sim) plan() {
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: s.builds, Offers: s.in}
+// batchWait is how long the arrival batch stays open, as the BatchWait
+// query reads it: among the containers of the lookback still pending or
+// placed on a host bought for them.
+func (s *sim) batchWait() time.Duration {
+	w := s.p.Batch
+	var arrivals []time.Time
+	for _, c := range s.pending {
+		arrivals = append(arrivals, c.arrived)
+	}
+	for _, h := range s.hosts {
+		for _, c := range h.containers {
+			if c.host != nil {
+				arrivals = append(arrivals, c.arrived)
+			}
+		}
+	}
+	slices.SortFunc(arrivals, time.Time.Compare)
+	prev := s.now.Add(-(w.Max + w.Quiet))
+	var newest, began time.Time
+	for _, at := range arrivals {
+		if at.Before(prev) {
+			continue
+		}
+		if at.Sub(prev) >= w.Quiet {
+			began = at
+		}
+		prev, newest = at, at
+	}
+	if began.IsZero() {
+		return 0
+	}
+	return max(min(newest.Add(w.Quiet).Sub(s.now), began.Add(w.Max).Sub(s.now)), 0)
+}
+
+// plan runs one pass and returns how long it held purchases.
+func (s *sim) plan() time.Duration {
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: s.builds, Offers: s.in, BatchWait: s.batchWait()}
 	snapshot.Offers.Now = s.now
 	// The scheduler refreshes Spot quotes far more often than they age out.
 	snapshot.Offers.Spot = slices.Clone(s.in.Spot)
@@ -270,6 +312,7 @@ func (s *sim) plan() {
 	for m, n := range held {
 		s.mostReserves[m] = max(s.mostReserves[m], n)
 	}
+	return plan.BatchWait
 }
 
 // check asserts no purchase serves a container a ready reserve would fit.

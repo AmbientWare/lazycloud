@@ -123,9 +123,9 @@ func (t HeadroomTarget) Of(load FleetCapacity) FleetCapacity {
 type MarketReserve struct {
 	Warm    HeadroomTarget
 	Stopped HeadroomTarget
-	// FitLargest adds the market's largest recent shape
-	// (Policy.LargestShape) to its stopped target, and one of the machines
-	// that hold the target must fit it.
+	// FitLargest raises the stopped target to at least the floor beside the
+	// market's largest recent shape (Policy.LargestShape), and one of the
+	// machines that hold the target must fit that shape.
 	FitLargest bool
 }
 

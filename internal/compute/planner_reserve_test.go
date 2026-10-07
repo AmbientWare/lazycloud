@@ -361,8 +361,8 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 }
 
 // The targets share the load containers hold now: what the market's hosts
-// run and what its pending containers ask for. The stopped target adds the
-// largest shape, 8 CPU by default.
+// run and what its pending containers ask for. The stopped target is at
+// least the floor beside the largest shape, 8 CPU by default.
 func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -377,7 +377,7 @@ select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate
 	}
 	plan(t, o)
 	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 12_000 ||
-		spot.StoppedTarget.CPUMillis != 24_000+8000 {
+		spot.StoppedTarget.CPUMillis != 24_000 {
 		t.Fatalf("Spot market %+v, want 25%% and 50%% of 16 running and 32 pending CPU", spot)
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
