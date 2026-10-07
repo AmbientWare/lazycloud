@@ -37,9 +37,10 @@ Planner core (A):
 - Hold reasons name the hold; real exclusions name themselves.
 
 Launch and cost (B):
-- Launches go through EC2 CreateFleet (type instant) with
-  price-capacity-optimized over a short list of acceptable types and zones
-  per decision, replacing single-type RunInstances.
+- Launches stay on RunInstances. The planner ranks pools (type, zone,
+  market) by full cost and Spot placement score, and a launch refused for
+  capacity, quota or price moves to the next ranked pool in the same pass;
+  only refusals for that pool cool it.
 - Offers carry their full hourly cost: compute, root disk throughput, IPv4,
   and expected cross-region transfer to us-east-1 (registry pushes and pulls,
   layer and volume reads). regionOrder() goes.
@@ -55,7 +56,16 @@ through EC2 Fleet with price-capacity-optimized. Consolidation (phase 2)
 follows disruption/consolidation.go with budgets, do-not-disrupt and
 replace-before-delete.
 
-## Open questions (the spike answers them)
+## Spike answers (spike-fleet.md)
+
+EC2 Fleet rejects hibernation for Spot (instant and request) and refuses stops
+on maintain fleets, so it cannot hold our Spot reserves; on-demand hibernates
+through it. RunInstances reaches SSM online in 13.2 s against 15.0 s for Fleet
+instant. One pinned pool was refused 3 of 5 times, which the next-pool retry
+answers. Spot placement scores are free, 20 calls/s, and separate regions
+clearly (us-east-2 scored 1-2 for ten 8xlarge hosts, others 9).
+
+## Questions the spike asked
 
 1. Does CreateFleet type instant launch a Spot instance with hibernation
    configured and a persistent request, so a stopped reserve resumes as

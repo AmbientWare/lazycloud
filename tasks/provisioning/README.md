@@ -8,8 +8,12 @@ merges as is; the final PR removes `tasks/provisioning/`.
 - Refactor, no patches: the warm refill, the largest-shape reserve kept apart
   and the region order are replaced, not tuned. (user)
 - Region choice comes from availability and full cost, not an order or a
-  band: EC2 Fleet with price-capacity-optimized for launches, and offers that
-  price cross-region transfer to the us-east-1 registry and storage. (user)
+  band: offers price cross-region transfer to the us-east-1 registry and
+  storage, and rank pools by Spot placement score with price. (user)
+- Every launch stays on RunInstances: EC2 Fleet cannot launch a Spot instance
+  that hibernates and starts again (spike-fleet.md), and one launch path beats
+  two. A refused pool is followed by the next ranked pool in the same pass.
+  No Fleet code is written. (user, 2026-10-07)
 - Builds stay on fleet nodes; their shape feeds the warm slots. (user)
 - Consolidation is phase 2, after phase 1 is measured in prod. (user)
 - Prices and the rate card do not change; a per-core cost check against
@@ -22,7 +26,7 @@ merges as is; the final PR removes `tasks/provisioning/`.
 
 | Packet | Branch | Owns | Depends on |
 | --- | --- | --- | --- |
-| spike-fleet | prov-spike (scratch, never merges) | scratch code, EC2 in default | none |
+| spike-fleet | done; findings in spike-fleet.md | | none |
 | A planner core | prov-planner | fleet_plan.go, fleet_policy.go, fleet_cover.go, planner*.go, the planner loop in cmd/scheduler | none |
 | B launch and cost | prov-launch | launcher.go, reserve_actuator.go, aws.go, fleet_offers.go, fleet_catalog.go, offers.go, zone/spot price reads, images.go build reservation | spike-fleet |
 
