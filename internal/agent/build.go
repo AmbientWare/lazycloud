@@ -87,6 +87,8 @@ if [ "$snapshotter" != overlayfs ]; then
   cat /tmp/buildkitd.log >&2
   exit 1
 fi
+# The agent reads the content store's blobs as its own user.
+chmod 0711 ` + buildCacheDir + `/buildkit ` + buildCacheDir + `/buildkit/runc-overlayfs
 buildctl --addr "$addr" "$@" --progress plain --output "$LAZYCLOUD_IMAGE_OUTPUT" --metadata-file ` + buildOutDir + `/metadata.json
 echo "` + imagePushed + `"
 if [ -n "$LAZYCLOUD_CACHE_EXPORT" ]; then
