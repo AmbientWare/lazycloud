@@ -28,6 +28,10 @@ type fleetRead struct {
 	spot        []SpotQuote
 	zoneTypes   map[string]map[string][]string
 	quotas      []QuotaRoom
+	// batchWait is how long the platform's arrival batch stays open, and
+	// connectionWaits each connection's.
+	batchWait       time.Duration
+	connectionWaits map[uuid.UUID]time.Duration
 }
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
@@ -42,9 +46,25 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		return r, fmt.Errorf("read pending demand: %w", err)
 	}
 	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch,
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
+	}
+	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
+		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
+		LookbackSeconds: (p.Batch.Max + p.Batch.Quiet).Seconds(),
+	})
+	if err != nil {
+		return r, fmt.Errorf("read the arrival batches: %w", err)
+	}
+	r.connectionWaits = map[uuid.UUID]time.Duration{}
+	for _, w := range waits {
+		wait := time.Duration(w.WaitSeconds * float64(time.Second))
+		if w.ConnectionID == nil {
+			r.batchWait = wait
+			continue
+		}
+		r.connectionWaits[*w.ConnectionID] = wait
 	}
 	if r.cooldowns, err = q.PlannerCooldowns(ctx, p.RegionFailureWindow.Seconds()); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
@@ -216,11 +236,11 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 }
 
 // largestShapes are the largest shape each market's placed platform
-// containers reserved. GPU work belongs to the on-demand market of its
-// model, as its demand does; GPU work without a recorded model counts in
-// no market.
-func largestShapes(rows []RecentShapesRow) map[ReserveMarket]FleetCapacity {
-	out := map[ReserveMarket]FleetCapacity{}
+// containers reserved, and the largest its builds did. GPU work belongs to
+// the on-demand market of its model, as its demand does; GPU work without
+// a recorded model counts in no market.
+func largestShapes(rows []RecentShapesRow) (recent, builds map[ReserveMarket]FleetCapacity) {
+	recent, builds = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	for _, r := range rows {
 		var m ReserveMarket
 		switch {
@@ -231,9 +251,13 @@ func largestShapes(rows []RecentShapesRow) map[ReserveMarket]FleetCapacity {
 		default:
 			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
+		out := recent
+		if r.Build {
+			out = builds
+		}
 		out[m] = out[m].Upper(FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)})
 	}
-	return out
+	return recent, builds
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

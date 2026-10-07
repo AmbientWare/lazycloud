@@ -123,28 +123,16 @@ func (t HeadroomTarget) Of(load FleetCapacity) FleetCapacity {
 type MarketReserve struct {
 	Warm    HeadroomTarget
 	Stopped HeadroomTarget
-	Largest LargestReserve
+	// FitLargest raises the stopped target to at least the floor beside the
+	// market's largest recent shape (Policy.LargestShape), and one of the
+	// machines that hold the target must fit that shape.
+	FitLargest bool
 }
 
-// LargestReserve is how a market keeps a stopped machine that fits its
-// largest recent shape (Policy.LargestShape).
-type LargestReserve string
-
-const (
-	// LargestNone keeps none.
-	LargestNone LargestReserve = ""
-	// LargestShared keeps one among the machines that hold the stopped
-	// target.
-	LargestShared LargestReserve = "shared"
-	// LargestApart keeps one beside the machines that hold the stopped
-	// target. Work resumes it only when no other reserve fits.
-	LargestApart LargestReserve = "apart"
-)
-
-// LargestShape sizes a market's LargestReserve machine: the largest CPU,
-// memory and GPUs its containers reserved within Window, capped at Cap. A
-// CPU market without such containers keeps one of Default; a GPU market
-// keeps none.
+// LargestShape sizes the reserve that fits a market's largest shape: the
+// largest CPU, memory and GPUs its containers reserved within Window,
+// capped at Cap. A CPU market without such containers keeps one of
+// Default; a GPU market keeps none. Cap also bounds a warm slot.
 type LargestShape struct {
 	Window       time.Duration
 	Default, Cap FleetCapacity
@@ -165,6 +153,12 @@ func (s LargestShape) of(m ReserveMarket, largest FleetCapacity) FleetCapacity {
 	return largest.Lower(s.Cap)
 }
 
+// BatchWindow holds purchases while containers arrive: until Quiet passes
+// without an arrival, and at most Max after the first.
+type BatchWindow struct {
+	Quiet, Max time.Duration
+}
+
 // Policy is the fleet capacity policy, reviewed like prices.
 type Policy struct {
 	// MarginPercent is the share of rate-card revenue a purchase must keep
@@ -183,6 +177,10 @@ type Policy struct {
 	// none.
 	GPU          map[string]MarketReserve
 	LargestShape LargestShape
+	// BuildWindow is how long a build placed in a market keeps a warm slot
+	// of its shape there.
+	BuildWindow time.Duration
+	Batch       BatchWindow
 	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
@@ -197,11 +195,11 @@ type Policy struct {
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
 	cpuMarket := MarketReserve{
-		Warm:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, LoadPercent: 25},
-		Stopped: HeadroomTarget{Floor: FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}, LoadPercent: 50},
-		Largest: LargestApart,
+		Warm:       HeadroomTarget{Floor: FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, LoadPercent: 25},
+		Stopped:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}, LoadPercent: 50},
+		FitLargest: true,
 	}
-	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, Largest: LargestShared}
+	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
 	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
 	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
 	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
@@ -214,6 +212,8 @@ func DefaultPolicy() Policy {
 		Spot:             cpuMarket, OnDemand: cpuMarket,
 		GPU:            map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
 		LargestShape:   LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
+		BuildWindow:    time.Hour,
+		Batch:          BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
 		IdleTimeout:    5 * time.Minute,
 		SpotPriceAge:   time.Hour,
 		RegionFailures: 2, RegionFailureWindow: 30 * time.Minute,
@@ -231,6 +231,37 @@ func (p Policy) Reserve(m ReserveMarket) MarketReserve {
 		return p.Spot
 	}
 	return p.OnDemand
+}
+
+// slots are the warm slots target keeps at load: its floor, then what a
+// share of load adds beyond it. Each part splits into the fewest equal
+// slots within its bound, the cap for the floor and the floor for the
+// rest, so the slots hold the target's whole headroom and one fits a start
+// of the floor's shape.
+func (p Policy) slots(target HeadroomTarget, load FleetCapacity) []FleetCapacity {
+	rest := target.Of(load).Minus(target.Floor).Clamp()
+	bound := p.LargestShape.Cap
+	if !target.Floor.Empty() {
+		bound = target.Floor.Lower(bound)
+	}
+	return append(split(target.Floor, p.LargestShape.Cap), split(rest, bound)...)
+}
+
+// split divides c into the fewest equal parts, rounded up, that each fit
+// within bound in every dimension bound has; none when c is empty.
+func split(c, bound FleetCapacity) []FleetCapacity {
+	if c.Empty() {
+		return nil
+	}
+	n := int64(1)
+	for _, d := range [][2]int64{{int64(c.CPUMillis), int64(bound.CPUMillis)}, {c.MemoryBytes, bound.MemoryBytes}, {int64(c.GPUs), int64(bound.GPUs)}} {
+		if d[1] > 0 {
+			n = max(n, (d[0]+d[1]-1)/d[1])
+		}
+	}
+	up := func(v int64) int64 { return (v + n - 1) / n }
+	part := FleetCapacity{CPUMillis: cpu.Millis(up(int64(c.CPUMillis))), MemoryBytes: up(c.MemoryBytes), GPUs: int(up(int64(c.GPUs)))}
+	return slices.Repeat([]FleetCapacity{part}, int(n))
 }
 
 // Markets are the markets the policy keeps headroom in, in a fixed order.
