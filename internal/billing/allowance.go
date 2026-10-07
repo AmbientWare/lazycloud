@@ -25,8 +25,42 @@ type Declared struct {
 	Pinned bool
 	// Machine marks work pinned to a joined machine.
 	Machine bool
-	// MinContainers is the warm floor the workload keeps running.
+	// MinContainers is the warm floor the workload keeps running; only a
+	// deploy holds it to the plan.
 	MinContainers int
+}
+
+// DeclaredBy is what a workload with these sections declares. A container
+// holds gpu_count cards, else one when the workload names a model.
+func DeclaredBy(resources *apitypes.Resources, placement *apitypes.Placement, autoscaler *apitypes.Autoscaler) Declared {
+	var d Declared
+	if r := resources; r != nil {
+		switch {
+		case r.GpuCount != nil && *r.GpuCount > 0:
+			d.GPUs = *r.GpuCount
+		case r.Gpu != nil && len(*r.Gpu) > 0:
+			d.GPUs = 1
+		}
+		if r.Gpu != nil {
+			for _, g := range *r.Gpu {
+				d.GPUModels = append(d.GPUModels, GPUType(g))
+			}
+		}
+	}
+	if p := placement; p != nil {
+		d.Pinned = (p.Region != nil && *p.Region != "") || (p.AvailabilityZone != nil && *p.AvailabilityZone != "")
+		d.Machine = p.Machine != nil && *p.Machine != ""
+	}
+	if a := autoscaler; a != nil && a.MinContainers != nil {
+		d.MinContainers = *a.MinContainers
+	}
+	return d
+}
+
+// Request is the admission request for d's work in workspace, starting
+// nothing.
+func (d Declared) Request(workspace uuid.UUID) Request {
+	return Request{Workspace: workspace, GPUs: d.GPUs, GPUModels: d.GPUModels, Pinned: d.Pinned, Machine: d.Machine}
 }
 
 // Refusal is a plan rule a workload breaks. Message names the limit and

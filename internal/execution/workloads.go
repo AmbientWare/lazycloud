@@ -156,10 +156,9 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		}
 		// An instance has nowhere else to run, so the account's container
 		// limit refuses it rather than queueing it.
-		grant, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: uuid.UUID(workspace), Start: 1, Cold: true, GPUs: int(params.GpuCount),
-			GPUModels: gpuModels(spec), Pinned: pinned(spec), Machine: compute.PinnedMachine(spec) != "",
-		})
+		admit := billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler).Request(uuid.UUID(workspace))
+		admit.Start, admit.Cold = 1, true
+		grant, err := billing.Admit(ctx, tx, admit)
 		if err != nil {
 			return fmt.Errorf("admit instance: %w", err)
 		}
@@ -196,11 +195,12 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	if spec.Pod != nil && spec.Pod.Kind == apitypes.PodKindDevbox {
 		return InsertInstanceParams{}, &InvalidError{Reason: "a devbox runs one container; connect to it instead"}
 	}
+	declared := billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler)
 	params := InsertInstanceParams{
 		WorkspaceID: uuid.UUID(workspace), ReleaseID: &row.ID,
 		CpuMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
-		GpuCount:  int32(gpuCount(spec.Resources)), //nolint:gosec // The schema caps gpu_count at 8.
-		RateClass: string(billing.RateClassFor(pinned(spec), preemptible(spec))),
+		GpuCount:  int32(declared.GPUs), //nolint:gosec // The schema caps gpu_count at 8.
+		RateClass: string(billing.RateClassFor(declared.Pinned, preemptible(spec))),
 		Purpose:   string(PurposeInstance), Command: req.Command, SnapshotID: req.Snapshot,
 		AllowList: []string{}, ExposedPorts: []int32{},
 	}
@@ -297,34 +297,6 @@ func intOf(v *int32) *int {
 	}
 	n := int(*v)
 	return &n
-}
-
-// gpuCount is the cards each container holds, as planning reads it: a GPU
-// list without a positive count holds one.
-func gpuCount(r apitypes.Resources) int {
-	if r.GpuCount != nil && *r.GpuCount > 0 {
-		return *r.GpuCount
-	}
-	if r.Gpu != nil && len(*r.Gpu) > 0 {
-		return 1
-	}
-	return 0
-}
-
-func gpuModels(spec apitypes.WorkloadSpec) []billing.GPUType {
-	if spec.Resources.Gpu == nil {
-		return nil
-	}
-	out := make([]billing.GPUType, len(*spec.Resources.Gpu))
-	for n, g := range *spec.Resources.Gpu {
-		out[n] = billing.GPUType(g)
-	}
-	return out
-}
-
-func pinned(spec apitypes.WorkloadSpec) bool {
-	p := spec.Placement
-	return p != nil && ((p.Region != nil && *p.Region != "") || (p.AvailabilityZone != nil && *p.AvailabilityZone != ""))
 }
 
 func preemptible(spec apitypes.WorkloadSpec) bool {
