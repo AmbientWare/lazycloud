@@ -23,7 +23,7 @@ from lazycloud._shared.deployment_records import (
     VolumeMount,
 )
 from lazycloud._shared.deployments import DeploymentKind, PodRole
-from lazycloud._shared.disks import DiskMount, parse_disk_size_bytes
+from lazycloud._shared.disks import DiskMount, parse_devbox_disk_size_bytes
 from lazycloud._shared.gpu import GpuInput
 from lazycloud._shared.tasks import TaskPolicy
 from lazycloud.abstractions.disk import Disk, disk_mounts
@@ -838,7 +838,8 @@ class App:
             name: Devbox name; also the name of its root disk.
             image: Base image; what the devbox writes on top of it is kept on
                 the disk.
-            disk: Root disk size, such as ``"100Gi"``; stored data is billed.
+            disk: Root disk size, such as ``"100Gi"``: at least ``"10Gi"`` and room
+                for the image's unpacked root. Stored data is billed, not the size.
             agent_harnesses: Coding agents to install in a Debian or Ubuntu image.
                 Defaults to all supported agents; an empty list skips installation.
                 Versions are pinned by the SDK. Authentication happens after deployment.
@@ -884,7 +885,7 @@ class App:
                 docker_enabled=docker_enabled,
                 preemptible=preemptible,
                 role=PodRole.Devbox,
-                root_disk_bytes=parse_disk_size_bytes(disk),
+                root_disk_bytes=parse_devbox_disk_size_bytes(disk),
                 region=region,
                 availability_zone=availability_zone,
                 machine=machine,

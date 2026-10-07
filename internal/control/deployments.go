@@ -298,8 +298,8 @@ func (c *Control) ListVersions(ctx context.Context, workspace identity.Workspace
 }
 
 // PlanDeployment previews a deploy of workloads to app: each listed workload
-// is added or redeployed, and each deployed workload the request omits is
-// retained, or removed with prune.
+// is added or redeployed, with what would refuse it, and each deployed
+// workload the request omits is retained, or removed with prune.
 func (c *Control) PlanDeployment(ctx context.Context, workspace identity.WorkspaceID, app string, req apitypes.DeploymentPlanRequest) (apitypes.DeploymentPlan, error) {
 	type key struct{ kind, name string }
 	listed := map[key]bool{}
@@ -327,6 +327,10 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 			current[key{row.Kind, row.Name}] = int(row.Versions)
 		}
 	}
+	refused, err := refusals(ctx, c.pool, uuid.UUID(workspace), req.Workloads)
+	if err != nil {
+		return apitypes.DeploymentPlan{}, err
+	}
 	items := make([]apitypes.DeploymentPlanItem, 0, len(req.Workloads)+len(deployed))
 	for _, w := range req.Workloads {
 		versions, ok := current[key{string(w.Kind), w.Name}]
@@ -334,7 +338,13 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 		if ok {
 			action = apitypes.Redeploy
 		}
-		items = append(items, apitypes.DeploymentPlanItem{Kind: w.Kind, Name: w.Name, Action: action, Versions: versions})
+		item := apitypes.DeploymentPlanItem{Kind: w.Kind, Name: w.Name, Action: action, Versions: versions}
+		for _, r := range refused {
+			if r.Kind == w.Kind && r.Name == w.Name {
+				item.Refusals = ptr(append(deref(item.Refusals), r))
+			}
+		}
+		items = append(items, item)
 	}
 	sort.Slice(items, func(a, b int) bool {
 		if items[a].Kind != items[b].Kind {
@@ -358,3 +368,10 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func deref[T any](v *[]T) []T {
+	if v == nil {
+		return nil
+	}
+	return *v
+}

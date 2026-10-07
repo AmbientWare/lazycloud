@@ -32,7 +32,7 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 		{"sandbox", func() apitypes.WorkloadSpec { return pod("box", apitypes.PodKindSandbox) }, 600, false, false},
 		{"devbox", func() apitypes.WorkloadSpec {
 			s := pod("dev", apitypes.PodKindDevbox)
-			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 1 << 30, MountPath: "/"}}
+			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 10 << 30, MountPath: "/"}}
 			return s
 		}, 1800, false, true},
 	}
@@ -55,7 +55,7 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 
 func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 	withDisk := func(s apitypes.WorkloadSpec, name, path string) apitypes.WorkloadSpec {
-		s.Disks = &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: 1 << 30, MountPath: path}}
+		s.Disks = &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: 10 << 30, MountPath: path}}
 		return s
 	}
 	cases := map[string]struct {
@@ -70,6 +70,11 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 		}(), "does not match"},
 		"function without one": {func() apitypes.WorkloadSpec { s := function("f"); s.Handler = nil; return s }(), "handler is required"},
 		"devbox without disk":  {pod("dev", apitypes.PodKindDevbox), "needs a root disk"},
+		"devbox root below the minimum": {func() apitypes.WorkloadSpec {
+			s := pod("dev", apitypes.PodKindDevbox)
+			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 1 << 30, MountPath: "/"}}
+			return s
+		}(), "disks[dev].size_bytes is 1 GiB; a devbox's root disk needs at least 10 GiB"},
 		"devbox ssh off": {func() apitypes.WorkloadSpec {
 			s := withDisk(pod("dev", apitypes.PodKindDevbox), "dev", "/")
 			s.Pod.Ssh = new(false)

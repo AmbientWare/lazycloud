@@ -112,6 +112,10 @@ func resolvePod(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 		if root.Name != spec.Name {
 			return invalid("a devbox's root disk is named after the devbox")
 		}
+		if root.SizeBytes < minRootDiskBytes {
+			return invalid(fmt.Sprintf("disks[%s].size_bytes is %s GiB; a devbox's root disk needs at least %d GiB",
+				root.Name, gibOf(root.SizeBytes), minRootDiskBytes/gib))
+		}
 		if *p.Tcp {
 			return invalid("a devbox is reached over SSH, not raw TCP")
 		}

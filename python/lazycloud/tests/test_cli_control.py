@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.main import build_public_cli
+from lazycloud.cli.main import build_public_cli, start
 from lazycloud.session.deployment import DeploymentClient
 from typer.testing import CliRunner, Result
 
@@ -198,15 +199,98 @@ def test_deploy_diff_previews_the_plan_without_deploying(
 
     assert result.exit_code == 0, result.output
     (request,) = fake_api.calls("POST", f"{TEAM}/apps/reports/deployment-plan")
+    resources = {"cpu_millis": 125, "memory_mib": 128}
     assert request.json() == {
         "workloads": [
-            {"kind": "function", "name": "summarize_sales"},
-            {"kind": "function", "name": "forecast"},
+            {"kind": "function", "name": "summarize_sales", "resources": resources},
+            {"kind": "function", "name": "forecast", "resources": resources},
         ],
         "prune": True,
     }
     assert "old_job" in result.stdout and "remove" in result.stdout
     assert fake_api.calls("POST", f"{TEAM}/apps/reports/deployments") == []
+
+
+REFUSALS = [
+    {
+        "kind": "function",
+        "name": "forecast",
+        "gate": "region_selection",
+        "message": "the Free plan does not include region or availability zone selection",
+        "remedy": "upgrade to Team",
+    },
+    {
+        "kind": "function",
+        "name": "forecast",
+        "gate": "missing_secrets",
+        "message": "the workspace has no secret named API_KEY",
+        "remedy": "create it with `lazycloud secret create API_KEY VALUE`",
+    },
+]
+REFUSAL_LINES = [
+    "function forecast: the Free plan does not include region or availability zone selection;"
+    " upgrade to Team",
+    "function forecast: the workspace has no secret named API_KEY;"
+    " create it with `lazycloud secret create API_KEY VALUE`",
+]
+
+
+def _refusing_plan(api: FakeApi) -> None:
+    @api.route("POST", f"{TEAM}/apps/reports/deployment-plan")
+    def plan(request: ApiRequest) -> Reply:
+        listed: list[dict[str, Any]] = request.json()["workloads"]
+        items: list[dict[str, object]] = [
+            {
+                "kind": "function",
+                "name": item["name"],
+                "action": "add",
+                "versions": 0,
+                **({"refusals": REFUSALS} if item["name"] == "forecast" else {}),
+            }
+            for item in listed
+        ]
+        return json_reply({"app": "reports", "prune": False, "items": items})
+
+
+def run_cli(capsys: pytest.CaptureFixture[str], *args: str) -> tuple[object, list[str]]:
+    """The exit code and the lines the installed `lazycloud` command prints for args."""
+    with pytest.raises(SystemExit) as exited:
+        start(list(args))
+    captured = capsys.readouterr()
+    lines = (captured.out + captured.err).splitlines()
+    return exited.value.code, [line.strip("│╭╮╰╯─ ") for line in lines]
+
+
+def test_a_refused_deploy_fails_before_any_build_with_one_line_per_refusal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_api: FakeApi,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "reports.py").write_text(REPORTS, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    _refusing_plan(fake_api)
+
+    for args in (("deploy", "reports.py"), ("deploy", "reports.py", "--diff")):
+        code, lines = run_cli(capsys, *args)
+        assert code == 1, lines
+        # The card wraps long lines; each refusal starts its own.
+        card = lines[
+            lines.index("Deploy refused") : next(
+                n for n, line in enumerate(lines) if line.startswith("Next step")
+            )
+        ]
+        starts = [n for n, line in enumerate(card) if line.startswith("function forecast:")]
+        assert len(starts) == 2, card
+        refusals = [
+            " ".join(card[a:b]) for a, b in zip(starts, [*starts[1:], len(card)], strict=True)
+        ]
+        assert refusals == REFUSAL_LINES
+    # Nothing built, uploaded or deployed.
+    assert [request.path for request in fake_api.requests] == [
+        f"{TEAM}/apps/reports/deployment-plan"
+    ] * 2
 
 
 def test_task_commands_list_show_stop_and_report_failures(fake_api: FakeApi) -> None:

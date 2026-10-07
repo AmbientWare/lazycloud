@@ -661,6 +661,45 @@ func (e DeliveryState) Valid() bool {
 	}
 }
 
+// Defines values for DeploymentGate.
+const (
+	DiskAllowance   DeploymentGate = "disk_allowance"
+	DiskImage       DeploymentGate = "disk_image"
+	DiskMinimum     DeploymentGate = "disk_minimum"
+	GpuCount        DeploymentGate = "gpu_count"
+	GpuModel        DeploymentGate = "gpu_model"
+	GpuUnavailable  DeploymentGate = "gpu_unavailable"
+	MissingSecrets  DeploymentGate = "missing_secrets"
+	RegionSelection DeploymentGate = "region_selection"
+	WarmFloor       DeploymentGate = "warm_floor"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentGate enum.
+func (e DeploymentGate) Valid() bool {
+	switch e {
+	case DiskAllowance:
+		return true
+	case DiskImage:
+		return true
+	case DiskMinimum:
+		return true
+	case GpuCount:
+		return true
+	case GpuModel:
+		return true
+	case GpuUnavailable:
+		return true
+	case MissingSecrets:
+		return true
+	case RegionSelection:
+		return true
+	case WarmFloor:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeploymentPlanAction.
 const (
 	Add      DeploymentPlanAction = "add"
@@ -3176,6 +3215,9 @@ type Deployment struct {
 	RemovedVersions int `json:"removed_versions"`
 }
 
+// DeploymentGate defines model for DeploymentGate.
+type DeploymentGate string
+
 // DeploymentPlan defines model for DeploymentPlan.
 type DeploymentPlan struct {
 	App AppName `json:"app"`
@@ -3197,14 +3239,49 @@ type DeploymentPlanItem struct {
 	Kind WorkloadKind `json:"kind"`
 	Name WorkloadName `json:"name"`
 
+	// Refusals Why a deploy of the workload would fail before it changed anything.
+	Refusals *[]DeploymentRefusal `json:"refusals,omitempty"`
+
 	// Versions Versions the workload has now.
 	Versions int `json:"versions"`
 }
 
 // DeploymentPlanRequest defines model for DeploymentPlanRequest.
 type DeploymentPlanRequest struct {
-	Prune     *bool              `json:"prune,omitempty"`
-	Workloads []WorkloadIdentity `json:"workloads"`
+	Prune     *bool                    `json:"prune,omitempty"`
+	Workloads []DeploymentPlanWorkload `json:"workloads"`
+}
+
+// DeploymentPlanWorkload A workload the deploy lists, with the parts of its definition that the account's plan and the workspace must allow, so the plan reports what would refuse it before any image builds.
+type DeploymentPlanWorkload struct {
+	Autoscaler *Autoscaler      `json:"autoscaler,omitempty"`
+	Disks      *[]DiskMountSpec `json:"disks,omitempty"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
+
+	// Placement Where a workload's containers may run.
+	Placement *Placement `json:"placement,omitempty"`
+
+	// Resources Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources *Resources    `json:"resources,omitempty"`
+	Secrets   *[]SecretName `json:"secrets,omitempty"`
+}
+
+// DeploymentRefusal A reason a deploy fails before it changes anything: a plan limit, a secret it names that the workspace lacks, or a disk too small.
+type DeploymentRefusal struct {
+	Gate DeploymentGate `json:"gate"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+
+	// Message The limit or requirement the workload breaks.
+	Message string       `json:"message"`
+	Name    WorkloadName `json:"name"`
+
+	// Remedy How to lift it.
+	Remedy string `json:"remedy"`
 }
 
 // DeploymentRequest defines model for DeploymentRequest.
@@ -3340,7 +3417,7 @@ type DiskMountSpec struct {
 	MountPath string   `json:"mount_path"`
 	Name      DiskName `json:"name"`
 
-	// SizeBytes Whole 4096-byte blocks from 1 GiB to 1 TiB.
+	// SizeBytes Whole 4096-byte blocks from 1 GiB to 1 TiB; a devbox root needs 10 GiB.
 	SizeBytes int64 `json:"size_bytes"`
 }
 
@@ -3420,6 +3497,9 @@ type EntitlementUsage struct {
 type Error struct {
 	Code    ErrorCode `json:"code"`
 	Message string    `json:"message"`
+
+	// Refusals Every reason a refused deploy failed, by workload and gate.
+	Refusals *[]DeploymentRefusal `json:"refusals,omitempty"`
 }
 
 // ErrorCode defines model for ErrorCode.
@@ -5356,13 +5436,6 @@ type WorkloadDetail struct {
 
 	// Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.
 	Workload Workload `json:"workload"`
-}
-
-// WorkloadIdentity defines model for WorkloadIdentity.
-type WorkloadIdentity struct {
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
-	Kind WorkloadKind `json:"kind"`
-	Name WorkloadName `json:"name"`
 }
 
 // WorkloadKind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.

@@ -518,3 +518,15 @@ func traceBuild(ctx context.Context, build LockBuildRow, failure string) {
 	}
 	span.End()
 }
+
+// UnpackedBytes bounds the unpacked root of image id as workspace runs it:
+// every converted layer's data frames at full size. It overestimates by
+// under one frame a layer and counts files that later layers replace. ok is
+// false until every layer is converted.
+func UnpackedBytes(ctx context.Context, db DBTX, workspace uuid.UUID, id string) (bytes int64, ok bool, err error) {
+	row, err := New(db).ImageFrames(ctx, ImageFramesParams{WorkspaceID: workspace, ID: id})
+	if err != nil {
+		return 0, false, fmt.Errorf("read image layers: %w", err)
+	}
+	return row.Frames * imagefs.FrameSize, row.Layers > 0, nil
+}

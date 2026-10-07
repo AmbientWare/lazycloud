@@ -318,6 +318,19 @@ func (s *Secrets) List(ctx context.Context, workspace identity.WorkspaceID, curs
 	return out, next, nil
 }
 
+// Missing returns the names, in order, that workspace holds no secret by,
+// so a deploy refuses what Resolve would refuse at start.
+func Missing(ctx context.Context, db DBTX, workspace uuid.UUID, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	missing, err := New(db).MissingSecrets(ctx, MissingSecretsParams{WorkspaceID: workspace, Names: names})
+	if err != nil {
+		return nil, fmt.Errorf("read missing secrets: %w", err)
+	}
+	return missing, nil
+}
+
 // Resolve returns the values of names in workspace for a container start.
 // The first name the workspace lacks returns *NotFoundError.
 func (s *Secrets) Resolve(ctx context.Context, workspace identity.WorkspaceID, names []string) (map[string]string, error) {

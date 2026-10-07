@@ -105,6 +105,39 @@ func (q *Queries) ListSecrets(ctx context.Context, arg ListSecretsParams) ([]Lis
 	return items, nil
 }
 
+const missingSecrets = `-- name: MissingSecrets :many
+select n.name::text
+from unnest($1::text[]) as n(name)
+where not exists (select 1 from secrets s where s.workspace_id = $2 and s.name = n.name)
+order by n.name
+`
+
+type MissingSecretsParams struct {
+	Names       []string
+	WorkspaceID uuid.UUID
+}
+
+// The names the workspace holds no secret by.
+func (q *Queries) MissingSecrets(ctx context.Context, arg MissingSecretsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, missingSecrets, arg.Names, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var n_name string
+		if err := rows.Scan(&n_name); err != nil {
+			return nil, err
+		}
+		items = append(items, n_name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const sealedSecrets = `-- name: SealedSecrets :many
 select name, key_id, wrapped_key, nonce, ciphertext, created_at, updated_at
 from secrets

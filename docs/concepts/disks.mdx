@@ -35,7 +35,7 @@ anything else written outside a volume. The image still comes from the
 deployment, so a redeploy with a new image keeps what was written on top of
 it. `Disk("cache", size="20Gi", mount_path="/cache")` mounts at one directory
 instead. A [devbox](/concepts/dev-machines) gets a root disk named after it
-without declaring one.
+without declaring one; it needs at least `10Gi` and room for the image.
 
 ## How it persists
 
@@ -73,4 +73,5 @@ GiB-month for as long as it exists, and that can be less than its size. Its
 declared size bills per GiB-month for the time a container holds it.
 
 Disks need a paid plan. The plan caps the total declared size of a workspace's
-disks, and a deploy past the cap fails with a message naming the cap.
+disks, and a deploy past the cap fails before anything builds, naming the cap
+and the plan that lifts it. A redeploy counts each disk once.

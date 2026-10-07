@@ -74,8 +74,14 @@ the dashboard names what has to go first.
 
 A container past the concurrency limit fails to start with a message naming
 the limit, and existing work keeps running. Workspace and member limits apply
-when those are created, and the disk size limit applies to every deploy that
-names a disk.
+when those are created.
+
+A deploy checks what the plan allows before anything builds: the disk size
+limit, region selection, GPU models, GPUs per container, and a warm minimum
+that the concurrency limit could never meet. It also checks that every secret
+a workload names exists. A refused deploy changes nothing and prints one line
+per workload and limit, with the card or plan that lifts it. Balance and
+spending limits are checked as work starts, since they change after a deploy.
 
 At a zero balance, new work and transfers stop and running compute shuts down.
 Usage records periodically, so the balance can dip below zero first, and added

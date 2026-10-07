@@ -188,6 +188,15 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
         stored.add(request.path.rsplit("/", 1)[1])
         return 200, {}, b""
 
+    @api.route("POST", "/v1/workspaces/team/apps/reports/deployment-plan")
+    def plan(request: ApiRequest) -> Reply:
+        listed: list[dict[str, Any]] = request.json()["workloads"]
+        items: list[dict[str, object]] = [
+            {"kind": item["kind"], "name": item["name"], "action": "add", "versions": 0}
+            for item in listed
+        ]
+        return json_reply({"app": "reports", "prune": False, "items": items})
+
     @api.route("POST", "/v1/workspaces/team/apps/reports/deployments")
     def deploy(request: ApiRequest) -> Reply:
         workloads: list[dict[str, Any]] = request.json()["workloads"]

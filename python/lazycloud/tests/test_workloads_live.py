@@ -284,7 +284,7 @@ app = lazycloud.App("{app}")
 box = app.devbox(
     "{name}",
     image=lazycloud.Image(),
-    disk="1Gi",
+    disk="10Gi",
     cpu=1,
     memory="1Gi",
     agent_harnesses=[],
