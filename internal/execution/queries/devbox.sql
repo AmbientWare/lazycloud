@@ -25,34 +25,14 @@ where r.workload_id = @workload_id and c.purpose = 'serve' and c.state <> 'stopp
 order by c.created_at desc, c.id desc
 limit 1;
 
--- name: DevboxFailure :one
--- The newest serve container of the workload that failed to start within
--- the last 15 minutes.
+-- name: PodFailure :one
+-- The newest serve container of the workload that failed to start, and
+-- why: of those stopped after @since, or of all without one.
 select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
 from containers c
 join releases r on r.id = c.release_id
 where r.workload_id = @workload_id and c.purpose = 'serve' and c.state = 'stopped'
   and c.stop_reason in ('start_failed', 'crashed', 'out_of_memory', 'load_error')
-  and c.stopped_at > now() - interval '15 minutes'
-order by c.stopped_at desc
-limit 1;
-
--- name: PodStartFailedSince :one
--- Why the newest serve container of the workload created after @since
--- failed to start, for a connection waiting on it.
-select coalesce(c.exit_message, c.stop_reason)::text as reason
-from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = @workload_id and c.purpose = 'serve' and c.created_at >= @since
-  and c.state = 'stopped' and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
-order by c.stopped_at desc
-limit 1;
-
--- name: ReleaseLastFailure :one
--- The newest container of the release that failed to start, and why.
-select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
-from containers c
-where c.release_id = @release_id and c.state = 'stopped'
-  and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
+  and (sqlc.narg(since)::timestamptz is null or c.stopped_at > sqlc.narg(since))
 order by c.stopped_at desc
 limit 1;

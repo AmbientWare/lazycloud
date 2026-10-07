@@ -366,6 +366,20 @@ update pod_states set woken_at = now() - interval '1 hour'`, f.release, startFai
 	if n := pending(WakeStart); n != 1 {
 		t.Fatalf("a start left %d containers of a failed release", n)
 	}
+
+	// Below the limit a start waits out the backoff like any other.
+	if _, err := pool.Exec(t.Context(), `
+with failed as (
+    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() where release_id = $1
+)
+update releases set start_failures = 1 where id = $1`, f.release); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if n := pending(WakeStart); n != 0 {
+			t.Fatalf("a start during the backoff started %d containers", n)
+		}
+	}
 }
 
 // A woken devbox that billing will not start says why instead of queueing.

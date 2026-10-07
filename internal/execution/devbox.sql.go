@@ -54,31 +54,6 @@ func (q *Queries) DevboxContainer(ctx context.Context, workloadID uuid.UUID) (De
 	return i, err
 }
 
-const devboxFailure = `-- name: DevboxFailure :one
-select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
-from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = $1 and c.purpose = 'serve' and c.state = 'stopped'
-  and c.stop_reason in ('start_failed', 'crashed', 'out_of_memory', 'load_error')
-  and c.stopped_at > now() - interval '15 minutes'
-order by c.stopped_at desc
-limit 1
-`
-
-type DevboxFailureRow struct {
-	ID     uuid.UUID
-	Reason string
-}
-
-// The newest serve container of the workload that failed to start within
-// the last 15 minutes.
-func (q *Queries) DevboxFailure(ctx context.Context, workloadID uuid.UUID) (DevboxFailureRow, error) {
-	row := q.db.QueryRow(ctx, devboxFailure, workloadID)
-	var i DevboxFailureRow
-	err := row.Scan(&i.ID, &i.Reason)
-	return i, err
-}
-
 const devboxWorkload = `-- name: DevboxWorkload :one
 select w.id, w.name, w.kind, w.desired_state, a.name as app_name, a.state as app_state, a.id as app_id,
        w.active_release_id, r.spec, coalesce(r.start_failures, 0)::int as start_failures,
@@ -133,48 +108,32 @@ func (q *Queries) DevboxWorkload(ctx context.Context, arg DevboxWorkloadParams) 
 	return i, err
 }
 
-const podStartFailedSince = `-- name: PodStartFailedSince :one
-select coalesce(c.exit_message, c.stop_reason)::text as reason
-from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = $1 and c.purpose = 'serve' and c.created_at >= $2
-  and c.state = 'stopped' and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
-order by c.stopped_at desc
-limit 1
-`
-
-type PodStartFailedSinceParams struct {
-	WorkloadID uuid.UUID
-	Since      time.Time
-}
-
-// Why the newest serve container of the workload created after @since
-// failed to start, for a connection waiting on it.
-func (q *Queries) PodStartFailedSince(ctx context.Context, arg PodStartFailedSinceParams) (string, error) {
-	row := q.db.QueryRow(ctx, podStartFailedSince, arg.WorkloadID, arg.Since)
-	var reason string
-	err := row.Scan(&reason)
-	return reason, err
-}
-
-const releaseLastFailure = `-- name: ReleaseLastFailure :one
+const podFailure = `-- name: PodFailure :one
 select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
 from containers c
-where c.release_id = $1 and c.state = 'stopped'
-  and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
+join releases r on r.id = c.release_id
+where r.workload_id = $1 and c.purpose = 'serve' and c.state = 'stopped'
+  and c.stop_reason in ('start_failed', 'crashed', 'out_of_memory', 'load_error')
+  and ($2::timestamptz is null or c.stopped_at > $2)
 order by c.stopped_at desc
 limit 1
 `
 
-type ReleaseLastFailureRow struct {
+type PodFailureParams struct {
+	WorkloadID uuid.UUID
+	Since      *time.Time
+}
+
+type PodFailureRow struct {
 	ID     uuid.UUID
 	Reason string
 }
 
-// The newest container of the release that failed to start, and why.
-func (q *Queries) ReleaseLastFailure(ctx context.Context, releaseID *uuid.UUID) (ReleaseLastFailureRow, error) {
-	row := q.db.QueryRow(ctx, releaseLastFailure, releaseID)
-	var i ReleaseLastFailureRow
+// The newest serve container of the workload that failed to start, and
+// why: of those stopped after @since, or of all without one.
+func (q *Queries) PodFailure(ctx context.Context, arg PodFailureParams) (PodFailureRow, error) {
+	row := q.db.QueryRow(ctx, podFailure, arg.WorkloadID, arg.Since)
+	var i PodFailureRow
 	err := row.Scan(&i.ID, &i.Reason)
 	return i, err
 }

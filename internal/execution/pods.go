@@ -274,8 +274,9 @@ type WakeCause string
 const (
 	// WakeConnection is a connection arriving at the pod.
 	WakeConnection WakeCause = "connection"
-	// WakeStart is someone starting the pod, which retries a release whose
-	// starts failed: the cause may have been fixed outside a redeploy.
+	// WakeStart is someone starting the pod, which retries a release that
+	// stopped after failed starts or failed to load: the cause may have
+	// been fixed outside a redeploy.
 	WakeStart WakeCause = "start"
 )
 
@@ -299,7 +300,7 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 		}
 		switch cause {
 		case WakeStart:
-			if err := q.ResetStartFailures(ctx, *row.ActiveReleaseID); err != nil {
+			if err := q.RetryFailedRelease(ctx, RetryFailedReleaseParams{ID: *row.ActiveReleaseID, StartFailureLimit: startFailureLimit}); err != nil {
 				return fmt.Errorf("reset start failures: %w", err)
 			}
 		case WakeConnection:

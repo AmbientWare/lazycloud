@@ -13,7 +13,6 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -88,25 +87,20 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 		return PodView{}, fmt.Errorf("read pod state: %w", err)
 	}
 	woken := err == nil && !state.Parked && state.WokenAt != nil && time.Since(*state.WokenAt) < podWakeWindow
-	failure, err := e.queries.DevboxFailure(ctx, workload)
+	// A failed start shows for the wake window, and a release that stopped
+	// starting keeps its failure until a start or a redeploy retries it.
+	exhausted := row.StartFailures >= startFailureLimit
+	since := new(time.Now().Add(-podWakeWindow))
+	if exhausted || row.LoadFailed {
+		since = nil
+	}
+	failure, err := e.queries.PodFailure(ctx, PodFailureParams{WorkloadID: workload, Since: since})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return PodView{}, fmt.Errorf("read pod failure: %w", err)
 	}
 	failed := err == nil
-	// A release that stopped starting keeps its failure until a start or
-	// a redeploy retries it, however long ago its last container failed.
-	if exhausted := row.StartFailures >= startFailureLimit; (exhausted || row.LoadFailed) && row.ActiveReleaseID != nil {
-		last, err := e.queries.ReleaseLastFailure(ctx, row.ActiveReleaseID)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-		case err != nil:
-			return PodView{}, fmt.Errorf("read release failure: %w", err)
-		default:
-			failed, failure.ID, failure.Reason = true, last.ID, last.Reason
-			if exhausted {
-				failure.Reason = fmt.Sprintf("stopped after %d failed starts: %s", row.StartFailures, last.Reason)
-			}
-		}
+	if failed && exhausted {
+		failure.Reason = fmt.Sprintf("stopped after %d failed starts: %s", row.StartFailures, failure.Reason)
 	}
 	switch {
 	case saving:
@@ -140,10 +134,7 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 func (e *Execution) admissionRefusal(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) (string, error) {
 	var refusal string
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		_, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: workspace, GPUs: gpuCount(spec.Resources), GPUModels: gpuModels(spec),
-			Pinned: pinned(spec), Machine: compute.PinnedMachine(spec) != "",
-		})
+		_, err := billing.Admit(ctx, tx, billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler).Request(workspace))
 		if refusedToWait(err) {
 			refusal = err.Error()
 			return nil
@@ -156,17 +147,17 @@ func (e *Execution) admissionRefusal(ctx context.Context, workspace uuid.UUID, s
 	return refusal, nil
 }
 
-// PodStartFailure says why a container of the pod created since since
+// PodStartFailure says why a container of the pod that stopped since since
 // failed to start, or "" when none has.
 func (e *Execution) PodStartFailure(ctx context.Context, workload uuid.UUID, since time.Time) (string, error) {
-	reason, err := e.queries.PodStartFailedSince(ctx, PodStartFailedSinceParams{WorkloadID: workload, Since: since})
+	failure, err := e.queries.PodFailure(ctx, PodFailureParams{WorkloadID: workload, Since: &since})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("read pod start failure: %w", err)
 	}
-	return reason, nil
+	return failure.Reason, nil
 }
 
 // livePhase is what a live container is doing: placed or not, then the
