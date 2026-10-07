@@ -4257,7 +4257,7 @@ type Placement struct {
 	// Preemptible Allow capacity the provider can reclaim.
 	Preemptible *bool `json:"preemptible,omitempty"`
 
-	// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+	// Region A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
 	Region *Region `json:"region,omitempty"`
 }
 
@@ -4543,7 +4543,7 @@ type QueuePage struct {
 // RateClass defines model for RateClass.
 type RateClass string
 
-// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+// Region A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
 type Region string
 
 // Release defines model for Release.

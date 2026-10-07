@@ -5193,7 +5193,7 @@ export interface components {
          */
         GpuType: "T4" | "A10G" | "L4" | "L40S" | "A100-40" | "A100-80" | "H100" | "H200" | "any";
         /**
-         * @description A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+         * @description A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
          * @enum {string}
          */
         Region: "us-east" | "us-west" | "eu-central" | "eu-north" | "ap-southeast";

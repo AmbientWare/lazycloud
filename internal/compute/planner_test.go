@@ -151,7 +151,9 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 		"m7i.large on_demand us-east-2 us-east-2a ",
 		"m7i.large spot us-east-2 us-east-2a ",
 		"m7i.large spot us-east-2 us-east-2b ",
-		"m7i.large spot us-west-1 us-west-1b ",
+		// An m7i.large in us-west-1 with its transfer to us-east-1 costs
+		// more than the margin allows at these Spot prices.
+		"m7i.xlarge spot us-west-1 us-west-1b ",
 	}
 	if got := requested(t, o); len(got) != len(want) || !equal(got, want) {
 		t.Fatalf("requested hosts\n%q\nwant\n%q", got, want)

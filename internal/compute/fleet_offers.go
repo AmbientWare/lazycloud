@@ -2,6 +2,7 @@ package compute
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -99,10 +100,14 @@ type FleetOffer struct {
 	Usable FleetCapacity
 	// Hibernate is set on a reserve offer whose host hibernates.
 	Hibernate bool
-	// HourlyMicros is compute, root disk and public IPv4 while running;
-	// StoppedMicros is the root disk alone, what a stopped reserve costs.
+	// HourlyMicros is compute, root disk, public IPv4 and TransferMicros
+	// while running; StoppedMicros is the root disk alone, what a stopped
+	// reserve costs.
 	HourlyMicros  int64
 	StoppedMicros int64
+	// TransferMicros is the expected hourly transfer to and from
+	// storageRegion of a host serving from the offer.
+	TransferMicros int64
 	// CoolingRegion marks an offer in a region with recent refusals; it
 	// ranks last and serves only when nothing else does.
 	CoolingRegion bool
@@ -121,10 +126,11 @@ func servingCost(p Policy) func(FleetOffer) int64 {
 }
 
 // reserveCost prices a reserve: held stopped over the cost horizon, after
-// running while it is prepared.
+// running while it is prepared. Preparing serves nothing, so it moves no
+// image or volume bytes.
 func reserveCost(p Policy) func(FleetOffer) int64 {
 	return func(o FleetOffer) int64 {
-		return o.StoppedMicros*int64(p.CostHorizon/time.Second) + o.HourlyMicros*int64(p.Provision/time.Second)
+		return o.StoppedMicros*int64(p.CostHorizon/time.Second) + (o.HourlyMicros-o.TransferMicros)*int64(p.Provision/time.Second)
 	}
 }
 
@@ -229,8 +235,8 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // GPU model the platform fleet offers and that keep the purchase margin. A
 // reserve offer hibernates where hibernates allows.
 // Order: the need's GPU preference, cooling regions last, complete hourly
-// cost, region preference, fewest hosts in the zone, key. An offer whose
-// host would exceed a known vCPU quota is skipped.
+// cost, fewest hosts in the zone, key. An offer whose host would exceed a
+// known vCPU quota is skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
 	room := quotaRoom(in.Quotas, in.QuotaUsed)
@@ -241,9 +247,9 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 		markets = []Market{MarketSpot, MarketOnDemand}
 	}
 	var offers []FleetOffer
-	for _, region := range regionOrder() {
-		network, ok := in.Networks[region]
-		if !ok || (need.Region != "" && ProductRegion(region) != need.Region) {
+	for _, region := range slices.Sorted(maps.Keys(in.Networks)) {
+		network := in.Networks[region]
+		if need.Region != "" && ProductRegion(region) != need.Region {
 			continue
 		}
 		for _, subnet := range network.Subnets {
@@ -268,7 +274,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					disk := rootDiskMicros(region, t.RootGiB(hibernate), t.PricedMiBps(reserve))
 					compute := onDemand
 					if market == MarketSpot {
-						if compute, ok = spotPrice(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name); !ok {
+						var quoted bool
+						if compute, quoted = spotPrice(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name); !quoted {
 							continue
 						}
 					}
@@ -277,10 +284,11 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					if left, known := room[quota]; cooled(in.Cooldowns, in.Now, region, t.Name, market) || (known && left < t.VCPUs()) {
 						continue
 					}
+					transfer := transferMicros(region, t)
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
-						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
-						CoolingRegion: cooling[region], Quota: quota,
+						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour + transfer, StoppedMicros: disk,
+						TransferMicros: transfer, CoolingRegion: cooling[region], Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need.Preemptible); rejected && !in.OwnerPays {
 						continue
@@ -295,7 +303,6 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 			cmp.Compare(GPURank(need.GPUs, a.Type.GPU), GPURank(need.GPUs, b.Type.GPU)),
 			boolOrder(a.CoolingRegion, b.CoolingRegion),
 			cmp.Compare(a.HourlyMicros, b.HourlyMicros),
-			cmp.Compare(slices.Index(regionOrder(), a.Region), slices.Index(regionOrder(), b.Region)),
 			cmp.Compare(in.ZoneHosts[a.ZoneID], in.ZoneHosts[b.ZoneID]),
 			strings.Compare(a.Key(), b.Key()),
 		)
