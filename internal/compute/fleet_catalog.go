@@ -90,21 +90,26 @@ func FleetArchitectures() []string {
 	return architectures
 }
 
-// regionRates are a region's gp3 and public IPv4 rates in USD micros.
+// regionRates are a region's gp3 and public IPv4 rates in USD micros: a
+// GiB, a provisioned IOPS and a provisioned MiB/s for a month, and an
+// address for an hour.
 type regionRates struct {
-	gp3GiBMonth, ipv4Hour int64
+	gp3GiBMonth, gp3IOPSMonth, gp3MiBpsMonth, ipv4Hour int64
 }
 
 func ratesIn(region string) regionRates {
 	if region == "us-west-1" {
-		return regionRates{gp3GiBMonth: 96_000, ipv4Hour: 5_000}
+		return regionRates{gp3GiBMonth: 96_000, gp3IOPSMonth: 6_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000}
 	}
-	return regionRates{gp3GiBMonth: 80_000, ipv4Hour: 5_000}
+	return regionRates{gp3GiBMonth: 80_000, gp3IOPSMonth: 5_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
 }
 
-// rootDiskMicros is gib of gp3 for an hour, on AWS's 30-day month.
+// rootDiskMicros is a root of gib for an hour, on AWS's 30-day month, with
+// the IOPS and throughput provisioned above gp3's baseline.
 func rootDiskMicros(region string, gib int64) int64 {
-	return (gib*ratesIn(region).gp3GiBMonth + 719) / 720
+	r := ratesIn(region)
+	month := gib*r.gp3GiBMonth + (rootVolumeIOPS-3000)*r.gp3IOPSMonth + (rootVolumeMiBps-125)*r.gp3MiBpsMonth
+	return (month + 719) / 720
 }
 
 // FleetCatalog is what the platform fleet buys, with on-demand prices in

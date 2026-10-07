@@ -29,8 +29,13 @@ const (
 	// rootVolumeGiB is each instance's encrypted root disk; a host launched
 	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
-	cpuImage      = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-	gpuImage      = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
+	// rootVolumeIOPS is gp3's baseline; rootVolumeMiBps is provisioned above
+	// its 125 MiB/s, since image builds keep BuildKit's state and write their
+	// layers on the root and at the baseline wait on the disk.
+	rootVolumeIOPS  = 3000
+	rootVolumeMiBps = 500
+	cpuImage        = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+	gpuImage        = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
 )
 
 // Tags on every instance the fleet launches.
@@ -157,6 +162,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 			DeviceName: aws.String("/dev/xvda"),
 			Ebs: &ec2types.EbsBlockDevice{
 				VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
+				Iops: aws.Int32(rootVolumeIOPS), Throughput: aws.Int32(rootVolumeMiBps),
 				Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true),
 			},
 		}},

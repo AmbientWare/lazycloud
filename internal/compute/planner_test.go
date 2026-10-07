@@ -140,9 +140,9 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 	want := []string{
 		"g4dn.xlarge spot us-east-2 us-east-2a T4",
 		"m7i.large on_demand us-east-2 us-east-2a ",
-		"m7i.large spot us-east-2 us-east-2a ",
-		"m7i.large spot us-east-2 us-east-2b ",
-		"m7i.large spot us-west-1 us-west-1b ",
+		"m7i.xlarge spot us-east-2 us-east-2a ",
+		"m7i.xlarge spot us-east-2 us-east-2b ",
+		"m6a.2xlarge spot us-west-1 us-west-1b ",
 	}
 	if got := requested(t, o); len(got) != len(want) || !equal(got, want) {
 		t.Fatalf("requested hosts\n%q\nwant\n%q", got, want)

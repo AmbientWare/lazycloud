@@ -124,13 +124,14 @@ func TestOfferCostIsComputeRootDiskAndPublicIPv4(t *testing.T) {
 	if len(serving) != 1 || len(reserve) != 1 {
 		t.Fatalf("offers %v %v", offerKeys(serving), offerKeys(reserve))
 	}
-	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1 over 720 hours.
-	disk := (100*96_000 + 719) / 720
+	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1, with 375 MiB/s
+	// over the baseline at $0.048 a MiB/s-month, over 720 hours.
+	disk := (100*96_000 + 375*48_000 + 719) / 720
 	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
 	// A hibernating reserve adds its 8 GiB of RAM as swap.
-	disk = (108*96_000 + 719) / 720
+	disk = (108*96_000 + 375*48_000 + 719) / 720
 	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 {
 		t.Fatalf("reserve offer %+v", o)
 	}
