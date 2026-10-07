@@ -59,9 +59,9 @@ type launchTarget struct {
 }
 
 // Launch starts instances for requested hosts. Each launch is claimed with
-// a lease and runs outside any transaction; RunInstances takes the host id
-// and its pool as its client token, so a retry after a lost answer returns
-// the same instance. A refusal for capacity, quota or price cools the
+// a lease and runs outside any transaction; RunInstances takes the host id,
+// numbered by each refused pool the launch moved past, as its client token,
+// so a retry after a lost answer returns the same instance. A refusal for capacity, quota or price cools the
 // refused pool and moves the host to the next ranked pool that still holds
 // what it was bought for, up to maxLaunchPools; a host left without one
 // fails, so the planner buys again on its next pass.
@@ -233,10 +233,10 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 	return in, nil
 }
 
-// nextPool is the best ranked pool, of those not refused, that still holds
-// what h was bought for: its capacity and GPU model in its market, its
-// reserve's sleep mode, and the placement each container waiting for it
-// asks for.
+// nextPool is the best ranked pool, of those not refused and with a node
+// image, that still holds what h was bought for: its capacity and GPU
+// model in its market, its reserve's sleep mode, and the placement each
+// container waiting for it asks for.
 func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolInputs, quota bool) (FleetOffer, bool, error) {
 	if h.Market == nil {
 		return FleetOffer{}, false, nil
@@ -260,7 +260,8 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 	}
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
 	offers := slices.DeleteFunc(RankOffers(c.policy(), need, h.ReserveMode != nil, *in), func(o FleetOffer) bool {
-		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate ||
+		_, imaged := c.nodeImage(o.Region, o.Type.GPUCount > 0)
+		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged ||
 			slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
 				return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
 			})
