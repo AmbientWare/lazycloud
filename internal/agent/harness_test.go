@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
@@ -338,9 +339,24 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(func() {
 		e.grpc.Stop()
 		e.removeContainers()
+		e.removeBuildCaches()
 		_ = docker.Close()
 	})
 	return e
+}
+
+// removeBuildCaches deletes the build caches as root: builders write them
+// as their own users, which the test may not be.
+func (e *env) removeBuildCaches() {
+	dir := filepath.Join(e.stateDir, "build-cache")
+	if _, err := os.Stat(dir); err != nil {
+		return
+	}
+	out, err := exec.CommandContext(context.Background(), "docker", "run", "--rm", "-v", dir+":/cache", platformimages.Mount,
+		"sh", "-c", "rm -rf /cache/*").CombinedOutput()
+	if err != nil {
+		e.t.Errorf("remove the build caches: %v\n%s", err, out)
+	}
 }
 
 // shortDir is a directory removed when the test ends, short enough to hold

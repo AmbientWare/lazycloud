@@ -641,6 +641,9 @@ message ImageBuild {
   // They reach the builder as files of its secret mount, never as its
   // environment or a build argument.
   map<string, string> secrets = 11;
+  // The workspace the build runs for. Its builds on one host share a local
+  // build cache that no other workspace's build can read.
+  string workspace_id = 12;
 }
 
 message Source {

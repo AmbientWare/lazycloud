@@ -797,13 +797,14 @@ type BuildCommand struct {
 	Build      uuid.UUID
 	Attempt    int
 	Dockerfile string
-	// Context is the archive the build reads; ContextWorkspace stores it.
-	Context          []byte
-	ContextWorkspace identity.WorkspaceID
-	Platform         string
-	PushRepository   string
-	CacheRef         string
-	Insecure         bool
+	// Workspace is the one the build runs for, which stores Context, the
+	// archive the build reads.
+	Workspace      identity.WorkspaceID
+	Context        []byte
+	Platform       string
+	PushRepository string
+	CacheRef       string
+	Insecure       bool
 	// Auth holds logins by registry host, the platform registry included.
 	Auth     map[string]Auth
 	Deadline time.Time
@@ -878,7 +879,7 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	}
 	return BuildCommand{
 		Build: start.Build, Attempt: start.Attempt, Dockerfile: row.Dockerfile,
-		Context: row.ContextSha256, ContextWorkspace: identity.WorkspaceID(row.WorkspaceID),
+		Context: row.ContextSha256, Workspace: identity.WorkspaceID(row.WorkspaceID),
 		Platform:       "linux/" + row.Architecture,
 		PushRepository: i.config.Registry + "/" + image,
 		CacheRef:       i.config.Registry + "/" + cache + ":" + hex.EncodeToString(scope[:16]),

@@ -121,6 +121,7 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 		RegistryAuth:     map[string]*hostproto.RegistryAuth{},
 		Deadline:         timestamppb.New(command.Deadline),
 		Secrets:          command.Secrets,
+		WorkspaceId:      command.Workspace.String(),
 	}
 	for host, auth := range command.Auth {
 		build.RegistryAuth[host] = registryAuthOut(&auth)
@@ -128,7 +129,7 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 	if command.Context != nil {
 		var digest storage.Digest
 		copy(digest[:], command.Context)
-		url, expires, err := s.storage.SourceURL(ctx, command.ContextWorkspace, digest)
+		url, expires, err := s.storage.SourceURL(ctx, command.Workspace, digest)
 		if err != nil {
 			return nil, err
 		}
