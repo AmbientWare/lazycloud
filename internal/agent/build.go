@@ -256,9 +256,17 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 		return early
 	}
 	metadata := filepath.Join(c.dir, "out", "metadata.json")
+	// manifest is the exported image's, once named; the output is read by
+	// one goroutine.
+	manifest := ""
 	tail := c.a.followBuildOutput(ctx, c.dockerName(), logs, func(line string) {
 		if m := exportedManifest.FindStringSubmatch(line); m != nil {
-			exported(m[1])
+			manifest = m[1]
+			return
+		}
+		if manifest != "" && exportedConfig.MatchString(line) {
+			exported(manifest)
+			manifest = ""
 			return
 		}
 		if line != imagePushed || c.isStopping() {

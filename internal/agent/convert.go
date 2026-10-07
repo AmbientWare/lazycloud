@@ -273,9 +273,14 @@ func acquire(ctx context.Context, tokens chan struct{}) error {
 	}
 }
 
-// exportedManifest matches the builder's output line that names the image
-// manifest once it is in the builder's content store, before the push.
-var exportedManifest = regexp.MustCompile(`^#\d+ exporting manifest (sha256:[0-9a-f]{64}) .*done$`)
+// exportedManifest and exportedConfig match the builder's output lines that
+// name the image manifest and its config once each is in the builder's
+// content store. The config follows the manifest, and both come before the
+// push.
+var (
+	exportedManifest = regexp.MustCompile(`^#\d+ exporting manifest (sha256:[0-9a-f]{64}) .*done$`)
+	exportedConfig   = regexp.MustCompile(`^#\d+ exporting config sha256:[0-9a-f]{64} .*done$`)
+)
 
 // ahead starts converting the layers manifest names that the build made,
 // those its config dates from since on, while the image pushes. The others
