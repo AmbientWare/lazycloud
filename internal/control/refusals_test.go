@@ -101,7 +101,7 @@ func TestDeployRefusesWhatThePlanCannotRun(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	pinned := function("pinned")
-	pinned.Placement = &apitypes.Placement{Region: new(apitypes.Region("us-east-2"))}
+	pinned.Placement = &apitypes.Placement{Region: new(apitypes.UsEast)}
 	model := function("model")
 	model.Resources.Gpu = &[]apitypes.GpuType{apitypes.L40S}
 	cards := function("cards")

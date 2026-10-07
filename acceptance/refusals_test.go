@@ -24,7 +24,7 @@ func TestDeployPastThePlanIsRefusedBeforeAnythingChanges(t *testing.T) {
 	box.Pod = &apitypes.PodSpec{Kind: apitypes.PodKindDevbox}
 	box.Disks = &[]apitypes.DiskMountSpec{{Name: "box", SizeBytes: 10 << 30, MountPath: "/"}}
 	pinned := spec("count_words", "app:count_words", source, nil)
-	pinned.Placement = &apitypes.Placement{Region: new(apitypes.Region("us-east-2"))}
+	pinned.Placement = &apitypes.Placement{Region: new(apitypes.UsEast)}
 	pinned.Secrets = &[]string{"OPENAI_API_KEY"}
 	want := []string{
 		"function count_words region_selection",
