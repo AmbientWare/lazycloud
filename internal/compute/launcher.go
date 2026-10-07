@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -26,6 +28,9 @@ const (
 	launchLease = 2 * time.Minute
 	// maxLaunchAttempts bounds launches that keep failing without an answer.
 	maxLaunchAttempts = 5
+	// maxLaunchPools bounds the pools one launch tries while EC2 refuses
+	// them for capacity, quota or price.
+	maxLaunchPools = 3
 	// rootVolumeGiB is each instance's encrypted root disk; a host launched
 	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
@@ -55,9 +60,11 @@ type launchTarget struct {
 
 // Launch starts instances for requested hosts. Each launch is claimed with
 // a lease and runs outside any transaction; RunInstances takes the host id
-// as its client token, so a retry after a lost answer returns the same
-// instance. A refusal for capacity or quota cools the offer down and fails
-// the host, so the controller buys another offer on its next pass.
+// and its pool as its client token, so a retry after a lost answer returns
+// the same instance. A refusal for capacity, quota or price cools the
+// refused pool and moves the host to the next ranked pool that still holds
+// what it was bought for, up to maxLaunchPools; a host left without one
+// fails, so the planner buys again on its next pass.
 func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) {
 	if c.config.ServedRelease != "" {
 		release, err := c.TargetRelease(ctx)
@@ -75,8 +82,9 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 		return 0, fmt.Errorf("claim launches: %w", err)
 	}
 	launched := 0
+	pools := poolInputs{}
 	for _, h := range claimed {
-		started, err := c.launch(ctx, logger, h)
+		started, err := c.launch(ctx, logger, h, pools)
 		if err != nil {
 			if ctx.Err() != nil {
 				return launched, err
@@ -91,14 +99,199 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 	return launched, nil
 }
 
-// launch launches h in the trace of the container it was bought for.
-func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
+// launch launches h in the trace of the container it was bought for,
+// moving it on through refused pools.
+func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow, pools poolInputs) (bool, error) {
 	ctx, span := c.hostSpan(ctx, h.ID, "compute.launch", attribute.String("lazycloud.instance_type", h.InstanceType),
 		attribute.String("lazycloud.market", deref(h.Market)), attribute.String("lazycloud.region", h.Region))
-	started, err := c.launchHost(ctx, logger, h)
+	started, err := c.launchPools(ctx, logger, h, pools)
 	span.SetAttributes(attribute.Bool("lazycloud.started", started))
 	telemetry.Fail(span, err)
 	return started, err
+}
+
+// launchPools launches h in its pool, then in each next pool while EC2
+// refuses the last for capacity, quota or price, up to maxLaunchPools.
+func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow, pools poolInputs) (bool, error) {
+	for {
+		started, refusal, err := c.launchHost(ctx, logger, h)
+		if refusal == nil {
+			return started, err
+		}
+		message, quota := describeAWSError(refusal), quotaRefusal(awsCode(refusal))
+		var next FleetOffer
+		var ok bool
+		if h.LaunchPools+1 < maxLaunchPools {
+			if next, ok, err = c.nextPool(ctx, h, pools, quota); err != nil {
+				return false, err
+			}
+		} else {
+			pools.cool(c, h, quota)
+		}
+		if !ok {
+			return false, c.failLaunch(ctx, h, message, true, quota)
+		}
+		moved, err := c.movePool(ctx, h, next, message, quota)
+		if err != nil || !moved {
+			return false, err
+		}
+		logger.InfoContext(ctx, "launch moved to the next pool", "host_id", h.ID, "refused", h.Region+"/"+h.InstanceType,
+			"next", next.Key(), "reason", message)
+		h.Region, h.AvailabilityZone, h.InstanceType = next.Region, next.Zone, next.Type.Name
+		h.CpuMillis, h.MemoryBytes, h.GpuCount = next.Usable.CPUMillis, next.Usable.MemoryBytes, int32(next.Usable.GPUs) //nolint:gosec // At most 8 cards.
+		h.LaunchPools++
+	}
+}
+
+// poolInputs are one launch pass's offer inputs by owner, read at the
+// owner's first refusal and kept current with each refusal after it.
+type poolInputs map[string]*OfferInputs
+
+// ownerKey names the owner of h's cooldowns: the platform or a connection.
+func ownerKey(h ClaimLaunchesRow) string {
+	if h.ConnectionID != nil {
+		return h.ConnectionID.String()
+	}
+	return string(KindPlatform)
+}
+
+// cool records the refusal of h's pool in the pass's inputs, as failLaunch
+// and movePool record it in the database: the type in its region and
+// market, and for the platform its quota class on a quota refusal.
+func (p poolInputs) cool(c *Compute, h ClaimLaunchesRow, quota bool) {
+	in, ok := p[ownerKey(h)]
+	if !ok || h.Market == nil {
+		return
+	}
+	in.Cooldowns = append(in.Cooldowns, OfferCooldown{
+		Region: h.Region, InstanceType: h.InstanceType, Market: Market(*h.Market), RefusedAt: in.Now,
+		Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: quota && h.ConnectionID == nil,
+	})
+}
+
+// inputs reads the offer inputs of h's owner once a pass.
+func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) (*OfferInputs, error) {
+	owner := ownerKey(h)
+	if in, ok := p[owner]; ok {
+		return in, nil
+	}
+	in := &OfferInputs{Now: time.Now(), Catalog: FleetCatalog(), ReportedMemory: map[string]int64{}}
+	if h.ConnectionID == nil {
+		in.Networks = c.fleet.Networks
+		rates, err := billing.FleetComputeRates(in.Now)
+		if err != nil {
+			return nil, fmt.Errorf("read the fleet's compute rates: %w", err)
+		}
+		in.Rates = rates
+		rooms, err := quotaRooms(ctx, c.queries, in.Now)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rooms {
+			if r.Known {
+				in.Quotas = append(in.Quotas, VCPUQuota{Key: QuotaKey{Region: r.Region, Class: r.Class, Market: r.Market}, VCPUs: r.VCPUs})
+			}
+		}
+	} else {
+		row, err := c.queries.ConnectionScope(ctx, *h.ConnectionID)
+		if err != nil {
+			return nil, fmt.Errorf("read connection scope: %w", err)
+		}
+		if err := json.Unmarshal(row.Networks, &in.Networks); err != nil {
+			return nil, fmt.Errorf("decode networks: %w", err)
+		}
+		in.OwnerPays = true
+	}
+	var err error
+	if in.Spot, err = readSpotPrices(ctx, c.queries); err != nil {
+		return nil, err
+	}
+	if in.ZoneTypes, err = readZoneOfferings(ctx, c.queries); err != nil {
+		return nil, err
+	}
+	cooldowns, err := c.queries.LaunchCooldowns(ctx, LaunchCooldownsParams{
+		ConnectionKey: owner, WindowSeconds: c.policy().RegionFailureWindow.Seconds(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read cooldowns: %w", err)
+	}
+	for _, r := range cooldowns {
+		cooldown := OfferCooldown{Region: r.Region, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until}
+		if r.RefusedAt != nil {
+			cooldown.RefusedAt = *r.RefusedAt
+		}
+		in.Cooldowns = append(in.Cooldowns, cooldown)
+	}
+	reported, err := c.queries.ReportedMemory(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read reported memory: %w", err)
+	}
+	for _, r := range reported {
+		in.ReportedMemory[r.InstanceType] = r.MemoryBytes
+	}
+	p[owner] = in
+	return in, nil
+}
+
+// nextPool is the best ranked pool, of those not refused, that still holds
+// what h was bought for: its capacity and GPU model in its market, its
+// reserve's sleep mode, and the placement each container waiting for it
+// asks for.
+func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolInputs, quota bool) (FleetOffer, bool, error) {
+	if h.Market == nil {
+		return FleetOffer{}, false, nil
+	}
+	in, err := pools.inputs(ctx, c, h)
+	if err != nil {
+		return FleetOffer{}, false, err
+	}
+	pools.cool(c, h, quota)
+	waiters, err := c.queries.HostWaiters(ctx, &h.ID)
+	if err != nil {
+		return FleetOffer{}, false, fmt.Errorf("read the containers waiting for the host: %w", err)
+	}
+	market := Market(*h.Market)
+	need := Requirement{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUCount: int(h.GpuCount), Preemptible: market == MarketSpot}
+	if h.GpuType != "" {
+		need.GPUs = []string{h.GpuType}
+	}
+	for _, w := range waiters {
+		need.Preemptible = need.Preemptible || w.Preemptible
+	}
+	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
+	offers := slices.DeleteFunc(RankOffers(c.policy(), need, h.ReserveMode != nil, *in), func(o FleetOffer) bool {
+		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate ||
+			slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
+				return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
+			})
+	})
+	if offers = preferHealthy(offers); len(offers) == 0 {
+		return FleetOffer{}, false, nil
+	}
+	return offers[0], true, nil
+}
+
+// movePool cools h's refused pool and moves h to next in one transaction.
+// It reports false when h stopped being requested.
+func (c *Compute) movePool(ctx context.Context, h ClaimLaunchesRow, next FleetOffer, message string, quota bool) (bool, error) {
+	moved := false
+	err := inTx(ctx, c, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		if err := c.coolPool(ctx, q, h, message, quota); err != nil {
+			return err
+		}
+		n, err := q.MoveLaunchPool(ctx, MoveLaunchPoolParams{
+			ID: h.ID, InstanceType: next.Type.Name, Region: next.Region, AvailabilityZone: next.Zone,
+			AvailabilityZoneID: next.ZoneID, CpuMillis: next.Usable.CPUMillis, MemoryBytes: next.Usable.MemoryBytes,
+			GpuCount: int32(next.Usable.GPUs), HourlyMicros: &next.HourlyMicros, //nolint:gosec // At most 8 cards.
+		})
+		if err != nil {
+			return fmt.Errorf("move launch pool: %w", err)
+		}
+		moved = n == 1
+		return nil
+	})
+	return moved, err
 }
 
 // hostSpan starts a span of work on host in the trace of the container
@@ -112,28 +305,31 @@ func (c *Compute) hostSpan(ctx context.Context, host uuid.UUID, name string, att
 	return telemetry.StartFor(ctx, parent, name, trace.WithAttributes(append(attrs, telemetry.Host(host.String()))...))
 }
 
-func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
+// launchHost launches h in its pool. A refusal of the pool for capacity,
+// quota or price is returned for the caller to move on; every other
+// outcome is settled here.
+func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error, error) {
 	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
 	if err != nil {
-		return false, c.failLaunch(ctx, h, err.Error(), false, false)
+		return false, nil, c.failLaunch(ctx, h, err.Error(), false, false)
 	}
 	release, err := c.TargetRelease(ctx)
 	if err != nil {
-		return false, c.failLaunch(ctx, h, "no agent release is published", false, false)
+		return false, nil, c.failLaunch(ctx, h, "no agent release is published", false, false)
 	}
 	subnet, ok := subnetFor(target.network, h.AvailabilityZone, h.ID)
 	if !ok {
-		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false, false)
+		return false, nil, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false, false)
 	}
 	image, ok := c.nodeImage(h.Region, h.GpuCount > 0)
 	if !ok {
-		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false, false)
+		return false, nil, c.failLaunch(ctx, h, "no node image for "+h.Region, false, false)
 	}
 	if err := c.shareImage(ctx, target, h.Region, image); err != nil {
 		if accessDenied(err) || strings.HasPrefix(awsCode(err), "InvalidAMI") {
-			return false, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false, false)
+			return false, nil, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), false, false)
 		}
-		return false, fmt.Errorf("share node image: %w", err)
+		return false, nil, fmt.Errorf("share node image: %w", err)
 	}
 	opts := launchOptionsFor(h)
 	tags := []ec2types.Tag{
@@ -142,7 +338,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 		{Key: aws.String("Name"), Value: aws.String("lazycloud-" + h.ID.String()[:8])},
 	}
 	input := &ec2.RunInstancesInput{
-		ClientToken:  aws.String(h.ID.String()),
+		ClientToken:  aws.String(launchToken(h)),
 		ImageId:      aws.String(image),
 		InstanceType: ec2types.InstanceType(h.InstanceType),
 		MinCount:     aws.Int32(1),
@@ -199,19 +395,23 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 		}
 		input.InstanceMarketOptions = &ec2types.InstanceMarketOptionsRequest{MarketType: ec2types.MarketTypeSpot, SpotOptions: spot}
 	}
-	out, err := c.aws().ec2(target.scope, h.Region).RunInstances(ctx, input)
+	out, err := c.aws().ec2(target.scope, h.Region).RunInstances(ctx, input, func(o *ec2.Options) {
+		o.Retryer = poolRefusalFinal{o.Retryer}
+	})
 	if err != nil {
 		code := awsCode(err)
 		switch {
-		case capacityRefusal(code) || strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
-			return false, c.failLaunch(ctx, h, describeAWSError(err), true, quotaRefusal(code))
+		case capacityRefusal(code):
+			return false, fmt.Errorf("run instance: %w", err), nil
+		case strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
+			return false, nil, c.failLaunch(ctx, h, describeAWSError(err), true, false)
 		case h.LaunchAttempts >= maxLaunchAttempts:
-			return false, c.failLaunch(ctx, h, describeAWSError(err), false, false)
+			return false, nil, c.failLaunch(ctx, h, describeAWSError(err), false, false)
 		}
-		return false, fmt.Errorf("run instance: %w", err)
+		return false, nil, fmt.Errorf("run instance: %w", err)
 	}
 	if len(out.Instances) != 1 {
-		return false, fmt.Errorf("run instance returned %d instances", len(out.Instances))
+		return false, nil, fmt.Errorf("run instance returned %d instances", len(out.Instances))
 	}
 	instance := out.Instances[0]
 	zone := aws.ToString(instance.Placement.AvailabilityZone)
@@ -225,15 +425,34 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 		SpotRequestID: persistentRequest(opts, instance), NodeImage: instance.ImageId, HibernationConfigured: opts.hibernate,
 	})
 	if err != nil {
-		return false, fmt.Errorf("record launch: %w", err)
+		return false, nil, fmt.Errorf("record launch: %w", err)
 	}
 	if n == 0 {
 		// The host stopped being wanted while it launched.
-		return false, c.terminate(ctx, target.scope, h.Region, aws.ToString(instance.InstanceId))
+		return false, nil, c.terminate(ctx, target.scope, h.Region, aws.ToString(instance.InstanceId))
 	}
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
 		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market))
-	return true, nil
+	return true, nil, nil
+}
+
+// launchToken is the client token of h's launch in its current pool: the
+// host id in the pool it was bought from, then numbered by the pools it
+// moved past. EC2 refuses a token reused with other parameters.
+func launchToken(h ClaimLaunchesRow) string {
+	if h.LaunchPools == 0 {
+		return h.ID.String()
+	}
+	return fmt.Sprintf("%s-%d", h.ID, h.LaunchPools)
+}
+
+// poolRefusalFinal answers a launch's pool refusal at once instead of
+// retrying it; EC2 sends some, such as InsufficientInstanceCapacity, as
+// server faults, and the next pool is the retry.
+type poolRefusalFinal struct{ aws.Retryer }
+
+func (r poolRefusalFinal) IsErrorRetryable(err error) bool {
+	return !capacityRefusal(awsCode(err)) && r.Retryer.IsErrorRetryable(err)
 }
 
 // launchOptions are the parts of a launch a reserve changes.
@@ -320,21 +539,9 @@ func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, i
 func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool, quota bool) error {
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
-		if cool && h.Market != nil {
-			key := string(KindPlatform)
-			if h.ConnectionID != nil {
-				key = h.ConnectionID.String()
-			}
-			if err := q.InsertCooldown(ctx, InsertCooldownParams{
-				ConnectionKey: key, Region: h.Region, InstanceType: h.InstanceType, Market: *h.Market,
-				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(message),
-			}); err != nil {
-				return fmt.Errorf("insert cooldown: %w", err)
-			}
-			if quota && h.ConnectionID == nil {
-				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
-					return err
-				}
+		if cool {
+			if err := c.coolPool(ctx, q, h, message, quota); err != nil {
+				return err
 			}
 		}
 		if _, err := q.FailHost(ctx, FailHostParams{
@@ -344,6 +551,24 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 		}
 		return notifyChannel(ctx, tx, h.ID)
 	})
+}
+
+// coolPool skips h's refused pool until the cooldown ends, and on a quota
+// refusal its class in the region for the platform.
+func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimLaunchesRow, message string, quota bool) error {
+	if h.Market == nil {
+		return nil
+	}
+	if err := q.InsertCooldown(ctx, InsertCooldownParams{
+		ConnectionKey: ownerKey(h), Region: h.Region, InstanceType: h.InstanceType, Market: *h.Market,
+		Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(message),
+	}); err != nil {
+		return fmt.Errorf("insert cooldown: %w", err)
+	}
+	if quota && h.ConnectionID == nil {
+		return c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market))
+	}
+	return nil
 }
 
 // launchTarget resolves the credentials, network and instance profile for

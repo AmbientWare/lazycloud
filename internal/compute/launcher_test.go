@@ -4,10 +4,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -120,6 +124,8 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 	}
 }
 
+// A host every pool refuses fails after three pools, each cooled, and the
+// next pass buys from none of them.
 func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", func(call awsCall) awsReply {
@@ -137,18 +143,126 @@ func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
 	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseFailed) {
 		t.Fatalf("refused host is %s, want failed", phase)
 	}
-	cooled := scan[string](t, o.pool, "select region || '/' || instance_type || '/' || market from capacity_cooldowns where until > now()")
-	if cooled != offer {
-		t.Fatalf("cooldown on %s, want the refused offer %s", cooled, offer)
+	cooled := scan[[]string](t, o.pool, "select array_agg(region || '/' || instance_type || '/' || market) from capacity_cooldowns where until > now()")
+	if tried := len(emulator.calls("RunInstances")); tried != 3 || len(cooled) != tried || !slices.Contains(cooled, offer) {
+		t.Fatalf("%d pools tried, cooldowns on %v, want three including the bought offer %s", tried, cooled, offer)
 	}
 	if result := planCapacity(t, o); result.Requested != 1 {
 		t.Fatalf("next pass %+v, want another host for the container", result)
 	}
 	next := scan[string](t, o.pool, "select region || '/' || instance_type || '/' || market from hosts where phase = 'requested'")
-	if next == offer {
+	if slices.Contains(cooled, next) {
 		t.Fatalf("next pass bought the cooling offer %s again", next)
 	}
 }
+
+// refuseFirstPool refuses each host's launch in the pool it was bought
+// from, whose client token is the host id, and launches it elsewhere.
+func refuseFirstPool(t *testing.T, code string) awsHandler {
+	t.Helper()
+	succeed := launched(t)
+	return func(call awsCall) awsReply {
+		if _, err := uuid.Parse(call.Form.Get("ClientToken")); err == nil {
+			return ec2Error(http.StatusInternalServerError, code, "refused "+call.Form.Get("InstanceType"))
+		}
+		return succeed(call)
+	}
+}
+
+// pool is a RunInstances call's type, subnet and market.
+func pool(call awsCall) string {
+	return call.Form.Get("InstanceType") + " " + call.Form.Get("SubnetId") + " " + call.Form.Get("InstanceMarketOptions.MarketType")
+}
+
+// A launch EC2 refuses for capacity, quota or price moves on in the same
+// pass to the next ranked pool that holds what the host was bought for,
+// and only the pool it tried cools.
+func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
+	for _, code := range []string{"InsufficientInstanceCapacity", "MaxSpotInstanceCountExceeded", "SpotMaxPriceTooLow"} {
+		o, emulator, _ := launchFleet(t, compute.Fleet{})
+		emulator.on("RunInstances", refuseFirstPool(t, code))
+		alice := newUser(t, o.pool, "alice@example.com")
+		host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+		bought := scan[string](t, o.pool, "select region || '/' || instance_type || '/' || market from hosts where id = $1", uuid.UUID(host))
+		usable := scan[int64](t, o.pool, "select memory_bytes from hosts where id = $1", uuid.UUID(host))
+
+		if n := launch(t, o); n != 1 {
+			t.Fatalf("%s: launched %d, want the host in its next pool", code, n)
+		}
+		calls := emulator.calls("RunInstances")
+		var pools []string
+		for _, c := range calls {
+			pools = append(pools, pool(c))
+		}
+		if len(calls) != 2 || calls[1].Form.Get("ClientToken") != host.String()+"-1" || pools[0] == pools[1] ||
+			calls[1].Form.Get("InstanceMarketOptions.MarketType") != "spot" {
+			t.Fatalf("%s: launches %v, want the bought pool and then another Spot pool under a new token", code, pools)
+		}
+		var phase, instanceType string
+		var memory int64
+		if err := o.pool.QueryRow(t.Context(), "select phase, instance_type, memory_bytes from hosts where id = $1", uuid.UUID(host)).
+			Scan(&phase, &instanceType, &memory); err != nil {
+			t.Fatal(err)
+		}
+		if phase != string(compute.PhaseProvisioning) || instanceType != calls[1].Form.Get("InstanceType") || memory < usable {
+			t.Fatalf("%s: host %s as %s with %d bytes, want provisioning in the pool launched, holding at least %d", code, phase, instanceType, memory, usable)
+		}
+		cooled := scan[[]string](t, o.pool, "select array_agg(region || '/' || instance_type || '/' || market) from capacity_cooldowns")
+		if len(cooled) != 1 || cooled[0] != bought {
+			t.Fatalf("%s: cooldowns %v, want only the refused pool %s", code, cooled, bought)
+		}
+	}
+}
+
+// A hibernating Spot reserve keeps its persistent request and hibernation
+// in the pool it moves to.
+func TestARefusedSpotReserveMovesOnHibernatingOnAPersistentRequest(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	spotPrices(t, o)
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	usable := small.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market, reserve_mode)
+values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'spot', 'hibernate') returning id`,
+		int64(usable.CPUMillis), usable.MemoryBytes)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the reserve in its next pool", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 2 {
+		t.Fatalf("%d launches, want 2", len(calls))
+	}
+	f := calls[1].Form
+	if f.Get("ClientToken") != host.String()+"-1" || f.Get("HibernationOptions.Configured") != "true" ||
+		f.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") != "persistent" ||
+		f.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior") != "hibernate" {
+		t.Fatalf("next pool launch %v, want a hibernating persistent Spot request", f)
+	}
+}
+
+// A refused pool answers at once: the next pool is the retry, not the
+// SDK's.
+func TestAPoolRefusalIsNotRetriedBeforeTheNextPool(t *testing.T) {
+	emulator := newAWS(t)
+	f := emulator.fleet(compute.Fleet{})
+	f.AWS.Retryer = func() aws.Retryer {
+		return retry.NewStandard(func(o *retry.StandardOptions) { o.Backoff = retry.BackoffDelayerFunc(noDelay) })
+	}
+	o := newOwners(t, fleetConfig(f))
+	publish(t, o.compute)
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	alice := newUser(t, o.pool, "alice@example.com")
+	requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want 1", n)
+	}
+	if calls := emulator.calls("RunInstances"); len(calls) != 2 {
+		t.Fatalf("%d RunInstances calls, want the refused pool once and the next", len(calls))
+	}
+}
+
+func noDelay(int, error) (time.Duration, error) { return 0, nil }
 
 func TestPlatformHostsLaunchFromTheBakedNodeImageOfTheirRegion(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}}})

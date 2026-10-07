@@ -12,8 +12,42 @@ where h.id in (
     limit @batch_size
     for update skip locked
 )
-returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_count,
-          h.launch_attempts, h.reserve_mode;
+returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
+          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode;
+
+-- name: MoveLaunchPool :execrows
+-- Moves a requested host whose pool EC2 refused to the next pool, with
+-- that pool's capacity and cost.
+update hosts
+set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
+    availability_zone_id = @availability_zone_id, cpu_millis = @cpu_millis, memory_bytes = @memory_bytes,
+    gpu_count = @gpu_count, hourly_micros = @hourly_micros, launch_pools = launch_pools + 1, updated_at = now()
+where id = @id and phase = 'requested';
+
+-- name: HostWaiters :many
+-- The placement each pending container waiting for a host asks for. A
+-- build has no release and takes any region on Spot.
+select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
+       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
+       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible
+from containers c
+left join releases r on r.id = c.release_id
+where c.state = 'pending' and c.capacity_host_id = @host_id;
+
+-- name: LaunchCooldowns :many
+-- One owner's offers cooling now, and refusals recent enough to cool their
+-- region.
+select region, instance_type, market, until, refused_at
+from capacity_cooldowns
+where connection_key = @connection_key
+  and (until > now() or refused_at > now() - make_interval(secs => @window_seconds::float8));
+
+-- name: ReportedMemory :many
+-- The least memory live hosts of each type reported.
+select instance_type, min(memory_bytes)::bigint as memory_bytes
+from hosts
+where provider = 'aws' and phase not in ('deleted', 'failed') and session_epoch > 0 and instance_type <> ''
+group by instance_type;
 
 -- name: RecordLaunch :execrows
 update hosts
