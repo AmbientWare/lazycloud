@@ -47,6 +47,32 @@ func TestBuildCachesGiveConcurrentBuildsTheirOwnState(t *testing.T) {
 	}
 }
 
+// A build that names no workspace gets an empty state no other build holds,
+// and the state goes once its build ends.
+func TestBuildCachesGiveUnscopedBuildsAnEmptyStateOfTheirOwn(t *testing.T) {
+	caches := newBuildCaches(t.TempDir(), 1<<30, slog.Default())
+	first, err := caches.acquire(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fillState(t, first, 1<<10)
+	caches.release(t.Context(), first)
+	second, err := caches.acquire(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(second); err != nil || len(entries) != 0 || second == first {
+		t.Fatalf("an unscoped build got %s holding %d entries (%v), want a new empty state", second, len(entries), err)
+	}
+	caches.evict(t.Context())
+	if _, err := os.Stat(first); err == nil {
+		t.Fatal("an ended unscoped build's state stayed")
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Fatalf("a running unscoped build's state was removed: %v", err)
+	}
+}
+
 // The caches stay within their limit: when a build ends, the least recently
 // used workspaces are removed whole, and never one whose build still runs.
 func TestBuildCachesEvictLeastRecentlyUsedWorkspacesToTheLimit(t *testing.T) {

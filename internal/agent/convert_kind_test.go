@@ -142,7 +142,9 @@ func testPublish(t *testing.T, repository string, layers *layerServer) *layerPub
 	}()
 	t.Cleanup(stop)
 	build := &hostproto.ImageBuild{PushRepository: repository, InsecureRegistry: true}
-	return newLayerPublish(newTestContainer(t, server), build, t.TempDir(), "", newBuildLogs(nil, "build", nil))
+	p := newLayerPublish(t.Context(), newTestContainer(t, server), build, t.TempDir(), "", newBuildLogs(nil, "build", nil))
+	t.Cleanup(p.close)
+	return p
 }
 
 // A converted layer uploads while another still converts: here the large
@@ -256,6 +258,56 @@ func TestLayerConversionRetriesACutOffRead(t *testing.T) {
 	upload := server.complete(&hostproto.CompleteImageBuildRequest{}).GetLayerUploads()[0]
 	if _, err := testPublish(t, repository, server).convert(t.Context(), upload.GetBlobDigest(), upload.GetDiffId()); err != nil || !cut.Load() {
 		t.Fatalf("a layer whose first read was cut off gave %v (cut %v)", err, cut.Load())
+	}
+}
+
+// A publish the server names no layers for ends at once, and stops the
+// conversion of a layer started while the image pushed.
+func TestLayerPublishStopsConversionsTheServerDoesNotName(t *testing.T) {
+	read := make(chan struct{}, 1)
+	repository, layers := pushLayers(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
+				select {
+				case read <- struct{}{}:
+				default:
+				}
+				<-r.Context().Done()
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
+	}, 1024)
+	p := testPublish(t, repository, newLayerServer(t, "http://store", nil))
+	blob, err := layers[0].Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffID, err := layers[0].DiffID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.prepare(blob.String(), diffID.String())
+	<-read
+	published := make(chan error, 1)
+	go func() { published <- p.publish(t.Context(), &hostproto.CompleteImageBuildRequest{}) }()
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the publish waited for a conversion no answer named")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		p.preparing.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the unnamed conversion kept running after the publish")
 	}
 }
 

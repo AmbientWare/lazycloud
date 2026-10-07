@@ -799,7 +799,10 @@ type BuildCommand struct {
 	Dockerfile string
 	// Workspace is the one the build runs for, which stores Context, the
 	// archive the build reads.
-	Workspace      identity.WorkspaceID
+	Workspace identity.WorkspaceID
+	// CacheWorkspace is Workspace when the image is that workspace's alone,
+	// and its builds on a host may share a local cache; nil otherwise.
+	CacheWorkspace *identity.WorkspaceID
 	Context        []byte
 	Platform       string
 	PushRepository string
@@ -858,7 +861,8 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	// one: a build could write any cache entry it can push, and caches hold
 	// the workspace's build contexts.
 	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + base))
-	image := i.config.targetOf(row.PlatformHost, row.WorkspaceID, row.Digest, row.Forced).repository
+	target := i.config.targetOf(row.PlatformHost, row.WorkspaceID, row.Digest, row.Forced)
+	image := target.repository
 	cache := i.config.cacheRepository(row.WorkspaceID)
 	// The build pushes only its image and its workspace's cache, until its
 	// deadline.
@@ -877,7 +881,7 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	if platform != nil {
 		auth[i.config.Registry] = *platform
 	}
-	return BuildCommand{
+	command := BuildCommand{
 		Build: start.Build, Attempt: start.Attempt, Dockerfile: row.Dockerfile,
 		Context: row.ContextSha256, Workspace: identity.WorkspaceID(row.WorkspaceID),
 		Platform:       "linux/" + row.Architecture,
@@ -885,7 +889,11 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 		CacheRef:       i.config.Registry + "/" + cache + ":" + hex.EncodeToString(scope[:16]),
 		Insecure:       i.config.Insecure, Auth: auth, Deadline: row.DeadlineAt,
 		Secrets: values, GPUs: buildGPUs(row.BuildGpu),
-	}, nil
+	}
+	if target.scoped {
+		command.CacheWorkspace = &command.Workspace
+	}
+	return command, nil
 }
 
 // BuildResources are the reservations and ceilings of a build container.

@@ -77,6 +77,12 @@ type layerPublish struct {
 	results               chan layerResult
 	layers                map[string]*publishedLayer
 
+	// preparing tracks the conversions ahead starts, which run within
+	// aheadCtx until publish no longer needs them.
+	preparing sync.WaitGroup
+	aheadCtx  context.Context //nolint:containedctx // Bounds the conversions ahead starts.
+	stopAhead context.CancelFunc
+
 	mu sync.Mutex
 	// prepared are the conversions ahead started, by blob digest.
 	prepared map[string]*preparedLayer
@@ -111,12 +117,14 @@ type layerResult struct {
 	err   error
 }
 
-func newLayerPublish(c *container, build *hostproto.ImageBuild, dir, blobs string, logs buildLogs) *layerPublish {
+// newLayerPublish returns a publish whose conversions ahead run within ctx.
+func newLayerPublish(ctx context.Context, c *container, build *hostproto.ImageBuild, dir, blobs string, logs buildLogs) *layerPublish {
 	p := &layerPublish{
 		c: c, build: build, dir: dir, blobs: blobs, logs: logs, auth: authn.Anonymous,
 		converting: make(chan struct{}, maxConversions), uploading: make(chan struct{}, maxConversions),
 		results: make(chan layerResult), layers: map[string]*publishedLayer{}, prepared: map[string]*preparedLayer{},
 	}
+	p.aheadCtx, p.stopAhead = context.WithCancel(ctx)
 	if build.GetInsecureRegistry() {
 		p.options = append(p.options, name.Insecure)
 	}
@@ -129,9 +137,11 @@ func newLayerPublish(c *container, build *hostproto.ImageBuild, dir, blobs strin
 
 // publish completes the build with request, then acts on the layers each
 // answer names and sends what that produced, until an answer names none.
-// It returns once its conversions and uploads end.
+// It returns once its conversions and uploads end, and stops the
+// conversions ahead started that no answer named.
 func (p *layerPublish) publish(ctx context.Context, request *hostproto.CompleteImageBuildRequest) error {
 	ctx, cancel := context.WithCancel(ctx)
+	defer p.stopAhead()
 	defer p.running.Wait()
 	defer cancel()
 	began := time.Now()
@@ -286,8 +296,9 @@ var (
 // those its config dates from since on, while the image pushes. The others
 // are layers of the base or of earlier builds, which the server mostly
 // has already. It returns at once; publish waits for the conversions.
-func (p *layerPublish) ahead(ctx context.Context, manifest string, since time.Time) {
-	p.running.Go(func() {
+func (p *layerPublish) ahead(manifest string, since time.Time) {
+	ctx := p.aheadCtx
+	p.preparing.Go(func() {
 		layers, err := p.madeLayers(manifest, since)
 		if err != nil {
 			p.c.log.Warn("reading the exported image failed", "error", err)
@@ -297,7 +308,7 @@ func (p *layerPublish) ahead(ctx context.Context, manifest string, since time.Ti
 			p.logs.add(ctx, fmt.Sprintf("converting %d new layers while the image pushes", len(layers)))
 		}
 		for _, l := range layers {
-			p.prepare(ctx, l.blob, l.diffID)
+			p.prepare(l.blob, l.diffID)
 		}
 	})
 }
@@ -343,7 +354,7 @@ func (p *layerPublish) madeLayers(manifest string, since time.Time) ([]madeLayer
 }
 
 // prepare starts converting blob unless a conversion of it started.
-func (p *layerPublish) prepare(ctx context.Context, blob, diffID string) {
+func (p *layerPublish) prepare(blob, diffID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.prepared[blob] != nil {
@@ -351,9 +362,9 @@ func (p *layerPublish) prepare(ctx context.Context, blob, diffID string) {
 	}
 	l := &preparedLayer{done: make(chan struct{})}
 	p.prepared[blob] = l
-	p.running.Go(func() {
+	p.preparing.Go(func() {
 		defer close(l.done)
-		l.converted, l.err = p.convert(ctx, blob, diffID)
+		l.converted, l.err = p.convert(p.aheadCtx, blob, diffID)
 	})
 }
 
@@ -436,7 +447,7 @@ func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, diffID
 func (p *layerPublish) openLayer(ctx context.Context, ref name.Digest) (io.ReadCloser, error) {
 	var layer v1.Layer
 	path := p.blobPath(ref.DigestStr())
-	if _, err := os.Stat(path); p.blobs != "" && err == nil {
+	if _, err := os.Stat(path); err == nil {
 		layer, err = tarball.LayerFromFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read layer: %w", err)
@@ -451,6 +462,15 @@ func (p *layerPublish) openLayer(ctx context.Context, ref name.Digest) (io.ReadC
 		return nil, fmt.Errorf("read layer: %w", err)
 	}
 	return uncompressed, nil
+}
+
+// close stops the conversions ahead started, waits for every conversion
+// and upload, and removes their files.
+func (p *layerPublish) close() {
+	p.stopAhead()
+	p.preparing.Wait()
+	p.running.Wait()
+	_ = os.RemoveAll(p.dir)
 }
 
 // sourceRead reads r and keeps the first error other than io.EOF it gave.

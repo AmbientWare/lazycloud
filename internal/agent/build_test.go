@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -99,7 +100,7 @@ func buildCommand(registry, dockerfile string) *hostproto.ServerMessage {
 			BuildId: uuid.NewString(), Attempt: 1, Dockerfile: dockerfile, Platform: "linux/amd64",
 			PushRepository: registry + "/lazycloud/images", CacheRef: registry + "/lazycloud/cache:test",
 			InsecureRegistry: true, Deadline: timestamppb.New(time.Now().Add(10 * time.Minute)),
-			WorkspaceId: testWorkspace,
+			CacheWorkspaceId: testWorkspace,
 		},
 	}}}
 }
@@ -336,7 +337,8 @@ func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 }
 
 // A workspace's builds on a host share a cache that no other workspace's
-// build reads, cache mounts included.
+// build reads, cache mounts included, and that no build of an image every
+// workspace may use reads either.
 func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
@@ -346,7 +348,7 @@ func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
 		t.Helper()
 		start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN --mount=type=cache,id=probe,target=/probe "+step+"\n")
 		b := start.GetStart().GetBuild()
-		b.WorkspaceId, b.CacheRef = workspace, registry+"/lazycloud/cache:"+workspace
+		b.CacheWorkspaceId, b.CacheRef = workspace, registry+"/lazycloud/cache:"+cmp.Or(workspace, "shared")
 		session.send(t, start)
 		select {
 		case outcome := <-e.server.builds:
@@ -359,6 +361,7 @@ func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
 		session.phase(t, start.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
 	}
 	build(testWorkspace, "echo kept > /probe/marker")
+	build("", "test ! -e /probe/marker")
 	build(uuid.NewString(), "test ! -e /probe/marker")
 	build(testWorkspace, "test -e /probe/marker")
 }

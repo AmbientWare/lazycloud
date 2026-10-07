@@ -201,6 +201,12 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 		if start.Build == forced.Build.ID {
 			forcedContainer = start.Container
 		}
+		// Only the forced build's image is its workspace's alone; the other
+		// publishes for every workspace, so it gets no workspace's cache.
+		if scoped := start.Build == forced.Build.ID; (command.CacheWorkspace != nil) != scoped ||
+			scoped && *command.CacheWorkspace != a {
+			t.Errorf("build for every workspace=%v has cache workspace %v", !scoped, command.CacheWorkspace)
+		}
 	}
 	if len(caches) != 2 {
 		t.Fatalf("two workspaces' builds on one base use separate caches, got %v", caches)
@@ -249,6 +255,9 @@ func TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	own := f.workspaceImageRepository(t, a, first.Image.ID)
+	if command.CacheWorkspace == nil || *command.CacheWorkspace != a {
+		t.Errorf("a build of the workspace's own image has cache workspace %v, want %v", command.CacheWorkspace, a)
+	}
 	if command.PushRepository != own {
 		t.Fatalf("a customer host pushes to %s, want the workspace's repository %s", command.PushRepository, own)
 	}

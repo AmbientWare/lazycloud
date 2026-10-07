@@ -31,9 +31,11 @@ const (
 // that built on this host. A workspace's directory holds a BuildKit state
 // for each of its builds that ran at once, <dir>/<workspace>/<n>, so two
 // builds never share a BuildKit store. A builder mounts only the state it
-// holds, so a build reads no other workspace's layers or cache mounts.
-// When a build ends, whole workspaces that run no build are removed, least
-// recently used first, until the caches fit in limit.
+// holds, so a build reads no other workspace's layers or cache mounts. A
+// build that names no workspace gets an empty state of its own under
+// <dir>/unscoped, removed once its build ends. When a build ends, whole
+// workspaces that run no build are removed, least recently used first,
+// until the caches fit in limit.
 type buildCaches struct {
 	dir   string
 	limit int64
@@ -47,8 +49,8 @@ type buildCaches struct {
 	// evicting has a channel for each workspace being removed, closed once
 	// it is gone.
 	evicting map[string]chan struct{}
-	// sizes are the bytes of each state when its last build ended. They are
-	// measured again from the directories when the agent starts.
+	// sizes are the bytes of each state, measured by the first eviction pass
+	// after the agent starts or the state's build ends.
 	sizes map[string]int64
 }
 
@@ -59,9 +61,16 @@ func newBuildCaches(dir string, limit int64, log *slog.Logger) *buildCaches {
 	}
 }
 
+// unscopedDir holds the states of builds that name no workspace.
+const unscopedDir = "unscoped"
+
 // acquire holds a state of workspace's cache for one build and returns its
-// directory, which the builder's user can write.
+// directory, which the builder's user can write. With no workspace it is a
+// new, empty state.
 func (b *buildCaches) acquire(ctx context.Context, workspace string) (string, error) {
+	if workspace == "" {
+		return b.acquireUnscoped()
+	}
 	id, err := uuid.Parse(workspace)
 	if err != nil {
 		return "", fmt.Errorf("the build names no workspace: %w", err)
@@ -93,6 +102,24 @@ func (b *buildCaches) acquire(ctx context.Context, workspace string) (string, er
 	return state, nil
 }
 
+func (b *buildCaches) acquireUnscoped() (string, error) {
+	dir := filepath.Join(b.dir, unscopedDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create the build state: %w", err)
+	}
+	state, err := os.MkdirTemp(dir, "state")
+	if err != nil {
+		return "", fmt.Errorf("create the build state: %w", err)
+	}
+	if err := os.Chmod(state, 0o777); err != nil { //nolint:gosec // The builder runs as its own unprivileged user.
+		return "", fmt.Errorf("open the build state: %w", err)
+	}
+	b.mu.Lock()
+	b.held[state] = true
+	b.mu.Unlock()
+	return state, nil
+}
+
 // openState creates state and marks its workspace used now.
 func openState(workspace, state string) error {
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
@@ -112,20 +139,17 @@ func openState(workspace, state string) error {
 	return nil
 }
 
-// release ends a build's hold on state. evict then brings the caches back
-// within their limit.
+// release ends a build's hold on state, so the workspace's next build can
+// take it. evict then measures it, removes it if it names no workspace, and
+// brings the caches back within their limit.
 func (b *buildCaches) release(ctx context.Context, state string) {
-	size, err := treeBytes(state)
-	if err != nil {
-		b.log.WarnContext(ctx, "measuring the build cache failed", "error", err)
-	}
 	now := time.Now()
 	if err := os.Chtimes(filepath.Dir(state), now, now); err != nil {
 		b.log.WarnContext(ctx, "marking the build cache used failed", "error", err)
 	}
 	b.mu.Lock()
 	delete(b.held, state)
-	b.sizes[state] = size
+	delete(b.sizes, state)
 	b.mu.Unlock()
 }
 
@@ -146,6 +170,7 @@ func (b *buildCaches) evict(ctx context.Context) {
 		return
 	}
 	defer func() { <-b.passes }()
+	b.removeUnscoped(ctx)
 	caches, total, err := b.measure()
 	if err != nil {
 		b.log.Warn("measuring the build caches failed", "error", err)
@@ -185,8 +210,30 @@ func (b *buildCaches) evict(ctx context.Context) {
 	}
 }
 
+// removeUnscoped removes the states of ended builds that named no
+// workspace.
+func (b *buildCaches) removeUnscoped(ctx context.Context) {
+	dir := filepath.Join(b.dir, unscopedDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		state := filepath.Join(dir, entry.Name())
+		b.mu.Lock()
+		held := b.held[state]
+		b.mu.Unlock()
+		if held {
+			continue
+		}
+		if err := os.RemoveAll(state); err != nil {
+			b.log.WarnContext(ctx, "removing a build state failed", "dir", state, "error", err)
+		}
+	}
+}
+
 // measure lists the workspace caches with their sizes and the total. A
-// state a build holds counts what it took when its last build ended.
+// state a build holds counts what it took when last measured.
 func (b *buildCaches) measure() ([]workspaceCache, int64, error) {
 	entries, err := os.ReadDir(b.dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -199,7 +246,7 @@ func (b *buildCaches) measure() ([]workspaceCache, int64, error) {
 	var total int64
 	for _, entry := range entries {
 		info, err := entry.Info()
-		if err != nil || !info.IsDir() {
+		if err != nil || !info.IsDir() || entry.Name() == unscopedDir {
 			continue
 		}
 		w := workspaceCache{dir: filepath.Join(b.dir, entry.Name()), used: info.ModTime()}
