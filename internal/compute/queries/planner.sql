@@ -142,10 +142,10 @@ order by connection_id;
 -- name: PlannerCooldowns :many
 -- Offers cooling now, and refusals recent enough to cool their region. A
 -- cooldown with no refusal behind it has no refused_at.
-select connection_key, region, instance_type, market, until, refused_at
+select connection_key, region, availability_zone_id, instance_type, market, until, refused_at
 from capacity_cooldowns
 where until > now() or refused_at > now() - make_interval(secs => @window_seconds::float8)
-order by connection_key, region, instance_type, market;
+order by connection_key, region, availability_zone_id, instance_type, market;
 
 -- name: FleetMarkets :many
 -- The published markets. An expired plan is no plan; readers compare
@@ -247,7 +247,8 @@ insert into capacity_cooldowns (connection_key, region, instance_type, market, u
 select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => @seconds::float8),
        'the host bought for a container could not take it'
 from jsonb_to_recordset(@offers::jsonb) as v(connection_key text, region text, instance_type text, market text)
-on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason;
+on conflict (connection_key, region, availability_zone_id, instance_type, market)
+do update set until = excluded.until, reason = excluded.reason;
 
 -- name: FailPreparing :many
 -- Reserves whose agent never proved them within the limit fail, and

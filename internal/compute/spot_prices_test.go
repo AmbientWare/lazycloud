@@ -38,29 +38,30 @@ func placementScoreReply(region string, scores map[string]int) awsReply {
 }
 
 // The planner buys a pending container's Spot host in the pool that wins
-// on price and placement score: a pool AWS scores 5 against a best of 9
-// loses to one 10% dearer and wins against one 33% dearer.
+// on price and placement score: an 8-vCPU pool AWS scores 5 against a best
+// of 9 loses to one 10% dearer and wins against one 30% dearer. Shapes the
+// catalog sells fewer than three types of are not scored.
 func TestPlacementScoresRankAScarcePoolBelowASlightlyDearerOne(t *testing.T) {
 	for _, c := range []struct {
 		dearPrice string
 		want      string
-	}{{"0.033000", "use2-az2"}, {"0.040000", "use2-az1"}} {
+	}{{"0.110000", "use2-az2"}, {"0.130000", "use2-az1"}} {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
-		prices := map[string]string{"use2-az1": "0.030000", "use2-az2": c.dearPrice}
+		prices := map[string]string{"use2-az1": "0.100000", "use2-az2": c.dearPrice}
 		emulator.on("DescribeSpotPriceHistory", func(call awsCall) awsReply {
 			zone := call.Form.Get("AvailabilityZoneId")
 			if price, ok := prices[zone]; ok {
-				return spotPriceReply([4]string{"m7i.large", price, "2026-10-07T12:00:00Z", zone})
+				return spotPriceReply([4]string{"c6a.2xlarge", price, "2026-10-07T12:00:00Z", zone})
 			}
 			return spotPriceReply()
 		})
 		emulator.on("GetSpotPlacementScores", func(call awsCall) awsReply {
-			region := call.Form.Get("RegionName.1")
+			region, types := call.Form.Get("RegionName.1"), list(call.Form, "InstanceType")
 			if call.Form.Get("SingleAvailabilityZone") != "true" || call.Form.Get("TargetCapacity") != "1" || region == "" ||
-				call.Form.Get("RegionName.2") != "" {
-				t.Errorf("GetSpotPlacementScores %v, want one instance in one zone of one region", call.Form)
+				call.Form.Get("RegionName.2") != "" || len(types) < 3 {
+				t.Errorf("GetSpotPlacementScores %v, want one instance of a shape of three types or more in one zone of one region", call.Form)
 			}
-			if region == "us-east-2" && slices.Contains(list(call.Form, "InstanceType"), "m7i.large") {
+			if region == "us-east-2" && slices.Contains(types, "c6a.2xlarge") {
 				return placementScoreReply(region, map[string]int{"use2-az1": 5, "use2-az2": 9})
 			}
 			return placementScoreReply(region, nil)
@@ -70,12 +71,12 @@ func TestPlacementScoresRankAScarcePoolBelowASlightlyDearerOne(t *testing.T) {
 		}
 		alice := newUser(t, o.pool, "alice@example.com")
 		dev := newWorkspace(t, o.pool, "dev", alice)
-		container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 1000, gib)
+		container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 4000, 8*gib)
 		plan(t, o)
 		got := scan[string](t, o.pool, `
 select h.instance_type || ' ' || h.market || ' ' || h.availability_zone_id
 from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1`, container)
-		if want := "m7i.large spot " + c.want; got != want {
+		if want := "c6a.2xlarge spot " + c.want; got != want {
 			t.Errorf("use2-az2 at %s: bought %s, want %s", c.dearPrice, got, want)
 		}
 	}

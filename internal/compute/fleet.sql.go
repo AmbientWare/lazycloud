@@ -66,7 +66,8 @@ type ClaimLaunchesRow struct {
 }
 
 // Requested hosts whose launch is not held by another launcher. The lease
-// outlasts one RunInstances call; a launcher that dies leaves it to expire.
+// outlasts one pool's RunInstances call and each move to a next pool renews
+// it; a launcher that dies leaves it to expire.
 func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([]ClaimLaunchesRow, error) {
 	rows, err := q.db.Query(ctx, claimLaunches, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -361,25 +362,29 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
-values ($1, $2, $3, $4, now() + make_interval(secs => $5::float8), $6, now())
-on conflict (connection_key, region, instance_type, market)
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason, refused_at)
+values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::float8),
+        $7, now())
+on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at
 `
 
 type InsertCooldownParams struct {
-	ConnectionKey string
-	Region        string
-	InstanceType  string
-	Market        string
-	Seconds       float64
-	Reason        string
+	ConnectionKey      string
+	Region             string
+	AvailabilityZoneID string
+	InstanceType       string
+	Market             string
+	Seconds            float64
+	Reason             string
 }
 
+// Cools an offer in one zone, or in its whole region for the zone ”.
 func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) error {
 	_, err := q.db.Exec(ctx, insertCooldown,
 		arg.ConnectionKey,
 		arg.Region,
+		arg.AvailabilityZoneID,
 		arg.InstanceType,
 		arg.Market,
 		arg.Seconds,
@@ -406,54 +411,6 @@ func (q *Queries) KnownHostIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUI
 			return nil, err
 		}
 		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const launchCooldowns = `-- name: LaunchCooldowns :many
-select region, instance_type, market, until, refused_at
-from capacity_cooldowns
-where connection_key = $1
-  and (until > now() or refused_at > now() - make_interval(secs => $2::float8))
-`
-
-type LaunchCooldownsParams struct {
-	ConnectionKey string
-	WindowSeconds float64
-}
-
-type LaunchCooldownsRow struct {
-	Region       string
-	InstanceType string
-	Market       string
-	Until        time.Time
-	RefusedAt    *time.Time
-}
-
-// One owner's offers cooling now, and refusals recent enough to cool their
-// region.
-func (q *Queries) LaunchCooldowns(ctx context.Context, arg LaunchCooldownsParams) ([]LaunchCooldownsRow, error) {
-	rows, err := q.db.Query(ctx, launchCooldowns, arg.ConnectionKey, arg.WindowSeconds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []LaunchCooldownsRow
-	for rows.Next() {
-		var i LaunchCooldownsRow
-		if err := rows.Scan(
-			&i.Region,
-			&i.InstanceType,
-			&i.Market,
-			&i.Until,
-			&i.RefusedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -518,9 +475,9 @@ func (q *Queries) MarkHostDeleted(ctx context.Context, arg MarkHostDeletedParams
 const moveLaunchPool = `-- name: MoveLaunchPool :execrows
 update hosts
 set instance_type = $1, region = $2, availability_zone = $3,
-    availability_zone_id = $4, cpu_millis = $5, memory_bytes = $6,
-    gpu_count = $7, hourly_micros = $8, launch_pools = launch_pools + 1, updated_at = now()
-where id = $9 and phase = 'requested'
+    availability_zone_id = $4, hourly_micros = $5, launch_pools = launch_pools + 1,
+    launch_lease_until = now() + make_interval(secs => $6::float8), updated_at = now()
+where id = $7 and phase = 'requested' and launch_pools = $8
 `
 
 type MoveLaunchPoolParams struct {
@@ -528,26 +485,27 @@ type MoveLaunchPoolParams struct {
 	Region             string
 	AvailabilityZone   string
 	AvailabilityZoneID string
-	CpuMillis          cpu.Millis
-	MemoryBytes        int64
-	GpuCount           int32
 	HourlyMicros       *int64
+	LeaseSeconds       float64
 	ID                 uuid.UUID
+	LaunchPools        int16
 }
 
-// Moves a requested host whose pool EC2 refused to the next pool, with
-// that pool's capacity and cost.
+// Moves a requested host whose pool EC2 refused to the next pool at that
+// pool's cost, and renews the launcher's lease. The host keeps the
+// capacity it was bought with until it reports its own, so every pool it
+// moves to holds that. A host another launcher moved on since it was
+// claimed stays where that one put it.
 func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) (int64, error) {
 	result, err := q.db.Exec(ctx, moveLaunchPool,
 		arg.InstanceType,
 		arg.Region,
 		arg.AvailabilityZone,
 		arg.AvailabilityZoneID,
-		arg.CpuMillis,
-		arg.MemoryBytes,
-		arg.GpuCount,
 		arg.HourlyMicros,
+		arg.LeaseSeconds,
 		arg.ID,
+		arg.LaunchPools,
 	)
 	if err != nil {
 		return 0, err
@@ -563,7 +521,7 @@ set instance_id = $1, availability_zone = $2, availability_zone_id = $3,
     authorization_id = $4, node_role_arn = $5,
     spot_request_id = $6, node_image = $7,
     hibernation_configured = $8
-where id = $9 and phase = 'requested'
+where id = $9 and phase = 'requested' and launch_pools = $10
 `
 
 type RecordLaunchParams struct {
@@ -576,8 +534,11 @@ type RecordLaunchParams struct {
 	NodeImage             *string
 	HibernationConfigured bool
 	ID                    uuid.UUID
+	LaunchPools           int16
 }
 
+// Records the instance launched in the pool the launcher holds; a host
+// another launcher moved on records nothing, and its instance ends.
 func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordLaunch,
 		arg.InstanceID,
@@ -589,44 +550,12 @@ func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int
 		arg.NodeImage,
 		arg.HibernationConfigured,
 		arg.ID,
+		arg.LaunchPools,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const reportedMemory = `-- name: ReportedMemory :many
-select instance_type, min(memory_bytes)::bigint as memory_bytes
-from hosts
-where provider = 'aws' and phase not in ('deleted', 'failed') and session_epoch > 0 and instance_type <> ''
-group by instance_type
-`
-
-type ReportedMemoryRow struct {
-	InstanceType string
-	MemoryBytes  int64
-}
-
-// The least memory live hosts of each type reported.
-func (q *Queries) ReportedMemory(ctx context.Context) ([]ReportedMemoryRow, error) {
-	rows, err := q.db.Query(ctx, reportedMemory)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ReportedMemoryRow
-	for rows.Next() {
-		var i ReportedMemoryRow
-		if err := rows.Scan(&i.InstanceType, &i.MemoryBytes); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const setHostPhase = `-- name: SetHostPhase :execrows

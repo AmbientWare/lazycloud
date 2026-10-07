@@ -184,6 +184,28 @@ func TestOffersPreferTheStorageRegionUntilAnotherIsCheaperAllIn(t *testing.T) {
 	}
 }
 
+// A pool of a scored shape that has no score of its own ranks at the
+// shape's worst score, not its best.
+func TestAnUnscoredPoolRanksAtItsShapesWorstScore(t *testing.T) {
+	in := offerInputs(t)
+	in.Catalog = []CatalogType{mustType(t, "c6a.2xlarge")}
+	in.Networks = map[string]Network{"us-east-2": {Subnets: []Subnet{
+		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"},
+		{ID: "c", Zone: "us-east-2c", ZoneID: "use2-az3"},
+	}}}
+	quote := func(zone string, micros int64, score int) SpotQuote {
+		return SpotQuote{Region: "us-east-2", ZoneID: zone, InstanceType: "c6a.2xlarge", HourlyMicros: micros, ObservedAt: offerNow, PlacementScore: score}
+	}
+	in.Spot = []SpotQuote{quote("use2-az1", 120_000, 9), quote("use2-az2", 115_000, 0), quote("use2-az3", 150_000, 1)}
+	offers := RankOffers(DefaultPolicy(), Requirement{Preemptible: true}, false, in)
+	if len(offers) == 0 || offers[0].ZoneID != "use2-az1" {
+		t.Fatalf("offers %v, want the pool scored 9 before the cheaper unscored one", offerKeys(offers))
+	}
+	if i := slices.IndexFunc(offers, func(o FleetOffer) bool { return o.ZoneID == "use2-az2" }); i < 0 || offers[i].PlacementPenalty != 32 {
+		t.Fatalf("offers %+v, want the unscored pool penalized as a score of 1", offers)
+	}
+}
+
 func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 	p := DefaultPolicy()
 	rates := indexRates(fleetRates(t))
@@ -198,25 +220,28 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 		name        string
 		market      Market
 		preemptible bool
+		region      string
 		gpu         string
 		cards       int
 		class       billing.RateClass
 	}{
-		{"Spot", MarketSpot, true, "", 0, billing.ClassAuto},
-		{"on-demand", MarketOnDemand, false, "", 0, billing.ClassNonPreemptible},
-		{"Spot-tolerant work on on-demand keeps its lower rate", MarketOnDemand, true, "", 0, billing.ClassAuto},
-		{"on-demand GPU", MarketOnDemand, false, "L4", 1, billing.ClassNonPreemptible},
+		{"Spot", MarketSpot, true, "", "", 0, billing.ClassAuto},
+		{"on-demand", MarketOnDemand, false, "", "", 0, billing.ClassNonPreemptible},
+		{"Spot-tolerant work on on-demand keeps its lower rate", MarketOnDemand, true, "", "", 0, billing.ClassAuto},
+		{"on-demand GPU", MarketOnDemand, false, "", "L4", 1, billing.ClassNonPreemptible},
+		{"Spot work pinned to a region pays the pinned rate", MarketSpot, true, "us-west", "", 0, billing.ClassPinned},
 	}
 	for _, c := range cases {
 		limit := ceiling(revenue(c.class, billing.GPUType(c.gpu), c.cards))
 		o := FleetOffer{Type: CatalogType{GPU: c.gpu, GPUCount: c.cards}, Market: c.market, Usable: usable}
 		o.Usable.GPUs = c.cards
 		o.HourlyMicros = limit
-		if reason, rejected := marginRejection(p, rates, o, c.preemptible); rejected {
+		need := Requirement{Preemptible: c.preemptible, Region: c.region}
+		if reason, rejected := marginRejection(p, rates, o, need); rejected {
 			t.Errorf("%s at its ceiling %d: %s", c.name, limit, reason)
 		}
 		o.HourlyMicros = limit + 1
-		if reason, _ := marginRejection(p, rates, o, c.preemptible); reason != rejectInsufficientMargin {
+		if reason, _ := marginRejection(p, rates, o, need); reason != rejectInsufficientMargin {
 			t.Errorf("%s over its ceiling: %q", c.name, reason)
 		}
 	}
@@ -226,7 +251,7 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 		t.Fatalf("non-preemptible CPU and memory are three times automatic; GPUs are not")
 	}
 	unpriced := FleetOffer{Type: CatalogType{GPU: "unpriced", GPUCount: 1}, Market: MarketOnDemand, Usable: usable, HourlyMicros: 1}
-	if reason, _ := marginRejection(p, rates, unpriced, false); reason != rejectUnpricedCapacity {
+	if reason, _ := marginRejection(p, rates, unpriced, Requirement{}); reason != rejectUnpricedCapacity {
 		t.Fatalf("unpriced GPU: %q", reason)
 	}
 }

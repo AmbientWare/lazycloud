@@ -1,6 +1,7 @@
 -- name: ClaimLaunches :many
 -- Requested hosts whose launch is not held by another launcher. The lease
--- outlasts one RunInstances call; a launcher that dies leaves it to expire.
+-- outlasts one pool's RunInstances call and each move to a next pool renews
+-- it; a launcher that dies leaves it to expire.
 update hosts h
 set launch_lease_until = now() + make_interval(secs => @lease_seconds::float8),
     launch_attempts = launch_attempts + 1, updated_at = now()
@@ -16,13 +17,16 @@ returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instan
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode;
 
 -- name: MoveLaunchPool :execrows
--- Moves a requested host whose pool EC2 refused to the next pool, with
--- that pool's capacity and cost.
+-- Moves a requested host whose pool EC2 refused to the next pool at that
+-- pool's cost, and renews the launcher's lease. The host keeps the
+-- capacity it was bought with until it reports its own, so every pool it
+-- moves to holds that. A host another launcher moved on since it was
+-- claimed stays where that one put it.
 update hosts
 set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
-    availability_zone_id = @availability_zone_id, cpu_millis = @cpu_millis, memory_bytes = @memory_bytes,
-    gpu_count = @gpu_count, hourly_micros = @hourly_micros, launch_pools = launch_pools + 1, updated_at = now()
-where id = @id and phase = 'requested';
+    availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros, launch_pools = launch_pools + 1,
+    launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), updated_at = now()
+where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
 -- name: HostWaiters :many
 -- The placement each pending container waiting for a host asks for. A
@@ -34,22 +38,9 @@ from containers c
 left join releases r on r.id = c.release_id
 where c.state = 'pending' and c.capacity_host_id = @host_id;
 
--- name: LaunchCooldowns :many
--- One owner's offers cooling now, and refusals recent enough to cool their
--- region.
-select region, instance_type, market, until, refused_at
-from capacity_cooldowns
-where connection_key = @connection_key
-  and (until > now() or refused_at > now() - make_interval(secs => @window_seconds::float8));
-
--- name: ReportedMemory :many
--- The least memory live hosts of each type reported.
-select instance_type, min(memory_bytes)::bigint as memory_bytes
-from hosts
-where provider = 'aws' and phase not in ('deleted', 'failed') and session_epoch > 0 and instance_type <> ''
-group by instance_type;
-
 -- name: RecordLaunch :execrows
+-- Records the instance launched in the pool the launcher holds; a host
+-- another launcher moved on records nothing, and its instance ends.
 update hosts
 set instance_id = @instance_id, availability_zone = @availability_zone, availability_zone_id = @availability_zone_id,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
@@ -57,7 +48,7 @@ set instance_id = @instance_id, availability_zone = @availability_zone, availabi
     authorization_id = sqlc.narg(authorization_id), node_role_arn = @node_role_arn,
     spot_request_id = sqlc.narg(spot_request_id), node_image = @node_image,
     hibernation_configured = @hibernation_configured
-where id = @id and phase = 'requested';
+where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
 -- name: FailHost :execrows
 -- Fails a host still in the phase its caller read.
@@ -67,9 +58,11 @@ set phase = 'failed', failure = @failure, phase_message = @message, phase_at = n
 where id = @id and phase = @from_phase;
 
 -- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
-values (@connection_key, @region, @instance_type, @market, now() + make_interval(secs => @seconds::float8), @reason, now())
-on conflict (connection_key, region, instance_type, market)
+-- Cools an offer in one zone, or in its whole region for the zone ''.
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason, refused_at)
+values (@connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => @seconds::float8),
+        @reason, now())
+on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at;
 
 -- name: DrainConnectionHosts :many

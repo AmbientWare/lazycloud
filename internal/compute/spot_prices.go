@@ -26,9 +26,13 @@ const (
 	// region that fails to refresh keeps its prices until then.
 	spotPriceFresh = time.Hour
 	spotProduct    = "Linux/UNIX"
-	// placementScoreFresh is how long a placement score ranks its pool; a
-	// region whose score read fails keeps its scores until then.
-	placementScoreFresh = 30 * time.Minute
+	// placementScoreFresh is how long a placement score ranks its pool: as
+	// long as the price read with it. A region whose score read fails keeps
+	// its scores until then.
+	placementScoreFresh = spotPriceFresh
+	// placementShapeTypes is the fewest catalog types a scored shape has.
+	// AWS scores a request of fewer types low whatever the capacity.
+	placementShapeTypes = 3
 	// placementScoreCalls bounds a region's score reads in flight. AWS
 	// refills 20 a second and charges nothing.
 	placementScoreCalls = 4
@@ -111,12 +115,12 @@ func placementShape(t CatalogType) string {
 }
 
 // placementScores reads AWS's Spot placement score of one instance in each
-// of zones for every shape of types, and gives each type its shape's score.
-// AWS scores a request of fewer than three types low whatever the capacity,
-// so a pool is scored as its shape: every catalog type of its vCPUs and
-// GPUs, which tells zones and regions apart (on 2026-10-07 the 8-vCPU shape
-// scored 1 in two us-east-2 zones and 9 in most others). A shape whose read
-// fails is left out and the others kept.
+// of zones for every shape of types the catalog sells at least
+// placementShapeTypes of, and gives each type its shape's score: a pool is
+// scored as any catalog type of its vCPUs and GPUs. Shapes of fewer types,
+// which include the 2- and 4-vCPU ones bought most, are not scored, since
+// AWS would score them low wherever they are; their pools rank on price
+// alone. A shape whose read fails is left out and the others kept.
 func placementScores(ctx context.Context, client *ec2.Client, region string, zones map[string]bool, types []string) (ScoreSpotPoolsParams, error) {
 	shapes := map[string][]string{}
 	for _, name := range types {
@@ -124,6 +128,7 @@ func placementScores(ctx context.Context, client *ec2.Client, region string, zon
 			shapes[placementShape(t)] = append(shapes[placementShape(t)], name)
 		}
 	}
+	maps.DeleteFunc(shapes, func(_ string, types []string) bool { return len(types) < placementShapeTypes })
 	keys := slices.Sorted(maps.Keys(shapes))
 	scores := make([]map[string]int16, len(keys))
 	errs := make([]error, len(keys))
