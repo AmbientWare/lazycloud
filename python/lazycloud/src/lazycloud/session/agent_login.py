@@ -130,9 +130,7 @@ def login_shell_command(harness: AgentHarness, nonce: str) -> str:
     )
     installation = AGENT_INSTALLATIONS[harness]
     executable = installation.login_command[0]
-    install_command = shlex.join(
-        ["npm", "install", "--global", f"{installation.package}@{installation.version}"]
-    )
+    install_command = shlex.join(["npm", "install", "--global", installation.package])
     prerequisites = [
         (
             executable,
