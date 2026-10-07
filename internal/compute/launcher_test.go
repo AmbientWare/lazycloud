@@ -204,8 +204,8 @@ func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
 			Scan(&phase, &instanceType, &memory); err != nil {
 			t.Fatal(err)
 		}
-		if phase != string(compute.PhaseProvisioning) || instanceType != calls[1].Form.Get("InstanceType") || memory < usable {
-			t.Fatalf("%s: host %s as %s with %d bytes, want provisioning in the pool launched, holding at least %d", code, phase, instanceType, memory, usable)
+		if phase != string(compute.PhaseProvisioning) || instanceType != calls[1].Form.Get("InstanceType") || memory != usable {
+			t.Fatalf("%s: host %s as %s with %d bytes, want provisioning in the pool launched, still recording the %d it was bought with", code, phase, instanceType, memory, usable)
 		}
 		cooled := scan[[]string](t, o.pool, "select array_agg(region || '/' || instance_type || '/' || market) from capacity_cooldowns")
 		if len(cooled) != 1 || cooled[0] != bought {
