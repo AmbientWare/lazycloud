@@ -18,7 +18,8 @@ import (
 // reaches the deployed containers; a stopped workload reuses only
 // working-tree releases. Otherwise an unversioned release is inserted; it is
 // never active and its tasks name it explicitly. A missing app or workload is
-// created without being deployed.
+// created without being deployed. A spec a deploy would refuse is refused
+// the same way.
 func (c *Control) PrepareRelease(ctx context.Context, workspace identity.WorkspaceID, app string, spec apitypes.WorkloadSpec) (apitypes.Release, error) {
 	function := spec.Name
 	f, err := resolveFunction(spec)
@@ -33,6 +34,9 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 			return fmt.Errorf("upsert app: %w", err)
 		}
 		if err := requireSources(ctx, q, workspace, []resolvedFunction{f}); err != nil {
+			return err
+		}
+		if err := checkDeploy(ctx, tx, uuid.UUID(workspace), []apitypes.WorkloadSpec{f.spec}); err != nil {
 			return err
 		}
 		workload, err := q.EnsureWorkload(ctx, EnsureWorkloadParams{AppID: appRow.ID, Kind: string(f.spec.Kind), Name: function})

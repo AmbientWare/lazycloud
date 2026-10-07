@@ -70,11 +70,6 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 		}(), "does not match"},
 		"function without one": {func() apitypes.WorkloadSpec { s := function("f"); s.Handler = nil; return s }(), "handler is required"},
 		"devbox without disk":  {pod("dev", apitypes.PodKindDevbox), "needs a root disk"},
-		"devbox root below the minimum": {func() apitypes.WorkloadSpec {
-			s := pod("dev", apitypes.PodKindDevbox)
-			s.Disks = &[]apitypes.DiskMountSpec{{Name: "dev", SizeBytes: 1 << 30, MountPath: "/"}}
-			return s
-		}(), "disks[dev].size_bytes is 1 GiB; a devbox's root disk needs at least 10 GiB"},
 		"devbox ssh off": {func() apitypes.WorkloadSpec {
 			s := withDisk(pod("dev", apitypes.PodKindDevbox), "dev", "/")
 			s.Pod.Ssh = new(false)

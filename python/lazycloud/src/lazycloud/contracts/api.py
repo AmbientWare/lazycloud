@@ -2880,6 +2880,7 @@ class AppPage(APIModel):
 class DeploymentPlanWorkload(APIModel):
     kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    pod_kind: PodKind | None = None
     resources: Resources | None = None
     autoscaler: Autoscaler | None = None
     placement: Placement | None = None

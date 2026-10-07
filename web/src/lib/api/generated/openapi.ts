@@ -4451,6 +4451,7 @@ export interface components {
         DeploymentPlanWorkload: {
             kind: components["schemas"]["WorkloadKind"];
             name: components["schemas"]["WorkloadName"];
+            pod_kind?: components["schemas"]["PodKind"];
             resources?: components["schemas"]["Resources"];
             autoscaler?: components["schemas"]["Autoscaler"];
             placement?: components["schemas"]["Placement"];

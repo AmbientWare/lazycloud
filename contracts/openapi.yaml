@@ -5708,6 +5708,7 @@ components:
       properties:
         kind: { $ref: "#/components/schemas/WorkloadKind" }
         name: { $ref: "#/components/schemas/WorkloadName" }
+        pod_kind: { $ref: "#/components/schemas/PodKind" }
         resources: { $ref: "#/components/schemas/Resources" }
         autoscaler: { $ref: "#/components/schemas/Autoscaler" }
         placement: { $ref: "#/components/schemas/Placement" }

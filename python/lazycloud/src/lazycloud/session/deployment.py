@@ -150,6 +150,8 @@ def plan_workload(
         image=ImageBuildResult(success=True, image_id=_PLANNED_IMAGE, python_version="3.12"),
     )
     planned = spec.model_dump(mode="json", include=_PLANNED_FIELDS, exclude_unset=True)
+    if spec.pod is not None:
+        planned["pod_kind"] = spec.pod.kind.value
     return DeploymentPlanWorkload.model_validate({**planned, "name": name or spec.name})
 
 
@@ -460,7 +462,12 @@ def prepare_release(
         [function], client=client, workspace=workspace, source_root=source_root, terminal=terminal
     )[id(function)]
     with terminal.step("Runtime", function.resource_name) as step:
-        release = client.prepare_release(workspace, function._app_slug, spec)
+        try:
+            release = client.prepare_release(workspace, function._app_slug, spec)
+        except ApiError as exc:
+            if exc.refusals:
+                raise DeploymentRefusedError(exc.refusals) from exc
+            raise
         _runtime_done(step, function.resource_name, release)
     return release
 

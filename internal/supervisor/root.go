@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/rootdisk"
 )
 
 // seededMarker, inside a devbox root, records that seeding finished; a seed
@@ -174,25 +176,11 @@ func bindInto(root string, m mountPoint) error {
 	return nil
 }
 
-// Root disk sizing as the deploy check in internal/control suggests it: the
-// image's unpacked root rounded up to whole GiB plus headroom, and at least
-// the devbox minimum.
-const (
-	gib             = int64(1) << 30
-	rootHeadroomGiB = 2
-	minRootDiskGiB  = 10
-)
-
 // rootTooSmall describes a seed that ran out of space by the sizes the
 // devbox's owner changes: its root disk's and its image's.
 func rootTooSmall(diskBytes, imageBytes int64) error {
-	need := max((imageBytes+gib-1)/gib+rootHeadroomGiB, minRootDiskGiB)
-	return fmt.Errorf("the root disk of %s GiB is too small for its image of %s GiB; set disk to at least %d GiB",
-		gibOf(diskBytes), gibOf(imageBytes), need)
-}
-
-func gibOf(bytes int64) string {
-	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(bytes)/float64(gib)), ".0")
+	return fmt.Errorf("the root disk of %s GiB is too small for its image of %s GiB; set disk to at least %s GiB",
+		rootdisk.GiB(diskBytes), rootdisk.GiB(imageBytes), rootdisk.GiB(rootdisk.Needed(imageBytes)))
 }
 
 // treeBytes is the size of the regular files under base, except skip and

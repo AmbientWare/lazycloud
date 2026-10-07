@@ -190,21 +190,32 @@ insert into image_reference_layers (reference, position, layer_id) select 'regis
 		r.Message != "the root disk box of 10 GiB is too small for its image's unpacked root of up to 10 GiB" {
 		t.Fatalf("refusal %+v", r)
 	}
+	// A root disk that exists at the size was seeded by an earlier start,
+	// so its redeploy copies nothing.
+	if _, err := pool.Exec(t.Context(), "insert into disks (workspace_id, name, size_bytes) values ($1, 'box', $2)", uuid.UUID(ws), int64(10<<30)); err != nil {
+		t.Fatal(err)
+	}
+	if got := refusedBy(t, c, ws, box); got != nil {
+		t.Fatalf("a redeploy of a seeded 10 GiB root: %v", got)
+	}
 	box.Disks = &[]apitypes.DiskMountSpec{{Name: "box", SizeBytes: 12 << 30, MountPath: "/"}}
 	if got := refusedBy(t, c, ws, box); got != nil {
 		t.Fatalf("a 12 GiB root: %v", got)
 	}
 }
 
-// The plan reports each listed workload's refusals before anything builds,
-// including a root disk below a devbox's minimum.
+// The plan reports each listed workload's refusals before anything builds.
+// Only a devbox's root disk has a minimum.
 func TestPlanReportsRefusalsByWorkload(t *testing.T) {
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	account(t, pool, ws, "free-v2", true)
+	root := func(name string, size int64) *[]apitypes.DiskMountSpec {
+		return &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: size, MountPath: "/"}}
+	}
 	plan, err := c.PlanDeployment(t.Context(), ws, "reports", apitypes.DeploymentPlanRequest{Workloads: []apitypes.DeploymentPlanWorkload{
 		{Kind: apitypes.WorkloadKindFunction, Name: "summarize"},
-		{Kind: apitypes.WorkloadKindPod, Name: "box", Disks: &[]apitypes.DiskMountSpec{{Name: "box", SizeBytes: 1 << 30, MountPath: "/"}}},
+		{Kind: apitypes.WorkloadKindPod, PodKind: new(apitypes.PodKindDevbox), Name: "box", Disks: root("box", 1<<30)},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -217,5 +228,20 @@ func TestPlanReportsRefusalsByWorkload(t *testing.T) {
 	}
 	if len(gates) != 1 || !slices.Equal(gates["box"], []apitypes.DeploymentGate{apitypes.DiskMinimum, apitypes.DiskAllowance}) {
 		t.Fatalf("plan refusals %v", gates)
+	}
+}
+
+// A devbox root below the minimum is refused with the deploy's other
+// refusals; any other workload's disk at / takes any size.
+func TestDeployHoldsOnlyDevboxRootsToTheMinimum(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	if got := refusedBy(t, c, ws, devbox("box", 1<<30)); !slices.Equal(got, []string{"box disk_minimum: set disk to at least 10 GiB"}) {
+		t.Fatalf("a 1 GiB devbox root: %v", got)
+	}
+	work := function("work")
+	work.Disks = &[]apitypes.DiskMountSpec{{Name: "work", SizeBytes: 2 << 30, MountPath: "/"}}
+	if got := refusedBy(t, c, ws, work); got != nil {
+		t.Fatalf("a function's 2 GiB disk at /: %v", got)
 	}
 }

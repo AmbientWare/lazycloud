@@ -3264,6 +3264,9 @@ type DeploymentPlanWorkload struct {
 	// Placement Where a workload's containers may run.
 	Placement *Placement `json:"placement,omitempty"`
 
+	// PodKind A devbox is a pod reached over SSH whose root filesystem is a disk.
+	PodKind *PodKind `json:"pod_kind,omitempty"`
+
 	// Resources Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 	Resources *Resources    `json:"resources,omitempty"`
 	Secrets   *[]SecretName `json:"secrets,omitempty"`

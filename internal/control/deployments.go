@@ -327,7 +327,7 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 			current[key{row.Kind, row.Name}] = int(row.Versions)
 		}
 	}
-	refused, err := refusals(ctx, c.pool, uuid.UUID(workspace), req.Workloads)
+	refused, _, err := refusals(ctx, c.pool, uuid.UUID(workspace), req.Workloads)
 	if err != nil {
 		return apitypes.DeploymentPlan{}, err
 	}

@@ -213,6 +213,8 @@ def test_app_deploy_sends_pods_and_devboxes_with_their_defaults_and_never_sandbo
     result = _cli("deploy", "tools.py")
 
     assert result.exit_code == 0, result.output
+    (plan,) = fake_api.calls("POST", f"{TEAM}/apps/tools/deployment-plan")
+    assert [item.get("pod_kind") for item in plan.json()["workloads"]] == ["pod", "devbox"]
     (request,) = fake_api.calls("POST", f"{TEAM}/apps/tools/deployments")
     web, box = request.json()["workloads"]
     assert (web["kind"], box["kind"]) == ("pod", "pod")
