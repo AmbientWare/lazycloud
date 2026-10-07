@@ -517,7 +517,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, "select dockerfile from images where id = $1", inA.Image.ID).Scan(&dockerfile); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(dockerfile, "RUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<") || strings.Contains(dockerfile, value) {
+	if !strings.Contains(dockerfile, "RUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true --mount=type=cache,id=lazycloud-npm,target=/root/.npm <<") || strings.Contains(dockerfile, value) {
 		t.Fatalf("the step mounts the secret and the Dockerfile never holds its value:\n%s", dockerfile)
 	}
 	if _, err := f.secrets.Set(ctx, a, "TOKEN", "rotated"); err != nil {
