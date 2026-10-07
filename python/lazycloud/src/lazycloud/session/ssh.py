@@ -78,6 +78,7 @@ class SshPodHost:
     alias: str
     pod: str
     app: str
+    role: PodRole
     host_public_key: str
 
 
@@ -106,6 +107,7 @@ def list_ssh_hosts(
                 alias=item.alias,
                 pod=item.pod,
                 app=item.app,
+                role=item.role,
                 host_public_key=item.host_public_key.strip(),
             )
             for item in page.hosts

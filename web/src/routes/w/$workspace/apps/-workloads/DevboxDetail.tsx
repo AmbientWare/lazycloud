@@ -48,12 +48,14 @@ const PHASE_LABELS: Record<Schemas["DevboxPhase"], string> = {
 };
 
 type DevboxAction =
-  { kind: "start" } | { kind: "stop" } | { kind: "busy"; label: string; reason: string };
+  | { kind: "busy"; label: string; reason: string }
+  | { kind: "power"; start: boolean; stop: "Stop" | "Cancel" | null };
 
 /**
- * The one power action the header offers, from the server's state and what the
- * person asked for. A start is followed by the server's own `starting` state; a
- * stop is not visible in it until the container is gone, so the request is held
+ * The power actions the header offers, from the server's state and what the
+ * person asked for. A starting devbox can be cancelled, and a failed one
+ * stopped, since it retries its start, or started again. A stop is not visible
+ * in the server's state until the container is gone, so the request is held
  * locally until the server reports the devbox stopped.
  */
 function devboxAction(
@@ -70,13 +72,12 @@ function devboxAction(
       reason: "Saving disk. Start is available once it is saved.",
     };
   }
-  if (devbox.state === "starting") {
-    return { kind: "busy", label: "Starting…", reason: PHASE_LABELS[devbox.phase] };
-  }
+  if (devbox.state === "starting") return { kind: "power", start: false, stop: "Cancel" };
   if (request.starting) {
     return { kind: "busy", label: "Starting…", reason: "Asking for a machine" };
   }
-  return devbox.state === "running" ? { kind: "stop" } : { kind: "start" };
+  if (devbox.state === "running") return { kind: "power", start: false, stop: "Stop" };
+  return { kind: "power", start: true, stop: devbox.phase === "failed" ? "Stop" : null };
 }
 
 /** How long a stop may go unconfirmed before the header shows the server's state again. */
@@ -183,35 +184,45 @@ export function DevboxActions({
             <span className="sr-only">{action.reason}</span>
           </Button>
         </span>
-      ) : action.kind === "start" ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="min-w-26"
-          onClick={() => {
-            stop.reset();
-            start.mutate();
-          }}
-        >
-          <Play />
-          Start
-        </Button>
       ) : (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="min-w-26"
-          onClick={() => {
-            start.reset();
-            setStopRequest({ containerId: devbox.container_id });
-            stop.mutate();
-          }}
-        >
-          <Square className="fill-current" />
-          Stop
-        </Button>
+        <>
+          {action.start ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-w-26"
+              onClick={() => {
+                stop.reset();
+                start.mutate();
+              }}
+            >
+              <Play />
+              Start
+            </Button>
+          ) : null}
+          {action.stop ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-w-26"
+              title={
+                action.stop === "Cancel"
+                  ? `Cancel the start: ${PHASE_LABELS[devbox.phase]}`
+                  : undefined
+              }
+              onClick={() => {
+                start.reset();
+                setStopRequest({ containerId: devbox.container_id });
+                stop.mutate();
+              }}
+            >
+              <Square className="fill-current" />
+              {action.stop}
+            </Button>
+          ) : null}
+        </>
       )}
     </>
   );

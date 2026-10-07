@@ -9,11 +9,11 @@ from typing import Annotated
 import typer
 
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import emit
+from lazycloud.cli.components.output import emit, write_stream
 from lazycloud.cli.components.progress import ConnectingIndicator
 from lazycloud.cli.control import control_config, workloads
 from lazycloud.clients.workloads import WorkloadsClient
-from lazycloud.contracts.api import DevboxPhase, PodRole, WorkloadKind, WorkloadState
+from lazycloud.contracts.api import DevboxPhase, DevboxState, PodRole, WorkloadKind, WorkloadState
 from lazycloud.session.ssh import (
     SshAccess,
     SshPaths,
@@ -56,7 +56,25 @@ def ssh_connection(
         host = _one_host(client, listed.hosts, pod, app=app)
         access.write_hosts([host])
         access.refresh_certificate()
-        yield access, host
+        # Connecting to a stopped devbox starts it, so Ctrl-C cancels that start.
+        starts = (
+            host.role is PodRole.devbox
+            and client.devbox(host.app, host.pod).state is DevboxState.stopped
+        )
+        try:
+            yield access, host
+        except KeyboardInterrupt:
+            if starts:
+                cancel_devbox_start(client, host.app, host.pod)
+            raise
+
+
+def cancel_devbox_start(client: WorkloadsClient, app: str, name: str) -> None:
+    """Stop a devbox whose start was interrupted, unless it is running by now."""
+    if client.devbox(app, name).state is DevboxState.running:
+        return
+    client.stop_devbox(app, name)
+    write_stream(f"Stopped {name}: its start was cancelled.\n", error=True)
 
 
 def ssh_proxy(
@@ -268,4 +286,4 @@ def _setup_errors() -> Iterator[None]:
         raise ClientError(str(exc), type="ssh_setup_failed") from exc
 
 
-__all__ = ["ssh", "ssh_cert", "ssh_config", "ssh_connection", "ssh_proxy"]
+__all__ = ["cancel_devbox_start", "ssh", "ssh_cert", "ssh_config", "ssh_connection", "ssh_proxy"]

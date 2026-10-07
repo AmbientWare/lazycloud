@@ -7,6 +7,7 @@ package execution
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -209,13 +210,20 @@ select r.id as release_id,
        c.pending::int as pending,
        c.starting::int as starting,
        c.ready::int as ready,
-       c.draining::int as draining
+       c.draining::int as draining,
+       r.start_failures,
+       last_stop.stopped_at as last_stopped_at
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join previews p on p.release_id = r.id
+left join lateral (
+    select lc.stopped_at from containers lc
+    where lc.release_id = r.id and lc.purpose = 'serve'
+    order by lc.id desc limit 1
+) last_stop on r.start_failures > 0
 cross join lateral (
     select coalesce(sum(l.in_flight + l.waiting), 0) as current, coalesce(sum(l.window_peak), 0) as peak
     from endpoint_loads l where l.release_id = r.id and l.expires_at > now()
@@ -263,12 +271,15 @@ type ServingReleasesRow struct {
 	Starting          int32
 	Ready             int32
 	Draining          int32
+	StartFailures     int32
+	LastStoppedAt     *time.Time
 }
 
 // Releases after @after_id whose containers follow traffic or a preview
 // instead of queued tasks: HTTP workloads and previews with live containers,
 // unexpired edge demand, a live preview or a warm minimum. Each source reads
 // live rows only.
+// The newest serve container's stop paces the next start after failed ones.
 func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams) ([]ServingReleasesRow, error) {
 	rows, err := q.db.Query(ctx, servingReleases, arg.StartFailureLimit, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -305,6 +316,8 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 			&i.Starting,
 			&i.Ready,
 			&i.Draining,
+			&i.StartFailures,
+			&i.LastStoppedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +21,12 @@ const (
 	// cancelBatch bounds the queued tasks of a stopped workload cancelled per
 	// release and pass; the release stays a candidate until none remain.
 	cancelBatch = 1000
+	// After consecutive failed starts a release waits startRetryBase before
+	// its next container, doubling per failure up to startRetryMax, so a
+	// release that cannot start does not cycle containers on its way to
+	// startFailureLimit.
+	startRetryBase = 5 * time.Second
+	startRetryMax  = time.Minute
 )
 
 // PlanResult summarizes one planning pass.
@@ -34,6 +41,9 @@ type PlanResult struct {
 	Drained int
 	// Cancelled counts queued tasks of stopped workloads.
 	Cancelled int
+	// RetryAt is the earliest time a release held back after failed starts
+	// may start a container; zero when none is held.
+	RetryAt time.Time
 }
 
 // releasePlan is what one release's decision changed.
@@ -43,6 +53,7 @@ type releasePlan struct {
 	stopped   []uuid.UUID
 	drained   []drainedContainer
 	cancelled int
+	retryAt   time.Time
 }
 
 type drainedContainer struct {
@@ -55,6 +66,28 @@ func (r *PlanResult) add(p releasePlan) {
 	r.Stopped += len(p.stopped)
 	r.Drained += len(p.drained)
 	r.Cancelled += p.cancelled
+	if !p.retryAt.IsZero() && (r.RetryAt.IsZero() || p.retryAt.Before(r.RetryAt)) {
+		r.RetryAt = p.retryAt
+	}
+}
+
+// holdStart reports whether the release must wait before another container
+// because its last `failures` starts failed, the newest container stopping at
+// stopped, and records when it may start one.
+func (p *releasePlan) holdStart(failures int32, stopped *time.Time) bool {
+	if failures <= 0 || stopped == nil {
+		return false
+	}
+	delay := startRetryMax
+	if failures < 8 {
+		delay = min(startRetryBase<<(failures-1), startRetryMax)
+	}
+	at := stopped.Add(delay)
+	if !time.Now().Before(at) {
+		return false
+	}
+	p.retryAt = at
+	return true
 }
 
 // Plan decides how many containers each release with demand or live
@@ -159,7 +192,9 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	}
 	q := e.queries.WithTx(tx)
 	minimum := 0
-	if release.Active {
+	// A release that cannot start keeps no warm minimum; each new task still
+	// gets a container, which fails it at once.
+	if release.Active && !release.LoadFailed && release.StartFailures < startFailureLimit {
 		minimum = int(release.MinContainers)
 	}
 	desired := desiredContainers(
@@ -174,7 +209,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	switch {
 	case active < desired:
 		count := min(desired-active, int(release.MaxContainers)-live)
-		if count <= 0 {
+		if count <= 0 || plan.holdStart(release.StartFailures, release.LastStoppedAt) {
 			return nil
 		}
 		grant, err := billing.Admit(ctx, tx, billing.Request{

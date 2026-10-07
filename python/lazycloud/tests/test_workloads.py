@@ -740,6 +740,138 @@ def test_devbox_list_pages_and_status_reports_the_devbox(fake_api: FakeApi) -> N
         assert text in status.output, status.output
 
 
+BOX_DEVBOX = f"{TEAM}/apps/tools/workloads/pod/box/devbox"
+
+
+def _devbox(state: str, phase: str, **extra: object) -> dict[str, object]:
+    return {
+        "deployment_id": DEPLOYMENT,
+        "name": "box",
+        "app": "tools",
+        "ssh_command": "lazycloud devbox box ssh",
+        "ssh_host": "lazycloud-team-tools-box",
+        "state": state,
+        "phase": phase,
+        "open_connections": 0,
+        **extra,
+    }
+
+
+def _serve_devbox(fake_api: FakeApi, *reads: dict[str, object]) -> None:
+    """Answer devbox reads in turn, the last one from then on, and stop and start."""
+    remaining = list(reads)
+    fake_api.route("GET", f"{TEAM}/ssh/hosts")(lambda request: json_reply({"hosts": [_host()]}))
+    fake_api.route("GET", BOX_DEVBOX)(
+        lambda request: json_reply(remaining.pop(0) if len(remaining) > 1 else remaining[0])
+    )
+    fake_api.route("POST", f"{BOX_DEVBOX}/stop")(
+        lambda request: json_reply(_devbox("stopped", "stopping"))
+    )
+    fake_api.route("POST", f"{BOX_DEVBOX}/start")(
+        lambda request: json_reply(_devbox("stopped", "failed", failed_container_id=CONTAINER))
+    )
+
+
+def _no_sleep(seconds: float) -> None:
+    del seconds
+
+
+def test_devbox_stop_stops_a_devbox_that_is_still_starting(fake_api: FakeApi) -> None:
+    _serve_devbox(fake_api, _devbox("starting", "pulling_image"))
+
+    result = _cli("devbox", "box", "stop")
+
+    assert result.exit_code == 0, result.output
+    assert len(fake_api.calls("POST", f"{BOX_DEVBOX}/stop")) == 1
+    assert "Stopped box." in result.output
+
+
+def test_devbox_start_waits_past_an_earlier_failure_until_it_runs(
+    monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    monkeypatch.setattr("lazycloud.cli.devbox.time.sleep", _no_sleep)
+    _serve_devbox(fake_api, _devbox("starting", "restoring_disk"), _devbox("running", "running"))
+
+    result = _cli("devbox", "box", "start")
+
+    assert result.exit_code == 0, result.output
+    assert "box is running" in result.output
+    assert not fake_api.calls("POST", f"{BOX_DEVBOX}/stop")
+
+
+def test_devbox_start_reports_a_new_failure(
+    monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    monkeypatch.setattr("lazycloud.cli.devbox.time.sleep", _no_sleep)
+    failed = _devbox(
+        "stopped",
+        "failed",
+        failed_container_id=RELEASE,
+        phase_reason="exit code 3: seed the devbox root: no space left on device",
+    )
+    _serve_devbox(fake_api, _devbox("starting", "starting"), failed)
+
+    result = _cli("devbox", "box", "start")
+
+    assert result.exit_code != 0
+    assert "no space left on device" in str(result.exception)
+
+
+def test_ctrl_c_while_devbox_start_waits_stops_it(
+    monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    def interrupt(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("lazycloud.cli.devbox.time.sleep", interrupt)
+    _serve_devbox(fake_api, _devbox("starting", "queued"))
+
+    result = _cli("devbox", "box", "start")
+
+    assert result.exit_code != 0
+    assert len(fake_api.calls("POST", f"{BOX_DEVBOX}/stop")) == 1
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "stops"),
+    [
+        (_devbox("stopped", "stopped"), _devbox("starting", "pulling_image"), True),
+        (_devbox("stopped", "stopped"), _devbox("running", "running"), False),
+        (_devbox("running", "running"), _devbox("running", "running"), False),
+    ],
+    ids=["start it began", "already running by then", "was running"],
+)
+def test_ctrl_c_during_devbox_ssh_cancels_only_the_start_it_began(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_api: FakeApi,
+    before: dict[str, object],
+    after: dict[str, object],
+    stops: bool,
+) -> None:
+    def interrupted_ssh(config: Path, alias: str, arguments: list[str]) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("lazycloud.cli.devbox.run_ssh", interrupted_ssh)
+    fake_api.route("POST", f"{TEAM}/ssh/certificates")(
+        lambda request: json_reply(
+            {
+                "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA lazycloud",
+                "principal": "root",
+                "expires_at": NOW,
+            },
+            201,
+        )
+    )
+    _serve_devbox(fake_api, before, after)
+
+    result = _cli("devbox", "box", "ssh")
+
+    assert result.exit_code != 0
+    assert len(fake_api.calls("POST", f"{BOX_DEVBOX}/stop")) == (1 if stops else 0)
+
+
 def test_ssh_names_why_a_pod_cannot_be_reached(fake_api: FakeApi) -> None:
     fake_api.route("GET", f"{TEAM}/ssh/hosts")(lambda request: json_reply({"hosts": []}))
 

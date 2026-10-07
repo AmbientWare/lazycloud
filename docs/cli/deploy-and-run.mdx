@@ -112,13 +112,18 @@ that carry the connection and renew the login certificate.
 ```bash
 uv run lazycloud devbox list [--app <app>] [--limit <n>] [--cursor <cursor>]
 uv run lazycloud devbox NAME status [--app <app>]
+uv run lazycloud devbox NAME start [--app <app>]
+uv run lazycloud devbox NAME stop [--app <app>]
 uv run lazycloud devbox NAME ssh [--app <app>] [-- <ssh options> <command>]
 uv run lazycloud devbox NAME login HARNESS [--app <app>]
 ```
 
 `list` returns a page of deployed devboxes. `status` shows one box's live state
 and resources. Both support global `--json` output and leave sleeping boxes
-asleep. `ssh` opens a session. All four commands accept `--workspace <workspace>`.
+asleep. `start` waits until the box runs. `stop` stops it in any state, even
+mid-start or while a failing start retries, and saves its disk. Ctrl-C while
+`start` or `ssh` waits on a box they woke stops it again. `ssh` opens a session.
+Every command accepts `--workspace <workspace>`.
 See [devboxes](/concepts/dev-machines#find-and-inspect-boxes) for listing and selection.
 
 `login` runs the installed agent's native browser login inside the devbox. `HARNESS` is

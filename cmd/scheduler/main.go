@@ -237,7 +237,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: tick, quiet: true}, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
+		// When a release held back after failed starts may start again. The
+		// loop's goroutine alone reads and writes it.
+		var retryAt time.Time
+		retryDue := func(context.Context) (time.Time, bool, error) { return retryAt, !retryAt.IsZero(), nil }
+		return p.loop(ctx, cadence{every: tick, quiet: true, due: retryDue}, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
 			result, err := exec.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
@@ -252,6 +256,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			}
 			result.Skipped = result.Skipped || serving.Skipped || pods.Skipped
 			result.Created += serving.Created + pods.Created
+			retryAt = time.Time{}
+			for _, at := range []time.Time{result.RetryAt, serving.RetryAt, pods.RetryAt} {
+				if !at.IsZero() && (retryAt.IsZero() || at.Before(retryAt)) {
+					retryAt = at
+				}
+			}
 			if result.Created > 0 {
 				// New pending containers are live work before any report
 				// wakes the probe.

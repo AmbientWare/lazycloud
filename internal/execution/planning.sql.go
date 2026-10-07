@@ -7,6 +7,7 @@ package execution
 
 import (
 	"context"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
@@ -301,12 +302,20 @@ select r.id as release_id,
        c.pending::int as pending,
        c.starting::int as starting,
        c.ready::int as ready,
-       c.draining::int as draining
+       c.draining::int as draining,
+       (r.load_error is not null)::bool as load_failed,
+       r.start_failures,
+       last_stop.stopped_at as last_stopped_at
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
+left join lateral (
+    select lc.stopped_at from containers lc
+    where lc.release_id = r.id and lc.purpose = 'serve'
+    order by lc.id desc limit 1
+) last_stop on r.start_failures > 0
 cross join lateral (
     select count(*) as available from (
         select 1 from tasks t
@@ -358,6 +367,9 @@ type PlanningReleasesRow struct {
 	Starting          int32
 	Ready             int32
 	Draining          int32
+	LoadFailed        bool
+	StartFailures     int32
+	LastStoppedAt     *time.Time
 }
 
 // Releases after @after_id that need a planning decision: queued or running
@@ -365,6 +377,7 @@ type PlanningReleasesRow struct {
 // reads a partial index of live rows, so retained history costs nothing. The
 // queued releases are found by skipping through tasks_queued one release at
 // a time, so a deep backlog costs one probe per release, not per task.
+// The newest serve container's stop paces the next start after failed ones.
 // Demand past max_containers * tasks_per_container changes no decision, so
 // the count stops there and a deep backlog reads a bounded prefix.
 func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesParams) ([]PlanningReleasesRow, error) {
@@ -400,6 +413,9 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			&i.Starting,
 			&i.Ready,
 			&i.Draining,
+			&i.LoadFailed,
+			&i.StartFailures,
+			&i.LastStoppedAt,
 		); err != nil {
 			return nil, err
 		}

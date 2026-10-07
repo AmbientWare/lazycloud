@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
 import typer
@@ -8,7 +9,7 @@ from typer.core import TyperGroup
 from typer.main import get_group
 
 from lazycloud._shared.ssh import SSH_HOST_LIST_LIMIT
-from lazycloud._terminal.cards import result_card
+from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud.agent_harness import AgentHarness
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
@@ -17,12 +18,14 @@ from lazycloud.cli.components.output import (
     table,
     write_stream,
 )
+from lazycloud.cli.components.progress import CONNECTING_POLL_SECONDS
 from lazycloud.cli.control import workloads
-from lazycloud.cli.ssh import AppOption, WorkspaceOption, ssh_connection
-from lazycloud.contracts.api import PodRole, Resources
+from lazycloud.cli.ssh import AppOption, WorkspaceOption, cancel_devbox_start, ssh_connection
+from lazycloud.clients.workloads import WorkloadsClient
+from lazycloud.contracts.api import Devbox, DevboxPhase, DevboxState, PodRole, Resources, SshHost
 from lazycloud.session.agent_login import login_agent
 from lazycloud.session.ssh import run_ssh
-from lazycloud.terminal import humanize_bytes
+from lazycloud.terminal import Terminal, humanize_bytes
 
 _named_devbox = typer.Typer(help="Log in, connect, or inspect a devbox by name.")
 
@@ -138,12 +141,7 @@ def status(
     """Show live state and resources without starting the devbox."""
     name = _name(ctx)
     client = workloads(workspace=workspace)
-    matches = client.ssh_hosts(app=app, pod=name, role=PodRole.devbox, limit=2)
-    if not matches.hosts:
-        raise ClientError(f"devbox not found: {name}")
-    if len(matches.hosts) > 1 or matches.next_cursor:
-        raise ClientError(f"Several apps have a devbox named {name}; select one with --app")
-    host = matches.hosts[0]
+    host = _devbox_host(client, name, app)
     box = client.devbox(host.app, host.pod)
     resources = box.resources
     if resources is None:
@@ -169,6 +167,81 @@ def status(
             message=box.phase_reason or "",
         ),
     )
+
+
+@_named_devbox.command("start")
+def start(
+    ctx: typer.Context,
+    app: AppOption = None,
+    workspace: WorkspaceOption = None,
+) -> None:
+    """Start the devbox and wait until it runs. Ctrl-C while it starts stops it."""
+    name = _name(ctx)
+    client = workloads(workspace=workspace)
+    host = _devbox_host(client, name, app)
+    box = client.start_devbox(host.app, host.pod)
+    try:
+        box = _wait_running(client, host, box)
+    except KeyboardInterrupt:
+        cancel_devbox_start(client, host.app, host.pod)
+        raise
+    emit(
+        ctx,
+        payload=box.model_dump(mode="json"),
+        view=notice_card(f"{name} is running; connect with `{box.ssh_command}`.", tone="success"),
+    )
+
+
+@_named_devbox.command("stop")
+def stop(
+    ctx: typer.Context,
+    app: AppOption = None,
+    workspace: WorkspaceOption = None,
+) -> None:
+    """Stop the devbox whatever it is doing, cancelling a start; its disk is saved."""
+    name = _name(ctx)
+    client = workloads(workspace=workspace)
+    host = _devbox_host(client, name, app)
+    box = client.stop_devbox(host.app, host.pod)
+    emit(
+        ctx,
+        payload=box.model_dump(mode="json"),
+        view=notice_card(f"Stopped {name}.", tone="success"),
+    )
+
+
+def _devbox_host(client: WorkloadsClient, name: str, app: str | None) -> SshHost:
+    matches = client.ssh_hosts(app=app, pod=name, role=PodRole.devbox, limit=2)
+    if not matches.hosts:
+        raise ClientError(f"devbox not found: {name}")
+    if len(matches.hosts) > 1 or matches.next_cursor:
+        raise ClientError(f"Several apps have a devbox named {name}; select one with --app")
+    return matches.hosts[0]
+
+
+def _wait_running(client: WorkloadsClient, host: SshHost, box: Devbox) -> Devbox:
+    """Follow a started devbox until it runs; a start that fails or ends is an error.
+
+    A failure from before the start still shows until the next container exists, so
+    only a failed container other than that one counts.
+    """
+    earlier = box.failed_container_id if box.phase is DevboxPhase.failed else None
+    with Terminal().step("Starting", host.pod) as step:
+        while box.state is not DevboxState.running:
+            if box.phase is DevboxPhase.failed and box.failed_container_id != earlier:
+                raise ClientError(
+                    f"{host.pod} failed to start: {box.phase_reason or 'see its start logs'}",
+                    type="devbox_start_failed",
+                    hint=f"It retries; `lazycloud devbox {host.pod} stop` stops it.",
+                )
+            if box.phase is DevboxPhase.stopped:
+                raise ClientError(
+                    f"{host.pod} stopped before it was running", type="devbox_stopped"
+                )
+            step.update(f"{host.pod} · {box.phase.value.replace('_', ' ')}")
+            time.sleep(CONNECTING_POLL_SECONDS)
+            box = client.devbox(host.app, host.pod)
+    return box
 
 
 def _cpus(resources: Resources) -> str:
