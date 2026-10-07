@@ -114,6 +114,10 @@ type cadence struct {
 	// due, if set, reports when time alone next makes a quiet loop's work
 	// due, such as a schedule's next occurrence.
 	due func(context.Context) (time.Time, bool, error)
+	// rerun, if set, reports when the last pass asked to run again, such as
+	// when purchases it held may proceed. Every replica honours it: the pass
+	// that held the work may have run on any of them.
+	rerun func() (time.Time, bool)
 }
 
 // loop runs pass now, then after every wake, contended retry, change of
@@ -139,6 +143,18 @@ func (p *pace) wait(ctx context.Context, c cadence, again bool) (time.Duration, 
 	if again {
 		return contendedRetry, true
 	}
+	wait, timed := p.cadenceWait(ctx, c)
+	if c.rerun == nil {
+		return wait, timed
+	}
+	if at, ok := c.rerun(); ok && (!timed || time.Until(at) < wait) {
+		return max(time.Until(at), 0), true
+	}
+	return wait, timed
+}
+
+// cadenceWait is how long the cadence alone lets the loop sleep.
+func (p *pace) cadenceWait(ctx context.Context, c cadence) (time.Duration, bool) {
 	leading, live, _ := p.state()
 	switch {
 	case !leading:

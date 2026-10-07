@@ -17,13 +17,13 @@ const batchWait = `-- name: BatchWait :one
 with recent as (
     select c.created_at
     from containers c
-    where c.id > (select uuidv7(- make_interval(secs => $3::float8)))
+    where c.id > (select uuidv7(- make_interval(secs => $4::float8)))
     order by c.id desc
     limit $1
 ), arrivals as (
     select created_at,
            coalesce(created_at - lag(created_at) over (order by created_at),
-                    created_at - (now() - make_interval(secs => $3::float8)))
+                    created_at - (now() - make_interval(secs => $4::float8)))
                >= make_interval(secs => $2::float8) as opens
     from recent
 ), batch as (
@@ -38,19 +38,26 @@ from batch
 `
 
 type BatchWaitParams struct {
-	SampleSize   int32
-	QuietSeconds float64
-	MaxSeconds   float64
+	SampleSize      int32
+	QuietSeconds    float64
+	MaxSeconds      float64
+	LookbackSeconds float64
 }
 
 // How long, in seconds, the arrival batch stays open: until quiet passes
 // after its newest container, and at most max_seconds after the first. The
 // batch runs back from the newest container through arrivals less than
-// quiet apart; one that may have begun before the lookback, or fills the
-// sample, has closed. The sample follows the primary key, so it reads at
-// most sample_size rows whatever the history or backlog.
+// quiet apart, among those of the lookback, max and quiet seconds; one that
+// may have begun before it, or fills the sample, has closed. The sample
+// follows the primary key, so it reads at most sample_size rows whatever
+// the history or backlog.
 func (q *Queries) BatchWait(ctx context.Context, arg BatchWaitParams) (float64, error) {
-	row := q.db.QueryRow(ctx, batchWait, arg.SampleSize, arg.QuietSeconds, arg.MaxSeconds)
+	row := q.db.QueryRow(ctx, batchWait,
+		arg.SampleSize,
+		arg.QuietSeconds,
+		arg.MaxSeconds,
+		arg.LookbackSeconds,
+	)
 	var wait_seconds float64
 	err := row.Scan(&wait_seconds)
 	return wait_seconds, err

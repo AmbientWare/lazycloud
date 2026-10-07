@@ -204,7 +204,7 @@ join apps a on a.id = w.app_id`, toHistory-history)
 		{"hosts", plannerHosts, nil},
 		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
 		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), p.BuildWindow.Seconds()}},
-		{"arrival batch", batchWait, []any{int32(demandBatch), p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds()}},
+		{"arrival batch", batchWait, []any{int32(demandBatch), p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds(), (p.Batch.Max + p.Batch.Quiet).Seconds()}},
 		{"cooldowns", plannerCooldowns, []any{p.RegionFailureWindow.Seconds()}},
 		{"markets", fleetMarkets, nil},
 	}

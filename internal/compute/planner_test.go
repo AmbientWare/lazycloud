@@ -4,6 +4,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -284,5 +285,51 @@ func TestFleetLimitAndPurchasesExplainPendingTasks(t *testing.T) {
 		if got.Pending == nil || got.Pending.Reason != want {
 			t.Errorf("task %s pending %+v, want %s", task, got.Pending, want)
 		}
+	}
+}
+
+// The arrival batch closes a second after its newest container and at
+// most five seconds after its first: a pass holds purchases until then and
+// buys once it closes. A stream that may have begun before the pass looks
+// back has run its five seconds and holds nothing.
+func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
+	stream := func(from time.Duration) []time.Duration {
+		var ages []time.Duration
+		for age := from; age > 0; age -= 500 * time.Millisecond {
+			ages = append(ages, age)
+		}
+		return ages
+	}
+	for _, c := range []struct {
+		name string
+		// ages are how long ago each container arrived.
+		ages []time.Duration
+		// most is the longest the batch may still hold purchases; zero
+		// when it has closed.
+		most time.Duration
+	}{
+		{"one just arrived", []time.Duration{0}, time.Second},
+		{"settled", []time.Duration{2 * time.Second}, 0},
+		{"a stream four and a half seconds long", stream(4600 * time.Millisecond), 500 * time.Millisecond},
+		{"a stream that began before the lookback", stream(6600 * time.Millisecond), 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := newOwners(t, fleetConfig(compute.Fleet{}))
+			spotPrices(t, o)
+			alice := newUser(t, o.pool, "alice@example.com")
+			dev := newWorkspace(t, o.pool, "dev", alice)
+			release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+			for _, age := range c.ages {
+				id := pendingContainer(t, o.pool, dev, release, 1000, gib)
+				run(t, o.pool, "update containers set created_at = now() - $2::interval where id = $1", id, age)
+			}
+			r, err := o.compute.Plan(t.Context(), discard())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if held := c.most > 0; held != (r.BatchWait > 0) || r.BatchWait > c.most || held == (r.Requested > 0) {
+				t.Fatalf("plan %+v, want purchases held for at most %s", r, c.most)
+			}
+		})
 	}
 }

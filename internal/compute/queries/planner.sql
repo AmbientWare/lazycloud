@@ -98,19 +98,20 @@ order by 1, 2, 3;
 -- How long, in seconds, the arrival batch stays open: until quiet passes
 -- after its newest container, and at most max_seconds after the first. The
 -- batch runs back from the newest container through arrivals less than
--- quiet apart; one that may have begun before the lookback, or fills the
--- sample, has closed. The sample follows the primary key, so it reads at
--- most sample_size rows whatever the history or backlog.
+-- quiet apart, among those of the lookback, max and quiet seconds; one that
+-- may have begun before it, or fills the sample, has closed. The sample
+-- follows the primary key, so it reads at most sample_size rows whatever
+-- the history or backlog.
 with recent as (
     select c.created_at
     from containers c
-    where c.id > (select uuidv7(- make_interval(secs => @max_seconds::float8)))
+    where c.id > (select uuidv7(- make_interval(secs => @lookback_seconds::float8)))
     order by c.id desc
     limit @sample_size
 ), arrivals as (
     select created_at,
            coalesce(created_at - lag(created_at) over (order by created_at),
-                    created_at - (now() - make_interval(secs => @max_seconds::float8)))
+                    created_at - (now() - make_interval(secs => @lookback_seconds::float8)))
                >= make_interval(secs => @quiet_seconds::float8) as opens
     from recent
 ), batch as (

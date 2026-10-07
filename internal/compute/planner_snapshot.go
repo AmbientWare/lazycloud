@@ -48,7 +48,10 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
-	wait, err := q.BatchWait(ctx, BatchWaitParams{SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds()})
+	wait, err := q.BatchWait(ctx, BatchWaitParams{
+		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
+		LookbackSeconds: (p.Batch.Max + p.Batch.Quiet).Seconds(),
+	})
 	if err != nil {
 		return r, fmt.Errorf("read the arrival batch: %w", err)
 	}

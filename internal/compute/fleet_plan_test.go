@@ -470,3 +470,42 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 		t.Fatalf("reserve already held: %+v", plan.Actions)
 	}
 }
+
+// While containers keep arriving a pass buys nothing and says how long the
+// batch stays open, then buys once it closes. A container a stopped reserve
+// fits resumes it, and one a starting host fits waits for that host, at
+// once.
+func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
+	need := Requirement{CPUMillis: 4000, MemoryBytes: 4 * gib}
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	batching := func(hosts ...FleetHost) (FleetSnapshot, uuid.UUID) {
+		s := planSnapshot(t, hosts...)
+		s.BatchWait = 800 * time.Millisecond
+		g, id := pendingOne(need, nil)
+		s.Pending = []DemandGroup{g}
+		return s, id
+	}
+
+	s, id := batching()
+	plan := PlanFleet(p, s)
+	if len(plan.Actions) > 0 || plan.BatchWait != s.BatchWait || waitOf(t, plan, id).Wait != nil ||
+		marketPlan(t, plan, onDemand).Reason != ReasonBatch {
+		t.Fatalf("while arriving: actions %+v, batch %s, wait %+v, reason %q", plan.Actions, plan.BatchWait, waitOf(t, plan, id),
+			marketPlan(t, plan, onDemand).Reason)
+	}
+	s.BatchWait = 0
+	if plan := PlanFleet(p, s); len(actionsOf(plan, ActionBuy)) != 1 || plan.BatchWait != 0 {
+		t.Fatalf("once settled: actions %+v, batch %s", plan.Actions, plan.BatchWait)
+	}
+
+	s, id = batching(planHost(1, planSmall, FleetStopped))
+	if plan := PlanFleet(p, s); len(actionsOf(plan, ActionResume)) != 1 || len(plan.Actions) != 1 || plan.BatchWait != 0 ||
+		*waitOf(t, plan, id).Host != (HostID{1}) {
+		t.Fatalf("a fitting reserve: actions %+v, batch %s", plan.Actions, plan.BatchWait)
+	}
+
+	s, id = batching(planHost(1, planSmall, FleetStarting))
+	if plan := PlanFleet(p, s); len(plan.Actions) > 0 || plan.BatchWait != 0 || *waitOf(t, plan, id).Host != (HostID{1}) {
+		t.Fatalf("a starting host: actions %+v, batch %s, wait %+v", plan.Actions, plan.BatchWait, waitOf(t, plan, id))
+	}
+}
