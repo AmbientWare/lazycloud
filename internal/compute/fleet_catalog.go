@@ -91,25 +91,45 @@ func FleetArchitectures() []string {
 }
 
 // regionRates are a region's gp3 and public IPv4 rates in USD micros: a
-// GiB, a provisioned IOPS and a provisioned MiB/s for a month, and an
-// address for an hour.
+// GiB and a MiB/s provisioned over the baseline for a month, and an address
+// for an hour.
 type regionRates struct {
-	gp3GiBMonth, gp3IOPSMonth, gp3MiBpsMonth, ipv4Hour int64
+	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour int64
 }
 
 func ratesIn(region string) regionRates {
 	if region == "us-west-1" {
-		return regionRates{gp3GiBMonth: 96_000, gp3IOPSMonth: 6_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000}
+		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000}
 	}
-	return regionRates{gp3GiBMonth: 80_000, gp3IOPSMonth: 5_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
+	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
 }
 
-// rootDiskMicros is a root of gib for an hour, on AWS's 30-day month, with
-// the IOPS and throughput provisioned above gp3's baseline.
-func rootDiskMicros(region string, gib int64) int64 {
+// Root throughput in MiB/s. gp3 gives baselineMiBps; a serving host of a
+// type that can hold an image build gets buildMiBps, since builds keep
+// BuildKit's state and write their layers on the root and at the baseline
+// wait on the disk. A reserve keeps the baseline: provisioned throughput is
+// billed while it is stopped, which is most of its life.
+const (
+	baselineMiBps = 125
+	buildMiBps    = 500
+	// buildCores is what a build reserves, LAZYCLOUD_BUILD_CPU's default.
+	buildCores = 4
+)
+
+// RootMiBps is the throughput a root of t is provisioned with, for a
+// reserve or a serving host.
+func (t CatalogType) RootMiBps(reserve bool) int64 {
+	if !reserve && t.Topology.Cores >= buildCores {
+		return buildMiBps
+	}
+	return baselineMiBps
+}
+
+// rootDiskMicros is a root of gib at mibps for an hour, on AWS's 30-day
+// month.
+func rootDiskMicros(region string, gib, mibps int64) int64 {
 	r := ratesIn(region)
-	month := gib*r.gp3GiBMonth + (rootVolumeIOPS-3000)*r.gp3IOPSMonth + (rootVolumeMiBps-125)*r.gp3MiBpsMonth
-	return (month + 719) / 720
+	return (gib*r.gp3GiBMonth + (mibps-baselineMiBps)*r.gp3MiBpsMonth + 719) / 720
 }
 
 // FleetCatalog is what the platform fleet buys, with on-demand prices in

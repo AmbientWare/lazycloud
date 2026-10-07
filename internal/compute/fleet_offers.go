@@ -265,7 +265,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 				}
 				for _, market := range markets {
 					hibernate := reserve && hibernates(t)
-					disk := rootDiskMicros(region, t.RootGiB(hibernate))
+					disk := rootDiskMicros(region, t.RootGiB(hibernate), t.RootMiBps(reserve))
 					compute := onDemand
 					if market == MarketSpot {
 						if compute, ok = spotPrice(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name); !ok {
@@ -304,9 +304,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 }
 
 // hibernationRAMLimit is the most RAM a reserve hibernates. EC2 writes it
-// to the gp3 root at no more than rootVolumeMiBps; even at gp3's 125 MiB/s
-// baseline, 32 GiB takes about 4.5 minutes of the 10-minute
-// providerDeadline.
+// to the gp3 root at 125 MiB/s: 32 GiB takes about 4.5 minutes of the
+// 10-minute providerDeadline, while 128 GiB would outlast it.
 const hibernationRAMLimit = 32 * gib
 
 // hibernates reports whether a reserve of type t hibernates instead of

@@ -124,14 +124,13 @@ func TestOfferCostIsComputeRootDiskAndPublicIPv4(t *testing.T) {
 	if len(serving) != 1 || len(reserve) != 1 {
 		t.Fatalf("offers %v %v", offerKeys(serving), offerKeys(reserve))
 	}
-	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1, with 375 MiB/s
-	// over the baseline at $0.048 a MiB/s-month, over 720 hours.
-	disk := (100*96_000 + 375*48_000 + 719) / 720
+	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1 over 720 hours.
+	disk := (100*96_000 + 719) / 720
 	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
 	// A hibernating reserve adds its 8 GiB of RAM as swap.
-	disk = (108*96_000 + 375*48_000 + 719) / 720
+	disk = (108*96_000 + 719) / 720
 	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 {
 		t.Fatalf("reserve offer %+v", o)
 	}
@@ -269,7 +268,7 @@ func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing
 	for _, preemptible := range []bool{false, true} {
 		need.Preemptible = preemptible
 		offers := RankOffers(DefaultPolicy(), need, true, in)
-		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true)) {
+		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true), offers[0].Type.RootMiBps(true)) {
 			t.Errorf("preemptible %v: reserve offers %v, want one that hibernates", preemptible, offerKeys(offers))
 		}
 	}
@@ -284,7 +283,7 @@ func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
 		typ := mustType(t, name)
 		in.Catalog = []CatalogType{typ}
 		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
-		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want)) {
+		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want), typ.RootMiBps(true)) {
 			t.Errorf("%s: reserve offers %v, want one that hibernates %v", name, offerKeys(offers), want)
 		}
 	}

@@ -29,13 +29,8 @@ const (
 	// rootVolumeGiB is each instance's encrypted root disk; a host launched
 	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
-	// rootVolumeIOPS is gp3's baseline; rootVolumeMiBps is provisioned above
-	// its 125 MiB/s, since image builds keep BuildKit's state and write their
-	// layers on the root and at the baseline wait on the disk.
-	rootVolumeIOPS  = 3000
-	rootVolumeMiBps = 500
-	cpuImage        = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-	gpuImage        = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
+	cpuImage      = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+	gpuImage      = "resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id"
 )
 
 // Tags on every instance the fleet launches.
@@ -162,8 +157,8 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 			DeviceName: aws.String("/dev/xvda"),
 			Ebs: &ec2types.EbsBlockDevice{
 				VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
-				Iops: aws.Int32(rootVolumeIOPS), Throughput: aws.Int32(rootVolumeMiBps),
-				Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true),
+				Throughput: aws.Int32(opts.rootMiBps),
+				Encrypted:  aws.Bool(true), DeleteOnTermination: aws.Bool(true),
 			},
 		}},
 		TagSpecifications: []ec2types.TagSpecification{
@@ -243,7 +238,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 
 // launchOptions are the parts of a launch a reserve changes.
 type launchOptions struct {
-	rootGiB int32
+	rootGiB, rootMiBps int32
 	// hibernate launches the instance able to hibernate.
 	hibernate bool
 	// persistent buys Spot on a persistent request that stops instead of
@@ -251,17 +246,18 @@ type launchOptions struct {
 	persistent bool
 }
 
-// launchOptionsFor sizes a launch. A platform host bought for the reserve
-// hibernates when it asks to and its catalog type can, with its root grown
-// for the image. A Spot reserve keeps its request across stops. Serving and
-// connection hosts launch with the plain root.
+// launchOptionsFor sizes a launch. Its root has the throughput its type is
+// priced with. A platform host bought for the reserve hibernates when it
+// asks to and its catalog type can, with its root grown for the image. A
+// Spot reserve keeps its request across stops. Serving and connection
+// hosts launch with the plain root.
 func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
-	opts := launchOptions{rootGiB: rootVolumeGiB}
+	t, _ := CatalogTypeNamed(h.InstanceType)
+	opts := launchOptions{rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps(h.ReserveMode != nil))} //nolint:gosec // At most buildMiBps.
 	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
 		return opts
 	}
 	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot
-	t, _ := CatalogTypeNamed(h.InstanceType)
 	opts.hibernate = ReserveMode(*h.ReserveMode) == ReserveHibernate && t.Hibernates
 	opts.rootGiB = int32(t.RootGiB(opts.hibernate)) //nolint:gosec // At most 250: only types under 150 GiB of RAM hibernate.
 	return opts
