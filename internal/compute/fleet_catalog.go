@@ -104,11 +104,11 @@ func ratesIn(region string) regionRates {
 	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
 }
 
-// Root throughput in MiB/s. gp3 gives baselineMiBps; a serving host of a
-// type that can hold an image build gets buildMiBps, since builds keep
-// BuildKit's state and write their layers on the root and at the baseline
-// wait on the disk. A reserve keeps the baseline: provisioned throughput is
-// billed while it is stopped, which is most of its life.
+// Root throughput in MiB/s. gp3 gives baselineMiBps; a type that can hold
+// an image build gets buildMiBps, since builds keep BuildKit's state and
+// write their layers on the root and at the baseline wait on the disk.
+// Reserves get it too: builds land on resumed reserves, and a volume's
+// throughput changes at most once in six hours.
 const (
 	baselineMiBps = 125
 	buildMiBps    = 500
@@ -116,13 +116,23 @@ const (
 	buildCores = 4
 )
 
-// RootMiBps is the throughput a root of t is provisioned with, for a
-// reserve or a serving host.
-func (t CatalogType) RootMiBps(reserve bool) int64 {
-	if !reserve && t.Topology.Cores >= buildCores {
+// RootMiBps is the throughput a root of t is provisioned with.
+func (t CatalogType) RootMiBps() int64 {
+	if t.Topology.Cores >= buildCores {
 		return buildMiBps
 	}
 	return baselineMiBps
+}
+
+// PricedMiBps is the throughput offers and stopped costs price a root of t
+// at. A reserve's extra throughput is priced as a cost of the builds that
+// resume it, not of its shape: counting it would trade one floor reserve a
+// build fits on for several smaller ones none fits on.
+func (t CatalogType) PricedMiBps(reserve bool) int64 {
+	if reserve {
+		return baselineMiBps
+	}
+	return t.RootMiBps()
 }
 
 // rootDiskMicros is a root of gib at mibps for an hour, on AWS's 30-day

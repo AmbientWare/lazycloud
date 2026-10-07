@@ -253,7 +253,7 @@ type launchOptions struct {
 // hosts launch with the plain root.
 func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
 	t, _ := CatalogTypeNamed(h.InstanceType)
-	opts := launchOptions{rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps(h.ReserveMode != nil))} //nolint:gosec // At most buildMiBps.
+	opts := launchOptions{rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps())} //nolint:gosec // At most buildMiBps.
 	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
 		return opts
 	}

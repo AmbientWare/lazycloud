@@ -102,9 +102,9 @@ values ('s', 'offline', 'platform', 'aws', 'requested', 4000, 16::bigint << 30, 
 		s.Get("TagSpecification.3.ResourceType") != "spot-instances-request" || s.Get("TagSpecification.3.Tag.2.Value") != spot.String() {
 		t.Errorf("spot reserve launch %v, want hibernation, a 100+8 GiB encrypted root and a tagged persistent request", s)
 	}
-	// A serving host that can hold a build gets the root throughput builds
-	// need; reserves, billed while stopped, keep the baseline.
-	for host, want := range map[compute.HostID]string{spot: "125", large: "125", serving: "500"} {
+	// Hosts that can hold a build, reserves included, get the root
+	// throughput builds need.
+	for host, want := range map[compute.HostID]string{spot: "125", large: "500", serving: "500"} {
 		if got := calls[host.String()].Form.Get("BlockDeviceMapping.1.Ebs.Throughput"); got != want {
 			t.Errorf("root throughput %s MiB/s, want %s", got, want)
 		}
