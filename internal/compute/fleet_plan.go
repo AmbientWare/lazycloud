@@ -968,12 +968,12 @@ func (ps *pass) buyClass(c *demandClass, m ReserveMarket, offers []FleetOffer) {
 // place was held back by the quota room the pass's earlier purchases took.
 func (ps *pass) shortReason(m ReserveMarket, shape FleetCapacity, reserve bool) MarketReason {
 	switch {
+	case ps.hostRoom <= 0 || reserve && ps.reserveRoom <= 0:
+		return ReasonFleetLimit
 	case ps.s.BatchWait > 0:
 		return ReasonBatch
 	case ps.room(m) <= 0:
 		return ReasonActionCap
-	case ps.hostRoom <= 0 || reserve && ps.reserveRoom <= 0:
-		return ReasonFleetLimit
 	}
 	need := slotNeed(m, shape)
 	offered := func(relax func(*OfferInputs)) bool {
