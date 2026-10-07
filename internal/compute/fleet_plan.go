@@ -401,7 +401,7 @@ func (ps *pass) stoppedMicros(h FleetHost) int64 {
 	if !ok {
 		return 0
 	}
-	return rootDiskMicros(h.Region, t.RootGiB(h.ReserveMode != nil && *h.ReserveMode == ReserveHibernate), t.RootMiBps(h.ReserveMode != nil))
+	return rootDiskMicros(h.Region, t.RootGiB(h.ReserveMode != nil && *h.ReserveMode == ReserveHibernate), t.PricedMiBps(h.ReserveMode != nil))
 }
 
 func (ps *pass) cooled(h FleetHost) bool {
