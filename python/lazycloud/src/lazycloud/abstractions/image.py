@@ -34,6 +34,7 @@ from lazycloud._shared.image_building.credentials import (
     resolve_registry_credentials,
 )
 from lazycloud._shared.image_building.python import normalize_python_version
+from lazycloud.agent_harness import AgentHarness, agent_install_commands
 
 # Declaring an image loads no API client; image_build makes the API calls.
 if TYPE_CHECKING:
@@ -133,6 +134,10 @@ class Image:
     explicit_image_id: str | None = None
     ignore_python: bool = False
     include_files_patterns: tuple[str, ...] = field(default_factory=tuple)
+    # Coding agents installed after build_steps, at the releases current when
+    # the definition is built for a deploy or build, never when containers
+    # import the app.
+    agent_harnesses: tuple[AgentHarness, ...] = ()
 
     def __init__(
         self,
@@ -427,8 +432,9 @@ class Image:
             fields["base_image_credentials"] = credentials
         if self.packages:
             fields["python_packages"] = list(self.packages)
-        if self.build_steps:
-            fields["steps"] = [_definition_step(step) for step in self.build_steps]
+        steps = [*self.build_steps, *self._agent_steps()]
+        if steps:
+            fields["steps"] = [_definition_step(step) for step in steps]
         if self.commands:
             fields["commands"] = list(self.commands)
         if self.env_vars:
@@ -529,6 +535,12 @@ class Image:
             image_id=self.explicit_image_id,
             ignore_python=self.ignore_python,
         )
+
+    def _agent_steps(self) -> list[ImageBuildStep]:
+        return [
+            ImageBuildStep(kind=ImageBuildStepKind.Shell, command=command)
+            for command in agent_install_commands(self.agent_harnesses, self.architecture)
+        ]
 
     def _has_context(self) -> bool:
         return self.context_path is not None or self.dockerfile_content is not None

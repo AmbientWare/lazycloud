@@ -5,6 +5,10 @@ from __future__ import annotations
 import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import cache
+from urllib.parse import quote
+
+import httpx
 
 from lazycloud._shared.enums import StringEnum
 from lazycloud._shared.image_building.authoring import LinuxArchitecture
@@ -26,25 +30,21 @@ class AgentSystemDependency:
 @dataclass(frozen=True)
 class AgentInstallation:
     package: str
-    version: str
     login_command: tuple[str, ...]
     system_dependencies: tuple[AgentSystemDependency, ...] = ()
 
 
 AGENT_INSTALLATIONS = {
     AgentHarness.Codex: AgentInstallation(
-        "@openai/codex", "0.156.1", ("codex", "login"), (AgentSystemDependency("ps", "procps"),)
+        "@openai/codex", ("codex", "login"), (AgentSystemDependency("ps", "procps"),)
     ),
     AgentHarness.ClaudeCode: AgentInstallation(
         "@anthropic-ai/claude-code",
-        "2.1.282",
         ("claude", "auth", "login"),
         (AgentSystemDependency("script", "util-linux"),),
     ),
-    AgentHarness.OpenCode: AgentInstallation(
-        "opencode-ai", "1.18.32", ("opencode", "auth", "login")
-    ),
-    AgentHarness.Pi: AgentInstallation("@earendil-works/pi-coding-agent", "0.87.1", ("pi",)),
+    AgentHarness.OpenCode: AgentInstallation("opencode-ai", ("opencode", "auth", "login")),
+    AgentHarness.Pi: AgentInstallation("@earendil-works/pi-coding-agent", ("pi",)),
 }
 
 _NODE_VERSION = "22.23.3"
@@ -60,6 +60,31 @@ _NODE_RELEASES = {
 }
 
 
+class AgentVersionError(RuntimeError):
+    """The npm registry did not name a coding agent's latest release."""
+
+
+@cache
+def latest_version(package: str) -> str:
+    """The release npm tags latest for package, read once per process.
+
+    A build installs the release current when it is deployed. Pinning it in
+    the step keeps that build's cache, and a later release changes the step,
+    so the next build installs that one."""
+    url = f"https://registry.npmjs.org/{quote(package, safe='@')}/latest"
+    try:
+        response = httpx.get(url, timeout=10, follow_redirects=True)
+        response.raise_for_status()
+        version = response.json()["version"]
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise AgentVersionError(
+            f"could not read the latest release of {package} from the npm registry: {exc}"
+        ) from exc
+    if not isinstance(version, str) or not version or any(c.isspace() for c in version):
+        raise AgentVersionError(f"the npm registry named no usable latest release of {package}")
+    return version
+
+
 def agent_install_commands(
     harnesses: Iterable[AgentHarness], architecture: LinuxArchitecture
 ) -> list[str]:
@@ -69,7 +94,9 @@ def agent_install_commands(
     node_arch, checksum = _NODE_RELEASES[architecture]
     archive = f"node-v{_NODE_VERSION}-linux-{node_arch}.tar.xz"
     packages = [
-        shlex.quote(f"{AGENT_INSTALLATIONS[item].package}@{AGENT_INSTALLATIONS[item].version}")
+        shlex.quote(
+            f"{AGENT_INSTALLATIONS[item].package}@{latest_version(AGENT_INSTALLATIONS[item].package)}"
+        )
         for item in selected
     ]
     system_packages = shlex.join(
@@ -98,4 +125,4 @@ def agent_install_commands(
     ]
 
 
-__all__ = ["AgentHarness"]
+__all__ = ["AgentHarness", "AgentVersionError"]
