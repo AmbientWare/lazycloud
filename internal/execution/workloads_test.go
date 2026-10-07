@@ -248,7 +248,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if n := len(serve()); n != 0 {
 		t.Fatalf("an unconnected pod has %d containers", n)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
 		t.Fatal(err)
 	}
 	plan()
@@ -309,7 +309,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if err != nil || view.Phase != apitypes.DevboxPhaseStopped {
 		t.Fatalf("parked view = %+v, %v", view, err)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
+	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
 		t.Fatal(err)
 	}
 	if view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil }); err != nil || view.Phase != apitypes.DevboxPhaseQueued {
@@ -318,6 +318,37 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	plan()
 	if n := len(serve()); n != 1 {
 		t.Fatalf("a woken pod has %d", n)
+	}
+}
+
+// TestStartRetriesAPodWhoseStartsFailed: a release that reached the start
+// failure limit stays down for connections, and starting the pod retries it.
+func TestStartRetriesAPodWhoseStartsFailed(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedPod(t, pool, "devbox", 600)
+	if _, err := pool.Exec(t.Context(), "update releases set start_failures = $1 where id = $2", startFailureLimit, f.release); err != nil {
+		t.Fatal(err)
+	}
+	pending := func(cause WakeCause) int {
+		t.Helper()
+		if err := e.WakePod(t.Context(), f.workspace, f.workload, cause); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.PlanPods(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := pool.QueryRow(t.Context(), "select count(*) from containers where release_id = $1 and state = 'pending'", f.release).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := pending(WakeConnection); n != 0 {
+		t.Fatalf("a connection started %d containers of a failed release", n)
+	}
+	if n := pending(WakeStart); n != 1 {
+		t.Fatalf("a start left %d containers of a failed release", n)
 	}
 }
 
