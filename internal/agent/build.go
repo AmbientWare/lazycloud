@@ -113,7 +113,10 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 	a.mu.Unlock()
 	c.report()
 	if !known {
-		a.goOwned(func(ctx context.Context) { c.runBuild(ctx, spec) })
+		a.goOwned(func(ctx context.Context) {
+			c.runBuild(ctx, spec)
+			a.buildCaches.evict(ctx)
+		})
 	}
 }
 
@@ -121,8 +124,9 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 // and reports the outcome, converting the layers the server asks for, then
 // the exit. If the agent stops first, the build is abandoned: the next agent
 // removes its container and the server gives the build a new one.
-func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer) {
+func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer) { //nolint:contextcheck // The build works within the container's work, which outlives ctx.
 	build := spec.GetBuild()
+	began := time.Now()
 	logs := newBuildLogs(c.a.host, c.id, c.log)
 	c.a.goOwned(func(context.Context) { logs.run(c.work) }) //nolint:contextcheck // output lives as long as the container's work
 	work, cancel := context.WithDeadline(c.work, build.GetDeadline().AsTime())
@@ -135,23 +139,31 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 	// An early publish converts the pushed image while the builder exports
 	// its cache.
 	var early sync.WaitGroup
+	var layers *layerPublish
 	publish := func(outcome *hostproto.CompleteImageBuildRequest) {
 		publishCtx, publish := telemetry.Start(work, "agent.build_publish")
-		c.publishBuild(trace.ContextWithSpan(ctx, publish), publishCtx, build, outcome, logs) //nolint:contextcheck // as runBuilder
+		c.publishBuild(trace.ContextWithSpan(ctx, publish), publishCtx, layers, outcome, logs) //nolint:contextcheck // as runBuilder
 		publish.End()
 	}
 	var outcome *hostproto.CompleteImageBuildRequest
 	var exit *hostproto.ContainerExit
-	// The state stays held until the publishes that read it end.
+	// The state stays held until the conversions that read it end.
 	cache, err := c.a.buildCaches.acquire(work, build.GetWorkspaceId()) //nolint:contextcheck // as runBuilder
+	if err == nil {
+		defer c.a.buildCaches.release(ctx, cache)
+		var stop func()
+		if layers, stop, err = c.newBuildLayers(build, cache, logs); err == nil {
+			defer stop()
+		}
+	}
 	if err != nil {
 		exit = c.buildStartFailure(err)
 	} else {
-		defer func() {
-			c.a.buildCaches.release(cache)
-			c.a.goOwned(c.a.buildCaches.evict)
-		}()
-		outcome, exit = c.runBuilder(work, spec, cache, logs, func(pushed *hostproto.CompleteImageBuildRequest) { //nolint:contextcheck // stopping the container ends its build
+		// Conversions ahead of the server's answer end with the build.
+		ahead, stopAhead := context.WithCancel(work)
+		defer stopAhead()
+		exported := func(manifest string) { layers.ahead(ahead, manifest, began) }
+		outcome, exit = c.runBuilder(work, spec, cache, logs, exported, func(pushed *hostproto.CompleteImageBuildRequest) { //nolint:contextcheck // stopping the container ends its build
 			early.Go(func() { publish(pushed) })
 		})
 	}
@@ -167,13 +179,32 @@ func (c *container) runBuild(ctx context.Context, spec *hostproto.StartContainer
 	c.exited(exit)
 }
 
+// newBuildLayers returns the build's layer publish, reading the content
+// store of the BuildKit state in cache, and a function that waits for its
+// conversions and removes their files.
+func (c *container) newBuildLayers(build *hostproto.ImageBuild, cache string, logs buildLogs) (*layerPublish, func(), error) {
+	if err := os.MkdirAll(c.dir, 0o755); err != nil { //nolint:gosec // The builder reads the build's files as another user.
+		return nil, nil, fmt.Errorf("create the build directory: %w", err)
+	}
+	dir, err := os.MkdirTemp(c.dir, "layers")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create the layer directory: %w", err)
+	}
+	blobs := filepath.Join(cache, "buildkit", "runc-overlayfs", "content", "blobs", "sha256")
+	layers := newLayerPublish(c, build, dir, blobs, logs)
+	return layers, func() {
+		layers.running.Wait()
+		_ = os.RemoveAll(dir)
+	}, nil
+}
+
 // runBuilder runs the builder and returns what to report: an outcome unless
 // the build was stopped, never ran or was handed to pushed, and the
 // container's exit. pushed takes the outcome as soon as the image is in the registry,
 // while the builder exports its cache, and returns at once; runBuilder calls
 // it at most once, before it returns.
 func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContainer, cache string, logs buildLogs,
-	pushed func(*hostproto.CompleteImageBuildRequest),
+	exported func(manifest string), pushed func(*hostproto.CompleteImageBuildRequest),
 ) (*hostproto.CompleteImageBuildRequest, *hostproto.ContainerExit) {
 	build := spec.GetBuild()
 	startFailed := func(err error) (*hostproto.CompleteImageBuildRequest, *hostproto.ContainerExit) {
@@ -226,6 +257,10 @@ func (c *container) runBuilder(ctx context.Context, spec *hostproto.StartContain
 	}
 	metadata := filepath.Join(c.dir, "out", "metadata.json")
 	tail := c.a.followBuildOutput(ctx, c.dockerName(), logs, func(line string) {
+		if m := exportedManifest.FindStringSubmatch(line); m != nil {
+			exported(m[1])
+			return
+		}
 		if line != imagePushed || c.isStopping() {
 			return
 		}
@@ -753,23 +788,15 @@ func readBuildDigest(path string) (string, error) {
 // signed for those sizes and reports it uploaded, within the build's
 // deadline (work). A layer that cannot be converted or stored, or one still
 // missing after a few rounds, fails the build.
-func (c *container) publishBuild(ctx, work context.Context, build *hostproto.ImageBuild, request *hostproto.CompleteImageBuildRequest, logs buildLogs) {
-	fail := func(reason string, transient bool) {
-		logs.add(ctx, reason)
-		request := failedBuild(c.id, reason, nil)
-		request.FailureTransient = transient
-		c.completeBuild(ctx, request)
-	}
-	dir, err := os.MkdirTemp(c.dir, "layers")
-	if err != nil {
-		fail(fmt.Sprintf("create the layer directory: %v", err), true)
-		return
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	if err := newLayerPublish(c, build, dir, logs).publish(work, request); err != nil {
+func (c *container) publishBuild(ctx, work context.Context, layers *layerPublish, request *hostproto.CompleteImageBuildRequest, logs buildLogs) {
+	if err := layers.publish(work, request); err != nil {
 		// Only a layer's content fails the image; a store or registry that
 		// stayed unreachable fails this build alone.
-		fail(err.Error(), !errors.Is(err, errLayerContent))
+		reason := err.Error()
+		logs.add(ctx, reason)
+		request := failedBuild(c.id, reason, nil)
+		request.FailureTransient = !errors.Is(err, errLayerContent)
+		c.completeBuild(ctx, request)
 	}
 }
 

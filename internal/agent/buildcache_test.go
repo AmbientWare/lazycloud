@@ -34,7 +34,7 @@ func TestBuildCachesGiveConcurrentBuildsTheirOwnState(t *testing.T) {
 	if first == second {
 		t.Fatalf("two running builds share the state %s", first)
 	}
-	caches.release(first)
+	caches.release(t.Context(), first)
 	again, err := caches.acquire(t.Context(), workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestBuildCachesEvictLeastRecentlyUsedWorkspacesToTheLimit(t *testing.T) {
 	}
 	oldest, running, recent := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	release := func(state string) {
-		caches.release(state)
+		caches.release(t.Context(), state)
 		caches.evict(t.Context())
 	}
 	release(use(oldest, 500<<10))

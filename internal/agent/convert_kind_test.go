@@ -142,7 +142,7 @@ func testPublish(t *testing.T, repository string, layers *layerServer) *layerPub
 	}()
 	t.Cleanup(stop)
 	build := &hostproto.ImageBuild{PushRepository: repository, InsecureRegistry: true}
-	return newLayerPublish(newTestContainer(t, server), build, t.TempDir(), newBuildLogs(nil, "build", nil))
+	return newLayerPublish(newTestContainer(t, server), build, t.TempDir(), "", newBuildLogs(nil, "build", nil))
 }
 
 // A converted layer uploads while another still converts: here the large
@@ -254,7 +254,7 @@ func TestLayerConversionRetriesACutOffRead(t *testing.T) {
 	}, 64<<10)
 	server := newLayerServer(t, "http://store", layers)
 	upload := server.complete(&hostproto.CompleteImageBuildRequest{}).GetLayerUploads()[0]
-	if _, err := testPublish(t, repository, server).convert(t.Context(), upload); err != nil || !cut.Load() {
+	if _, err := testPublish(t, repository, server).convert(t.Context(), upload.GetBlobDigest(), upload.GetDiffId()); err != nil || !cut.Load() {
 		t.Fatalf("a layer whose first read was cut off gave %v (cut %v)", err, cut.Load())
 	}
 }

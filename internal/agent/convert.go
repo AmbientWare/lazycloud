@@ -1,17 +1,23 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -52,11 +58,15 @@ func retryTransfer(ctx context.Context, fn func() error) error {
 // layerPublish converts and uploads the layers the server names for one
 // build. Each conversion and upload runs on a goroutine of its own, so
 // layers upload while others convert, and hands its result to publish,
-// which alone reads and writes the layers' state.
+// which alone reads and writes the layers' state. Layers are read from
+// the builder's content store, blobs, and from the registry only when a
+// blob is not there. ahead converts the layers the build made while the
+// image still pushes, so publish finds them converted.
 type layerPublish struct {
 	c       *container
 	build   *hostproto.ImageBuild
 	dir     string
+	blobs   string
 	logs    buildLogs
 	options []name.Option
 	auth    authn.Authenticator
@@ -66,6 +76,17 @@ type layerPublish struct {
 	running               sync.WaitGroup
 	results               chan layerResult
 	layers                map[string]*publishedLayer
+
+	mu sync.Mutex
+	// prepared are the conversions ahead started, by blob digest.
+	prepared map[string]*preparedLayer
+}
+
+// preparedLayer is a conversion ahead started; done closes when it ends.
+type preparedLayer struct {
+	done      chan struct{}
+	converted *imagefs.ConvertedFile
+	err       error
 }
 
 // publishedLayer is what the agent did with one layer and has yet to report.
@@ -90,11 +111,11 @@ type layerResult struct {
 	err   error
 }
 
-func newLayerPublish(c *container, build *hostproto.ImageBuild, dir string, logs buildLogs) *layerPublish {
+func newLayerPublish(c *container, build *hostproto.ImageBuild, dir, blobs string, logs buildLogs) *layerPublish {
 	p := &layerPublish{
-		c: c, build: build, dir: dir, logs: logs, auth: authn.Anonymous,
+		c: c, build: build, dir: dir, blobs: blobs, logs: logs, auth: authn.Anonymous,
 		converting: make(chan struct{}, maxConversions), uploading: make(chan struct{}, maxConversions),
-		results: make(chan layerResult), layers: map[string]*publishedLayer{},
+		results: make(chan layerResult), layers: map[string]*publishedLayer{}, prepared: map[string]*preparedLayer{},
 	}
 	if build.GetInsecureRegistry() {
 		p.options = append(p.options, name.Insecure)
@@ -155,7 +176,7 @@ func (p *layerPublish) start(ctx context.Context, uploads []*hostproto.LayerUplo
 		case converted == nil:
 			conversions++
 			p.run(ctx, l, func() (func(), error) {
-				converted, err := p.convert(ctx, u)
+				converted, err := p.converted(ctx, u.GetBlobDigest(), u.GetDiffId())
 				return func() { l.converted, l.sized = converted, sizes(u, converted) }, err
 			})
 		case u.GetIndexUrl() != "":
@@ -252,22 +273,123 @@ func acquire(ctx context.Context, tokens chan struct{}) error {
 	}
 }
 
-// convert converts one layer, read from the image the build pushed.
-func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*imagefs.ConvertedFile, error) {
+// exportedManifest matches the builder's output line that names the image
+// manifest once it is in the builder's content store, before the push.
+var exportedManifest = regexp.MustCompile(`^#\d+ exporting manifest (sha256:[0-9a-f]{64}) .*done$`)
+
+// ahead starts converting the layers manifest names that the build made,
+// those its config dates from since on, while the image pushes. The others
+// are layers of the base or of earlier builds, which the server mostly
+// has already. It returns at once; publish waits for the conversions.
+func (p *layerPublish) ahead(ctx context.Context, manifest string, since time.Time) {
+	p.running.Go(func() {
+		layers, err := p.madeLayers(manifest, since)
+		if err != nil {
+			p.c.log.Warn("reading the exported image failed", "error", err)
+			return
+		}
+		if len(layers) > 0 {
+			p.logs.add(ctx, fmt.Sprintf("converting %d new layers while the image pushes", len(layers)))
+		}
+		for _, l := range layers {
+			p.prepare(ctx, l.blob, l.diffID)
+		}
+	})
+}
+
+// madeLayer is a layer the build made.
+type madeLayer struct{ blob, diffID string }
+
+// madeLayers reads manifest and its config from the content store and
+// returns the layers its history dates from since on.
+func (p *layerPublish) madeLayers(manifest string, since time.Time) ([]madeLayer, error) {
+	data, err := os.ReadFile(p.blobPath(manifest)) //nolint:gosec // A digest's path in the build's own store.
+	if err != nil {
+		return nil, fmt.Errorf("read the manifest: %w", err)
+	}
+	m, err := v1.ParseManifest(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode the manifest: %w", err)
+	}
+	data, err = os.ReadFile(p.blobPath(m.Config.Digest.String())) //nolint:gosec // As above.
+	if err != nil {
+		return nil, fmt.Errorf("read the image config: %w", err)
+	}
+	config, err := v1.ParseConfigFile(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode the image config: %w", err)
+	}
+	var created []time.Time
+	for _, h := range config.History {
+		if !h.EmptyLayer {
+			created = append(created, h.Created.Time)
+		}
+	}
+	if len(created) != len(m.Layers) || len(config.RootFS.DiffIDs) != len(m.Layers) {
+		return nil, fmt.Errorf("the image config's history does not match its %d layers", len(m.Layers))
+	}
+	var layers []madeLayer
+	for n, l := range m.Layers {
+		if !created[n].Before(since) {
+			layers = append(layers, madeLayer{blob: l.Digest.String(), diffID: config.RootFS.DiffIDs[n].String()})
+		}
+	}
+	return layers, nil
+}
+
+// prepare starts converting blob unless a conversion of it started.
+func (p *layerPublish) prepare(ctx context.Context, blob, diffID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prepared[blob] != nil {
+		return
+	}
+	l := &preparedLayer{done: make(chan struct{})}
+	p.prepared[blob] = l
+	p.running.Go(func() {
+		defer close(l.done)
+		l.converted, l.err = p.convert(ctx, blob, diffID)
+	})
+}
+
+// converted is blob converted: by ahead, or now.
+func (p *layerPublish) converted(ctx context.Context, blob, diffID string) (*imagefs.ConvertedFile, error) {
+	p.mu.Lock()
+	l := p.prepared[blob]
+	p.mu.Unlock()
+	if l == nil {
+		return p.convert(ctx, blob, diffID)
+	}
+	select {
+	case <-l.done:
+		return l.converted, l.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("convert layer %s: %w", blob, ctx.Err())
+	}
+}
+
+// blobPath is where the content store keeps digest.
+func (p *layerPublish) blobPath(digest string) string {
+	return filepath.Join(p.blobs, strings.TrimPrefix(digest, "sha256:"))
+}
+
+// convert converts one layer, read from the content store or the image
+// the build pushed.
+func (p *layerPublish) convert(ctx context.Context, blob, diffID string) (*imagefs.ConvertedFile, error) {
 	if err := acquire(ctx, p.converting); err != nil {
-		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
+		return nil, fmt.Errorf("convert layer %s: %w", blob, err)
 	}
 	defer func() { <-p.converting }()
-	ref, err := name.NewDigest(p.build.GetPushRepository()+"@"+u.GetBlobDigest(), p.options...)
+	ref, err := name.NewDigest(p.build.GetPushRepository()+"@"+blob, p.options...)
 	if err != nil {
-		return nil, fmt.Errorf("layer %s: %w", u.GetBlobDigest(), err)
+		return nil, fmt.Errorf("layer %s: %w", blob, err)
 	}
 	start := time.Now()
-	layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, u.GetDiffId())))
+	layerCtx, span := telemetry.Start(ctx, "agent.convert_layer", trace.WithAttributes(attribute.String(telemetry.AttrLayer, diffID)))
 	var l *imagefs.ConvertedFile
 	err = retryTransfer(layerCtx, func() error {
 		var err error
-		l, err = p.convertLayer(layerCtx, ref, u.GetDiffId())
+		l, err = p.convertLayer(layerCtx, ref, diffID)
 		return err
 	})
 	if err == nil {
@@ -275,24 +397,20 @@ func (p *layerPublish) convert(ctx context.Context, u *hostproto.LayerUpload) (*
 	}
 	telemetry.Fail(span, err)
 	if err != nil {
-		return nil, fmt.Errorf("convert layer %s: %w", u.GetBlobDigest(), err)
+		return nil, fmt.Errorf("convert layer %s: %w", blob, err)
 	}
 	p.logs.add(ctx, fmt.Sprintf("converted %s: %d files, %d MB stored, in %s",
-		u.GetBlobDigest(), l.Entries, l.DataBytes>>20, time.Since(start).Round(time.Millisecond)))
+		blob, l.Entries, l.DataBytes>>20, time.Since(start).Round(time.Millisecond)))
 	return l, nil
 }
 
-// convertLayer reads one layer from the registry and converts it into a
-// data file under the build's directory. The file lives only until its
-// upload, and a host that stops abandons the build, so it is not synced.
+// convertLayer reads one layer and converts it into a data file under the
+// build's directory. The file lives only until its upload, and a host that
+// stops abandons the build, so it is not synced.
 func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, diffID string) (*imagefs.ConvertedFile, error) {
-	layer, err := remote.Layer(ref, remote.WithContext(ctx), remote.WithAuth(p.auth))
+	tarball, err := p.openLayer(ctx, ref)
 	if err != nil {
-		return nil, fmt.Errorf("read layer: %w", err)
-	}
-	tarball, err := layer.Uncompressed()
-	if err != nil {
-		return nil, fmt.Errorf("read layer: %w", err)
+		return nil, err
 	}
 	defer func() { _ = tarball.Close() }()
 	source := &sourceRead{r: tarball}
@@ -306,6 +424,28 @@ func (p *layerPublish) convertLayer(ctx context.Context, ref name.Digest, diffID
 		return nil, fmt.Errorf("%w: %w", errLayerContent, err)
 	}
 	return l, err //nolint:wrapcheck // The caller names the layer.
+}
+
+// openLayer opens ref's layer uncompressed, from the content store when it
+// holds the blob and from the registry otherwise.
+func (p *layerPublish) openLayer(ctx context.Context, ref name.Digest) (io.ReadCloser, error) {
+	var layer v1.Layer
+	path := p.blobPath(ref.DigestStr())
+	if _, err := os.Stat(path); p.blobs != "" && err == nil {
+		layer, err = tarball.LayerFromFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read layer: %w", err)
+		}
+	} else {
+		if layer, err = remote.Layer(ref, remote.WithContext(ctx), remote.WithAuth(p.auth)); err != nil {
+			return nil, fmt.Errorf("read layer: %w", err)
+		}
+	}
+	uncompressed, err := layer.Uncompressed()
+	if err != nil {
+		return nil, fmt.Errorf("read layer: %w", err)
+	}
+	return uncompressed, nil
 }
 
 // sourceRead reads r and keeps the first error other than io.EOF it gave.

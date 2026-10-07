@@ -114,14 +114,14 @@ func openState(workspace, state string) error {
 
 // release ends a build's hold on state. evict then brings the caches back
 // within their limit.
-func (b *buildCaches) release(state string) {
+func (b *buildCaches) release(ctx context.Context, state string) {
 	size, err := treeBytes(state)
 	if err != nil {
-		b.log.Warn("measuring the build cache failed", "error", err)
+		b.log.WarnContext(ctx, "measuring the build cache failed", "error", err)
 	}
 	now := time.Now()
 	if err := os.Chtimes(filepath.Dir(state), now, now); err != nil {
-		b.log.Warn("marking the build cache used failed", "error", err)
+		b.log.WarnContext(ctx, "marking the build cache used failed", "error", err)
 	}
 	b.mu.Lock()
 	delete(b.held, state)
