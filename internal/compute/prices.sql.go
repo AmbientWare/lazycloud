@@ -11,22 +11,40 @@ import (
 )
 
 const freshSpotPrices = `-- name: FreshSpotPrices :many
-select region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at
+select region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at,
+       coalesce(case when scored_at > now() - make_interval(secs => $1::float8) then placement_score end,
+                0)::smallint as placement_score
 from spot_prices
-where observed_at > now() - make_interval(secs => $1::float8)
+where observed_at > now() - make_interval(secs => $2::float8)
 order by region, availability_zone_id, instance_type
 `
 
-// Spot prices observed recently enough to buy on.
-func (q *Queries) FreshSpotPrices(ctx context.Context, maxAgeSeconds float64) ([]SpotPrice, error) {
-	rows, err := q.db.Query(ctx, freshSpotPrices, maxAgeSeconds)
+type FreshSpotPricesParams struct {
+	ScoreAgeSeconds float64
+	MaxAgeSeconds   float64
+}
+
+type FreshSpotPricesRow struct {
+	Region             string
+	AvailabilityZoneID string
+	InstanceType       string
+	HourlyMicros       int64
+	EffectiveAt        time.Time
+	ObservedAt         time.Time
+	PlacementScore     int16
+}
+
+// Spot prices observed recently enough to buy on, with their placement
+// scores while those are fresh; 0 is no fresh score.
+func (q *Queries) FreshSpotPrices(ctx context.Context, arg FreshSpotPricesParams) ([]FreshSpotPricesRow, error) {
+	rows, err := q.db.Query(ctx, freshSpotPrices, arg.ScoreAgeSeconds, arg.MaxAgeSeconds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SpotPrice
+	var items []FreshSpotPricesRow
 	for rows.Next() {
-		var i SpotPrice
+		var i FreshSpotPricesRow
 		if err := rows.Scan(
 			&i.Region,
 			&i.AvailabilityZoneID,
@@ -34,6 +52,7 @@ func (q *Queries) FreshSpotPrices(ctx context.Context, maxAgeSeconds float64) ([
 			&i.HourlyMicros,
 			&i.EffectiveAt,
 			&i.ObservedAt,
+			&i.PlacementScore,
 		); err != nil {
 			return nil, err
 		}
@@ -43,6 +62,33 @@ func (q *Queries) FreshSpotPrices(ctx context.Context, maxAgeSeconds float64) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const scoreSpotPools = `-- name: ScoreSpotPools :exec
+update spot_prices s
+set placement_score = v.score, scored_at = now()
+from (select unnest($2::text[]) as zone_id, unnest($3::text[]) as instance_type,
+             unnest($4::smallint[]) as score) v
+where s.region = $1::text and s.availability_zone_id = v.zone_id and s.instance_type = v.instance_type
+`
+
+type ScoreSpotPoolsParams struct {
+	Region        string
+	ZoneIds       []string
+	InstanceTypes []string
+	Scores        []int16
+}
+
+// One region's Spot placement scores per zone and type, in one statement,
+// on the prices stored. The arrays have one element per score.
+func (q *Queries) ScoreSpotPools(ctx context.Context, arg ScoreSpotPoolsParams) error {
+	_, err := q.db.Exec(ctx, scoreSpotPools,
+		arg.Region,
+		arg.ZoneIds,
+		arg.InstanceTypes,
+		arg.Scores,
+	)
+	return err
 }
 
 const upsertSpotPrices = `-- name: UpsertSpotPrices :exec

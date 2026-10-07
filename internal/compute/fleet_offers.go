@@ -108,6 +108,10 @@ type FleetOffer struct {
 	// TransferMicros is the expected hourly transfer to and from
 	// storageRegion of a host serving from the offer.
 	TransferMicros int64
+	// PlacementPenalty is the percent a Spot offer ranks above its cost for
+	// its pool's placement score, placementPenaltyPercent for each point
+	// below the best pool of its shape.
+	PlacementPenalty int64
 	// CoolingRegion marks an offer in a region with recent refusals; it
 	// ranks last and serves only when nothing else does.
 	CoolingRegion bool
@@ -115,22 +119,35 @@ type FleetOffer struct {
 	Quota QuotaKey
 }
 
+// placementPenaltyPercent is the policy weight of a Spot placement score:
+// each point a pool scores below the best pool of its shape ranks it as 4%
+// dearer. A pool AWS scores 1 against a best of 9 ranks 32% dearer, so a
+// pool that is likely to fill wins up to about a third above the price of
+// one that is not (a single pool scored low refused 3 of 5 launches), while
+// a point of difference between pools both likely to fill weighs less
+// than ordinary Spot price spread.
+const placementPenaltyPercent = 4
+
 // Key names the offer.
 func (o FleetOffer) Key() string {
 	return o.Region + "/" + o.ZoneID + "/" + o.Type.Name + "/" + string(o.Market)
 }
 
-// servingCost prices a host bought to serve over the cost horizon.
+// ranked is micros of the offer's cost as ranking weighs it, with its
+// placement penalty.
+func (o FleetOffer) ranked(micros int64) int64 { return micros * (100 + o.PlacementPenalty) / 100 }
+
+// servingCost ranks a host bought to serve over the cost horizon.
 func servingCost(p Policy) func(FleetOffer) int64 {
-	return func(o FleetOffer) int64 { return o.HourlyMicros * int64(p.CostHorizon/time.Second) }
+	return func(o FleetOffer) int64 { return o.ranked(o.HourlyMicros * int64(p.CostHorizon/time.Second)) }
 }
 
-// reserveCost prices a reserve: held stopped over the cost horizon, after
+// reserveCost ranks a reserve: held stopped over the cost horizon, after
 // running while it is prepared. Preparing serves nothing, so it moves no
 // image or volume bytes.
 func reserveCost(p Policy) func(FleetOffer) int64 {
 	return func(o FleetOffer) int64 {
-		return o.StoppedMicros*int64(p.CostHorizon/time.Second) + (o.HourlyMicros-o.TransferMicros)*int64(p.Provision/time.Second)
+		return o.ranked(o.StoppedMicros*int64(p.CostHorizon/time.Second) + (o.HourlyMicros-o.TransferMicros)*int64(p.Provision/time.Second))
 	}
 }
 
@@ -209,9 +226,9 @@ func cooled(cooldowns []OfferCooldown, now time.Time, region, instanceType strin
 	})
 }
 
-// spotPrice is the freshest quote for a type in a zone within the policy's
+// spotQuote is the freshest quote for a type in a zone within the policy's
 // age, if any.
-func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, instanceType string) (int64, bool) {
+func spotQuote(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, instanceType string) (SpotQuote, bool) {
 	var best *SpotQuote
 	for i, q := range quotes {
 		if q.Region != region || q.ZoneID != zoneID || q.InstanceType != instanceType || now.Sub(q.ObservedAt) > p.SpotPriceAge {
@@ -222,9 +239,25 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 		}
 	}
 	if best == nil {
-		return 0, false
+		return SpotQuote{}, false
 	}
-	return best.HourlyMicros, true
+	return *best, true
+}
+
+// bestPlacementScores is the best placement score each shape's fresh quotes
+// hold in any zone.
+func bestPlacementScores(p Policy, in OfferInputs) map[string]int {
+	shapes := map[string]string{}
+	for _, t := range in.Catalog {
+		shapes[t.Name] = placementShape(t)
+	}
+	best := map[string]int{}
+	for _, q := range in.Spot {
+		if shape, ok := shapes[q.InstanceType]; ok && in.Now.Sub(q.ObservedAt) <= p.SpotPriceAge {
+			best[shape] = max(best[shape], q.PlacementScore)
+		}
+	}
+	return best
 }
 
 // RankOffers lists the offers that can host need, best first. A reserve
@@ -235,10 +268,11 @@ func spotPrice(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, inst
 // GPU model the platform fleet offers and that keep the purchase margin. A
 // reserve offer hibernates where hibernates allows.
 // Order: the need's GPU preference, cooling regions last, complete hourly
-// cost, fewest hosts in the zone, key. An offer whose host would exceed a
-// known vCPU quota is skipped.
+// cost with its placement penalty, fewest hosts in the zone, key. An offer
+// whose host would exceed a known vCPU quota is skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
+	scores := bestPlacementScores(p, in)
 	room := quotaRoom(in.Quotas, in.QuotaUsed)
 	cooling := coolingRegions(p, in.Cooldowns, in.Now)
 	gpus := need.GPUsNeeded()
@@ -272,11 +306,15 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 				for _, market := range markets {
 					hibernate := reserve && hibernates(t)
 					disk := rootDiskMicros(region, t.RootGiB(hibernate), t.PricedMiBps(reserve))
-					compute := onDemand
+					compute, penalty := onDemand, int64(0)
 					if market == MarketSpot {
-						var quoted bool
-						if compute, quoted = spotPrice(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name); !quoted {
+						q, quoted := spotQuote(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name)
+						if !quoted {
 							continue
+						}
+						compute = q.HourlyMicros
+						if q.PlacementScore > 0 {
+							penalty = placementPenaltyPercent * int64(scores[placementShape(t)]-q.PlacementScore)
 						}
 					}
 					class, _ := QuotaClassOf(t.Name)
@@ -288,7 +326,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour + transfer, StoppedMicros: disk,
-						TransferMicros: transfer, CoolingRegion: cooling[region], Quota: quota,
+						TransferMicros: transfer, PlacementPenalty: penalty, CoolingRegion: cooling[region], Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need.Preemptible); rejected && !in.OwnerPays {
 						continue
@@ -302,7 +340,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 		return cmp.Or(
 			cmp.Compare(GPURank(need.GPUs, a.Type.GPU), GPURank(need.GPUs, b.Type.GPU)),
 			boolOrder(a.CoolingRegion, b.CoolingRegion),
-			cmp.Compare(a.HourlyMicros, b.HourlyMicros),
+			cmp.Compare(a.ranked(a.HourlyMicros), b.ranked(b.HourlyMicros)),
 			cmp.Compare(in.ZoneHosts[a.ZoneID], in.ZoneHosts[b.ZoneID]),
 			strings.Compare(a.Key(), b.Key()),
 		)
