@@ -221,3 +221,24 @@ func TestDiskLeaseOverTheHostConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDiskPlanRefusalReachesTheHost covers a disk past the plan's
+// allowance: the host gets the refusal and its message, not an internal
+// error, so the start failure names the cap.
+func TestDiskPlanRefusalReachesTheHost(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"disks": [{"name": "root", "size_bytes": 1073741824, "mount_path": "/data"}]}`)
+	if _, err := h.pool.Exec(t.Context(), `
+with owner as (select user_id from workspace_members where workspace_id = $1 and role = 'owner'),
+     account as (update billing_accounts set complimentary_since = null where user_id in (select user_id from owner))
+update billing_balances set balance_nanos = 1000000000 where user_id in (select user_id from owner)`, uuid.UUID(ws)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := h.client.AcquireDisk(ctx, &hostproto.AcquireDiskRequest{ContainerId: container.String(), Name: "root"})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(status.Convert(err).Message(), "more than its plan allows (0 GiB)") {
+		t.Fatalf("acquire past the plan: %v", err)
+	}
+}
