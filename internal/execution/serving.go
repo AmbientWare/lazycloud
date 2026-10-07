@@ -222,7 +222,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if row.Preview {
 			count = min(desired-active, 1-live)
 		}
-		if count <= 0 {
+		if count <= 0 || plan.holdStart(row.StartFailures, row.LastStoppedAt) {
 			return nil
 		}
 		grant, err := billing.Admit(ctx, tx, billing.Request{

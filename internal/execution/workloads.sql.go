@@ -715,9 +715,10 @@ func (q *Queries) NetworkPoliciesOnHost(ctx context.Context, hostID *uuid.UUID) 
 
 const parkPod = `-- name: ParkPod :exec
 insert into pod_states (workload_id, woken_at, parked) values ($1, null, true)
-on conflict (workload_id) do update set woken_at = null, parked = true
+on conflict (workload_id) do update set woken_at = null, parked = true, replicas = null
 `
 
+// A stop overrides an earlier scale.
 func (q *Queries) ParkPod(ctx context.Context, workloadID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, parkPod, workloadID)
 	return err
@@ -818,13 +819,20 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       c.warm::int as warm
+       c.warm::int as warm,
+       r.start_failures,
+       last_stop.stopped_at as last_stopped_at
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join pod_states s on s.workload_id = w.id
+left join lateral (
+    select lc.stopped_at from containers lc
+    where lc.release_id = r.id and lc.purpose = 'serve'
+    order by lc.id desc limit 1
+) last_stop on r.start_failures > 0
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
@@ -878,11 +886,14 @@ type PodReleasesRow struct {
 	Ready           int32
 	Draining        int32
 	Warm            int32
+	StartFailures   int32
+	LastStoppedAt   *time.Time
 }
 
 // Pod releases after @after_id that need a decision: live serve
 // containers, a wake or a count, or an always-on active release. Each source
 // reads live rows only.
+// The newest serve container's stop paces the next start after failed ones.
 func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]PodReleasesRow, error) {
 	rows, err := q.db.Query(ctx, podReleases, arg.StartFailureLimit, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -921,6 +932,8 @@ func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]Pod
 			&i.Ready,
 			&i.Draining,
 			&i.Warm,
+			&i.StartFailures,
+			&i.LastStoppedAt,
 		); err != nil {
 			return nil, err
 		}

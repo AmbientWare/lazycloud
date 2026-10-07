@@ -29,7 +29,7 @@ type ContainerExit struct {
 
 // containerExited stops a container in tx. Its running attempts are lost and
 // retried by policy. A load error fails the release's queued tasks with that
-// error, as does the start_failed limit. Stopping a stopped container does
+// error, as does the start failure limit. Stopping a stopped container does
 // nothing, so duplicate reports are harmless. Lock order: container, then
 // task, then attempt.
 func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container ContainerID, exit ContainerExit) error {
@@ -74,8 +74,14 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 	}
 	release := *row.ReleaseID
 
+	// A container that exits before it was ever ready failed to start,
+	// whatever ended it, unless it was stopped or its host was lost.
+	reason := exit.Reason
+	if ContainerState(row.State) == ContainerStarting && (reason == StopCrashed || reason == StopOutOfMemory || reason == StopExited) {
+		reason = StopStartFailed
+	}
 	var failQueued *Failure
-	switch exit.Reason {
+	switch reason {
 	case StopLoadError:
 		failQueued = exit.LoadError
 		if failQueued == nil {

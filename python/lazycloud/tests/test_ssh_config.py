@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.workloads import WorkloadsClient
+from lazycloud.contracts.api import PodRole
 from lazycloud.session.ssh import (
     SshAccess,
     SshPaths,
@@ -20,7 +21,13 @@ _OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiXkZ0yA7i4zb4bCVI0jQq1h0lJmN
 
 
 def _host(app: str, pod: str, key: str) -> SshPodHost:
-    return SshPodHost(alias=f"lazycloud-acme-{app}-{pod}", pod=pod, app=app, host_public_key=key)
+    return SshPodHost(
+        alias=f"lazycloud-acme-{app}-{pod}",
+        pod=pod,
+        app=app,
+        role=PodRole.devbox,
+        host_public_key=key,
+    )
 
 
 def test_pods_sharing_a_name_across_apps_get_separate_hosts_and_pins(tmp_path: Path) -> None:
@@ -53,7 +60,11 @@ def test_a_full_sync_removes_only_this_workspaces_stale_hosts(tmp_path: Path) ->
     other = SshAccess(client=client, workspace="other", paths=paths, cli_command=("lazycloud",))
     acme.write_hosts([_host("dev", "box", _KEY), _host("dev", "gone", _OTHER_KEY)])
     other_host = SshPodHost(
-        alias="lazycloud-other-dev-box", pod="box", app="dev", host_public_key=_KEY
+        alias="lazycloud-other-dev-box",
+        pod="box",
+        app="dev",
+        role=PodRole.devbox,
+        host_public_key=_KEY,
     )
     other.write_hosts([other_host])
     (paths.hosts / "mine.conf").write_text("Host mine\n    HostName example.test\n")

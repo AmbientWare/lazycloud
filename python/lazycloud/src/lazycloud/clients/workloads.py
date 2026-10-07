@@ -273,6 +273,14 @@ class WorkloadsClient:
         path = workload_path(self.workspace, app, WorkloadKind.pod, name, "devbox")
         return self.api._send(Devbox, "GET", path)
 
+    def start_devbox(self, app: str, name: str) -> Devbox:
+        path = workload_path(self.workspace, app, WorkloadKind.pod, name, "devbox", "start")
+        return self.api._send(Devbox, "POST", path)
+
+    def stop_devbox(self, app: str, name: str) -> Devbox:
+        path = workload_path(self.workspace, app, WorkloadKind.pod, name, "devbox", "stop")
+        return self.api._send(Devbox, "POST", path)
+
     def create_ssh_certificate(self, public_key: str) -> SshCertificate:
         return self.api._send(
             SshCertificate,
