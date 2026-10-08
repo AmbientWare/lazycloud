@@ -397,11 +397,14 @@ func TestPlanCountsRoomPendingWorkTakesAgainstTheWarmTarget(t *testing.T) {
 }
 
 func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
-	cheap := idle(planHost(1, planSmall, FleetServing))
-	costly := idle(planHost(2, planSmall, FleetServing))
-	costly.HourlyMicros = ptr(int64(500_000))
-	plan := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, cheap, costly))
-	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{2}}) || plan.Actions[0].Kind != ActionDrain {
+	dear := planSmall
+	dear.Name, dear.prices = "m.dear", [4]int64{500_000, 500_000, 500_000, 500_000}
+	costly := idle(planHost(1, dear, FleetServing))
+	cheap := idle(planHost(2, planSmall, FleetServing))
+	s := planSnapshot(t, costly, cheap)
+	s.Offers.Catalog = append(s.Offers.Catalog, dear)
+	plan := PlanFleet(planPolicy(small, FleetCapacity{}), s)
+	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 }
@@ -488,6 +491,24 @@ func TestAWarmSlotResumesAReserveThatLeavesTheLargeOneStopped(t *testing.T) {
 	}
 }
 
+// A warm slot resumes a reserve only when running it costs no more than
+// buying for the slot, and never the reserve that fits the largest shape
+// when no other would: an idle fleet whose only reserve has 16 CPUs buys a
+// small host for its 1-CPU slot and keeps the reserve stopped.
+func TestAWarmSlotBuysASmallHostRatherThanResumeTheLargeReserve(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU = MarketReserve{}, nil
+	reserve := planHost(1, mustType(t, "c6a.4xlarge"), FleetStopped)
+	reserve.ReserveMode, reserve.HibernationConfigured = ptr(ReserveHibernate), true
+	s := planSnapshot(t, reserve)
+	s.Offers.Catalog = FleetCatalog()
+	plan := PlanFleet(p, s)
+	bought := actionsOf(plan, ActionBuy)
+	if len(actionsOf(plan, ActionResume, ActionRetireReserve)) > 0 || len(bought) != 1 || bought[0].Offer.Type.Name != "m7i.large" {
+		t.Fatalf("actions %+v, want an m7i.large bought for the slot and the reserve kept stopped", plan.Actions)
+	}
+}
+
 // A market without a stopped floor holds its largest shape within its
 // share of load: one running T4 keeps a stopped target of one card.
 func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
@@ -500,6 +521,25 @@ func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
 	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: h.Load}
 	if target := marketPlan(t, PlanFleet(p, s), ReserveMarket{GPU: "T4"}).StoppedTarget; target.GPUs != 1 {
 		t.Fatalf("T4 stopped target %+v, want one card", target)
+	}
+}
+
+// Recent builds keep a warm slot of their shape only in CPU markets: after
+// a GPU build its idle host leaves on the idle timeout like any other.
+func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	h := idle(planHost(1, mustType(t, "g4dn.xlarge"), FleetServing))
+	h.GPU = "T4"
+	s := planSnapshot(t, h)
+	s.Offers.Catalog = FleetCatalog()
+	s.Builds = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
+	plan := PlanFleet(p, s)
+	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
+		t.Fatalf("actions %+v, want the idle T4 host to leave", plan.Actions)
+	}
+	if mp := marketPlan(t, plan, ReserveMarket{GPU: "T4"}); !mp.WarmTarget.Empty() {
+		t.Fatalf("T4 warm target %+v, want none", mp.WarmTarget)
 	}
 }
 

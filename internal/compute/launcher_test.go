@@ -241,6 +241,33 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	}
 }
 
+// A refused reserve moves to the pool that is cheapest to keep stopped, as
+// the planner bought it, not the one cheapest to run: m7i.large runs for
+// less in us-west-1, but its hibernating root costs more there each hour
+// it stays stopped.
+func TestARefusedReserveMovesToTheCheapestPoolToKeepStopped(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	run(t, o.pool, `
+insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-east-2', 'use2-az2', 'm7i.large', 40000, now(), now()),
+       ('us-west-1', 'usw1-az3', 'm7i.large', 20000, now(), now())`)
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	usable := small.Usable(0)
+	run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
+    instance_type, market, reserve_mode)
+values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'm7i.large', 'spot', 'hibernate')`,
+		int64(usable.CPUMillis), usable.MemoryBytes)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the reserve in its next pool", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 2 || calls[1].Form.Get("SubnetId") != "subnet-east-b" {
+		t.Fatalf("%d launches, the last %q; want the reserve moved to us-east-2b", len(calls), pool(calls[len(calls)-1]))
+	}
+}
+
 // A refused pool answers at once: the next pool is the retry, not the
 // SDK's.
 // A capacity refusal cools only the zone it tried: the launch moves to the

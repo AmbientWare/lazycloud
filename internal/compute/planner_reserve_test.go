@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
 // fleetHost is an on-demand platform instance of a catalog type in
@@ -235,11 +236,11 @@ func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	publish(t, o.compute)
 	refused := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc01")
-	other := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc02")
+	other := idleHost(t, o, "c6a.2xlarge", "i-0000000000000fc02")
 	run(t, o.pool, "update hosts set hibernation_configured = true where id = any($1)", []uuid.UUID{uuid.UUID(refused), uuid.UUID(other)})
-	// The agent's refusal returned it to ready just now; it costs more, so
-	// retention considers it first.
-	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now(), hourly_micros = hourly_micros + 1 where id = $1", uuid.UUID(refused))
+	// The agent's refusal returned it to ready just now. The other host
+	// costs less, so it keeps the warm slot and the refused one leaves.
+	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now() where id = $1", uuid.UUID(refused))
 
 	if r := plan(t, o); r.Drained != 1 || r.Returned != 0 {
 		t.Fatalf("plan %+v, want the refused host drained, not asked again", r)
@@ -513,12 +514,13 @@ func TestSurplusReservesRetire(t *testing.T) {
 	for _, instance := range []string{"i-0000000000000fb01", "i-0000000000000fb02", "i-0000000000000fb03", "i-0000000000000fb04"} {
 		reserves = append(reserves, uuid.UUID(stoppedReserve(t, o, "c6a.4xlarge", instance)))
 	}
-	// One resumes for the empty warm slot, two keep the stopped target, the
-	// floor and the 8 CPU largest shape, and the fourth retires.
-	if r := plan(t, o); r.Retired != 1 || r.Resumed != 1 {
-		t.Fatalf("plan %+v, want one of four reserves retired and one resumed", r)
+	// Two keep the stopped target, the floor and the 8 CPU largest shape,
+	// and two retire. The empty warm slot buys a small host: running a
+	// 16-CPU reserve for it costs more.
+	if r := plan(t, o); r.Retired != 2 || r.Resumed != 0 || r.Requested != 1 {
+		t.Fatalf("plan %+v, want two of four reserves retired and a host bought for the slot", r)
 	}
-	for phase, want := range map[string]int{"terminating": 1, "resuming": 1, "stopped": 2} {
+	for phase, want := range map[string]int{"terminating": 2, "stopped": 2} {
 		if n := scan[int](t, o.pool, "select count(*) from hosts where id = any($1) and phase = $2", reserves, phase); n != want {
 			t.Errorf("%d reserves %s, want %d", n, phase, want)
 		}
@@ -864,18 +866,27 @@ and phase in ('requested', 'provisioning', 'booting', 'joining', 'resuming', 're
 	}
 }
 
-// pendingBuild is a pending platform build container of 4 CPU and 2 GiB in
-// workspace, the shape builds reserve.
+// buildShape is what a build container reserves at LAZYCLOUD_BUILD_CPU's
+// default of 4 CPUs.
+func buildShape() (cpuMillis, memoryBytes int64) {
+	reserved, memory, _ := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000}).BuildResources()
+	return int64(reserved), memory
+}
+
+// pendingBuild is a pending platform build container in workspace, of the
+// shape builds reserve.
 func pendingBuild(t *testing.T, o owners, workspace uuid.UUID) uuid.UUID {
 	t.Helper()
 	return buildContainer(t, o, workspace, "pending", 0)
 }
 
-// buildContainer is a build container in state whose build began age ago;
-// one not pending was placed when it began.
+// buildContainer is a build container of the shape builds reserve, in
+// state, whose build began age ago; one not pending was placed when it
+// began.
 func buildContainer(t *testing.T, o owners, workspace uuid.UUID, state string, age time.Duration) uuid.UUID {
 	t.Helper()
 	seed := uuid.NewString()
+	cpuMillis, memory := buildShape()
 	return scan[uuid.UUID](t, o.pool, `
 with image as (
     insert into images (digest, id, dockerfile, python_version, architecture)
@@ -885,10 +896,10 @@ with image as (
     select uuidv7(- $4::interval), digest, 'building', $2, now() - $4::interval, now() + interval '1 hour' from image returning id
 )
 insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, assigned_at, stop_reason, stopped_at)
-select $2, id, $3, 1, 4000, 2 << 30,
+select $2, id, $3, 1, $5, $6,
        case when $3 <> 'pending' then now() - $4::interval end,
        case when $3 = 'stopped' then 'stopped' end, case when $3 = 'stopped' then now() end
-from build returning id`, []byte(seed), workspace, state, age)
+from build returning id`, []byte(seed), workspace, state, age, cpuMillis, memory)
 }
 
 // A build after an idle spell resumes a stopped reserve that fits it, at
@@ -932,8 +943,9 @@ func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
 	buildContainer(t, o, dev, "stopped", 10*time.Minute)
 	staleMarkets(t, o)
 	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.WarmTarget.CPUMillis != 1000+4000 {
-		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the 4 CPU build", spot.WarmTarget)
+	cpuMillis, memory := buildShape()
+	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
+		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 {
 		t.Fatalf("on-demand warm target %+v, want the floor alone: builds run in the Spot market", od.WarmTarget)

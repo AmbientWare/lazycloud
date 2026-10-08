@@ -270,10 +270,12 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 	return in, nil
 }
 
-// nextPool is the best ranked pool, of those not refused and with a node
+// nextPool is the cheapest pool, of those not refused and with a node
 // image, that still holds what h was bought for: the capacity recorded at
 // purchase, which moves keep, its GPU model in its market, its reserve's
 // sleep mode, and the placement each container waiting for it asks for.
+// Pools are priced as the planner buys: a reserve by what it costs to keep
+// stopped, any other host by what it costs to serve.
 func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolInputs, cool poolCooldown) (FleetOffer, bool, error) {
 	if h.Market == nil {
 		return FleetOffer{}, false, nil
@@ -307,7 +309,11 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 	if offers = preferHealthy(offers); len(offers) == 0 {
 		return FleetOffer{}, false, nil
 	}
-	return offers[0], true, nil
+	cost := servingCost(c.policy())
+	if h.ReserveMode != nil {
+		cost = reserveCost(c.policy())
+	}
+	return slices.MinFunc(offers, func(a, b FleetOffer) int { return cmp.Compare(cost(a), cost(b)) }), true, nil
 }
 
 // movePool cools h's refused pool and moves h to next in one transaction,

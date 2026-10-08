@@ -128,13 +128,13 @@ func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
 	// 0.5 GB an hour for its one core at $0.02 a GB to and from us-east-1.
 	disk := (100*96_000 + 719) / 720
 	transfer := int64(10_000)
-	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000+transfer || o.StoppedMicros != int64(disk) || o.Hibernate {
+	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
 	// A hibernating reserve adds its 8 GiB of RAM as swap; stopped, it
 	// moves nothing.
 	disk = (108*96_000 + 719) / 720
-	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000+transfer {
+	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer {
 		t.Fatalf("reserve offer %+v", o)
 	}
 }

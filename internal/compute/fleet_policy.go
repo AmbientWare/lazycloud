@@ -177,7 +177,7 @@ type Policy struct {
 	// none.
 	GPU          map[string]MarketReserve
 	LargestShape LargestShape
-	// BuildWindow is how long a build placed in a market keeps a warm slot
+	// BuildWindow is how long a build placed in a CPU market keeps a warm slot
 	// of its shape there.
 	BuildWindow time.Duration
 	Batch       BatchWindow
