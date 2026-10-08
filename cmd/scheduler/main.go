@@ -346,10 +346,18 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, timed("fleet_plan", func(ctx context.Context) bool {
+		// When the purchases the last pass held for arriving containers may
+		// proceed. The loop's goroutine alone reads and writes it.
+		var batchAt time.Time
+		rerun := func() (time.Time, bool) { return batchAt, !batchAt.IsZero() }
+		return p.loop(ctx, cadence{every: fleetTick, rerun: rerun}, capacityWake, capacityFleetWake, timed("fleet_plan", func(ctx context.Context) bool {
 			result, err := comp.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "fleet planning pass", "error", err)
+			}
+			batchAt = time.Time{}
+			if result.BatchWait > 0 {
+				batchAt = time.Now().Add(result.BatchWait)
 			}
 			return result.Skipped
 		}))

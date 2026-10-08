@@ -9,11 +9,19 @@ import (
 // coverWidth bounds the partial covers kept after each added node.
 const coverWidth = 128
 
-// CoverItem is Count requests of one shape; each goes whole onto one node.
+// CoverItem is Count requests of one shape; each goes whole onto one node,
+// of Market when it is set. An item that Rides takes only room left on a
+// node that holds an item that does not, and a cover is complete without
+// it, so it never makes a cover larger or costlier.
 type CoverItem struct {
-	Shape FleetCapacity
-	Count int
+	Shape  FleetCapacity
+	Count  int
+	Market *Market
+	Rides  bool
 }
+
+// takes reports whether a node of offer o may hold the item.
+func (i CoverItem) takes(o FleetOffer) bool { return i.Market == nil || *i.Market == o.Market }
 
 // CoverNeed is what a set of new nodes must supply: items placed whole and
 // aggregate room beyond the items.
@@ -43,9 +51,10 @@ type CoverResult struct {
 	Supplied   FleetCapacity
 }
 
-// Complete reports whether the nodes meet the whole need.
+// Complete reports whether the nodes meet the whole need but the items
+// that ride.
 func (r CoverResult) Complete(need CoverNeed) bool {
-	return len(r.UnmetItems) == 0 && r.Supplied.Covers(need.Aggregate)
+	return !slices.ContainsFunc(r.UnmetItems, func(i CoverItem) bool { return !i.Rides }) && r.Supplied.Covers(need.Aggregate)
 }
 
 type coverState struct {
@@ -135,17 +144,19 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, lim
 }
 
 // coverCandidates are the offers that can contribute, the cheapest of each
-// usable shape and limited quota, ties to the earlier offer.
+// usable shape and limited quota, and of each market where an item asks for
+// one, ties to the earlier offer.
 func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, limits CoverLimits) []FleetOffer {
+	marketed := slices.ContainsFunc(need.Items, func(i CoverItem) bool { return i.Market != nil })
 	var out []FleetOffer
 	for _, o := range offers {
-		if need.Aggregate.Empty() && !slices.ContainsFunc(need.Items, func(i CoverItem) bool { return o.Usable.Covers(i.Shape) }) {
+		if need.Aggregate.Empty() && !slices.ContainsFunc(need.Items, func(i CoverItem) bool { return i.takes(o) && o.Usable.Covers(i.Shape) }) {
 			continue
 		}
 		_, limited := limits.VCPUs[o.Quota]
 		n := slices.IndexFunc(out, func(c FleetOffer) bool {
 			_, cLimited := limits.VCPUs[c.Quota]
-			return c.Usable == o.Usable && (!limited && !cLimited || c.Quota == o.Quota)
+			return c.Usable == o.Usable && (!marketed || c.Market == o.Market) && (!limited && !cLimited || c.Quota == o.Quota)
 		})
 		switch {
 		case n < 0:
@@ -162,12 +173,17 @@ func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order 
 	free := o.Usable
 	placed := make([]int, len(need.Items))
 	remaining := slices.Clone(s.remaining)
-	moved := false
-	for _, i := range order {
-		if n := free.fits(need.Items[i].Shape, remaining[i]); n > 0 {
-			placed[i], remaining[i] = n, remaining[i]-n
-			free = free.Minus(need.Items[i].Shape.Times(n))
-			moved = true
+	moved, holds := false, false
+	for _, rides := range []bool{false, true} {
+		for _, i := range order {
+			if item := need.Items[i]; item.Rides != rides || rides && !holds || !item.takes(o) {
+				continue
+			}
+			if n := free.fits(need.Items[i].Shape, remaining[i]); n > 0 {
+				placed[i], remaining[i] = n, remaining[i]-n
+				free = free.Minus(need.Items[i].Shape.Times(n))
+				moved, holds = true, holds || !rides
+			}
 		}
 	}
 	supplied := s.supplied.Plus(free).Lower(need.Aggregate)
@@ -203,7 +219,12 @@ func (s coverState) coverage(need CoverNeed, total int) float64 {
 func (s coverState) ratio() float64 { return float64(s.cost) / max(s.progress, 0.001) }
 
 func (s coverState) complete(need CoverNeed) bool {
-	return !slices.ContainsFunc(s.remaining, func(n int) bool { return n > 0 }) && s.supplied.Covers(need.Aggregate)
+	for i, n := range s.remaining {
+		if n > 0 && !need.Items[i].Rides {
+			return false
+		}
+	}
+	return s.supplied.Covers(need.Aggregate)
 }
 
 func (s coverState) key() string {
@@ -246,7 +267,9 @@ func (s coverState) result(candidates []FleetOffer, need CoverNeed) CoverResult 
 	}
 	for i, left := range s.remaining {
 		if left > 0 {
-			r.UnmetItems = append(r.UnmetItems, CoverItem{Shape: need.Items[i].Shape, Count: left})
+			item := need.Items[i]
+			item.Count = left
+			r.UnmetItems = append(r.UnmetItems, item)
 		}
 	}
 	return r

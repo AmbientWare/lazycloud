@@ -139,6 +139,26 @@ func TestMeteringFindsContainersThatLivedBetweenPasses(t *testing.T) {
 	}
 }
 
+// A build reserves 8 GiB to place it and bills 2 GiB of memory.
+func TestMeteringBillsABuildTwoGiBWhileItReservesEight(t *testing.T) {
+	f := newFixture(t)
+	owner := f.user()
+	ws := f.workspace(owner)
+	build := f.imageBuild(ws)
+	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	ready, stopped := base.Add(3*time.Minute), base.Add(41*time.Minute)
+	c := f.container(containerSpec{workspace: ws, host: f.host(time.Now()), build: &build, ready: ready, stopped: &stopped, cpuMillis: 4000, memoryBytes: 8 << 30})
+	f.meter()
+	var total int64
+	for _, e := range f.ledger(c) {
+		total += e.cost
+	}
+	billed := Shape{Owner: OwnerPlatformFleet, Class: ClassAuto, CPUMillis: 4000, MemoryBytes: 2 << 30}
+	if want := f.expected(ready, billed, stopped.Sub(ready)); total == 0 || abs(total-want) > 3 {
+		t.Fatalf("build billed %d, want %d, the cost of 4 CPUs and 2 GiB", total, want)
+	}
+}
+
 func abs(n int64) int64 {
 	if n < 0 {
 		return -n

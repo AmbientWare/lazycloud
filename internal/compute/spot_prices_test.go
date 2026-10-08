@@ -2,7 +2,9 @@ package compute_test
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,63 @@ func spotPriceReply(prices ...[4]string) awsReply {
 	}
 	b.WriteString(`</spotPriceHistorySet><nextToken/></DescribeSpotPriceHistoryResponse>`)
 	return ok(b.String())
+}
+
+func placementScoreReply(region string, scores map[string]int) awsReply {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<GetSpotPlacementScoresResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotPlacementScoreSet>`)
+	for _, zone := range slices.Sorted(maps.Keys(scores)) {
+		fmt.Fprintf(&b, `<item><region>%s</region><availabilityZoneId>%s</availabilityZoneId><score>%d</score></item>`,
+			esc(region), esc(zone), scores[zone])
+	}
+	b.WriteString(`</spotPlacementScoreSet></GetSpotPlacementScoresResponse>`)
+	return ok(b.String())
+}
+
+// The planner buys a pending container's Spot host in the pool that wins
+// on price and placement score: an 8-vCPU pool AWS scores 5 against a best
+// of 9 loses to one 10% dearer and wins against one 30% dearer. Shapes the
+// catalog sells fewer than three types of are not scored.
+func TestPlacementScoresRankAScarcePoolBelowASlightlyDearerOne(t *testing.T) {
+	for _, c := range []struct {
+		dearPrice string
+		want      string
+	}{{"0.110000", "use2-az2"}, {"0.130000", "use2-az1"}} {
+		o, emulator, _ := launchFleet(t, compute.Fleet{})
+		prices := map[string]string{"use2-az1": "0.100000", "use2-az2": c.dearPrice}
+		emulator.on("DescribeSpotPriceHistory", func(call awsCall) awsReply {
+			zone := call.Form.Get("AvailabilityZoneId")
+			if price, ok := prices[zone]; ok {
+				return spotPriceReply([4]string{"c6a.2xlarge", price, "2026-10-07T12:00:00Z", zone})
+			}
+			return spotPriceReply()
+		})
+		emulator.on("GetSpotPlacementScores", func(call awsCall) awsReply {
+			region, types := call.Form.Get("RegionName.1"), list(call.Form, "InstanceType")
+			if call.Form.Get("SingleAvailabilityZone") != "true" || call.Form.Get("TargetCapacity") != "1" || region == "" ||
+				call.Form.Get("RegionName.2") != "" || len(types) < 3 {
+				t.Errorf("GetSpotPlacementScores %v, want one instance of a shape of three types or more in one zone of one region", call.Form)
+			}
+			if region == "us-east-2" && slices.Contains(types, "c6a.2xlarge") {
+				return placementScoreReply(region, map[string]int{"use2-az1": 5, "use2-az2": 9})
+			}
+			return placementScoreReply(region, nil)
+		})
+		if _, err := o.compute.RefreshSpotPrices(t.Context(), discard()); err != nil {
+			t.Fatal(err)
+		}
+		alice := newUser(t, o.pool, "alice@example.com")
+		dev := newWorkspace(t, o.pool, "dev", alice)
+		container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 4000, 8*gib)
+		plan(t, o)
+		got := scan[string](t, o.pool, `
+select h.instance_type || ' ' || h.market || ' ' || h.availability_zone_id
+from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1`, container)
+		if want := "c6a.2xlarge spot " + c.want; got != want {
+			t.Errorf("use2-az2 at %s: bought %s, want %s", c.dearPrice, got, want)
+		}
+	}
 }
 
 func TestSpotPricesKeepTheLatestQuotePerZoneAndAFailedRegionKeepsItsPrices(t *testing.T) {
@@ -42,6 +101,7 @@ func TestSpotPricesKeepTheLatestQuotePerZoneAndAFailedRegionKeepsItsPrices(t *te
 		}
 		return ec2Error(http.StatusServiceUnavailable, "Unavailable", "The service is unavailable")
 	})
+	emulator.on("GetSpotPlacementScores", func(call awsCall) awsReply { return placementScoreReply(call.Form.Get("RegionName.1"), nil) })
 
 	stored, err := o.compute.RefreshSpotPrices(t.Context(), discard())
 	if stored != 3 || err == nil || !strings.Contains(err.Error(), "us-west-1") {

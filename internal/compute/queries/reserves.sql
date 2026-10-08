@@ -13,7 +13,7 @@ where h.id in (
     limit @batch_size
     for update skip locked
 )
-returning h.id, h.phase, h.region, h.instance_type, h.market, h.instance_id, h.spot_request_id, h.reserve_mode,
+returning h.id, h.phase, h.region, h.availability_zone_id, h.instance_type, h.market, h.instance_id, h.spot_request_id, h.reserve_mode,
           h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at, h.launch_lease_until;
 
 -- name: RecheckProviderActions :exec

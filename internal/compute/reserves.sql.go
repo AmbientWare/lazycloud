@@ -24,7 +24,7 @@ where h.id in (
     limit $2
     for update skip locked
 )
-returning h.id, h.phase, h.region, h.instance_type, h.market, h.instance_id, h.spot_request_id, h.reserve_mode,
+returning h.id, h.phase, h.region, h.availability_zone_id, h.instance_type, h.market, h.instance_id, h.spot_request_id, h.reserve_mode,
           h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at, h.launch_lease_until
 `
 
@@ -37,6 +37,7 @@ type ClaimProviderActionsRow struct {
 	ID                    uuid.UUID
 	Phase                 string
 	Region                string
+	AvailabilityZoneID    string
 	InstanceType          string
 	Market                *string
 	InstanceID            *string
@@ -65,6 +66,7 @@ func (q *Queries) ClaimProviderActions(ctx context.Context, arg ClaimProviderAct
 			&i.ID,
 			&i.Phase,
 			&i.Region,
+			&i.AvailabilityZoneID,
 			&i.InstanceType,
 			&i.Market,
 			&i.InstanceID,

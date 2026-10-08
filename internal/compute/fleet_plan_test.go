@@ -83,6 +83,17 @@ func boughtTypes(plan FleetPlan) []string {
 	return names
 }
 
+// boughtForWork are the types bought for pending containers.
+func boughtForWork(plan FleetPlan) []string {
+	var names []string
+	for _, a := range actionsOf(plan, ActionBuy) {
+		if len(a.Containers) > 0 {
+			names = append(names, a.Offer.Type.Name)
+		}
+	}
+	return names
+}
+
 func hostsOf(actions []FleetAction) []HostID {
 	var ids []HostID
 	for _, a := range actions {
@@ -234,7 +245,7 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 
 	s.HostRoom = 0
 	plan = PlanFleet(p, s)
-	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != ReasonDemand {
+	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != ReasonFleetLimit {
 		t.Fatalf("fleet limit: %+v %+v", plan.Actions, w)
 	}
 }
@@ -296,7 +307,7 @@ func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *t
 		g, _ := pendingOne(need, nil)
 		s.Pending = []DemandGroup{g}
 		plan := PlanFleet(p, s)
-		if got := boughtTypes(plan); !slices.Equal(got, []string{c.want}) {
+		if got := boughtForWork(plan); !slices.Equal(got, []string{c.want}) {
 			t.Errorf("%s: bought %v", c.name, got)
 		}
 	}
@@ -386,11 +397,14 @@ func TestPlanCountsRoomPendingWorkTakesAgainstTheWarmTarget(t *testing.T) {
 }
 
 func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
-	cheap := idle(planHost(1, planSmall, FleetServing))
-	costly := idle(planHost(2, planSmall, FleetServing))
-	costly.HourlyMicros = ptr(int64(500_000))
-	plan := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, cheap, costly))
-	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{2}}) || plan.Actions[0].Kind != ActionDrain {
+	dear := planSmall
+	dear.Name, dear.prices = "m.dear", [4]int64{500_000, 500_000, 500_000, 500_000}
+	costly := idle(planHost(1, dear, FleetServing))
+	cheap := idle(planHost(2, planSmall, FleetServing))
+	s := planSnapshot(t, costly, cheap)
+	s.Offers.Catalog = append(s.Offers.Catalog, dear)
+	plan := PlanFleet(planPolicy(small, FleetCapacity{}), s)
+	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 }
@@ -457,5 +471,156 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 	s := planSnapshot(t, idle(planHost(1, planSmall, FleetServing)), planHost(2, planSmall, FleetStopped))
 	if plan := PlanFleet(p, s); !slices.Equal(hostsOf(plan.Actions), []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
 		t.Fatalf("reserve already held: %+v", plan.Actions)
+	}
+}
+
+// A warm slot that resumes a reserve on its own takes one whose absence
+// leaves a reserve that fits the largest shape, though it is not the
+// smallest.
+func TestAWarmSlotResumesAReserveThatLeavesTheLargeOneStopped(t *testing.T) {
+	narrow := CatalogType{Name: "narrow", Topology: twoPerCore(8), MemoryBytes: 32 * gib, prices: [4]int64{90_000, 90_000, 90_000, 90_000}}
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
+	p.LargestShape.Default = cpuGiB(8000, 8)
+	large := planHost(1, planSmall, FleetStopped)
+	s := planSnapshot(t, large, planHost(2, narrow, FleetStopped))
+	s.Offers.Catalog = append(s.Offers.Catalog, narrow)
+	plan := PlanFleet(p, s)
+	if got := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(got, []HostID{{2}}) {
+		t.Fatalf("resumed %v, want the reserve that leaves the large one stopped: %+v", got, plan.Actions)
+	}
+}
+
+// A warm slot resumes a reserve only when running it costs no more than
+// buying for the slot, and never the reserve that fits the largest shape
+// when no other would: an idle fleet whose only reserve has 16 CPUs buys a
+// small host for its 1-CPU slot and keeps the reserve stopped.
+func TestAWarmSlotBuysASmallHostRatherThanResumeTheLargeReserve(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU = MarketReserve{}, nil
+	reserve := planHost(1, mustType(t, "c6a.4xlarge"), FleetStopped)
+	reserve.ReserveMode, reserve.HibernationConfigured = ptr(ReserveHibernate), true
+	s := planSnapshot(t, reserve)
+	s.Offers.Catalog = FleetCatalog()
+	plan := PlanFleet(p, s)
+	bought := actionsOf(plan, ActionBuy)
+	if len(actionsOf(plan, ActionResume, ActionRetireReserve)) > 0 || len(bought) != 1 || bought[0].Offer.Type.Name != "m7i.large" {
+		t.Fatalf("actions %+v, want an m7i.large bought for the slot and the reserve kept stopped", plan.Actions)
+	}
+}
+
+// A market without a stopped floor holds its largest shape within its
+// share of load: one running T4 keeps a stopped target of one card.
+func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	h := planHost(1, mustType(t, "g4dn.xlarge"), FleetServing)
+	h.GPU, h.Load, h.Containers = "T4", FleetCapacity{CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}, 1
+	s := planSnapshot(t, h)
+	s.Offers.Catalog = FleetCatalog()
+	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: h.Load}
+	if target := marketPlan(t, PlanFleet(p, s), ReserveMarket{GPU: "T4"}).StoppedTarget; target.GPUs != 1 {
+		t.Fatalf("T4 stopped target %+v, want one card", target)
+	}
+}
+
+// Recent builds keep a warm slot of their shape only in CPU markets: after
+// a GPU build its idle host leaves on the idle timeout like any other.
+func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	h := idle(planHost(1, mustType(t, "g4dn.xlarge"), FleetServing))
+	h.GPU = "T4"
+	s := planSnapshot(t, h)
+	s.Offers.Catalog = FleetCatalog()
+	s.Builds = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
+	plan := PlanFleet(p, s)
+	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
+		t.Fatalf("actions %+v, want the idle T4 host to leave", plan.Actions)
+	}
+	if mp := marketPlan(t, plan, ReserveMarket{GPU: "T4"}); !mp.WarmTarget.Empty() {
+		t.Fatalf("T4 warm target %+v, want none", mp.WarmTarget)
+	}
+}
+
+// A reserve shortfall held for a host that may return names the hold, not
+// an offer exclusion; with no host that could return it is bought at once.
+func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {
+	back := planHost(1, planSmall, FleetServing)
+	back.PhaseAt, back.Load, back.Containers = offerNow, cpuGiB(1000, 1), 1
+	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, back))
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonReturning || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+		t.Fatalf("a host may return: reason %q, actions %+v", mp.Reason, plan.Actions)
+	}
+	plan = PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t))
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonNone || len(actionsOf(plan, ActionBuyReserve)) != 1 {
+		t.Fatalf("no host could return: reason %q, actions %+v", mp.Reason, plan.Actions)
+	}
+}
+
+// A warm slot no offer covers names what keeps the offers out: a cooldown,
+// a vCPU quota, the purchase margin, or none at all.
+func TestAnUncoveredSlotNamesTheExclusion(t *testing.T) {
+	for _, c := range []struct {
+		want    MarketReason
+		exclude func(*Policy, *OfferInputs)
+	}{
+		{ReasonCooldown, func(_ *Policy, in *OfferInputs) {
+			for _, typ := range in.Catalog {
+				in.Cooldowns = append(in.Cooldowns, OfferCooldown{Region: "us-east-2", InstanceType: typ.Name, Market: MarketOnDemand, Until: offerNow.Add(time.Hour)})
+			}
+		}},
+		{ReasonQuota, func(_ *Policy, in *OfferInputs) {
+			in.Quotas = []VCPUQuota{{Key: QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketOnDemand}}}
+		}},
+		{ReasonMargin, func(p *Policy, _ *OfferInputs) { p.MarginPercent = 100 }},
+		{ReasonNoOffer, func(_ *Policy, in *OfferInputs) { in.Networks = nil }},
+	} {
+		p := planPolicy(small, FleetCapacity{})
+		s := planSnapshot(t)
+		c.exclude(&p, &s.Offers)
+		plan := PlanFleet(p, s)
+		if mp := marketPlan(t, plan, onDemand); mp.Reason != c.want || len(plan.Actions) > 0 {
+			t.Errorf("want %q: reason %q, actions %+v", c.want, mp.Reason, plan.Actions)
+		}
+	}
+}
+
+// While containers keep arriving a pass buys nothing and says how long the
+// batch stays open, then buys once it closes. A container a stopped reserve
+// fits resumes it, and one a starting host fits waits for that host, at
+// once.
+func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
+	need := Requirement{CPUMillis: 4000, MemoryBytes: 4 * gib}
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	batching := func(hosts ...FleetHost) (FleetSnapshot, uuid.UUID) {
+		s := planSnapshot(t, hosts...)
+		s.BatchWait = 800 * time.Millisecond
+		g, id := pendingOne(need, nil)
+		s.Pending = []DemandGroup{g}
+		return s, id
+	}
+
+	s, id := batching()
+	plan := PlanFleet(p, s)
+	if len(plan.Actions) > 0 || plan.BatchWait != s.BatchWait || waitOf(t, plan, id).Wait != nil ||
+		marketPlan(t, plan, onDemand).Reason != ReasonBatch {
+		t.Fatalf("while arriving: actions %+v, batch %s, wait %+v, reason %q", plan.Actions, plan.BatchWait, waitOf(t, plan, id),
+			marketPlan(t, plan, onDemand).Reason)
+	}
+	s.BatchWait = 0
+	if plan := PlanFleet(p, s); len(actionsOf(plan, ActionBuy)) != 1 || plan.BatchWait != 0 {
+		t.Fatalf("once settled: actions %+v, batch %s", plan.Actions, plan.BatchWait)
+	}
+
+	s, id = batching(planHost(1, planSmall, FleetStopped))
+	if plan := PlanFleet(p, s); len(actionsOf(plan, ActionResume)) != 1 || len(plan.Actions) != 1 || plan.BatchWait != 0 ||
+		*waitOf(t, plan, id).Host != (HostID{1}) {
+		t.Fatalf("a fitting reserve: actions %+v, batch %s", plan.Actions, plan.BatchWait)
+	}
+
+	s, id = batching(planHost(1, planSmall, FleetStarting))
+	if plan := PlanFleet(p, s); len(plan.Actions) > 0 || plan.BatchWait != 0 || *waitOf(t, plan, id).Host != (HostID{1}) {
+		t.Fatalf("a starting host: actions %+v, batch %s, wait %+v", plan.Actions, plan.BatchWait, waitOf(t, plan, id))
 	}
 }

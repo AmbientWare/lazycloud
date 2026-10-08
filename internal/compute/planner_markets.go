@@ -19,7 +19,7 @@ type PublishedMarket struct {
 	StoppedTarget FleetCapacity `json:"stopped_target"`
 	ReserveReady  FleetCapacity `json:"reserve_ready"`
 	Reason        MarketReason  `json:"reason"`
-	// FloorShortSince is when the stopped floor went short; the next pass
+	// FloorShortSince is when the stopped target went short; the next pass
 	// reads it back.
 	FloorShortSince *time.Time           `json:"floor_short_since,omitempty"`
 	States          []FleetStateCapacity `json:"states"`

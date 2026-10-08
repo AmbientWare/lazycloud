@@ -144,6 +144,8 @@ func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, IdleTimeout: 5 * time.Minute, Networks: map[string]Network{
 		"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3"),
 	}}})
+	costExec(t, pool, `insert into images (digest, id, dockerfile, python_version, architecture)
+values (sha256('cost'), 'img_' || left(encode(sha256('cost'), 'hex'), 24), 'FROM x', '3.12', 'amd64')`)
 	// Twenty functions, and serving hosts with four live containers each.
 	costExec(t, pool, `
 with ws as (insert into workspaces (name) select 'ws-' || n from generate_series(1, 20) n returning id),
@@ -190,6 +192,23 @@ select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, 'stoppe
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
 join apps a on a.id = w.app_id`, toHistory-history)
+		// Builds grow with history too: one in ten finished two days ago,
+		// and ten more within the hour, each with a placed build container.
+		costExec(t, pool, `
+with builds as (
+    insert into image_builds (id, image_digest, state, workspace_id, created_at, deadline_at, finished_at)
+    select uuidv7(- (case when n <= $1 then interval '2 days' else interval '10 minutes' end)), i.digest, 'succeeded', w.id,
+           now() - interval '1 hour', now(), now()
+    from generate_series(1, $1 + 10) n
+    cross join (select digest from images limit 1) i
+    cross join lateral (select id from workspaces order by id offset n % 20 limit 1) w
+    returning id, workspace_id
+)
+insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, stop_reason, assigned_at, ready_at, stopped_at)
+select workspace_id, id, 'stopped', 1, 4000, 2::bigint << 30, 'stopped', now() - interval '1 hour', now() - interval '1 hour', now()
+from builds`, (toHistory-history)/10)
+		// The pass measures a settled backlog, not one still arriving.
+		costExec(t, pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
 		costExec(t, pool, "analyze")
 		pending, history = toPending, toHistory
 	}
@@ -201,7 +220,8 @@ join apps a on a.id = w.app_id`, toHistory-history)
 	}{
 		{"hosts", plannerHosts, nil},
 		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
-		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch)}},
+		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), p.BuildWindow.Seconds()}},
+		{"arrival batches", batchWaits, []any{p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds(), int32(demandBatch), (p.Batch.Max + p.Batch.Quiet).Seconds()}},
 		{"cooldowns", plannerCooldowns, []any{p.RegionFailureWindow.Seconds()}},
 		{"markets", fleetMarkets, nil},
 	}

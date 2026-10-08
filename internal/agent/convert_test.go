@@ -32,6 +32,7 @@ import (
 func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	e := newEnv(t)
 	backend := startTestRegistry(t)
+	base := buildBase(t, backend)
 	var blobReads atomic.Int32
 	target, err := url.Parse("http://" + backend)
 	if err != nil {
@@ -104,7 +105,7 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	e.startAgent()
 	session := e.session()
 
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\nhead -c 3000000 /dev/urandom > /proof\nLAZYCLOUD_STEP\n")
+	start := buildCommand(registry, "FROM "+base+"\nRUN <<'LAZYCLOUD_STEP'\nhead -c 3000000 /dev/urandom > /proof\nLAZYCLOUD_STEP\n")
 	start.GetStart().GetBuild().CacheRef = ""
 	container := start.GetStart().GetContainerId()
 	// The build reports once per conversion or upload that ends between

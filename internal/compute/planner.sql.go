@@ -13,12 +13,96 @@ import (
 	"github.com/google/uuid"
 )
 
+const batchWaits = `-- name: BatchWaits :many
+with sample as (
+    select c.created_at, c.workspace_id, c.release_id, c.image_build_id, c.state, c.capacity_host_id, c.billing_owner
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => $4::float8)))
+    order by c.id desc
+    limit $3
+), recent as (
+    select s.created_at, ws.connection_id
+    from sample s
+    left join image_builds ib on ib.id = s.image_build_id
+    left join workspaces ws on ws.id = s.workspace_id and ib.mirror is not true
+    left join releases r on r.id = s.release_id
+    where (s.state = 'pending' or s.capacity_host_id is not null) and s.billing_owner <> 'self_hosted'
+      and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
+), arrivals as (
+    select connection_id, created_at,
+           coalesce(created_at - lag(created_at) over (partition by connection_id order by created_at),
+                    created_at - (now() - make_interval(secs => $4::float8)))
+               >= make_interval(secs => $1::float8) as opens
+    from recent
+), batch as (
+    select connection_id, max(created_at) as newest, max(created_at) filter (where opens) as began
+    from arrivals
+    group by connection_id
+)
+select connection_id,
+       greatest(extract(epoch from least(newest + make_interval(secs => $1::float8),
+                                         began + make_interval(secs => $2::float8)) - now()), 0)::float8
+           as wait_seconds
+from batch
+where began is not null and (select count(*) from sample) < $3::int
+order by connection_id
+`
+
+type BatchWaitsParams struct {
+	QuietSeconds    float64
+	MaxSeconds      float64
+	SampleSize      int32
+	LookbackSeconds float64
+}
+
+type BatchWaitsRow struct {
+	ConnectionID *uuid.UUID
+	WaitSeconds  float64
+}
+
+// How long, in seconds, each owner's arrival batch stays open: until quiet
+// passes after its newest container, and at most max_seconds after its
+// first. An arrival is a container of the lookback, max and quiet seconds
+// that may need a purchase: still pending, or placed on a host bought for
+// it. It belongs to its workspace's connection, a mirror build to the
+// platform (a null connection), as pending demand does; work pinned to a
+// joined machine buys nothing. A batch runs back from its newest arrival
+// through arrivals less than quiet apart; one that may have begun before
+// the lookback, or a sample that fills, holds nothing. The sample follows
+// the primary key, so it reads at most sample_size rows whatever the
+// history or backlog.
+func (q *Queries) BatchWaits(ctx context.Context, arg BatchWaitsParams) ([]BatchWaitsRow, error) {
+	rows, err := q.db.Query(ctx, batchWaits,
+		arg.QuietSeconds,
+		arg.MaxSeconds,
+		arg.SampleSize,
+		arg.LookbackSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BatchWaitsRow
+	for rows.Next() {
+		var i BatchWaitsRow
+		if err := rows.Scan(&i.ConnectionID, &i.WaitSeconds); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const coolOffers = `-- name: CoolOffers :exec
 insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
 select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => $1::float8),
        'the host bought for a container could not take it'
 from jsonb_to_recordset($2::jsonb) as v(connection_key text, region text, instance_type text, market text)
-on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason
+on conflict (connection_key, region, availability_zone_id, instance_type, market)
+do update set until = excluded.until, reason = excluded.reason
 `
 
 type CoolOffersParams struct {
@@ -338,19 +422,20 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 }
 
 const plannerCooldowns = `-- name: PlannerCooldowns :many
-select connection_key, region, instance_type, market, until, refused_at
+select connection_key, region, availability_zone_id, instance_type, market, until, refused_at
 from capacity_cooldowns
 where until > now() or refused_at > now() - make_interval(secs => $1::float8)
-order by connection_key, region, instance_type, market
+order by connection_key, region, availability_zone_id, instance_type, market
 `
 
 type PlannerCooldownsRow struct {
-	ConnectionKey string
-	Region        string
-	InstanceType  string
-	Market        string
-	Until         time.Time
-	RefusedAt     *time.Time
+	ConnectionKey      string
+	Region             string
+	AvailabilityZoneID string
+	InstanceType       string
+	Market             string
+	Until              time.Time
+	RefusedAt          *time.Time
 }
 
 // Offers cooling now, and refusals recent enough to cool their region. A
@@ -367,6 +452,7 @@ func (q *Queries) PlannerCooldowns(ctx context.Context, windowSeconds float64) (
 		if err := rows.Scan(
 			&i.ConnectionKey,
 			&i.Region,
+			&i.AvailabilityZoneID,
 			&i.InstanceType,
 			&i.Market,
 			&i.Until,
@@ -498,21 +584,34 @@ with recent as (
     where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
     order by c.id desc
     limit $2
+), builds as (
+    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
+    from image_builds b
+    join containers c on c.image_build_id = b.id
+    where b.id > (select uuidv7(- make_interval(secs => $3::float8)))
+      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null
 )
-select (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select false::bool as build, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
-group by 1, 2
-order by 1, 2
+group by 2, 3
+union all
+select true, (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
+from builds
+group by 2, 3
+order by 1, 2, 3
 `
 
 type RecentShapesParams struct {
-	WindowSeconds float64
-	SampleSize    int32
+	WindowSeconds      float64
+	SampleSize         int32
+	BuildWindowSeconds float64
 }
 
 type RecentShapesRow struct {
+	Build       bool
 	Preemptible bool
 	GpuType     string
 	CpuMillis   int64
@@ -521,12 +620,14 @@ type RecentShapesRow struct {
 }
 
 // The largest CPU, memory and GPUs placed platform containers reserved, by
-// purchase market and GPU model, among the newest containers created within
-// the window, up to the sample. The sample follows the primary key, so it
-// reads at most sample_size rows whatever the history; the subquery makes
-// its bound a constant the index can use.
+// purchase market and GPU model: among the newest containers created within
+// the window, up to the sample, and, marked build, among the containers of
+// builds created within the build window. Both reads follow primary keys,
+// so they read at most sample_size containers and the window's builds
+// whatever the history; the subqueries make their bounds constants the
+// indexes can use.
 func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
-	rows, err := q.db.Query(ctx, recentShapes, arg.WindowSeconds, arg.SampleSize)
+	rows, err := q.db.Query(ctx, recentShapes, arg.WindowSeconds, arg.SampleSize, arg.BuildWindowSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -535,6 +636,7 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 	for rows.Next() {
 		var i RecentShapesRow
 		if err := rows.Scan(
+			&i.Build,
 			&i.Preemptible,
 			&i.GpuType,
 			&i.CpuMillis,
