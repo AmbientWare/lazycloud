@@ -69,13 +69,6 @@ func (h FleetHost) reserve() bool {
 	return h.resumable() || h.State == FleetPreparing || h.State == FleetStopping
 }
 
-func (h FleetHost) hourly() int64 {
-	if h.HourlyMicros == nil {
-		return 0
-	}
-	return *h.HourlyMicros
-}
-
 // capacity is the host as placement sees it.
 func (h FleetHost) capacity() HostCapacity {
 	free := h.free()
@@ -239,7 +232,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{}, batched: map[ReserveMarket]bool{},
 		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, byMarket: map[ReserveMarket]*marketView{},
 		claimed: map[HostID]bool{}, holding: map[HostID][]FleetCapacity{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
-		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog),
+		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), scores: placementRanges(p, s.Offers),
 	}
 	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
 	items := ps.pendingItems()
@@ -279,6 +272,9 @@ type pass struct {
 	// quotaUsed is what running hosts and this pass's starts count
 	// against each vCPU quota.
 	quotaUsed map[QuotaKey]int64
+	// scores are the placement score ranges that price Spot hosts as
+	// offers.
+	scores map[string]scoreRange
 }
 
 type plannedHost struct {
@@ -597,7 +593,7 @@ func (ps *pass) cover(items []coverItem) {
 	slices.SortStableFunc(ready, func(a, b bin) int {
 		idleA, idleB := a.host.Containers == 0, b.host.Containers == 0
 		if idleA && idleB {
-			return retention(a.host, b.host)
+			return ps.retention(a.host, b.host)
 		}
 		return boolOrder(idleA, idleB)
 	})
@@ -761,12 +757,13 @@ func (ps *pass) resumeEach(items []coverItem, work bool) []coverItem {
 // bestReserve is the ready reserve to resume for items, and the items, by
 // index, it takes first fit, pending containers before slots: one of its
 // first item's market first, then the one that takes the most pending
-// containers; for slots alone, one whose absence leaves a reserve that fits
-// the largest shape; then one that takes every pending container and every
-// slot of its market, so one resume does; then the smallest, the cheapest,
-// and the one that takes the most slots.
+// containers, then one that takes every pending container and every slot
+// of its market, so one resume does; then the smallest, the cheapest, and
+// the one that takes the most slots.
 // Spot work takes an on-demand reserve only while it is lendable. Without
-// work, only slots of markets where no work waits take a reserve.
+// work, only slots of markets where no work waits take a reserve, and only
+// one whose absence leaves a reserve that fits the largest shape and that
+// costs no more to serve than buying for the slots it takes.
 func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 	var best *FleetHost
 	var bestTaken []int
@@ -779,7 +776,6 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 		}
 		return true
 	}
-	keepsLarge := func(h *FleetHost) bool { return work || ps.leavesLarge(*h) }
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
 		if !ps.ready(*h) {
@@ -805,12 +801,12 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 				count[kind]++
 			}
 		}
-		if len(taken) == 0 || work && count[0] == 0 {
+		if len(taken) == 0 || work && count[0] == 0 || !work && (!ps.leavesLarge(*h) || !ps.resumePays(h, items, taken)) {
 			continue
 		}
 		if best == nil || cmp.Or(boolOrder(h.market() != items[taken[0]].market, best.market() != items[bestTaken[0]].market),
-			cmp.Compare(bestCount[0], count[0]), boolOrder(!keepsLarge(h), !keepsLarge(best)),
-			boolOrder(!all(h, taken), !all(best, bestTaken)), shapeOrder(h.Usable, best.Usable), cheaper(h, best),
+			cmp.Compare(bestCount[0], count[0]),
+			boolOrder(!all(h, taken), !all(best, bestTaken)), shapeOrder(h.Usable, best.Usable), ps.cheaper(h, best),
 			cmp.Compare(bestCount[1], count[1])) < 0 {
 			best, bestTaken, bestCount = h, taken, count
 		}
@@ -831,17 +827,77 @@ func (ps *pass) leavesLarge(h FleetHost) bool {
 	return !h.Usable.Covers(v.largest) || ps.holdsLargest(v, h.ID)
 }
 
-// cheaper orders hosts by known hourly cost, unknown last.
-func cheaper(a, b *FleetHost) int {
-	return cmp.Or(boolOrder(a.HourlyMicros == nil, b.HourlyMicros == nil), cmp.Compare(a.hourly(), b.hourly()),
-		strings.Compare(a.ID.String(), b.ID.String()))
+// cheaper orders hosts by what they cost to serve, unknown last.
+func (ps *pass) cheaper(a, b *FleetHost) int {
+	costA, knownA := ps.hostCost(*a)
+	costB, knownB := ps.hostCost(*b)
+	return cmp.Or(boolOrder(!knownA, !knownB), cmp.Compare(costA, costB), strings.Compare(a.ID.String(), b.ID.String()))
 }
 
 // retention orders idle hosts by what keeping them costs, cheapest and
-// smallest first.
-func retention(a, b *FleetHost) int {
-	return cmp.Or(cmp.Compare(a.hourly(), b.hourly()), cmp.Compare(a.Usable.CPUMillis, b.Usable.CPUMillis),
+// smallest first, unknown last.
+func (ps *pass) retention(a, b *FleetHost) int {
+	costA, knownA := ps.hostCost(*a)
+	costB, knownB := ps.hostCost(*b)
+	return cmp.Or(boolOrder(!knownA, !knownB), cmp.Compare(costA, costB), cmp.Compare(a.Usable.CPUMillis, b.Usable.CPUMillis),
 		cmp.Compare(a.Usable.MemoryBytes, b.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
+}
+
+// hostCost is what host h costs to serve over the cost horizon, ranked
+// as servingCost ranks a purchase from the current offer inputs: its pool's
+// fresh Spot quote or its on-demand price, its root and public address,
+// its expected transfer and its placement penalty. Without a current price
+// it is the price h recorded with its transfer; false when neither is
+// known.
+func (ps *pass) hostCost(h FleetHost) (int64, bool) {
+	t, catalogued := ps.typeNamed(h.InstanceType)
+	var o FleetOffer
+	if catalogued {
+		o.TransferMicros = transferMicros(h.Region, t)
+	}
+	compute, priced := t.OnDemandMicros(h.Region)
+	if h.Market == MarketSpot {
+		q, quoted := spotQuote(ps.p, ps.s.Offers.Spot, ps.s.Now, h.Region, h.ZoneID, h.InstanceType)
+		compute, priced = q.HourlyMicros, quoted
+		o.PlacementPenalty = placementPenalty(ps.scores, placementShape(t), q.PlacementScore)
+	}
+	switch {
+	case catalogued && priced:
+		o.HourlyMicros = compute + rootDiskMicros(h.Region, t.RootGiB(h.HibernationConfigured), t.PricedMiBps(false)) + ratesIn(h.Region).ipv4Hour
+	case h.HourlyMicros != nil:
+		o.HourlyMicros, o.PlacementPenalty = *h.HourlyMicros, 0
+	default:
+		return 0, false
+	}
+	return servingCost(ps.p)(o), true
+}
+
+// resumePays reports whether resuming reserve h for the slots it takes, by
+// index into items, costs no more over the cost horizon than the cheapest
+// purchase that covers them. The resume is priced without the root it pays
+// stopped as well, the purchase with what it runs while it provisions.
+// With no purchase that covers them, a resume is the only way.
+func (ps *pass) resumePays(h *FleetHost, items []coverItem, taken []int) bool {
+	var need CoverNeed
+	for _, n := range taken {
+		shape := reservedShape(items[n].need)
+		if i := slices.IndexFunc(need.Items, func(c CoverItem) bool { return c.Shape == shape }); i >= 0 {
+			need.Items[i].Count++
+			continue
+		}
+		need.Items = append(need.Items, CoverItem{Shape: shape, Count: 1})
+	}
+	m := h.market()
+	result := Cover(preferHealthy(ps.marketOffers(m, false)), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
+	if !result.Complete(need) {
+		return true
+	}
+	var purchase int64
+	for _, node := range result.Nodes {
+		purchase += servingCost(ps.p)(node.Offer) + node.Offer.HourlyMicros*int64(ps.p.Provision/time.Second)
+	}
+	cost, known := ps.hostCost(*h)
+	return known && cost-ps.stoppedMicros(*h)*int64(ps.p.CostHorizon/time.Second) <= purchase
 }
 
 // lendable reports whether Spot work may resume on-demand reserve h: the
@@ -1067,7 +1123,7 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 		_, idle := ps.plan.IdleSince[h.ID]
 		return serving(h) && idle && !h.Protected && len(ps.holding[h.ID]) == 0
 	})
-	slices.SortStableFunc(out, retention)
+	slices.SortStableFunc(out, ps.retention)
 	return out
 }
 
@@ -1306,14 +1362,15 @@ func (ps *pass) rightsize(v *marketView) {
 // are, exceeds what it costs while it provisions.
 func (ps *pass) replacement(v *marketView, h FleetHost) (*FleetOffer, int64) {
 	need := totalOf(ps.holding[h.ID], func(c FleetCapacity) FleetCapacity { return c })
-	if !ps.idleLong(h) || h.HourlyMicros == nil || need.Empty() {
+	cost, known := ps.hostCost(h)
+	if !ps.idleLong(h) || !known || need.Empty() {
 		return nil, 0
 	}
 	var best *FleetOffer
 	var bestPayback int64
-	horizon, provision, serving := int64(ps.p.CostHorizon/time.Second), int64(ps.p.Provision/time.Second), servingCost(ps.p)
+	provision, serving := int64(ps.p.Provision/time.Second), servingCost(ps.p)
 	for _, o := range ps.marketOffers(v.m, false) {
-		payback := *h.HourlyMicros*horizon - serving(o) - o.HourlyMicros*provision
+		payback := cost - serving(o) - o.HourlyMicros*provision
 		if !o.CoolingRegion && o.Type.Name != h.InstanceType && o.Usable.Covers(need) && payback > bestPayback {
 			best, bestPayback = &o, payback
 		}

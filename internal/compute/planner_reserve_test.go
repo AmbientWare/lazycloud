@@ -235,11 +235,11 @@ func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	publish(t, o.compute)
 	refused := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc01")
-	other := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc02")
+	other := idleHost(t, o, "c6a.2xlarge", "i-0000000000000fc02")
 	run(t, o.pool, "update hosts set hibernation_configured = true where id = any($1)", []uuid.UUID{uuid.UUID(refused), uuid.UUID(other)})
-	// The agent's refusal returned it to ready just now; it costs more, so
-	// retention considers it first.
-	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now(), hourly_micros = hourly_micros + 1 where id = $1", uuid.UUID(refused))
+	// The agent's refusal returned it to ready just now. The other host
+	// costs less, so it keeps the warm slot and the refused one leaves.
+	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now() where id = $1", uuid.UUID(refused))
 
 	if r := plan(t, o); r.Drained != 1 || r.Returned != 0 {
 		t.Fatalf("plan %+v, want the refused host drained, not asked again", r)
@@ -513,12 +513,13 @@ func TestSurplusReservesRetire(t *testing.T) {
 	for _, instance := range []string{"i-0000000000000fb01", "i-0000000000000fb02", "i-0000000000000fb03", "i-0000000000000fb04"} {
 		reserves = append(reserves, uuid.UUID(stoppedReserve(t, o, "c6a.4xlarge", instance)))
 	}
-	// One resumes for the empty warm slot, two keep the stopped target, the
-	// floor and the 8 CPU largest shape, and the fourth retires.
-	if r := plan(t, o); r.Retired != 1 || r.Resumed != 1 {
-		t.Fatalf("plan %+v, want one of four reserves retired and one resumed", r)
+	// Two keep the stopped target, the floor and the 8 CPU largest shape,
+	// and two retire. The empty warm slot buys a small host: running a
+	// 16-CPU reserve for it costs more.
+	if r := plan(t, o); r.Retired != 2 || r.Resumed != 0 || r.Requested != 1 {
+		t.Fatalf("plan %+v, want two of four reserves retired and a host bought for the slot", r)
 	}
-	for phase, want := range map[string]int{"terminating": 1, "resuming": 1, "stopped": 2} {
+	for phase, want := range map[string]int{"terminating": 2, "stopped": 2} {
 		if n := scan[int](t, o.pool, "select count(*) from hosts where id = any($1) and phase = $2", reserves, phase); n != want {
 			t.Errorf("%d reserves %s, want %d", n, phase, want)
 		}
