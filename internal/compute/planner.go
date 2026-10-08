@@ -132,9 +132,9 @@ func connectionPolicy(p Policy) Policy {
 // fleetPass is one planning pass: its snapshot, its decisions and the
 // writes they make.
 type fleetPass struct {
-	c        *Compute
-	p        Policy
-	r        fleetRead
+	c     *Compute
+	p     Policy
+	r     fleetRead
 	rows  map[HostID]PlannerHostsRow
 	waits map[uuid.UUID]waitRow
 	// traces holds the pending containers' traces and earlier waits.
