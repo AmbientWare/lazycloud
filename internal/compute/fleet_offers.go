@@ -203,12 +203,14 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, need Requirement) 
 	return "", false
 }
 
-// coolingRegions are the regions where refusals from at least
-// RegionFailures distinct offers fell within RegionFailureWindow.
+// coolingRegions are the regions where refusals covering the whole region
+// from at least RegionFailures distinct offers fell within
+// RegionFailureWindow. A refusal in one zone says nothing of the region's
+// other zones or markets; its own cooldown holds that zone back.
 func coolingRegions(p Policy, cooldowns []OfferCooldown, now time.Time) map[string]bool {
 	offers := map[string]map[string]bool{}
 	for _, c := range cooldowns {
-		if c.RefusedAt.Before(now.Add(-p.RegionFailureWindow)) {
+		if c.ZoneID != "" || c.RefusedAt.Before(now.Add(-p.RegionFailureWindow)) {
 			continue
 		}
 		if offers[c.Region] == nil {

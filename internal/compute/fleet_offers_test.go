@@ -270,7 +270,14 @@ func TestRefusalsCoolTheOfferAndTwoInARegionMoveBuyingToTheNext(t *testing.T) {
 	if slices.Contains(keys, "us-east-2/use2-az1/m7i.large/on_demand") || !slices.Contains(keys, "us-east-2/use2-az1/m7i.xlarge/on_demand") {
 		t.Fatalf("one refusal cools only its offer: %v", keys)
 	}
-	in.Cooldowns = append(in.Cooldowns, refused("m7i.xlarge", offerNow.Add(-20*time.Minute)))
+	inZone := refused("m7i.xlarge", offerNow.Add(-time.Minute))
+	inZone.ZoneID = "use2-az2"
+	in.Cooldowns = append(in.Cooldowns, inZone)
+	offers = RankOffers(DefaultPolicy(), need, false, in)
+	if slices.ContainsFunc(offers, func(o FleetOffer) bool { return o.CoolingRegion }) {
+		t.Fatalf("a refusal in one zone cools only that zone: %v", offerKeys(offers))
+	}
+	in.Cooldowns[1] = refused("m7i.xlarge", offerNow.Add(-20*time.Minute))
 	offers = RankOffers(DefaultPolicy(), need, false, in)
 	if last := offers[len(offers)-1]; !last.CoolingRegion || offers[0].CoolingRegion {
 		t.Fatalf("a cooling region ranks last: %v", offerKeys(offers))
