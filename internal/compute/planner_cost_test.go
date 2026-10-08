@@ -250,7 +250,10 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 			for _, mode := range []string{"auto", "force_generic_plan"} {
 				plan := explainPlan(t, pool, mode, s.query, s.args...)
 				out.buffers[s.name] = max(out.buffers[s.name], planBuffers(plan))
-				if rows := containerRows(plan); rows > demandBatch+100 {
+				// A read may cover twice its sample: the planner reads a table
+				// that small whole rather than walk its index, and a plan
+				// whose reads grow with history still crosses the bound.
+				if rows := containerRows(plan); rows > 2*demandBatch+100 {
 					t.Errorf("%s: %s (%s) reads %d container or task rows:\n%s", label, s.name, mode, rows, plan)
 				}
 			}
