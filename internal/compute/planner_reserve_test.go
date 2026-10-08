@@ -869,7 +869,7 @@ and phase in ('requested', 'provisioning', 'booting', 'joining', 'resuming', 're
 // buildShape is what a build container reserves at LAZYCLOUD_BUILD_CPU's
 // default of 4 CPUs.
 func buildShape() (cpuMillis, memoryBytes int64) {
-	reserved, memory, _ := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000}).BuildResources()
+	reserved, memory := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000}).BuildResources()
 	return int64(reserved), memory
 }
 

@@ -137,7 +137,7 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 		}
 		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)}
 	}
-	reserved, memory, memoryLimit := s.images.BuildResources()
+	reserved, memory := s.images.BuildResources()
 	ctx, span := telemetry.StartIn(ctx, s.tracer, start.Traceparent, "hostsession.start_build", trace.WithAttributes(
 		telemetry.Container(start.Container.String()), telemetry.Host(host.String()), attribute.String(telemetry.AttrBuild, command.Build.String())))
 	span.End()
@@ -145,7 +145,7 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 		ContainerId: start.Container.String(),
 		Traceparent: telemetry.TraceParentOf(ctx),
 		Resources: &hostproto.Resources{
-			CpuMillis: int64(reserved), MemoryBytes: memory, MemoryLimitBytes: memoryLimit,
+			CpuMillis: int64(reserved), MemoryBytes: memory, MemoryLimitBytes: memory,
 			GpuCount: int32(command.GPUs), //nolint:gosec // A build holds at most one GPU.
 		},
 		Build: build,

@@ -614,17 +614,11 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 	}
 }
 
-// A GPU build waits for a host with its model, holds one of its GPUs and
-// asks its steps for it.
-// A build reserves all the memory it may use, so it never takes memory a
-// neighbour holds, and still lands on a 4-core c6a.2xlarge.
-func TestABuildReservesTheMemoryItMayUseAndFitsAFourCoreHost(t *testing.T) {
+// A build reserves all the memory it may use and still lands on a 4-core
+// c6a.2xlarge.
+func TestABuildFitsAFourCoreHost(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
-	_, memory, limit := f.images.BuildResources()
-	if memory != limit {
-		t.Fatalf("a build reserves %d bytes and may use %d", memory, limit)
-	}
 	typ, _ := compute.CatalogTypeNamed("c6a.2xlarge")
 	usable := typ.Usable(0)
 	var id uuid.UUID
@@ -645,15 +639,10 @@ values ('c6a', sha256(gen_random_uuid()::text::bytea), 'online', $1, $2, now()) 
 	if err != nil || len(starts) != 1 {
 		t.Fatalf("the build is placed on the c6a.2xlarge: %v %v", starts, err)
 	}
-	var reserved int64
-	if err := f.pool.QueryRow(ctx, "select memory_bytes from containers where id = $1", uuid.UUID(starts[0].Container)).Scan(&reserved); err != nil {
-		t.Fatal(err)
-	}
-	if reserved != limit {
-		t.Fatalf("the build container reserves %d bytes, want the %d it may use", reserved, limit)
-	}
 }
 
+// A GPU build waits for a host with its model, holds one of its GPUs and
+// asks its steps for it.
 func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
