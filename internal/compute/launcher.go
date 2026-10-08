@@ -20,7 +20,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -197,7 +196,7 @@ func (p poolInputs) cool(c *Compute, h ClaimLaunchesRow, cool poolCooldown) {
 		Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market, RefusedAt: in.Now,
 		Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: cool.quota && h.ConnectionID == nil,
 	})
-	if t, known := CatalogTypeNamed(h.InstanceType); known && in.QuotaUsed != nil {
+	if t, known := CatalogTypeNamed(h.InstanceType); known {
 		class, _ := QuotaClassOf(t.Name)
 		in.QuotaUsed[QuotaKey{Region: h.Region, Class: class, Market: market}] -= t.VCPUs()
 	}
@@ -205,69 +204,37 @@ func (p poolInputs) cool(c *Compute, h ClaimLaunchesRow, cool poolCooldown) {
 
 // moved counts h, moved to next, against next's quota.
 func (p poolInputs) moved(h ClaimLaunchesRow, next FleetOffer) {
-	if in, ok := p[ownerKey(h)]; ok && in.QuotaUsed != nil {
+	if in, ok := p[ownerKey(h)]; ok {
 		in.QuotaUsed[next.Quota] += next.Type.VCPUs()
 	}
 }
 
 // inputs reads the offer inputs of h's owner once a pass, as the planner
-// reads them: cooldowns, quotas and the vCPUs live hosts count against
-// them, and the memory each type reported.
+// builds them.
 func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) (*OfferInputs, error) {
 	owner := ownerKey(h)
 	if in, ok := p[owner]; ok {
 		return in, nil
 	}
-	now := time.Now()
-	in := &OfferInputs{Now: now, Catalog: FleetCatalog(), ReportedMemory: map[string]int64{}}
-	rows, err := c.queries.PlannerHosts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("read fleet hosts: %w", err)
-	}
-	var platform []FleetHost
-	for _, row := range rows {
-		if row.SessionEpoch > 0 && row.InstanceType != "" {
-			if seen, ok := in.ReportedMemory[row.InstanceType]; !ok || row.MemoryBytes < seen {
-				in.ReportedMemory[row.InstanceType] = row.MemoryBytes
-			}
-		}
-		if HostKind(row.Kind) == KindPlatform {
-			platform = append(platform, fleetHostOf(row, now, nil))
-		}
-	}
+	var networks map[string]Network
 	if h.ConnectionID == nil {
-		in.Networks = c.fleet.Networks
-		if in.Rates, err = billing.FleetComputeRates(now); err != nil {
-			return nil, fmt.Errorf("read the fleet's compute rates: %w", err)
-		}
-		rooms, err := quotaRooms(ctx, c.queries, now)
-		if err != nil {
-			return nil, err
-		}
-		in.Quotas, in.QuotaUsed = vcpuQuotas(rooms), QuotaUse(platform, in.Catalog)
+		networks = c.fleet.Networks
 	} else {
 		row, err := c.queries.ConnectionScope(ctx, *h.ConnectionID)
 		if err != nil {
 			return nil, fmt.Errorf("read connection scope: %w", err)
 		}
-		if err := json.Unmarshal(row.Networks, &in.Networks); err != nil {
+		if err := json.Unmarshal(row.Networks, &networks); err != nil {
 			return nil, fmt.Errorf("decode networks: %w", err)
 		}
-		in.OwnerPays = true
 	}
-	if in.Spot, err = readSpotPrices(ctx, c.queries); err != nil {
-		return nil, err
-	}
-	if in.ZoneTypes, err = readZoneOfferings(ctx, c.queries); err != nil {
-		return nil, err
-	}
-	cooldowns, err := c.queries.PlannerCooldowns(ctx, c.policy().RegionFailureWindow.Seconds())
+	r, err := readOffers(ctx, c.queries, c.policy(), time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("read cooldowns: %w", err)
+		return nil, err
 	}
-	in.Cooldowns = offerCooldowns(cooldowns, owner)
-	p[owner] = in
-	return in, nil
+	in := r.owner(h.ConnectionID, networks, nil, c.fleet.CapacityCooldown).in
+	p[owner] = &in
+	return &in, nil
 }
 
 // nextPool is the cheapest pool, of those not refused and with a node
