@@ -256,46 +256,26 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 	}
 }
 
-func TestRefusalsCoolTheOfferAndTwoInARegionMoveBuyingToTheNext(t *testing.T) {
+// A refusal cools only its own offer: in its zone, or with no zone in every
+// zone of its region. Other types and zones keep their place.
+func TestARefusalCoolsOnlyItsOffer(t *testing.T) {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "m7i.xlarge")}
-	in.Networks["us-east-1"] = oneZone("us-east-1a", "use1-az1")
+	in.Networks["us-east-2"] = Network{Subnets: []Subnet{{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}}}
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
-	refused := func(instanceType string, at time.Time) OfferCooldown {
-		return OfferCooldown{Region: "us-east-2", InstanceType: instanceType, Market: MarketOnDemand, RefusedAt: at, Until: at.Add(10 * time.Minute)}
+	in.Cooldowns = []OfferCooldown{
+		{Region: "us-east-2", InstanceType: "m7i.large", Market: MarketOnDemand, Until: offerNow.Add(10 * time.Minute)},
+		{Region: "us-east-2", ZoneID: "use2-az2", InstanceType: "m7i.xlarge", Market: MarketOnDemand, Until: offerNow.Add(10 * time.Minute)},
 	}
-	in.Cooldowns = []OfferCooldown{refused("m7i.large", offerNow.Add(-time.Minute))}
-	offers := RankOffers(DefaultPolicy(), need, false, in)
-	keys := offerKeys(offers)
-	if slices.Contains(keys, "us-east-2/use2-az1/m7i.large/on_demand") || !slices.Contains(keys, "us-east-2/use2-az1/m7i.xlarge/on_demand") {
-		t.Fatalf("one refusal cools only its offer: %v", keys)
+	keys := offerKeys(RankOffers(DefaultPolicy(), need, false, in))
+	want := []string{"us-east-2/use2-az1/m7i.xlarge/on_demand"}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("offers %v, want %v", keys, want)
 	}
-	inZone := refused("m7i.xlarge", offerNow.Add(-time.Minute))
-	inZone.ZoneID = "use2-az2"
-	in.Cooldowns = append(in.Cooldowns, inZone)
-	offers = RankOffers(DefaultPolicy(), need, false, in)
-	if slices.ContainsFunc(offers, func(o FleetOffer) bool { return o.CoolingRegion }) {
-		t.Fatalf("a refusal in one zone cools only that zone: %v", offerKeys(offers))
-	}
-	in.Cooldowns[1] = refused("m7i.xlarge", offerNow.Add(-20*time.Minute))
-	offers = RankOffers(DefaultPolicy(), need, false, in)
-	if last := offers[len(offers)-1]; !last.CoolingRegion || offers[0].CoolingRegion {
-		t.Fatalf("a cooling region ranks last: %v", offerKeys(offers))
-	}
-	for _, o := range preferHealthy(offers) {
-		if o.Region == "us-east-2" {
-			t.Fatalf("a cooling region is passed over while another serves: %v", offerKeys(offers))
-		}
-	}
-	delete(in.Networks, "us-east-1")
-	in.Cooldowns[1].Until = offerNow.Add(-time.Minute)
-	offers = RankOffers(DefaultPolicy(), need, false, in)
-	if len(offers) != 1 || !offers[0].CoolingRegion {
-		t.Fatalf("a cooling region still serves when nothing else does: %v", offerKeys(offers))
-	}
-	in.Cooldowns[1].RefusedAt = offerNow.Add(-31 * time.Minute)
-	if offers = RankOffers(DefaultPolicy(), need, false, in); offers[0].CoolingRegion {
-		t.Fatalf("refusals older than the window still cool the region")
+	in.Cooldowns[0].Until = offerNow.Add(-time.Minute)
+	keys = offerKeys(RankOffers(DefaultPolicy(), need, false, in))
+	if !slices.Contains(keys, "us-east-2/use2-az1/m7i.large/on_demand") || !slices.Contains(keys, "us-east-2/use2-az2/m7i.large/on_demand") {
+		t.Fatalf("an ended cooldown still holds its offer back: %v", keys)
 	}
 }
 

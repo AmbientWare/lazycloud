@@ -15,6 +15,12 @@ sql:
         overrides:
           - column: "hosts.cpu_millis"
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
+          - column: "hosts.holds_cpu_millis"
+            go_type:
+              import: github.com/AmbientWare/lazycloud/internal/cpu
+              type: Millis
+              pointer: true
+            nullable: true
           - column: "containers.cpu_millis"
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
           - column: "ledger_entries.cpu_millis"

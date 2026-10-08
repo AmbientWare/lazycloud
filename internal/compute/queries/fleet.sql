@@ -14,17 +14,18 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
-          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode;
+          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
+          h.holds_cpu_millis, h.holds_memory_bytes;
 
 -- name: MoveLaunchPool :execrows
 -- Moves a requested host whose pool EC2 refused to the next pool at that
--- pool's cost, and renews the launcher's lease. The host keeps the
--- capacity it was bought with until it reports its own, so every pool it
--- moves to holds that. A host another launcher moved on since it was
--- claimed stays where that one put it.
+-- pool's cost and capacity, and renews the launcher's lease. Every pool it
+-- moves to holds what it was bought to hold. A host another launcher moved
+-- on since it was claimed stays where that one put it.
 update hosts
 set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
-    availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros, launch_pools = launch_pools + 1,
+    availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros,
+    cpu_millis = @cpu_millis, memory_bytes = @memory_bytes, launch_pools = launch_pools + 1,
     launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), updated_at = now()
 where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
@@ -57,13 +58,17 @@ set phase = 'failed', failure = @failure, phase_message = @message, phase_at = n
     token_hash = null, launch_lease_until = null, updated_at = now()
 where id = @id and phase = @from_phase;
 
+-- name: RefuseRightsize :exec
+-- Records that EC2 refused the launch bought to replace this host.
+update hosts set rightsize_refused_at = now(), updated_at = now() where id = @id;
+
 -- name: InsertCooldown :exec
 -- Cools an offer in one zone, or in its whole region for the zone ''.
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason, refused_at)
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason)
 values (@connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => @seconds::float8),
-        @reason, now())
+        @reason)
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at;
+do update set until = excluded.until, reason = excluded.reason;
 
 -- name: DrainConnectionHosts :many
 -- A disconnecting account's hosts stop taking work.

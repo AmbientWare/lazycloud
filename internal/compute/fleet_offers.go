@@ -19,7 +19,6 @@ type OfferCooldown struct {
 	ZoneID       string
 	InstanceType string
 	Market       Market
-	RefusedAt    time.Time
 	Until        time.Time
 	Quota        bool
 }
@@ -116,9 +115,6 @@ type FleetOffer struct {
 	// below the best pool of its shape. A pool of a scored shape without a
 	// score of its own ranks at the shape's worst.
 	PlacementPenalty int64
-	// CoolingRegion marks an offer in a region with recent refusals; it
-	// ranks last and serves only when nothing else does.
-	CoolingRegion bool
 	// Quota is the vCPU quota a host bought from the offer counts against.
 	Quota QuotaKey
 }
@@ -203,28 +199,6 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, need Requirement) 
 	return "", false
 }
 
-// coolingRegions are the regions where refusals covering the whole region
-// from at least RegionFailures distinct offers fell within
-// RegionFailureWindow. A refusal in one zone says nothing of the region's
-// other zones or markets; its own cooldown holds that zone back.
-func coolingRegions(p Policy, cooldowns []OfferCooldown, now time.Time) map[string]bool {
-	offers := map[string]map[string]bool{}
-	for _, c := range cooldowns {
-		if c.ZoneID != "" || c.RefusedAt.Before(now.Add(-p.RegionFailureWindow)) {
-			continue
-		}
-		if offers[c.Region] == nil {
-			offers[c.Region] = map[string]bool{}
-		}
-		offers[c.Region][c.InstanceType+"/"+string(c.Market)] = true
-	}
-	cooling := map[string]bool{}
-	for region, refused := range offers {
-		cooling[region] = len(refused) >= p.RegionFailures
-	}
-	return cooling
-}
-
 // cooled reports whether a cooldown holds an offer in a zone back at now.
 func cooled(cooldowns []OfferCooldown, now time.Time, region, zoneID, instanceType string, market Market) bool {
 	class, _ := QuotaClassOf(instanceType)
@@ -300,14 +274,12 @@ func placementPenalty(ranges map[string]scoreRange, shape string, score int) int
 // accepts (GPU hosts only for GPU work), and, unless the owner pays, whose
 // GPU model the platform fleet offers and that keep the purchase margin. A
 // reserve offer hibernates where hibernates allows.
-// Order: the need's GPU preference, cooling regions last, hourly cost with
-// expected transfer and its placement penalty, fewest hosts in the zone,
-// key. An offer whose host would exceed a known vCPU quota is skipped.
+// Order: the need's GPU preference, hourly cost with expected transfer and
+// its placement penalty, fewest hosts in the zone, key. An offer whose host would exceed a known vCPU quota is skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
 	scores := placementRanges(p, in)
 	room := quotaRoom(in.Quotas, in.QuotaUsed)
-	cooling := coolingRegions(p, in.Cooldowns, in.Now)
 	gpus := need.GPUsNeeded()
 	markets := []Market{MarketOnDemand}
 	if need.Preemptible {
@@ -356,7 +328,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
-						TransferMicros: transferMicros(region, t), PlacementPenalty: penalty, CoolingRegion: cooling[region], Quota: quota,
+						TransferMicros: transferMicros(region, t), PlacementPenalty: penalty, Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need); rejected && !in.OwnerPays {
 						continue
@@ -369,7 +341,6 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 	slices.SortStableFunc(offers, func(a, b FleetOffer) int {
 		return cmp.Or(
 			cmp.Compare(GPURank(need.GPUs, a.Type.GPU), GPURank(need.GPUs, b.Type.GPU)),
-			boolOrder(a.CoolingRegion, b.CoolingRegion),
 			cmp.Compare(a.ranked(a.running()), b.ranked(b.running())),
 			cmp.Compare(in.ZoneHosts[a.ZoneID], in.ZoneHosts[b.ZoneID]),
 			strings.Compare(a.Key(), b.Key()),
@@ -388,16 +359,6 @@ const hibernationRAMLimit = 32 * gib
 // hibernationRAMLimit of RAM.
 func hibernates(t CatalogType) bool {
 	return t.Hibernates && t.MemoryBytes <= hibernationRAMLimit
-}
-
-// preferHealthy drops offers in cooling regions while another offer
-// remains. Callers apply it after every placement filter, so a cooling
-// region still serves demand nothing else can.
-func preferHealthy(offers []FleetOffer) []FleetOffer {
-	if !slices.ContainsFunc(offers, func(o FleetOffer) bool { return !o.CoolingRegion }) {
-		return offers
-	}
-	return slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return o.CoolingRegion })
 }
 
 // boolOrder sorts false before true.

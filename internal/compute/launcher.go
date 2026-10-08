@@ -194,7 +194,7 @@ func (p poolInputs) cool(c *Compute, h ClaimLaunchesRow, cool poolCooldown) {
 	}
 	market := Market(*h.Market)
 	in.Cooldowns = append(in.Cooldowns, OfferCooldown{
-		Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market, RefusedAt: in.Now,
+		Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market,
 		Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: cool.quota && h.ConnectionID == nil,
 	})
 	if t, known := CatalogTypeNamed(h.InstanceType); known && in.QuotaUsed != nil {
@@ -261,7 +261,7 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 	if in.ZoneTypes, err = readZoneOfferings(ctx, c.queries); err != nil {
 		return nil, err
 	}
-	cooldowns, err := c.queries.PlannerCooldowns(ctx, c.policy().RegionFailureWindow.Seconds())
+	cooldowns, err := c.queries.PlannerCooldowns(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read cooldowns: %w", err)
 	}
@@ -270,12 +270,8 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 	return in, nil
 }
 
-// nextPool is the cheapest pool, of those not refused and with a node
-// image, that still holds what h was bought for: the capacity recorded at
-// purchase, which moves keep, its GPU model in its market, its reserve's
-// sleep mode, and the placement each container waiting for it asks for.
-// Pools are priced as the planner buys: a reserve by what it costs to keep
-// stopped, any other host by what it costs to serve.
+// nextPool cools h's refused pool and returns the pool its launch moves
+// to, as fallbackPool picks it from the owner's current offer inputs.
 func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolInputs, cool poolCooldown) (FleetOffer, bool, error) {
 	if h.Market == nil {
 		return FleetOffer{}, false, nil
@@ -289,8 +285,30 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 	if err != nil {
 		return FleetOffer{}, false, fmt.Errorf("read the containers waiting for the host: %w", err)
 	}
+	next, ok := fallbackPool(c.policy(), h, waiters, *in, func(region string, gpu bool) bool {
+		_, imaged := c.nodeImage(region, gpu)
+		return imaged
+	})
+	return next, ok, nil
+}
+
+// fallbackPool is the cheapest pool, of those not refused and with a node
+// image, that still holds what h was bought for: what the planner bought it
+// to hold, or without that its capacity, its GPU model in its market, its
+// reserve's sleep mode, and the placement each container waiting for it
+// asks for.
+// Pools are priced as the planner buys: a reserve by what it costs to keep
+// stopped, any other host by what it costs to serve. A rightsize has none:
+// only the planner knows which pools still pay back the host it replaces.
+func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) (FleetOffer, bool) {
+	if h.Replaces != nil {
+		return FleetOffer{}, false
+	}
 	market := Market(*h.Market)
 	need := Requirement{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUCount: int(h.GpuCount), Preemptible: market == MarketSpot}
+	if h.HoldsCpuMillis != nil && h.HoldsMemoryBytes != nil {
+		need.CPUMillis, need.MemoryBytes = *h.HoldsCpuMillis, *h.HoldsMemoryBytes
+	}
 	if h.GpuType != "" {
 		need.GPUs = []string{h.GpuType}
 	}
@@ -299,21 +317,20 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 		need.Region, need.Zone = cmp.Or(need.Region, w.Region), cmp.Or(need.Zone, w.Zone)
 	}
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
-	offers := slices.DeleteFunc(RankOffers(c.policy(), need, h.ReserveMode != nil, *in), func(o FleetOffer) bool {
-		_, imaged := c.nodeImage(o.Region, o.Type.GPUCount > 0)
-		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged ||
+	offers := slices.DeleteFunc(RankOffers(p, need, h.ReserveMode != nil, in), func(o FleetOffer) bool {
+		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
 			slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
 				return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
 			})
 	})
-	if offers = preferHealthy(offers); len(offers) == 0 {
-		return FleetOffer{}, false, nil
+	if len(offers) == 0 {
+		return FleetOffer{}, false
 	}
-	cost := servingCost(c.policy())
+	cost := servingCost(p)
 	if h.ReserveMode != nil {
-		cost = reserveCost(c.policy())
+		cost = reserveCost(p)
 	}
-	return slices.MinFunc(offers, func(a, b FleetOffer) int { return cmp.Compare(cost(a), cost(b)) }), true, nil
+	return slices.MinFunc(offers, func(a, b FleetOffer) int { return cmp.Compare(cost(a), cost(b)) }), true
 }
 
 // movePool cools h's refused pool and moves h to next in one transaction,
@@ -329,6 +346,7 @@ func (c *Compute) movePool(ctx context.Context, h ClaimLaunchesRow, next FleetOf
 		n, err := q.MoveLaunchPool(ctx, MoveLaunchPoolParams{
 			ID: h.ID, LaunchPools: h.LaunchPools, InstanceType: next.Type.Name, Region: next.Region,
 			AvailabilityZone: next.Zone, AvailabilityZoneID: next.ZoneID, HourlyMicros: &next.HourlyMicros,
+			CpuMillis: next.Usable.CPUMillis, MemoryBytes: next.Usable.MemoryBytes,
 			LeaseSeconds: launchLease.Seconds(),
 		})
 		if err != nil {
@@ -594,6 +612,11 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 			ID: h.ID, FromPhase: string(PhaseRequested), Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
 		}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
+		}
+		if h.Replaces != nil && cool != nil {
+			if err := q.RefuseRightsize(ctx, *h.Replaces); err != nil {
+				return fmt.Errorf("record the refused rightsize: %w", err)
+			}
 		}
 		return notifyChannel(ctx, tx, h.ID)
 	})

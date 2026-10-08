@@ -216,17 +216,17 @@ func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 			t.Errorf("host %s is %s (%v), want %s", host, phase, failure, want)
 		}
 	}
-	if !cooledWithoutRefusal(t, o, "m7i.large") {
+	if !offerCooled(t, o, "m7i.large") {
 		t.Fatal("the failed reserve's offer did not cool, so the pass could buy it again")
 	}
 }
 
-// cooledWithoutRefusal reports whether the platform's on-demand offer of
-// typ in us-east-2 cools without counting as a provider refusal.
-func cooledWithoutRefusal(t *testing.T, o owners, typ string) bool {
+// offerCooled reports whether the platform's on-demand offer of typ in
+// us-east-2 cools.
+func offerCooled(t *testing.T, o owners, typ string) bool {
 	t.Helper()
 	return scan[bool](t, o.pool, `select exists (select 1 from capacity_cooldowns where connection_key = 'platform'
-and region = 'us-east-2' and instance_type = $1 and market = 'on_demand' and until > now() and refused_at is null)`, typ)
+and region = 'us-east-2' and instance_type = $1 and market = 'on_demand' and until > now())`, typ)
 }
 
 // A host whose agent refused to prove a stop serves with its reserve mode
@@ -248,7 +248,7 @@ func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
 	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseDraining) {
 		t.Fatalf("refused host is %s, want draining", phase)
 	}
-	if !cooledWithoutRefusal(t, o, "m7i.2xlarge") {
+	if !offerCooled(t, o, "m7i.2xlarge") {
 		t.Fatal("the refused host's offer did not cool")
 	}
 	if n := scan[int](t, o.pool, `select count(*) from hosts where phase = 'requested' and instance_type = 'm7i.2xlarge'

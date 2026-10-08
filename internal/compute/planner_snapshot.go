@@ -47,6 +47,7 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
 		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(),
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
@@ -66,7 +67,7 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		}
 		r.connectionWaits[*w.ConnectionID] = wait
 	}
-	if r.cooldowns, err = q.PlannerCooldowns(ctx, p.RegionFailureWindow.Seconds()); err != nil {
+	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
 	}
 	markets, err := q.FleetMarkets(ctx)
@@ -174,6 +175,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, PhaseAt: h.PhaseAt,
+		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 	}
 }
 
@@ -268,11 +270,7 @@ func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 		if r.ConnectionKey != owner {
 			continue
 		}
-		c := OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until}
-		if r.RefusedAt != nil {
-			c.RefusedAt = *r.RefusedAt
-		}
-		out = append(out, c)
+		out = append(out, OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until})
 	}
 	return out
 }

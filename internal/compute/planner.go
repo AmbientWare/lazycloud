@@ -205,6 +205,9 @@ type requestedHost struct {
 	Market             Market       `json:"market"`
 	HourlyMicros       int64        `json:"hourly_micros"`
 	ReserveMode        *ReserveMode `json:"reserve_mode"`
+	Replaces           *uuid.UUID   `json:"replaces"`
+	HoldsCPUMillis     *cpu.Millis  `json:"holds_cpu_millis"`
+	HoldsMemoryBytes   *int64       `json:"holds_memory_bytes"`
 }
 
 type idleRow struct {
@@ -330,8 +333,8 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	s := FleetSnapshot{
 		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
-		FloorShortSince: ps.floorShortSince(),
 	}
+	s.FloorShortSince, s.Peaks = ps.carried()
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
 	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
 	bought, err := ps.apply(plan, nil)
@@ -433,8 +436,7 @@ func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []
 	return PlanFleet(p, s), cools
 }
 
-// cool writes cooldowns without a refusal time, so they do not count toward
-// region cooling.
+// cool writes the pass's own cooldowns.
 func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 	for _, c := range cools {
 		ps.w.cools = append(ps.w.cools, coolRow{ConnectionKey: owner, Region: c.Region, InstanceType: c.InstanceType, Market: c.Market})
@@ -489,11 +491,18 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 		GPUType: o.Type.GPU, GPUCount: o.Type.GPUCount, Region: o.Region, AvailabilityZone: o.Zone, AvailabilityZoneID: o.ZoneID,
 		InstanceType: o.Type.Name, Market: o.Market, HourlyMicros: o.HourlyMicros,
 	}
+	if !a.Holds.Empty() {
+		h.HoldsCPUMillis, h.HoldsMemoryBytes = &a.Holds.CPUMillis, &a.Holds.MemoryBytes
+	}
 	if connection != nil {
 		h.Kind = KindConnection
 	}
-	if a.Kind == ActionBuyReserve {
+	switch a.Kind {
+	case ActionBuyReserve:
 		h.ReserveMode = a.Mode
+	case ActionRightsize:
+		h.Replaces = ptr(uuid.UUID(*a.Host))
+	case ActionBuy, ActionResume, ActionRefresh, ActionReturnToReserve, ActionDrain, ActionRetireReserve:
 	}
 	return h
 }
@@ -542,23 +551,28 @@ func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
 	}
 }
 
-// floorShortSince is when each market's stopped target went short, from the
-// published plans; an unreadable plan reads as never short.
-func (ps *fleetPass) floorShortSince() map[ReserveMarket]time.Time {
-	out := map[ReserveMarket]time.Time{}
+// carried is what each market's published plan carries to the next pass:
+// when its stopped target went short, and its load peak. An unreadable
+// plan reads as never short and without a peak.
+func (ps *fleetPass) carried() (map[ReserveMarket]time.Time, map[ReserveMarket]LoadPeak) {
+	since, peaks := map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
 	for _, m := range ps.r.markets {
 		var stored PublishedMarket
-		if json.Unmarshal(m.Plan, &stored) != nil || stored.FloorShortSince == nil {
+		if json.Unmarshal(m.Plan, &stored) != nil {
 			continue
 		}
-		out[ReserveMarket{Preemptible: stored.Preemptible, GPU: stored.GPUType}] = *stored.FloorShortSince
+		market := ReserveMarket{Preemptible: stored.Preemptible, GPU: stored.GPUType}
+		if stored.FloorShortSince != nil {
+			since[market] = *stored.FloorShortSince
+		}
+		peaks[market] = stored.Peak
 	}
-	return out
+	return since, peaks
 }
 
 // publish writes every platform market's plan when the pass acted, a
-// market's reserve shortfall began or ended, or the last plan is
-// planRefresh old, and logs each decision that changed.
+// market's reserve shortfall began or ended, its load peak moved, or the
+// last plan is planRefresh old, and logs each decision that changed.
 func (ps *fleetPass) publish(plan FleetPlan) error {
 	var last time.Time
 	for _, m := range ps.r.markets {
@@ -566,12 +580,14 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 			last = m.GeneratedAt
 		}
 	}
-	stored := ps.floorShortSince()
-	floorMoved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
+	stored, peaks := ps.carried()
+	moved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
 		since, ok := stored[mp.Market]
-		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince)
+		peak := peaks[mp.Market]
+		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince) ||
+			peak.Load != mp.Peak.Load || !peak.At.Equal(mp.Peak.At)
 	})
-	if len(plan.Actions) == 0 && !floorMoved && ps.r.now.Sub(last) < planRefresh {
+	if len(plan.Actions) == 0 && !moved && ps.r.now.Sub(last) < planRefresh {
 		return nil
 	}
 	for _, mp := range plan.Markets {
