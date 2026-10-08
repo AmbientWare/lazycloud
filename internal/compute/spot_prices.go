@@ -30,8 +30,8 @@ const (
 	// long as the price read with it. A region whose score read fails keeps
 	// its scores until then.
 	placementScoreFresh = spotPriceFresh
-	// placementShapeTypes is the fewest catalog types a scored shape has.
-	// AWS scores a request of fewer types low whatever the capacity.
+	// placementShapeTypes is the fewest catalog types a scored shape has,
+	// the fewest AWS asks a placement score request to name.
 	placementShapeTypes = 3
 	// placementScoreCalls bounds a region's score reads in flight. AWS
 	// refills 20 a second and charges nothing.
@@ -118,9 +118,11 @@ func placementShape(t CatalogType) string {
 // of zones for every shape of types the catalog sells at least
 // placementShapeTypes of, and gives each type its shape's score: a pool is
 // scored as any catalog type of its vCPUs and GPUs. Shapes of fewer types,
-// which include the 2- and 4-vCPU ones bought most, are not scored, since
-// AWS would score them low wherever they are; their pools rank on price
-// alone. A shape whose read fails is left out and the others kept.
+// which include the 2- and 4-vCPU ones bought most, are not read: padding
+// them with types the catalog never launches would score capacity it does
+// not buy. Their pools carry no placement penalty and rank on full cost,
+// and a refused pool moves the launch to the next. A shape whose read
+// fails is left out and the others kept.
 func placementScores(ctx context.Context, client *ec2.Client, region string, zones map[string]bool, types []string) (ScoreSpotPoolsParams, error) {
 	shapes := map[string][]string{}
 	for _, name := range types {

@@ -126,7 +126,7 @@ type FleetOffer struct {
 // each point a pool scores below the best pool of its shape ranks it as 4%
 // dearer. A pool AWS scores 1 against a best of 9 ranks 32% dearer, so a
 // pool that is likely to fill wins up to about a third above the price of
-// one that is not (a single pool scored low refused 3 of 5 launches), while
+// one that is not (one pinned pool refused 3 of 5 launches), while
 // a point of difference between pools both likely to fill weighs less
 // than ordinary Spot price spread.
 const placementPenaltyPercent = 4
