@@ -2,6 +2,7 @@ package compute_test
 
 import (
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -377,5 +378,48 @@ values ($1, $2, 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t,
 				t.Fatalf("plan %+v, settled container waits %q; want its purchase made at once", r, bought)
 			}
 		})
+	}
+}
+
+// A connected account's estimated cost is what its hosts' compute, root
+// disks and public addresses cost. Expected transfer is an estimate, so it
+// ranks the regions but stays out of the price a host records.
+func TestAConnectedHostRecordsItsPriceWithoutTheTransferThatRankedIt(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	ws := newWorkspace(t, o.pool, "connected", alice)
+	networks := `{"us-east-2": {"subnets": [{"id": "subnet-c-east", "zone": "us-east-2a", "zone_id": "use2-az1"}]},
+	              "us-west-1": {"subnets": [{"id": "subnet-c-west", "zone": "us-west-1b", "zone_id": "usw1-az3"}]}}`
+	run(t, o.pool, `
+with conn as (insert into cloud_connections (account_id, aws_account_id, phase) values ($1, '123456789012', 'ready') returning id),
+auth as (
+    insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region, networks)
+    select id, 1, 'existing_role', 'active', 'ready', 'arn:aws:iam::123456789012:role/lazycloud', 'external', 'us-east-2', $3::jsonb
+    from conn
+)
+update workspaces set connection_id = (select id from conn) where id = $2`, uuid.UUID(alice), ws, networks)
+	// m7i.large computes 4,000 µ$ an hour cheaper in us-west-1, but its root
+	// costs 2,222 more there and its expected transfer 5,000 more.
+	run(t, o.pool, `
+insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-west-1', 'usw1-az3', 'm7i.large', 36000, now(), now())`)
+	container := pendingContainer(t, o.pool, ws, newRelease(t, o.pool, ws, `{"placement": {"preemptible": true}}`), 1000, gib)
+	plan(t, o)
+
+	host := scan[string](t, o.pool, `
+select h.region || ' ' || h.instance_type || ' ' || h.market || ' ' || h.hourly_micros
+from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and h.kind = 'connection'`, container)
+	// Spot compute, a 100 GiB gp3 root over a 720-hour month and one public
+	// IPv4 address.
+	want := 40_000 + (100*80_000+719)/720 + 5_000
+	if host != "us-east-2 m7i.large spot "+strconv.Itoa(want) {
+		t.Fatalf("connected host %q, want us-east-2 m7i.large spot %d", host, want)
+	}
+	summary, err := o.compute.WorkspaceSummary(t.Context(), identity.WorkspaceID(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.HourlyMicros == nil || *summary.HourlyMicros != int64(want) {
+		t.Fatalf("connection estimate %v µ$/h, want %d", summary.HourlyMicros, want)
 	}
 }
