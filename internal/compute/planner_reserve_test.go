@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
 // fleetHost is an on-demand platform instance of a catalog type in
@@ -865,18 +866,27 @@ and phase in ('requested', 'provisioning', 'booting', 'joining', 'resuming', 're
 	}
 }
 
-// pendingBuild is a pending platform build container of 4 CPU and 2 GiB in
-// workspace, the shape builds reserve.
+// buildShape is what a build container reserves at LAZYCLOUD_BUILD_CPU's
+// default of 4 CPUs.
+func buildShape() (cpuMillis, memoryBytes int64) {
+	reserved, memory, _ := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000}).BuildResources()
+	return int64(reserved), memory
+}
+
+// pendingBuild is a pending platform build container in workspace, of the
+// shape builds reserve.
 func pendingBuild(t *testing.T, o owners, workspace uuid.UUID) uuid.UUID {
 	t.Helper()
 	return buildContainer(t, o, workspace, "pending", 0)
 }
 
-// buildContainer is a build container in state whose build began age ago;
-// one not pending was placed when it began.
+// buildContainer is a build container of the shape builds reserve, in
+// state, whose build began age ago; one not pending was placed when it
+// began.
 func buildContainer(t *testing.T, o owners, workspace uuid.UUID, state string, age time.Duration) uuid.UUID {
 	t.Helper()
 	seed := uuid.NewString()
+	cpuMillis, memory := buildShape()
 	return scan[uuid.UUID](t, o.pool, `
 with image as (
     insert into images (digest, id, dockerfile, python_version, architecture)
@@ -886,10 +896,10 @@ with image as (
     select uuidv7(- $4::interval), digest, 'building', $2, now() - $4::interval, now() + interval '1 hour' from image returning id
 )
 insert into containers (workspace_id, image_build_id, state, slots, cpu_millis, memory_bytes, assigned_at, stop_reason, stopped_at)
-select $2, id, $3, 1, 4000, 2 << 30,
+select $2, id, $3, 1, $5, $6,
        case when $3 <> 'pending' then now() - $4::interval end,
        case when $3 = 'stopped' then 'stopped' end, case when $3 = 'stopped' then now() end
-from build returning id`, []byte(seed), workspace, state, age)
+from build returning id`, []byte(seed), workspace, state, age, cpuMillis, memory)
 }
 
 // A build after an idle spell resumes a stopped reserve that fits it, at
@@ -933,8 +943,9 @@ func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
 	buildContainer(t, o, dev, "stopped", 10*time.Minute)
 	staleMarkets(t, o)
 	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.WarmTarget.CPUMillis != 1000+4000 {
-		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the 4 CPU build", spot.WarmTarget)
+	cpuMillis, memory := buildShape()
+	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
+		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 {
 		t.Fatalf("on-demand warm target %+v, want the floor alone: builds run in the Spot market", od.WarmTarget)
