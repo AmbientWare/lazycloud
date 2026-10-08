@@ -580,8 +580,9 @@ func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, i
 	return nil
 }
 
-// failLaunch fails a host that could not launch; a cooldown, when given,
-// also skips its pool until the cooldown ends.
+// failLaunch fails a host that could not launch in the pool its launcher
+// holds; a cooldown, when given, also skips the pool until the cooldown
+// ends. A host another launcher moved on stays requested.
 func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool *poolCooldown) error {
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -590,10 +591,14 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 				return err
 			}
 		}
-		if _, err := q.FailHost(ctx, FailHostParams{
-			ID: h.ID, FromPhase: string(PhaseRequested), Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
-		}); err != nil {
-			return fmt.Errorf("fail host: %w", err)
+		n, err := q.FailLaunch(ctx, FailLaunchParams{
+			ID: h.ID, LaunchPools: h.LaunchPools, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
+		})
+		if err != nil {
+			return fmt.Errorf("fail launch: %w", err)
+		}
+		if n == 0 {
+			return nil
 		}
 		return notifyChannel(ctx, tx, h.ID)
 	})

@@ -319,40 +319,82 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	}
 }
 
-// A launcher whose host another launcher moved on in the meantime neither
-// records its instance nor moves the host again; the instance ends.
+// A launcher whose lease lapsed while EC2 answered it, and whose host a
+// second launcher moved to its next pool meanwhile, neither records its
+// instance, moves the host nor fails it, whatever EC2 answered; its
+// instance ends, and the second launcher's launch stands.
 func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing.T) {
-	for _, refuse := range []bool{false, true} {
+	refused := func(awsCall, awsHandler) awsReply {
+		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "refused")
+	}
+	answers := map[string]func(call awsCall, succeed awsHandler) awsReply{
+		"launched": func(call awsCall, succeed awsHandler) awsReply { return succeed(call) },
+		"refused":  refused,
+		"invalid": func(awsCall, awsHandler) awsReply {
+			return ec2Error(http.StatusBadRequest, "InvalidParameterValue", "invalid")
+		},
+	}
+	for name, answer := range answers {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
 		alice := newUser(t, o.pool, "alice@example.com")
 		host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 		succeed := launched(t)
+		firstAsked, secondMoved := make(chan struct{}), make(chan struct{})
+		answerFirst, answerSecond := make(chan struct{}), make(chan struct{})
+		var calls atomic.Int64
 		emulator.on("RunInstances", func(call awsCall) awsReply {
-			if _, err := o.pool.Exec(t.Context(), "update hosts set launch_pools = 1 where id = $1", uuid.UUID(host)); err != nil {
-				t.Error(err)
-			}
-			if refuse {
-				return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "refused")
+			switch calls.Add(1) {
+			case 1:
+				close(firstAsked)
+				<-answerFirst
+				return answer(call, succeed)
+			case 2:
+				return refused(call, succeed)
+			case 3:
+				close(secondMoved)
+				<-answerSecond
 			}
 			return succeed(call)
 		})
 		emulator.on("TerminateInstances", terminateInstancesReply)
-		if n := launch(t, o); n != 0 {
-			t.Fatalf("refuse %v: launched %d for a host another launcher moved", refuse, n)
+		type result struct {
+			n   int
+			err error
 		}
-		if n := len(emulator.calls("RunInstances")); n != 1 {
-			t.Fatalf("refuse %v: %d launches, want the fenced one alone", refuse, n)
+		launcher := func() chan result {
+			out := make(chan result, 1)
+			go func() {
+				n, err := o.compute.Launch(t.Context(), discard())
+				out <- result{n, err}
+			}()
+			return out
+		}
+		first := launcher()
+		<-firstAsked
+		run(t, o.pool, "update hosts set launch_lease_until = now() - interval '1 second' where id = $1", uuid.UUID(host))
+		second := launcher()
+		<-secondMoved
+		close(answerFirst)
+		a := <-first
+		close(answerSecond)
+		b := <-second
+		if a.err != nil || b.err != nil || a.n != 0 || b.n != 1 {
+			t.Fatalf("%s: launchers launched %d (%v) and %d (%v), want only the second", name, a.n, a.err, b.n, b.err)
+		}
+		runs := emulator.calls("RunInstances")
+		if len(runs) != 3 {
+			t.Fatalf("%s: %d launches, want the fenced one and the second launcher's two", name, len(runs))
 		}
 		var phase, instanceType string
 		if err := o.pool.QueryRow(t.Context(), "select phase, instance_type from hosts where id = $1", uuid.UUID(host)).
 			Scan(&phase, &instanceType); err != nil {
 			t.Fatal(err)
 		}
-		if phase != string(compute.PhaseRequested) || instanceType != emulator.calls("RunInstances")[0].Form.Get("InstanceType") {
-			t.Fatalf("refuse %v: host %s as %s, want it requested where the other launcher left it", refuse, phase, instanceType)
+		if phase != string(compute.PhaseProvisioning) || instanceType != runs[2].Form.Get("InstanceType") {
+			t.Fatalf("%s: host %s as %s, want provisioning where the second launcher launched it", name, phase, instanceType)
 		}
-		if terminated := len(emulator.calls("TerminateInstances")); terminated != map[bool]int{false: 1, true: 0}[refuse] {
-			t.Fatalf("refuse %v: %d terminations, want the fenced instance ended", refuse, terminated)
+		if terminated := len(emulator.calls("TerminateInstances")); terminated != map[bool]int{true: 1, false: 0}[name == "launched"] {
+			t.Fatalf("%s: %d terminations, want only a fenced instance ended", name, terminated)
 		}
 	}
 }

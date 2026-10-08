@@ -236,6 +236,35 @@ func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) (int64, erro
 	return result.RowsAffected(), nil
 }
 
+const failLaunch = `-- name: FailLaunch :execrows
+update hosts
+set phase = 'failed', failure = $1, phase_message = $2, phase_at = now(), state = 'retired',
+    token_hash = null, launch_lease_until = null, updated_at = now()
+where id = $3 and phase = 'requested' and launch_pools = $4
+`
+
+type FailLaunchParams struct {
+	Failure     *string
+	Message     string
+	ID          uuid.UUID
+	LaunchPools int16
+}
+
+// Fails a requested host in the pool its launcher holds; a host another
+// launcher moved on fails nothing.
+func (q *Queries) FailLaunch(ctx context.Context, arg FailLaunchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failLaunch,
+		arg.Failure,
+		arg.Message,
+		arg.ID,
+		arg.LaunchPools,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
 select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at
 from hosts
