@@ -115,7 +115,7 @@ func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 	}
 }
 
-func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
+func TestOfferCostIsComputeRootDiskAndPublicIPv4(t *testing.T) {
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-west-1": oneZone("us-west-1a", "usw1-az1")}
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
@@ -124,17 +124,14 @@ func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
 	if len(serving) != 1 || len(reserve) != 1 {
 		t.Fatalf("offers %v %v", offerKeys(serving), offerKeys(reserve))
 	}
-	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1 over 720 hours, and
-	// 0.5 GB an hour for its one core at $0.02 a GB to and from us-east-1.
+	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1 over 720 hours.
 	disk := (100*96_000 + 719) / 720
-	transfer := int64(10_000)
-	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer || o.StoppedMicros != int64(disk) || o.Hibernate {
+	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
-	// A hibernating reserve adds its 8 GiB of RAM as swap; stopped, it
-	// moves nothing.
+	// A hibernating reserve adds its 8 GiB of RAM as swap.
 	disk = (108*96_000 + 719) / 720
-	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer {
+	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 {
 		t.Fatalf("reserve offer %+v", o)
 	}
 }
@@ -191,18 +188,24 @@ func TestAnUnscoredPoolRanksAtItsShapesWorstScore(t *testing.T) {
 	in.Catalog = []CatalogType{mustType(t, "c6a.2xlarge")}
 	in.Networks = map[string]Network{"us-east-2": {Subnets: []Subnet{
 		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"},
-		{ID: "c", Zone: "us-east-2c", ZoneID: "use2-az3"},
+		{ID: "c", Zone: "us-east-2c", ZoneID: "use2-az3"}, {ID: "d", Zone: "us-east-2d", ZoneID: "use2-az4"},
 	}}}
 	quote := func(zone string, micros int64, score int) SpotQuote {
 		return SpotQuote{Region: "us-east-2", ZoneID: zone, InstanceType: "c6a.2xlarge", HourlyMicros: micros, ObservedAt: offerNow, PlacementScore: score}
 	}
-	in.Spot = []SpotQuote{quote("use2-az1", 120_000, 9), quote("use2-az2", 115_000, 0), quote("use2-az3", 150_000, 1)}
-	offers := RankOffers(DefaultPolicy(), Requirement{Preemptible: true}, false, in)
-	if len(offers) == 0 || offers[0].ZoneID != "use2-az1" {
-		t.Fatalf("offers %v, want the pool scored 9 before the cheaper unscored one", offerKeys(offers))
+	// The unscored pool is the cheapest, and would rank first at the best
+	// score and before the pool scored 5 at that score.
+	in.Spot = []SpotQuote{
+		quote("use2-az1", 120_000, 9), quote("use2-az2", 100_000, 0), quote("use2-az3", 110_000, 5), quote("use2-az4", 140_000, 1),
 	}
-	if i := slices.IndexFunc(offers, func(o FleetOffer) bool { return o.ZoneID == "use2-az2" }); i < 0 || offers[i].PlacementPenalty != 32 {
-		t.Fatalf("offers %+v, want the unscored pool penalized as a score of 1", offers)
+	var zones []string
+	for _, o := range RankOffers(DefaultPolicy(), Requirement{Preemptible: true}, false, in) {
+		if o.Market == MarketSpot {
+			zones = append(zones, o.ZoneID)
+		}
+	}
+	if want := []string{"use2-az1", "use2-az3", "use2-az2", "use2-az4"}; !slices.Equal(zones, want) {
+		t.Fatalf("Spot offers in %v, want %v", zones, want)
 	}
 }
 
