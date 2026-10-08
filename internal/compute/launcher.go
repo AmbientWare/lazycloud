@@ -61,11 +61,12 @@ type launchTarget struct {
 
 // Launch starts instances for requested hosts. Each launch is claimed with
 // a lease and runs outside any transaction; RunInstances takes the host id,
-// numbered by each refused pool the launch moved past, as its client token,
-// so a retry after a lost answer returns the same instance. A refusal for capacity, quota or price cools the
-// refused pool and moves the host to the next ranked pool that still holds
-// what it was bought for, up to maxLaunchPools; a host left without one
-// fails, so the planner buys again on its next pass.
+// numbered by each refused pool the launch moved past, as its client
+// token, so a retry after a lost answer returns the same instance. A
+// refusal for capacity, quota or price cools the refused pool and moves the
+// host to the next ranked pool that still holds what it was bought for, up
+// to maxLaunchPools; a host left without one fails, so the planner buys
+// again on its next pass.
 func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) {
 	if c.config.ServedRelease != "" {
 		release, err := c.TargetRelease(ctx)

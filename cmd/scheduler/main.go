@@ -346,8 +346,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		// When the purchases the last pass held for arriving containers may
-		// proceed. The loop's goroutine alone reads and writes it.
+		// batchAt is when the purchases the last pass held for arriving
+		// containers may proceed. The loop's goroutine alone reads and
+		// writes it.
 		var batchAt time.Time
 		rerun := func() (time.Time, bool) { return batchAt, !batchAt.IsZero() }
 		return p.loop(ctx, cadence{every: fleetTick, rerun: rerun}, capacityWake, capacityFleetWake, timed("fleet_plan", func(ctx context.Context) bool {
