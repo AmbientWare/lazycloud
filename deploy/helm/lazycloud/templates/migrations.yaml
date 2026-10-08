@@ -1,8 +1,9 @@
 {{/*
 Migrations run before the workloads change, while the previous release
 still serves, and a failure stops the sync before any pod is replaced.
-Migration files are additive and frozen once deployed, so old replicas keep
-working against the new schema during the rollout. Argo CD runs this as a
+Migration files are frozen once deployed. Old server replicas keep working
+against the new schema during the rollout; the scheduler recreates, so its
+old replicas run against it only until the rollout stops them. Argo CD runs this as a
 Sync hook after the Secret's waves; plain Helm runs it as a pre-upgrade
 hook. The server also migrates at start; after this Job that is a no-op
 check under the same advisory lock.
