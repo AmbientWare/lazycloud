@@ -292,6 +292,32 @@ func TestRefusalsCoolTheOfferAndTwoInARegionMoveBuyingToTheNext(t *testing.T) {
 	}
 }
 
+// Refusals in one zone cool that zone's offers, not the region: one launch
+// moving through pools can refuse several in one zone.
+func TestRefusalsInOneZoneLeaveTheRegionRankedByCost(t *testing.T) {
+	in := offerInputs(t)
+	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "m7i.xlarge")}
+	in.Networks = map[string]Network{
+		"us-east-2": {Subnets: []Subnet{{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}}},
+		"us-west-1": oneZone("us-west-1a", "usw1-az1"),
+	}
+	at := offerNow.Add(-time.Minute)
+	for _, name := range []string{"m7i.large", "m7i.xlarge"} {
+		in.Cooldowns = append(in.Cooldowns, OfferCooldown{
+			Region: "us-east-2", ZoneID: "use2-az1", InstanceType: name, Market: MarketOnDemand, RefusedAt: at, Until: at.Add(10 * time.Minute),
+		})
+	}
+	offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, false, in)
+	if len(offers) == 0 || offers[0].Key() != "us-east-2/use2-az2/m7i.large/on_demand" {
+		t.Fatalf("offers %v, want us-east-2's other zone first", offerKeys(offers))
+	}
+	for _, o := range offers {
+		if o.ZoneID == "use2-az1" {
+			t.Fatalf("a refused zone offered %s", o.Key())
+		}
+	}
+}
+
 func TestOffersPreferTheEmptierZoneAtEqualCost(t *testing.T) {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}

@@ -186,8 +186,8 @@ type Policy struct {
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
-	// RegionFailures refusals from distinct offers of one region within
-	// RegionFailureWindow rank that region after the others.
+	// RegionFailures region-wide refusals from distinct offers of one region
+	// within RegionFailureWindow rank that region after the others.
 	RegionFailures      int
 	RegionFailureWindow time.Duration
 }
