@@ -57,14 +57,6 @@ set phase = 'failed', failure = @failure, phase_message = @message, phase_at = n
     token_hash = null, launch_lease_until = null, updated_at = now()
 where id = @id and phase = @from_phase;
 
--- name: FailLaunch :execrows
--- Fails a requested host in the pool its launcher holds; a host another
--- launcher moved on fails nothing.
-update hosts
-set phase = 'failed', failure = @failure, phase_message = @message, phase_at = now(), state = 'retired',
-    token_hash = null, launch_lease_until = null, updated_at = now()
-where id = @id and phase = 'requested' and launch_pools = @launch_pools;
-
 -- name: InsertCooldown :exec
 -- Cools an offer in one zone, or in its whole region for the zone ''.
 insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason, refused_at)

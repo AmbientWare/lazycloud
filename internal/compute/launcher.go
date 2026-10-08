@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -61,12 +62,11 @@ type launchTarget struct {
 
 // Launch starts instances for requested hosts. Each launch is claimed with
 // a lease and runs outside any transaction; RunInstances takes the host id,
-// numbered by each refused pool the launch moved past, as its client
-// token, so a retry after a lost answer returns the same instance. A
-// refusal for capacity, quota or price cools the refused pool and moves the
-// host to the next ranked pool that still holds what it was bought for, up
-// to maxLaunchPools; a host left without one fails, so the planner buys
-// again on its next pass.
+// numbered by each refused pool the launch moved past, as its client token,
+// so a retry after a lost answer returns the same instance. A refusal for capacity, quota or price cools the
+// refused pool and moves the host to the next ranked pool that still holds
+// what it was bought for, up to maxLaunchPools; a host left without one
+// fails, so the planner buys again on its next pass.
 func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) {
 	if c.config.ServedRelease != "" {
 		release, err := c.TargetRelease(ctx)
@@ -197,7 +197,7 @@ func (p poolInputs) cool(c *Compute, h ClaimLaunchesRow, cool poolCooldown) {
 		Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market, RefusedAt: in.Now,
 		Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: cool.quota && h.ConnectionID == nil,
 	})
-	if t, known := CatalogTypeNamed(h.InstanceType); known {
+	if t, known := CatalogTypeNamed(h.InstanceType); known && in.QuotaUsed != nil {
 		class, _ := QuotaClassOf(t.Name)
 		in.QuotaUsed[QuotaKey{Region: h.Region, Class: class, Market: market}] -= t.VCPUs()
 	}
@@ -205,37 +205,69 @@ func (p poolInputs) cool(c *Compute, h ClaimLaunchesRow, cool poolCooldown) {
 
 // moved counts h, moved to next, against next's quota.
 func (p poolInputs) moved(h ClaimLaunchesRow, next FleetOffer) {
-	if in, ok := p[ownerKey(h)]; ok {
+	if in, ok := p[ownerKey(h)]; ok && in.QuotaUsed != nil {
 		in.QuotaUsed[next.Quota] += next.Type.VCPUs()
 	}
 }
 
 // inputs reads the offer inputs of h's owner once a pass, as the planner
-// builds them.
+// reads them: cooldowns, quotas and the vCPUs live hosts count against
+// them, and the memory each type reported.
 func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) (*OfferInputs, error) {
 	owner := ownerKey(h)
 	if in, ok := p[owner]; ok {
 		return in, nil
 	}
-	var networks map[string]Network
+	now := time.Now()
+	in := &OfferInputs{Now: now, Catalog: FleetCatalog(), ReportedMemory: map[string]int64{}}
+	rows, err := c.queries.PlannerHosts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read fleet hosts: %w", err)
+	}
+	var platform []FleetHost
+	for _, row := range rows {
+		if row.SessionEpoch > 0 && row.InstanceType != "" {
+			if seen, ok := in.ReportedMemory[row.InstanceType]; !ok || row.MemoryBytes < seen {
+				in.ReportedMemory[row.InstanceType] = row.MemoryBytes
+			}
+		}
+		if HostKind(row.Kind) == KindPlatform {
+			platform = append(platform, fleetHostOf(row, now, nil))
+		}
+	}
 	if h.ConnectionID == nil {
-		networks = c.fleet.Networks
+		in.Networks = c.fleet.Networks
+		if in.Rates, err = billing.FleetComputeRates(now); err != nil {
+			return nil, fmt.Errorf("read the fleet's compute rates: %w", err)
+		}
+		rooms, err := quotaRooms(ctx, c.queries, now)
+		if err != nil {
+			return nil, err
+		}
+		in.Quotas, in.QuotaUsed = vcpuQuotas(rooms), QuotaUse(platform, in.Catalog)
 	} else {
 		row, err := c.queries.ConnectionScope(ctx, *h.ConnectionID)
 		if err != nil {
 			return nil, fmt.Errorf("read connection scope: %w", err)
 		}
-		if err := json.Unmarshal(row.Networks, &networks); err != nil {
+		if err := json.Unmarshal(row.Networks, &in.Networks); err != nil {
 			return nil, fmt.Errorf("decode networks: %w", err)
 		}
+		in.OwnerPays = true
 	}
-	r, err := readOffers(ctx, c.queries, c.policy(), time.Now())
-	if err != nil {
+	if in.Spot, err = readSpotPrices(ctx, c.queries); err != nil {
 		return nil, err
 	}
-	in := r.owner(h.ConnectionID, networks, nil, c.fleet.CapacityCooldown).in
-	p[owner] = &in
-	return &in, nil
+	if in.ZoneTypes, err = readZoneOfferings(ctx, c.queries); err != nil {
+		return nil, err
+	}
+	cooldowns, err := c.queries.PlannerCooldowns(ctx, c.policy().RegionFailureWindow.Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("read cooldowns: %w", err)
+	}
+	in.Cooldowns = offerCooldowns(cooldowns, owner)
+	p[owner] = in
+	return in, nil
 }
 
 // nextPool is the cheapest pool, of those not refused and with a node
@@ -548,9 +580,8 @@ func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, i
 	return nil
 }
 
-// failLaunch fails a host that could not launch in the pool its launcher
-// holds; a cooldown, when given, also skips the pool until the cooldown
-// ends. A host another launcher moved on stays requested.
+// failLaunch fails a host that could not launch; a cooldown, when given,
+// also skips its pool until the cooldown ends.
 func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool *poolCooldown) error {
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -559,14 +590,10 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 				return err
 			}
 		}
-		n, err := q.FailLaunch(ctx, FailLaunchParams{
-			ID: h.ID, LaunchPools: h.LaunchPools, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
-		})
-		if err != nil {
-			return fmt.Errorf("fail launch: %w", err)
-		}
-		if n == 0 {
-			return nil
+		if _, err := q.FailHost(ctx, FailHostParams{
+			ID: h.ID, FromPhase: string(PhaseRequested), Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
+		}); err != nil {
+			return fmt.Errorf("fail host: %w", err)
 		}
 		return notifyChannel(ctx, tx, h.ID)
 	})

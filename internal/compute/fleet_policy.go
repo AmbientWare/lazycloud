@@ -1,7 +1,6 @@
 package compute
 
 import (
-	"cmp"
 	"slices"
 	"time"
 
@@ -160,33 +159,6 @@ type BatchWindow struct {
 	Quiet, Max time.Duration
 }
 
-// lookback is how far back an arrival can still hold the window open.
-func (w BatchWindow) lookback() time.Duration { return w.Max + w.Quiet }
-
-// wait is how long the window stays open given how long ago each arrival
-// of the lookback came. The batch runs back from the newest arrival
-// through arrivals less than Quiet apart; one that may have begun before
-// the lookback holds nothing.
-func (w BatchWindow) wait(ages []time.Duration) time.Duration {
-	ages = slices.Clone(ages)
-	slices.SortFunc(ages, func(a, b time.Duration) int { return cmp.Compare(b, a) })
-	prev := w.lookback()
-	newest, began := time.Duration(-1), time.Duration(-1)
-	for _, age := range ages {
-		if age > prev {
-			continue
-		}
-		if prev-age >= w.Quiet {
-			began = age
-		}
-		prev, newest = age, age
-	}
-	if began < 0 {
-		return 0
-	}
-	return max(min(w.Quiet-newest, w.Max-began), 0)
-}
-
 // Policy is the fleet capacity policy, reviewed like prices.
 type Policy struct {
 	// MarginPercent is the share of rate-card revenue a purchase must keep
@@ -214,8 +186,8 @@ type Policy struct {
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
-	// RegionFailures region-wide refusals from distinct offers of one region
-	// within RegionFailureWindow rank that region after the others.
+	// RegionFailures refusals from distinct offers of one region within
+	// RegionFailureWindow rank that region after the others.
 	RegionFailures      int
 	RegionFailureWindow time.Duration
 }

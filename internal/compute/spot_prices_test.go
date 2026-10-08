@@ -39,7 +39,8 @@ func placementScoreReply(region string, scores map[string]int) awsReply {
 
 // The planner buys a pending container's Spot host in the pool that wins
 // on price and placement score: an 8-vCPU pool AWS scores 5 against a best
-// of 9 loses to one 10% dearer and wins against one 30% dearer.
+// of 9 loses to one 10% dearer and wins against one 30% dearer. Shapes the
+// catalog sells fewer than three types of are not scored.
 func TestPlacementScoresRankAScarcePoolBelowASlightlyDearerOne(t *testing.T) {
 	for _, c := range []struct {
 		dearPrice string
@@ -56,6 +57,10 @@ func TestPlacementScoresRankAScarcePoolBelowASlightlyDearerOne(t *testing.T) {
 		})
 		emulator.on("GetSpotPlacementScores", func(call awsCall) awsReply {
 			region, types := call.Form.Get("RegionName.1"), list(call.Form, "InstanceType")
+			if call.Form.Get("SingleAvailabilityZone") != "true" || call.Form.Get("TargetCapacity") != "1" || region == "" ||
+				call.Form.Get("RegionName.2") != "" || len(types) < 3 {
+				t.Errorf("GetSpotPlacementScores %v, want one instance of a shape of three types or more in one zone of one region", call.Form)
+			}
 			if region == "us-east-2" && slices.Contains(types, "c6a.2xlarge") {
 				return placementScoreReply(region, map[string]int{"use2-az1": 5, "use2-az2": 9})
 			}

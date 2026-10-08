@@ -127,8 +127,9 @@ type FleetOffer struct {
 // each point a pool scores below the best pool of its shape ranks it as 4%
 // dearer. A pool AWS scores 1 against a best of 9 ranks 32% dearer, so a
 // pool that is likely to fill wins up to about a third above the price of
-// one that is not, while a point of difference between pools both likely
-// to fill weighs less than ordinary Spot price spread.
+// one that is not (one pinned pool refused 3 of 5 launches), while
+// a point of difference between pools both likely to fill weighs less
+// than ordinary Spot price spread.
 const placementPenaltyPercent = 4
 
 // Key names the offer.
@@ -202,14 +203,12 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, need Requirement) 
 	return "", false
 }
 
-// coolingRegions are the regions where region-wide refusals from at least
-// RegionFailures distinct offers fell within RegionFailureWindow. A zone's
-// refusal already cools that zone's offer, and one launch can move through
-// several pools of one zone, so only refusals of a whole region count.
+// coolingRegions are the regions where refusals from at least
+// RegionFailures distinct offers fell within RegionFailureWindow.
 func coolingRegions(p Policy, cooldowns []OfferCooldown, now time.Time) map[string]bool {
 	offers := map[string]map[string]bool{}
 	for _, c := range cooldowns {
-		if c.ZoneID != "" || c.RefusedAt.Before(now.Add(-p.RegionFailureWindow)) {
+		if c.RefusedAt.Before(now.Add(-p.RegionFailureWindow)) {
 			continue
 		}
 		if offers[c.Region] == nil {

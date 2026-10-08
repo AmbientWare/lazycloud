@@ -171,9 +171,9 @@ func rootDiskMicros(region string, gib, mibps int64) int64 {
 }
 
 // FleetCatalog is what the platform fleet buys, with on-demand prices in
-// priceRegions as the AWS price list published 2026-09-25 has them
-// (testdata/fleet/on_demand_prices.json). Every type runs two threads per
-// core, its DefaultThreadsPerCore.
+// priceRegions as the AWS price list
+// published 2026-09-25 has them (testdata/fleet/on_demand_prices.json).
+// Every type runs two threads per core, its DefaultThreadsPerCore.
 func FleetCatalog() []CatalogType {
 	cpuType := func(name string, vcpus int, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
 		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}

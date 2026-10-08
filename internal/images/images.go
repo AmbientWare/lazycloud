@@ -897,10 +897,9 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 	return command, nil
 }
 
-// BuildResources are the CPU and memory a build container reserves; its
-// memory is also its ceiling.
-func (i *Images) BuildResources() (cpuMillis cpu.Millis, memoryBytes int64) {
-	return i.config.BuildCPU, buildMemoryBytes
+// BuildResources are the reservations and ceilings of a build container.
+func (i *Images) BuildResources() (cpuMillis cpu.Millis, memoryBytes, memoryLimitBytes int64) {
+	return i.config.BuildCPU, buildMemoryBytes, buildMemoryBytes
 }
 
 // BuildOutcome is what a build attempt produced: a pushed manifest digest or

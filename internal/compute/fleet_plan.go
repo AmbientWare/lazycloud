@@ -807,8 +807,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 		}
 		if best == nil || cmp.Or(boolOrder(h.market() != items[taken[0]].market, best.market() != items[bestTaken[0]].market),
 			cmp.Compare(bestCount[0], count[0]),
-			boolOrder(!all(h, taken), !all(best, bestTaken)), shapeOrder(h.Usable, best.Usable), ps.retention(h, best),
-			cmp.Compare(bestCount[1], count[1])) < 0 {
+			boolOrder(!all(h, taken), !all(best, bestTaken)), shapeOrder(h.Usable, best.Usable), ps.retention(h, best)) < 0 {
 			best, bestTaken, bestCount = h, taken, count
 		}
 	}
@@ -828,8 +827,8 @@ func (ps *pass) leavesLarge(h FleetHost) bool {
 	return !h.Usable.Covers(v.largest) || ps.holdsLargest(v, h.ID)
 }
 
-// retention orders hosts by what they cost to serve, cheapest and smallest
-// first, unknown last.
+// retention orders idle hosts by what keeping them costs, cheapest and
+// smallest first, unknown last.
 func (ps *pass) retention(a, b *FleetHost) int {
 	costA, knownA := ps.hostCost(*a)
 	costB, knownB := ps.hostCost(*b)

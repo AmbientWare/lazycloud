@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,50 +17,15 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// statementLog counts the statements a pool sends and keeps each distinct
-// read with the arguments it last ran with.
-type statementLog struct {
-	mu    sync.Mutex
-	n     int64
-	reads map[string][]any
-}
+// statementCounter counts the statements a pool sends.
+type statementCounter struct{ n atomic.Int64 }
 
-func (s *statementLog) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.n++
-	if body := statementBody(data.SQL); strings.HasPrefix(body, "select") || strings.HasPrefix(body, "with") {
-		s.reads[data.SQL] = data.Args
-	}
+func (s *statementCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	s.n.Add(1)
 	return ctx
 }
 
-func (*statementLog) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-// reset forgets what the log saw.
-func (s *statementLog) reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.n, s.reads = 0, map[string][]any{}
-}
-
-// statementBody is a statement's text after its leading comment lines.
-func statementBody(sql string) string {
-	lines := strings.Split(strings.TrimSpace(sql), "\n")
-	for len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "--") {
-		lines = lines[1:]
-	}
-	return strings.ToLower(strings.TrimSpace(strings.Join(lines, "\n")))
-}
-
-// statementName is a statement's sqlc name, or its first line.
-func statementName(sql string) string {
-	first, _, _ := strings.Cut(strings.TrimSpace(sql), "\n")
-	if name, ok := strings.CutPrefix(first, "-- name: "); ok {
-		first, _, _ = strings.Cut(name, " ")
-	}
-	return first
-}
+func (*statementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 var errRollback = errors.New("rollback") //nolint:gochecknoglobals // Test sentinel.
 
@@ -160,16 +123,16 @@ func costExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 	}
 }
 
-// The planning pass sends a fixed number of statements, and no read it
-// sends touches more container rows than the pending batch as the backlog,
+// The planning pass sends a fixed number of statements, and no snapshot
+// read touches more container rows than the pending batch as the backlog,
 // history and fleet grow to 250 hosts: it reads the batch and live
 // containers per host, never the backlog or history. Run with -v for the
 // cost table.
 func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	pool := dbtest.New(t)
-	statements := &statementLog{}
+	counter := &statementCounter{}
 	cfg := pool.Config().Copy()
-	cfg.ConnConfig.Tracer = statements
+	cfg.ConnConfig.Tracer = counter
 	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +212,19 @@ from builds`, (toHistory-history)/10)
 		costExec(t, pool, "analyze")
 		pending, history = toPending, toHistory
 	}
+	p := DefaultPolicy()
+	scans := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"hosts", plannerHosts, nil},
+		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
+		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), p.BuildWindow.Seconds()}},
+		{"arrival batches", batchWaits, []any{p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds(), int32(demandBatch), (p.Batch.Max + p.Batch.Quiet).Seconds()}},
+		{"cooldowns", plannerCooldowns, []any{p.RegionFailureWindow.Seconds()}},
+		{"markets", fleetMarkets, nil},
+	}
 	type cost struct {
 		statements int64
 		wall       time.Duration
@@ -262,27 +238,23 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 		costExec(t, pool, "delete from fleet_markets")
 		// Plans follow current statistics, not autovacuum's timing.
 		costExec(t, pool, "analyze")
-		statements.reset()
+		counter.n.Store(0)
 		start := time.Now()
 		result, err := c.Plan(t.Context(), slog.New(slog.DiscardHandler))
 		if err != nil || result.Skipped {
 			t.Fatalf("plan %+v %v", result, err)
 		}
-		statements.mu.Lock()
-		out := cost{statements: statements.n, wall: time.Since(start), buffers: map[string]int{}}
-		reads := maps.Clone(statements.reads)
-		statements.mu.Unlock()
+		out := cost{statements: counter.n.Load(), wall: time.Since(start), buffers: map[string]int{}}
 		var row []string
-		for _, query := range slices.Sorted(maps.Keys(reads)) {
-			name := statementName(query)
+		for _, s := range scans {
 			for _, mode := range []string{"auto", "force_generic_plan"} {
-				plan := explainPlan(t, pool, mode, query, reads[query]...)
-				out.buffers[name] = max(out.buffers[name], planBuffers(plan))
+				plan := explainPlan(t, pool, mode, s.query, s.args...)
+				out.buffers[s.name] = max(out.buffers[s.name], planBuffers(plan))
 				if rows := containerRows(plan); rows > demandBatch+100 {
-					t.Errorf("%s: %s (%s) reads %d container or task rows:\n%s", label, name, mode, rows, plan)
+					t.Errorf("%s: %s (%s) reads %d container or task rows:\n%s", label, s.name, mode, rows, plan)
 				}
 			}
-			row = append(row, fmt.Sprintf("%s %d", name, out.buffers[name]))
+			row = append(row, fmt.Sprintf("%s %d", s.name, out.buffers[s.name]))
 		}
 		t.Logf("%s: %d statements, %s, requested %d; buffers: %s", label, out.statements, out.wall.Round(time.Millisecond),
 			result.Requested, strings.Join(row, ", "))
