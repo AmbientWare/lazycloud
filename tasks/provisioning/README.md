@@ -20,7 +20,7 @@ merges as is; the final PR removes `tasks/provisioning/`.
   $0.044 is reported to the user separately. (user)
 - Integrator defaults the user may overrule: batch window 1 s quiet, 5 s at
   most; a build slot is warm while builds ran in the market within the last
-  hour.
+  hour, in CPU markets only, so a GPU build does not hold a GPU host.
 
 ## Packets
 

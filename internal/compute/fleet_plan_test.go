@@ -524,6 +524,25 @@ func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
 	}
 }
 
+// Recent builds keep a warm slot of their shape only in CPU markets: after
+// a GPU build its idle host leaves on the idle timeout like any other.
+func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	h := idle(planHost(1, mustType(t, "g4dn.xlarge"), FleetServing))
+	h.GPU = "T4"
+	s := planSnapshot(t, h)
+	s.Offers.Catalog = FleetCatalog()
+	s.Builds = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
+	plan := PlanFleet(p, s)
+	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
+		t.Fatalf("actions %+v, want the idle T4 host to leave", plan.Actions)
+	}
+	if mp := marketPlan(t, plan, ReserveMarket{GPU: "T4"}); !mp.WarmTarget.Empty() {
+		t.Fatalf("T4 warm target %+v, want none", mp.WarmTarget)
+	}
+}
+
 // A reserve shortfall held for a host that may return names the hold, not
 // an offer exclusion; with no host that could return it is bought at once.
 func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {

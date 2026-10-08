@@ -347,7 +347,8 @@ func (ps *pass) pendingItems() []coverItem {
 
 // views sets every market's targets from its current load, what its hosts'
 // containers reserve and what its pending containers ask for: its warm
-// slots, with one of the shape of its builds while they run, and its
+// slots, with one of the shape of its builds while they run in a CPU
+// market, since a GPU host held warm for builds costs far more, and its
 // stopped target: its share of load, and at least its floor beside the
 // largest shape one reserve must fit.
 func (ps *pass) views(items []coverItem) []*marketView {
@@ -378,7 +379,7 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		}
 		r := ps.p.Reserve(m)
 		v.slots = ps.p.slots(r.Warm, v.load)
-		if build := ps.s.Builds[m]; !build.Empty() && r.Warm != (HeadroomTarget{}) {
+		if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
 			v.slots = append(v.slots, build.Lower(ps.p.LargestShape.Cap))
 		}
 		v.stopped = r.Stopped.Of(v.load)
