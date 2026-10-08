@@ -543,6 +543,42 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 	}
 }
 
+// A reserve resumed for a build goes back into the reserve: while it idles
+// holding a warm slot a cheaper type will take over, the reserve waits for
+// it rather than buying its like, even once the wait from the resume has
+// run out; rightsize then replaces it, and it returns once the
+// replacement serves.
+func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU = MarketReserve{}, nil
+	big := mustType(t, "c6a.8xlarge")
+	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(2000, 4)}, Stopped: HeadroomTarget{Floor: big.Usable(0)}}
+	resumed := planHost(1, big, FleetServing)
+	resumed.PhaseAt = offerNow.Add(-6 * time.Minute)
+	snapshot := func(idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
+		h := resumed
+		h.IdleSince = ptr(offerNow.Add(-idleFor))
+		s := planSnapshot(t, append([]FleetHost{h}, hosts...)...)
+		s.Offers.Catalog = FleetCatalog()
+		s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: resumed.PhaseAt}
+		return s
+	}
+	plan := PlanFleet(p, snapshot(2*time.Minute))
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonReturning || len(plan.Actions) > 0 {
+		t.Fatalf("idle 2m: reason %q, actions %+v", mp.Reason, plan.Actions)
+	}
+	plan = PlanFleet(p, snapshot(6*time.Minute))
+	moves := actionsOf(plan, ActionRightsize)
+	if len(moves) != 1 || *moves[0].Host != resumed.ID || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+		t.Fatalf("idle 6m: %+v", plan.Actions)
+	}
+	replacement := idle(planHost(2, moves[0].Offer.Type, FleetServing))
+	plan = PlanFleet(p, snapshot(6*time.Minute, replacement))
+	if got := actionsOf(plan, ActionReturnToReserve); len(got) != 1 || *got[0].Host != resumed.ID || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+		t.Fatalf("once the replacement serves: %+v", plan.Actions)
+	}
+}
+
 // A reserve shortfall held for a host that may return names the hold, not
 // an offer exclusion; with no host that could return it is bought at once.
 func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {

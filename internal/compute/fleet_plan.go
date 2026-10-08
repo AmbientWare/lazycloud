@@ -1340,6 +1340,9 @@ func (ps *pass) rightsize(v *marketView) {
 	var replaced *FleetHost
 	var bestPayback int64
 	for _, h := range ps.inMarket(v.m, serving) {
+		if !ps.idleLong(*h) {
+			continue
+		}
 		if o, payback := ps.replacement(v, *h); o != nil && payback > bestPayback {
 			best, replaced, bestPayback = o, h, payback
 		}
@@ -1352,11 +1355,14 @@ func (ps *pass) rightsize(v *marketView) {
 // replacement is the offer of another type that pays back most for
 // replacing idle host h, with its payback, or nil: it holds the warm slots
 // h does, and what it saves over the cost horizon, priced as purchases
-// are, exceeds what it costs while it provisions.
+// are, exceeds what it costs while it provisions. It does not wait for the
+// idle timeout, so a host rightsize will replace counts as returning while
+// it idles.
 func (ps *pass) replacement(v *marketView, h FleetHost) (*FleetOffer, int64) {
 	need := totalOf(ps.holding[h.ID], func(c FleetCapacity) FleetCapacity { return c })
 	cost, known := ps.hostCost(h)
-	if !ps.idleLong(h) || !known || need.Empty() {
+	_, idle := ps.plan.IdleSince[h.ID]
+	if !idle || h.Protected || !known || need.Empty() {
 		return nil, 0
 	}
 	var best *FleetOffer
