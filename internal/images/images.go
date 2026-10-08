@@ -45,9 +45,10 @@ const (
 	// lost without an outcome earns another; a failed build step does not.
 	maxAttempts = 2
 	// Build containers reserve Config.BuildCPU and buildMemoryBytes and may
-	// use the host's CPU and up to buildMemoryLimit.
-	buildMemoryBytes = 2 << 30
-	buildMemoryLimit = 8 << 30
+	// use the host's CPU but no more memory than they reserve, so a build
+	// never takes memory a neighbour holds. A 4-core c6a.2xlarge, about
+	// 13.5 GiB usable, holds a build.
+	buildMemoryBytes = 8 << 30
 	maxFailureBytes  = 64 << 10
 	// maxLogBytes and maxLogLines bound the output one attempt stores.
 	maxLogBytes   = 8 << 20
@@ -898,7 +899,7 @@ func (i *Images) BuildCommandOf(ctx context.Context, host compute.HostID, start 
 
 // BuildResources are the reservations and ceilings of a build container.
 func (i *Images) BuildResources() (cpuMillis cpu.Millis, memoryBytes, memoryLimitBytes int64) {
-	return i.config.BuildCPU, buildMemoryBytes, buildMemoryLimit
+	return i.config.BuildCPU, buildMemoryBytes, buildMemoryBytes
 }
 
 // BuildOutcome is what a build attempt produced: a pushed manifest digest or

@@ -95,9 +95,6 @@ func (f Fleet) withDefaults() Fleet {
 
 const gib = int64(1) << 30
 
-// regionOrder is the purchase preference among the US regions.
-func regionOrder() []string { return []string{"us-east-2", "us-west-1", "us-east-1", "us-west-2"} }
-
 // subnetFor picks the subnet to launch in: one in zone when set, otherwise
 // the one after the host id's position, which spreads hosts over zones.
 func subnetFor(network Network, zone string, host uuid.UUID) (Subnet, bool) {

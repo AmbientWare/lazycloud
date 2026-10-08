@@ -23,15 +23,18 @@ type CatalogType struct {
 	// Hibernates is EC2's HibernationSupported for the type in every
 	// region it is sold in; RAM is under 150 GiB.
 	Hibernates bool
-	// prices are reviewed on-demand hourly USD micros in regionOrder; zero
-	// means EC2 does not sell the type in that region.
+	// prices are reviewed on-demand hourly USD micros in priceRegions;
+	// zero means EC2 does not sell the type in that region.
 	prices [4]int64
 }
+
+// priceRegions are the regions of CatalogType.prices, in its order.
+func priceRegions() []string { return []string{"us-east-2", "us-west-1", "us-east-1", "us-west-2"} }
 
 // OnDemandMicros is the reviewed hourly on-demand price in region, and
 // whether EC2 sells the type there.
 func (t CatalogType) OnDemandMicros(region string) (int64, bool) {
-	n := slices.Index(regionOrder(), region)
+	n := slices.Index(priceRegions(), region)
 	if n < 0 || t.prices[n] == 0 {
 		return 0, false
 	}
@@ -90,18 +93,43 @@ func FleetArchitectures() []string {
 	return architectures
 }
 
-// regionRates are a region's gp3 and public IPv4 rates in USD micros: a
-// GiB and a MiB/s provisioned over the baseline for a month, and an address
-// for an hour.
+// regionRates are a region's gp3, public IPv4 and transfer rates in USD
+// micros: a GiB and a MiB/s provisioned over the baseline for a month, an
+// address for an hour, and a GB moved between the region and storageRegion.
 type regionRates struct {
-	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour int64
+	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour, transferGB int64
 }
 
 func ratesIn(region string) regionRates {
-	if region == "us-west-1" {
-		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000}
+	switch region {
+	case storageRegion:
+		return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
+	case "us-east-2":
+		return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000, transferGB: 10_000}
+	case "us-west-1":
+		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000, transferGB: 20_000}
 	}
-	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
+	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000, transferGB: 20_000}
+}
+
+// storageRegion holds the registry and the object store. A host in another
+// region pays AWS inter-region transfer on what it moves to and from them:
+// registry pulls and pushes, layer reads, and volume and disk restores.
+const storageRegion = "us-east-1"
+
+// transferMilliGBPerCoreHour is the policy estimate of what a running host
+// moves to and from storageRegion, in thousandths of a GB per core-hour. A
+// cold start reads about 2 GB of layers for a torch image and 0.1 GB for a
+// python one, a build pushes and converts about what it pulled, and volume
+// and disk restores are rarer than starts. Host caches absorb repeated
+// images, so a host averages about one torch-sized cold read per four
+// core-hours.
+const transferMilliGBPerCoreHour = 500
+
+// transferMicros is the expected hourly transfer cost of a running host of
+// t in region.
+func transferMicros(region string, t CatalogType) int64 {
+	return int64(t.Topology.Cores) * transferMilliGBPerCoreHour * ratesIn(region).transferGB / 1000
 }
 
 // Root throughput in MiB/s. gp3 gives baselineMiBps; a type that can hold
@@ -143,7 +171,7 @@ func rootDiskMicros(region string, gib, mibps int64) int64 {
 }
 
 // FleetCatalog is what the platform fleet buys, with on-demand prices in
-// us-east-2, us-west-1, us-east-1 and us-west-2 as the AWS price list
+// priceRegions as the AWS price list
 // published 2026-09-25 has them (testdata/fleet/on_demand_prices.json).
 // Every type runs two threads per core, its DefaultThreadsPerCore.
 func FleetCatalog() []CatalogType {

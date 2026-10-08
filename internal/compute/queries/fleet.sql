@@ -1,6 +1,7 @@
 -- name: ClaimLaunches :many
 -- Requested hosts whose launch is not held by another launcher. The lease
--- outlasts one RunInstances call; a launcher that dies leaves it to expire.
+-- outlasts one pool's RunInstances call and each move to a next pool renews
+-- it; a launcher that dies leaves it to expire.
 update hosts h
 set launch_lease_until = now() + make_interval(secs => @lease_seconds::float8),
     launch_attempts = launch_attempts + 1, updated_at = now()
@@ -12,10 +13,34 @@ where h.id in (
     limit @batch_size
     for update skip locked
 )
-returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_count,
-          h.launch_attempts, h.reserve_mode;
+returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
+          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode;
+
+-- name: MoveLaunchPool :execrows
+-- Moves a requested host whose pool EC2 refused to the next pool at that
+-- pool's cost, and renews the launcher's lease. The host keeps the
+-- capacity it was bought with until it reports its own, so every pool it
+-- moves to holds that. A host another launcher moved on since it was
+-- claimed stays where that one put it.
+update hosts
+set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
+    availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros, launch_pools = launch_pools + 1,
+    launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), updated_at = now()
+where id = @id and phase = 'requested' and launch_pools = @launch_pools;
+
+-- name: HostWaiters :many
+-- The placement each pending container waiting for a host asks for. A
+-- build has no release and takes any region on Spot.
+select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
+       coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
+       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible
+from containers c
+left join releases r on r.id = c.release_id
+where c.state = 'pending' and c.capacity_host_id = @host_id;
 
 -- name: RecordLaunch :execrows
+-- Records the instance launched in the pool the launcher holds; a host
+-- another launcher moved on records nothing, and its instance ends.
 update hosts
 set instance_id = @instance_id, availability_zone = @availability_zone, availability_zone_id = @availability_zone_id,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
@@ -23,7 +48,7 @@ set instance_id = @instance_id, availability_zone = @availability_zone, availabi
     authorization_id = sqlc.narg(authorization_id), node_role_arn = @node_role_arn,
     spot_request_id = sqlc.narg(spot_request_id), node_image = @node_image,
     hibernation_configured = @hibernation_configured
-where id = @id and phase = 'requested';
+where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
 -- name: FailHost :execrows
 -- Fails a host still in the phase its caller read.
@@ -33,9 +58,11 @@ set phase = 'failed', failure = @failure, phase_message = @message, phase_at = n
 where id = @id and phase = @from_phase;
 
 -- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason, refused_at)
-values (@connection_key, @region, @instance_type, @market, now() + make_interval(secs => @seconds::float8), @reason, now())
-on conflict (connection_key, region, instance_type, market)
+-- Cools an offer in one zone, or in its whole region for the zone ''.
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason, refused_at)
+values (@connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => @seconds::float8),
+        @reason, now())
+on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at;
 
 -- name: DrainConnectionHosts :many

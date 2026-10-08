@@ -28,7 +28,7 @@ func TestFleetCatalogPricesMatchTheAWSPriceList(t *testing.T) {
 		if !ok {
 			t.Errorf("%s is not in the price list", typ.Name)
 		}
-		for _, region := range regionOrder() {
+		for _, region := range priceRegions() {
 			price, priced := typ.OnDemandMicros(region)
 			want, listed := sold[region]
 			if priced != listed || price != want {

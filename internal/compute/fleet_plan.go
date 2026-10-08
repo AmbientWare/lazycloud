@@ -471,7 +471,7 @@ func (ps *pass) stoppedMicros(h FleetHost) int64 {
 }
 
 func (ps *pass) cooled(h FleetHost) bool {
-	return cooled(ps.s.Offers.Cooldowns, ps.s.Now, h.Region, h.InstanceType, h.Market)
+	return cooled(ps.s.Offers.Cooldowns, ps.s.Now, h.Region, h.ZoneID, h.InstanceType, h.Market)
 }
 
 func (ps *pass) room(m ReserveMarket) int { return ps.p.MaxGrowthActions - ps.used[m] }

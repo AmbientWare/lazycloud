@@ -16,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -84,6 +87,29 @@ func startTestRegistry(t *testing.T) string {
 	}
 }
 
+// buildBase copies testBuildBase into registry and names the copy, so test
+// builds resolve their base on the loopback registry: BuildKit fails a build
+// on a registry's transient 5xx, and the copy retries it.
+func buildBase(t *testing.T, registry string) string {
+	t.Helper()
+	src, err := name.ParseReference(testBuildBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := remote.Image(src, remote.WithContext(t.Context()), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
+	if err != nil {
+		t.Fatalf("read %s: %v", testBuildBase, err)
+	}
+	dst, err := name.ParseReference(registry+"/lazycloud/base:test", name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(dst, img, remote.WithContext(t.Context())); err != nil {
+		t.Fatalf("copy %s to %s: %v", testBuildBase, dst, err)
+	}
+	return dst.String()
+}
+
 // pullBuilt pulls an image a test build pushed, to look inside it.
 func pullBuilt(t *testing.T, reference string) {
 	t.Helper()
@@ -108,11 +134,12 @@ func buildCommand(registry, dockerfile string) *hostproto.ServerMessage {
 func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 
 	// Rendered shell steps are heredocs.
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\necho built > /proof\nLAZYCLOUD_STEP\n")
+	start := buildCommand(registry, "FROM "+base+"\nRUN <<'LAZYCLOUD_STEP'\necho built > /proof\nLAZYCLOUD_STEP\n")
 	container := start.GetStart().GetContainerId()
 	session.send(t, start)
 	session.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
@@ -173,10 +200,11 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 func TestAgentPublishesABuildWhoseCacheExportFails(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\necho built > /proof\nLAZYCLOUD_STEP\n")
+	start := buildCommand(registry, "FROM "+base+"\nRUN <<'LAZYCLOUD_STEP'\necho built > /proof\nLAZYCLOUD_STEP\n")
 	// Nothing listens on port 1: the cache import is skipped and the
 	// export fails.
 	start.GetStart().GetBuild().CacheRef = "127.0.0.1:1/lazycloud/cache:test"
@@ -205,10 +233,11 @@ func TestAgentPublishesABuildWhoseCacheExportFails(t *testing.T) {
 func TestAgentReportsAFailedBuildWithItsOutputTail(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN echo about to fail && exit 3\n")
+	start := buildCommand(registry, "FROM "+base+"\nRUN echo about to fail && exit 3\n")
 	session.send(t, start)
 	select {
 	case outcome := <-e.server.builds:
@@ -227,11 +256,12 @@ func TestAgentReportsAFailedBuildWithItsOutputTail(t *testing.T) {
 func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 
 	const secret = "s3cr3t-0f-the-build-7d1e"
-	start := buildCommand(registry, "FROM "+testBuildBase+
+	start := buildCommand(registry, "FROM "+base+
 		"\nRUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<'LAZYCLOUD_STEP'\n"+
 		"printf %s \"$TOKEN\" | sha256sum | cut -d' ' -f1 > /proof\nLAZYCLOUD_STEP\n"+
 		"RUN test -z \"$TOKEN\" && ! test -e /run/secrets/TOKEN\n")
@@ -300,11 +330,12 @@ func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
 func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 	build := func(versions, secret string) string {
 		t.Helper()
-		start := buildCommand(registry, "FROM "+testBuildBase+"\nARG LAZYCLOUD_BUILD_SECRET_VERSIONS="+versions+
+		start := buildCommand(registry, "FROM "+base+"\nARG LAZYCLOUD_BUILD_SECRET_VERSIONS="+versions+
 			"\nRUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<'LAZYCLOUD_STEP'\n"+
 			"printf %s \"$TOKEN\" > /proof\nLAZYCLOUD_STEP\n")
 		start.GetStart().GetBuild().Secrets = map[string]string{"TOKEN": secret}
@@ -342,11 +373,12 @@ func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 	build := func(workspace, step string) {
 		t.Helper()
-		start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN --mount=type=cache,id=probe,target=/probe "+step+"\n")
+		start := buildCommand(registry, "FROM "+base+"\nRUN --mount=type=cache,id=probe,target=/probe "+step+"\n")
 		b := start.GetStart().GetBuild()
 		b.CacheWorkspaceId, b.CacheRef = workspace, registry+"/lazycloud/cache:"+cmp.Or(workspace, "shared")
 		session.send(t, start)
@@ -369,10 +401,11 @@ func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
 func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {
 	e := newEnv(t)
 	registry := startTestRegistry(t)
+	base := buildBase(t, registry)
 	e.startAgent()
 	session := e.session()
 
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN sleep 300\n")
+	start := buildCommand(registry, "FROM "+base+"\nRUN sleep 300\n")
 	container := start.GetStart().GetContainerId()
 	session.send(t, start)
 	session.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_READY)

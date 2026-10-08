@@ -268,7 +268,7 @@ func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 		if r.ConnectionKey != owner {
 			continue
 		}
-		c := OfferCooldown{Region: r.Region, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until}
+		c := OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until}
 		if r.RefusedAt != nil {
 			c.RefusedAt = *r.RefusedAt
 		}

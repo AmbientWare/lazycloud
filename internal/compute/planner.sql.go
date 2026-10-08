@@ -101,7 +101,8 @@ insert into capacity_cooldowns (connection_key, region, instance_type, market, u
 select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => $1::float8),
        'the host bought for a container could not take it'
 from jsonb_to_recordset($2::jsonb) as v(connection_key text, region text, instance_type text, market text)
-on conflict (connection_key, region, instance_type, market) do update set until = excluded.until, reason = excluded.reason
+on conflict (connection_key, region, availability_zone_id, instance_type, market)
+do update set until = excluded.until, reason = excluded.reason
 `
 
 type CoolOffersParams struct {
@@ -421,19 +422,20 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 }
 
 const plannerCooldowns = `-- name: PlannerCooldowns :many
-select connection_key, region, instance_type, market, until, refused_at
+select connection_key, region, availability_zone_id, instance_type, market, until, refused_at
 from capacity_cooldowns
 where until > now() or refused_at > now() - make_interval(secs => $1::float8)
-order by connection_key, region, instance_type, market
+order by connection_key, region, availability_zone_id, instance_type, market
 `
 
 type PlannerCooldownsRow struct {
-	ConnectionKey string
-	Region        string
-	InstanceType  string
-	Market        string
-	Until         time.Time
-	RefusedAt     *time.Time
+	ConnectionKey      string
+	Region             string
+	AvailabilityZoneID string
+	InstanceType       string
+	Market             string
+	Until              time.Time
+	RefusedAt          *time.Time
 }
 
 // Offers cooling now, and refusals recent enough to cool their region. A
@@ -450,6 +452,7 @@ func (q *Queries) PlannerCooldowns(ctx context.Context, windowSeconds float64) (
 		if err := rows.Scan(
 			&i.ConnectionKey,
 			&i.Region,
+			&i.AvailabilityZoneID,
 			&i.InstanceType,
 			&i.Market,
 			&i.Until,

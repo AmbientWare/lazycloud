@@ -29,6 +29,11 @@ const (
 	cursorPruneBatch   = 5_000
 	stopHostLost       = "host_lost"
 	categoryImageBuild = "image-build"
+	// buildBilledMemoryBytes is the most memory an image build bills as
+	// reserved. A build reserves the memory it may use, so it never takes
+	// memory a neighbour holds; that reservation places it and the
+	// platform carries it. Measured use above this still bills.
+	buildBilledMemoryBytes = 2 << 30
 
 	kindContainer = "container"
 	kindVolume    = "volume"
@@ -303,15 +308,16 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // lost host ends at the host's last report, and a live one is never billed
 // past it. Entries price measured use, so a period is written only once
 // its use is complete at measured, observability's watermark; until then
-// it is accrued.
+// it is accrued. A build reserves at most buildBilledMemoryBytes as billing
+// sees it.
 func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (sourcePlan, error) {
-	shape := c.shape
+	shape, category := c.shape, ""
+	if c.build {
+		shape.MemoryBytes, category = min(shape.MemoryBytes, buildBilledMemoryBytes), categoryImageBuild
+	}
 	src := source{
 		kind: kindContainer, id: c.id, owner: c.owner, workspace: c.workspace, app: c.app, workload: c.workload, shape: shape,
-		price: func(card RateCard, d time.Duration) (Charge, error) { return card.price(shape, d) },
-	}
-	if c.build {
-		src.category = categoryImageBuild
+		category: category, price: func(card RateCard, d time.Duration) (Charge, error) { return card.price(shape, d) },
 	}
 	start := c.readyAt
 	if c.billedThrough != nil && c.billedThrough.After(start) {
