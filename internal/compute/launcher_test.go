@@ -184,7 +184,6 @@ func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
 		alice := newUser(t, o.pool, "alice@example.com")
 		host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 		bought := scan[string](t, o.pool, "select region || '/' || instance_type || '/' || market from hosts where id = $1", uuid.UUID(host))
-		usable := scan[int64](t, o.pool, "select memory_bytes from hosts where id = $1", uuid.UUID(host))
 
 		if n := launch(t, o); n != 1 {
 			t.Fatalf("%s: launched %d, want the host in its next pool", code, n)
@@ -204,8 +203,9 @@ func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
 			Scan(&phase, &instanceType, &memory); err != nil {
 			t.Fatal(err)
 		}
-		if phase != string(compute.PhaseProvisioning) || instanceType != calls[1].Form.Get("InstanceType") || memory != usable {
-			t.Fatalf("%s: host %s as %s with %d bytes, want provisioning in the pool launched, still recording the %d it was bought with", code, phase, instanceType, memory, usable)
+		next, _ := compute.CatalogTypeNamed(instanceType)
+		if phase != string(compute.PhaseProvisioning) || instanceType != calls[1].Form.Get("InstanceType") || memory != next.Usable(0).MemoryBytes {
+			t.Fatalf("%s: host %s as %s with %d bytes, want provisioning in the pool launched with its capacity", code, phase, instanceType, memory)
 		}
 		cooled := scan[[]string](t, o.pool, "select array_agg(region || '/' || instance_type || '/' || market) from capacity_cooldowns")
 		if len(cooled) != 1 || cooled[0] != bought {
@@ -265,6 +265,41 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	calls := emulator.calls("RunInstances")
 	if len(calls) != 2 || calls[1].Form.Get("SubnetId") != "subnet-east-b" {
 		t.Fatalf("%d launches, the last %q; want the reserve moved to us-east-2b", len(calls), pool(calls[len(calls)-1]))
+	}
+}
+
+// A refused launch moves to the cheapest pool that holds what the planner
+// bought the host to hold, a smaller type among them: an r7i.2xlarge bought
+// for a 4 CPU slot moves to a c6a.2xlarge, not to another type with its
+// memory.
+func TestARefusedLaunchMovesToAPoolThatHoldsWhatItWasBoughtFor(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	run(t, o.pool, `
+insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+values ('us-east-2', 'use2-az1', 'r7i.2xlarge', 100000, now(), now()), ('us-east-2', 'use2-az2', 'r7i.2xlarge', 150000, now(), now()),
+       ('us-east-2', 'use2-az2', 'c6a.2xlarge', 120000, now(), now())`)
+	large, _ := compute.CatalogTypeNamed("r7i.2xlarge")
+	usable := large.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
+    instance_type, market, holds_cpu_millis, holds_memory_bytes)
+values ('w', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'r7i.2xlarge', 'spot', 4000, $3)
+returning id`, int64(usable.CPUMillis), usable.MemoryBytes, 8*gib)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host in its next pool", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 2 || calls[1].Form.Get("InstanceType") != "c6a.2xlarge" {
+		var pools []string
+		for _, c := range calls {
+			pools = append(pools, pool(c))
+		}
+		t.Fatalf("launches %v, want c6a.2xlarge after the refusal", pools)
+	}
+	small, _ := compute.CatalogTypeNamed("c6a.2xlarge")
+	if memory := scan[int64](t, o.pool, "select memory_bytes from hosts where id = $1", host); memory != small.Usable(0).MemoryBytes {
+		t.Fatalf("host records %d bytes, want c6a.2xlarge's %d", memory, small.Usable(0).MemoryBytes)
 	}
 }
 

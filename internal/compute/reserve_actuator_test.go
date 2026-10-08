@@ -339,9 +339,9 @@ func TestResumeStartsTheReserveOnceAndARefusedSpotStartRetiresItsRequest(t *test
 		t.Fatalf("refused reserve is %s, want terminating", phase)
 	}
 	cooled := scan[string](t, o.pool, `select region || '/' || instance_type || '/' || market from capacity_cooldowns
-where until > now() and refused_at > now() - interval '1 minute'`)
+where until > now()`)
 	if cooled != "us-east-2/m7i.large/spot" {
-		t.Fatalf("cooldown %q, want the refused offer with its refusal time", cooled)
+		t.Fatalf("cooldown %q, want the refused offer", cooled)
 	}
 	actuate(t, o)
 	if r := ec2.request("sir-0000d002"); r.State != "cancelled" {

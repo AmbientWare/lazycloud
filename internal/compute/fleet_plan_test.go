@@ -543,6 +543,67 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 	}
 }
 
+// A large idle host that holds the warm floor does not stand in for the
+// reserve: the floor never lapses, so once the shortfall outlasts the
+// idle timeout the market buys a reserve that fits the largest shape.
+func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU = MarketReserve{}, nil
+	big := mustType(t, "c6a.8xlarge")
+	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(1000, 4)}, Stopped: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
+	warm := idle(planHost(1, big, FleetServing))
+	warm.RightsizeRefusedAt = ptr(offerNow)
+	s := planSnapshot(t, warm)
+	s.Offers.Catalog = FleetCatalog()
+	s.Recent = map[ReserveMarket]FleetCapacity{onDemand: cpuGiB(12000, 24)}
+	s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: offerNow.Add(-6 * time.Minute)}
+	plan := PlanFleet(p, s)
+	if len(actionsOf(plan, ActionBuyReserve)) == 0 {
+		t.Fatalf("actions %+v, reason %q; want a reserve bought", plan.Actions, marketPlan(t, plan, onDemand).Reason)
+	}
+}
+
+// A reserve resumed for work takes warm slots after the hosts that serve
+// them: busy with spare room, it does not push the idle warm host out, so
+// it can go back into the reserve once its work ends.
+func TestAResumedReserveLeavesTheWarmSlotsToTheWarmHost(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
+	warm := idle(planHost(1, mustType(t, "m7i.large"), FleetServing))
+	resumed := planHost(2, mustType(t, "c6a.4xlarge"), FleetServing)
+	resumed.Load, resumed.Containers, resumed.Slept = cpuGiB(4000, 8), 1, true
+	s := planSnapshot(t, warm, resumed)
+	s.Offers.Catalog = FleetCatalog()
+	if plan := PlanFleet(p, s); len(plan.Actions) > 0 {
+		t.Fatalf("actions %+v, want the warm host kept", plan.Actions)
+	}
+}
+
+// A rightsize's replacement holds the warm slot once it serves, even when
+// work landed on the host it replaces meanwhile: the replacement stays,
+// and the replaced host leaves once its work ends.
+func TestARightsizeReplacementKeepsTheSlotWhenWorkLandsOnTheReplacedHost(t *testing.T) {
+	p := DefaultPolicy()
+	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
+	snapshot := func(hosts ...FleetHost) FleetSnapshot {
+		s := planSnapshot(t, hosts...)
+		s.Offers.Catalog = FleetCatalog()
+		return s
+	}
+	busy := planHost(1, mustType(t, "c6a.2xlarge"), FleetServing)
+	busy.Load, busy.Containers = cpuGiB(1000, 1), 1
+	replacement := idle(planHost(2, mustType(t, "m7i.large"), FleetServing))
+	replacement.Replaces = ptr(busy.ID)
+	if plan := PlanFleet(p, snapshot(busy, replacement)); len(plan.Actions) > 0 {
+		t.Fatalf("while the replaced host works: %+v", plan.Actions)
+	}
+	done := idle(planHost(1, mustType(t, "c6a.2xlarge"), FleetServing))
+	plan := PlanFleet(p, snapshot(done, replacement))
+	if got := hostsOf(plan.Actions); !slices.Equal(got, []HostID{{1}}) || plan.Actions[0].Kind != ActionDrain {
+		t.Fatalf("once its work ends: %+v", plan.Actions)
+	}
+}
+
 // A reserve resumed for a build goes back into the reserve: while it idles
 // holding a warm slot a cheaper type will take over, the reserve waits for
 // it rather than buying its like, even once the wait from the resume has

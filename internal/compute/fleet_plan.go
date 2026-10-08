@@ -53,6 +53,13 @@ type FleetHost struct {
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
 	PhaseAt time.Time
+	// Replaces is the idle host a rightsize bought this one to replace.
+	Replaces *HostID
+	// RightsizeRefusedAt is when EC2 last refused a launch to replace it.
+	RightsizeRefusedAt *time.Time
+	// Slept is set on a host that has proved it can stop into the reserve:
+	// a reserve, or one resumed from it.
+	Slept bool
 }
 
 func (h FleetHost) market() ReserveMarket { return reserveMarketOf(h.Market, h.GPU) }
@@ -99,7 +106,7 @@ type FleetSnapshot struct {
 	Pending []DemandGroup
 	// Recent is the largest shape each market's placed containers reserved
 	// within the policy's LargestShape window, and Builds the largest its
-	// build containers reserved within its BuildWindow.
+	// finished build containers reserved within its BuildWindow.
 	Recent, Builds map[ReserveMarket]FleetCapacity
 	Offers         OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
@@ -112,6 +119,8 @@ type FleetSnapshot struct {
 	// FloorShortSince is when each market's stopped target went short, from
 	// the last published plan.
 	FloorShortSince map[ReserveMarket]time.Time
+	// Peaks are each market's peak load, from the published plans.
+	Peaks map[ReserveMarket]LoadPeak
 }
 
 // FleetActionKind is what an action asks for.
@@ -148,6 +157,10 @@ type FleetAction struct {
 	Mode   *ReserveMode
 	// Containers are the pending containers a resume or purchase is for.
 	Containers []uuid.UUID
+	// Holds is what a purchase must hold in whichever pool it launches:
+	// the containers and warm slots the cover placed on it, or the reserve
+	// room it was bought for.
+	Holds FleetCapacity
 }
 
 // ContainerWait is why a pending container waits for compute: nil Wait
@@ -189,6 +202,29 @@ const (
 	ReasonNoOffer MarketReason = "no offer fits"
 )
 
+// LoadPeak is the most load a market held and when it last reached it.
+type LoadPeak struct {
+	Load FleetCapacity `json:"load"`
+	At   time.Time     `json:"at"`
+}
+
+// after is the load peak once a pass sees load: the stored one while
+// within the horizon, raised to load, and restarted when load reaches it.
+// Its time is to the minute, so load held at its peak republishes it at
+// most once a minute.
+func (p LoadPeak) after(load FleetCapacity, now time.Time, horizon time.Duration) LoadPeak {
+	if now.Sub(p.At) >= horizon {
+		p = LoadPeak{}
+	}
+	switch {
+	case load.Empty():
+		return p
+	case load.Covers(p.Load):
+		return LoadPeak{Load: load, At: now.Truncate(time.Minute)}
+	}
+	return LoadPeak{Load: p.Load.Upper(load), At: p.At}
+}
+
 // MarketPlan is one market's targets and measures.
 type MarketPlan struct {
 	Market ReserveMarket
@@ -203,8 +239,11 @@ type MarketPlan struct {
 	Shortfall, StoppedShortfall FleetCapacity
 	// FloorShortSince is when the stopped target went short; nil while held.
 	FloorShortSince *time.Time
-	Reason          MarketReason
-	States          []FleetStateCapacity
+	// Peak is the most load the market held within the cost horizon; its
+	// reserves stay while it holds.
+	Peak   LoadPeak
+	Reason MarketReason
+	States []FleetStateCapacity
 }
 
 // FleetPlan is one pass's decisions.
@@ -231,8 +270,8 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{}, batched: map[ReserveMarket]bool{},
 		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, byMarket: map[ReserveMarket]*marketView{},
-		claimed: map[HostID]bool{}, holding: map[HostID][]FleetCapacity{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
-		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), scores: placementRanges(p, s.Offers),
+		claimed: map[HostID]bool{}, holding: map[HostID][]FleetCapacity{}, warming: map[HostID]bool{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
+		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog),
 	}
 	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
 	items := ps.pendingItems()
@@ -269,12 +308,11 @@ type pass struct {
 	// slots each serving host keeps room for.
 	claimed map[HostID]bool
 	holding map[HostID][]FleetCapacity
+	// warming are the hosts holding a warm slot other than a build's.
+	warming map[HostID]bool
 	// quotaUsed is what running hosts and this pass's starts count
 	// against each vCPU quota.
 	quotaUsed map[QuotaKey]int64
-	// scores are the placement score ranges that price Spot hosts as
-	// offers.
-	scores map[string]scoreRange
 }
 
 type plannedHost struct {
@@ -285,10 +323,15 @@ type plannedHost struct {
 
 // marketView is one market during the pass.
 type marketView struct {
-	m       ReserveMarket
-	load    FleetCapacity
-	slots   []FleetCapacity
-	stopped FleetCapacity
+	m     ReserveMarket
+	load  FleetCapacity
+	slots []FleetCapacity
+	// buildSlot is set when the last slot is the one a recent build keeps.
+	buildSlot bool
+	stopped   FleetCapacity
+	// peak is the market's load peak; while it holds, the reserves a burst
+	// bought wait for the next one.
+	peak LoadPeak
 	// largest is the shape one of the market's reserves fits; empty for
 	// none. loaded is set while the share of load, not the floor beside
 	// the largest shape, sets the stopped target.
@@ -318,13 +361,14 @@ func starting(h FleetHost) bool { return h.State == FleetStarting }
 
 // coverItem is one pending container or warm slot during the cover.
 type coverItem struct {
-	// slot is set on a warm slot, which has no container and no wait.
-	slot   bool
-	id     uuid.UUID
-	need   Requirement
-	market ReserveMarket
-	bought *HostID
-	wait   int
+	// slot is set on a warm slot, which has no container and no wait;
+	// build on the one a recent build keeps.
+	slot, build bool
+	id          uuid.UUID
+	need        Requirement
+	market      ReserveMarket
+	bought      *HostID
+	wait        int
 }
 
 // pendingItems lists the pending containers, each with a wait slot and the
@@ -380,8 +424,9 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		r := ps.p.Reserve(m)
 		v.slots = ps.p.slots(r.Warm, v.load)
 		if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
-			v.slots = append(v.slots, build.Lower(ps.p.LargestShape.Cap))
+			v.slots, v.buildSlot = append(v.slots, build.Lower(ps.p.LargestShape.Cap)), true
 		}
+		v.peak = ps.s.Peaks[m].after(v.load, ps.s.Now, ps.p.CostHorizon)
 		v.stopped = r.Stopped.Of(v.load)
 		if r.FitLargest {
 			v.largest = ps.p.LargestShape.of(m, largest)
@@ -399,8 +444,9 @@ func (ps *pass) views(items []coverItem) []*marketView {
 func slotItems(views []*marketView) []coverItem {
 	var out []coverItem
 	for _, v := range views {
-		for _, shape := range v.slots {
-			out = append(out, coverItem{slot: true, need: slotNeed(v.m, shape), market: v.m, wait: -1})
+		for i, shape := range v.slots {
+			build := v.buildSlot && i == len(v.slots)-1
+			out = append(out, coverItem{slot: true, build: build, need: slotNeed(v.m, shape), market: v.m, wait: -1})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b coverItem) int { return size(b.need) - size(a.need) })
@@ -518,7 +564,7 @@ func (ps *pass) act(a FleetAction) int {
 }
 
 // buy launches a host from o, to serve or as a reserve in its sleep mode.
-func (ps *pass) buy(m ReserveMarket, o FleetOffer, kind FleetActionKind, containers []uuid.UUID, replaces *HostID) int {
+func (ps *pass) buy(m ReserveMarket, o FleetOffer, kind FleetActionKind, holds FleetCapacity, containers []uuid.UUID, replaces *HostID) int {
 	reserve := kind == ActionBuyReserve
 	var mode *ReserveMode
 	if reserve {
@@ -532,7 +578,7 @@ func (ps *pass) buy(m ReserveMarket, o FleetOffer, kind FleetActionKind, contain
 	ps.hostRoom--
 	ps.planned = append(ps.planned, plannedHost{market: reserveMarketOf(o.Market, o.Type.GPU), offer: o, reserve: reserve})
 	ps.start(o.Region, o.Type.Name, o.Market)
-	return ps.act(FleetAction{Kind: kind, Market: m, Host: replaces, Offer: &o, Mode: mode, Containers: containers})
+	return ps.act(FleetAction{Kind: kind, Market: m, Host: replaces, Offer: &o, Mode: mode, Containers: containers, Holds: holds})
 }
 
 func (ps *pass) resume(m ReserveMarket, h *FleetHost, kind FleetActionKind, containers []uuid.UUID) int {
@@ -574,10 +620,11 @@ func place(bins []bin, it coverItem) int {
 }
 
 // cover packs pending containers, then warm slots, in one pass. Each takes
-// room on a ready host, busy ones first and the cheapest idle ones after;
-// a pending container then the host bought for it; each then a starting
-// host. Ready reserves resume for what is left, and purchases cover the
-// rest.
+// room on a ready host, busy ones first and the cheapest idle ones after,
+// a resumed reserve last so it can go back, and a rightsize's replacement
+// before the host it replaces; a pending container then the host bought
+// for it; each then a starting host. Ready reserves resume for what is
+// left, and purchases cover the rest.
 func (ps *pass) cover(items []coverItem) {
 	var ready, coming []bin
 	for i := range ps.hosts {
@@ -593,11 +640,19 @@ func (ps *pass) cover(items []coverItem) {
 	}
 	slices.SortStableFunc(ready, func(a, b bin) int {
 		idleA, idleB := a.host.Containers == 0, b.host.Containers == 0
-		if idleA && idleB {
-			return ps.retention(a.host, b.host)
+		if a.host.Slept != b.host.Slept || !idleA || !idleB {
+			return cmp.Or(boolOrder(a.host.Slept, b.host.Slept), boolOrder(idleA, idleB))
 		}
-		return boolOrder(idleA, idleB)
+		return ps.retention(a.host, b.host)
 	})
+	for i := 0; i < len(ready); i++ {
+		r := ready[i].host.Replaces
+		if j := slices.IndexFunc(ready[:i], func(b bin) bool { return r != nil && b.host.ID == *r }); j >= 0 {
+			moved := ready[i]
+			copy(ready[j+1:i+1], ready[j:i])
+			ready[j] = moved
+		}
+	}
 	var left []coverItem
 	for _, it := range items {
 		if it.need.Machine != "" || it.need.Connection != nil {
@@ -607,6 +662,7 @@ func (ps *pass) cover(items []coverItem) {
 			h := ready[i].host
 			if it.slot {
 				ps.holding[h.ID] = append(ps.holding[h.ID], reservedShape(it.need))
+				ps.warming[h.ID] = ps.warming[h.ID] || !it.build
 				continue
 			}
 			// The room it takes is load, not warm headroom.
@@ -836,12 +892,13 @@ func (ps *pass) retention(a, b *FleetHost) int {
 		cmp.Compare(a.Usable.MemoryBytes, b.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 }
 
-// hostCost is what host h costs to serve over the cost horizon, ranked
-// as servingCost ranks a purchase from the current offer inputs: its pool's
-// fresh Spot quote or its on-demand price, its root and public address,
-// its expected transfer and its placement penalty. Without a current price
-// it is the price h recorded with its transfer; false when neither is
-// known.
+// hostCost is what host h costs to serve over the cost horizon, priced
+// as servingCost prices a purchase from the current offer inputs: its
+// pool's fresh Spot quote or its on-demand price, its root and public
+// address and its expected transfer. It carries no placement penalty: the
+// penalty predicts whether a launch fills, and h already runs. Without a
+// current price it is the price h recorded with its transfer; false when
+// neither is known.
 func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
 	var o FleetOffer
@@ -852,13 +909,12 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	if h.Market == MarketSpot {
 		q, quoted := spotQuote(ps.p, ps.s.Offers.Spot, ps.s.Now, h.Region, h.ZoneID, h.InstanceType)
 		compute, priced = q.HourlyMicros, quoted
-		o.PlacementPenalty = placementPenalty(ps.scores, placementShape(t), q.PlacementScore)
 	}
 	switch {
 	case catalogued && priced:
 		o.HourlyMicros = compute + rootDiskMicros(h.Region, t.RootGiB(h.HibernationConfigured), t.PricedMiBps(false)) + ratesIn(h.Region).ipv4Hour
 	case h.HourlyMicros != nil:
-		o.HourlyMicros, o.PlacementPenalty = *h.HourlyMicros, 0
+		o.HourlyMicros = *h.HourlyMicros
 	default:
 		return 0, false
 	}
@@ -881,7 +937,7 @@ func (ps *pass) resumePays(h *FleetHost, items []coverItem, taken []int) bool {
 		need.Items = append(need.Items, CoverItem{Shape: shape, Count: 1})
 	}
 	m := h.market()
-	result := Cover(preferHealthy(ps.marketOffers(m, false)), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
+	result := Cover(ps.marketOffers(m, false), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
 	if !result.Complete(need) {
 		return true
 	}
@@ -1009,7 +1065,7 @@ func (ps *pass) buyClass(c *demandClass, m ReserveMarket, offers []FleetOffer) {
 	if len(at) == 0 {
 		return
 	}
-	result := Cover(preferHealthy(offers), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
+	result := Cover(offers, need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
 	for _, node := range result.Nodes {
 		var taken []coverItem
 		for i, n := range node.Placed {
@@ -1018,12 +1074,14 @@ func (ps *pass) buyClass(c *demandClass, m ReserveMarket, offers []FleetOffer) {
 			g.items = g.items[n:]
 		}
 		var ids []uuid.UUID
+		var holds FleetCapacity
 		for _, it := range taken {
+			holds = holds.Plus(reservedShape(it.need))
 			if !it.slot {
 				ids = append(ids, it.id)
 			}
 		}
-		action := ps.buy(m, node.Offer, ActionBuy, ids, nil)
+		action := ps.buy(m, node.Offer, ActionBuy, holds, ids, nil)
 		for _, it := range taken {
 			ps.provisioning(it, nil, ptr(action))
 		}
@@ -1172,8 +1230,9 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 // timeout and any host could return, or while hosts due back soon cover
 // it. A host could return when EC2 can stop it and it serves or starts. It
 // is due back soon when it starts, became ready within the idle timeout,
-// as a reserve resumed for a burst does, or idles holding no warm slot or
-// slots a cheaper type will take over.
+// as a reserve resumed for a burst does, or idles holding no warm slot,
+// slots a cheaper type will take over, or only a build's slot with room for
+// the largest shape, which it holds warm until the slot lapses.
 func (ps *pass) returning(v *marketView, short, item FleetCapacity) bool {
 	leaving := ps.leavers(v)
 	could := ps.inMarket(v.m, func(h FleetHost) bool {
@@ -1185,7 +1244,9 @@ func (ps *pass) returning(v *marketView, short, item FleetCapacity) bool {
 	}
 	soon := slices.DeleteFunc(could, func(h *FleetHost) bool {
 		replaced, _ := ps.replacement(v, *h)
-		return !starting(*h) && ps.s.Now.Sub(h.PhaseAt) >= ps.p.IdleTimeout && replaced == nil &&
+		_, idle := ps.plan.IdleSince[h.ID]
+		holdsLargest := idle && !ps.warming[h.ID] && !v.largest.Empty() && h.Usable.Covers(v.largest)
+		return !starting(*h) && ps.s.Now.Sub(h.PhaseAt) >= ps.p.IdleTimeout && replaced == nil && !holdsLargest &&
 			!slices.ContainsFunc(leaving, func(l *FleetHost) bool { return l.ID == h.ID })
 	})
 	return totalOf(soon, func(h *FleetHost) FleetCapacity { return h.Usable }).Covers(short) &&
@@ -1271,13 +1332,19 @@ func (ps *pass) reserveReason(v *marketView, item FleetCapacity) {
 // buyReserves buys the cheapest reserves that cover need, ones that
 // hibernate wherever one fits shape.
 func (ps *pass) buyReserves(v *marketView, need CoverNeed, shape FleetCapacity) CoverResult {
-	offers := preferHealthy(ps.marketOffers(v.m, true))
+	offers := ps.marketOffers(v.m, true)
 	if !shape.Empty() {
 		offers = preferHibernating(offers, shape)
 	}
 	result := Cover(offers, need, reserveCost(ps.p), ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom)))
 	for _, node := range result.Nodes {
-		ps.buy(v.m, node.Offer, ActionBuyReserve, nil, nil)
+		holds := node.Offer.Usable.Lower(need.Aggregate)
+		for i, n := range node.Placed {
+			if n > 0 {
+				holds = holds.Upper(need.Items[i].Shape)
+			}
+		}
+		ps.buy(v.m, node.Offer, ActionBuyReserve, holds, nil, nil)
 	}
 	return result
 }
@@ -1298,7 +1365,11 @@ func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
 // older agent release, then the costliest to hold.
 // It keeps the ready capacity the target needs, so a pending reserve never
 // stands in for a ready one, and a reserve that fits the largest shape.
+// Within the cost horizon of the market's peak load it keeps every ready
+// reserve it would buy again, so the reserves a burst bought wait stopped
+// for the next burst rather than retiring as its load falls.
 func (ps *pass) retire(v *marketView) {
+	holding := !v.peak.Load.Empty() && ps.s.Now.Sub(v.peak.At) < ps.p.CostHorizon
 	ready := FleetHost.resumable
 	needReady := ps.floor(v, HostID{}, ready).Lower(v.stopped)
 	growable := func(h *FleetHost) bool {
@@ -1312,6 +1383,9 @@ func (ps *pass) retire(v *marketView) {
 			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 	})
 	for _, h := range candidates {
+		if holding && growable(h) && ready(*h) && h.Current {
+			continue
+		}
 		if !ps.floor(v, h.ID, FleetHost.reserve).Covers(v.stopped) || !ps.floor(v, h.ID, ready).Covers(needReady) ||
 			!ps.holdsLargest(v, h.ID) {
 			continue
@@ -1348,7 +1422,8 @@ func (ps *pass) rightsize(v *marketView) {
 		}
 	}
 	if best != nil {
-		ps.buy(v.m, *best, ActionRightsize, nil, ptr(replaced.ID))
+		holds := totalOf(ps.holding[replaced.ID], func(c FleetCapacity) FleetCapacity { return c })
+		ps.buy(v.m, *best, ActionRightsize, holds, nil, ptr(replaced.ID))
 	}
 }
 
@@ -1357,12 +1432,14 @@ func (ps *pass) rightsize(v *marketView) {
 // h does, and what it saves over the cost horizon, priced as purchases
 // are, exceeds what it costs while it provisions. It does not wait for the
 // idle timeout, so a host rightsize will replace counts as returning while
-// it idles.
+// it idles. A host whose replacement EC2 refused within the cost horizon
+// has none.
 func (ps *pass) replacement(v *marketView, h FleetHost) (*FleetOffer, int64) {
 	need := totalOf(ps.holding[h.ID], func(c FleetCapacity) FleetCapacity { return c })
 	cost, known := ps.hostCost(h)
 	_, idle := ps.plan.IdleSince[h.ID]
-	if !idle || h.Protected || !known || need.Empty() {
+	refused := h.RightsizeRefusedAt != nil && ps.s.Now.Sub(*h.RightsizeRefusedAt) < ps.p.CostHorizon
+	if !idle || h.Protected || refused || !known || need.Empty() {
 		return nil, 0
 	}
 	var best *FleetOffer
@@ -1370,7 +1447,7 @@ func (ps *pass) replacement(v *marketView, h FleetHost) (*FleetOffer, int64) {
 	provision, serving := int64(ps.p.Provision/time.Second), servingCost(ps.p)
 	for _, o := range ps.marketOffers(v.m, false) {
 		payback := cost - serving(o) - o.HourlyMicros*provision
-		if !o.CoolingRegion && o.Type.Name != h.InstanceType && o.Usable.Covers(need) && payback > bestPayback {
+		if o.Type.Name != h.InstanceType && o.Usable.Covers(need) && payback > bestPayback {
 			best, bestPayback = &o, payback
 		}
 	}
@@ -1417,7 +1494,7 @@ func (ps *pass) report(v *marketView) MarketPlan {
 		Market: v.m, Load: v.load, WarmTarget: totalOf(v.slots, func(c FleetCapacity) FleetCapacity { return c }),
 		WarmFree: ps.warmFree(v), WarmPending: ps.warmPending(v),
 		StoppedTarget: v.stopped, ReserveReady: ready, ReservePending: reserve.Minus(ready).Clamp(),
-		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, FloorShortSince: v.floorShortSince, States: ps.states(v.m),
+		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, FloorShortSince: v.floorShortSince, Peak: v.peak, States: ps.states(v.m),
 	}
 	switch {
 	case ps.limited[v.m]:

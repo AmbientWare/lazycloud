@@ -40,7 +40,7 @@ func TestAQuotaRefusalCoolsTheWholeClassInItsRegionAndMarket(t *testing.T) {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "c6a.2xlarge"), mustType(t, "g4dn.2xlarge")}
 	in.Cooldowns = []OfferCooldown{{
-		Region: "us-east-2", InstanceType: "m7i.large", Market: MarketOnDemand, RefusedAt: offerNow, Until: offerNow.Add(10 * time.Minute), Quota: true,
+		Region: "us-east-2", InstanceType: "m7i.large", Market: MarketOnDemand, Until: offerNow.Add(10 * time.Minute), Quota: true,
 	}}
 	if offers := RankOffers(DefaultPolicy(), Requirement{}, false, in); len(offers) != 0 {
 		t.Fatalf("standard types still offered: %v", offerKeys(offers))

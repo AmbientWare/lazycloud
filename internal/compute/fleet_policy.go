@@ -178,18 +178,17 @@ type Policy struct {
 	GPU          map[string]MarketReserve
 	LargestShape LargestShape
 	// BuildWindow is how long a build placed in a CPU market keeps a warm slot
-	// of its shape there.
+	// of its shape there once it ends.
 	BuildWindow time.Duration
-	Batch       BatchWindow
+	// LongestBuild is the most an image build runs, the images owner's
+	// build timeout.
+	LongestBuild time.Duration
+	Batch        BatchWindow
 	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
-	// RegionFailures refusals from distinct offers of one region within
-	// RegionFailureWindow rank that region after the others.
-	RegionFailures      int
-	RegionFailureWindow time.Duration
 }
 
 // DefaultPolicy is the policy the planner runs.
@@ -210,13 +209,13 @@ func DefaultPolicy() Policy {
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
 		Spot:             cpuMarket, OnDemand: cpuMarket,
-		GPU:            map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
-		LargestShape:   LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
-		BuildWindow:    time.Hour,
-		Batch:          BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		IdleTimeout:    5 * time.Minute,
-		SpotPriceAge:   time.Hour,
-		RegionFailures: 2, RegionFailureWindow: 30 * time.Minute,
+		GPU:          map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
+		LargestShape: LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
+		BuildWindow:  time.Hour,
+		LongestBuild: time.Hour,
+		Batch:        BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		IdleTimeout:  5 * time.Minute,
+		SpotPriceAge: time.Hour,
 	}
 }
 

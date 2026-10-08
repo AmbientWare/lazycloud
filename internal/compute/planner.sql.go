@@ -111,7 +111,7 @@ type CoolOffersParams struct {
 }
 
 // Offers whose bought host joined and still could not take its container
-// cool without counting as a provider refusal.
+// cool in every zone of their region.
 func (q *Queries) CoolOffers(ctx context.Context, arg CoolOffersParams) error {
 	_, err := q.db.Exec(ctx, coolOffers, arg.Seconds, arg.Offers)
 	return err
@@ -286,14 +286,16 @@ func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsR
 const insertRequestedHosts = `-- name: InsertRequestedHosts :exec
 insert into hosts (id, name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
                    gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
-                   hourly_micros, reserve_mode)
+                   hourly_micros, reserve_mode, replaces, holds_cpu_millis, holds_memory_bytes)
 select v.id, 'lazycloud-' || v.instance_type, 'offline', v.kind, 'aws', v.connection_id, 'requested',
        'Waiting for the machine to be launched', v.cpu_millis, v.memory_bytes, v.gpu_type, v.gpu_count, v.region,
-       v.availability_zone, v.availability_zone_id, v.instance_type, v.market, v.hourly_micros, v.reserve_mode
+       v.availability_zone, v.availability_zone_id, v.instance_type, v.market, v.hourly_micros, v.reserve_mode,
+       v.replaces, v.holds_cpu_millis, v.holds_memory_bytes
 from jsonb_to_recordset($1::jsonb) as v(
     id uuid, kind text, connection_id uuid, cpu_millis bigint, memory_bytes bigint, gpu_type text, gpu_count integer,
     region text, availability_zone text, availability_zone_id text, instance_type text, market text,
-    hourly_micros bigint, reserve_mode text)
+    hourly_micros bigint, reserve_mode text, replaces uuid, holds_cpu_millis bigint,
+    holds_memory_bytes bigint)
 `
 
 // Hosts to buy, for the launcher. The planner names each id, so container
@@ -422,9 +424,9 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 }
 
 const plannerCooldowns = `-- name: PlannerCooldowns :many
-select connection_key, region, availability_zone_id, instance_type, market, until, refused_at
+select connection_key, region, availability_zone_id, instance_type, market, until
 from capacity_cooldowns
-where until > now() or refused_at > now() - make_interval(secs => $1::float8)
+where until > now()
 order by connection_key, region, availability_zone_id, instance_type, market
 `
 
@@ -435,13 +437,11 @@ type PlannerCooldownsRow struct {
 	InstanceType       string
 	Market             string
 	Until              time.Time
-	RefusedAt          *time.Time
 }
 
-// Offers cooling now, and refusals recent enough to cool their region. A
-// cooldown with no refusal behind it has no refused_at.
-func (q *Queries) PlannerCooldowns(ctx context.Context, windowSeconds float64) ([]PlannerCooldownsRow, error) {
-	rows, err := q.db.Query(ctx, plannerCooldowns, windowSeconds)
+// Offers cooling now.
+func (q *Queries) PlannerCooldowns(ctx context.Context) ([]PlannerCooldownsRow, error) {
+	rows, err := q.db.Query(ctx, plannerCooldowns)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +456,6 @@ func (q *Queries) PlannerCooldowns(ctx context.Context, windowSeconds float64) (
 			&i.InstanceType,
 			&i.Market,
 			&i.Until,
-			&i.RefusedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -473,7 +472,8 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.updating_until, h.idle_since,
+       h.prepared_agent_version, h.updating_until, h.idle_since, h.replaces,
+       h.rightsize_refused_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers
 from hosts h
@@ -517,6 +517,8 @@ type PlannerHostsRow struct {
 	PreparedAgentVersion  *string
 	UpdatingUntil         *time.Time
 	IdleSince             *time.Time
+	Replaces              *uuid.UUID
+	RightsizeRefusedAt    *time.Time
 	UsedCpu               int64
 	UsedMemory            int64
 	UsedGpus              int32
@@ -562,6 +564,8 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.PreparedAgentVersion,
 			&i.UpdatingUntil,
 			&i.IdleSince,
+			&i.Replaces,
+			&i.RightsizeRefusedAt,
 			&i.UsedCpu,
 			&i.UsedMemory,
 			&i.UsedGpus,
@@ -589,7 +593,8 @@ with recent as (
     from image_builds b
     join containers c on c.image_build_id = b.id
     where b.id > (select uuidv7(- make_interval(secs => $3::float8)))
-      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null
+      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.state = 'stopped'
+      and c.stopped_at > now() - make_interval(secs => $4::float8)
 )
 select false::bool as build, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
@@ -607,6 +612,7 @@ order by 1, 2, 3
 type RecentShapesParams struct {
 	WindowSeconds      float64
 	SampleSize         int32
+	BuildScanSeconds   float64
 	BuildWindowSeconds float64
 }
 
@@ -621,13 +627,20 @@ type RecentShapesRow struct {
 
 // The largest CPU, memory and GPUs placed platform containers reserved, by
 // purchase market and GPU model: among the newest containers created within
-// the window, up to the sample, and, marked build, among the containers of
-// builds created within the build window. Both reads follow primary keys,
-// so they read at most sample_size containers and the window's builds
-// whatever the history; the subqueries make their bounds constants the
-// indexes can use.
+// the window, up to the sample, and, marked build, among the build
+// containers that stopped within the build window: a running build's host
+// holds its slot once it ends. The builds read are those created within
+// build_scan, the window and the longest a build runs. Both reads follow
+// primary keys, so they read at most sample_size containers and the
+// scan's builds whatever the history; the subqueries make their bounds
+// constants the indexes can use.
 func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
-	rows, err := q.db.Query(ctx, recentShapes, arg.WindowSeconds, arg.SampleSize, arg.BuildWindowSeconds)
+	rows, err := q.db.Query(ctx, recentShapes,
+		arg.WindowSeconds,
+		arg.SampleSize,
+		arg.BuildScanSeconds,
+		arg.BuildWindowSeconds,
+	)
 	if err != nil {
 		return nil, err
 	}

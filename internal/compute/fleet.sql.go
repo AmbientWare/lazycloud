@@ -40,7 +40,8 @@ where h.id in (
     for update skip locked
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
-          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode
+          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
+          h.holds_cpu_millis, h.holds_memory_bytes
 `
 
 type ClaimLaunchesParams struct {
@@ -63,6 +64,9 @@ type ClaimLaunchesRow struct {
 	LaunchAttempts   int32
 	LaunchPools      int16
 	ReserveMode      *string
+	Replaces         *uuid.UUID
+	HoldsCpuMillis   *cpu.Millis
+	HoldsMemoryBytes *int64
 }
 
 // Requested hosts whose launch is not held by another launcher. The lease
@@ -92,6 +96,9 @@ func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([
 			&i.LaunchAttempts,
 			&i.LaunchPools,
 			&i.ReserveMode,
+			&i.Replaces,
+			&i.HoldsCpuMillis,
+			&i.HoldsMemoryBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -362,11 +369,11 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason, refused_at)
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason)
 values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::float8),
-        $7, now())
+        $7)
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason, refused_at = excluded.refused_at
+do update set until = excluded.until, reason = excluded.reason
 `
 
 type InsertCooldownParams struct {
@@ -475,9 +482,10 @@ func (q *Queries) MarkHostDeleted(ctx context.Context, arg MarkHostDeletedParams
 const moveLaunchPool = `-- name: MoveLaunchPool :execrows
 update hosts
 set instance_type = $1, region = $2, availability_zone = $3,
-    availability_zone_id = $4, hourly_micros = $5, launch_pools = launch_pools + 1,
-    launch_lease_until = now() + make_interval(secs => $6::float8), updated_at = now()
-where id = $7 and phase = 'requested' and launch_pools = $8
+    availability_zone_id = $4, hourly_micros = $5,
+    cpu_millis = $6, memory_bytes = $7, launch_pools = launch_pools + 1,
+    launch_lease_until = now() + make_interval(secs => $8::float8), updated_at = now()
+where id = $9 and phase = 'requested' and launch_pools = $10
 `
 
 type MoveLaunchPoolParams struct {
@@ -486,16 +494,17 @@ type MoveLaunchPoolParams struct {
 	AvailabilityZone   string
 	AvailabilityZoneID string
 	HourlyMicros       *int64
+	CpuMillis          cpu.Millis
+	MemoryBytes        int64
 	LeaseSeconds       float64
 	ID                 uuid.UUID
 	LaunchPools        int16
 }
 
 // Moves a requested host whose pool EC2 refused to the next pool at that
-// pool's cost, and renews the launcher's lease. The host keeps the
-// capacity it was bought with until it reports its own, so every pool it
-// moves to holds that. A host another launcher moved on since it was
-// claimed stays where that one put it.
+// pool's cost and capacity, and renews the launcher's lease. Every pool it
+// moves to holds what it was bought to hold. A host another launcher moved
+// on since it was claimed stays where that one put it.
 func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) (int64, error) {
 	result, err := q.db.Exec(ctx, moveLaunchPool,
 		arg.InstanceType,
@@ -503,6 +512,8 @@ func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) 
 		arg.AvailabilityZone,
 		arg.AvailabilityZoneID,
 		arg.HourlyMicros,
+		arg.CpuMillis,
+		arg.MemoryBytes,
 		arg.LeaseSeconds,
 		arg.ID,
 		arg.LaunchPools,
@@ -556,6 +567,16 @@ func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const refuseRightsize = `-- name: RefuseRightsize :exec
+update hosts set rightsize_refused_at = now(), updated_at = now() where id = $1
+`
+
+// Records that EC2 refused the launch bought to replace this host.
+func (q *Queries) RefuseRightsize(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, refuseRightsize, id)
+	return err
 }
 
 const setHostPhase = `-- name: SetHostPhase :execrows
