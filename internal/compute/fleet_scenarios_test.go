@@ -421,7 +421,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		HoldsCpuMillis: ptr(a.Holds.CPUMillis), HoldsMemoryBytes: ptr(a.Holds.MemoryBytes),
 	}
 	if a.Kind == ActionRightsize {
-		row.Replaces = ptr(uuid.UUID(*a.Host))
+		row.Replaces, row.ReplacesHourlyMicros = ptr(uuid.UUID(*a.Host)), ptr(s.host(*a.Host).offer.HourlyMicros)
 	}
 	if reserve {
 		row.ReserveMode = ptr(string(*a.Mode))

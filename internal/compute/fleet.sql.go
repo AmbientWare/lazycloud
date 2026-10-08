@@ -41,7 +41,8 @@ where h.id in (
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes
+          h.holds_cpu_millis, h.holds_memory_bytes,
+          (select r.hourly_micros from hosts r where r.id = h.replaces) as replaces_hourly_micros
 `
 
 type ClaimLaunchesParams struct {
@@ -50,28 +51,30 @@ type ClaimLaunchesParams struct {
 }
 
 type ClaimLaunchesRow struct {
-	ID               uuid.UUID
-	Kind             string
-	ConnectionID     *uuid.UUID
-	Region           string
-	AvailabilityZone string
-	InstanceType     string
-	Market           *string
-	GpuType          string
-	GpuCount         int32
-	CpuMillis        cpu.Millis
-	MemoryBytes      int64
-	LaunchAttempts   int32
-	LaunchPools      int16
-	ReserveMode      *string
-	Replaces         *uuid.UUID
-	HoldsCpuMillis   *cpu.Millis
-	HoldsMemoryBytes *int64
+	ID                   uuid.UUID
+	Kind                 string
+	ConnectionID         *uuid.UUID
+	Region               string
+	AvailabilityZone     string
+	InstanceType         string
+	Market               *string
+	GpuType              string
+	GpuCount             int32
+	CpuMillis            cpu.Millis
+	MemoryBytes          int64
+	LaunchAttempts       int32
+	LaunchPools          int16
+	ReserveMode          *string
+	Replaces             *uuid.UUID
+	HoldsCpuMillis       *cpu.Millis
+	HoldsMemoryBytes     *int64
+	ReplacesHourlyMicros *int64
 }
 
-// Requested hosts whose launch is not held by another launcher. The lease
-// outlasts one pool's RunInstances call and each move to a next pool renews
-// it; a launcher that dies leaves it to expire.
+// Requested hosts whose launch is not held by another launcher, a
+// rightsize with what the host it replaces costs. The lease outlasts one
+// pool's RunInstances call and each move to a next pool renews it; a
+// launcher that dies leaves it to expire.
 func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([]ClaimLaunchesRow, error) {
 	rows, err := q.db.Query(ctx, claimLaunches, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -99,6 +102,7 @@ func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([
 			&i.Replaces,
 			&i.HoldsCpuMillis,
 			&i.HoldsMemoryBytes,
+			&i.ReplacesHourlyMicros,
 		); err != nil {
 			return nil, err
 		}

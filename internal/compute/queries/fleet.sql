@@ -1,7 +1,8 @@
 -- name: ClaimLaunches :many
--- Requested hosts whose launch is not held by another launcher. The lease
--- outlasts one pool's RunInstances call and each move to a next pool renews
--- it; a launcher that dies leaves it to expire.
+-- Requested hosts whose launch is not held by another launcher, a
+-- rightsize with what the host it replaces costs. The lease outlasts one
+-- pool's RunInstances call and each move to a next pool renews it; a
+-- launcher that dies leaves it to expire.
 update hosts h
 set launch_lease_until = now() + make_interval(secs => @lease_seconds::float8),
     launch_attempts = launch_attempts + 1, updated_at = now()
@@ -15,7 +16,8 @@ where h.id in (
 )
 returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes;
+          h.holds_cpu_millis, h.holds_memory_bytes,
+          (select r.hourly_micros from hosts r where r.id = h.replaces) as replaces_hourly_micros;
 
 -- name: MoveLaunchPool :execrows
 -- Moves a requested host whose pool EC2 refused to the next pool at that
