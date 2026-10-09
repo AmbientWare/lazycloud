@@ -232,18 +232,44 @@ func (p Policy) Reserve(m ReserveMarket) MarketReserve {
 	return p.OnDemand
 }
 
+// slotKind is why a market keeps a warm slot.
+type slotKind string
+
+const (
+	// slotFloor is part of the market's floor.
+	slotFloor slotKind = "floor"
+	// slotLoad is part of the share of load the market adds beyond its
+	// floor; it follows the load.
+	slotLoad slotKind = "load"
+	// slotBuild is a recent build's shape.
+	slotBuild slotKind = "build"
+)
+
+// warmSlot is room a market keeps free on a serving host.
+type warmSlot struct {
+	shape FleetCapacity
+	kind  slotKind
+}
+
 // slots are the warm slots target keeps at load: its floor, then what a
 // share of load adds beyond it. Each part splits into the fewest equal
 // slots within its bound, the cap for the floor and the floor for the
 // rest, so the slots hold the target's whole headroom and one fits a start
 // of the floor's shape.
-func (p Policy) slots(target HeadroomTarget, load FleetCapacity) []FleetCapacity {
+func (p Policy) slots(target HeadroomTarget, load FleetCapacity) []warmSlot {
 	rest := target.Of(load).Minus(target.Floor).Clamp()
 	bound := p.LargestShape.Cap
 	if !target.Floor.Empty() {
 		bound = target.Floor.Lower(bound)
 	}
-	return append(split(target.Floor, p.LargestShape.Cap), split(rest, bound)...)
+	var out []warmSlot
+	for _, shape := range split(target.Floor, p.LargestShape.Cap) {
+		out = append(out, warmSlot{shape: shape, kind: slotFloor})
+	}
+	for _, shape := range split(rest, bound) {
+		out = append(out, warmSlot{shape: shape, kind: slotLoad})
+	}
+	return out
 }
 
 // split divides c into the fewest equal parts, rounded up, that each fit

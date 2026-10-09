@@ -162,7 +162,7 @@ select count(*) from rel`)
 		costExec(t, pool, `
 insert into hosts (name, token_hash, state, last_seen_at, kind, provider, phase, cpu_millis, memory_bytes, market, region,
                    availability_zone, availability_zone_id, instance_type, instance_id, launched_at, session_epoch)
-select 'h', sha256(n::text::bytea), 'online', now(), 'platform', 'aws', 'ready', 14400, 54 * (1::bigint << 30), 'on_demand',
+select 'h', sha256(n::text::bytea), 'online', now(), 'platform', 'aws', 'ready', 4000, 8 * (1::bigint << 30), 'on_demand',
        'us-east-2', 'us-east-2a', 'use2-az1', 'm7i.4xlarge', 'i-' || lpad(to_hex(n), 17, '0'), now() - interval '1 hour', 1
 from generate_series($1::int, $2::int) n`, hosts+1, to)
 		costExec(t, pool, `

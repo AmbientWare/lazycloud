@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -51,6 +52,40 @@ func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 	host := fleetHost(t, o, compute.PhaseReady, typ, instance)
 	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
 	return host
+}
+
+// Spot-tolerant containers on an on-demand host count as the Spot market's
+// load, and the rest as the on-demand market's, in the plan a pass
+// publishes.
+func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+	host := fleetHost(t, o, compute.PhaseReady, "c6a.4xlarge", "i-0000000000000a001")
+	alice := newUser(t, o.pool, "alice@example.com")
+	ws := newWorkspace(t, o.pool, "dev", alice)
+	release := newRelease(t, o.pool, ws, `{}`)
+	for _, c := range []struct {
+		class string
+		cpu   int64
+	}{{"auto", 1000}, {"pinned", 500}, {"non_preemptible", 2000}} {
+		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uuid.UUID(host), c.cpu, c.class)
+	}
+	if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	markets, err := o.compute.PublishedPlan(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := map[bool]cpu.Millis{}
+	for _, m := range markets {
+		if m.GPUType == "" {
+			load[m.Preemptible] = m.Load.CPUMillis
+		}
+	}
+	if load[true] != 1500 || load[false] != 2000 {
+		t.Fatalf("Spot load %v and on-demand %v, want 1500 and 2000", load[true], load[false])
+	}
 }
 
 // staleMarkets makes the published plan old enough that the next pass
