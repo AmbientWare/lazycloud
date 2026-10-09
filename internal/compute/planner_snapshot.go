@@ -170,6 +170,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
+		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
 		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
 		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
@@ -177,6 +178,15 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, PhaseAt: h.PhaseAt,
 		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 	}
+}
+
+// lent is what Spot-tolerant work holds on a host: on an on-demand CPU host
+// it is lent to the Spot market, and elsewhere nothing.
+func lent(market Market, gpus int, tolerant FleetCapacity) FleetCapacity {
+	if market != MarketOnDemand || gpus > 0 {
+		return FleetCapacity{}
+	}
+	return tolerant
 }
 
 // onRelease reports whether version is the agent release a host should run:

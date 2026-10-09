@@ -4,9 +4,11 @@
 package scheduling
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -171,27 +173,20 @@ func requirement(c PendingContainersRow) compute.Requirement {
 	}
 }
 
-// pack assigns containers in order, each to the accepting host it fits most
-// tightly: the host whose free CPU and memory, as fractions of its size, sum
-// lowest after placement. Filling tight hosts first keeps large holes for
-// large containers. It returns parallel container and host id slices.
+// pack assigns containers, those that cannot run on Spot first so they
+// take on-demand room before Spot-tolerant work borrows it, each to the
+// host compute.ChooseHost picks, keeping the platform's on-demand warm
+// floor free for them. It returns parallel container and host id slices.
 func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, hostIDs []uuid.UUID) {
-	free := make([]compute.HostCapacity, len(hosts))
-	copy(free, hosts)
-	for _, c := range pending {
+	free := slices.Clone(hosts)
+	order := slices.Clone(pending)
+	slices.SortStableFunc(order, func(a, b PendingContainersRow) int {
+		return cmp.Compare(boolRank(a.Preemptible), boolRank(b.Preemptible))
+	})
+	floor := compute.DefaultPolicy().OnDemand.Warm.Floor
+	for _, c := range order {
 		need := requirement(c)
-		best := -1
-		var bestScore float64
-		for i, h := range free {
-			if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || !h.Fits(need) {
-				continue
-			}
-			score := float64(h.FreeCPUMillis-c.CpuMillis)/float64(h.CPUMillis) +
-				float64(h.FreeMemoryBytes-c.MemoryBytes)/float64(h.MemoryBytes)
-			if best < 0 || score < bestScore {
-				best, bestScore = i, score
-			}
-		}
+		best := compute.ChooseHost(free, need, floor)
 		if best < 0 {
 			continue
 		}
@@ -215,4 +210,12 @@ func traceAssignment(ctx context.Context, a AssignContainersRow) {
 	_, span := telemetry.StartFor(ctx, *a.Traceparent, "scheduling.placement",
 		trace.WithTimestamp(a.CreatedAt), trace.WithAttributes(attrs...))
 	span.End()
+}
+
+// boolRank orders false before true.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

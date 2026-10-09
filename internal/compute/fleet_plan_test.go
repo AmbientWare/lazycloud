@@ -543,6 +543,23 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 	}
 }
 
+// Spot-tolerant work borrowing an on-demand host is the Spot market's load:
+// its headroom is bought as Spot, and the on-demand market keeps only the
+// load of work that cannot run on Spot.
+func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
+	p := DefaultPolicy()
+	p.GPU = nil
+	h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
+	h.Load, h.Lent, h.Containers = cpuGiB(6000, 12), cpuGiB(4000, 8), 3
+	plan := PlanFleet(p, planSnapshot(t, h))
+	if spot := marketPlan(t, plan, ReserveMarket{Preemptible: true}).Load; spot != cpuGiB(4000, 8) {
+		t.Errorf("Spot load %+v, want the borrowed 4 CPU", spot)
+	}
+	if od := marketPlan(t, plan, onDemand).Load; od != cpuGiB(2000, 4) {
+		t.Errorf("on-demand load %+v, want the 2 CPU that cannot run on Spot", od)
+	}
+}
+
 // A large idle host that holds the warm floor does not stand in for the
 // reserve: the floor never lapses, so once the shortfall outlasts the
 // idle timeout the market buys a reserve that fits the largest shape.

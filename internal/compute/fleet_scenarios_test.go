@@ -25,7 +25,6 @@ const (
 	simPrepare   = 60 * time.Second
 	simResume    = 30 * time.Second
 	simBoot      = 120 * time.Second
-	simMaxHosts  = 40
 	// simCooldown is how long a refusal cools its pool, the fleet's
 	// default CapacityCooldown.
 	simCooldown = 10 * time.Minute
@@ -37,6 +36,8 @@ type simHost struct {
 
 	until      time.Time
 	containers []*simContainer
+	// served is set once a container ran on the host.
+	served bool
 }
 
 type simContainer struct {
@@ -68,8 +69,14 @@ type simResult struct {
 	// launched, refused, reserveBought and retired are when each launch,
 	// refused launch, reserve purchase and retirement happened.
 	launched, refused, reserveBought, retired []time.Time
-	finalHourly                               int64
-	violations                                []string
+	// unused counts serving hosts that left without running a container;
+	// onDemand counts on-demand hosts bought to serve; mostHosts is the most
+	// hosts that served at once.
+	unused, onDemand, mostHosts int
+	// pinnedWaits are the waits of work that cannot run on Spot.
+	pinnedWaits []time.Duration
+	finalHourly int64
+	violations  []string
 }
 
 type sim struct {
@@ -94,6 +101,8 @@ type sim struct {
 	peaks           map[ReserveMarket]LoadPeak
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
+	// maxHosts is the fleet limit, simMaxHosts unless a scenario sets it.
+	maxHosts int
 	// refuses names the pools EC2 refuses for capacity. A refused launch
 	// cools its zone and moves to the pool fallbackPool picks, as the
 	// launcher does.
@@ -139,7 +148,7 @@ func newSim(t *testing.T, p Policy) *sim {
 		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}, {ID: "c", Zone: "us-east-2c", ZoneID: "use2-az3"},
 	}}}
 	return &sim{
-		t: t, p: p, now: offerNow, start: offerNow,
+		t: t, p: p, now: offerNow, start: offerNow, maxHosts: 40,
 		in: OfferInputs{Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks)},
 	}
 }
@@ -209,28 +218,47 @@ func (s *sim) advance() {
 			return true
 		})
 	}
-	s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.State == FleetDraining && len(h.containers) == 0 })
+	s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool {
+		gone := h.State == FleetDraining && len(h.containers) == 0
+		if gone && !h.served {
+			s.r.unused++
+		}
+		return gone
+	})
+	serving := 0
+	for _, h := range s.hosts {
+		if h.State == FleetServing {
+			serving++
+		}
+	}
+	s.r.mostHosts = max(s.r.mostHosts, serving)
 }
 
-// place puts pending containers on serving hosts, best fit.
+// place puts pending containers on serving hosts as placement does: work
+// that cannot run on Spot first, each on the host ChooseHost picks.
 func (s *sim) place() {
-	slices.SortStableFunc(s.pending, func(a, b *simContainer) int { return size(b.need) - size(a.need) })
+	slices.SortStableFunc(s.pending, func(a, b *simContainer) int {
+		return cmp.Or(boolOrder(a.need.Preemptible, b.need.Preemptible), size(b.need)-size(a.need))
+	})
 	s.pending = slices.DeleteFunc(s.pending, func(c *simContainer) bool {
-		var best *simHost
+		var serving []*simHost
+		var rooms []HostCapacity
 		for _, h := range s.hosts {
-			if h.State != FleetServing || !s.load(h).Fits(c.need) {
-				continue
-			}
-			if best == nil || s.load(h).FreeCPUMillis < s.load(best).FreeCPUMillis {
-				best = h
+			if h.State == FleetServing {
+				serving, rooms = append(serving, h), append(rooms, s.load(h))
 			}
 		}
-		if best == nil {
+		i := ChooseHost(rooms, c.need, s.p.OnDemand.Warm.Floor)
+		if i < 0 {
 			return false
 		}
+		best := serving[i]
 		c.ends = s.now.Add(c.runs)
-		best.containers = append(best.containers, c)
+		best.containers, best.served = append(best.containers, c), true
 		s.r.waits = append(s.r.waits, s.now.Sub(c.arrived))
+		if !c.need.Preemptible {
+			s.r.pinnedWaits = append(s.r.pinnedWaits, s.now.Sub(c.arrived))
+		}
 		return true
 	})
 }
@@ -242,10 +270,15 @@ func (s *sim) load(h *simHost) HostCapacity {
 
 func (s *sim) fleetHost(h *simHost) FleetHost {
 	fh := h.FleetHost
-	fh.Load, fh.Containers = FleetCapacity{}, len(h.containers)
+	fh.Load, fh.Lent, fh.Containers = FleetCapacity{}, FleetCapacity{}, len(h.containers)
+	var tolerant FleetCapacity
 	for _, c := range h.containers {
 		fh.Load = fh.Load.Plus(needShape(c.need))
+		if c.need.Preemptible {
+			tolerant = tolerant.Plus(needShape(c.need))
+		}
 	}
+	fh.Lent = lent(h.Market, h.Usable.GPUs, tolerant)
 	return fh
 }
 
@@ -315,7 +348,7 @@ func (s *sim) plan() time.Duration {
 			live++
 		}
 	}
-	snapshot.HostRoom, snapshot.ReserveRoom = simMaxHosts-live, simMaxHosts-reserves
+	snapshot.HostRoom, snapshot.ReserveRoom = s.maxHosts-live, s.maxHosts-reserves
 	groups := map[string]*DemandGroup{}
 	var order []string
 	for _, c := range s.pending {
@@ -474,6 +507,9 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		h.until = s.now.Add(simProvision + simPrepare)
 		s.r.reserveBought = append(s.r.reserveBought, s.now)
 	}
+	if !reserve && o.Market == MarketOnDemand {
+		s.r.onDemand++
+	}
 	s.hosts = append(s.hosts, h)
 	s.r.launches++
 	s.r.launched = append(s.r.launched, s.now)
@@ -626,7 +662,7 @@ func TestFleetScenarios(t *testing.T) {
 func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 	s := newSim(t, DefaultPolicy())
 	r := s.run(6*time.Hour, nil)
-	first := PlanFleet(DefaultPolicy(), FleetSnapshot{Now: offerNow, Offers: s.in, HostRoom: simMaxHosts, ReserveRoom: simMaxHosts})
+	first := PlanFleet(DefaultPolicy(), FleetSnapshot{Now: offerNow, Offers: s.in, HostRoom: s.maxHosts, ReserveRoom: s.maxHosts})
 	var want int64
 	for _, a := range first.Actions {
 		switch a.Kind {
@@ -872,5 +908,58 @@ func TestRecurringBurstsKeepTheirReserves(t *testing.T) {
 		if at.Before(lastPeak.Add(DefaultPolicy().CostHorizon)) {
 			t.Errorf("retired a reserve at %s, within the cost horizon of a burst", at.Format(time.TimeOnly))
 		}
+	}
+}
+
+// spotRamp is n one-CPU Spot-tolerant containers arriving evenly over ten
+// minutes, all running until minute twenty.
+func spotRamp(n int) []simArrival {
+	need := cpuNeed(1000, 2)
+	need.Preemptible = true
+	var out []simArrival
+	for i := range 20 {
+		at := time.Duration(i) * 30 * time.Second
+		out = append(out, simArrival{at: time.Hour + at, need: need, count: n / 20, runs: 20*time.Minute - at})
+	}
+	return out
+}
+
+// A ramp of Spot-tolerant work scales with hosts of a size that grows with
+// the market: twice the work adds hosts in proportion to the largest host.
+// Spot-tolerant work buys no on-demand host, and work that cannot run on
+// Spot starts at once on the on-demand floor it keeps; the floor is bought
+// again for each such start, and only those buys may leave unused.
+func TestASpotRampScalesWithLargeHosts(t *testing.T) {
+	var results []simResult
+	for _, n := range []int{200, 400} {
+		s := newProdSim(t, false)
+		s.maxHosts = 250
+		pinned := []simArrival{
+			{at: time.Hour + 4*time.Minute, need: cpuNeed(1000, 2), count: 1, runs: 5 * time.Minute},
+			{at: time.Hour + 16*time.Minute, need: cpuNeed(1000, 2), count: 1, runs: 5 * time.Minute},
+		}
+		r := s.run(2*time.Hour, append(spotRamp(n), pinned...))
+		n += len(pinned)
+		t.Log(r.row(fmt.Sprintf("Spot ramp to %d", n)) + fmt.Sprintf("  most hosts %d unused %d on-demand %d", r.mostHosts, r.unused, r.onDemand))
+		if len(r.waits) != n || len(r.violations) > 0 {
+			t.Fatalf("ramp to %d: placed %d, violations %v", n, len(r.waits), r.violations)
+		}
+		if r.onDemand > 1+len(pinned) {
+			t.Errorf("ramp to %d bought %d on-demand hosts", n, r.onDemand)
+		}
+		if r.unused > len(pinned) {
+			t.Errorf("ramp to %d: %d hosts left without running a container", n, r.unused)
+		}
+		for _, w := range r.pinnedWaits {
+			if w > simTick {
+				t.Errorf("ramp to %d: work that cannot run on Spot waited %s", n, w)
+			}
+		}
+		results = append(results, r)
+	}
+	p := DefaultPolicy()
+	perHost := int64(p.LargestShape.Cap.CPUMillis / 1000)
+	if grew := int64(results[1].mostHosts - results[0].mostHosts); grew > 200*(100+p.Spot.Warm.LoadPercent)/100/perHost+1 {
+		t.Errorf("200 more containers took %d more hosts", grew)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -136,6 +137,47 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 	ids, hosts := pack([]compute.HostCapacity{roomy, tight}, pending)
 	if len(ids) != 2 || hosts[0] != uuid.UUID(tight.Host) || hosts[1] != uuid.UUID(roomy.Host) {
 		t.Fatalf("placed %v on %v; want the first on the tight host, the second on the roomy one and the oversized one nowhere", ids, hosts)
+	}
+}
+
+// Spot-tolerant work takes a Spot host before a tighter on-demand one and
+// borrows on-demand room only while an on-demand host still keeps the
+// warm floor free; work that cannot run on Spot is placed first, so
+// borrowed room never crowds it out.
+func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
+	host := func(market compute.Market, freeCPU cpu.Millis) compute.HostCapacity {
+		return compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, Market: market,
+			CPUMillis: 4000, MemoryBytes: 16 * gib, FreeCPUMillis: freeCPU, FreeMemoryBytes: 16 * gib}
+	}
+	work := func(cpus cpu.Millis, tolerant bool) PendingContainersRow {
+		return PendingContainersRow{ID: uuid.New(), CpuMillis: cpus, MemoryBytes: gib, Preemptible: tolerant}
+	}
+	for _, c := range []struct {
+		name    string
+		hosts   []compute.HostCapacity
+		pending []PendingContainersRow
+		want    []int
+	}{
+		{"a Spot host before a tighter on-demand one", []compute.HostCapacity{host(compute.MarketOnDemand, 2000), host(compute.MarketSpot, 4000)},
+			[]PendingContainersRow{work(1000, true)}, []int{1}},
+		{"no borrowing the last free floor", []compute.HostCapacity{host(compute.MarketOnDemand, 1000)},
+			[]PendingContainersRow{work(1000, true)}, []int{-1}},
+		{"borrowing while another host keeps the floor", []compute.HostCapacity{host(compute.MarketOnDemand, 1000), host(compute.MarketOnDemand, 1000)},
+			[]PendingContainersRow{work(1000, true), work(1000, true)}, []int{0, -1}},
+		{"work that cannot run on Spot first", []compute.HostCapacity{host(compute.MarketOnDemand, 2000)},
+			[]PendingContainersRow{work(1000, true), work(2000, false)}, []int{-1, 0}},
+	} {
+		ids, hosts := pack(c.hosts, c.pending)
+		placed := map[uuid.UUID]uuid.UUID{}
+		for i, id := range ids {
+			placed[id] = hosts[i]
+		}
+		for i, want := range c.want {
+			got, ok := placed[c.pending[i].ID]
+			if want < 0 && ok || want >= 0 && got != uuid.UUID(c.hosts[want].Host) {
+				t.Errorf("%s: container %d on %v, want host %d", c.name, i, got, want)
+			}
+		}
 	}
 }
 

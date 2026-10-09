@@ -475,10 +475,13 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.prepared_agent_version, h.updating_until, h.idle_since, h.replaces,
        h.rightsize_refused_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
-       coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers
+       coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
+       coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
+           sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_cpu,
+           sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_memory,
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
            count(*) as containers
     from containers c
@@ -523,10 +526,12 @@ type PlannerHostsRow struct {
 	UsedMemory            int64
 	UsedGpus              int32
 	Containers            int32
+	TolerantCpu           int64
+	TolerantMemory        int64
 }
 
 // Every cloud host the fleet holds or is buying, with what its live
-// containers reserve.
+// containers reserve, and what those that could run on Spot reserve.
 func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	rows, err := q.db.Query(ctx, plannerHosts)
 	if err != nil {
@@ -570,6 +575,8 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.UsedMemory,
 			&i.UsedGpus,
 			&i.Containers,
+			&i.TolerantCpu,
+			&i.TolerantMemory,
 		); err != nil {
 			return nil, err
 		}
