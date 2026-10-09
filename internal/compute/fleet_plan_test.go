@@ -134,6 +134,24 @@ func TestPlanRefreshesAStaleReserveTheTargetNeedsAndRetiresOneItDoesNot(t *testi
 	}
 }
 
+// Work that fills the host holding the warm floor ends soon as often as
+// not: the floor waits FloorHold for the room to return before it buys a
+// host for it, and buys once the work outlasts the hold.
+func TestAFloorTakenByNewWorkWaitsBeforeItBuys(t *testing.T) {
+	p := planPolicy(cpuGiB(1000, 4), FleetCapacity{})
+	plan := func(busyFor time.Duration) FleetPlan {
+		full := planHost(1, planSmall, FleetServing)
+		full.Load, full.Containers, full.BusySince = full.Usable, 1, ptr(offerNow.Add(-busyFor))
+		return PlanFleet(p, planSnapshot(t, full))
+	}
+	if bought := actionsOf(plan(p.FloorHold/2), ActionBuy); len(bought) > 0 {
+		t.Fatalf("within the hold: bought %+v", bought)
+	}
+	if bought := actionsOf(plan(p.FloorHold+time.Second), ActionBuy); len(bought) != 1 {
+		t.Fatalf("past the hold: bought %+v, want the floor's host", bought)
+	}
+}
+
 // A reserve stopped after its reclaim notice never resumes: it retires and
 // holds none of the stopped target, which a reserve bought in its place
 // takes up.

@@ -203,6 +203,9 @@ type Policy struct {
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
+	// FloorHold is how long a warm floor slot that new work took from a host
+	// able to hold it waits for that work to end before it buys a host.
+	FloorHold time.Duration
 }
 
 // DefaultPolicy is the policy the planner runs.
@@ -235,6 +238,7 @@ func DefaultPolicy() Policy {
 		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
 		IdleTimeout:   2 * time.Minute,
 		ReturnWait:    5 * time.Minute,
+		FloorHold:     time.Minute,
 		SpotPriceAge:  time.Hour,
 	}
 }

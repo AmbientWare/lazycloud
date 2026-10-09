@@ -50,8 +50,9 @@ type FleetHost struct {
 	Stoppable bool
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
-	// IdleSince is when the serving host became idle, as last recorded.
-	IdleSince *time.Time
+	// IdleSince is when the serving host became idle, as last recorded;
+	// BusySince when its newest live container was placed.
+	IdleSince, BusySince *time.Time
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
 	PhaseAt time.Time
@@ -916,7 +917,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 					continue
 				case !slot && (!work || it.need.Preemptible && !lends):
 					continue
-				case slot && !work && ps.waiting[it.market] && !it.buysWithWork():
+				case slot && !work && (ps.waiting[it.market] && !it.buysWithWork() || ps.displaced(it)):
 					continue
 				}
 				b.room.Reserve(it.need)
@@ -1034,6 +1035,7 @@ type demandClass struct {
 type itemGroup struct {
 	shape FleetCapacity
 	slot  bool
+	kind  slotKind
 	items []coverItem
 }
 
@@ -1051,12 +1053,23 @@ func (ps *pass) coverNeed(c *demandClass) (CoverNeed, []int) {
 		item := CoverItem{Shape: g.shape, Count: len(g.items)}
 		if g.slot {
 			it := g.items[0]
-			item.Market, item.Rides = ptr(it.market.buyMarket()), ps.waiting[it.market] && !it.buysWithWork()
+			item.Market, item.Rides = ptr(it.market.buyMarket()), ps.waiting[it.market] && !it.buysWithWork() || ps.displaced(it)
 		}
 		need.Items = append(need.Items, item)
 		at = append(at, i)
 	}
 	return need, at
+}
+
+// displaced reports a floor slot that work placed within the policy's
+// FloorHold took from a serving host of its market able to hold it: the
+// room returns when that work ends, so the slot waits for it rather than
+// buy a host, and buys once the work outlasts the hold.
+func (ps *pass) displaced(it coverItem) bool {
+	return it.slot && it.kind == slotFloor && slices.ContainsFunc(ps.hosts, func(h FleetHost) bool {
+		return h.market() == it.market && serving(h) && h.Usable.Covers(reservedShape(it.need)) &&
+			h.BusySince != nil && ps.s.Now.Sub(*h.BusySince) < ps.p.FloorHold
+	})
 }
 
 // buyFor covers what no running host or resumed reserve holds with new
@@ -1075,9 +1088,9 @@ func (ps *pass) buyFor(items []coverItem) {
 		}
 		c := classes[n]
 		shape := reservedShape(it.need)
-		i := slices.IndexFunc(c.groups, func(g itemGroup) bool { return g.shape == shape && g.slot == it.slot })
+		i := slices.IndexFunc(c.groups, func(g itemGroup) bool { return g.shape == shape && g.slot == it.slot && g.kind == it.kind })
 		if i < 0 {
-			c.groups = append(c.groups, itemGroup{shape: shape, slot: it.slot})
+			c.groups = append(c.groups, itemGroup{shape: shape, slot: it.slot, kind: it.kind})
 			i = len(c.groups) - 1
 		}
 		c.groups[i].items = append(c.groups[i].items, it)

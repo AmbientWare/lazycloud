@@ -176,9 +176,18 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, PhaseAt: h.PhaseAt,
+		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
 		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 	}
+}
+
+// busySince is when the host's newest live container was placed; nil
+// without one.
+func busySince(h PlannerHostsRow) *time.Time {
+	if h.Containers == 0 {
+		return nil
+	}
+	return &h.BusySince
 }
 
 // lent is what Spot-tolerant work holds on a host: on an on-demand CPU host
