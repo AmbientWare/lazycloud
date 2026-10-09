@@ -1061,10 +1061,9 @@ func (ps *pass) coverNeed(c *demandClass) (CoverNeed, []int) {
 	return need, at
 }
 
-// displaced reports a floor slot that work placed within the policy's
-// FloorHold took from a serving host of its market able to hold it: the
-// room returns when that work ends, so the slot waits for it rather than
-// buy a host, and buys once the work outlasts the hold.
+// displaced reports a floor slot whose room a serving host of its market
+// gave to work placed less than FloorHold ago. The slot waits for that work
+// to end rather than buy a host, and buys once the work outlasts the hold.
 func (ps *pass) displaced(it coverItem) bool {
 	return it.slot && it.kind == slotFloor && slices.ContainsFunc(ps.hosts, func(h FleetHost) bool {
 		return h.market() == it.market && serving(h) && h.Usable.Covers(reservedShape(it.need)) &&

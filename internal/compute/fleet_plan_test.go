@@ -134,9 +134,9 @@ func TestPlanRefreshesAStaleReserveTheTargetNeedsAndRetiresOneItDoesNot(t *testi
 	}
 }
 
-// Work that fills the host holding the warm floor ends soon as often as
-// not: the floor waits FloorHold for the room to return before it buys a
-// host for it, and buys once the work outlasts the hold.
+// Work that fills the host holding the warm floor may end soon: the floor
+// waits FloorHold for its room before it buys a host, and buys once the
+// work outlasts the hold.
 func TestAFloorTakenByNewWorkWaitsBeforeItBuys(t *testing.T) {
 	p := planPolicy(cpuGiB(1000, 4), FleetCapacity{})
 	plan := func(busyFor time.Duration) FleetPlan {
