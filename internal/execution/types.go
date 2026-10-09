@@ -98,10 +98,13 @@ const (
 type FailureKind string
 
 const (
-	FailureUserError   FailureKind = "user_error"
-	FailureLoadError   FailureKind = "load_error"
-	FailureTimeout     FailureKind = "timeout"
-	FailureLost        FailureKind = "lost"
+	FailureUserError FailureKind = "user_error"
+	FailureLoadError FailureKind = "load_error"
+	FailureTimeout   FailureKind = "timeout"
+	FailureLost      FailureKind = "lost"
+	// FailurePreempted: the attempt's host stopped serving. The task retries
+	// without spending its attempts until MaxPreemptions.
+	FailurePreempted   FailureKind = "preempted"
 	FailureStartFailed FailureKind = "start_failed"
 	FailureSystem      FailureKind = "system"
 	// FailureDependencyFailed: an upstream task the input refers to did not
@@ -109,16 +112,21 @@ const (
 	FailureDependencyFailed FailureKind = "dependency_failed"
 )
 
-// Retryable reports whether another attempt may follow a failure of kind.
+// Retryable reports whether a retry policy may follow a failure of kind with
+// another attempt. A preemption retries outside the policy.
 func (k FailureKind) Retryable() bool {
 	switch k {
 	case FailureUserError, FailureTimeout, FailureLost:
 		return true
-	case FailureLoadError, FailureStartFailed, FailureSystem, FailureDependencyFailed:
+	case FailurePreempted, FailureLoadError, FailureStartFailed, FailureSystem, FailureDependencyFailed:
 		return false
 	}
 	return false
 }
+
+// MaxPreemptions is how many times a task may be preempted; the last
+// preemption fails it.
+const MaxPreemptions = 5
 
 // Failure is stored in tasks.failure and returned by the API unchanged.
 type Failure struct {

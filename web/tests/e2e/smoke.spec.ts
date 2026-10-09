@@ -167,6 +167,7 @@ test("workspace search opens from the keyboard and navigates to a canonical reso
             status: "succeeded",
             attempts: 1,
             max_attempts: 1,
+            preemptions: 0,
             root_task_id: "task-1",
             created_at: "2026-01-01T10:00:00Z",
           },

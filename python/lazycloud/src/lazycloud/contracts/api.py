@@ -350,6 +350,7 @@ class FailureKind(str, Enum):
     load_error = "load_error"
     timeout = "timeout"
     lost = "lost"
+    preempted = "preempted"
     start_failed = "start_failed"
     system = "system"
     dependency_failed = "dependency_failed"
@@ -3372,7 +3373,11 @@ class Task(APIModel):
     ] = None
     status: TaskStatus
     attempts: Annotated[int, Field(description="Attempts started so far.")]
-    max_attempts: int
+    max_attempts: Annotated[
+        int,
+        Field(description="Attempts the task may start; each attempt lost to preemption adds one."),
+    ]
+    preemptions: Annotated[int, Field(description="Attempts lost to preemption.")]
     parent_task_id: Annotated[
         UUID | None, Field(description="The running task that spawned this one.")
     ] = None

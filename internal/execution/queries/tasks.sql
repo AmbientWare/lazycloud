@@ -1,6 +1,6 @@
 -- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
@@ -16,7 +16,7 @@ where t.id = @id and t.workspace_id = @workspace_id;
 -- name: ListTasks :many
 -- Newest first below the cursor, from the workspace's recent index.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
@@ -41,7 +41,7 @@ limit @max_rows;
 -- Like ListTasks for one app's functions: each workload's recent index
 -- yields at most a page, and the pages merge.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
@@ -129,7 +129,7 @@ order by req.n;
 -- most @result_max and the inlined sizes so far stay within @total_max; only
 -- those rows read the result bytes.
 with finished as (
-    select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts,
+    select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts, t.preemptions,
            t.parent_task_id, t.root_task_id, t.available_at, t.created_at, t.started_at,
            t.finished_at, t.failure, t.scheduled_for, res.encoding,
            case res.encoding when 'cloudpickle' then (octet_length(res.data) + 2) / 3 * 4
@@ -150,7 +150,7 @@ with finished as (
     from finished f
 )
 select b.id, a.name as app_name, w.name as function_name, b.release_id, r.version, b.status,
-       b.attempt_count, b.max_attempts, b.parent_task_id, b.root_task_id, b.available_at,
+       b.attempt_count, b.max_attempts, b.preemptions, b.parent_task_id, b.root_task_id, b.available_at,
        b.created_at, b.started_at, b.finished_at, b.failure, b.scheduled_for,
        array(select at.container_id from attempts at
              where at.task_id = b.id and at.number = b.attempt_count)::uuid[] as container_ids,

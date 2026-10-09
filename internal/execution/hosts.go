@@ -14,8 +14,8 @@ import (
 var _ compute.Containers = (*Execution)(nil)
 
 // StopHostContainers stops every live container on host in tx because the
-// host stops serving: removed, reclaimed or gone. Running attempts are lost
-// and retried by policy. It locks the containers in id order before
+// host stops serving: removed, reclaimed or gone. Running attempts are
+// preempted and retried. It locks the containers in id order before
 // finishing any attempt, keeping the container, task, attempt lock order.
 func (e *Execution) StopHostContainers(ctx context.Context, tx pgx.Tx, host compute.HostID, message string) (int, error) {
 	id := uuid.UUID(host)
