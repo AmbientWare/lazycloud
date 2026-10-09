@@ -47,7 +47,8 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
 		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
@@ -247,12 +248,22 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 	return out, nil
 }
 
-// largestShapes are the largest shape each market's placed platform
-// containers reserved, and the largest its builds did. GPU work belongs to
-// the on-demand market of its model, as its demand does; GPU work without
-// a recorded model counts in no market.
-func largestShapes(rows []RecentShapesRow) (recent, builds map[ReserveMarket]FleetCapacity) {
-	recent, builds = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+// shapeKind is what a RecentShapes row measures.
+type shapeKind string
+
+const (
+	shapeRecent  shapeKind = "recent"
+	shapeBuild   shapeKind = "build"
+	shapeArrived shapeKind = "arrived"
+)
+
+// shapesByMarket are, by market, the largest shape placed platform
+// containers reserved and the largest its finished builds did, and what
+// arrived within the arrival window. GPU work belongs to the on-demand
+// market of its model, as its demand does; GPU work without a model
+// belongs to none.
+func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
+	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	for _, r := range rows {
 		var m ReserveMarket
 		switch {
@@ -263,13 +274,17 @@ func largestShapes(rows []RecentShapesRow) (recent, builds map[ReserveMarket]Fle
 		default:
 			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
-		out := recent
-		if r.Build {
-			out = builds
+		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
+		switch shapeKind(r.Kind) {
+		case shapeRecent:
+			recent[m] = recent[m].Upper(shape)
+		case shapeBuild:
+			builds[m] = builds[m].Upper(shape)
+		case shapeArrived:
+			arrived[m] = arrived[m].Plus(shape)
 		}
-		out[m] = out[m].Upper(FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)})
 	}
-	return recent, builds
+	return recent, builds, arrived
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

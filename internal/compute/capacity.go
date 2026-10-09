@@ -110,11 +110,14 @@ func (h HostCapacity) Fits(r Requirement) bool {
 		h.FreeGPUs >= r.GPUsNeeded()
 }
 
-// keepsFloor reports whether h is an on-demand platform CPU host with
-// floor free.
+// floorHost reports an on-demand platform CPU host, which keeps the
+// on-demand warm floor; keepsFloor one with floor free.
+func (h HostCapacity) floorHost() bool {
+	return h.Kind == KindPlatform && h.Market == MarketOnDemand && h.GPUCount == 0
+}
+
 func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
-	return h.Kind == KindPlatform && h.Market == MarketOnDemand && h.GPUCount == 0 &&
-		h.FreeCPUMillis >= floor.CPUMillis && h.FreeMemoryBytes >= floor.MemoryBytes
+	return h.floorHost() && h.FreeCPUMillis >= floor.CPUMillis && h.FreeMemoryBytes >= floor.MemoryBytes
 }
 
 // ChooseHost is the host, by index, a container of r goes to, or -1: one
@@ -139,7 +142,7 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			continue
 		}
 		borrows := r.Preemptible && h.Market != MarketSpot
-		if borrows && !floor.Empty() && h.Kind == KindPlatform && h.Market == MarketOnDemand && h.GPUCount == 0 {
+		if borrows && !floor.Empty() && h.floorHost() {
 			after, left := h, holders
 			after.Reserve(r)
 			if h.keepsFloor(floor) && !after.keepsFloor(floor) {

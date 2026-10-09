@@ -543,6 +543,42 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 	}
 }
 
+// While load sets the Spot market's stopped target, a reserve bought for a
+// small shortfall still holds the target up to the default largest shape,
+// the size that hibernates, so a target that grows a little each pass is
+// held by a few large reserves.
+func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
+	p := DefaultPolicy()
+	p.OnDemand, p.GPU, p.Spot.Warm = MarketReserve{}, nil, HeadroomTarget{}
+	spot := ReserveMarket{Preemptible: true}
+	host := func(id byte, typ string, state FleetState) FleetHost {
+		h := planHost(id, mustType(t, typ), state)
+		h.Market = MarketSpot
+		if state == FleetServing {
+			h.Load, h.Containers = h.Usable, 16
+		}
+		return h
+	}
+	// 48 busy CPU keep a 24 CPU stopped target; the reserves hold 20.
+	s := planSnapshot(t, host(1, "c6a.8xlarge", FleetServing), host(2, "c6a.8xlarge", FleetServing), host(3, "c6a.8xlarge", FleetServing),
+		host(4, "c6a.8xlarge", FleetStopped), host(5, "c6a.2xlarge", FleetStopped))
+	s.Offers.Catalog = FleetCatalog()
+	for _, typ := range s.Offers.Catalog {
+		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ.Name, HourlyMicros: 10_000 * typ.VCPUs(), ObservedAt: offerNow})
+	}
+	s.FloorShortSince = map[ReserveMarket]time.Time{spot: offerNow.Add(-time.Hour)}
+	plan := PlanFleet(p, s)
+	bought := actionsOf(plan, ActionBuyReserve)
+	if len(bought) == 0 {
+		t.Fatalf("actions %+v, reason %q; want a reserve bought", plan.Actions, marketPlan(t, plan, spot).Reason)
+	}
+	for _, a := range bought {
+		if !a.Offer.Usable.Covers(p.LargestShape.Default) {
+			t.Errorf("bought reserve %s holds %+v, want at least %+v", a.Offer.Key(), a.Offer.Usable, p.LargestShape.Default)
+		}
+	}
+}
+
 // Spot-tolerant work borrowing an on-demand host is the Spot market's load:
 // its headroom is bought as Spot, and the on-demand market keeps only the
 // load of work that cannot run on Spot.
