@@ -92,6 +92,10 @@ func (m ReserveMarket) String() string {
 	return market + ":" + gpu
 }
 
+// spotCPU reports the CPU Spot market, the one whose purchases follow
+// its load and arrivals.
+func (m ReserveMarket) spotCPU() bool { return m == ReserveMarket{Preemptible: true} }
+
 // buyMarket is how a market's own purchases are bought.
 func (m ReserveMarket) buyMarket() Market {
 	if m.Preemptible {
@@ -183,7 +187,13 @@ type Policy struct {
 	// LongestBuild is the most an image build runs, the images owner's
 	// build timeout.
 	LongestBuild time.Duration
-	Batch        BatchWindow
+	// ArrivalWindow is a margin over how long a Spot launch takes to serve
+	// work, about a minute: the Spot market keeps warm at least what was
+	// placed from arrivals within it, less their largest batch, so work
+	// arriving at a steady rate finds room rather than waiting for a
+	// launch, while a single burst buys no headroom it cannot use.
+	ArrivalWindow time.Duration
+	Batch         BatchWindow
 	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
@@ -209,13 +219,14 @@ func DefaultPolicy() Policy {
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
 		Spot:             cpuMarket, OnDemand: cpuMarket,
-		GPU:          map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
-		LargestShape: LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
-		BuildWindow:  time.Hour,
-		LongestBuild: time.Hour,
-		Batch:        BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		IdleTimeout:  5 * time.Minute,
-		SpotPriceAge: time.Hour,
+		GPU:           map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
+		LargestShape:  LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
+		BuildWindow:   time.Hour,
+		LongestBuild:  time.Hour,
+		ArrivalWindow: 2 * time.Minute,
+		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		IdleTimeout:   5 * time.Minute,
+		SpotPriceAge:  time.Hour,
 	}
 }
 
@@ -251,13 +262,13 @@ type warmSlot struct {
 	kind  slotKind
 }
 
-// slots are the warm slots target keeps at load: its floor, then what a
-// share of load adds beyond it. Each part splits into the fewest equal
+// slots are the warm slots that hold warm, a target's headroom: its floor,
+// then what warm adds beyond it. Each part splits into the fewest equal
 // slots within its bound, the cap for the floor and the floor for the
-// rest, so the slots hold the target's whole headroom and one fits a start
-// of the floor's shape.
-func (p Policy) slots(target HeadroomTarget, load FleetCapacity) []warmSlot {
-	rest := target.Of(load).Minus(target.Floor).Clamp()
+// rest, so the slots hold the whole headroom and one fits a start of the
+// floor's shape.
+func (p Policy) slots(target HeadroomTarget, warm FleetCapacity) []warmSlot {
+	rest := warm.Minus(target.Floor).Clamp()
 	bound := p.LargestShape.Cap
 	if !target.Floor.Empty() {
 		bound = target.Floor.Lower(bound)

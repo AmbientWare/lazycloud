@@ -88,6 +88,44 @@ values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uu
 	}
 }
 
+// The Spot market keeps warm what a steady stream of work placed within
+// the arrival window, less its largest batch: four batches of four
+// one-CPU containers 20 seconds apart keep twelve, while one burst of
+// sixteen, arriving over a second and a half across a clock's five-second
+// boundary, keeps only its share of load.
+func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		created string
+		want    cpu.Millis
+	}{
+		{"steady", "now() - make_interval(secs => 20 * (n / 4))", 13_000},
+		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 4_000},
+	} {
+		o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+		host := fleetHost(t, o, compute.PhaseReady, "c6a.8xlarge", "i-0000000000000b001")
+		run(t, o.pool, "update hosts set market = 'spot' where id = $1", uuid.UUID(host))
+		alice := newUser(t, o.pool, "alice@example.com")
+		ws := newWorkspace(t, o.pool, "dev", alice)
+		release := newRelease(t, o.pool, ws, `{}`)
+		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, created_at)
+select $1, $2, 'ready', $3, 1, 1000, 1 << 30, now(), now(), `+c.created+`
+from generate_series(0, 15) n`, ws, release, uuid.UUID(host))
+		if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
+			t.Fatal(err)
+		}
+		markets, err := o.compute.PublishedPlan(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range markets {
+			if m.Preemptible && m.GPUType == "" && m.WarmTarget.CPUMillis != c.want {
+				t.Errorf("%s: Spot warm target %v, want %v", c.name, m.WarmTarget.CPUMillis, c.want)
+			}
+		}
+	}
+}
+
 // staleMarkets makes the published plan old enough that the next pass
 // publishes it again.
 func staleMarkets(t *testing.T, o owners) {

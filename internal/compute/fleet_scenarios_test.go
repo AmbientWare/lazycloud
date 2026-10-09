@@ -73,8 +73,10 @@ type simResult struct {
 	// onDemand counts on-demand hosts bought to serve; mostHosts is the most
 	// hosts that served at once.
 	unused, onDemand, mostHosts int
-	// pinnedWaits are the waits of work that cannot run on Spot.
+	// pinnedWaits are the waits of work that cannot run on Spot; mostWarm
+	// is the largest warm target the Spot market kept.
 	pinnedWaits []time.Duration
+	mostWarm    FleetCapacity
 	finalHourly int64
 	violations  []string
 }
@@ -101,14 +103,18 @@ type sim struct {
 	peaks           map[ReserveMarket]LoadPeak
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
-	// maxHosts is the fleet limit, simMaxHosts unless a scenario sets it.
-	maxHosts int
+	// maxHosts is the fleet limit; provision is how long a launch takes to
+	// serve, simProvision unless a scenario sets it.
+	maxHosts  int
+	provision time.Duration
 	// refuses names the pools EC2 refuses for capacity. A refused launch
 	// cools its zone and moves to the pool fallbackPool picks, as the
 	// launcher does.
 	refuses func(region, zoneID, instanceType string, market Market) bool
-	// builds are the builds that ended, for the planner's build window.
-	builds []simBuild
+	// builds are the builds that ended, for the planner's build window, and
+	// placedLog every container placed.
+	builds    []simBuild
+	placedLog []*simContainer
 }
 
 type simBuild struct {
@@ -148,7 +154,7 @@ func newSim(t *testing.T, p Policy) *sim {
 		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}, {ID: "c", Zone: "us-east-2c", ZoneID: "use2-az3"},
 	}}}
 	return &sim{
-		t: t, p: p, now: offerNow, start: offerNow, maxHosts: 40,
+		t: t, p: p, now: offerNow, start: offerNow, maxHosts: 40, provision: simProvision,
 		in: OfferInputs{Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks)},
 	}
 }
@@ -255,6 +261,7 @@ func (s *sim) place() {
 		best := serving[i]
 		c.ends = s.now.Add(c.runs)
 		best.containers, best.served = append(best.containers, c), true
+		s.placedLog = append(s.placedLog, c)
 		s.r.waits = append(s.r.waits, s.now.Sub(c.arrived))
 		if !c.need.Preemptible {
 			s.r.pinnedWaits = append(s.r.pinnedWaits, s.now.Sub(c.arrived))
@@ -327,7 +334,31 @@ func (s *sim) plan() time.Duration {
 			builds[b.market] = builds[b.market].Upper(b.shape)
 		}
 	}
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: builds, Offers: s.in, BatchWait: s.batchWait()}
+	// Arrived is what the Spot market's placed work created within the
+	// arrival window reserves, less its largest batch, as RecentShapes
+	// reads it: arrivals less than the batch's quiet apart, at most its max
+	// long.
+	var recent []*simContainer
+	for _, c := range s.placedLog {
+		if c.need.Preemptible && s.now.Sub(c.arrived) < s.p.ArrivalWindow {
+			recent = append(recent, c)
+		}
+	}
+	slices.SortStableFunc(recent, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
+	var total, batch, largest FleetCapacity
+	var run, last time.Time
+	part := -1
+	for _, c := range recent {
+		if c.arrived.Sub(last) >= s.p.Batch.Quiet {
+			run, part = c.arrived, -1
+		}
+		if n := int(c.arrived.Sub(run) / s.p.Batch.Max); n != part {
+			largest, batch, part = largest.Upper(batch), FleetCapacity{}, n
+		}
+		total, batch, last = total.Plus(needShape(c.need)), batch.Plus(needShape(c.need)), c.arrived
+	}
+	arrived := map[ReserveMarket]FleetCapacity{{Preemptible: true}: total.Minus(largest.Upper(batch)).Clamp()}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: builds, Arrived: arrived, Offers: s.in, BatchWait: s.batchWait()}
 	snapshot.Offers.Now = s.now
 	// The scheduler refreshes Spot quotes far more often than they age out.
 	snapshot.Offers.Spot = slices.Clone(s.in.Spot)
@@ -366,6 +397,9 @@ func (s *sim) plan() time.Duration {
 	plan := PlanFleet(s.p, snapshot)
 	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
 	for _, mp := range plan.Markets {
+		if mp.Market == (ReserveMarket{Preemptible: true}) {
+			s.r.mostWarm = s.r.mostWarm.Upper(mp.WarmTarget)
+		}
 		s.peaks[mp.Market] = mp.Peak
 		if mp.FloorShortSince != nil {
 			s.floorShortSince[mp.Market] = *mp.FloorShortSince
@@ -501,10 +535,10 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
 		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
 	}}
-	h.until = s.now.Add(simProvision)
+	h.until = s.now.Add(s.provision)
 	if reserve {
 		h.State, h.ReserveMode, h.Current, h.Slept = FleetPreparing, a.Mode, false, true
-		h.until = s.now.Add(simProvision + simPrepare)
+		h.until = s.now.Add(s.provision + simPrepare)
 		s.r.reserveBought = append(s.r.reserveBought, s.now)
 	}
 	if !reserve && o.Market == MarketOnDemand {
@@ -589,22 +623,27 @@ func (s *sim) account() {
 	}
 }
 
+// slow counts the starts that waited over 30 seconds.
+func (r simResult) slow() int {
+	n := 0
+	for _, w := range r.waits {
+		if w > 30*time.Second {
+			n++
+		}
+	}
+	return n
+}
+
 func (r simResult) row(name string) string {
 	waits := slices.Clone(r.waits)
 	slices.SortFunc(waits, cmp.Compare)
-	var p95 time.Duration
-	long := 0
-	for _, w := range waits {
-		if w > 30*time.Second {
-			long++
-		}
-	}
+	var p50, p95 time.Duration
 	if len(waits) > 0 {
-		p95 = waits[(len(waits)*95+99)/100-1]
+		p50, p95 = waits[(len(waits)-1)/2], waits[(len(waits)*95+99)/100-1]
 	}
-	return fmt.Sprintf("%-34s $%7.3f/h  reserve $%6.3f/h  idle-end $%6.3f/h  waits>30s %3d/%-3d  p95 %5s  launches %3d refused %3d stops %3d resumes %3d",
+	return fmt.Sprintf("%-34s $%7.3f/h  reserve $%6.3f/h  idle-end $%6.3f/h  waits>30s %3d/%-3d  p50 %5s p95 %5s  launches %3d refused %3d stops %3d resumes %3d",
 		name, float64(r.spendMicros)/3600/1e6/r.hours, float64(r.reserveMicros)/3600/1e6/r.hours, float64(r.finalHourly)/1e6,
-		long, len(waits), p95, r.launches, r.refusals, r.stops, r.resumes)
+		r.slow(), len(waits), p50, p95, r.launches, r.refusals, r.stops, r.resumes)
 }
 
 // demandOnly is the baseline the scenarios compare the policy with: no
@@ -924,42 +963,47 @@ func spotRamp(n int) []simArrival {
 	return out
 }
 
-// A ramp of Spot-tolerant work scales with hosts of a size that grows with
-// the market: twice the work adds hosts in proportion to the largest host.
-// Spot-tolerant work buys no on-demand host, and work that cannot run on
-// Spot starts at once on the on-demand floor it keeps; the floor is bought
-// again for each such start, and only those buys may leave unused.
-func TestASpotRampScalesWithLargeHosts(t *testing.T) {
-	var results []simResult
+// A ramp of Spot-tolerant work runs on hosts that grow with the market,
+// averaging at least half the largest shape, and starts warm: headroom
+// follows the steady arrival rate, so beyond the ramp's first batches no
+// start waits for a launch. Spot-tolerant work buys no on-demand host, and
+// work that cannot run on Spot starts at once on the on-demand floor it
+// keeps. Only the floor bought again for those starts and the headroom
+// the market held when the ramp stopped may leave unused.
+func TestASpotRampStartsWarmOnLargeHosts(t *testing.T) {
+	p := DefaultPolicy()
 	for _, n := range []int{200, 400} {
 		s := newProdSim(t, false)
-		s.maxHosts = 250
+		s.maxHosts, s.provision = 250, 45*time.Second
 		pinned := []simArrival{
 			{at: time.Hour + 4*time.Minute, need: cpuNeed(1000, 2), count: 1, runs: 5 * time.Minute},
 			{at: time.Hour + 16*time.Minute, need: cpuNeed(1000, 2), count: 1, runs: 5 * time.Minute},
 		}
 		r := s.run(2*time.Hour, append(spotRamp(n), pinned...))
-		n += len(pinned)
 		t.Log(r.row(fmt.Sprintf("Spot ramp to %d", n)) + fmt.Sprintf("  most hosts %d unused %d on-demand %d", r.mostHosts, r.unused, r.onDemand))
-		if len(r.waits) != n || len(r.violations) > 0 {
+		if len(r.waits) != n+len(pinned) || len(r.violations) > 0 {
 			t.Fatalf("ramp to %d: placed %d, violations %v", n, len(r.waits), r.violations)
+		}
+		// Beside the two warm floors and their refills, hosts average at
+		// least half the largest shape.
+		largest := p.LargestShape.Cap.CPUMillis
+		if hosts := r.mostHosts - 2 - len(pinned); cpu.Millis(n*1000) < cpu.Millis(hosts)*largest/2 {
+			t.Errorf("ramp to %d ran on %d hosts", n, r.mostHosts)
+		}
+		// The first two batches arrive before any headroom can serve.
+		if slow := r.slow(); slow > 2*n/20 {
+			t.Errorf("ramp to %d: %d starts waited over 30s", n, slow)
 		}
 		if r.onDemand > 1+len(pinned) {
 			t.Errorf("ramp to %d bought %d on-demand hosts", n, r.onDemand)
 		}
-		if r.unused > len(pinned) {
-			t.Errorf("ramp to %d: %d hosts left without running a container", n, r.unused)
+		if spare := len(pinned) + int((r.mostWarm.CPUMillis+largest-1)/largest); r.unused > spare {
+			t.Errorf("ramp to %d: %d hosts left without running a container, want at most %d", n, r.unused, spare)
 		}
 		for _, w := range r.pinnedWaits {
 			if w > simTick {
 				t.Errorf("ramp to %d: work that cannot run on Spot waited %s", n, w)
 			}
 		}
-		results = append(results, r)
-	}
-	p := DefaultPolicy()
-	perHost := int64(p.LargestShape.Cap.CPUMillis / 1000)
-	if grew := int64(results[1].mostHosts - results[0].mostHosts); grew > 200*(100+p.Spot.Warm.LoadPercent)/100/perHost+1 {
-		t.Errorf("200 more containers took %d more hosts", grew)
 	}
 }
