@@ -39,7 +39,7 @@ type Task struct {
 	Status      TaskStatus
 	Attempts    int
 	MaxAttempts int
-	// Preemptions counts the attempts lost to preemption and retried.
+	// Preemptions counts the attempts lost to preemption.
 	Preemptions int
 	// Parent is the task that spawned this one; Root is the root of its
 	// call graph, the task itself when nothing spawned it.

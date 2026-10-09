@@ -4963,7 +4963,7 @@ type Task struct {
 	// Pending Why a queued task has not started, derived from current state on every read.
 	Pending *TaskPendingProgress `json:"pending,omitempty"`
 
-	// Preemptions Attempts lost to preemption and retried.
+	// Preemptions Attempts lost to preemption.
 	Preemptions int                `json:"preemptions"`
 	ReleaseId   openapi_types.UUID `json:"release_id"`
 

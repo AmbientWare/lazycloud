@@ -36,7 +36,7 @@ insert into task_results (task_id, encoding, data, display)
 select unnest(@task_ids::uuid[]), unnest(@encodings::text[]), unnest(@data::bytea[]), unnest(@displays::jsonb[]);
 
 -- name: RequeueTasks :exec
--- A preempted task gains the attempt it lost.
+-- A preempted task gets back the attempt it lost.
 update tasks t
 set status = 'queued',
     current_attempt_id = null,
@@ -49,6 +49,8 @@ where t.id = v.id;
 
 -- name: FailRunningTasks :exec
 update tasks t
-set status = 'failed', failure = v.failure, finished_at = now()
-from (select unnest(@ids::uuid[]) as id, unnest(@failures::jsonb[]) as failure) v
+set status = 'failed', failure = v.failure, finished_at = now(),
+    preemptions = t.preemptions + v.preempted::int
+from (select unnest(@ids::uuid[]) as id, unnest(@failures::jsonb[]) as failure,
+             unnest(@preempted::bool[]) as preempted) v
 where t.id = v.id;

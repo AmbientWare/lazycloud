@@ -181,14 +181,14 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		preempted := failure.Kind == FailurePreempted
 		policy := policies[task.ReleaseID]
 		switch {
-		case preempted && task.Preemptions < MaxPreemptions:
+		case preempted && task.Preemptions+1 < MaxPreemptions:
 			requeue.DelaySeconds = append(requeue.DelaySeconds, 0)
 		case mayRetry(task, failure) && policy.Retries(failure.Kind):
 			requeue.DelaySeconds = append(requeue.DelaySeconds, policy.NextAttemptDelay(int(task.AttemptCount)+1).Seconds())
 		default:
 			if preempted {
 				failure = Failure{Kind: FailurePreempted, Message: fmt.Sprintf(
-					"Lost to preemption %d times. Set preemptible=False to run without preemption.", task.Preemptions+1)}
+					"Lost to preemption %d times. Set preemptible=False to run without preemption.", MaxPreemptions)}
 			}
 			encoded, err := json.Marshal(failure)
 			if err != nil {
@@ -196,6 +196,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 			}
 			failed.Ids = append(failed.Ids, task.ID)
 			failed.Failures = append(failed.Failures, encoded)
+			failed.Preempted = append(failed.Preempted, preempted)
 			continue
 		}
 		requeue.Ids = append(requeue.Ids, task.ID)

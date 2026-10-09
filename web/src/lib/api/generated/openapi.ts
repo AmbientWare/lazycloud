@@ -3924,7 +3924,7 @@ export interface components {
             attempts: number;
             /** @description Attempts the task may start; each attempt lost to preemption adds one. */
             max_attempts: number;
-            /** @description Attempts lost to preemption and retried. */
+            /** @description Attempts lost to preemption. */
             preemptions: number;
             /**
              * Format: uuid

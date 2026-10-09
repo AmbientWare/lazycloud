@@ -102,8 +102,8 @@ const (
 	FailureLoadError FailureKind = "load_error"
 	FailureTimeout   FailureKind = "timeout"
 	FailureLost      FailureKind = "lost"
-	// FailurePreempted: the attempt's host stopped serving. It retries
-	// without spending the task's attempts, up to MaxPreemptions times.
+	// FailurePreempted: the attempt's host stopped serving. The task retries
+	// without spending its attempts until MaxPreemptions.
 	FailurePreempted   FailureKind = "preempted"
 	FailureStartFailed FailureKind = "start_failed"
 	FailureSystem      FailureKind = "system"
@@ -124,7 +124,7 @@ func (k FailureKind) Retryable() bool {
 	return false
 }
 
-// MaxPreemptions is how many preempted attempts a task retries; the next
+// MaxPreemptions is how many times a task may be preempted; the last
 // preemption fails it.
 const MaxPreemptions = 5
 

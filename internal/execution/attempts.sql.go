@@ -13,18 +13,21 @@ import (
 
 const failRunningTasks = `-- name: FailRunningTasks :exec
 update tasks t
-set status = 'failed', failure = v.failure, finished_at = now()
-from (select unnest($1::uuid[]) as id, unnest($2::jsonb[]) as failure) v
+set status = 'failed', failure = v.failure, finished_at = now(),
+    preemptions = t.preemptions + v.preempted::int
+from (select unnest($1::uuid[]) as id, unnest($2::jsonb[]) as failure,
+             unnest($3::bool[]) as preempted) v
 where t.id = v.id
 `
 
 type FailRunningTasksParams struct {
-	Ids      []uuid.UUID
-	Failures [][]byte
+	Ids       []uuid.UUID
+	Failures  [][]byte
+	Preempted []bool
 }
 
 func (q *Queries) FailRunningTasks(ctx context.Context, arg FailRunningTasksParams) error {
-	_, err := q.db.Exec(ctx, failRunningTasks, arg.Ids, arg.Failures)
+	_, err := q.db.Exec(ctx, failRunningTasks, arg.Ids, arg.Failures, arg.Preempted)
 	return err
 }
 
@@ -192,7 +195,7 @@ type RequeueTasksParams struct {
 	Preempted    []bool
 }
 
-// A preempted task gains the attempt it lost.
+// A preempted task gets back the attempt it lost.
 func (q *Queries) RequeueTasks(ctx context.Context, arg RequeueTasksParams) error {
 	_, err := q.db.Exec(ctx, requeueTasks, arg.Ids, arg.DelaySeconds, arg.Preempted)
 	return err

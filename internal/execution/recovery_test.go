@@ -172,9 +172,9 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 	}
 }
 
-// A preempted attempt retries without spending the task's attempts, so the
-// user's retries stay for their own failures, until the preemption bound
-// fails the task.
+// A preempted task retries without spending its attempts, so the user's
+// retries stay for their own failures. The last preemption the bound allows
+// fails it.
 func TestPreemptionRetriesWithoutSpendingAttemptsUntilItsBound(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
@@ -210,7 +210,7 @@ from att where t.id = $1 returning att.id`, f.task, uuid.UUID(f.host)).Scan(&att
 	}
 
 	once := runningAttempt(t, pool, `{}`, 1)
-	for n := 1; n <= MaxPreemptions; n++ {
+	for n := 1; n < MaxPreemptions; n++ {
 		preempt(once)
 		var status string
 		var maxAttempts, preemptions int
@@ -225,12 +225,14 @@ from att where t.id = $1 returning att.id`, f.task, uuid.UUID(f.host)).Scan(&att
 	}
 	preempt(once)
 	var status, kind, message string
-	if err := pool.QueryRow(t.Context(), "select status, failure->>'kind', failure->>'message' from tasks where id = $1", once.task).
-		Scan(&status, &kind, &message); err != nil {
+	var preemptions int
+	if err := pool.QueryRow(t.Context(), "select status, failure->>'kind', failure->>'message', preemptions from tasks where id = $1", once.task).
+		Scan(&status, &kind, &message, &preemptions); err != nil {
 		t.Fatal(err)
 	}
-	if status != string(TaskFailed) || kind != string(FailurePreempted) || !strings.Contains(message, "preemptible=False") {
-		t.Fatalf("past the bound: task %s, %s %q; want failed as preempted, naming preemptible=False", status, kind, message)
+	if status != string(TaskFailed) || kind != string(FailurePreempted) || preemptions != MaxPreemptions || !strings.Contains(message, "preemptible=False") {
+		t.Fatalf("at the bound: task %s after %d preemptions, %s %q; want failed as preempted after %d, naming preemptible=False",
+			status, preemptions, kind, message, MaxPreemptions)
 	}
 
 	retried := runningAttempt(t, pool, `{"retry_policy": {"max_attempts": 2}}`, 2)

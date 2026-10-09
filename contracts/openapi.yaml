@@ -4869,7 +4869,7 @@ components:
           description: Attempts the task may start; each attempt lost to preemption adds one.
           type: integer
         preemptions:
-          description: Attempts lost to preemption and retried.
+          description: Attempts lost to preemption.
           type: integer
         parent_task_id:
           description: The running task that spawned this one.
