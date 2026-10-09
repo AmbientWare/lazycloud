@@ -9,6 +9,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
 
+// An interrupted host drains at once, its work stops just before the
+// reclaim, and the provider rather than the fleet ends it: EC2 charges
+// nothing for a Spot instance it reclaims in its first hour. The fleet
+// terminates it only once the reclaim is overdue.
 func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
 	ctx := t.Context()
 	o := newOwners(t, compute.Config{})
@@ -16,7 +20,8 @@ func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	release := newRelease(t, o.pool, dev, `{}`)
 	later := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16000, Memory: 32 * gib})
-	soon := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16000, Memory: 32 * gib})
+	soon := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16000, Memory: 32 * gib,
+		InstanceID: "i-soon"})
 	running := runningAttempt(t, o.pool, dev, release, later)
 	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
 values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
@@ -63,8 +68,11 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, rel
 		t.Fatalf("preempted %d hosts, want only the one reclaimed within the lead", preempted)
 	}
 	assertRetried(t, o.pool, doomed)
-	if phase, _ := hostPhase(t, o.pool, soon); phase != string(compute.PhaseTerminating) {
-		t.Fatalf("preempted host is %s, want terminating", phase)
+	if _, err := o.compute.Retire(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	if phase, _ := hostPhase(t, o.pool, soon); phase != string(compute.PhaseDraining) {
+		t.Fatalf("preempted host is %s, want draining until the provider reclaims it", phase)
 	}
 	if phase, _ := hostPhase(t, o.pool, later); phase != string(compute.PhaseDraining) {
 		t.Fatalf("host reclaimed later is %s, want still draining", phase)
@@ -74,5 +82,14 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, rel
 	}
 	if n, err := o.compute.Preempt(ctx, discard()); err != nil || n != 0 {
 		t.Fatalf("second preemption pass: %d %v, want nothing", n, err)
+	}
+
+	run(t, o.pool, "update hosts set interruption_at = now() - make_interval(secs => $2) where id = $1",
+		uuid.UUID(soon), (compute.ReclaimGrace + time.Second).Seconds())
+	if _, err := o.compute.Retire(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	if phase, _ := hostPhase(t, o.pool, soon); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("host the provider did not reclaim in time is %s, want terminating", phase)
 	}
 }

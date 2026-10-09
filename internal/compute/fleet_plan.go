@@ -1020,7 +1020,7 @@ func (ps *pass) resumePays(h *FleetHost, items []coverItem, taken []int) bool {
 // and hold one that fits the largest shape.
 func (ps *pass) lendable(h FleetHost) bool {
 	v := ps.byMarket[h.market()]
-	return ps.floor(v, h.ID, func(r FleetHost) bool { return r.resumable() && !r.Protected }).Covers(v.stopped) && ps.leavesLarge(h)
+	return ps.floor(v, h.ID, FleetHost.resumable).Covers(v.stopped) && ps.leavesLarge(h)
 }
 
 // demandClass is cover items that can share offers, by shape and kind.
@@ -1291,10 +1291,10 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 }
 
 // floor is what holds the market's stopped target: the reserves keep
-// selects, less skip and retired ones.
+// selects, less skip, retired and interrupted ones, which never resume.
 func (ps *pass) floor(v *marketView, skip HostID, keep func(FleetHost) bool) FleetCapacity {
 	return totalOf(ps.inMarket(v.m, func(h FleetHost) bool {
-		return h.reserve() && keep(h) && h.ID != skip && !v.retired[h.ID]
+		return h.reserve() && !h.Protected && keep(h) && h.ID != skip && !v.retired[h.ID]
 	}), func(h *FleetHost) FleetCapacity { return h.Usable })
 }
 
@@ -1305,7 +1305,7 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 		return true
 	}
 	for _, h := range ps.inMarket(v.m, FleetHost.reserve) {
-		if h.ID != skip && !v.retired[h.ID] && h.Usable.Covers(v.largest) {
+		if h.ID != skip && !h.Protected && !v.retired[h.ID] && h.Usable.Covers(v.largest) {
 			return true
 		}
 	}
@@ -1316,10 +1316,10 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 
 // returning reports whether market v waits for hosts to return to the
 // reserve before it buys what the reserve lacks, short in total and a host
-// that fits item: while the reserve has lacked it for less than the idle
-// timeout and any host could return, or while hosts due back soon cover
-// it. A host could return when EC2 can stop it and it serves or starts. It
-// is due back soon when it starts, became ready within the idle timeout,
+// that fits item: while the reserve has lacked it for less than the return
+// wait and any host could return, or while hosts due back soon cover it. A
+// host could return when EC2 can stop it and it serves or starts. It is due
+// back soon when it starts, became ready within the return wait,
 // as a reserve resumed for a burst does, or idles holding no warm slot,
 // slots a cheaper type will take over, or only a build's slot with room for
 // the largest shape, which it holds warm until the slot lapses.
@@ -1329,14 +1329,14 @@ func (ps *pass) returning(v *marketView, short, item FleetCapacity) bool {
 		_, catalogued := ps.typeNamed(h.InstanceType)
 		return (serving(h) || starting(h)) && h.Stoppable && !h.Protected && catalogued
 	})
-	if len(could) > 0 && ps.s.Now.Sub(*v.floorShortSince) < ps.p.IdleTimeout {
+	if len(could) > 0 && ps.s.Now.Sub(*v.floorShortSince) < ps.p.ReturnWait {
 		return true
 	}
 	soon := slices.DeleteFunc(could, func(h *FleetHost) bool {
 		replaced, _ := ps.replacement(v, *h)
 		_, idle := ps.plan.IdleSince[h.ID]
 		holdsLargest := idle && !ps.holds(h.ID, slotFloor, slotLoad) && !v.largest.Empty() && h.Usable.Covers(v.largest)
-		return !starting(*h) && ps.s.Now.Sub(h.PhaseAt) >= ps.p.IdleTimeout && replaced == nil && !holdsLargest &&
+		return !starting(*h) && ps.s.Now.Sub(h.PhaseAt) >= ps.p.ReturnWait && replaced == nil && !holdsLargest &&
 			!slices.ContainsFunc(leaving, func(l *FleetHost) bool { return l.ID == h.ID })
 	})
 	return totalOf(soon, func(h *FleetHost) FleetCapacity { return h.Usable }).Covers(short) &&
@@ -1412,8 +1412,19 @@ func (ps *pass) reserves(v *marketView) {
 		}
 		ps.reserveReason(v, item)
 	}
+	ps.retireInterrupted(v)
 	if short.Empty() {
 		ps.retire(v)
+	}
+}
+
+// retireInterrupted retires the market's reserves that stopped after their
+// reclaim notice: they never resume, so they hold none of the target.
+func (ps *pass) retireInterrupted(v *marketView) {
+	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && h.Protected }) {
+		v.retired[h.ID] = true
+		ps.reserveRoom++
+		ps.act(FleetAction{Kind: ActionRetireReserve, Market: v.m, Host: ptr(h.ID)})
 	}
 }
 

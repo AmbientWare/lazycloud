@@ -118,11 +118,9 @@ func (ps *fleetPass) trace(ctx context.Context) {
 	}
 }
 
-// policy is the platform fleet policy with the configured idle timeout.
+// policy is the platform fleet policy.
 func (c *Compute) policy() Policy {
-	p := DefaultPolicy()
-	p.IdleTimeout = c.fleet.IdleTimeout
-	return p
+	return DefaultPolicy()
 }
 
 // connectionPolicy is a connected account's: no headroom and no reserves,

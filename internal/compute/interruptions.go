@@ -16,6 +16,12 @@ import (
 // while the host still answers.
 const PreemptLead = 20 * time.Second
 
+// ReclaimGrace is how long past its reclaim time an interrupted host is
+// left for the provider. EC2 charges nothing for a Spot instance it
+// reclaims within its first hour but bills one the fleet terminates, so the
+// fleet terminates an interrupted host only once the provider has not.
+const ReclaimGrace = 2 * time.Minute
+
 // ReportInterruption records a provider's notice that it reclaims host at
 // reclaimAt. In one transaction the host stops taking work (draining,
 // preempting) and its containers drain through execution: they claim
@@ -53,8 +59,8 @@ func (c *Compute) ReportInterruption(ctx context.Context, host HostID, reason st
 
 // Preempt stops what still runs on interrupted hosts within PreemptLead of
 // their reclaim time, through execution, so running attempts are preempted
-// and retried. Each host commits on its own. It returns how many hosts
-// it preempted.
+// and retried. The host stays draining until the provider reclaims it. Each
+// host commits on its own. It returns how many hosts it preempted.
 func (c *Compute) Preempt(ctx context.Context, logger *slog.Logger) (int, error) {
 	due, err := c.queries.DuePreemptions(ctx, DuePreemptionsParams{LeadSeconds: PreemptLead.Seconds(), BatchSize: 100})
 	if err != nil {
@@ -64,10 +70,7 @@ func (c *Compute) Preempt(ctx context.Context, logger *slog.Logger) (int, error)
 	for _, id := range due {
 		var stopped int
 		err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
-			n, err := c.queries.WithTx(tx).MarkPreempted(ctx, id)
-			if err != nil || n == 0 {
-				return err
-			}
+			var err error
 			if stopped, err = c.containers.StopHostContainers(ctx, tx, HostID(id), "the host was reclaimed"); err != nil {
 				return err
 			}

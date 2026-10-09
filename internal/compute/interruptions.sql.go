@@ -13,11 +13,12 @@ import (
 )
 
 const duePreemptions = `-- name: DuePreemptions :many
-select id from hosts
-where interruption_at is not null
-  and interruption_at <= now() + make_interval(secs => $1::float8)
-  and capacity_state = 'preempting' and phase = 'draining'
-order by interruption_at, id
+select h.id from hosts h
+where h.interruption_at is not null
+  and h.interruption_at <= now() + make_interval(secs => $1::float8)
+  and h.capacity_state = 'preempting' and h.phase = 'draining'
+  and exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+order by h.interruption_at, h.id
 limit $2
 `
 
@@ -26,8 +27,7 @@ type DuePreemptionsParams struct {
 	BatchSize   int32
 }
 
-// Interrupted hosts whose reclaim time is near and that have not been
-// preempted yet.
+// Interrupted hosts whose reclaim time is near that still run containers.
 func (q *Queries) DuePreemptions(ctx context.Context, arg DuePreemptionsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, duePreemptions, arg.LeadSeconds, arg.BatchSize)
 	if err != nil {
@@ -96,18 +96,4 @@ func (q *Queries) MarkInterrupted(ctx context.Context, arg MarkInterruptedParams
 		arg.ID,
 	)
 	return err
-}
-
-const markPreempted = `-- name: MarkPreempted :execrows
-update hosts
-set phase = 'terminating', phase_message = 'Reclaimed by the provider', phase_at = now(), updated_at = now()
-where id = $1 and phase = 'draining' and capacity_state = 'preempting'
-`
-
-func (q *Queries) MarkPreempted(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, markPreempted, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

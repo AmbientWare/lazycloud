@@ -196,6 +196,10 @@ type Policy struct {
 	Batch         BatchWindow
 	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
+	// ReturnWait is how long a market waits for a host that could return to
+	// the reserve, as one resumed for a burst or a build does, before it
+	// buys what the reserve lacks.
+	ReturnWait time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
@@ -208,6 +212,10 @@ func DefaultPolicy() Policy {
 		Stopped:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}, LoadPercent: 50},
 		FitLargest: true,
 	}
+	// Spot keeps only the floor stopped: its launches serve in about 25 s,
+	// so reserves sized to load cost more than the starts they speed up.
+	spotMarket := cpuMarket
+	spotMarket.Stopped.LoadPercent = 0
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
 	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
 	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
@@ -218,14 +226,15 @@ func DefaultPolicy() Policy {
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
-		Spot:             cpuMarket, OnDemand: cpuMarket,
+		Spot:             spotMarket, OnDemand: cpuMarket,
 		GPU:           map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
 		LargestShape:  LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
 		BuildWindow:   time.Hour,
 		LongestBuild:  time.Hour,
 		ArrivalWindow: 2 * time.Minute,
 		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		IdleTimeout:   5 * time.Minute,
+		IdleTimeout:   2 * time.Minute,
+		ReturnWait:    5 * time.Minute,
 		SpotPriceAge:  time.Hour,
 	}
 }

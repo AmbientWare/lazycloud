@@ -134,6 +134,18 @@ func TestPlanRefreshesAStaleReserveTheTargetNeedsAndRetiresOneItDoesNot(t *testi
 	}
 }
 
+// A reserve stopped after its reclaim notice never resumes: it retires and
+// holds none of the stopped target, which a reserve bought in its place
+// takes up.
+func TestPlanRetiresAnInterruptedReserveAndBuysItsPlace(t *testing.T) {
+	interrupted := planHost(1, planSmall, FleetStopped)
+	interrupted.Protected = true
+	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, interrupted))
+	if got := hostsOf(actionsOf(plan, ActionRetireReserve)); !slices.Equal(got, []HostID{{1}}) || len(actionsOf(plan, ActionBuyReserve)) != 1 {
+		t.Fatalf("actions %+v", plan.Actions)
+	}
+}
+
 func TestPlanPendingCapacityNeverJustifiesRetiringReadyCapacity(t *testing.T) {
 	s := planSnapshot(t, idle(planHost(1, planSmall, FleetServing)), planHost(2, planLarge, FleetStarting))
 	plan := PlanFleet(planPolicy(small, FleetCapacity{}), s)
@@ -364,14 +376,15 @@ func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 // An idle host leaves once idle for the idle timeout; a host pending work
 // fits is not idle.
 func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)
-	fresh.IdleSince = ptr(offerNow.Add(-4 * time.Minute))
+	fresh.IdleSince = ptr(offerNow.Add(-p.IdleTimeout + time.Second))
 	old := idle(planHost(2, planSmall, FleetServing))
 	wanted := idle(planHost(3, planLarge, FleetServing))
 	s := planSnapshot(t, fresh, old, wanted)
 	g, _ := pendingOne(Requirement{CPUMillis: 16_000, MemoryBytes: 32 * gib}, nil)
 	s.Pending = []DemandGroup{g}
-	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
+	plan := PlanFleet(p, s)
 	if got := hostsOf(actionsOf(plan, ActionDrain)); !slices.Equal(got, []HostID{{2}}) || len(plan.Actions) != 1 {
 		t.Fatalf("actions %+v", plan.Actions)
 	}
@@ -550,6 +563,7 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 	p := DefaultPolicy()
 	p.OnDemand, p.GPU, p.Spot.Warm = MarketReserve{}, nil, HeadroomTarget{}
+	p.Spot.Stopped.LoadPercent = 50
 	spot := ReserveMarket{Preemptible: true}
 	host := func(id byte, typ string, state FleetState) FleetHost {
 		h := planHost(id, mustType(t, typ), state)
@@ -667,8 +681,9 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 	p.Spot, p.GPU = MarketReserve{}, nil
 	big := mustType(t, "c6a.8xlarge")
 	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(2000, 4)}, Stopped: HeadroomTarget{Floor: big.Usable(0)}}
+	under, over := p.IdleTimeout/2, p.IdleTimeout+time.Minute
 	resumed := planHost(1, big, FleetServing)
-	resumed.PhaseAt = offerNow.Add(-6 * time.Minute)
+	resumed.PhaseAt = offerNow.Add(-over)
 	snapshot := func(idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
 		h := resumed
 		h.IdleSince = ptr(offerNow.Add(-idleFor))
@@ -677,17 +692,17 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 		s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: resumed.PhaseAt}
 		return s
 	}
-	plan := PlanFleet(p, snapshot(2*time.Minute))
+	plan := PlanFleet(p, snapshot(under))
 	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonReturning || len(plan.Actions) > 0 {
-		t.Fatalf("idle 2m: reason %q, actions %+v", mp.Reason, plan.Actions)
+		t.Fatalf("idle within the timeout: reason %q, actions %+v", mp.Reason, plan.Actions)
 	}
-	plan = PlanFleet(p, snapshot(6*time.Minute))
+	plan = PlanFleet(p, snapshot(over))
 	moves := actionsOf(plan, ActionRightsize)
 	if len(moves) != 1 || *moves[0].Host != resumed.ID || len(actionsOf(plan, ActionBuyReserve)) > 0 {
-		t.Fatalf("idle 6m: %+v", plan.Actions)
+		t.Fatalf("idle past the timeout: %+v", plan.Actions)
 	}
 	replacement := idle(planHost(2, moves[0].Offer.Type, FleetServing))
-	plan = PlanFleet(p, snapshot(6*time.Minute, replacement))
+	plan = PlanFleet(p, snapshot(over, replacement))
 	if got := actionsOf(plan, ActionReturnToReserve); len(got) != 1 || *got[0].Host != resumed.ID || len(actionsOf(plan, ActionBuyReserve)) > 0 {
 		t.Fatalf("once the replacement serves: %+v", plan.Actions)
 	}

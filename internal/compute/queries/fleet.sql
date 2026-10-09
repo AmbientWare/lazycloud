@@ -90,11 +90,15 @@ where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase =
   and (h.launch_lease_until is null or h.launch_lease_until < now());
 
 -- name: ClaimTerminations :many
--- Draining cloud hosts that run nothing move to terminating.
+-- Draining cloud hosts that run nothing move to terminating. An interrupted
+-- host is left for the provider to reclaim until @reclaim_grace_seconds
+-- past its reclaim time.
 update hosts h
 set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired',
     token_hash = null, updated_at = now()
 where h.provider = 'aws' and h.phase = 'draining' and h.instance_id is not null
+  and (h.interruption_at is null
+       or h.interruption_at < now() - make_interval(secs => @reclaim_grace_seconds::float8))
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id, h.connection_id, h.region, h.instance_id;
 
@@ -108,7 +112,8 @@ where cc.phase not in ('awaiting_authorization', 'validating');
 
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at
+select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
+       interruption_at
 from hosts
 where provider = 'aws' and region = @region
   and connection_id is not distinct from sqlc.narg(connection_id)::uuid
