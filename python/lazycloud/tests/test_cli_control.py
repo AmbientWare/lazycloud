@@ -83,6 +83,7 @@ def _task(status: str = "running", **extra: object) -> dict[str, object]:
         "status": status,
         "attempts": 2,
         "max_attempts": 3,
+        "preemptions": 0,
         "created_at": NOW,
         **extra,
     }

@@ -177,19 +177,31 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 			results.Displays = append(results.Displays, []byte(o.Result.Display))
 			continue
 		}
-		if policy := policies[task.ReleaseID]; mayRetry(task, *o.Failure) && policy.Retries(o.Failure.Kind) {
-			requeue.Ids = append(requeue.Ids, task.ID)
+		failure := *o.Failure
+		preempted := failure.Kind == FailurePreempted
+		policy := policies[task.ReleaseID]
+		switch {
+		case preempted && task.Preemptions < MaxPreemptions:
+			requeue.DelaySeconds = append(requeue.DelaySeconds, 0)
+		case mayRetry(task, failure) && policy.Retries(failure.Kind):
 			requeue.DelaySeconds = append(requeue.DelaySeconds, policy.NextAttemptDelay(int(task.AttemptCount)+1).Seconds())
-			retryFailures = append(retryFailures, *o.Failure)
-			retryReleases = append(retryReleases, task.ReleaseID.String())
+		default:
+			if preempted {
+				failure = Failure{Kind: FailurePreempted, Message: fmt.Sprintf(
+					"Lost to preemption %d times. Set preemptible=False to run without preemption.", task.Preemptions+1)}
+			}
+			encoded, err := json.Marshal(failure)
+			if err != nil {
+				return fmt.Errorf("encode failure: %w", err)
+			}
+			failed.Ids = append(failed.Ids, task.ID)
+			failed.Failures = append(failed.Failures, encoded)
 			continue
 		}
-		encoded, err := json.Marshal(o.Failure)
-		if err != nil {
-			return fmt.Errorf("encode failure: %w", err)
-		}
-		failed.Ids = append(failed.Ids, task.ID)
-		failed.Failures = append(failed.Failures, encoded)
+		requeue.Ids = append(requeue.Ids, task.ID)
+		requeue.Preempted = append(requeue.Preempted, preempted)
+		retryFailures = append(retryFailures, failure)
+		retryReleases = append(retryReleases, task.ReleaseID.String())
 	}
 	if len(results.TaskIds) > 0 {
 		if err := q.InsertTaskResults(ctx, results); err != nil {

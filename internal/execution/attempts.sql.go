@@ -94,8 +94,8 @@ func (q *Queries) LockRunningAttempts(ctx context.Context, ids []uuid.UUID) ([]L
 }
 
 const lockTasksForAttempts = `-- name: LockTasksForAttempts :many
-select a.id as attempt_id, t.id, t.status, t.attempt_count, t.max_attempts, t.release_id,
-       t.current_attempt_id
+select a.id as attempt_id, t.id, t.status, t.attempt_count, t.max_attempts, t.preemptions,
+       t.release_id, t.current_attempt_id
 from attempts a
 join tasks t on t.id = a.task_id
 where a.id = any($1::uuid[])
@@ -109,6 +109,7 @@ type LockTasksForAttemptsRow struct {
 	Status           string
 	AttemptCount     int32
 	MaxAttempts      int32
+	Preemptions      int32
 	ReleaseID        uuid.UUID
 	CurrentAttemptID *uuid.UUID
 }
@@ -130,6 +131,7 @@ func (q *Queries) LockTasksForAttempts(ctx context.Context, attemptIds []uuid.UU
 			&i.Status,
 			&i.AttemptCount,
 			&i.MaxAttempts,
+			&i.Preemptions,
 			&i.ReleaseID,
 			&i.CurrentAttemptID,
 		); err != nil {
@@ -176,18 +178,23 @@ const requeueTasks = `-- name: RequeueTasks :exec
 update tasks t
 set status = 'queued',
     current_attempt_id = null,
-    available_at = now() + make_interval(secs => v.delay_seconds)
-from (select unnest($1::uuid[]) as id, unnest($2::float8[]) as delay_seconds) v
+    available_at = now() + make_interval(secs => v.delay_seconds),
+    max_attempts = t.max_attempts + v.preempted::int,
+    preemptions = t.preemptions + v.preempted::int
+from (select unnest($1::uuid[]) as id, unnest($2::float8[]) as delay_seconds,
+             unnest($3::bool[]) as preempted) v
 where t.id = v.id
 `
 
 type RequeueTasksParams struct {
 	Ids          []uuid.UUID
 	DelaySeconds []float64
+	Preempted    []bool
 }
 
+// A preempted task gains the attempt it lost.
 func (q *Queries) RequeueTasks(ctx context.Context, arg RequeueTasksParams) error {
-	_, err := q.db.Exec(ctx, requeueTasks, arg.Ids, arg.DelaySeconds)
+	_, err := q.db.Exec(ctx, requeueTasks, arg.Ids, arg.DelaySeconds, arg.Preempted)
 	return err
 }
 

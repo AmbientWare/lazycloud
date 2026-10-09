@@ -14,7 +14,7 @@ import (
 
 const finishedTasks = `-- name: FinishedTasks :many
 with finished as (
-    select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts,
+    select req.n, t.id, t.workload_id, t.release_id, t.status, t.attempt_count, t.max_attempts, t.preemptions,
            t.parent_task_id, t.root_task_id, t.available_at, t.created_at, t.started_at,
            t.finished_at, t.failure, t.scheduled_for, res.encoding,
            case res.encoding when 'cloudpickle' then (octet_length(res.data) + 2) / 3 * 4
@@ -28,14 +28,14 @@ with finished as (
     left join lateral (select res.display::text as text) shown on true
     where t.workspace_id = $2 and t.status in ('succeeded', 'failed', 'cancelled')
 ), budget as (
-    select f.n, f.id, f.workload_id, f.release_id, f.status, f.attempt_count, f.max_attempts, f.parent_task_id, f.root_task_id, f.available_at, f.created_at, f.started_at, f.finished_at, f.failure, f.scheduled_for, f.encoding, f.result_size,
+    select f.n, f.id, f.workload_id, f.release_id, f.status, f.attempt_count, f.max_attempts, f.preemptions, f.parent_task_id, f.root_task_id, f.available_at, f.created_at, f.started_at, f.finished_at, f.failure, f.scheduled_for, f.encoding, f.result_size,
            f.result_size <= $3::bigint
              and sum(case when f.result_size <= $3::bigint then f.result_size else 0 end)
                    over (order by f.n) <= $4::bigint as inline
     from finished f
 )
 select b.id, a.name as app_name, w.name as function_name, b.release_id, r.version, b.status,
-       b.attempt_count, b.max_attempts, b.parent_task_id, b.root_task_id, b.available_at,
+       b.attempt_count, b.max_attempts, b.preemptions, b.parent_task_id, b.root_task_id, b.available_at,
        b.created_at, b.started_at, b.finished_at, b.failure, b.scheduled_for,
        array(select at.container_id from attempts at
              where at.task_id = b.id and at.number = b.attempt_count)::uuid[] as container_ids,
@@ -64,6 +64,7 @@ type FinishedTasksRow struct {
 	Status       string
 	AttemptCount int32
 	MaxAttempts  int32
+	Preemptions  int32
 	ParentTaskID *uuid.UUID
 	RootTaskID   *uuid.UUID
 	AvailableAt  time.Time
@@ -107,6 +108,7 @@ func (q *Queries) FinishedTasks(ctx context.Context, arg FinishedTasksParams) ([
 			&i.Status,
 			&i.AttemptCount,
 			&i.MaxAttempts,
+			&i.Preemptions,
 			&i.ParentTaskID,
 			&i.RootTaskID,
 			&i.AvailableAt,
@@ -133,7 +135,7 @@ func (q *Queries) FinishedTasks(ctx context.Context, arg FinishedTasksParams) ([
 
 const listAppTasks = `-- name: ListAppTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
@@ -143,7 +145,7 @@ select t.id, a.name as app_name, w.name as function_name, t.release_id, r.versio
 from workloads w
 join apps a on a.id = w.app_id
 cross join lateral (
-    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for, traceparent from tasks t
+    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for, traceparent, preemptions from tasks t
     where t.workload_id = w.id
       and ($1::text is null or t.status = $1::text)
       and (not $2::bool or t.parent_task_id is null)
@@ -183,6 +185,7 @@ type ListAppTasksRow struct {
 	Status       string
 	AttemptCount int32
 	MaxAttempts  int32
+	Preemptions  int32
 	ParentTaskID *uuid.UUID
 	RootTaskID   *uuid.UUID
 	AvailableAt  time.Time
@@ -224,6 +227,7 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 			&i.Status,
 			&i.AttemptCount,
 			&i.MaxAttempts,
+			&i.Preemptions,
 			&i.ParentTaskID,
 			&i.RootTaskID,
 			&i.AvailableAt,
@@ -246,7 +250,7 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 
 const listTasks = `-- name: ListTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
@@ -286,6 +290,7 @@ type ListTasksRow struct {
 	Status       string
 	AttemptCount int32
 	MaxAttempts  int32
+	Preemptions  int32
 	ParentTaskID *uuid.UUID
 	RootTaskID   *uuid.UUID
 	AvailableAt  time.Time
@@ -323,6 +328,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 			&i.Status,
 			&i.AttemptCount,
 			&i.MaxAttempts,
+			&i.Preemptions,
 			&i.ParentTaskID,
 			&i.RootTaskID,
 			&i.AvailableAt,
@@ -540,7 +546,7 @@ func (q *Queries) TaskResult(ctx context.Context, arg TaskResultParams) (TaskRes
 
 const taskView = `-- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
@@ -568,6 +574,7 @@ type TaskViewRow struct {
 	Status       string
 	AttemptCount int32
 	MaxAttempts  int32
+	Preemptions  int32
 	ParentTaskID *uuid.UUID
 	RootTaskID   *uuid.UUID
 	AvailableAt  time.Time
@@ -591,6 +598,7 @@ func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow
 		&i.Status,
 		&i.AttemptCount,
 		&i.MaxAttempts,
+		&i.Preemptions,
 		&i.ParentTaskID,
 		&i.RootTaskID,
 		&i.AvailableAt,

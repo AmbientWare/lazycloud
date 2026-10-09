@@ -100,6 +100,7 @@ def _task(task_id: str, status: str = "queued", **extra: object) -> dict[str, ob
         "status": status,
         "attempts": 1 if status != "queued" else 0,
         "max_attempts": 1,
+        "preemptions": 0,
         "created_at": NOW,
         **extra,
     }

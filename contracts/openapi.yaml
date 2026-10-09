@@ -4852,7 +4852,7 @@ components:
 
     Task:
       type: object
-      required: [id, app, function, release_id, status, attempts, max_attempts, created_at, root_task_id]
+      required: [id, app, function, release_id, status, attempts, max_attempts, preemptions, created_at, root_task_id]
       properties:
         id: { type: string, format: uuid }
         app: { $ref: "#/components/schemas/AppName" }
@@ -4865,7 +4865,12 @@ components:
         attempts:
           description: Attempts started so far.
           type: integer
-        max_attempts: { type: integer }
+        max_attempts:
+          description: Attempts the task may start; each attempt lost to preemption adds one.
+          type: integer
+        preemptions:
+          description: Attempts lost to preemption and retried.
+          type: integer
         parent_task_id:
           description: The running task that spawned this one.
           type: string
@@ -4932,7 +4937,7 @@ components:
 
     FailureKind:
       type: string
-      enum: [user_error, load_error, timeout, lost, start_failed, system, dependency_failed]
+      enum: [user_error, load_error, timeout, lost, preempted, start_failed, system, dependency_failed]
 
     TaskFailure:
       type: object

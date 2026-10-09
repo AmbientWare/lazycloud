@@ -3922,7 +3922,10 @@ export interface components {
             status: components["schemas"]["TaskStatus"];
             /** @description Attempts started so far. */
             attempts: number;
+            /** @description Attempts the task may start; each attempt lost to preemption adds one. */
             max_attempts: number;
+            /** @description Attempts lost to preemption and retried. */
+            preemptions: number;
             /**
              * Format: uuid
              * @description The running task that spawned this one.
@@ -3977,7 +3980,7 @@ export interface components {
         /** @enum {string} */
         TaskPendingReason: "queued" | "dependencies" | "retry" | "capacity_busy" | "capacity_unavailable" | "capacity_limit" | "provisioning_compute" | "starting_container";
         /** @enum {string} */
-        FailureKind: "user_error" | "load_error" | "timeout" | "lost" | "start_failed" | "system" | "dependency_failed";
+        FailureKind: "user_error" | "load_error" | "timeout" | "lost" | "preempted" | "start_failed" | "system" | "dependency_failed";
         TaskFailure: {
             kind: components["schemas"]["FailureKind"];
             /** @description The exception type the handler raised. */
@@ -11596,7 +11599,7 @@ export const richDisplayKindValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const richDisplayMedia_typeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["media_type"]> = ["image/png"];
 export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
-export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "start_failed", "system", "dependency_failed"];
+export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "preempted", "start_failed", "system", "dependency_failed"];
 export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogEntry"]["stream"]> = ["stdout", "stderr", "system"];
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];

@@ -11,6 +11,7 @@ func APITask(t Task) apitypes.Task {
 	out := apitypes.Task{
 		Id: uuid.UUID(t.ID), App: t.App, Function: t.Function, ReleaseId: t.Release, Version: t.Version,
 		Status: apitypes.TaskStatus(t.Status), Attempts: t.Attempts, MaxAttempts: t.MaxAttempts,
+		Preemptions:  t.Preemptions,
 		ParentTaskId: (*uuid.UUID)(t.Parent), RootTaskId: uuid.UUID(t.Root), ContainerId: (*uuid.UUID)(t.Container),
 		NextAttemptAt: t.NextAttemptAt, ScheduledFor: t.ScheduledFor,
 		CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,

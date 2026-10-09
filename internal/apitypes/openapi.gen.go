@@ -957,6 +957,7 @@ const (
 	FailureKindDependencyFailed FailureKind = "dependency_failed"
 	FailureKindLoadError        FailureKind = "load_error"
 	FailureKindLost             FailureKind = "lost"
+	FailureKindPreempted        FailureKind = "preempted"
 	FailureKindStartFailed      FailureKind = "start_failed"
 	FailureKindSystem           FailureKind = "system"
 	FailureKindTimeout          FailureKind = "timeout"
@@ -971,6 +972,8 @@ func (e FailureKind) Valid() bool {
 	case FailureKindLoadError:
 		return true
 	case FailureKindLost:
+		return true
+	case FailureKindPreempted:
 		return true
 	case FailureKindStartFailed:
 		return true
@@ -4947,7 +4950,9 @@ type Task struct {
 	FinishedAt  *time.Time          `json:"finished_at,omitempty"`
 	Function    WorkloadName        `json:"function"`
 	Id          openapi_types.UUID  `json:"id"`
-	MaxAttempts int                 `json:"max_attempts"`
+
+	// MaxAttempts Attempts the task may start; each attempt lost to preemption adds one.
+	MaxAttempts int `json:"max_attempts"`
 
 	// NextAttemptAt When a queued task that already ran becomes due again.
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
@@ -4956,8 +4961,11 @@ type Task struct {
 	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
 
 	// Pending Why a queued task has not started, derived from current state on every read.
-	Pending   *TaskPendingProgress `json:"pending,omitempty"`
-	ReleaseId openapi_types.UUID   `json:"release_id"`
+	Pending *TaskPendingProgress `json:"pending,omitempty"`
+
+	// Preemptions Attempts lost to preemption and retried.
+	Preemptions int                `json:"preemptions"`
+	ReleaseId   openapi_types.UUID `json:"release_id"`
 
 	// RootTaskId The root of the call graph; the task itself when nothing spawned it.
 	RootTaskId openapi_types.UUID `json:"root_task_id"`

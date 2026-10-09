@@ -121,10 +121,10 @@ func (e *Execution) TimeOutStarts(ctx context.Context, logger *slog.Logger) (int
 
 // ReleaseLostHosts marks hosts silent for longer than
 // compute.LivenessTimeout as lost and stops their live containers as
-// host_lost in the same transaction, so their running attempts retry by
-// policy. It locks every live container of the host in id order before
-// finishing any attempt, so it never locks a container after a task. Each
-// host commits on its own. It returns how many hosts it marked.
+// host_lost in the same transaction, so their running attempts are
+// preempted and retried. It locks every live container of the host in id
+// order before finishing any attempt, so it never locks a container after a
+// task. Each host commits on its own. It returns how many hosts it marked.
 func (e *Execution) ReleaseLostHosts(ctx context.Context, logger *slog.Logger) (int, error) {
 	var after *compute.StaleHost
 	lost := 0

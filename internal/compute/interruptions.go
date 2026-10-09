@@ -52,8 +52,8 @@ func (c *Compute) ReportInterruption(ctx context.Context, host HostID, reason st
 }
 
 // Preempt stops what still runs on interrupted hosts within PreemptLead of
-// their reclaim time, through execution, so running attempts are lost and
-// retried by policy. Each host commits on its own. It returns how many hosts
+// their reclaim time, through execution, so running attempts are preempted
+// and retried. Each host commits on its own. It returns how many hosts
 // it preempted.
 func (c *Compute) Preempt(ctx context.Context, logger *slog.Logger) (int, error) {
 	due, err := c.queries.DuePreemptions(ctx, DuePreemptionsParams{LeadSeconds: PreemptLead.Seconds(), BatchSize: 100})
@@ -68,7 +68,7 @@ func (c *Compute) Preempt(ctx context.Context, logger *slog.Logger) (int, error)
 			if err != nil || n == 0 {
 				return err
 			}
-			if stopped, err = c.containers.StopHostContainers(ctx, tx, HostID(id), "the provider reclaimed the host"); err != nil {
+			if stopped, err = c.containers.StopHostContainers(ctx, tx, HostID(id), "the host was reclaimed"); err != nil {
 				return err
 			}
 			return notifyMachines(ctx, tx, id)

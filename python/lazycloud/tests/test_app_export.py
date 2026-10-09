@@ -140,6 +140,7 @@ def _task(task_id: str, function: str, status: str, **extra: object) -> dict[str
         "status": status,
         "attempts": 1,
         "max_attempts": 1,
+        "preemptions": 0,
         "created_at": NOW,
         **extra,
     }

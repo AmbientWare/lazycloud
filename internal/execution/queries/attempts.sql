@@ -1,8 +1,8 @@
 -- name: LockTasksForAttempts :many
 -- Lock order everywhere in execution: container, then task, then attempt.
 -- Tasks lock in id order so concurrent batches never deadlock on each other.
-select a.id as attempt_id, t.id, t.status, t.attempt_count, t.max_attempts, t.release_id,
-       t.current_attempt_id
+select a.id as attempt_id, t.id, t.status, t.attempt_count, t.max_attempts, t.preemptions,
+       t.release_id, t.current_attempt_id
 from attempts a
 join tasks t on t.id = a.task_id
 where a.id = any(@attempt_ids::uuid[])
@@ -36,11 +36,15 @@ insert into task_results (task_id, encoding, data, display)
 select unnest(@task_ids::uuid[]), unnest(@encodings::text[]), unnest(@data::bytea[]), unnest(@displays::jsonb[]);
 
 -- name: RequeueTasks :exec
+-- A preempted task gains the attempt it lost.
 update tasks t
 set status = 'queued',
     current_attempt_id = null,
-    available_at = now() + make_interval(secs => v.delay_seconds)
-from (select unnest(@ids::uuid[]) as id, unnest(@delay_seconds::float8[]) as delay_seconds) v
+    available_at = now() + make_interval(secs => v.delay_seconds),
+    max_attempts = t.max_attempts + v.preempted::int,
+    preemptions = t.preemptions + v.preempted::int
+from (select unnest(@ids::uuid[]) as id, unnest(@delay_seconds::float8[]) as delay_seconds,
+             unnest(@preempted::bool[]) as preempted) v
 where t.id = v.id;
 
 -- name: FailRunningTasks :exec
