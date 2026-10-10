@@ -61,5 +61,3 @@ func TestCloudBucketsMountOverHTTPS(t *testing.T) {
 		t.Fatalf("read both mounts: %d %s", status, body)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
