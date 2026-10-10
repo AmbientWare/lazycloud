@@ -321,6 +321,8 @@ type env struct {
 	// metricsInterval overrides the agent's sampling interval.
 	metricsInterval time.Duration
 	geesefs         string
+	// running is the agent startAgent last started.
+	running *runningAgent
 }
 
 func newEnv(t *testing.T) *env {
@@ -441,6 +443,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 	}
 	go func() { a.done <- Run(ctx, cfg) }()
 	e.t.Cleanup(a.stop)
+	e.running = a
 	return a
 }
 
@@ -467,11 +470,28 @@ func (a *runningAgent) exited(t *testing.T) error {
 	}
 }
 
+// agentExit yields Run's result if the running agent returns; failExited
+// puts it back for stop and fails the test with it.
+func (e *env) agentExit() <-chan error {
+	if e.running == nil {
+		return nil
+	}
+	return e.running.done
+}
+
+func (e *env) failExited(err error, waiting string) {
+	e.running.done <- err
+	e.t.Fatalf("agent exited before %s: %v", waiting, err)
+}
+
 func (e *env) enrollment() *hostproto.EnrollRequest {
 	e.t.Helper()
 	select {
 	case r := <-e.server.enrolls:
 		return r
+	case err := <-e.agentExit():
+		e.failExited(err, "enrolling")
+		return nil
 	case <-time.After(30 * time.Second):
 		e.t.Fatal("agent did not enroll")
 		return nil
@@ -483,6 +503,9 @@ func (e *env) session() *serverSession {
 	select {
 	case s := <-e.server.sessions:
 		return s
+	case err := <-e.agentExit():
+		e.failExited(err, "opening a session")
+		return nil
 	case <-time.After(30 * time.Second):
 		e.t.Fatal("agent did not open a session")
 		return nil

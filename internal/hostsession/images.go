@@ -67,7 +67,7 @@ func (sess *session) imagePull(ctx context.Context, cache *syncCache, workspace 
 		p.pull, p.err = sess.server.images.ConvertedPull(ctx, workspace, key.id, key.reference)
 	}
 	cache.pulls[key] = p
-	return p.pull, p.err //nolint:wrapcheck // permanentStartFailure and the waits match the owner's errors.
+	return p.pull, p.err //nolint:wrapcheck // startFailure and the waits match the owner's errors.
 }
 
 func registryAuthOut(auth *images.Auth) *hostproto.RegistryAuth {

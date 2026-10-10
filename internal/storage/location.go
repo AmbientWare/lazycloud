@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
@@ -18,20 +19,23 @@ type Location struct {
 	PathStyle bool
 }
 
-// locate resolves a bucket's address. A custom endpoint, as for Garage, R2
-// or MinIO, takes path-style requests; without one the bucket is AWS S3 in
-// region, addressed by subdomain unless forcePathStyle.
-func locate(endpoint, region, bucket string, forcePathStyle bool) (Location, error) {
-	if endpoint != "" {
-		return Location{Endpoint: endpoint, Region: region, Bucket: bucket, PathStyle: true}, nil
+// locate resolves a bucket's address: at endpoint, such as Garage's, R2's or
+// MinIO's, or without one AWS S3 in region. Requests name the bucket in the
+// host name unless pathStyle, or the name holds a dot: TLS certificates
+// cover one subdomain label, so a dotted bucket's host name fails
+// verification.
+func locate(endpoint, region, bucket string, pathStyle bool) (Location, error) {
+	if endpoint == "" {
+		if region == "" {
+			return Location{}, ErrNoRegion
+		}
+		endpoint = "https://s3." + region + ".amazonaws.com"
 	}
-	if region == "" {
-		return Location{}, ErrNoRegion
-	}
-	return Location{Endpoint: "https://s3." + region + ".amazonaws.com", Region: region, Bucket: bucket, PathStyle: forcePathStyle}, nil
+	return Location{Endpoint: endpoint, Region: region, Bucket: bucket, PathStyle: pathStyle || strings.Contains(bucket, ".")}, nil
 }
 
-// CloudBucketLocation is the address of a user's bucket.
+// CloudBucketLocation is the address of a user's bucket, path-style as its
+// spec forces.
 func CloudBucketLocation(b apitypes.CloudBucketSpec) (Location, error) {
 	return locate(deref(b.Endpoint), deref(b.Region), b.Bucket, b.ForcePathStyle != nil && *b.ForcePathStyle)
 }

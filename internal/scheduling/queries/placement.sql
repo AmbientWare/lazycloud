@@ -42,13 +42,15 @@ limit @batch_size;
 -- The state check loses to a planner that stopped the container meanwhile.
 -- Hosts are locked FOR SHARE and must still take work, so an assignment
 -- either commits before host loss, a drain or a removal touches the host's
--- containers, or skips a host that one of them changed meanwhile. The host
+-- containers, or skips a host that one of them changed meanwhile. A host
+-- whose agent must move to the target release takes none. The host
 -- decides what billing prices: its GPU model and whose machine it is.
 with online as (
     select h.id, h.kind, h.gpu_type from hosts h
     where h.id = any(@host_ids::uuid[]) and h.state = 'online' and h.phase = 'ready'
       and h.capacity_state = 'available'
-    for share
+      and not exists (select 1 from agent_updates u where u.host_id = h.id)
+    for share of h
 )
 update containers c
 set state = 'starting', host_id = a.host_id, assigned_at = now(), capacity_wait = null,

@@ -2,8 +2,6 @@ package compute
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -106,44 +104,24 @@ type AgentUpdate struct {
 	SHA256  string
 }
 
-// UpdateFor returns the update a connecting agent should install: the
-// target release when the agent can update itself, runs another version,
-// did not roll back from the target, and an archive exists for its
-// architecture.
-func (c *Compute) UpdateFor(ctx context.Context, host HostID, version, rejected string, updatable bool) (*AgentUpdate, error) {
-	if !updatable {
-		return nil, nil
-	}
-	target, err := c.TargetRelease(ctx)
-	if errors.Is(err, ErrNotFound) {
+// UpdateFor returns the update host's agent must install, or nil: the
+// target release when, by the agent's last Hello, it can update itself,
+// runs another release, did not roll back from the target, the rollout
+// reaches it and an archive exists for its architecture. Placement gives
+// such a host no work.
+func (c *Compute) UpdateFor(ctx context.Context, host HostID) (*AgentUpdate, error) {
+	row, err := c.queries.AgentUpdate(ctx, uuid.UUID(host))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
-	}
-	if target.Version == version || target.Version == rejected || rolloutBucket(host) >= target.RolloutPercent {
-		return nil, nil
-	}
-	arch, err := c.queries.HostArchitecture(ctx, uuid.UUID(host))
-	if err != nil {
-		return nil, fmt.Errorf("read host architecture: %w", err)
-	}
-	digest, ok := target.SHA256[arch]
-	if !ok {
-		return nil, nil
+		return nil, fmt.Errorf("read agent update: %w", err)
 	}
 	return &AgentUpdate{
-		Version: target.Version,
-		URL:     fmt.Sprintf("%s/install/agent/%s/linux/%s", strings.TrimRight(c.config.InstallURL, "/"), target.Version, arch),
-		SHA256:  digest,
+		Version: row.Version,
+		URL:     fmt.Sprintf("%s/install/agent/%s/linux/%s", strings.TrimRight(c.config.InstallURL, "/"), row.Version, row.Architecture),
+		SHA256:  row.Sha256,
 	}, nil
-}
-
-// rolloutBucket places a host in 0-99, stable across releases, so a
-// percentage rollout reaches the same hosts first each time.
-func rolloutBucket(host HostID) int {
-	sum := sha256.Sum256(host[:])
-	return int(binary.BigEndian.Uint16(sum[:2])) % 100
 }
 
 // UpdateSent records that host was told to update: while it restarts into

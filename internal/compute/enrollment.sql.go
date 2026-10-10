@@ -229,24 +229,28 @@ set session_epoch = session_epoch + 1,
     gpu_count = $4,
     boot_id = $5,
     agent_version = $6,
+    agent_updatable = $7,
+    agent_rejected_version = $8,
     updating_until = null,
     phase = case when phase = 'joining' then 'ready' else phase end,
     phase_message = case when phase = 'joining' then 'Ready for workloads' else phase_message end,
     phase_at = case when phase = 'joining' then now() else phase_at end,
     last_seen_at = now(),
     updated_at = now()
-where id = $7 and state <> 'retired'
+where id = $9 and state <> 'retired'
 returning session_epoch
 `
 
 type OpenHostSessionParams struct {
-	CpuMillis    cpu.Millis
-	MemoryBytes  int64
-	GpuType      string
-	GpuCount     int32
-	BootID       string
-	AgentVersion string
-	ID           uuid.UUID
+	CpuMillis            cpu.Millis
+	MemoryBytes          int64
+	GpuType              string
+	GpuCount             int32
+	BootID               string
+	AgentVersion         string
+	AgentUpdatable       bool
+	AgentRejectedVersion *string
+	ID                   uuid.UUID
 }
 
 // A new epoch supersedes every earlier session of the host. The first
@@ -259,6 +263,8 @@ func (q *Queries) OpenHostSession(ctx context.Context, arg OpenHostSessionParams
 		arg.GpuCount,
 		arg.BootID,
 		arg.AgentVersion,
+		arg.AgentUpdatable,
+		arg.AgentRejectedVersion,
 		arg.ID,
 	)
 	var session_epoch int64

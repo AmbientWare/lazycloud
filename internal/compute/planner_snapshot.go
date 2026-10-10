@@ -173,7 +173,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
 		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
 		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
-		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
+		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
@@ -203,8 +203,8 @@ func lent(market Market, gpus int, tolerant FleetCapacity) FleetCapacity {
 // the target once the rollout reaches it, any release outside the rollout
 // or without a target. A reserve passes the release it last proved it could
 // stop on.
-func onRelease(host HostID, version *string, release *AgentRelease) bool {
-	if release == nil || rolloutBucket(host) >= release.RolloutPercent {
+func onRelease(bucket int32, version *string, release *AgentRelease) bool {
+	if release == nil || int(bucket) >= release.RolloutPercent {
 		return true
 	}
 	return version != nil && *version == release.Version

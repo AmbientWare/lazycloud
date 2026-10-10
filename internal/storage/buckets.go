@@ -9,10 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -101,7 +104,8 @@ func (s *Storage) bucketName(workspace identity.WorkspaceID) string {
 
 // workspaceBucket returns the workspace's bucket, creating it on first use.
 // The row is written after the provider created the bucket, so a recorded
-// bucket always exists.
+// bucket always exists. The object store's refusal is a
+// *StoreRefusedError.
 func (s *Storage) workspaceBucket(ctx context.Context, workspace identity.WorkspaceID) (string, error) {
 	bucket, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
 	if err == nil {
@@ -115,7 +119,7 @@ func (s *Storage) workspaceBucket(ctx context.Context, workspace identity.Worksp
 	}
 	bucket = s.bucketName(workspace)
 	if err := s.buckets.ensureBucket(ctx, bucket); err != nil {
-		return "", fmt.Errorf("create workspace bucket: %w", err)
+		return "", storeError(fmt.Errorf("create workspace bucket: %w", err))
 	}
 	// Hosts and clients upload volume files in parts; the store discards
 	// parts of uploads nobody completed.
@@ -127,10 +131,10 @@ func (s *Storage) workspaceBucket(ctx context.Context, workspace identity.Worksp
 			AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{DaysAfterInitiation: aws.Int32(1)},
 		}}},
 	}); err != nil {
-		return "", fmt.Errorf("set workspace bucket lifecycle: %w", err)
+		return "", storeError(fmt.Errorf("set workspace bucket lifecycle: %w", err))
 	}
 	if err := s.allowBrowser(ctx, bucket); err != nil {
-		return "", err
+		return "", storeError(err)
 	}
 	if err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{WorkspaceID: uuid.UUID(workspace), Bucket: bucket}); err != nil {
 		return "", fmt.Errorf("record workspace bucket: %w", err)
@@ -165,6 +169,44 @@ func (s *Storage) allowBrowser(ctx context.Context, bucket string) error {
 		return fmt.Errorf("allow the dashboard on bucket %s: %w", bucket, err)
 	}
 	return nil
+}
+
+// StoreRefusedError is the object store refusing a request with a client
+// error that retrying does not fix, such as access denied. Code is the
+// store's error code, or the HTTP status where it gives none.
+type StoreRefusedError struct {
+	Code string
+	Err  error
+}
+
+func (e *StoreRefusedError) Error() string { return e.Err.Error() }
+
+func (e *StoreRefusedError) Unwrap() error { return e.Err }
+
+// storeError returns err as a *StoreRefusedError when the object store
+// answered it with a 4xx that retrying does not fix: not a timeout or
+// throttling. Any other error is returned as it is, for the caller to
+// retry.
+func storeError(err error) error {
+	var garage *garageError
+	if errors.As(err, &garage) {
+		if !refusedStatus(garage.Status) {
+			return err
+		}
+		return &StoreRefusedError{Code: "HTTP " + strconv.Itoa(garage.Status), Err: err}
+	}
+	var response *awshttp.ResponseError
+	var api smithy.APIError
+	if !errors.As(err, &response) || !errors.As(err, &api) || !refusedStatus(response.HTTPStatusCode()) ||
+		retry.IsErrorThrottles(retry.DefaultThrottles).IsErrorThrottle(err) == aws.TrueTernary ||
+		retry.IsErrorRetryables(retry.DefaultRetryables).IsErrorRetryable(err) == aws.TrueTernary {
+		return err
+	}
+	return &StoreRefusedError{Code: api.ErrorCode(), Err: err}
+}
+
+func refusedStatus(status int) bool {
+	return status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
 }
 
 type garageBuckets struct {
@@ -346,8 +388,9 @@ func (a *awsBuckets) revoke(context.Context, string) error { return nil }
 
 // hostPolicy is the STS session policy of a host grant: object reads,
 // writes and multipart uploads under the bucket's volumes/ and disks/
-// prefixes, and listing those prefixes. It grants nothing on the bucket
-// itself, such as its policy, lifecycle or deletion.
+// prefixes, listing those prefixes, and listing the bucket's multipart
+// uploads, which S3 does not condition on a prefix. It grants nothing else
+// on the bucket itself, such as its policy, lifecycle or deletion.
 func hostPolicy(bucket string) map[string]any {
 	arn := "arn:aws:s3:::" + bucket
 	return map[string]any{
@@ -363,9 +406,14 @@ func hostPolicy(bucket string) map[string]any {
 			},
 			{
 				"Effect":    "Allow",
-				"Action":    []string{"s3:ListBucket", "s3:ListBucketMultipartUploads"},
+				"Action":    []string{"s3:ListBucket"},
 				"Resource":  []string{arn},
 				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}}},
+			},
+			{
+				"Effect":   "Allow",
+				"Action":   []string{"s3:ListBucketMultipartUploads"},
+				"Resource": []string{arn},
 			},
 		},
 	}
