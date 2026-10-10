@@ -72,7 +72,7 @@ jobs:
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -count=1 -run TestMeasureMounts ./internal/agent
+      - run: go test -count=1 -v -run 'TestABucketPrefixStaysInsideItsMount|TestAMountThatDiesFailsOnlyItsContainer|TestAMountThatDiesDuringItsStartFailsIt|TestCloudBucketMountsWithItsKeys|TestAdoptKeepsLiveMountsAndRemovesOrphans|TestAgentStopsWhenItsCredentialIsRevoked' ./internal/agent
 
   # Cross-owner workflows against an agent on a runner set up as a host:
   # the platform images and the managed image convert for real and
