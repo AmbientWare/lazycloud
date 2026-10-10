@@ -21,8 +21,9 @@ type Remover func(ctx context.Context, keys []string, bytes int64) error
 // to. remove deletes them in batches, manifests first: a manifest whose chunks
 // are gone breaks a restore, while a chunk nothing names waits for the next
 // collect. remove is called at least once, with no keys when nothing is
-// unreachable, so the caller can record the new base. Collect returns the chunk bytes removed, the same bytes
-// Published.AddedBytes counts on the way in.
+// unreachable, so the caller can record the new base. Collect returns the
+// chunk bytes removed, the same bytes Published.AddedBytes counts on the way
+// in.
 func (e *Engine) Collect(ctx context.Context, diskID string, store Store, chain []Generation, remove Remover) (int64, error) {
 	p, err := e.paths(diskID)
 	if err != nil {
