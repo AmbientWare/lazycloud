@@ -69,17 +69,13 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- name: RecentShapes :many
 -- By purchase market and GPU model: the largest CPU, memory and GPUs placed
 -- platform containers reserved among the newest containers created within
--- the window, up to the sample (recent); the same among the build
+-- the window, up to the sample (recent); and the same among the build
 -- containers that stopped within the build window (build), since a running
--- build's host holds its slot once it ends; and what the placed
--- Spot-tolerant platform CPU containers of the sample created within the
--- arrival window reserve, less their largest batch (arrived): a steady rate
--- of work, which a single burst is not. A batch is arrivals less than
--- batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
--- builds read are those created within build_scan, the window and the
--- longest a build runs. Both reads follow primary keys, so they read at
--- most sample_size containers and the scan's builds whatever the history;
--- the subqueries make their bounds constants the indexes can use.
+-- build's host holds its slot once it ends. The builds read are those
+-- created within build_scan, the window and the longest a build runs. Both
+-- reads follow primary keys, so they read at most sample_size containers
+-- and the scan's builds whatever the history; the subqueries make their
+-- bounds constants the indexes can use.
 with recent as (
     select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
     from containers c
@@ -104,30 +100,21 @@ select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
        max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
 from builds
 group by 2, 3
-union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0
-from (
-    select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
-    from (
-        select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / @batch_max_seconds::float8) as part
-        from (
-            select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
-            from (
-                select id, cpu_millis, memory_bytes, created_at,
-                       coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
-                           >= make_interval(secs => @batch_quiet_seconds::float8) as opens
-                from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
-                  and rate_class in ('auto', 'pinned')
-                  and id > (select uuidv7(- make_interval(secs => @arrival_seconds::float8)))
-            ) gaps
-        ) runs
-    ) parts
-    group by run, part
-) batches
-having count(*) > 0
 order by 1, 2, 3;
+
+-- name: RecentArrivals :many
+-- The placed platform containers created within the window, newest first
+-- up to the sample: what each market's headroom measures demand by. Build
+-- containers keep their own warm slot instead. The read follows the
+-- primary key, so it reads at most sample_size containers whatever the
+-- history.
+select c.created_at, (c.rate_class in ('auto', 'pinned'))::bool as preemptible, c.gpu_type,
+       c.cpu_millis, c.memory_bytes, c.gpu_count
+from containers c
+where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
+  and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.image_build_id is null
+order by c.id desc
+limit @sample_size;
 
 -- name: BatchWaits :many
 -- How long, in seconds, each owner's arrival batch stays open: until quiet

@@ -591,6 +591,62 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	return items, nil
 }
 
+const recentArrivals = `-- name: RecentArrivals :many
+select c.created_at, (c.rate_class in ('auto', 'pinned'))::bool as preemptible, c.gpu_type,
+       c.cpu_millis, c.memory_bytes, c.gpu_count
+from containers c
+where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
+  and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.image_build_id is null
+order by c.id desc
+limit $2
+`
+
+type RecentArrivalsParams struct {
+	WindowSeconds float64
+	SampleSize    int32
+}
+
+type RecentArrivalsRow struct {
+	CreatedAt   time.Time
+	Preemptible bool
+	GpuType     string
+	CpuMillis   cpu.Millis
+	MemoryBytes int64
+	GpuCount    int32
+}
+
+// The placed platform containers created within the window, newest first
+// up to the sample: what each market's headroom measures demand by. Build
+// containers keep their own warm slot instead. The read follows the
+// primary key, so it reads at most sample_size containers whatever the
+// history.
+func (q *Queries) RecentArrivals(ctx context.Context, arg RecentArrivalsParams) ([]RecentArrivalsRow, error) {
+	rows, err := q.db.Query(ctx, recentArrivals, arg.WindowSeconds, arg.SampleSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecentArrivalsRow
+	for rows.Next() {
+		var i RecentArrivalsRow
+		if err := rows.Scan(
+			&i.CreatedAt,
+			&i.Preemptible,
+			&i.GpuType,
+			&i.CpuMillis,
+			&i.MemoryBytes,
+			&i.GpuCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recentShapes = `-- name: RecentShapes :many
 with recent as (
     select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
@@ -616,29 +672,6 @@ select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
        max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
 from builds
 group by 2, 3
-union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0
-from (
-    select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
-    from (
-        select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $5::float8) as part
-        from (
-            select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
-            from (
-                select id, cpu_millis, memory_bytes, created_at,
-                       coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
-                           >= make_interval(secs => $6::float8) as opens
-                from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
-                  and rate_class in ('auto', 'pinned')
-                  and id > (select uuidv7(- make_interval(secs => $7::float8)))
-            ) gaps
-        ) runs
-    ) parts
-    group by run, part
-) batches
-having count(*) > 0
 order by 1, 2, 3
 `
 
@@ -647,9 +680,6 @@ type RecentShapesParams struct {
 	SampleSize         int32
 	BuildScanSeconds   float64
 	BuildWindowSeconds float64
-	BatchMaxSeconds    float64
-	BatchQuietSeconds  float64
-	ArrivalSeconds     float64
 }
 
 type RecentShapesRow struct {
@@ -663,26 +693,19 @@ type RecentShapesRow struct {
 
 // By purchase market and GPU model: the largest CPU, memory and GPUs placed
 // platform containers reserved among the newest containers created within
-// the window, up to the sample (recent); the same among the build
+// the window, up to the sample (recent); and the same among the build
 // containers that stopped within the build window (build), since a running
-// build's host holds its slot once it ends; and what the placed
-// Spot-tolerant platform CPU containers of the sample created within the
-// arrival window reserve, less their largest batch (arrived): a steady rate
-// of work, which a single burst is not. A batch is arrivals less than
-// batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
-// builds read are those created within build_scan, the window and the
-// longest a build runs. Both reads follow primary keys, so they read at
-// most sample_size containers and the scan's builds whatever the history;
-// the subqueries make their bounds constants the indexes can use.
+// build's host holds its slot once it ends. The builds read are those
+// created within build_scan, the window and the longest a build runs. Both
+// reads follow primary keys, so they read at most sample_size containers
+// and the scan's builds whatever the history; the subqueries make their
+// bounds constants the indexes can use.
 func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
 	rows, err := q.db.Query(ctx, recentShapes,
 		arg.WindowSeconds,
 		arg.SampleSize,
 		arg.BuildScanSeconds,
 		arg.BuildWindowSeconds,
-		arg.BatchMaxSeconds,
-		arg.BatchQuietSeconds,
-		arg.ArrivalSeconds,
 	)
 	if err != nil {
 		return nil, err

@@ -32,7 +32,7 @@ func planPolicy(warm, stopped FleetCapacity) Policy {
 func planSnapshot(t *testing.T, hosts ...FleetHost) FleetSnapshot {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{planSmall, planLarge}
-	return FleetSnapshot{Now: offerNow, Hosts: hosts, Offers: in, HostRoom: 100, ReserveRoom: 100}
+	return FleetSnapshot{Now: offerNow, Hosts: hosts, Offers: in, HostRoom: 100, ReserveRoom: 100, Arrivals: map[ReserveMarket][]Arrival{}}
 }
 
 func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
@@ -574,14 +574,14 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 	}
 }
 
-// While load sets the Spot market's stopped target, a reserve bought for a
-// small shortfall still holds the target up to the default largest shape,
-// the size that hibernates, so a target that grows a little each pass is
-// held by a few large reserves.
+// While demand sets the Spot market's stopped target, a reserve bought for
+// a small shortfall still holds the target up to the default largest
+// shape, the size that hibernates, so a target that grows a little each
+// pass is held by a few large reserves.
 func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 	p := DefaultPolicy()
 	p.OnDemand, p.GPU, p.Spot.Warm = MarketReserve{}, nil, HeadroomTarget{}
-	p.Spot.Stopped.LoadPercent = 50
+	p.Spot.Stopped = HeadroomTarget{Lead: 5 * time.Minute, Memory: time.Hour}
 	spot := ReserveMarket{Preemptible: true}
 	host := func(id byte, typ string, state FleetState) FleetHost {
 		h := planHost(id, mustType(t, typ), state)
@@ -591,12 +591,15 @@ func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 		}
 		return h
 	}
-	// 48 busy CPU keep a 24 CPU stopped target; the reserves hold 20.
+	// A burst of 24 CPU keeps a 24 CPU stopped target; the reserves hold 20.
 	s := planSnapshot(t, host(1, "c6a.8xlarge", FleetServing), host(2, "c6a.8xlarge", FleetServing), host(3, "c6a.8xlarge", FleetServing),
 		host(4, "c6a.8xlarge", FleetStopped), host(5, "c6a.2xlarge", FleetStopped))
 	s.Offers.Catalog = FleetCatalog()
 	for _, typ := range s.Offers.Catalog {
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ.Name, HourlyMicros: 10_000 * typ.VCPUs(), ObservedAt: offerNow})
+	}
+	for range 24 {
+		s.Arrivals[spot] = append(s.Arrivals[spot], Arrival{At: offerNow, Shape: cpuGiB(1000, 2)})
 	}
 	s.FloorShortSince = map[ReserveMarket]time.Time{spot: offerNow.Add(-time.Hour)}
 	plan := PlanFleet(p, s)

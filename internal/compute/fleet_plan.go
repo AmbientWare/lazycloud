@@ -109,11 +109,12 @@ type FleetSnapshot struct {
 	Pending []DemandGroup
 	// Recent is the largest shape each market's placed containers reserved
 	// within the policy's LargestShape window, and Builds the largest its
-	// finished build containers reserved within its BuildWindow; Arrived is
-	// what the CPU Spot market's placed containers created within the
-	// ArrivalWindow reserve, less their largest batch.
-	Recent, Builds, Arrived map[ReserveMarket]FleetCapacity
-	Offers                  OfferInputs
+	// finished build containers reserved within its BuildWindow.
+	Recent, Builds map[ReserveMarket]FleetCapacity
+	// Arrivals are each market's placed platform containers within the
+	// longest headroom memory, which its targets measure demand by.
+	Arrivals map[ReserveMarket][]Arrival
+	Offers   OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
@@ -124,8 +125,6 @@ type FleetSnapshot struct {
 	// FloorShortSince is when each market's stopped target went short, from
 	// the last published plan.
 	FloorShortSince map[ReserveMarket]time.Time
-	// Peaks are each market's peak load, from the published plans.
-	Peaks map[ReserveMarket]LoadPeak
 }
 
 // FleetActionKind is what an action asks for.
@@ -207,29 +206,6 @@ const (
 	ReasonNoOffer MarketReason = "no offer fits"
 )
 
-// LoadPeak is the most load a market held and when it last reached it.
-type LoadPeak struct {
-	Load FleetCapacity `json:"load"`
-	At   time.Time     `json:"at"`
-}
-
-// after is the load peak once a pass sees load: the stored one while
-// within the horizon, raised to load, and restarted when load reaches it.
-// Its time is to the minute, so load held at its peak republishes it at
-// most once a minute.
-func (p LoadPeak) after(load FleetCapacity, now time.Time, horizon time.Duration) LoadPeak {
-	if now.Sub(p.At) >= horizon {
-		p = LoadPeak{}
-	}
-	switch {
-	case load.Empty():
-		return p
-	case load.Covers(p.Load):
-		return LoadPeak{Load: load, At: now.Truncate(time.Minute)}
-	}
-	return LoadPeak{Load: p.Load.Upper(load), At: p.At}
-}
-
 // MarketPlan is one market's targets and measures.
 type MarketPlan struct {
 	Market ReserveMarket
@@ -244,11 +220,8 @@ type MarketPlan struct {
 	Shortfall, StoppedShortfall FleetCapacity
 	// FloorShortSince is when the stopped target went short; nil while held.
 	FloorShortSince *time.Time
-	// Peak is the most load the market held within the cost horizon; its
-	// reserves stay while it holds.
-	Peak   LoadPeak
-	Reason MarketReason
-	States []FleetStateCapacity
+	Reason          MarketReason
+	States          []FleetStateCapacity
 }
 
 // FleetPlan is one pass's decisions.
@@ -333,16 +306,15 @@ type marketView struct {
 	slots []warmSlot
 	// warm is the warm target the slots hold, but a build's.
 	warm FleetCapacity
-	// stopped is the reserve target purchases keep, a share of the load,
-	// and peakShare the same share of the peak, which reserves woken for a
+	// stopped is the reserve target purchases keep and reserves woken for a
 	// burst return to.
-	stopped, peakShare FleetCapacity
-	// peak is the market's load peak; while it holds, the reserves a burst
-	// bought or woke wait for the next one.
-	peak LoadPeak
+	stopped FleetCapacity
+	// burst is the largest batch the reserve target remembers; while it
+	// holds, the reserves a burst bought or woke wait for the next one.
+	burst FleetCapacity
 	// largest is the shape one of the market's reserves fits; empty for
-	// none. loaded is set while the share of load, not the floor beside
-	// the largest shape, sets the stopped target.
+	// none. loaded is set while demand, not the floor beside the largest
+	// shape, sets the stopped target.
 	largest FleetCapacity
 	loaded  bool
 	retired map[HostID]bool
@@ -440,23 +412,19 @@ func (ps *pass) views(items []coverItem) []*marketView {
 			}
 		}
 		r := ps.p.Reserve(m)
-		// The Spot market keeps warm at least the work that came at a
-		// steady rate.
-		v.warm = r.Warm.Of(v.load)
-		if m.spotCPU() && r.Warm != (HeadroomTarget{}) {
-			v.warm = v.warm.Upper(r.Warm.Floor.Plus(ps.s.Arrived[m]))
-		}
+		arrivals := ps.s.Arrivals[m]
+		v.warm = r.Warm.Of(arrivals, ps.s.Now, ps.p.Batch)
 		v.slots = ps.p.slots(r.Warm, v.warm)
 		if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
 			v.slots = append(v.slots, warmSlot{shape: build.Lower(ps.p.LargestShape.Cap), kind: slotBuild})
 		}
-		v.peak = ps.s.Peaks[m].after(v.load, ps.s.Now, ps.p.CostHorizon)
-		v.stopped, v.peakShare = r.Stopped.Of(v.load), r.Stopped.Of(v.peak.Load)
+		v.stopped = r.Stopped.Of(arrivals, ps.s.Now, ps.p.Batch)
+		v.burst = DemandOf(arrivals, ps.s.Now, r.Stopped.Lead, r.Stopped.Memory, ps.p.Batch).Burst
 		if r.FitLargest {
 			v.largest = ps.p.LargestShape.of(m, largest)
 			floor := r.Stopped.Floor.Plus(v.largest)
 			v.loaded = !floor.Covers(v.stopped)
-			v.stopped, v.peakShare = v.stopped.Upper(floor), v.peakShare.Upper(floor)
+			v.stopped = v.stopped.Upper(floor)
 		}
 		ps.byMarket[m] = v
 		views = append(views, v)
@@ -1280,15 +1248,13 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 }
 
 // leave returns a leaving host to the reserve when EC2 can stop it and the
-// market's reserve falls short, holds nothing that fits the largest shape
-// while the host does, or the host slept there before and the reserve
-// holds less than its share of the peak, so a reserve woken for a burst
-// waits stopped for the next. A host launched able to hibernate does where
-// hibernates allows. Any other leaving host drains.
+// market's reserve falls short, which the burst it remembers keeps it while
+// a reserve woken for that burst serves, or holds nothing that fits the
+// largest shape while the host does. A host launched able to hibernate
+// does where hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
-	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{})) ||
-		h.Slept && !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.peakShare)
+	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
 		if h.HibernationConfigured && hibernates(t) {
@@ -1503,13 +1469,12 @@ func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
 // older agent release, then the costliest to hold.
 // It keeps the ready capacity the target needs, so a pending reserve never
 // stands in for a ready one, and a reserve that fits the largest shape.
-// Within the cost horizon of the market's peak load it keeps every reserve
-// it would buy again that is ready or being prepared, so the reserves a
-// burst bought or woke wait stopped for the next burst rather than
-// retiring as its load falls.
+// While the reserve target remembers a burst it keeps every reserve it
+// would buy again that is ready or being prepared, so the reserves a burst
+// bought or woke wait stopped for the next burst rather than retiring as
+// its load falls.
 func (ps *pass) retire(v *marketView) {
-	// A peak older than the cost horizon is already empty.
-	holding := !v.peak.Load.Empty()
+	holding := !v.burst.Empty()
 	ready := FleetHost.resumable
 	needReady := ps.floor(v, HostID{}, ready).Lower(v.stopped)
 	growable := func(h *FleetHost) bool {
@@ -1636,7 +1601,7 @@ func (ps *pass) report(v *marketView) MarketPlan {
 		Market: v.m, Load: v.load, WarmTarget: totalOf(v.slots, func(s warmSlot) FleetCapacity { return s.shape }),
 		WarmFree: ps.warmFree(v), WarmPending: ps.warmPending(v),
 		StoppedTarget: v.stopped, ReserveReady: ready, ReservePending: reserve.Minus(ready).Clamp(),
-		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, FloorShortSince: v.floorShortSince, Peak: v.peak, States: ps.states(v.m),
+		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, FloorShortSince: v.floorShortSince, States: ps.states(v.m),
 	}
 	switch {
 	case ps.limited[v.m]:

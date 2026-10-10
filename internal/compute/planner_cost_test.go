@@ -220,7 +220,8 @@ from builds`, (toHistory-history)/10)
 	}{
 		{"hosts", plannerHosts, nil},
 		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
-		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), (p.BuildWindow + p.LongestBuild).Seconds(), p.BuildWindow.Seconds(), p.Batch.Max.Seconds(), p.Batch.Quiet.Seconds(), p.ArrivalWindow.Seconds()}},
+		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), (p.BuildWindow + p.LongestBuild).Seconds(), p.BuildWindow.Seconds()}},
+		{"recent arrivals", recentArrivals, []any{p.demandWindow().Seconds(), int32(demandBatch)}},
 		{"arrival batches", batchWaits, []any{p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds(), int32(demandBatch), (p.Batch.Max + p.Batch.Quiet).Seconds()}},
 		{"cooldowns", plannerCooldowns, nil},
 		{"markets", fleetMarkets, nil},

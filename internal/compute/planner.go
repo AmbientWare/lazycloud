@@ -327,12 +327,12 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			held++
 		}
 	}
-	recent, builds, arrived := shapesByMarket(ps.r.recent)
+	recent, builds := shapesByMarket(ps.r.recent)
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Arrived: arrived, Offers: in,
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Arrivals: arrivalsByMarket(ps.r.arrivals), Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 	}
-	s.FloorShortSince, s.Peaks = ps.carried()
+	s.FloorShortSince = ps.carried()
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
 	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
 	bought, err := ps.apply(plan, nil)
@@ -550,10 +550,10 @@ func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
 }
 
 // carried is what each market's published plan carries to the next pass:
-// when its stopped target went short, and its load peak. An unreadable
-// plan reads as never short and without a peak.
-func (ps *fleetPass) carried() (map[ReserveMarket]time.Time, map[ReserveMarket]LoadPeak) {
-	since, peaks := map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
+// when its stopped target went short. An unreadable plan reads as never
+// short.
+func (ps *fleetPass) carried() map[ReserveMarket]time.Time {
+	since := map[ReserveMarket]time.Time{}
 	for _, m := range ps.r.markets {
 		var stored PublishedMarket
 		if json.Unmarshal(m.Plan, &stored) != nil {
@@ -563,14 +563,13 @@ func (ps *fleetPass) carried() (map[ReserveMarket]time.Time, map[ReserveMarket]L
 		if stored.FloorShortSince != nil {
 			since[market] = *stored.FloorShortSince
 		}
-		peaks[market] = stored.Peak
 	}
-	return since, peaks
+	return since
 }
 
 // publish writes every platform market's plan when the pass acted, a
-// market's reserve shortfall began or ended, its load peak moved, or the
-// last plan is planRefresh old, and logs each decision that changed.
+// market's reserve shortfall began or ended, or the last plan is
+// planRefresh old, and logs each decision that changed.
 func (ps *fleetPass) publish(plan FleetPlan) error {
 	var last time.Time
 	for _, m := range ps.r.markets {
@@ -578,12 +577,10 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 			last = m.GeneratedAt
 		}
 	}
-	stored, peaks := ps.carried()
+	stored := ps.carried()
 	moved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
 		since, ok := stored[mp.Market]
-		peak := peaks[mp.Market]
-		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince) ||
-			peak.Load != mp.Peak.Load || !peak.At.Equal(mp.Peak.At)
+		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince)
 	})
 	if len(plan.Actions) == 0 && !moved && ps.r.now.Sub(last) < planRefresh {
 		return nil

@@ -3,6 +3,7 @@ package compute
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
@@ -11,27 +12,51 @@ func cpuGiB(millis cpu.Millis, memGiB int64) FleetCapacity {
 	return FleetCapacity{CPUMillis: millis, MemoryBytes: memGiB * gib}
 }
 
-func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
-	p := DefaultPolicy()
+// A target keeps what arrived at a steady rate within its lead time and
+// room for the largest batch within its memory, and at least its floor:
+// steady work keeps about its rate, a burst keeps room for the next burst
+// until its memory passes, and work older than both is forgotten.
+func TestHeadroomKeepsTheFloorTheSteadyRateAndTheLargestRecentBurst(t *testing.T) {
+	now := offerNow
+	one := cpuGiB(1000, 2)
+	floor := cpuGiB(1000, 4)
+	target := HeadroomTarget{Floor: floor, Lead: time.Minute, Memory: 30 * time.Minute}
+	batch := DefaultPolicy().Batch
+	every := func(n int, gap, ago time.Duration) []Arrival {
+		var out []Arrival
+		for i := range n {
+			out = append(out, Arrival{At: now.Add(-ago - time.Duration(i)*gap), Shape: one})
+		}
+		return out
+	}
 	cases := []struct {
-		name          string
-		market        ReserveMarket
-		load          FleetCapacity
-		warm, stopped FleetCapacity
+		name     string
+		arrivals []Arrival
+		want     FleetCapacity
 	}{
-		{"quiet on-demand keeps its floors", ReserveMarket{}, FleetCapacity{}, cpuGiB(1000, 4), cpuGiB(3000, 12)},
-		{"quiet Spot keeps its floors", ReserveMarket{Preemptible: true}, FleetCapacity{}, cpuGiB(1000, 4), cpuGiB(3000, 12)},
-		{"loaded market keeps a share", ReserveMarket{}, cpuGiB(40_000, 80), cpuGiB(10_000, 20), cpuGiB(20_000, 40)},
-		{"a share rounds up", ReserveMarket{}, FleetCapacity{CPUMillis: 10_001}, cpuGiB(2501, 4), cpuGiB(5001, 12)},
-		{"GPU markets keep a share without a floor", ReserveMarket{GPU: "T4"}, FleetCapacity{}, FleetCapacity{}, FleetCapacity{}},
-		{"loaded GPU market", ReserveMarket{GPU: "L4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{CPUMillis: 1000, GPUs: 1}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
-		{"other cards keep none", ReserveMarket{GPU: "H100"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
-		{"Spot GPU work keeps none", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
+		{"quiet", nil, floor},
+		// Six apart by 10 s within the lead: five steady, and one the
+		// largest batch, which the burst counts once.
+		{"steady", every(6, 10*time.Second, 0), floor.Upper(one.Times(6))},
+		{"a burst within the lead", every(20, 0, 0), floor.Upper(one.Times(20))},
+		{"a burst past the lead stays remembered", every(20, 0, 10*time.Minute), floor.Upper(one.Times(20))},
+		{"one arrival keeps no more than the floor", every(1, 0, 0), floor},
+		{"a burst past its memory is forgotten", every(20, 0, time.Hour), floor},
 	}
 	for _, c := range cases {
-		r := p.Reserve(c.market)
-		if warm, stopped := r.Warm.Of(c.load), r.Stopped.Of(c.load); warm != c.warm || stopped != c.stopped {
-			t.Errorf("%s: warm %+v stopped %+v, want %+v %+v", c.name, warm, stopped, c.warm, c.stopped)
+		if got := target.Of(c.arrivals, now, batch); got != c.want {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+	for _, m := range []ReserveMarket{{GPU: "T4"}, {GPU: "L4"}} {
+		r := DefaultPolicy().Reserve(m)
+		if got := r.Warm.Of(nil, now, batch); !got.Empty() {
+			t.Errorf("quiet %s keeps %+v warm, want nothing", m.GPU, got)
+		}
+	}
+	for _, m := range []ReserveMarket{{GPU: "H100"}, {Preemptible: true, GPU: "T4"}} {
+		if r := DefaultPolicy().Reserve(m); r != (MarketReserve{}) {
+			t.Errorf("%v keeps a reserve %+v, want none", m, r)
 		}
 	}
 }

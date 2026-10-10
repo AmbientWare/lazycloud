@@ -20,6 +20,7 @@ type fleetRead struct {
 	hosts     []PlannerHostsRow
 	pending   []PendingDemandRow
 	recent    []RecentShapesRow
+	arrivals  []RecentArrivalsRow
 	cooldowns []PlannerCooldownsRow
 	markets   map[string]FleetMarketsRow
 	// release is the target agent release; nil when none is published.
@@ -47,10 +48,14 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
 		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
-		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(),
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
+	}
+	if r.arrivals, err = q.RecentArrivals(ctx, RecentArrivalsParams{
+		WindowSeconds: p.demandWindow().Seconds(), SampleSize: demandBatch,
+	}); err != nil {
+		return r, fmt.Errorf("read recent arrivals: %w", err)
 	}
 	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
 		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
@@ -261,27 +266,18 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 type shapeKind string
 
 const (
-	shapeRecent  shapeKind = "recent"
-	shapeBuild   shapeKind = "build"
-	shapeArrived shapeKind = "arrived"
+	shapeRecent shapeKind = "recent"
+	shapeBuild  shapeKind = "build"
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
-// containers reserved and the largest its finished builds did, and what
-// arrived within the arrival window. GPU work belongs to the on-demand
-// market of its model, as its demand does; GPU work without a model
-// belongs to none.
-func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
-	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+// containers reserved and the largest its finished builds did.
+func shapesByMarket(rows []RecentShapesRow) (recent, builds map[ReserveMarket]FleetCapacity) {
+	recent, builds = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	for _, r := range rows {
-		var m ReserveMarket
-		switch {
-		case r.GpuType != "":
-			m = ReserveMarket{GPU: r.GpuType}
-		case r.Gpus > 0:
+		m, ok := shapeMarket(r.Preemptible, r.GpuType, int(r.Gpus))
+		if !ok {
 			continue
-		default:
-			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
 		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
 		switch shapeKind(r.Kind) {
@@ -289,11 +285,32 @@ func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[Reserve
 			recent[m] = recent[m].Upper(shape)
 		case shapeBuild:
 			builds[m] = builds[m].Upper(shape)
-		case shapeArrived:
-			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, builds, arrived
+	return recent, builds
+}
+
+// arrivalsByMarket groups recent arrivals by market.
+func arrivalsByMarket(rows []RecentArrivalsRow) map[ReserveMarket][]Arrival {
+	out := map[ReserveMarket][]Arrival{}
+	for _, r := range rows {
+		if m, ok := shapeMarket(r.Preemptible, r.GpuType, int(r.GpuCount)); ok {
+			out[m] = append(out[m], Arrival{At: r.CreatedAt, Shape: FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.GpuCount)}})
+		}
+	}
+	return out
+}
+
+// shapeMarket is the market a container's demand belongs to: GPU work to
+// the on-demand market of its model, and GPU work without a model to none.
+func shapeMarket(preemptible bool, gpuType string, gpus int) (ReserveMarket, bool) {
+	switch {
+	case gpuType != "":
+		return ReserveMarket{GPU: gpuType}, true
+	case gpus > 0:
+		return ReserveMarket{}, false
+	}
+	return ReserveMarket{Preemptible: preemptible}, true
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"maps"
 	"slices"
 	"time"
 
@@ -44,12 +45,6 @@ func (a FleetCapacity) Lower(b FleetCapacity) FleetCapacity {
 
 // Clamp raises negative dimensions to zero.
 func (a FleetCapacity) Clamp() FleetCapacity { return a.Upper(FleetCapacity{}) }
-
-// Percent is p percent of a, each dimension rounded up.
-func (a FleetCapacity) Percent(p int64) FleetCapacity {
-	up := func(v int64) int64 { return (v*p + 99) / 100 }
-	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(up(int64(a.GPUs)))}
-}
 
 // Empty reports whether a has nothing positive in any dimension.
 func (a FleetCapacity) Empty() bool { return FleetCapacity{}.Covers(a) }
@@ -110,16 +105,19 @@ func reserveMarketOf(market Market, gpu string) ReserveMarket {
 	return ReserveMarket{Preemptible: market == MarketSpot, GPU: gpu}
 }
 
-// HeadroomTarget is a minimum spare capacity and the share of current load
-// kept free, whichever is larger.
+// HeadroomTarget is spare capacity kept as safety stock: what arrived at a
+// steady rate within Lead, about how long new capacity of the layer takes
+// to serve, and the largest batch within Memory, so a market that saw a
+// burst keeps room for the next one; at least the floor.
 type HeadroomTarget struct {
-	Floor       FleetCapacity
-	LoadPercent int64
+	Floor        FleetCapacity
+	Lead, Memory time.Duration
 }
 
-// Of is the target at load.
-func (t HeadroomTarget) Of(load FleetCapacity) FleetCapacity {
-	return t.Floor.Upper(load.Percent(t.LoadPercent))
+// Of is the target arrivals set at now.
+func (t HeadroomTarget) Of(arrivals []Arrival, now time.Time, batch BatchWindow) FleetCapacity {
+	d := DemandOf(arrivals, now, t.Lead, t.Memory, batch)
+	return t.Floor.Upper(d.Steady.Plus(d.Burst))
 }
 
 // MarketReserve is the running headroom a market keeps warm and the
@@ -187,13 +185,9 @@ type Policy struct {
 	// LongestBuild is the most an image build runs, the images owner's
 	// build timeout.
 	LongestBuild time.Duration
-	// ArrivalWindow is a margin over how long a Spot launch takes to serve
-	// work, about a minute: the Spot market keeps warm at least what was
-	// placed from arrivals within it, less their largest batch, so work
-	// arriving at a steady rate finds room rather than waiting for a
-	// launch, while a single burst buys no headroom it cannot use.
-	ArrivalWindow time.Duration
-	Batch         BatchWindow
+	// Batch is how purchases wait for arrivals, and how headroom groups
+	// them into batches.
+	Batch BatchWindow
 	// IdleTimeout is how long a serving host stays idle before it leaves.
 	IdleTimeout time.Duration
 	// ReturnWait is how long a market waits for a host that could return to
@@ -210,16 +204,21 @@ type Policy struct {
 
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
-	cpuMarket := MarketReserve{
-		Warm:       HeadroomTarget{Floor: FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, LoadPercent: 25},
-		Stopped:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}, LoadPercent: 50},
-		FitLargest: true,
+	// Warm room serves arrivals until a reserve resumes or a launch serves,
+	// tens of seconds; reserves serve until a purchase does, minutes. Each
+	// keeps room for the largest recent burst.
+	warm := func(floor FleetCapacity) HeadroomTarget {
+		return HeadroomTarget{Floor: floor, Lead: 2 * time.Minute, Memory: 30 * time.Minute}
 	}
-	// Spot keeps only the floor stopped: its launches serve in about 25 s,
-	// so reserves sized to load cost more than the starts they speed up.
-	spotMarket := cpuMarket
-	spotMarket.Stopped.LoadPercent = 0
-	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
+	stopped := func(floor FleetCapacity) HeadroomTarget {
+		return HeadroomTarget{Floor: floor, Lead: 5 * time.Minute, Memory: time.Hour}
+	}
+	cpuFloor, reserveFloor := FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}
+	onDemand := MarketReserve{Warm: warm(cpuFloor), Stopped: stopped(reserveFloor), FitLargest: true}
+	// Spot launches serve in about 25 s, so Spot keeps only the floor
+	// stopped.
+	spot := MarketReserve{Warm: warm(cpuFloor), Stopped: HeadroomTarget{Floor: reserveFloor}, FitLargest: true}
+	card := MarketReserve{Warm: warm(FleetCapacity{}), Stopped: stopped(FleetCapacity{}), FitLargest: true}
 	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
 	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
 	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
@@ -229,18 +228,26 @@ func DefaultPolicy() Policy {
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
-		Spot:             spotMarket, OnDemand: cpuMarket,
-		GPU:           map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
-		LargestShape:  LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
-		BuildWindow:   time.Hour,
-		LongestBuild:  time.Hour,
-		ArrivalWindow: 2 * time.Minute,
-		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		IdleTimeout:   2 * time.Minute,
-		ReturnWait:    5 * time.Minute,
-		FloorHold:     time.Minute,
-		SpotPriceAge:  time.Hour,
+		Spot:             spot, OnDemand: onDemand,
+		GPU:          map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
+		LargestShape: LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
+		BuildWindow:  time.Hour,
+		LongestBuild: time.Hour,
+		Batch:        BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		IdleTimeout:  2 * time.Minute,
+		ReturnWait:   5 * time.Minute,
+		FloorHold:    time.Minute,
+		SpotPriceAge: time.Hour,
 	}
+}
+
+// demandWindow is the longest any market's headroom looks back.
+func (p Policy) demandWindow() time.Duration {
+	var out time.Duration
+	for _, r := range slices.Concat([]MarketReserve{p.Spot, p.OnDemand}, slices.Collect(maps.Values(p.GPU))) {
+		out = max(out, r.Warm.Lead, r.Warm.Memory, r.Stopped.Lead, r.Stopped.Memory)
+	}
+	return out
 }
 
 // Reserve is the headroom market m keeps.
