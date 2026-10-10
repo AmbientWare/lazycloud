@@ -66,7 +66,7 @@ ffmpeg_image = Image.from_uv(".").add_commands(
     ]
 )
 whisper_image = Image.from_uv(
-    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-runtime-ubuntu24.04"
+    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04"
 ).add_commands(
     [
         "python -c 'from faster_whisper import download_model; "
@@ -141,7 +141,7 @@ def extract_audio(video: SourceVideo) -> None:
     image=whisper_image,
     volumes=[work],
     gpu=[GpuType.L4, GpuType.A10G, GpuType.T4],
-    cpu=4,
+    cpu=2,
     memory="8Gi",
     timeout_seconds=3600,
     retries=2,
