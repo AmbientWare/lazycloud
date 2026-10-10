@@ -29,7 +29,9 @@ class HighlightPlan(BaseModel):
     highlights: list[Highlight]
 
 
-def normalize_plan(plan: HighlightPlan, transcript: Transcript, max_highlights: int) -> HighlightPlan:
+def normalize_plan(
+    plan: HighlightPlan, transcript: Transcript, max_highlights: int
+) -> HighlightPlan:
     """Keep the picks that fit the video, cut on whole segments, best first."""
     highlights: list[Highlight] = []
     for pick in plan.highlights:
