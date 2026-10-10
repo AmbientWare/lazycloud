@@ -1,4 +1,4 @@
-"""Store the bucket keys and the OpenAI API key as workspace secrets."""
+"""Store the bucket keys and the OpenAI API key, and make sure a signing key exists."""
 
 from getpass import getpass
 from secrets import token_urlsafe
