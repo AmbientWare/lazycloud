@@ -2,13 +2,13 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
@@ -17,21 +17,23 @@ const (
 	logFlushInterval = 100 * time.Millisecond
 	logBatchBytes    = 64 << 10
 	// logBufferBytes bounds buffered and in-flight output per container.
-	// Appends wait above it, which pushes back through the supervisor to the
-	// runner instead of dropping output.
+	// Appends wait above it, which pushes back on the output's source, the
+	// runner through the supervisor or the builder's output stream, instead
+	// of dropping output.
 	logBufferBytes = 1 << 20
 )
 
-// logBatcher sends a container's output in ordered AppendLogs batches. A
-// batch goes out after logFlushInterval, at logBatchBytes, or at once when a
-// completion waits for it, so results never overtake their output.
-type logBatcher struct {
-	container string
-	host      hostproto.HostServiceClient
-	log       *slog.Logger
+// logBatcher sends one container's output through send in ordered batches.
+// A batch goes out logFlushInterval after its first line, at logBatchBytes,
+// or at once when a completion waits for it, so results never overtake
+// their output.
+type logBatcher[L any] struct {
+	size func(L) int
+	send func(context.Context, []L) error
+	log  *slog.Logger
 
 	mu      sync.Mutex
-	lines   []*hostproto.LogLine
+	lines   []L
 	bytes   int
 	first   time.Time
 	urgent  bool
@@ -43,15 +45,44 @@ type logBatcher struct {
 	done    chan struct{}
 }
 
-func newLogBatcher(container string, host hostproto.HostServiceClient, log *slog.Logger) *logBatcher {
-	return &logBatcher{
-		container: container, host: host, log: log,
+func newLogBatcher[L any](size func(L) int, send func(context.Context, []L) error, log *slog.Logger) *logBatcher[L] {
+	return &logBatcher[L]{
+		size: size, send: send, log: log,
 		changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}
 }
 
-// append buffers a line, waiting while the buffer is full.
-func (b *logBatcher) append(ctx context.Context, line *hostproto.LogLine) error {
+// containerLogs sends a workload container's output as AppendLogs batches.
+func containerLogs(host hostproto.HostServiceClient, container string, log *slog.Logger) *logBatcher[*hostproto.LogLine] {
+	return newLogBatcher(func(l *hostproto.LogLine) int { return len(l.GetData()) },
+		func(ctx context.Context, lines []*hostproto.LogLine) error {
+			_, err := host.AppendLogs(ctx, &hostproto.AppendLogsRequest{ContainerId: container, Lines: lines})
+			return err //nolint:wrapcheck // The batcher reads the call's status.
+		}, log)
+}
+
+// buildLogs sends a build container's output as AppendImageBuildLogs
+// batches.
+type buildLogs struct {
+	*logBatcher[*hostproto.BuildLogLine]
+}
+
+func newBuildLogs(host hostproto.HostServiceClient, container string, log *slog.Logger) buildLogs {
+	return buildLogs{newLogBatcher(func(l *hostproto.BuildLogLine) int { return len(l.GetData()) },
+		func(ctx context.Context, lines []*hostproto.BuildLogLine) error {
+			_, err := host.AppendImageBuildLogs(ctx, &hostproto.AppendImageBuildLogsRequest{ContainerId: container, Lines: lines})
+			return err //nolint:wrapcheck // The batcher reads the call's status.
+		}, log)}
+}
+
+// add queues a line of build output stamped now.
+func (b buildLogs) add(ctx context.Context, line string) {
+	b.append(ctx, &hostproto.BuildLogLine{Data: line, Time: timestamppb.Now()})
+}
+
+// append buffers a line, waiting while the buffer is full. The line is
+// dropped if ctx ends or the batcher stops first.
+func (b *logBatcher[L]) append(ctx context.Context, line L) {
 	for {
 		b.mu.Lock()
 		if b.bytes < logBufferBytes {
@@ -59,33 +90,33 @@ func (b *logBatcher) append(ctx context.Context, line *hostproto.LogLine) error 
 				b.first = time.Now()
 			}
 			b.lines = append(b.lines, line)
-			b.bytes += len(line.GetData())
+			b.bytes += b.size(line)
 			b.seq++
 			b.mu.Unlock()
 			b.signal()
-			return nil
+			return
 		}
 		changed := b.changed
 		b.mu.Unlock()
 		select {
 		case <-changed:
 		case <-b.done:
-			return errStopped
+			return
 		case <-ctx.Done():
-			return fmt.Errorf("append log: %w", ctx.Err())
+			return
 		}
 	}
 }
 
 // mark returns the sequence number of the last appended line.
-func (b *logBatcher) mark() uint64 {
+func (b *logBatcher[L]) mark() uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.seq
 }
 
 // waitFlushed flushes at once and waits until every line up to seq was sent.
-func (b *logBatcher) waitFlushed(ctx context.Context, seq uint64) {
+func (b *logBatcher[L]) waitFlushed(ctx context.Context, seq uint64) {
 	for {
 		b.mu.Lock()
 		if b.flushed >= seq {
@@ -106,7 +137,7 @@ func (b *logBatcher) waitFlushed(ctx context.Context, seq uint64) {
 	}
 }
 
-func (b *logBatcher) signal() {
+func (b *logBatcher[L]) signal() {
 	select {
 	case b.wake <- struct{}{}:
 	default:
@@ -114,7 +145,7 @@ func (b *logBatcher) signal() {
 }
 
 // run sends batches until ctx ends.
-func (b *logBatcher) run(ctx context.Context) {
+func (b *logBatcher[L]) run(ctx context.Context) {
 	defer close(b.done)
 	for {
 		b.mu.Lock()
@@ -143,23 +174,22 @@ func (b *logBatcher) run(ctx context.Context) {
 }
 
 // flush sends the oldest batch and reports whether the batcher should go on.
-func (b *logBatcher) flush(ctx context.Context) bool {
+func (b *logBatcher[L]) flush(ctx context.Context) bool {
 	b.mu.Lock()
-	var batch []*hostproto.LogLine
+	var batch []L
 	size := 0
 	for _, line := range b.lines {
-		if len(batch) > 0 && size+len(line.GetData()) > logBatchBytes {
+		if len(batch) > 0 && size+b.size(line) > logBatchBytes {
 			break
 		}
 		batch = append(batch, line)
-		size += len(line.GetData())
+		size += b.size(line)
 	}
 	b.mu.Unlock()
 
-	request := &hostproto.AppendLogsRequest{ContainerId: b.container, Lines: batch}
 	delay := 100 * time.Millisecond
 	for {
-		_, err := b.host.AppendLogs(ctx, request)
+		err := b.send(ctx, batch)
 		if err == nil {
 			break
 		}
@@ -167,7 +197,7 @@ func (b *logBatcher) flush(ctx context.Context) bool {
 			return false
 		}
 		if !retryable(err) {
-			b.log.Error("dropping log batch", "container_id", b.container, "lines", len(batch), "error", err)
+			b.log.Error("dropping log batch", "lines", len(batch), "error", err)
 			break
 		}
 		if !sleep(ctx, delay) {

@@ -2871,7 +2871,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start the devbox now, activating its workload if it is stopped */
+        /**
+         * Start the devbox now, activating its workload if it is stopped
+         * @description A start also retries a release that stopped after failed starts.
+         */
         post: operations["startDevbox"];
         delete?: never;
         options?: never;
@@ -3416,6 +3419,8 @@ export interface components {
         Error: {
             code: components["schemas"]["ErrorCode"];
             message: string;
+            /** @description Every reason a refused deploy failed, by workload and gate. */
+            refusals?: components["schemas"]["DeploymentRefusal"][];
         };
         /** @enum {string} */
         ErrorCode: "invalid_request" | "unauthenticated" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "unsupported" | "too_many_pending_tasks" | "task_not_finished" | "unavailable" | "internal" | "payment_required" | "limit_reached";
@@ -3917,7 +3922,10 @@ export interface components {
             status: components["schemas"]["TaskStatus"];
             /** @description Attempts started so far. */
             attempts: number;
+            /** @description Attempts the task may start; each attempt lost to preemption adds one. */
             max_attempts: number;
+            /** @description Attempts lost to preemption. */
+            preemptions: number;
             /**
              * Format: uuid
              * @description The running task that spawned this one.
@@ -3972,7 +3980,7 @@ export interface components {
         /** @enum {string} */
         TaskPendingReason: "queued" | "dependencies" | "retry" | "capacity_busy" | "capacity_unavailable" | "capacity_limit" | "provisioning_compute" | "starting_container";
         /** @enum {string} */
-        FailureKind: "user_error" | "load_error" | "timeout" | "lost" | "start_failed" | "system" | "dependency_failed";
+        FailureKind: "user_error" | "load_error" | "timeout" | "lost" | "preempted" | "start_failed" | "system" | "dependency_failed";
         TaskFailure: {
             kind: components["schemas"]["FailureKind"];
             /** @description The exception type the handler raised. */
@@ -4438,14 +4446,33 @@ export interface components {
          */
         WorkloadKind: "function" | "endpoint" | "asgi" | "pod" | "sandbox";
         DeploymentPlanRequest: {
-            workloads: components["schemas"]["WorkloadIdentity"][];
+            workloads: components["schemas"]["DeploymentPlanWorkload"][];
             /** @default false */
             prune?: boolean;
         };
-        WorkloadIdentity: {
+        /** @description A workload the deploy lists, with the parts of its definition that the account's plan and the workspace must allow, so the plan reports what would refuse it before any image builds. */
+        DeploymentPlanWorkload: {
             kind: components["schemas"]["WorkloadKind"];
             name: components["schemas"]["WorkloadName"];
+            pod_kind?: components["schemas"]["PodKind"];
+            resources?: components["schemas"]["Resources"];
+            autoscaler?: components["schemas"]["Autoscaler"];
+            placement?: components["schemas"]["Placement"];
+            disks?: components["schemas"]["DiskMountSpec"][];
+            secrets?: components["schemas"]["SecretName"][];
         };
+        /** @description A reason a deploy fails before it changes anything: a plan limit, a secret it names that the workspace lacks, or a disk too small. */
+        DeploymentRefusal: {
+            kind: components["schemas"]["WorkloadKind"];
+            name: components["schemas"]["WorkloadName"];
+            gate: components["schemas"]["DeploymentGate"];
+            /** @description The limit or requirement the workload breaks. */
+            message: string;
+            /** @description How to lift it. */
+            remedy: string;
+        };
+        /** @enum {string} */
+        DeploymentGate: "disk_allowance" | "disk_minimum" | "disk_image" | "region_selection" | "gpu_model" | "gpu_count" | "gpu_unavailable" | "warm_floor" | "missing_secrets";
         DeploymentPlan: {
             app: components["schemas"]["AppName"];
             prune: boolean;
@@ -4458,6 +4485,8 @@ export interface components {
             action: components["schemas"]["DeploymentPlanAction"];
             /** @description Versions the workload has now. */
             versions: number;
+            /** @description Why a deploy of the workload would fail before it changed anything. */
+            refusals?: components["schemas"]["DeploymentRefusal"][];
         };
         /** @description A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}. */
         Workload: {
@@ -5167,7 +5196,7 @@ export interface components {
          */
         GpuType: "T4" | "A10G" | "L4" | "L40S" | "A100-40" | "A100-80" | "H100" | "H200" | "any";
         /**
-         * @description A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+         * @description A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
          * @enum {string}
          */
         Region: "us-east" | "us-west" | "eu-central" | "eu-north" | "ap-southeast";
@@ -5993,7 +6022,7 @@ export interface components {
             name: components["schemas"]["DiskName"];
             /**
              * Format: int64
-             * @description Whole 4096-byte blocks from 1 GiB to 1 TiB.
+             * @description Whole 4096-byte blocks from 1 GiB to 1 TiB; a devbox root needs 10 GiB.
              */
             size_bytes: number;
             /** @description An absolute path; a devbox's root disk mounts at /. */
@@ -11570,7 +11599,7 @@ export const richDisplayKindValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const richDisplayMedia_typeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["media_type"]> = ["image/png"];
 export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
-export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "start_failed", "system", "dependency_failed"];
+export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "preempted", "start_failed", "system", "dependency_failed"];
 export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogEntry"]["stream"]> = ["stdout", "stderr", "system"];
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
@@ -11581,6 +11610,7 @@ export const liveAppStateValues: ReadonlyArray<FlattenedDeepRequired<components>
 export const workloadStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadState"]> = ["active", "stopped", "deleted"];
 export const deploymentPlanActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DeploymentPlanAction"]> = ["add", "redeploy", "retain", "remove"];
 export const workloadKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkloadKind"]> = ["function", "endpoint", "asgi", "pod", "sandbox"];
+export const deploymentGateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DeploymentGate"]> = ["disk_allowance", "disk_minimum", "disk_image", "region_selection", "gpu_model", "gpu_count", "gpu_unavailable", "warm_floor", "missing_secrets"];
 export const containerStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerState"]> = ["pending", "starting", "ready", "draining", "stopped"];
 export const stopReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["StopReason"]> = ["stopped", "load_error", "start_failed", "crashed", "out_of_memory", "host_lost", "exited"];
 export const containerPurposeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerPurpose"]> = ["serve", "instance", "shell"];

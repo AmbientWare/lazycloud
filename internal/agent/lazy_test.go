@@ -25,6 +25,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -36,7 +37,7 @@ import (
 var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage, platformimages.Builder, platformimages.Mount}
 
 // imageLayers holds the layer grants of each of lazyImages.
-var imageLayers = map[string][]*hostproto.LayerGrant{}
+var imageLayers = map[string][]*imagefsproto.LayerGrant{}
 
 // layerBucket is the test store's bucket the test pairs go to, made and
 // removed by TestMain.
@@ -76,7 +77,7 @@ func convertLazyImages(ctx context.Context) error {
 
 // convertLayer converts l into a pair under prefix and returns a grant of
 // it until expires.
-func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket, prefix string, l v1.Layer, expires time.Time) (*hostproto.LayerGrant, error) {
+func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket, prefix string, l v1.Layer, expires time.Time) (*imagefsproto.LayerGrant, error) {
 	tar, err := l.Uncompressed()
 	if err != nil {
 		return nil, err
@@ -111,7 +112,7 @@ func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClie
 		}
 		urls[object] = signed.URL
 	}
-	return &hostproto.LayerGrant{DiffId: string(ix.Layer), IndexUrl: urls["index"], DataUrl: urls["data"], ExpiresAt: timestamppb.New(expires)}, nil
+	return &imagefsproto.LayerGrant{DiffId: string(ix.Layer), IndexUrl: urls["index"], DataUrl: urls["data"], ExpiresAt: timestamppb.New(expires)}, nil
 }
 
 // withImage points a start at image and carries its grants.

@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/pkg/authconfig"
 	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sys/unix"
@@ -129,12 +131,12 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 		}
 	}()
 
-	options, err := pullOptions(request.GetRegistryAuth())
+	login, err := encodeLogin(request.GetRegistryAuth())
 	if err != nil {
 		return "", "", err
 	}
 	importedAt := time.Now()
-	pushed, err := a.docker.ImagePush(ctx, tag, client.ImagePushOptions{RegistryAuth: options.RegistryAuth})
+	pushed, err := a.docker.ImagePush(ctx, tag, client.ImagePushOptions{RegistryAuth: login})
 	if err != nil {
 		return "", "", fmt.Errorf("push %s: %w", tag, err)
 	}
@@ -149,7 +151,7 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	}
 	// The push output names the digest only on some Docker versions; the
 	// registry is the authority on what the tag now points to.
-	pushedAt, err := a.docker.DistributionInspect(ctx, tag, client.DistributionInspectOptions{EncodedRegistryAuth: options.RegistryAuth})
+	pushedAt, err := a.docker.DistributionInspect(ctx, tag, client.DistributionInspectOptions{EncodedRegistryAuth: login})
 	if err != nil {
 		return "", "", fmt.Errorf("read the pushed digest of %s: %w", tag, err)
 	}
@@ -160,6 +162,20 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	a.log.Info("filesystem image published", "container_id", c.id, "archive_bytes", archive.n,
 		"import_ms", importedAt.Sub(began).Milliseconds(), "push_ms", time.Since(importedAt).Milliseconds())
 	return request.GetRepository() + "@" + digest, source.Architecture, nil
+}
+
+// encodeLogin is auth as Docker takes it on a push; nil is anonymous.
+func encodeLogin(auth *hostproto.RegistryAuth) (string, error) {
+	if auth == nil {
+		return "", nil
+	}
+	encoded, err := authconfig.Encode(registry.AuthConfig{
+		Username: auth.GetUsername(), Password: auth.GetPassword(), IdentityToken: auth.GetIdentityToken(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode registry login: %w", err)
+	}
+	return encoded, nil
 }
 
 // archiveBound is the most a container's filesystem archive may hold: its

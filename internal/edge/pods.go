@@ -148,7 +148,7 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 	if err == nil {
 		span.SetAttributes(telemetry.Container(uuid.UUID(c.Container).String()))
 		if woken {
-			span.AddLink(telemetry.Link(c.Traceparent))
+			span.AddLink(trace.Link{SpanContext: telemetry.SpanContextOf(c.Traceparent)})
 		}
 	}
 	telemetry.Fail(span, err)
@@ -203,7 +203,7 @@ func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.
 		}
 		if !woken {
 			wokeAt = time.Now().Add(-time.Second)
-			if err := e.execution.WakePod(ctx, t.workspace, t.workload); err != nil {
+			if err := e.execution.WakePod(ctx, t.workspace, t.workload, execution.WakeConnection); err != nil {
 				var conflict *execution.ConflictError
 				if errors.As(err, &conflict) {
 					return execution.PodContainer{}, woken, errPodStopped

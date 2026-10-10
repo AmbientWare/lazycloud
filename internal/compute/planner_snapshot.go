@@ -28,6 +28,10 @@ type fleetRead struct {
 	spot        []SpotQuote
 	zoneTypes   map[string]map[string][]string
 	quotas      []QuotaRoom
+	// batchWait is how long the platform's arrival batch stays open, and
+	// connectionWaits each connection's.
+	batchWait       time.Duration
+	connectionWaits map[uuid.UUID]time.Duration
 }
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
@@ -42,11 +46,29 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		return r, fmt.Errorf("read pending demand: %w", err)
 	}
 	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch,
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
-	if r.cooldowns, err = q.PlannerCooldowns(ctx, p.RegionFailureWindow.Seconds()); err != nil {
+	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
+		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
+		LookbackSeconds: (p.Batch.Max + p.Batch.Quiet).Seconds(),
+	})
+	if err != nil {
+		return r, fmt.Errorf("read the arrival batches: %w", err)
+	}
+	r.connectionWaits = map[uuid.UUID]time.Duration{}
+	for _, w := range waits {
+		wait := time.Duration(w.WaitSeconds * float64(time.Second))
+		if w.ConnectionID == nil {
+			r.batchWait = wait
+			continue
+		}
+		r.connectionWaits[*w.ConnectionID] = wait
+	}
+	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
 	}
 	markets, err := q.FleetMarkets(ctx)
@@ -149,12 +171,32 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
+		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
 		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
 		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, PhaseAt: h.PhaseAt,
+		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
+		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 	}
+}
+
+// busySince is when the host's newest live container was placed; nil
+// without one.
+func busySince(h PlannerHostsRow) *time.Time {
+	if h.Containers == 0 {
+		return nil
+	}
+	return &h.BusySince
+}
+
+// lent is what Spot-tolerant work holds on a host: on an on-demand CPU host
+// it is lent to the Spot market, and elsewhere nothing.
+func lent(market Market, gpus int, tolerant FleetCapacity) FleetCapacity {
+	if market != MarketOnDemand || gpus > 0 {
+		return FleetCapacity{}
+	}
+	return tolerant
 }
 
 // onRelease reports whether version is the agent release a host should run:
@@ -215,12 +257,22 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 	return out, nil
 }
 
-// largestShapes are the largest shape each market's placed platform
-// containers reserved. GPU work belongs to the on-demand market of its
-// model, as its demand does; GPU work without a recorded model counts in
-// no market.
-func largestShapes(rows []RecentShapesRow) map[ReserveMarket]FleetCapacity {
-	out := map[ReserveMarket]FleetCapacity{}
+// shapeKind is what a RecentShapes row measures.
+type shapeKind string
+
+const (
+	shapeRecent  shapeKind = "recent"
+	shapeBuild   shapeKind = "build"
+	shapeArrived shapeKind = "arrived"
+)
+
+// shapesByMarket are, by market, the largest shape placed platform
+// containers reserved and the largest its finished builds did, and what
+// arrived within the arrival window. GPU work belongs to the on-demand
+// market of its model, as its demand does; GPU work without a model
+// belongs to none.
+func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
+	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	for _, r := range rows {
 		var m ReserveMarket
 		switch {
@@ -231,9 +283,17 @@ func largestShapes(rows []RecentShapesRow) map[ReserveMarket]FleetCapacity {
 		default:
 			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
-		out[m] = out[m].Upper(FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)})
+		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
+		switch shapeKind(r.Kind) {
+		case shapeRecent:
+			recent[m] = recent[m].Upper(shape)
+		case shapeBuild:
+			builds[m] = builds[m].Upper(shape)
+		case shapeArrived:
+			arrived[m] = arrived[m].Plus(shape)
+		}
 	}
-	return out
+	return recent, builds, arrived
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a
@@ -244,11 +304,7 @@ func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 		if r.ConnectionKey != owner {
 			continue
 		}
-		c := OfferCooldown{Region: r.Region, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until}
-		if r.RefusedAt != nil {
-			c.RefusedAt = *r.RefusedAt
-		}
-		out = append(out, c)
+		out = append(out, OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until})
 	}
 	return out
 }

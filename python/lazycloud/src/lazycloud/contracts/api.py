@@ -350,6 +350,7 @@ class FailureKind(str, Enum):
     load_error = "load_error"
     timeout = "timeout"
     lost = "lost"
+    preempted = "preempted"
     start_failed = "start_failed"
     system = "system"
     dependency_failed = "dependency_failed"
@@ -832,16 +833,16 @@ class WorkloadKind(str, Enum):
     sandbox = "sandbox"
 
 
-class WorkloadIdentity(APIModel):
-    kind: WorkloadKind
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-
-
-class DeploymentPlanItem(APIModel):
-    kind: WorkloadKind
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    action: DeploymentPlanAction
-    versions: Annotated[int, Field(description="Versions the workload has now.")]
+class DeploymentGate(str, Enum):
+    disk_allowance = "disk_allowance"
+    disk_minimum = "disk_minimum"
+    disk_image = "disk_image"
+    region_selection = "region_selection"
+    gpu_model = "gpu_model"
+    gpu_count = "gpu_count"
+    gpu_unavailable = "gpu_unavailable"
+    warm_floor = "warm_floor"
+    missing_secrets = "missing_secrets"
 
 
 class StartWorkloadRequest(APIModel):
@@ -2359,7 +2360,7 @@ class DiskMountSpec(APIModel):
     size_bytes: Annotated[
         int,
         Field(
-            description="Whole 4096-byte blocks from 1 GiB to 1 TiB.",
+            description="Whole 4096-byte blocks from 1 GiB to 1 TiB; a devbox root needs 10 GiB.",
             ge=1073741824,
             le=1099511627776,
         ),
@@ -2681,11 +2682,6 @@ class SshHostPage(APIModel):
     next_cursor: str | None = None
 
 
-class Error(APIModel):
-    code: ErrorCode
-    message: str
-
-
 class User(APIModel):
     id: UUID
     email: Annotated[
@@ -2882,18 +2878,34 @@ class AppPage(APIModel):
     )
 
 
-class DeploymentPlanRequest(APIModel):
-    workloads: Annotated[list[WorkloadIdentity], Field(max_length=200)]
-    prune: bool = False
+class DeploymentPlanWorkload(APIModel):
+    kind: WorkloadKind
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    pod_kind: PodKind | None = None
+    resources: Resources | None = None
+    autoscaler: Autoscaler | None = None
+    placement: Placement | None = None
+    disks: Annotated[list[DiskMountSpec] | None, Field(max_length=8)] = None
+    secrets: Annotated[list[SecretName] | None, Field(max_length=100)] = None
 
 
-class DeploymentPlan(APIModel):
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    prune: bool
-    items: Annotated[
-        list[DeploymentPlanItem],
-        Field(description="Listed workloads by kind and name, then omitted deployed ones."),
-    ]
+class DeploymentRefusal(APIModel):
+    kind: WorkloadKind
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    gate: DeploymentGate
+    message: Annotated[str, Field(description="The limit or requirement the workload breaks.")]
+    remedy: Annotated[str, Field(description="How to lift it.")]
+
+
+class DeploymentPlanItem(APIModel):
+    kind: WorkloadKind
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    action: DeploymentPlanAction
+    versions: Annotated[int, Field(description="Versions the workload has now.")]
+    refusals: Annotated[
+        list[DeploymentRefusal] | None,
+        Field(description="Why a deploy of the workload would fail before it changed anything."),
+    ] = None
 
 
 class Workload(APIModel):
@@ -3212,6 +3224,15 @@ class SandboxStats(APIModel):
     ]
 
 
+class Error(APIModel):
+    code: ErrorCode
+    message: str
+    refusals: Annotated[
+        list[DeploymentRefusal] | None,
+        Field(description="Every reason a refused deploy failed, by workload and gate."),
+    ] = None
+
+
 class Me(APIModel):
     user: User
     workspaces: list[Workspace]
@@ -3352,7 +3373,11 @@ class Task(APIModel):
     ] = None
     status: TaskStatus
     attempts: Annotated[int, Field(description="Attempts started so far.")]
-    max_attempts: int
+    max_attempts: Annotated[
+        int,
+        Field(description="Attempts the task may start; each attempt lost to preemption adds one."),
+    ]
+    preemptions: Annotated[int, Field(description="Attempts lost to preemption.")]
     parent_task_id: Annotated[
         UUID | None, Field(description="The running task that spawned this one.")
     ] = None
@@ -3397,6 +3422,20 @@ class SecretPage(APIModel):
     next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
         None
     )
+
+
+class DeploymentPlanRequest(APIModel):
+    workloads: Annotated[list[DeploymentPlanWorkload], Field(max_length=200)]
+    prune: bool = False
+
+
+class DeploymentPlan(APIModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    prune: bool
+    items: Annotated[
+        list[DeploymentPlanItem],
+        Field(description="Listed workloads by kind and name, then omitted deployed ones."),
+    ]
 
 
 class WorkloadDetail(APIModel):

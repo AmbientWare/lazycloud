@@ -84,8 +84,11 @@ values ('r', 'offline', 'platform', 'aws', 'requested', 1500, 6::bigint << 30, '
 	plain := insert(compute.MarketOnDemand, compute.ReserveStop, "m7i.large")
 	// 192 GiB is over EC2's hibernation limit: it stops plainly.
 	large := insert(compute.MarketOnDemand, compute.ReserveHibernate, "g4dn.12xlarge")
-	if n := launch(t, o); n != 3 {
-		t.Fatalf("launched %d, want 3", n)
+	serving := compute.HostID(scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, instance_type, market)
+values ('s', 'offline', 'platform', 'aws', 'requested', 4000, 16::bigint << 30, 'us-east-2', 'c6a.2xlarge', 'on_demand') returning id`))
+	if n := launch(t, o); n != 4 {
+		t.Fatalf("launched %d, want 4", n)
 	}
 	calls := map[string]awsCall{}
 	for _, c := range emulator.calls("RunInstances") {
@@ -98,6 +101,13 @@ values ('r', 'offline', 'platform', 'aws', 'requested', 1500, 6::bigint << 30, '
 		s.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior") != "hibernate" ||
 		s.Get("TagSpecification.3.ResourceType") != "spot-instances-request" || s.Get("TagSpecification.3.Tag.2.Value") != spot.String() {
 		t.Errorf("spot reserve launch %v, want hibernation, a 100+8 GiB encrypted root and a tagged persistent request", s)
+	}
+	// Hosts that can hold a build, reserves included, get the root
+	// throughput builds need.
+	for host, want := range map[compute.HostID]string{spot: "125", large: "500", serving: "500"} {
+		if got := calls[host.String()].Form.Get("BlockDeviceMapping.1.Ebs.Throughput"); got != want {
+			t.Errorf("root throughput %s MiB/s, want %s", got, want)
+		}
 	}
 	for _, host := range []compute.HostID{plain, large} {
 		f := calls[host.String()].Form
@@ -329,9 +339,9 @@ func TestResumeStartsTheReserveOnceAndARefusedSpotStartRetiresItsRequest(t *test
 		t.Fatalf("refused reserve is %s, want terminating", phase)
 	}
 	cooled := scan[string](t, o.pool, `select region || '/' || instance_type || '/' || market from capacity_cooldowns
-where until > now() and refused_at > now() - interval '1 minute'`)
+where until > now()`)
 	if cooled != "us-east-2/m7i.large/spot" {
-		t.Fatalf("cooldown %q, want the refused offer with its refusal time", cooled)
+		t.Fatalf("cooldown %q, want the refused offer", cooled)
 	}
 	actuate(t, o)
 	if r := ec2.request("sir-0000d002"); r.State != "cancelled" {

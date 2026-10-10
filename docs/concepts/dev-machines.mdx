@@ -34,8 +34,11 @@ uv run lazycloud devbox box ssh
 `lazycloud devbox box ssh` opens a shell as `root` in `/root`. The app's source is not
 mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
-`disk=` sizes the root disk, which is named after the devbox.
-[Disk pricing](/concepts/disks#pricing) covers what it costs.
+`disk=` sizes the root disk, which is named after the devbox. It takes at
+least `10Gi`, plus room for the image's unpacked root, which the first start
+copies onto it. A disk too small for its image fails the deploy with the size
+to set. Disks bill for what they store, not their size, so headroom costs
+nothing. [Disk pricing](/concepts/disks#pricing) covers the rates.
 
 ## Find and inspect boxes
 
@@ -142,6 +145,10 @@ config refreshes, so there are no keys to copy.
 Connecting starts a stopped devbox, and the terminal shows each step until it
 is up. An open SSH session keeps it running; the idle time counts from when the
 last one closes. On the devbox's dashboard page, Start boots it and Stop ends it.
+
+After three failed starts in a row a devbox stops trying, and its page and
+`lazycloud devbox box status` show the last failure. Fix the cause, then Start
+tries again.
 
 ## Stop and clean up
 

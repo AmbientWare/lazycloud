@@ -241,9 +241,14 @@ func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h Clai
 			return nil
 		}
 		if refusal != nil && h.Market != nil {
+			// A start refused for capacity cools its zone alone.
+			zone := ""
+			if code := awsCode(refusal); capacityRefusal(code) && !quotaRefusal(code) {
+				zone = h.AvailabilityZoneID
+			}
 			if err := q.InsertCooldown(ctx, InsertCooldownParams{
-				ConnectionKey: string(KindPlatform), Region: h.Region, InstanceType: h.InstanceType, Market: *h.Market,
-				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(describeAWSError(refusal)),
+				ConnectionKey: string(KindPlatform), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
+				Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(describeAWSError(refusal)),
 			}); err != nil {
 				return fmt.Errorf("insert cooldown: %w", err)
 			}

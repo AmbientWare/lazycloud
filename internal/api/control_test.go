@@ -132,4 +132,19 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 	}
 }
 
+// A refused deploy answers with the code of the refusal its account most
+// needs to act on; a GPU model the fleet does not offer stays unsupported.
+func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
+	e := newEnv(t)
+	unoffered := e.deploy().Releases[0].Spec
+	unoffered.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
+	var apiErr apitypes.Error
+	status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
+		apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{unoffered}}, &apiErr)
+	if status != http.StatusBadRequest || apiErr.Code != apitypes.Unsupported || apiErr.Refusals == nil ||
+		len(*apiErr.Refusals) != 1 || (*apiErr.Refusals)[0].Gate != apitypes.GpuUnavailable {
+		t.Fatalf("an unoffered GPU model: %d %+v", status, apiErr)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

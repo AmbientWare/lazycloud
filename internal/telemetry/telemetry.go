@@ -17,7 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -25,32 +24,20 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// Config selects what a binary exports.
+// Config selects what a binary exports; ConfigFromEnv describes each
+// setting. Service names the binary in traces as lazycloud-<Service>.
 type Config struct {
-	// Service names the binary in traces: server, scheduler or agent.
-	Service string
-	Version string
-	// OTLPEndpoint is an OTLP/gRPC collector address, host:port. Empty
-	// turns tracing off.
-	OTLPEndpoint string
-	// OTLPInsecure sends spans without TLS, for a local collector.
-	OTLPInsecure bool
-	// SampleRatio is the share of new traces recorded, 0 to 1. A trace
-	// that arrives sampled from another process is always recorded.
-	SampleRatio float64
-	// EdgeSampleRatio is the share of workload requests through the edge
-	// traced, which anyone may send.
-	EdgeSampleRatio float64
-	// MetricsAddr is where /metrics listens. Empty serves nothing.
-	MetricsAddr string
+	Service, Version             string
+	OTLPEndpoint                 string
+	OTLPInsecure                 bool
+	SampleRatio, EdgeSampleRatio float64
+	MetricsAddr                  string
 }
 
-// Telemetry is one binary's tracer provider, propagator and metrics.
+// Telemetry is one binary's tracer provider and metrics.
 type Telemetry struct {
-	cfg        Config
-	provider   trace.TracerProvider
-	shutdown   func(context.Context) error
-	propagator propagation.TextMapPropagator
+	cfg      Config
+	provider trace.TracerProvider
 	// Registry holds the binary's Prometheus collectors.
 	Registry *prometheus.Registry
 }
@@ -60,13 +47,7 @@ type Telemetry struct {
 func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	t := &Telemetry{
-		cfg:        cfg,
-		provider:   noop.NewTracerProvider(),
-		shutdown:   func(context.Context) error { return nil },
-		propagator: propagation.TraceContext{},
-		Registry:   registry,
-	}
+	t := &Telemetry{cfg: cfg, provider: noop.NewTracerProvider(), Registry: registry}
 	if cfg.OTLPEndpoint == "" {
 		return t, nil
 	}
@@ -83,32 +64,27 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("describe telemetry resource: %w", err)
 	}
-	for _, ratio := range []float64{cfg.SampleRatio, cfg.EdgeSampleRatio} {
-		if ratio < 0 || ratio > 1 {
-			return nil, fmt.Errorf("trace sample ratio %v is outside 0 to 1", ratio)
-		}
-	}
-	provider := sdktrace.NewTracerProvider(
+	t.provider = sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(redacting{exporter}),
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(rootSampler{
 			ratio: sdktrace.TraceIDRatioBased(cfg.SampleRatio), edge: sdktrace.TraceIDRatioBased(cfg.EdgeSampleRatio),
 		})),
 	)
-	t.provider = provider
-	t.shutdown = provider.Shutdown
 	return t, nil
 }
 
 // Tracer is the binary's tracer for its own spans.
 func (t *Telemetry) Tracer() trace.Tracer {
-	return t.provider.Tracer("github.com/AmbientWare/lazycloud")
+	return t.provider.Tracer(scope)
 }
 
 // Shutdown flushes buffered spans.
 func (t *Telemetry) Shutdown(ctx context.Context) error {
-	if err := t.shutdown(ctx); err != nil {
-		return fmt.Errorf("flush spans: %w", err)
+	if sdk, ok := t.provider.(*sdktrace.TracerProvider); ok {
+		if err := sdk.Shutdown(ctx); err != nil {
+			return fmt.Errorf("flush spans: %w", err)
+		}
 	}
 	return nil
 }

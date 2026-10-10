@@ -110,6 +110,56 @@ func (h HostCapacity) Fits(r Requirement) bool {
 		h.FreeGPUs >= r.GPUsNeeded()
 }
 
+// floorHost reports an on-demand platform CPU host, which keeps the
+// on-demand warm floor; keepsFloor one with floor free.
+func (h HostCapacity) floorHost() bool {
+	return h.Kind == KindPlatform && h.Market == MarketOnDemand && h.GPUCount == 0
+}
+
+func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
+	return h.floorHost() && h.FreeCPUMillis >= floor.CPUMillis && h.FreeMemoryBytes >= floor.MemoryBytes
+}
+
+// ChooseHost is the host, by index, a container of r goes to, or -1: one
+// that fits it, a Spot host before an on-demand one for work that can run
+// on Spot, then the tightest fit, whose free CPU and memory as fractions
+// of its size sum lowest after placement, which keeps large holes for
+// large containers. Spot-tolerant work borrows an on-demand platform CPU
+// host only while one of them still keeps floor free afterwards, so work
+// that cannot run on Spot starts at once.
+func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
+	holders := 0
+	if r.Preemptible && !floor.Empty() {
+		for _, h := range hosts {
+			if h.keepsFloor(floor) {
+				holders++
+			}
+		}
+	}
+	best, bestBorrows, bestScore := -1, false, 0.0
+	for i, h := range hosts {
+		if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || !h.Fits(r) {
+			continue
+		}
+		borrows := r.Preemptible && h.Market != MarketSpot
+		if borrows && !floor.Empty() && h.floorHost() {
+			after, left := h, holders
+			after.Reserve(r)
+			if h.keepsFloor(floor) && !after.keepsFloor(floor) {
+				left--
+			}
+			if left < 1 {
+				continue
+			}
+		}
+		score := float64(h.FreeCPUMillis-r.CPUMillis)/float64(h.CPUMillis) + float64(h.FreeMemoryBytes-r.MemoryBytes)/float64(h.MemoryBytes)
+		if best < 0 || bestBorrows && !borrows || borrows == bestBorrows && score < bestScore {
+			best, bestBorrows, bestScore = i, borrows, score
+		}
+	}
+	return best
+}
+
 // Reserve subtracts r's resources from the host's free capacity.
 func (h *HostCapacity) Reserve(r Requirement) {
 	h.FreeCPUMillis -= r.CPUMillis

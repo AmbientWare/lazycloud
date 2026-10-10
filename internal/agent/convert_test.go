@@ -2,36 +2,53 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 )
 
-// bytesObject reads ranges of an object held in memory.
-type bytesObject []byte
-
-func (b bytesObject) ReadRange(_ context.Context, off, n int64) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(b[off : off+n])), nil
-}
-
 // After its push a build converts each layer the server names and reports
 // its sizes, uploads the data in the parts it is given and the index, and
 // reports the parts' ETags, until the server names none. The server here
 // signs a layer's URLs once its sizes arrive, as the images owner does.
+// The layers come from the builder's own store, the one the build made
+// converted while the image pushes, so no blob is read back from the
+// registry.
 func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	e := newEnv(t)
-	registry := startTestRegistry(t)
+	backend := startTestRegistry(t)
+	base := buildBase(t, backend)
+	var blobReads atomic.Int32
+	target, err := url.Parse("http://" + backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
+			blobReads.Add(1)
+			http.Error(w, "blobs are not read back", http.StatusForbidden)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	registry := strings.TrimPrefix(front.URL, "http://")
 	const partBytes = 1 << 20
 
 	var mu sync.Mutex
@@ -56,83 +73,40 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	}))
 	t.Cleanup(store.Close)
 
-	type layer struct {
-		blob, diffID string
-		dataBytes    int64
-		// sized and uploaded count the reports of the layer's sizes and
-		// of its upload.
-		sized, uploaded int
-		etags           []string
-	}
-	var layers []*layer
+	// The server reads the pushed image's layers from the first completion
+	// that names it.
+	var server *layerServer
 	e.server.mu.Lock()
 	e.server.answerBuild = func(r *hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse {
 		mu.Lock()
 		defer mu.Unlock()
-		resp := &hostproto.CompleteImageBuildResponse{}
-		if r.GetDigest() == "" {
-			return resp
-		}
-		if layers == nil {
-			ref, err := name.NewDigest(registry+"/lazycloud/images@"+r.GetDigest(), name.Insecure)
-			if err != nil {
-				t.Error(err)
-				return nil
-			}
-			img, err := remote.Image(ref)
-			if err != nil {
-				t.Error(err)
-				return nil
-			}
-			manifest, err := img.Manifest()
-			if err != nil {
-				t.Error(err)
-				return nil
-			}
-			config, err := img.ConfigFile()
-			if err != nil {
-				t.Error(err)
-				return nil
-			}
-			for n, l := range manifest.Layers {
-				layers = append(layers, &layer{blob: l.Digest.String(), diffID: config.RootFS.DiffIDs[n].String(), dataBytes: -1})
-			}
-		}
-		for _, l := range layers {
-			for _, c := range r.GetConvertedLayers() {
-				if c.GetBlobDigest() == l.blob {
-					l.dataBytes = c.GetDataBytes()
-					l.sized++
+		if server == nil && r.GetDigest() != "" {
+			var layers []v1.Layer
+			ref, err := name.NewDigest(backend+"/lazycloud/images@"+r.GetDigest(), name.Insecure)
+			if err == nil {
+				var img v1.Image
+				if img, err = remote.Image(ref); err == nil {
+					layers, err = img.Layers()
 				}
 			}
-			for _, u := range r.GetUploadedLayers() {
-				if u.GetBlobDigest() == l.blob {
-					l.etags = u.GetPartEtags()
-					l.uploaded++
-				}
+			if err != nil {
+				t.Error(err)
+				return nil
 			}
+			server = newLayerServer(t, store.URL, layers)
+			server.partBytes = partBytes
 		}
-		for n, l := range layers {
-			if l.uploaded > 0 {
-				continue
-			}
-			upload := &hostproto.LayerUpload{BlobDigest: l.blob, DiffId: l.diffID}
-			if l.dataBytes >= 0 {
-				prefix := store.URL + "/layers/" + strconv.Itoa(n)
-				upload.IndexUrl, upload.DataPartBytes = prefix+"/index?X-Amz-Signature=secret", partBytes
-				for p := range (l.dataBytes + partBytes - 1) / partBytes {
-					upload.DataPartUrls = append(upload.DataPartUrls, prefix+"/data/"+strconv.Itoa(int(p))+"?X-Amz-Signature=secret")
-				}
-			}
-			resp.LayerUploads = append(resp.LayerUploads, upload)
+		if server == nil {
+			return &hostproto.CompleteImageBuildResponse{}
 		}
-		return resp
+		return server.complete(r)
 	}
 	e.server.mu.Unlock()
 	e.startAgent()
 	session := e.session()
 
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\nhead -c 3000000 /dev/urandom > /proof\nLAZYCLOUD_STEP\n")
+	start := buildCommand(registry, "FROM "+base+"\nRUN <<'LAZYCLOUD_STEP'\nhead -c 3000000 /dev/urandom > /proof\nLAZYCLOUD_STEP\n")
+	start.GetStart().GetBuild().CacheRef = ""
 	container := start.GetStart().GetContainerId()
 	// The build reports once per conversion or upload that ends between
 	// two answers; the reports are drained until it exits.
@@ -157,32 +131,40 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(layers) == 0 {
+	if server == nil {
 		t.Fatal("the server never read the pushed image")
 	}
 	multipart := false
-	for n, l := range layers {
+	for n, l := range server.layers {
 		if l.sized != 1 || l.uploaded != 1 {
 			t.Fatalf("layer %d was sized %d and uploaded %d times, want once each", n, l.sized, l.uploaded)
 		}
 		var data []byte
 		for p, etag := range l.etags {
-			path := "/layers/" + strconv.Itoa(n) + "/data/" + strconv.Itoa(p)
+			path := "/" + strconv.Itoa(n) + "/data/" + strconv.Itoa(p)
 			if etag != `"`+path+`"` {
 				t.Fatalf("part %d of layer %d reported ETag %s", p, n, etag)
 			}
 			data = append(data, stored[path]...)
 		}
 		multipart = multipart || len(l.etags) > 1
-		ix, err := imagefs.Unmarshal(stored["/layers/"+strconv.Itoa(n)+"/index"])
+		ix, err := imagefs.Unmarshal(stored["/"+strconv.Itoa(n)+"/index"])
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(ix.Layer) != l.diffID || ix.DataSize != int64(len(data)) || l.dataBytes != ix.DataSize {
 			t.Fatalf("layer %d: index of %s with %d data bytes, got %d bytes", n, ix.Layer, ix.DataSize, len(data))
 		}
+		object := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+		}))
+		t.Cleanup(object.Close)
+		frames, err := imagefs.NewFrameReader(1)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for f := range ix.Frames {
-			if _, err := ix.ReadFrame(t.Context(), bytesObject(data), f); err != nil {
+			if _, err := frames.Read(t.Context(), ix, imagefs.HTTPObject(object.Client(), func() string { return object.URL }), f); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -190,7 +172,13 @@ func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
 	if !multipart {
 		t.Fatal("no layer was uploaded in more than one part")
 	}
-	if out := e.server.buildOutput(); !strings.Contains(out, "converted and stored "+strconv.Itoa(len(layers))+" layers") || strings.Contains(out, "secret") {
+	if out := e.server.buildOutput(); !strings.Contains(out, "converted and stored "+strconv.Itoa(len(server.layers))+" layers") || strings.Contains(out, "secret") {
 		t.Fatalf("the output names the conversion and no signature:\n%s", out)
+	}
+	if out := e.server.buildOutput(); !strings.Contains(out, "converting 1 new layers while the image pushes") {
+		t.Fatalf("the layer the build made was not converted ahead:\n%s", out)
+	}
+	if n := blobReads.Load(); n > 0 {
+		t.Fatalf("the agent read %d blobs back from the registry", n)
 	}
 }

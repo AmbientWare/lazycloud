@@ -140,9 +140,7 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
-        "image": { "$ref": "#/definitions/image" },
-        "sampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" },
-        "edgeSampleRatio": { "type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$" }
+        "image": { "$ref": "#/definitions/image" }
       }
     }
   }

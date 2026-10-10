@@ -51,6 +51,7 @@ from lazycloud.control import (
 from lazycloud.session.deployment import (
     AppFunctions,
     DeploymentClient,
+    DeploymentRefusedError,
     WorkloadDefinition,
     deploy_functions,
     plan_request,
@@ -185,6 +186,9 @@ def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlan]) -> N
             ],
         ),
     )
+    refusals = [refusal for plan in plans for item in plan.items for refusal in item.refusals or ()]
+    if refusals:
+        raise DeploymentRefusedError(refusals)
 
 
 def _emit_app_deployments(

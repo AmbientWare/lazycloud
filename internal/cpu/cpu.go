@@ -5,7 +5,11 @@
 // the one conversion between them.
 package cpu
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"strconv"
+)
 
 // Millis is thousandths of a CPU, one physical core.
 type Millis int64
@@ -40,4 +44,13 @@ func (t Topology) VCPUs(c Millis) VCPUMillis {
 // CPUTime is time spent on hardware threads as time on cores.
 func (t Topology) CPUTime(vcpuUsec uint64) uint64 {
 	return vcpuUsec * uint64(t.Cores) / uint64(t.Threads) //nolint:gosec // Validate keeps both positive.
+}
+
+// ParseCores reads a positive decimal count of CPUs, such as "4" or "0.5".
+func ParseCores(s string) (Millis, error) {
+	cores, err := strconv.ParseFloat(s, 64)
+	if err != nil || cores <= 0 || math.IsInf(cores, 0) {
+		return 0, fmt.Errorf("%q is not a positive number of CPUs", s)
+	}
+	return Millis(math.Round(cores * 1000)), nil
 }

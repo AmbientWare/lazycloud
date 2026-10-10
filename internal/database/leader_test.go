@@ -61,9 +61,19 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 	}
 
 	first := leader("start")
-	// The standby stays one while the leader holds the lock.
+	// The standby stays one while the leader holds the lock, and waiting
+	// holds no snapshot that would keep vacuum from removing dead rows.
 	time.Sleep(300 * time.Millisecond)
 	leader("while held")
+	var held int
+	if err := pool.QueryRow(t.Context(), `select count(*) from pg_stat_activity
+		where datname = current_database() and pid <> pg_backend_pid() and backend_xmin is not null
+		  and now() - query_start > interval '200 milliseconds'`).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	if held != 0 {
+		t.Fatalf("%d sessions hold a snapshot while the standby waits", held)
+	}
 
 	// Ending the leader's session releases the lock; the leader notices
 	// within its check.

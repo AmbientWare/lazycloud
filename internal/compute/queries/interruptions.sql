@@ -11,16 +11,11 @@ set phase = case when phase in ('ready', 'joining') then 'draining' else phase e
 where id = @id;
 
 -- name: DuePreemptions :many
--- Interrupted hosts whose reclaim time is near and that have not been
--- preempted yet.
-select id from hosts
-where interruption_at is not null
-  and interruption_at <= now() + make_interval(secs => @lead_seconds::float8)
-  and capacity_state = 'preempting' and phase = 'draining'
-order by interruption_at, id
+-- Interrupted hosts whose reclaim time is near that still run containers.
+select h.id from hosts h
+where h.interruption_at is not null
+  and h.interruption_at <= now() + make_interval(secs => @lead_seconds::float8)
+  and h.capacity_state = 'preempting' and h.phase = 'draining'
+  and exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+order by h.interruption_at, h.id
 limit @batch_size;
-
--- name: MarkPreempted :execrows
-update hosts
-set phase = 'terminating', phase_message = 'Reclaimed by the provider', phase_at = now(), updated_at = now()
-where id = @id and phase = 'draining' and capacity_state = 'preempting';

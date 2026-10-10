@@ -45,7 +45,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
@@ -196,10 +195,12 @@ func pushPythonBase() error {
 }
 
 // newImages is the images owner every test's server runs over pool. Its
-// managed template names the bases pushPythonBase pushed.
+// managed template names the bases pushPythonBase pushed, and its builds
+// fit the test host.
 func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
 	return images.NewImages(pool, exec, vault, store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
+		BuildCPU: 500,
 	})
 }
 
@@ -327,8 +328,8 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
-		TouchInterval: 5 * time.Second,
-		Secrets:       vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
+		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
+		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
 	}, logger)
 	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
@@ -343,7 +344,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	p.api = "http://" + apiListener.Addr().String()
-	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
+	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
@@ -420,7 +421,7 @@ func startPlatform(t *testing.T) *platform {
 		err := agent.Run(ctx, agent.Config{
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, ServerPlaintext: true, Snapshotter: layersource.Socket, BuildNetwork: "host",
+			GeeseFSPath: geesefs, ServerPlaintext: true, BuildNetwork: "host",
 			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger, Telemetry: tel,
 		})
 		if err != nil && ctx.Err() == nil {

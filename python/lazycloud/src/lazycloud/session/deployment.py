@@ -18,16 +18,17 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from lazycloud._terminal.formatting import short_id
-from lazycloud.clients.api import ApiClient
+from lazycloud.clients.api import ApiClient, ApiError
 from lazycloud.contracts.api import Deployment as AppDeployment
 from lazycloud.contracts.api import (
     DeploymentPlanRequest,
+    DeploymentPlanWorkload,
+    DeploymentRefusal,
     DeploymentRequest,
     Release,
     SourceUploadRequest,
     SubmitTasksRequest,
     Workload,
-    WorkloadIdentity,
     WorkloadKind,
     WorkloadSpec,
 )
@@ -99,6 +100,19 @@ class ImageBuildError(DeploymentOperationError):
     pass
 
 
+class DeploymentRefusedError(DeploymentOperationError):
+    """A deploy refused before it changed anything, with every reason."""
+
+    def __init__(self, refusals: Sequence[DeploymentRefusal]) -> None:
+        self.refusals = list(refusals)
+        super().__init__("\n".join(refusal_line(refusal) for refusal in self.refusals))
+
+
+def refusal_line(refusal: DeploymentRefusal) -> str:
+    """One refusal as a line naming the workload, the limit and how to lift it."""
+    return f"{refusal.kind.value} {refusal.name}: {refusal.message}; {refusal.remedy}"
+
+
 @dataclass(frozen=True, slots=True)
 class AppFunctions:
     """The functions of one app that a deployment makes current."""
@@ -108,28 +122,50 @@ class AppFunctions:
     prune: bool = False
 
 
+# A plan runs before any image builds or source uploads, so each definition
+# is built against these stand-ins and only the fields the plan checks are
+# sent.
+_PLANNED_SOURCE = "0" * 64
+_PLANNED_IMAGE = "img_" + "0" * 24
+_PLANNED_FIELDS = {"kind", "name", "resources", "autoscaler", "placement", "disks", "secrets"}
+
+
 def plan_request(target: AppFunctions, *, name: str | None = None) -> DeploymentPlanRequest:
     """The plan request for a deployment of `target`; `name` overrides each workload's name."""
     return DeploymentPlanRequest(
-        workloads=[
-            WorkloadIdentity(kind=workload_kind(function), name=name or function.resource_name)
-            for function in target.functions
-        ],
+        workloads=[plan_workload(function, name=name) for function in target.functions],
         prune=target.prune,
     )
 
 
-def workload_kind(workload: object) -> WorkloadKind:
-    from lazycloud.abstractions.endpoint import ASGI, Endpoint
-    from lazycloud.abstractions.pod import Pod
+def plan_workload(
+    function: WorkloadDefinition, *, name: str | None = None
+) -> DeploymentPlanWorkload:
+    """What the plan checks of a workload: its account's limits and the secrets it names."""
+    from lazycloud.abstractions.image import ImageBuildResult
 
-    if isinstance(workload, Pod):
-        return WorkloadKind.pod
-    if isinstance(workload, Endpoint):
-        return WorkloadKind.endpoint
-    if isinstance(workload, ASGI):
-        return WorkloadKind.asgi
-    return WorkloadKind.function
+    spec = function.workload_spec(
+        handler=function.handler_reference(),
+        source_sha256=_PLANNED_SOURCE,
+        image=ImageBuildResult(success=True, image_id=_PLANNED_IMAGE, python_version="3.12"),
+    )
+    planned = spec.model_dump(mode="json", include=_PLANNED_FIELDS, exclude_unset=True)
+    if spec.pod is not None:
+        planned["pod_kind"] = spec.pod.kind.value
+    return DeploymentPlanWorkload.model_validate({**planned, "name": name or spec.name})
+
+
+def refuse_planned(targets: Sequence[AppFunctions], *, client: ApiClient, workspace: str) -> None:
+    """Raise DeploymentRefusedError, before anything builds, when a plan of `targets` refuses."""
+    refusals = [
+        refusal
+        for target in targets
+        if target.functions
+        for item in client.plan_deployment(workspace, target.app, plan_request(target)).items
+        for refusal in item.refusals or ()
+    ]
+    if refusals:
+        raise DeploymentRefusedError(refusals)
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +396,7 @@ def deploy_functions(
     unsupported option never leaves a half-deployed app.
     """
     terminal = terminal or Terminal(quiet=True)
+    refuse_planned(targets, client=client, workspace=workspace)
     functions = [function for target in targets for function in target.functions]
     specs = _workload_specs(
         functions, client=client, workspace=workspace, source_root=source_root, terminal=terminal
@@ -384,9 +421,14 @@ def deploy_functions(
                 stack.enter_context(terminal.step("Runtime", function.resource_name))
                 for function in target.functions
             ]
-            deployment = client.deploy_app(
-                workspace, target.app, request(target, prune=target.prune and not staged)
-            )
+            try:
+                deployment = client.deploy_app(
+                    workspace, target.app, request(target, prune=target.prune and not staged)
+                )
+            except ApiError as exc:
+                if exc.refusals:
+                    raise DeploymentRefusedError(exc.refusals) from exc
+                raise
             releases = {release.name: release for release in deployment.releases}
             for function, step in zip(target.functions, steps, strict=True):
                 _runtime_done(step, function.resource_name, releases[function.resource_name])
@@ -420,7 +462,12 @@ def prepare_release(
         [function], client=client, workspace=workspace, source_root=source_root, terminal=terminal
     )[id(function)]
     with terminal.step("Runtime", function.resource_name) as step:
-        release = client.prepare_release(workspace, function._app_slug, spec)
+        try:
+            release = client.prepare_release(workspace, function._app_slug, spec)
+        except ApiError as exc:
+            if exc.refusals:
+                raise DeploymentRefusedError(exc.refusals) from exc
+            raise
         _runtime_done(step, function.resource_name, release)
     return release
 

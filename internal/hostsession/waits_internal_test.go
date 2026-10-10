@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
-// A session waiting for one image build wakes when that build changes, not
-// when any other does.
-func TestBuildWaitsWakeOnlyForTheirBuilds(t *testing.T) {
+// A wake-up the old subscription holds when a watch changes its keys, as a
+// confirmation committed while a grant's layers were read, is reported
+// rather than lost.
+func TestReplacingAWatchKeepsItsWakeUp(t *testing.T) {
 	pool := dbtest.New(t)
 	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelImageBuild)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -23,35 +23,28 @@ func TestBuildWaitsWakeOnlyForTheirBuilds(t *testing.T) {
 	wg.Go(func() { _ = listener.Run(ctx) })
 	t.Cleanup(func() { cancel(); wg.Wait() })
 
-	waits := buildWaits{wake: make(chan struct{}, 1), subs: map[string]func(){}}
-	defer waits.close()
-	awaited, other := uuid.New(), uuid.New()
-	waits.await(listener, map[string]bool{awaited.String(): true})
+	var w watch
+	defer w.set(listener)
+	w.set(listener, "") // every key
 	// The listener wakes everyone once it starts listening.
 	time.Sleep(200 * time.Millisecond)
 	select {
-	case <-waits.wake:
+	case <-w.wake:
 	default:
 	}
-	notify := func(build uuid.UUID) {
-		if _, err := pool.Exec(t.Context(), "select pg_notify($1, $2)", string(database.ChannelImageBuild), build.String()); err != nil {
-			t.Fatal(err)
+	key := images.ReplicasConfirmed("us-east-2")
+	if _, err := pool.Exec(t.Context(), "select pg_notify($1, $2)", string(database.ChannelImageBuild), key); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(3 * time.Second); len(w.wake) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the notification did not arrive")
 		}
 	}
-	notify(other)
-	select {
-	case <-waits.wake:
-		t.Fatal("another build's change woke the session")
-	case <-time.After(300 * time.Millisecond):
+	if !w.set(listener, key) {
+		t.Fatal("the wake-up the replaced subscription held was lost")
 	}
-	notify(awaited)
-	select {
-	case <-waits.wake:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the awaited build's change did not wake the session")
-	}
-	waits.await(listener, map[string]bool{})
-	if len(waits.subs) != 0 {
-		t.Fatal("a build no start waits for stays subscribed")
+	if w.set(listener, key) {
+		t.Fatal("an unchanged watch reported a wake-up")
 	}
 }

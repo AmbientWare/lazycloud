@@ -91,7 +91,10 @@ jobs:
             aws ecr describe-images --repository-name "$prefix/$image" --image-ids "imageTag=$VERSION" \
               --query 'imageDetails[0].imageDigest' --output text
           done
-          for python in 3.10 3.11 3.12 3.13 3.14; do
+          # The version's own bake file names its Python bases.
+          minors="$(docker buildx bake -f deploy/images/docker-bake.hcl --progress=quiet --print python |
+            jq -er '[.target[].args.PYTHON_VERSION | sub("[.][0-9]+$"; "")] | select(length > 0) | join(" ")')"
+          for python in $minors; do
             aws ecr describe-images --repository-name "$prefix/python" --image-ids "imageTag=$python-$VERSION" \
               --query 'imageDetails[0].imageDigest' --output text
           done

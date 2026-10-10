@@ -33,6 +33,9 @@ DISK_BLOCK_BYTES = 4096
 
 
 MAX_DISK_SIZE_BYTES = 1024**4
+# A devbox's root disk holds its image's unpacked root. Disks bill for what
+# they store, so the floor costs nothing.
+MIN_DEVBOX_DISK_SIZE_BYTES = 10 * 1024**3
 
 
 def validate_disk_name(value: str) -> str:
@@ -68,6 +71,15 @@ def parse_disk_size_bytes(value: str | int) -> int:
         raise ValueError(msg)
     if size % DISK_BLOCK_BYTES:
         msg = f"disk size must be a multiple of {DISK_BLOCK_BYTES} bytes"
+        raise ValueError(msg)
+    return size
+
+
+def parse_devbox_disk_size_bytes(value: str | int) -> int:
+    """A devbox root disk size in bytes: a disk size of at least 10Gi."""
+    size = parse_disk_size_bytes(value)
+    if size < MIN_DEVBOX_DISK_SIZE_BYTES:
+        msg = f"a devbox's disk must be at least 10Gi, not {value!r}"
         raise ValueError(msg)
     return size
 
@@ -136,8 +148,10 @@ __all__ = [
     "DISK_NAME_PATTERN",
     "DISK_ROOT_MOUNT_PATH",
     "MAX_DISK_SIZE_BYTES",
+    "MIN_DEVBOX_DISK_SIZE_BYTES",
     "MIN_DISK_SIZE_BYTES",
     "DiskMount",
+    "parse_devbox_disk_size_bytes",
     "parse_disk_size_bytes",
     "require_one_writer",
     "validate_disk_mount_path",

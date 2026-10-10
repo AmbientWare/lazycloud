@@ -49,3 +49,10 @@ cross join lateral jsonb_array_elements_text(coalesce(r.spec -> 'secrets', '[]':
 where a.workspace_id = @workspace_id and a.state <> 'deleted' and w.desired_state = 'active'
   and s.name = any(@names::text[])
 order by a.name, w.kind, w.name;
+
+-- name: MissingSecrets :many
+-- The names the workspace holds no secret by.
+select n.name::text
+from unnest(@names::text[]) as n(name)
+where not exists (select 1 from secrets s where s.workspace_id = @workspace_id and s.name = n.name)
+order by n.name;

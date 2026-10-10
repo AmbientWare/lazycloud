@@ -326,7 +326,12 @@ function TaskDrawerBody({
             />
             <StatCell
               label="Attempt"
-              value={task ? `${Math.max(task.attempts, 1)}/${task.max_attempts}` : "1/1"}
+              value={
+                task
+                  ? `${Math.max(task.attempts, 1)}/${task.max_attempts}` +
+                    (task.preemptions > 0 ? ` · ${task.preemptions} preempted` : "")
+                  : "1/1"
+              }
             />
           </div>
 

@@ -79,7 +79,7 @@ func (c *Control) CreatePreview(ctx context.Context, workspace identity.Workspac
 		if len(registered) == 0 {
 			return &SourceMissingError{Function: spec.Name, Sha256: source.String()}
 		}
-		if err := checkFleetGPUs(ctx, tx, uuid.UUID(workspace), resolved); err != nil {
+		if err := checkDeploy(ctx, tx, uuid.UUID(workspace), []apitypes.WorkloadSpec{resolved}); err != nil {
 			return err
 		}
 		workload, err := q.EnsurePreviewWorkload(ctx, EnsurePreviewWorkloadParams{AppID: appRow.ID, Kind: string(resolved.Kind), Name: spec.Name})

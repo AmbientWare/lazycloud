@@ -24,9 +24,9 @@ import (
 const HostTraceSocket = "/run/lazycloud-traces.sock"
 
 const (
-	// maxHostTraceBytes bounds one batch a host sends; an exporter batch
+	// MaxHostTraceBytes bounds one batch a host sends; an exporter batch
 	// holds at most 512 spans.
-	maxHostTraceBytes = 4 << 20
+	MaxHostTraceBytes = 4 << 20
 	// hostSpansPerSecond and hostSpanBurst bound the spans each host may
 	// send. A start records a few dozen.
 	hostSpansPerSecond = 200
@@ -41,26 +41,21 @@ const (
 	hostTraceTimeout = 10 * time.Second
 )
 
-// hostServices are the service names a host's spans may carry; any other
-// becomes lazycloud-agent, so a host never speaks as the control plane.
-var hostServices = map[string]bool{"lazycloud-agent": true, "lazycloud-snapshotter": true} //nolint:gochecknoglobals // A constant set.
-
 // HostTraces forwards the spans hosts send over their sessions to the
 // server's collector. Hosts are not trusted. Each host has a span budget,
 // and every resource and span names the host that sent it and nothing a
 // backend reads as identity or AWS metadata.
 type HostTraces struct {
 	conn    *grpc.ClientConn
-	client  collector.TraceServiceClient
 	queue   chan *collector.ExportTraceServiceRequest
 	dropped prometheus.Counter
 	log     *slog.Logger
 
 	mu      sync.Mutex
-	buckets map[string]*spanBucket
+	buckets map[string]spanBucket
 }
 
-// spanBucket is one host's span budget.
+// spanBucket is one host's span budget; the zero value is a full one.
 type spanBucket struct {
 	tokens float64
 	last   time.Time
@@ -86,8 +81,8 @@ func (t *Telemetry) HostTraces(logger *slog.Logger) (*HostTraces, error) {
 	})
 	t.Registry.MustRegister(dropped)
 	return &HostTraces{
-		conn: conn, client: collector.NewTraceServiceClient(conn), queue: make(chan *collector.ExportTraceServiceRequest, hostTraceQueue),
-		dropped: dropped, log: logger, buckets: map[string]*spanBucket{},
+		conn: conn, queue: make(chan *collector.ExportTraceServiceRequest, hostTraceQueue),
+		dropped: dropped, log: logger, buckets: map[string]spanBucket{},
 	}, nil
 }
 
@@ -98,19 +93,14 @@ func (h *HostTraces) Offer(host string, otlp []byte) {
 		return
 	}
 	request, spans, ok := hostRequest(host, otlp)
-	if !ok {
-		h.dropped.Add(float64(spans))
-		return
+	if ok && h.take(host, spans, time.Now()) {
+		select {
+		case h.queue <- request:
+			return
+		default:
+		}
 	}
-	if !h.take(host, spans, time.Now()) {
-		h.dropped.Add(float64(spans))
-		return
-	}
-	select {
-	case h.queue <- request:
-	default:
-		h.dropped.Add(float64(spans))
-	}
+	h.dropped.Add(float64(spans))
 }
 
 // take spends spans of host's budget, refilled at hostSpansPerSecond up to
@@ -118,38 +108,46 @@ func (h *HostTraces) Offer(host string, otlp []byte) {
 func (h *HostTraces) take(host string, spans int, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	b := h.buckets[host]
+	b.tokens = min(hostSpanBurst, b.tokens+now.Sub(b.last).Seconds()*hostSpansPerSecond)
+	b.last = now
+	held := float64(spans) <= b.tokens
+	if held {
+		b.tokens -= float64(spans)
+	}
+	h.buckets[host] = b
+	return held
+}
+
+// sweep drops the budgets of hosts idle past hostBucketIdle.
+func (h *HostTraces) sweep(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for id, b := range h.buckets {
 		if now.Sub(b.last) > hostBucketIdle {
 			delete(h.buckets, id)
 		}
 	}
-	b := h.buckets[host]
-	if b == nil {
-		b = &spanBucket{tokens: hostSpanBurst, last: now}
-		h.buckets[host] = b
-	}
-	b.tokens = min(hostSpanBurst, b.tokens+now.Sub(b.last).Seconds()*hostSpansPerSecond)
-	b.last = now
-	if float64(spans) > b.tokens {
-		return false
-	}
-	b.tokens -= float64(spans)
-	return true
 }
 
-// Run forwards queued batches until ctx ends, then closes the connection.
+// Run forwards queued batches and sweeps idle budgets until ctx ends, then
+// closes the connection.
 func (h *HostTraces) Run(ctx context.Context) error {
 	if h == nil {
 		return nil
 	}
 	defer func() { _ = h.conn.Close() }()
+	idle := time.NewTicker(hostBucketIdle)
+	defer idle.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case now := <-idle.C:
+			h.sweep(now)
 		case request := <-h.queue:
 			call, cancel := context.WithTimeout(ctx, hostTraceTimeout)
-			_, err := h.client.Export(call, request)
+			_, err := collector.NewTraceServiceClient(h.conn).Export(call, request)
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				h.log.DebugContext(ctx, "forwarding host spans failed", "error", err)
@@ -159,11 +157,12 @@ func (h *HostTraces) Run(ctx context.Context) error {
 }
 
 // hostRequest decodes a batch host sent and rewrites it: each resource
-// keeps its service name and version, each span loses the attributes a
-// backend reads as identity or AWS metadata, and both name host. It returns
+// keeps its version and is the snapshotter or else the agent, so a host
+// never speaks as the control plane; each span loses the attributes a
+// backend reads as identity or AWS metadata; and both name host. It returns
 // the span count, and false for a batch that is malformed or too large.
 func hostRequest(host string, otlp []byte) (*collector.ExportTraceServiceRequest, int, bool) {
-	if len(otlp) > maxHostTraceBytes {
+	if len(otlp) > MaxHostTraceBytes {
 		return nil, 0, false
 	}
 	var request collector.ExportTraceServiceRequest
@@ -177,8 +176,8 @@ func hostRequest(host string, otlp []byte) (*collector.ExportTraceServiceRequest
 		for _, a := range rs.GetResource().GetAttributes() {
 			switch a.GetKey() {
 			case "service.name":
-				if name := a.GetValue().GetStringValue(); hostServices[name] {
-					service = name
+				if a.GetValue().GetStringValue() == "lazycloud-snapshotter" {
+					service = "lazycloud-snapshotter"
 				}
 			case "service.version":
 				version = a.GetValue().GetStringValue()
@@ -195,8 +194,11 @@ func hostRequest(host string, otlp []byte) (*collector.ExportTraceServiceRequest
 				for _, e := range s.GetEvents() {
 					e.Attributes = hostSpanAttrs(e.GetAttributes())
 				}
+				for _, l := range s.GetLinks() {
+					l.Attributes = hostSpanAttrs(l.GetAttributes())
+				}
 				if s.GetStatus() != nil {
-					s.Status.Message = Redact(s.GetStatus().GetMessage())
+					s.Status.Message = redact(s.GetStatus().GetMessage())
 				}
 			}
 		}
@@ -214,7 +216,7 @@ func hostSpanAttrs(attrs []*commonpb.KeyValue) []*commonpb.KeyValue {
 			continue
 		}
 		if v, ok := a.GetValue().GetValue().(*commonpb.AnyValue_StringValue); ok {
-			v.StringValue = Redact(v.StringValue)
+			v.StringValue = redact(v.StringValue)
 		}
 		out = append(out, a)
 	}

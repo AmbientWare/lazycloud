@@ -99,6 +99,7 @@ values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 64000, 1 << 40, $
 type containerSpec struct {
 	workspace, host uuid.UUID
 	release         *uuid.UUID
+	build           *uuid.UUID
 	ready           time.Time
 	stopped         *time.Time
 	reason          string
@@ -122,10 +123,27 @@ func (f *fixture) container(spec containerSpec) uuid.UUID {
 	}
 	var id uuid.UUID
 	err := f.pool.QueryRow(f.t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes,
+insert into containers (workspace_id, release_id, image_build_id, state, host_id, slots, cpu_millis, memory_bytes,
                         assigned_at, ready_at, stopped_at, stop_reason)
-values ($1, $2, $3, $4, 1, $5, $6, $7, $7, $8, $9) returning id`,
-		spec.workspace, spec.release, state, spec.host, spec.cpuMillis, spec.memoryBytes, spec.ready, spec.stopped, reason).Scan(&id)
+values ($1, $2, $10, $3, $4, 1, $5, $6, $7, $7, $8, $9) returning id`,
+		spec.workspace, spec.release, state, spec.host, spec.cpuMillis, spec.memoryBytes, spec.ready, spec.stopped, reason, spec.build).Scan(&id)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return id
+}
+
+// imageBuild inserts a finished build of a new image in workspace.
+func (f *fixture) imageBuild(workspace uuid.UUID) uuid.UUID {
+	f.t.Helper()
+	var id uuid.UUID
+	err := f.pool.QueryRow(f.t.Context(), `
+with image as (
+    insert into images (digest, id, dockerfile, python_version, architecture)
+    values (sha256($1::bytea), 'img_' || left(encode(sha256($1::bytea), 'hex'), 24), 'FROM x', '3.12', 'amd64') returning digest
+)
+insert into image_builds (image_digest, state, workspace_id, deadline_at, finished_at)
+select digest, 'succeeded', $2, now() + interval '1 hour', now() from image returning id`, []byte(uuid.NewString()), workspace).Scan(&id)
 	if err != nil {
 		f.t.Fatal(err)
 	}

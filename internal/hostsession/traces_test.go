@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 // TestStartupTracesStayWithTheirWorkspace: a start of an image the
@@ -33,7 +34,7 @@ func TestStartupTracesStayWithTheirWorkspace(t *testing.T) {
 			t.Fatalf("the first start of an image records %v and prefetches %v", s.GetRecordTrace(), s.GetPrefetch())
 		}
 	}
-	report := func(container uuid.UUID, reads ...*hostproto.FrameRead) {
+	report := func(container uuid.UUID, reads ...*imagefsproto.FrameRead) {
 		t.Helper()
 		if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_StartupTrace{StartupTrace: &hostproto.StartupTrace{
 			ContainerId: container.String(), Trace: &hostproto.ImageTrace{Reads: reads},
@@ -41,9 +42,9 @@ func TestStartupTracesStayWithTheirWorkspace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	report(theirs, &hostproto.FrameRead{Layer: 0, Frame: 1})
-	report(uuid.New(), &hostproto.FrameRead{Layer: 0, Frame: 0})
-	traced := []*hostproto.FrameRead{{Layer: 1, Frame: 0}, {Layer: 0, Frame: 0}}
+	report(theirs, &imagefsproto.FrameRead{Layer: 0, Frame: 1})
+	report(uuid.New(), &imagefsproto.FrameRead{Layer: 0, Frame: 0})
+	traced := []*imagefsproto.FrameRead{{Layer: 1, Frame: 0}, {Layer: 0, Frame: 0}}
 	report(mine, traced...)
 	var stored int
 	for deadline := time.Now().Add(5 * time.Second); stored == 0 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -71,7 +72,7 @@ func TestStartupTracesStayWithTheirWorkspace(t *testing.T) {
 		starts[s.GetContainerId()] = s
 	}
 	got := starts[mineAgain.String()]
-	pairs := func(reads []*hostproto.FrameRead) [][2]uint32 {
+	pairs := func(reads []*imagefsproto.FrameRead) [][2]uint32 {
 		out := make([][2]uint32, len(reads))
 		for n, r := range reads {
 			out[n] = [2]uint32{r.GetLayer(), r.GetFrame()}

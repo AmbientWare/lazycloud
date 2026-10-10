@@ -14,6 +14,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -175,7 +177,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}, logger)
 	// Build recovery and the layer sweep need no registry: they read and move
 	// build state and delete layer pairs.
-	im := images.NewImages(pool, exec, vault, store, images.Config{})
+	buildCPU, err := cpu.ParseCores(cmp.Or(os.Getenv("LAZYCLOUD_BUILD_CPU"), "4"))
+	if err != nil {
+		return fmt.Errorf("LAZYCLOUD_BUILD_CPU: %w", err)
+	}
+	im := images.NewImages(pool, exec, vault, store, images.Config{BuildCPU: buildCPU})
 	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel, database.ChannelCallback)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
@@ -237,7 +243,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: tick, quiet: true}, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
+		// When a release held back after failed starts may start again. The
+		// loop's goroutine alone reads and writes it.
+		var retryAt time.Time
+		retryDue := func(context.Context) (time.Time, bool, error) { return retryAt, !retryAt.IsZero(), nil }
+		return p.loop(ctx, cadence{every: tick, quiet: true, due: retryDue}, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
 			result, err := exec.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
@@ -252,6 +262,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			}
 			result.Skipped = result.Skipped || serving.Skipped || pods.Skipped
 			result.Created += serving.Created + pods.Created
+			retryAt = time.Time{}
+			for _, at := range []time.Time{result.RetryAt, serving.RetryAt, pods.RetryAt} {
+				if !at.IsZero() && (retryAt.IsZero() || at.Before(retryAt)) {
+					retryAt = at
+				}
+			}
 			if result.Created > 0 {
 				// New pending containers are live work before any report
 				// wakes the probe.
@@ -330,16 +346,24 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: fleetTick}, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
+		// When the purchases the last pass held for arriving containers may
+		// proceed. The loop's goroutine alone reads and writes it.
+		var batchAt time.Time
+		rerun := func() (time.Time, bool) { return batchAt, !batchAt.IsZero() }
+		return p.loop(ctx, cadence{every: fleetTick, rerun: rerun}, capacityWake, capacityFleetWake, timed("fleet_plan", func(ctx context.Context) bool {
 			result, err := comp.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "fleet planning pass", "error", err)
 			}
+			batchAt = time.Time{}
+			if result.BatchWait > 0 {
+				batchAt = time.Now().Add(result.BatchWait)
+			}
 			return result.Skipped
-		})
+		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, timed("fleet_launch", func(ctx context.Context) bool {
 			if _, err := comp.Launch(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "launch pass", "error", err)
 			}
@@ -356,7 +380,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 				logger.ErrorContext(ctx, "connection pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: compute.SpotPriceInterval}, nil, nil, every("spot_prices", compute.SpotPriceInterval, func(ctx context.Context) bool {
@@ -395,7 +419,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: layerSweepTick}, nil, nil, every("image_layer_sweep", layerSweepTick, func(ctx context.Context) bool {
-			if _, err := im.SweepLayers(ctx, logger); err != nil && ctx.Err() == nil {
+			if err := im.SweepLayers(ctx, logger); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, "image layer sweep incomplete", "error", err)
 			}
 			return false
@@ -403,7 +427,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: buildRecoveryTick}, buildWake, nil, every("build_recovery", buildRecoveryTick, func(ctx context.Context) bool {
-			if _, err := im.Recover(ctx, logger); err != nil {
+			if err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false

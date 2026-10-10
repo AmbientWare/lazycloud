@@ -39,6 +39,8 @@ type Task struct {
 	Status      TaskStatus
 	Attempts    int
 	MaxAttempts int
+	// Preemptions counts the attempts lost to preemption.
+	Preemptions int
 	// Parent is the task that spawned this one; Root is the root of its
 	// call graph, the task itself when nothing spawned it.
 	Parent *TaskID
@@ -161,7 +163,7 @@ func (e *Execution) finishedTasks(ctx context.Context, workspace identity.Worksp
 		task, err := taskFrom(TaskViewRow{
 			ID: row.ID, AppName: row.AppName, FunctionName: row.FunctionName, ReleaseID: row.ReleaseID,
 			Version: row.Version, Status: row.Status, AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
-			ParentTaskID: row.ParentTaskID, RootTaskID: row.RootTaskID, AvailableAt: row.AvailableAt,
+			Preemptions: row.Preemptions, ParentTaskID: row.ParentTaskID, RootTaskID: row.RootTaskID, AvailableAt: row.AvailableAt,
 			CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
 			Failure: row.Failure, ScheduledFor: row.ScheduledFor, ContainerIds: row.ContainerIds,
 		})
@@ -203,7 +205,7 @@ func taskFrom(row TaskViewRow) (Task, error) {
 	task := Task{
 		ID: TaskID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
 		Version: versionOf(row.Version), Status: TaskStatus(row.Status),
-		Attempts: int(row.AttemptCount), MaxAttempts: int(row.MaxAttempts),
+		Attempts: int(row.AttemptCount), MaxAttempts: int(row.MaxAttempts), Preemptions: int(row.Preemptions),
 		Parent: taskIDPtr(row.ParentTaskID), Root: TaskID(row.ID), ScheduledFor: row.ScheduledFor,
 		CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
 	}

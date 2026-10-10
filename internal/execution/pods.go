@@ -21,9 +21,9 @@ import (
 // the planning lock, so counts hold across scheduler replicas:
 //
 //   - A scaled pod holds its count.
-//   - Otherwise an active pod runs one container while it was woken in the
-//     last 15 minutes or a container of it is still warm, none while
-//     parked, and one always when keep_warm is -1.
+//   - Otherwise an active pod runs none while parked, one always when
+//     keep_warm is -1, and one while it was woken in the last 15 minutes or
+//     a container of it is still warm.
 //   - A replaced release keeps its containers until the active release has
 //     a ready one.
 //
@@ -108,6 +108,9 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 	desired := podDesired(row, active)
 	switch {
 	case active < desired:
+		if plan.holdStart(row.StartFailures, row.LastStoppedAt) {
+			return nil
+		}
 		count := desired - active
 		grant, err := billing.Admit(ctx, tx, billing.Request{
 			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount),
@@ -196,10 +199,10 @@ func podDesired(row PodReleasesRow, active int) int {
 	}
 	want := 0
 	switch {
-	case row.AlwaysOn:
-		want = 1
 	case row.Parked:
 		return 0
+	case row.AlwaysOn:
+		want = 1
 	case row.Woken:
 		want = 1
 	}
@@ -265,9 +268,21 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 	return nil
 }
 
+// WakeCause is what asks a pod for a container.
+type WakeCause string
+
+const (
+	// WakeConnection is a connection arriving at the pod.
+	WakeConnection WakeCause = "connection"
+	// WakeStart is someone starting the pod, which retries a release that
+	// stopped after failed starts or failed to load: the cause may have
+	// been fixed outside a redeploy.
+	WakeStart WakeCause = "start"
+)
+
 // WakePod asks for a container of an active pod now, as a connection or a
 // devbox start does.
-func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) error {
+func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, cause WakeCause) error {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		row, _, err := e.lockPod(ctx, q, workspace, workload)
@@ -283,6 +298,13 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 		if row.ActiveReleaseID == nil {
 			return nil
 		}
+		switch cause {
+		case WakeStart:
+			if err := q.RetryFailedRelease(ctx, RetryFailedReleaseParams{ID: *row.ActiveReleaseID, StartFailureLimit: startFailureLimit}); err != nil {
+				return fmt.Errorf("reset start failures: %w", err)
+			}
+		case WakeConnection:
+		}
 		return database.Notify(ctx, tx, database.ChannelExecution, row.ActiveReleaseID.String())
 	})
 	if err != nil {
@@ -291,8 +313,9 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 	return nil
 }
 
-// ParkPod stops a pod's serve containers and keeps them stopped until the
-// next wake, as a devbox stop does. Its disks are saved as they stop.
+// ParkPod stops a pod's serve containers, starting ones included, and keeps
+// them stopped until the next wake or scale, as a devbox stop does. Its disks
+// are saved as they stop.
 func (e *Execution) ParkPod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) error {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)

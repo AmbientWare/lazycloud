@@ -161,6 +161,9 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			_, err = c.hostGone(ctx, h.ID, phase, "", "")
 		case phase == PhaseTerminating:
 			err = c.terminate(ctx, scope, region, instance)
+		case gone && h.InterruptionAt != nil:
+			// The reclaim its notice announced.
+			_, err = c.hostGone(ctx, h.ID, phase, "", "")
 		case gone:
 			_, err = c.hostGone(ctx, h.ID, phase, FailureProviderGone, "The provider terminated the instance")
 		case phase == PhaseStopping && o.state == ec2types.InstanceStateNameStopped && h.StopRequestedAt != nil:

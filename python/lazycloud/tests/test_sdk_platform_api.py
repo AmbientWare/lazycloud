@@ -100,6 +100,7 @@ def _task(task_id: str, status: str = "queued", **extra: object) -> dict[str, ob
         "status": status,
         "attempts": 1 if status != "queued" else 0,
         "max_attempts": 1,
+        "preemptions": 0,
         "created_at": NOW,
         **extra,
     }
@@ -187,6 +188,15 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
     def upload(request: ApiRequest) -> Reply:
         stored.add(request.path.rsplit("/", 1)[1])
         return 200, {}, b""
+
+    @api.route("POST", "/v1/workspaces/team/apps/reports/deployment-plan")
+    def plan(request: ApiRequest) -> Reply:
+        listed: list[dict[str, Any]] = request.json()["workloads"]
+        items: list[dict[str, object]] = [
+            {"kind": item["kind"], "name": item["name"], "action": "add", "versions": 0}
+            for item in listed
+        ]
+        return json_reply({"app": "reports", "prune": False, "items": items})
 
     @api.route("POST", "/v1/workspaces/team/apps/reports/deployments")
     def deploy(request: ApiRequest) -> Reply:

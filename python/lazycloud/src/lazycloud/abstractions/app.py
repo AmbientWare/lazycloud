@@ -23,7 +23,7 @@ from lazycloud._shared.deployment_records import (
     VolumeMount,
 )
 from lazycloud._shared.deployments import DeploymentKind, PodRole
-from lazycloud._shared.disks import DiskMount, parse_disk_size_bytes
+from lazycloud._shared.disks import DiskMount, parse_devbox_disk_size_bytes
 from lazycloud._shared.gpu import GpuInput
 from lazycloud._shared.tasks import TaskPolicy
 from lazycloud.abstractions.disk import Disk, disk_mounts
@@ -34,7 +34,7 @@ from lazycloud.abstractions.metadata import (
     SchemaInput,
 )
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
-from lazycloud.agent_harness import AgentHarness, agent_install_commands
+from lazycloud.agent_harness import AgentHarness
 from lazycloud.control import resolve_control_client_config
 from lazycloud.exceptions import SdkError
 
@@ -838,10 +838,12 @@ class App:
             name: Devbox name; also the name of its root disk.
             image: Base image; what the devbox writes on top of it is kept on
                 the disk.
-            disk: Root disk size, such as ``"100Gi"``; stored data is billed.
+            disk: Root disk size, such as ``"100Gi"``: at least ``"10Gi"`` and room
+                for the image's unpacked root. Stored data is billed, not the size.
             agent_harnesses: Coding agents to install in a Debian or Ubuntu image.
                 Defaults to all supported agents; an empty list skips installation.
-                Versions are pinned by the SDK. Authentication happens after deployment.
+                Each build installs the releases current at deploy; update them
+                inside the devbox afterwards. Authentication happens after deployment.
             cpu, memory, gpu, gpu_count: Compute resources for the container.
                 `cpu` counts CPUs, one physical core each.
             keep_warm: Idle seconds before the container stops; unset uses the
@@ -856,14 +858,15 @@ class App:
         """
         from lazycloud.abstractions.pod import Pod
 
-        install_commands = agent_install_commands(agent_harnesses, image.architecture)
-        if install_commands:
+        harnesses = tuple(dict.fromkeys(AgentHarness(item) for item in agent_harnesses))
+        if harnesses:
             if image.explicit_image_id:
                 raise ValueError(
                     "agent_harnesses requires a buildable image, not Image.from_id(); "
                     "pass agent_harnesses=[] to skip installation"
                 )
-            image = deepcopy(image).add_commands(install_commands)
+            image = deepcopy(image)
+            image.agent_harnesses = harnesses
         return self._register(
             Pod(
                 _app_slug=self.slug,
@@ -884,7 +887,7 @@ class App:
                 docker_enabled=docker_enabled,
                 preemptible=preemptible,
                 role=PodRole.Devbox,
-                root_disk_bytes=parse_disk_size_bytes(disk),
+                root_disk_bytes=parse_devbox_disk_size_bytes(disk),
                 region=region,
                 availability_zone=availability_zone,
                 machine=machine,

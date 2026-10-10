@@ -3,6 +3,7 @@ syntax = "proto3";
 package lazycloud.host.v1;
 
 import "google/protobuf/timestamp.proto";
+import "imagefs/v1/source.proto";
 
 option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
 
@@ -148,12 +149,7 @@ message StartupTrace {
 // first read them. layer indexes StartContainer.layers, base first; frame
 // numbers the layer's frames.
 message ImageTrace {
-  repeated FrameRead reads = 1;
-}
-
-message FrameRead {
-  uint32 layer = 1;
-  uint32 frame = 2;
+  repeated lazycloud.imagefs.v1.FrameRead reads = 1;
 }
 
 // Interruption is a provider's notice that it reclaims the instance at
@@ -475,7 +471,7 @@ message StartContainer {
   bool checkpointable = 93;
   // Reads of every layer of image, base first. The host hands them to its
   // snapshotter before it pulls the image and keeps them from containers.
-  repeated LayerGrant layers = 100;
+  repeated lazycloud.imagefs.v1.LayerGrant layers = 100;
   // The frames earlier containers of the image read through their first
   // task or request. The host fetches them ahead of the container's own
   // reads.
@@ -488,22 +484,11 @@ message StartContainer {
   string traceparent = 130;
 }
 
-// LayerGrant is presigned GET URLs for one image layer's index and data
-// objects, keyed by the layer's uncompressed digest. Each URL reads only
-// its own object, until expires_at.
-message LayerGrant {
-  // sha256:<hex>
-  string diff_id = 1;
-  string index_url = 2;
-  string data_url = 3;
-  google.protobuf.Timestamp expires_at = 4;
-}
-
 // LayerGrants are fresh reads of layers the host's containers use, sent
 // before the earlier ones expire. Of two grants for one layer the later
 // expires_at wins.
 message LayerGrants {
-  repeated LayerGrant layers = 1;
+  repeated lazycloud.imagefs.v1.LayerGrant layers = 1;
 }
 
 // PlatformImages answers the platform images a Hello named, once each is
@@ -523,7 +508,7 @@ message PlatformImage {
   string image = 2;
   RegistryAuth auth = 3;
   string platform = 4;
-  repeated LayerGrant layers = 5;
+  repeated lazycloud.imagefs.v1.LayerGrant layers = 5;
   string failure = 6;
 }
 
@@ -656,6 +641,13 @@ message ImageBuild {
   // They reach the builder as files of its secret mount, never as its
   // environment or a build argument.
   map<string, string> secrets = 11;
+  // The workspace whose local build cache on the host the build uses, set
+  // only when the image is that workspace's alone. Its builds there share
+  // the cache, which no other build reads. Empty, the build starts from an
+  // empty state and keeps nothing: an image every workspace may use must
+  // not read state one workspace's builds wrote, which cache mounts carry
+  // outside BuildKit's cache keys.
+  string cache_workspace_id = 12;
 }
 
 message Source {

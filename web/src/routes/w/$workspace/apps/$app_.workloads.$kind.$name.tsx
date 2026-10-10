@@ -27,6 +27,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { CallMethods } from "./-workloads/CallMethods";
 import { DevboxActions, DevboxConnect, DevboxWorkspace } from "./-workloads/DevboxDetail";
 import { Playground } from "./-workloads/Playground";
+import { PodActions } from "./-workloads/PodActions";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
 import { PodInstances, type PodInstanceStatusFilter } from "./-workloads/PodInstances";
 import { VersionHistory } from "./-workloads/VersionHistory";
@@ -154,7 +155,16 @@ function WorkloadDetail({ address }: { address: WorkloadRef }) {
           ]}
         />
       }
-      actions={backLink}
+      actions={
+        isPod ? (
+          <>
+            <PodActions workspace={workspace.name} workload={workload} />
+            {backLink}
+          </>
+        ) : (
+          backLink
+        )
+      }
       headerDetails={<WorkloadOperation workspace={workspace.name} detail={detail} />}
       contentClassName={
         isPod

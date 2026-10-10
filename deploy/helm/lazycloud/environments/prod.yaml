@@ -3,21 +3,19 @@
 # file holds what a person decides.
 config:
   LAZYCLOUD_LOG_FORMAT: json
-  # Fleet limits (internal/compute/fleet_config.go). Code defaults: 20
-  # running hosts per owner and as many platform reserves, 5m idle before
-  # a host leaves. Headroom is the fleet policy's (fleet_policy.go). The
-  # planner also buys only within each region's EC2 vCPU quotas, which
-  # bind before 250 hosts do.
+  # Fleet limits (internal/compute/fleet_config.go). Code default: 20
+  # running hosts per owner and as many platform reserves. Headroom and
+  # idle timeouts are the fleet policy's (fleet_policy.go). The planner
+  # also buys only within each region's EC2 vCPU quotas, which bind before
+  # 250 hosts do.
   LAZYCLOUD_FLEET_MAX_HOSTS: "250"
-  LAZYCLOUD_FLEET_IDLE_TIMEOUT: 5m
   # AMIs the Node images workflow baked, per region: Amazon Linux 2023 with
   # Docker, gVisor (runsc as Docker's runtime, --host-uds=all), nbd, and
   # hibinit-agent and acpid so reserves hibernate and resume by PARTUUID.
   # Platform and connected-account hosts launch only from these; a region
   # missing here launches nothing. Commit the workflow's output here
   # through a reviewed PR.
-  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-0543af049c88ffd36","us-east-2":"ami-0104d7b9500423a78","us-west-1":"ami-0ed79d634ea5ebab2","us-west-2":"ami-07d6a8cfffc852212"},"gpu":{"us-east-1":"ami-04f24f4b5fdbf0c29","us-east-2":"ami-0dfb81b878bf7b077","us-west-1":"ami-069e363bf0519dc62","us-west-2":"ami-0da77122f28be94eb"}}'
+  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-0f2514d7d58af712c","us-east-2":"ami-02261a8bd696ac326","us-west-1":"ami-031d3b0b95e35a622","us-west-2":"ami-017e56aac0ff04a24"},"gpu":{"us-east-1":"ami-01e4b2f81adc419e6","us-east-2":"ami-04426d37cdd63108c","us-west-1":"ami-0cb572c7003aef9a6","us-west-2":"ami-0caf7d2239bfe72d3"}}'
 # Traces go to AWS X-Ray through the collector.
 telemetry:
   enabled: true
-  sampleRatio: "1"

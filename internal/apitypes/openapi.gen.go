@@ -661,6 +661,45 @@ func (e DeliveryState) Valid() bool {
 	}
 }
 
+// Defines values for DeploymentGate.
+const (
+	DiskAllowance   DeploymentGate = "disk_allowance"
+	DiskImage       DeploymentGate = "disk_image"
+	DiskMinimum     DeploymentGate = "disk_minimum"
+	GpuCount        DeploymentGate = "gpu_count"
+	GpuModel        DeploymentGate = "gpu_model"
+	GpuUnavailable  DeploymentGate = "gpu_unavailable"
+	MissingSecrets  DeploymentGate = "missing_secrets"
+	RegionSelection DeploymentGate = "region_selection"
+	WarmFloor       DeploymentGate = "warm_floor"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentGate enum.
+func (e DeploymentGate) Valid() bool {
+	switch e {
+	case DiskAllowance:
+		return true
+	case DiskImage:
+		return true
+	case DiskMinimum:
+		return true
+	case GpuCount:
+		return true
+	case GpuModel:
+		return true
+	case GpuUnavailable:
+		return true
+	case MissingSecrets:
+		return true
+	case RegionSelection:
+		return true
+	case WarmFloor:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeploymentPlanAction.
 const (
 	Add      DeploymentPlanAction = "add"
@@ -918,6 +957,7 @@ const (
 	FailureKindDependencyFailed FailureKind = "dependency_failed"
 	FailureKindLoadError        FailureKind = "load_error"
 	FailureKindLost             FailureKind = "lost"
+	FailureKindPreempted        FailureKind = "preempted"
 	FailureKindStartFailed      FailureKind = "start_failed"
 	FailureKindSystem           FailureKind = "system"
 	FailureKindTimeout          FailureKind = "timeout"
@@ -932,6 +972,8 @@ func (e FailureKind) Valid() bool {
 	case FailureKindLoadError:
 		return true
 	case FailureKindLost:
+		return true
+	case FailureKindPreempted:
 		return true
 	case FailureKindStartFailed:
 		return true
@@ -3176,6 +3218,9 @@ type Deployment struct {
 	RemovedVersions int `json:"removed_versions"`
 }
 
+// DeploymentGate defines model for DeploymentGate.
+type DeploymentGate string
+
 // DeploymentPlan defines model for DeploymentPlan.
 type DeploymentPlan struct {
 	App AppName `json:"app"`
@@ -3197,14 +3242,52 @@ type DeploymentPlanItem struct {
 	Kind WorkloadKind `json:"kind"`
 	Name WorkloadName `json:"name"`
 
+	// Refusals Why a deploy of the workload would fail before it changed anything.
+	Refusals *[]DeploymentRefusal `json:"refusals,omitempty"`
+
 	// Versions Versions the workload has now.
 	Versions int `json:"versions"`
 }
 
 // DeploymentPlanRequest defines model for DeploymentPlanRequest.
 type DeploymentPlanRequest struct {
-	Prune     *bool              `json:"prune,omitempty"`
-	Workloads []WorkloadIdentity `json:"workloads"`
+	Prune     *bool                    `json:"prune,omitempty"`
+	Workloads []DeploymentPlanWorkload `json:"workloads"`
+}
+
+// DeploymentPlanWorkload A workload the deploy lists, with the parts of its definition that the account's plan and the workspace must allow, so the plan reports what would refuse it before any image builds.
+type DeploymentPlanWorkload struct {
+	Autoscaler *Autoscaler      `json:"autoscaler,omitempty"`
+	Disks      *[]DiskMountSpec `json:"disks,omitempty"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
+
+	// Placement Where a workload's containers may run.
+	Placement *Placement `json:"placement,omitempty"`
+
+	// PodKind A devbox is a pod reached over SSH whose root filesystem is a disk.
+	PodKind *PodKind `json:"pod_kind,omitempty"`
+
+	// Resources Reservations the container always keeps. CPU counts physical cores, two hardware threads (vCPUs) each on LazyCloud hosts. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 8 CPUs. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources *Resources    `json:"resources,omitempty"`
+	Secrets   *[]SecretName `json:"secrets,omitempty"`
+}
+
+// DeploymentRefusal A reason a deploy fails before it changes anything: a plan limit, a secret it names that the workspace lacks, or a disk too small.
+type DeploymentRefusal struct {
+	Gate DeploymentGate `json:"gate"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind WorkloadKind `json:"kind"`
+
+	// Message The limit or requirement the workload breaks.
+	Message string       `json:"message"`
+	Name    WorkloadName `json:"name"`
+
+	// Remedy How to lift it.
+	Remedy string `json:"remedy"`
 }
 
 // DeploymentRequest defines model for DeploymentRequest.
@@ -3340,7 +3423,7 @@ type DiskMountSpec struct {
 	MountPath string   `json:"mount_path"`
 	Name      DiskName `json:"name"`
 
-	// SizeBytes Whole 4096-byte blocks from 1 GiB to 1 TiB.
+	// SizeBytes Whole 4096-byte blocks from 1 GiB to 1 TiB; a devbox root needs 10 GiB.
 	SizeBytes int64 `json:"size_bytes"`
 }
 
@@ -3420,6 +3503,9 @@ type EntitlementUsage struct {
 type Error struct {
 	Code    ErrorCode `json:"code"`
 	Message string    `json:"message"`
+
+	// Refusals Every reason a refused deploy failed, by workload and gate.
+	Refusals *[]DeploymentRefusal `json:"refusals,omitempty"`
 }
 
 // ErrorCode defines model for ErrorCode.
@@ -4174,7 +4260,7 @@ type Placement struct {
 	// Preemptible Allow capacity the provider can reclaim.
 	Preemptible *bool `json:"preemptible,omitempty"`
 
-	// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+	// Region A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
 	Region *Region `json:"region,omitempty"`
 }
 
@@ -4460,7 +4546,7 @@ type QueuePage struct {
 // RateClass defines model for RateClass.
 type RateClass string
 
-// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+// Region A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
 type Region string
 
 // Release defines model for Release.
@@ -4864,7 +4950,9 @@ type Task struct {
 	FinishedAt  *time.Time          `json:"finished_at,omitempty"`
 	Function    WorkloadName        `json:"function"`
 	Id          openapi_types.UUID  `json:"id"`
-	MaxAttempts int                 `json:"max_attempts"`
+
+	// MaxAttempts Attempts the task may start; each attempt lost to preemption adds one.
+	MaxAttempts int `json:"max_attempts"`
 
 	// NextAttemptAt When a queued task that already ran becomes due again.
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
@@ -4873,8 +4961,11 @@ type Task struct {
 	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
 
 	// Pending Why a queued task has not started, derived from current state on every read.
-	Pending   *TaskPendingProgress `json:"pending,omitempty"`
-	ReleaseId openapi_types.UUID   `json:"release_id"`
+	Pending *TaskPendingProgress `json:"pending,omitempty"`
+
+	// Preemptions Attempts lost to preemption.
+	Preemptions int                `json:"preemptions"`
+	ReleaseId   openapi_types.UUID `json:"release_id"`
 
 	// RootTaskId The root of the call graph; the task itself when nothing spawned it.
 	RootTaskId openapi_types.UUID `json:"root_task_id"`
@@ -5356,13 +5447,6 @@ type WorkloadDetail struct {
 
 	// Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.
 	Workload Workload `json:"workload"`
-}
-
-// WorkloadIdentity defines model for WorkloadIdentity.
-type WorkloadIdentity struct {
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
-	Kind WorkloadKind `json:"kind"`
-	Name WorkloadName `json:"name"`
 }
 
 // WorkloadKind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.

@@ -17,22 +17,3 @@ module "fleet" {
   tags     = local.fleet_tags
 }
 
-moved {
-  from = module.fleet_us_east_1
-  to   = module.fleet["us-east-1"]
-}
-
-moved {
-  from = module.fleet_us_east_2
-  to   = module.fleet["us-east-2"]
-}
-
-moved {
-  from = module.fleet_us_west_1
-  to   = module.fleet["us-west-1"]
-}
-
-moved {
-  from = module.fleet_us_west_2
-  to   = module.fleet["us-west-2"]
-}

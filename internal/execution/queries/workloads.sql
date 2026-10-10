@@ -151,13 +151,21 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       c.warm::int as warm
+       c.warm::int as warm,
+       r.start_failures,
+       last_stop.stopped_at as last_stopped_at
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join pod_states s on s.workload_id = w.id
+-- The newest serve container's stop paces the next start after failed ones.
+left join lateral (
+    select lc.stopped_at from containers lc
+    where lc.release_id = r.id and lc.purpose = 'serve'
+    order by lc.id desc limit 1
+) last_stop on r.start_failures > 0
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
@@ -224,9 +232,17 @@ on conflict (workload_id) do update set replicas = excluded.replicas;
 insert into pod_states (workload_id, woken_at, parked) values (@workload_id, now(), false)
 on conflict (workload_id) do update set woken_at = now(), parked = false;
 
+-- name: RetryFailedRelease :exec
+-- A start retries a release that stopped starting or failed to load. One
+-- still backing off between failed starts keeps its count, so repeated
+-- starts wait out the backoff.
+update releases set start_failures = 0, load_error = null
+where id = @id and (start_failures >= @start_failure_limit::int or load_error is not null);
+
 -- name: ParkPod :exec
+-- A stop overrides an earlier scale.
 insert into pod_states (workload_id, woken_at, parked) values (@workload_id, null, true)
-on conflict (workload_id) do update set woken_at = null, parked = true;
+on conflict (workload_id) do update set woken_at = null, parked = true, replicas = null;
 
 -- name: PodState :one
 select replicas, woken_at, parked from pod_states where workload_id = @workload_id;

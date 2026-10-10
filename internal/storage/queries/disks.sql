@@ -126,3 +126,16 @@ select coalesce(sum(size_bytes) filter (where name <> @name::text), 0)::bigint a
        coalesce(max(size_bytes) filter (where name = @name::text), 0)::bigint as own
 from disks
 where workspace_id = @workspace_id and state = 'active';
+
+-- name: DeclaredDiskGrowth :one
+-- What the workspace's live disks would declare once each named disk is at
+-- least its given size, and which named disks would be created or grown.
+with declared as (
+    select unnest(@names::text[]) as name, unnest(@sizes::bigint[]) as size_bytes
+), live as (
+    select name, size_bytes from disks where workspace_id = @workspace_id and state = 'active'
+)
+select coalesce(sum(greatest(l.size_bytes, d.size_bytes)), 0)::bigint as total_bytes,
+       coalesce(array_agg(d.name order by d.name) filter (where d.size_bytes > coalesce(l.size_bytes, 0)), '{}')::text[] as growing
+from live l
+full join declared d on d.name = l.name;

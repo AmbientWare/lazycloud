@@ -1,10 +1,12 @@
 package execution
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
@@ -167,5 +169,80 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 	}
 	if state := containerState(t, pool, starting); state != ContainerStarting {
 		t.Fatalf("container within the start timeout is %s, want starting", state)
+	}
+}
+
+// A preempted task retries without spending its attempts, so the user's
+// retries stay for their own failures. The last preemption the bound allows
+// fails it.
+func TestPreemptionRetriesWithoutSpendingAttemptsUntilItsBound(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	preempt := func(f attemptFixture) {
+		t.Helper()
+		err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+			_, err := e.StopHostContainers(t.Context(), tx, f.host, "the host was reclaimed")
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// rerun starts the task's next attempt on a new container of its host.
+	rerun := func(f *attemptFixture) {
+		t.Helper()
+		var attempt uuid.UUID
+		err := pool.QueryRow(t.Context(), `
+with ctr as (
+    insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
+    select workspace_id, release_id, 'ready', $2, 1, 1000, 1 << 28 from tasks where id = $1 returning id
+), att as (
+    insert into attempts (task_id, number, container_id, state, deadline_at)
+    select t.id, t.attempt_count + 1, ctr.id, 'running', now() + interval '1 hour' from tasks t, ctr where t.id = $1
+    returning id, number
+)
+update tasks t set status = 'running', attempt_count = att.number, current_attempt_id = att.id
+from att where t.id = $1 returning att.id`, f.task, uuid.UUID(f.host)).Scan(&attempt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.attempt = AttemptID(attempt)
+	}
+
+	once := runningAttempt(t, pool, `{}`, 1)
+	for n := 1; n < MaxPreemptions; n++ {
+		preempt(once)
+		var status string
+		var maxAttempts, preemptions int
+		if err := pool.QueryRow(t.Context(), "select status, max_attempts, preemptions from tasks where id = $1", once.task).
+			Scan(&status, &maxAttempts, &preemptions); err != nil {
+			t.Fatal(err)
+		}
+		if status != string(TaskQueued) || maxAttempts != 1+n || preemptions != n {
+			t.Fatalf("preemption %d: task %s with %d attempts, %d preemptions; want queued with %d and %d", n, status, maxAttempts, preemptions, 1+n, n)
+		}
+		rerun(&once)
+	}
+	preempt(once)
+	var status, kind, message string
+	var preemptions int
+	if err := pool.QueryRow(t.Context(), "select status, failure->>'kind', failure->>'message', preemptions from tasks where id = $1", once.task).
+		Scan(&status, &kind, &message, &preemptions); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(TaskFailed) || kind != string(FailurePreempted) || preemptions != MaxPreemptions || !strings.Contains(message, "preemptible=False") {
+		t.Fatalf("at the bound: task %s after %d preemptions, %s %q; want failed as preempted after %d, naming preemptible=False",
+			status, preemptions, kind, message, MaxPreemptions)
+	}
+
+	retried := runningAttempt(t, pool, `{"retry_policy": {"max_attempts": 2}}`, 2)
+	preempt(retried)
+	rerun(&retried)
+	userError := &Failure{Kind: FailureUserError, Type: "ValueError", Message: "bad"}
+	if err := finish(t.Context(), e, &retried.host, AttemptOutcome{Attempt: retried.attempt, State: AttemptFailed, Failure: userError}); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := taskState(t, pool, retried.task); status != string(TaskQueued) {
+		t.Fatalf("user error after a preemption: task %s, want queued for the user's retry", status)
 	}
 }

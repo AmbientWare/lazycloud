@@ -131,6 +131,7 @@ function task(id: string): Schemas["Task"] {
     status: "running",
     attempts: 1,
     max_attempts: 1,
+    preemptions: 0,
     root_task_id: id,
     created_at: "2026-07-21T10:00:00Z",
   };

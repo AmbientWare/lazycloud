@@ -144,7 +144,7 @@ func (f fixture) host(t *testing.T) compute.HostID {
 	var id uuid.UUID
 	err := f.pool.QueryRow(t.Context(), `
 insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, last_seen_at)
-values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint << 34, now()) returning id`).Scan(&id)
+values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint << 35, now()) returning id`).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestLostBuildContainerRetriesOnceThenFails(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.images.Recover(t.Context(), logger); err != nil {
+		if err := f.images.Recover(t.Context(), logger); err != nil {
 			t.Fatal(err)
 		}
 		build, err := f.images.GetBuild(t.Context(), f.listener, ws, r.Build.ID, 0)
@@ -413,8 +413,8 @@ func TestBuildPastItsDeadlineFailsAndStopsItsContainer(t *testing.T) {
 	if _, err := f.pool.Exec(t.Context(), "update image_builds set deadline_at = now() - interval '1 second' where id = $1", r.Build.ID); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil || n != 1 {
-		t.Fatalf("recover: %d %v", n, err)
+	if err := f.images.Recover(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
 	}
 	build, err := f.images.GetBuild(t.Context(), f.listener, ws, r.Build.ID, 0)
 	if err != nil || build.Status != images.BuildFailed {
@@ -517,7 +517,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, "select dockerfile from images where id = $1", inA.Image.ID).Scan(&dockerfile); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(dockerfile, "RUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true <<") || strings.Contains(dockerfile, value) {
+	if !strings.Contains(dockerfile, "RUN --mount=type=secret,id=TOKEN,env=TOKEN,required=true --mount=type=cache,id=lazycloud-npm,target=/root/.npm <<") || strings.Contains(dockerfile, value) {
 		t.Fatalf("the step mounts the secret and the Dockerfile never holds its value:\n%s", dockerfile)
 	}
 	if _, err := f.secrets.Set(ctx, a, "TOKEN", "rotated"); err != nil {
@@ -616,6 +616,44 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 
 // A GPU build waits for a host with its model, holds one of its GPUs and
 // asks its steps for it.
+// A build reserves all the memory it may use, so it never takes memory a
+// neighbour holds, and still lands on a 4-core c6a.2xlarge.
+func TestABuildReservesTheMemoryItMayUseAndFitsAFourCoreHost(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	_, memory, limit := f.images.BuildResources()
+	if memory != limit {
+		t.Fatalf("a build reserves %d bytes and may use %d", memory, limit)
+	}
+	typ, _ := compute.CatalogTypeNamed("c6a.2xlarge")
+	usable := typ.Usable(0)
+	var id uuid.UUID
+	if err := f.pool.QueryRow(ctx, `
+insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, last_seen_at)
+values ('c6a', sha256(gen_random_uuid()::text::bytea), 'online', $1, $2, now()) returning id`,
+		int64(usable.CPUMillis), usable.MemoryBytes).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	host := compute.HostID(id)
+	if _, err := f.images.Build(ctx, f.workspace(t, "a"), numpy(), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+		t.Fatal(err)
+	}
+	starts, err := f.execution.BuildStarts(ctx, host)
+	if err != nil || len(starts) != 1 {
+		t.Fatalf("the build is placed on the c6a.2xlarge: %v %v", starts, err)
+	}
+	var reserved int64
+	if err := f.pool.QueryRow(ctx, "select memory_bytes from containers where id = $1", uuid.UUID(starts[0].Container)).Scan(&reserved); err != nil {
+		t.Fatal(err)
+	}
+	if reserved != limit {
+		t.Fatalf("the build container reserves %d bytes, want the %d it may use", reserved, limit)
+	}
+}
+
 func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()

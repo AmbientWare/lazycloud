@@ -21,6 +21,7 @@ it("shows a delayed pending notice and clears it when execution starts", () => {
     status: "queued",
     attempts: 0,
     max_attempts: 1,
+    preemptions: 0,
     root_task_id: "task",
     created_at: now.toISOString(),
     pending: {

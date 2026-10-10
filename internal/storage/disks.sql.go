@@ -117,6 +117,38 @@ func (q *Queries) DeclaredDisk(ctx context.Context, arg DeclaredDiskParams) (Dec
 	return i, err
 }
 
+const declaredDiskGrowth = `-- name: DeclaredDiskGrowth :one
+with declared as (
+    select unnest($1::text[]) as name, unnest($2::bigint[]) as size_bytes
+), live as (
+    select name, size_bytes from disks where workspace_id = $3 and state = 'active'
+)
+select coalesce(sum(greatest(l.size_bytes, d.size_bytes)), 0)::bigint as total_bytes,
+       coalesce(array_agg(d.name order by d.name) filter (where d.size_bytes > coalesce(l.size_bytes, 0)), '{}')::text[] as growing
+from live l
+full join declared d on d.name = l.name
+`
+
+type DeclaredDiskGrowthParams struct {
+	Names       []string
+	Sizes       []int64
+	WorkspaceID uuid.UUID
+}
+
+type DeclaredDiskGrowthRow struct {
+	TotalBytes int64
+	Growing    []string
+}
+
+// What the workspace's live disks would declare once each named disk is at
+// least its given size, and which named disks would be created or grown.
+func (q *Queries) DeclaredDiskGrowth(ctx context.Context, arg DeclaredDiskGrowthParams) (DeclaredDiskGrowthRow, error) {
+	row := q.db.QueryRow(ctx, declaredDiskGrowth, arg.Names, arg.Sizes, arg.WorkspaceID)
+	var i DeclaredDiskGrowthRow
+	err := row.Scan(&i.TotalBytes, &i.Growing)
+	return i, err
+}
+
 const deleteDiskGenerationsBefore = `-- name: DeleteDiskGenerationsBefore :exec
 delete from disk_generations where disk_id = $1 and generation < $2
 `

@@ -49,12 +49,3 @@ type CloudConnection struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
-
-type SpotPrice struct {
-	Region             string
-	AvailabilityZoneID string
-	InstanceType       string
-	HourlyMicros       int64
-	EffectiveAt        time.Time
-	ObservedAt         time.Time
-}

@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -178,8 +177,9 @@ func TestDeployRefusesGPUModelsOnlyWhereTheFleetMustServeThem(t *testing.T) {
 		_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
 		return err
 	}
-	var unoffered *billing.GPUUnavailableError
-	if err := deployOne(h100); !errors.As(err, &unoffered) || !strings.Contains(err.Error(), "coming soon") {
+	var refused *RefusedError
+	if err := deployOne(h100); !errors.As(err, &refused) || len(refused.Refusals) != 1 ||
+		refused.Refusals[0].Gate != apitypes.GpuUnavailable || !strings.Contains(refused.Refusals[0].Message, "coming soon") {
 		t.Fatalf("H100 on the fleet: %v", err)
 	}
 	fallback := h100

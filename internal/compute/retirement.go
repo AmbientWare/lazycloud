@@ -47,7 +47,7 @@ func (c *Compute) Retire(ctx context.Context, logger *slog.Logger) (RetireResult
 		if err := q.CancelConnectionLaunches(ctx); err != nil {
 			return fmt.Errorf("cancel launches: %w", err)
 		}
-		if terminate, err = q.ClaimTerminations(ctx); err != nil {
+		if terminate, err = q.ClaimTerminations(ctx, ReclaimGrace.Seconds()); err != nil {
 			return fmt.Errorf("claim terminations: %w", err)
 		}
 		return nil

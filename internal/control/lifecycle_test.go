@@ -186,7 +186,7 @@ func TestPlanDeploymentActions(t *testing.T) {
 	c := NewControl(pool)
 	deploy(t, c, ws, false, function("keep"), function("drop"))
 	deploy(t, c, ws, false, withConcurrency(function("keep"), 3))
-	req := apitypes.DeploymentPlanRequest{Workloads: []apitypes.WorkloadIdentity{
+	req := apitypes.DeploymentPlanRequest{Workloads: []apitypes.DeploymentPlanWorkload{
 		{Kind: apitypes.WorkloadKindFunction, Name: "new"}, {Kind: apitypes.WorkloadKindFunction, Name: "keep"},
 	}}
 	plan, err := c.PlanDeployment(t.Context(), ws, "reports", req)

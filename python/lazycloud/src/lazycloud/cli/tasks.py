@@ -100,6 +100,8 @@ def task_show(
     }
     if task.max_attempts > 1:
         summary["attempt"] = f"{max(task.attempts, 1)} of {task.max_attempts}"
+    if task.preemptions > 0:
+        summary["preempted"] = task.preemptions
     if task.started_at is not None:
         summary["started"] = timestamp(task.started_at)
     if task.finished_at is not None:

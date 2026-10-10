@@ -100,12 +100,8 @@ func TestPlatformImagesConvertOnceAcrossReplicas(t *testing.T) {
 	if n := f.count(t, "select count(*) from image_reference_uses where reference = $1", mirror); n != 1 {
 		t.Fatal("the converted copy is not live for the layer sweep")
 	}
-	reads, err := f.images.LayerReadURLs(ctx, mirror, host, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var got []imagefs.Digest
-	for _, u := range reads.Layers {
+	for _, u := range readsOf(t, f.images, mirror, host).Layers {
 		_, ix, err := imagefs.FetchIndex(ctx, http.DefaultClient, u.Index)
 		if err != nil {
 			t.Fatal(err)
@@ -266,6 +262,94 @@ func TestAServerWithoutWritableTempFailsItsConversionsVisibly(t *testing.T) {
 	}
 }
 
+// A server that downloads a layer but cannot write its data file fails the
+// conversion once as ErrServerDisk, without downloading the layer again.
+func TestADataFileTheServerCannotWriteIsItsDiskFailure(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	img, err := random.Image(64<<10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layers, err := img.Layers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := layers[0].Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversionDir := func() string {
+		dirs, err := filepath.Glob(filepath.Join(tmp, "lazycloud-platform-*"))
+		if err != nil || len(dirs) != 1 {
+			t.Errorf("conversion directories %v: %v", dirs, err)
+			return ""
+		}
+		return dirs[0]
+	}
+	t.Cleanup(func() {
+		if dirs, _ := filepath.Glob(filepath.Join(tmp, "lazycloud-platform-*")); len(dirs) > 0 {
+			_ = os.Chmod(dirs[0], 0o700)
+		}
+	})
+	// The first download of the layer turns the conversion directory
+	// read-only once its blob file exists, so only the data file fails.
+	upstream := &url.URL{Scheme: "http", Host: f.registry}
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	var mu sync.Mutex
+	downloads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/blobs/"+digest.String()) {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		mu.Lock()
+		downloads++
+		first := downloads == 1
+		mu.Unlock()
+		if !first {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		resp, err := http.Get(upstream.String() + r.URL.Path) //nolint:noctx // The test's proxy.
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body[:len(body)/2])
+		w.(http.Flusher).Flush() //nolint:forcetypeassert // httptest's writer.
+		dir := conversionDir()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+			if blobs, _ := filepath.Glob(filepath.Join(dir, "blob-*")); len(blobs) > 0 || time.Now().After(deadline) {
+				break
+			}
+		}
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write(body[len(body)/2:])
+	}))
+	t.Cleanup(server.Close)
+	registry := strings.TrimPrefix(server.URL, "http://")
+	im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	reference := registry + "/tools/disk:1@" + pushImage(t, f.registry+"/tools/disk:1", img)
+	err = im.ConvertPlatformImage(ctx, reference, "amd64")
+	var unconvertible *images.ConversionError
+	if !errors.Is(err, images.ErrServerDisk) || errors.As(err, &unconvertible) {
+		t.Fatalf("a data file the server cannot write is its disk failure: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if downloads != 1 {
+		t.Fatalf("the layer was downloaded %d times, want once", downloads)
+	}
+}
+
 // hangingRegistry answers no request until the client gives up, so a
 // conversion from it runs until its context ends.
 func hangingRegistry(t *testing.T) string {
@@ -289,18 +373,17 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 	ctx := t.Context()
 	registry := hangingRegistry(t)
 	replica := func() *images.Images {
-		im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
-		images.SetPlatformLease(im, 2*time.Second)
-		return im
+		return images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
 	}
 	owner, other := replica(), replica()
+	const lease = 2 * time.Second
 	reference := registry + "/tools/builder@sha256:" + strings.Repeat("c", 64)
 	// A replica that claims the lease converts until its attempt ends, and
 	// fails; one that finds the lease held returns at once.
 	try := func() error {
 		attempt, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
-		return other.ConvertPlatformImage(attempt, reference, "amd64")
+		return images.ConvertPlatformImageLeased(attempt, other, reference, "amd64", lease)
 	}
 	token := func() string {
 		var token *string
@@ -315,7 +398,7 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 	}
 
 	ended := make(chan error, 1)
-	go func() { ended <- owner.ConvertPlatformImage(ctx, reference, "amd64") }()
+	go func() { ended <- images.ConvertPlatformImageLeased(ctx, owner, reference, "amd64", lease) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for token() == "" {
 		if time.Now().After(deadline) {

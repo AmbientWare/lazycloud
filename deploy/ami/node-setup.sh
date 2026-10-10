@@ -53,9 +53,9 @@ tar -xJf nbd.tar.xz
   install -m 0755 nbd-client /usr/local/sbin/nbd-client
 )
 dnf remove -y gcc ninja-build flex bison glib2-devel zlib-devel libnl3-devel
-qemu-storage-daemon --version | head -1
-qemu-img --version | head -1
-nbd-client --version 2>&1 | head -1 || true
+qemu-storage-daemon --version | sed -n 1p
+qemu-img --version | sed -n 1p
+nbd-client --version 2>&1 | sed -n 1p || true
 
 # Disks reach containers through kernel NBD devices, loaded at every boot.
 printf 'nbd\n' >/etc/modules-load.d/lazycloud-nbd.conf
@@ -87,10 +87,10 @@ mkdir -p "$dest"
 tar -xjf gvisor.tar.bz2 -C "$dest"
 ln -sf "$dest/runsc" /usr/local/bin/runsc
 ln -sf "$dest/containerd-shim-runsc-v1" /usr/local/bin/containerd-shim-runsc-v1
-runsc --version | head -1
+runsc --version | sed -n 1p
 runsc_args='["--host-uds=all"]'
 if [ "$VARIANT" = gpu ]; then
-  driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | tr -d '[:space:]')
+  driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | sed -n 1p | tr -d '[:space:]')
   if ! runsc nvproxy list-supported-drivers | grep -qx "$driver"; then
     echo "driver $driver is not an ABI gVisor $GVISOR_RELEASE proxies" >&2
     exit 1

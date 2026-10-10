@@ -53,7 +53,7 @@ func (e *IdentityError) Error() string { return e.Message }
 // compute names this here rather than importing it.
 type Containers interface {
 	// StopHostContainers stops every live container on host; running
-	// attempts are lost and retried by policy.
+	// attempts are preempted and retried.
 	StopHostContainers(ctx context.Context, tx pgx.Tx, host HostID, message string) (int, error)
 	// DrainHostContainers stops claims on the host's ready containers and
 	// stops the ones still starting.
