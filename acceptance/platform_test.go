@@ -421,7 +421,7 @@ func startPlatform(t *testing.T) *platform {
 		err := agent.Run(ctx, agent.Config{
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, ServerPlaintext: true, BuildNetwork: "host",
+			GeeseFSPath: geesefs, TrustBundle: agent.HostTrustBundle(), ServerPlaintext: true, BuildNetwork: "host",
 			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger, Telemetry: tel,
 		})
 		if err != nil && ctx.Err() == nil {
