@@ -36,7 +36,8 @@ func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace 
 		}
 	}
 	// Hosts address the bucket as the server's own client does.
-	grant.Location, err = locate(s.config.Endpoint, store.region, grant.Bucket, s.config.Endpoint != "")
+	endpoint := s.endpointOf(store.connection)
+	grant.Location, err = locate(endpoint, store.region, grant.Bucket, endpoint != "")
 	if err != nil {
 		return Grant{}, fmt.Errorf("locate workspace bucket: %w", err)
 	}

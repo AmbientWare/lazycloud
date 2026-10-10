@@ -131,6 +131,13 @@ func TestRequestsNameTheBucketOwner(t *testing.T) {
 	if !strings.Contains(presigned.URL, "x-amz-expected-bucket-owner=123456789012") {
 		t.Fatalf("presigned URL %s names no owner", presigned.URL)
 	}
+	connected := s3.New(client.Options(), expectOwner("210987654321"))
+	if _, err := connected.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String("b"), Key: aws.String("k")}); err != nil {
+		t.Fatal(err)
+	}
+	if owners[http.MethodDelete] != "210987654321" {
+		t.Fatalf("a client made from another named owner %q, want its own", owners[http.MethodDelete])
+	}
 }
 
 // TestBucketsReachAnExplicitEndpoint: a bucket without an endpoint is AWS S3

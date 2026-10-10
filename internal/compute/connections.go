@@ -756,6 +756,10 @@ func (c *Compute) ConnectedAccount(ctx context.Context, connection uuid.UUID) (C
 	return ConnectedAccount{AWSAccountID: row.AwsAccountID, Region: row.Region, role: row.RoleArn, externalID: row.ExternalID}, nil
 }
 
+// S3Endpoint is where connected accounts' buckets are reached: empty for
+// AWS S3 in each bucket's region.
+func (c *Compute) S3Endpoint() string { return c.fleet.Endpoints.S3 }
+
 // AssumeConnectionRole returns credentials of the account's role for
 // lifetime, assumed through the platform principal with the external ID. A
 // non-empty policy narrows the session to what it allows. AWS's refusal

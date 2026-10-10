@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -52,8 +55,16 @@ type connectedStorage struct {
 	role       string
 	externalID string
 
+	// s3 stands in for AWS S3, in front of the test Garage.
+	s3 *httptest.Server
+
 	mu    sync.Mutex
 	calls []assumed
+	// unowned counts requests to s3 that named no expected bucket owner,
+	// other than CreateBucket, which takes none; owners counts the ones
+	// that did, by owner.
+	unowned int
+	owners  map[string]int
 }
 
 func newConnectedStorage(t *testing.T) *connectedStorage {
@@ -61,11 +72,30 @@ func newConnectedStorage(t *testing.T) *connectedStorage {
 	c := &connectedStorage{t: t, pool: dbtest.New(t), account: storagetest.ConnectedAccount(t)}
 	sts := httptest.NewServer(http.HandlerFunc(c.assumeRole))
 	t.Cleanup(sts.Close)
+	c.cfg = withLinks(t, func() *Storage { return c.storage })
+	garage, err := url.Parse(c.cfg.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.owners = map[string]int{}
+	c.s3 = httptest.NewServer(&httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(garage)
+		r.Out.Host = r.In.Host
+		owner := cmp.Or(r.In.Header.Get("X-Amz-Expected-Bucket-Owner"), r.In.URL.Query().Get("x-amz-expected-bucket-owner"))
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		switch {
+		case owner != "":
+			c.owners[owner]++
+		case r.In.Method != http.MethodPut || r.In.URL.RawQuery != "" || strings.Count(strings.Trim(r.In.URL.Path, "/"), "/") > 0:
+			c.unowned++
+		}
+	}})
+	t.Cleanup(c.s3.Close)
 	c.compute = compute.NewCompute(c.pool, nil, compute.Config{Fleet: compute.Fleet{
 		AWS:       aws.Config{Region: "us-east-2", Credentials: credentials.NewStaticCredentialsProvider("AKIAPLATFORM0000TEST", "platform-secret", "")},
-		Endpoints: compute.Endpoints{STS: sts.URL},
+		Endpoints: compute.Endpoints{STS: sts.URL, S3: c.s3.URL},
 	}})
-	c.cfg = withLinks(t, func() *Storage { return c.storage })
 	c.storage = NewStorage(c.pool, c.cfg, c.compute)
 
 	var user uuid.UUID
@@ -173,13 +203,15 @@ func (c *connectedStorage) deleteWorkspace(ws identity.WorkspaceID) {
 }
 
 // A workspace in a connected account keeps its volumes in a bucket of that
-// account, named for the account and in the connection's region: the
-// connection role creates it, host grants assume that role with the
-// external ID and a session policy for the bucket alone, and the API's
-// uploads and download links are signed with the role's credentials. The
-// platform's own key cannot reach the bucket. Disconnecting is refused
-// while the workspace lives there; deleting the workspace empties and
-// deletes the bucket, after which the account can be disconnected.
+// account, named for the account and in the connection's region, at AWS
+// S3 rather than the platform's store: the connection role creates it,
+// host grants assume that role with the external ID and a session policy
+// for the bucket alone, and the API's uploads and download links are
+// signed with the role's credentials. Every request names the account as
+// the bucket's owner. The platform's own key cannot reach the bucket.
+// Disconnecting is refused while the workspace lives there; deleting the
+// workspace empties and deletes the bucket, after which the account can
+// be disconnected.
 func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 	ctx := t.Context()
 	c := newConnectedStorage(t)
@@ -199,6 +231,9 @@ func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 	}
 	if grant.Bucket != bucket || grant.Region != region || grant.AccessKeyID != c.account.AccessKeyID {
 		t.Fatalf("grant %s in %s with key %s, want the connection role's for %s in %s", grant.Bucket, grant.Region, grant.AccessKeyID, bucket, region)
+	}
+	if grant.Endpoint != c.s3.URL || !grant.PathStyle {
+		t.Fatalf("grant at %s (path-style %v), want AWS S3 at %s, not the platform's store", grant.Endpoint, grant.PathStyle, c.s3.URL)
 	}
 	var hostCall bool
 	for _, call := range c.assumedCalls() {
@@ -244,6 +279,11 @@ func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 	}
 	if _, err := c.compute.Disconnect(ctx, c.user); err != nil {
 		t.Fatalf("disconnect after the workspace went: %v", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.unowned != 0 || len(c.owners) != 1 || c.owners[customerAccount] == 0 {
+		t.Fatalf("AWS S3 got %d requests naming no owner and %v by owner, want all naming %s", c.unowned, c.owners, customerAccount)
 	}
 }
 

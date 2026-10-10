@@ -127,8 +127,12 @@ func (s *Storage) clientFor(ctx context.Context, connection *uuid.UUID, region s
 		account, credentials = connected.AWSAccountID, s.connectionCredentials(*connection)
 		options = append(options, expectOwner(account))
 	}
+	endpoint := s.endpointOf(connection)
 	client := s3.New(s.client.Options(), append(options, func(o *s3.Options) {
-		o.Region, o.Credentials = region, credentials
+		o.Region, o.Credentials, o.BaseEndpoint, o.UsePathStyle = region, credentials, nil, endpoint != ""
+		if endpoint != "" {
+			o.BaseEndpoint = aws.String(endpoint)
+		}
 	})...)
 	c = objectClient{client: client, presign: s3.NewPresignClient(client), account: account}
 	s.accounts.mu.Lock()
@@ -140,11 +144,24 @@ func (s *Storage) clientFor(ctx context.Context, connection *uuid.UUID, region s
 	return c, nil
 }
 
+// endpointOf is the S3 endpoint of the platform's buckets, or of a
+// connected account's: AWS S3 in the bucket's region unless compute names
+// another. The platform's own store, such as Garage or R2, never holds a
+// connected account's bucket.
+func (s *Storage) endpointOf(connection *uuid.UUID) string {
+	if connection == nil {
+		return s.config.Endpoint
+	}
+	return s.connections.S3Endpoint()
+}
+
 // expectOwner makes every request but CreateBucket name account as the
 // owner of its bucket, so S3 refuses a bucket of the same name that
-// another account holds. Presigned URLs carry it as a query parameter.
+// another account holds. Presigned URLs carry it as a query parameter. It
+// replaces the owner of the options it extends.
 func expectOwner(account string) func(*s3.Options) {
-	owner := middleware.BuildMiddlewareFunc("ExpectedBucketOwner", func(ctx context.Context, in middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
+	const id = "ExpectedBucketOwner"
+	owner := middleware.BuildMiddlewareFunc(id, func(ctx context.Context, in middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
 		if req, ok := in.Request.(*smithyhttp.Request); ok && awsmiddleware.GetOperationName(ctx) != "CreateBucket" {
 			req.Header.Set("X-Amz-Expected-Bucket-Owner", account)
 		}
@@ -152,6 +169,10 @@ func expectOwner(account string) func(*s3.Options) {
 	})
 	return func(o *s3.Options) {
 		o.APIOptions = append(slices.Clone(o.APIOptions), func(stack *middleware.Stack) error {
+			if _, ok := stack.Build.Get(id); ok {
+				_, err := stack.Build.Swap(id, owner)
+				return err //nolint:wrapcheck // The SDK reports the stack's own error.
+			}
 			return stack.Build.Add(owner, middleware.After)
 		})
 	}
