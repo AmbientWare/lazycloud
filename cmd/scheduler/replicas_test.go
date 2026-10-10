@@ -18,8 +18,8 @@ const (
 	settle = 2 * time.Second
 	// window is how long idle passes are counted.
 	window = 6 * time.Second
-	// idlePassLimit bounds idle passes a second across the deployment; a
-	// scheduler that ran each of its loops every second made over six.
+	// idlePassLimit bounds idle passes a second across the deployment;
+	// running each loop every second makes over six.
 	idlePassLimit = 1.5
 )
 

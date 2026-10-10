@@ -44,8 +44,8 @@ type ConcurrencyLimits struct {
 	MaxGPUs          int
 }
 
-// LimitSource supplies an account's plan limits. Billing implements it;
-// without one, account metrics report usage and leave the limits out.
+// LimitSource supplies an account's plan limits; without one, account
+// metrics report usage and leave the limits out.
 type LimitSource interface {
 	ConcurrencyLimits(ctx context.Context, account identity.UserID) (*ConcurrencyLimits, error)
 }

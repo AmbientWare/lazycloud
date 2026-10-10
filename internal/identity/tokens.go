@@ -20,8 +20,8 @@ const (
 type Token struct {
 	ID   TokenID
 	Name string
-	// Prefix is the token's first characters, empty for tokens issued
-	// before prefixes were kept.
+	// Prefix is the token's first characters, which tell a person's tokens
+	// apart.
 	Prefix string
 	// Workspace is set for tokens restricted to one workspace.
 	Workspace *WorkspaceID
