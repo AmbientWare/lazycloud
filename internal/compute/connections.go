@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -765,23 +765,16 @@ func (c *Compute) S3Endpoint() string { return c.fleet.Endpoints.S3 }
 // non-empty policy narrows the session to what it allows. AWS's refusal
 // keeps its API error.
 func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAccount, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-	input := &sts.AssumeRoleInput{
-		RoleArn: aws.String(account.role), RoleSessionName: aws.String(session), ExternalId: aws.String(account.externalID),
-		DurationSeconds: aws.Int32(int32(lifetime.Seconds())),
-	}
-	if policy != "" {
-		input.Policy = aws.String(policy)
-	}
-	out, err := c.aws().sts(awsScope{}, "").AssumeRole(ctx, input)
+	creds, err := stscreds.NewAssumeRoleProvider(c.aws().sts(awsScope{}, ""), account.role, func(o *stscreds.AssumeRoleOptions) {
+		o.ExternalID, o.RoleSessionName, o.Duration = aws.String(account.externalID), session, lifetime
+		if policy != "" {
+			o.Policy = aws.String(policy)
+		}
+	}).Retrieve(ctx)
 	if err != nil {
 		return aws.Credentials{}, fmt.Errorf("assume the connection role %s: %w", account.role, err)
 	}
-	creds := out.Credentials
-	return aws.Credentials{
-		AccessKeyID: aws.ToString(creds.AccessKeyId), SecretAccessKey: aws.ToString(creds.SecretAccessKey),
-		SessionToken: aws.ToString(creds.SessionToken), Source: "lazycloud connection role",
-		CanExpire: true, Expires: aws.ToTime(creds.Expiration),
-	}, nil
+	return creds, nil
 }
 
 func notifyCompute(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {

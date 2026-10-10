@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -98,18 +99,13 @@ func newBucketProvider(cfg Config) bucketProvider {
 		client := sts.New(sts.Options{Region: cfg.Region, Credentials: credentialProvider(cfg)})
 		role := cfg.Workspaces.RoleARN
 		return &awsBuckets{account: cfg.Workspaces.AccountID, assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-			out, err := client.AssumeRole(ctx, &sts.AssumeRoleInput{
-				RoleArn: aws.String(role), RoleSessionName: aws.String(session),
-				DurationSeconds: aws.Int32(int32(lifetime.Seconds())), Policy: aws.String(policy),
-			})
+			creds, err := stscreds.NewAssumeRoleProvider(client, role, func(o *stscreds.AssumeRoleOptions) {
+				o.RoleSessionName, o.Policy, o.Duration = session, aws.String(policy), lifetime
+			}).Retrieve(ctx)
 			if err != nil {
 				return aws.Credentials{}, fmt.Errorf("assume %s: %w", role, err)
 			}
-			c := out.Credentials
-			return aws.Credentials{
-				AccessKeyID: aws.ToString(c.AccessKeyId), SecretAccessKey: aws.ToString(c.SecretAccessKey),
-				SessionToken: aws.ToString(c.SessionToken), CanExpire: true, Expires: aws.ToTime(c.Expiration),
-			}, nil
+			return creds, nil
 		}}
 	}
 	return nil
