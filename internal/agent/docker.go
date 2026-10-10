@@ -148,8 +148,10 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			privileged = true
 		}
 	}
-	limit := int64(pidsLimit)
-	resources := spec.GetResources()
+	resources := containerResources(spec.GetResources(), a.capacity, a.topology, pidsLimit, gpus)
+	if len(spec.GetVolumes()) > 0 {
+		resources.CgroupParent = a.workloadSlice(c.id)
+	}
 	options := client.ContainerCreateOptions{
 		Name: c.dockerName(),
 		Config: &containertypes.Config{
@@ -168,8 +170,8 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			CapAdd:      capAdd,
 			SecurityOpt: securityOpt,
 			Mounts:      append(mounts, binds...),
-			Resources:   containerResources(resources, a.capacity, a.topology, limit, gpus),
-			StorageOpt:  a.diskLimit(resources),
+			Resources:   resources,
+			StorageOpt:  a.diskLimit(spec.GetResources()),
 		},
 	}
 	id, err := a.createContainer(ctx, c.dockerName(), options)
@@ -276,7 +278,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 	var holders []containertypes.Summary
 	for _, summary := range list.Items {
 		switch summary.Labels[labelKind] {
-		case kindMount, kindBucket:
+		case kindMount:
 			continue
 		case kindHolder:
 			holders = append(holders, summary)
