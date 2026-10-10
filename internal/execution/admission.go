@@ -175,7 +175,7 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		if err != nil {
 			return err
 		}
-		retry := retries[fn.ReleaseID]
+		held := retries[fn.ReleaseID]
 
 		var parent, root *uuid.UUID
 		if req.Parent != nil {
@@ -266,18 +266,17 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 			// New tasks have no dependents yet.
 			return e.failQueued(ctx, tx, ids, releases, failure, false)
 		}
-		switch retry.Outcome {
-		case StartHeld:
+		if held != nil {
 			// The release's last start just failed: the tasks fail with its
 			// error rather than wait for a start that will not come.
 			all := make([]int, len(rows))
 			for n := range all {
 				all[n] = n
 			}
-			if err := failNew(all, *retry.Failure); err != nil {
+			if err := failNew(all, *held); err != nil {
 				return err
 			}
-		case StartAllowed, StartRetried:
+		} else {
 			if err := failNew(doomed, Failure{Kind: FailureDependencyFailed, Message: "an upstream task failed or was cancelled"}); err != nil {
 				return err
 			}
