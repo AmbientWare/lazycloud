@@ -98,6 +98,7 @@ export function watchJob(eventsUrl: string, onEvent: (event: JobEvent) => void):
   const connect = () => {
     socket = new WebSocket(`${scheme}://${window.location.host}${eventsUrl}`);
     socket.onmessage = (message) => {
+      reconnects = 0;
       const event = JSON.parse(message.data) as JobEvent;
       finished = event.stage === "done" || event.stage === "failed";
       onEvent(event);

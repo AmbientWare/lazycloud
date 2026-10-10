@@ -377,7 +377,8 @@ def sign_path(key: str, path: str, *, now: float, ttl_seconds: int) -> str:
 
 
 def signature_valid(key: str, path: str, *, expires: int, signature: str, now: float) -> bool:
-    return now < expires and hmac.compare_digest(signature, _signature(key, path, expires))
+    expected = _signature(key, path, expires).encode()
+    return now < expires and hmac.compare_digest(signature.encode(), expected)
 ```
 
 A new job returns its signed progress URL. A full GPU queue comes back as
@@ -538,8 +539,8 @@ curl --fail-with-body "<studio-url>/api/jobs" \
 ```
 
 The reply holds the job ID and its signed `events_url`.
-`uv run lazycloud task list --app image_studio` lists the generation tasks
-with their logs.
+`uv run lazycloud task list --app image_studio` lists the generation tasks,
+and `uv run lazycloud task logs <job-id>` prints one's output.
 
 ## Cost and scaling
 

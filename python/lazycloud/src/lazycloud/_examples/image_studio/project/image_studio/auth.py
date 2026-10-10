@@ -35,4 +35,5 @@ def sign_path(key: str, path: str, *, now: float, ttl_seconds: int) -> str:
 
 
 def signature_valid(key: str, path: str, *, expires: int, signature: str, now: float) -> bool:
-    return now < expires and hmac.compare_digest(signature, _signature(key, path, expires))
+    expected = _signature(key, path, expires).encode()
+    return now < expires and hmac.compare_digest(signature.encode(), expected)

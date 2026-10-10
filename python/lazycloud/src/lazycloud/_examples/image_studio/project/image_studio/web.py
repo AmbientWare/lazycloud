@@ -133,7 +133,7 @@ def share(job_id: str, index: ImageIndex) -> ShareLink:
     existing_image(job_id, index)
     try:
         return share_image.spawn(job_id, index).get(timeout_seconds=60)
-    except SdkError as error:
+    except (SdkError, TimeoutError) as error:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from error
 
 
