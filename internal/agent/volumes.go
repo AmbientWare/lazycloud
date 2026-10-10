@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	systemd "github.com/coreos/go-systemd/v22/dbus"
 	"github.com/google/uuid"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -62,6 +63,8 @@ type volumes struct {
 	granted map[string]chan struct{}
 	// mounts are the mount containers of each container with a slice.
 	mounts map[string][]*mounter
+	// bus reaches systemd, which runs the slices.
+	bus *systemd.Conn
 }
 
 // mounter is one mount container.
@@ -242,7 +245,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	v.mu.Unlock()
 	budget := containerResources(spec.GetResources(), v.a.capacity, v.a.topology, pidsLimit, nil)
 	budget.Memory += spec.GetResources().GetMountReserveBytes()
-	if err := startSlice(ctx, v.a.workloadSlice(c.id), budget); err != nil {
+	if err := v.startSlice(ctx, v.a.workloadSlice(c.id), budget); err != nil {
 		return nil, err
 	}
 	binds := make([]mount.Mount, 0, len(specs))
@@ -366,7 +369,7 @@ func (v *volumes) release(ctx context.Context, container string) {
 			v.a.log.Warn("removing cloud bucket keys failed", "mount", m.name, "error", err)
 		}
 	}
-	if err := stopSlices(ctx, v.a.workloadSlice(container)); err != nil {
+	if err := v.stopSlices(ctx, v.a.workloadSlice(container)); err != nil {
 		v.a.log.Warn("stopping a container's slice failed", "container", container, "error", err)
 	}
 }
@@ -688,7 +691,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			}
 		}
 	}
-	sliced, err := v.a.hostSlices(ctx)
+	sliced, err := v.hostSlices(ctx)
 	if err != nil {
 		return err
 	}
@@ -720,7 +723,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			v.a.log.Warn("removing a volume mount the agent did not adopt failed", "mount", m.name, "error", err)
 		}
 	}
-	if err := stopSlices(ctx, orphans...); err != nil {
+	if err := v.stopSlices(ctx, orphans...); err != nil {
 		return err
 	}
 	keys, err := os.ReadDir(v.bucketKeys(""))
@@ -754,11 +757,11 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 // removeAll stops this host's slices and deletes the storage keys it holds,
 // once its containers are gone.
 func (v *volumes) removeAll(ctx context.Context) error {
-	sliced, err := v.a.hostSlices(ctx)
+	sliced, err := v.hostSlices(ctx)
 	if err != nil {
 		return err
 	}
-	if err := stopSlices(ctx, sliced...); err != nil {
+	if err := v.stopSlices(ctx, sliced...); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(filepath.Join(v.a.cfg.StateDir, "storage")); err != nil {

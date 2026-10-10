@@ -151,8 +151,10 @@ func (e *env) sliceDir(container string) string {
 // returns its cgroup.
 func (e *env) plantSlice() string {
 	e.t.Helper()
-	name := (&Agent{identity: identity{HostID: e.server.hostID}}).slicePrefix() + "planted.slice"
-	if err := startSlice(e.t.Context(), name, containertypes.Resources{Memory: 64 << 20, CPUShares: 1024}); err != nil {
+	v := newVolumes(&Agent{identity: identity{HostID: e.server.hostID}})
+	defer v.close()
+	name := v.a.slicePrefix() + "planted.slice"
+	if err := v.startSlice(e.t.Context(), name, containertypes.Resources{Memory: 64 << 20, CPUShares: 1024}); err != nil {
 		e.t.Fatal(err)
 	}
 	dir := filepath.Join(cgroupRoot, "lazycloud.slice", "lazycloud-workloads.slice", name)
@@ -764,15 +766,15 @@ func (e *env) stopMounts() {
 			e.t.Errorf("stop mount container: %v", err)
 		}
 	}
-	sliced, err := (&Agent{identity: identity{HostID: e.server.hostID}}).hostSlices(ctx)
+	v := newVolumes(&Agent{identity: identity{HostID: e.server.hostID}})
+	defer v.close()
+	sliced, err := v.hostSlices(ctx)
 	if err != nil {
 		e.t.Errorf("list slices: %v", err)
 		return
 	}
-	for _, slice := range sliced {
-		if err := stopSlices(ctx, slice); err != nil {
-			e.t.Errorf("stop slice: %v", err)
-		}
+	if err := v.stopSlices(ctx, sliced...); err != nil {
+		e.t.Errorf("stop slices: %v", err)
 	}
 }
 
@@ -803,6 +805,21 @@ func TestAMountThatDiesDuringItsStartFailsIt(t *testing.T) {
 	e.killGeeseFS(e.mounter(id).ID)
 	if r := s.settle(t, id); r.GetPhase() != exited || !strings.Contains(r.GetExit().GetMessage(), "exited") {
 		t.Fatalf("a start whose mount died: %v", r)
+	}
+}
+
+// TestSlicesOutliveADroppedSystemdConnection: the agent connects to systemd
+// again once its connection drops.
+func TestSlicesOutliveADroppedSystemdConnection(t *testing.T) {
+	v := newVolumes(&Agent{identity: identity{HostID: uuid.NewString()}})
+	defer v.close()
+	conn, err := v.systemd(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if _, err := v.hostSlices(t.Context()); err != nil {
+		t.Fatalf("list slices after the connection dropped: %v", err)
 	}
 }
 
