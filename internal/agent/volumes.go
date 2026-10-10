@@ -92,8 +92,8 @@ func (v *volumes) mountDir() string { return filepath.Join(v.a.cfg.StateDir, "mo
 
 const mountPrefix = "lazycloud-mount-"
 
-// newMounter is mount n of container, named name. Each mounts in its own
-// directory directly in the mount directory, so no mount lies inside
+// newMounter is the mount container name, serving container. Each mounts in
+// its own directory directly in the mount directory, so no mount lies inside
 // another's.
 func (v *volumes) newMounter(name, container string) *mounter {
 	return &mounter{
