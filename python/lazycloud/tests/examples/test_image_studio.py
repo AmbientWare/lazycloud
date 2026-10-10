@@ -82,10 +82,12 @@ def test_a_signed_url_opens_only_its_own_path_until_it_expires() -> None:
     def valid(path: str, now: float, key: str = KEY) -> bool:
         return signature_valid(key, path, expires=expires, signature=signature, now=now)
 
-    assert valid(path, now=1059)
-    assert not valid(path, now=1060)
+    assert sign_path(KEY, path, now=1019, ttl_seconds=60) == url
+    assert valid(path, now=1060)
+    assert not valid(path, now=1120)
     assert not valid(path.replace("images/0", "images/1"), now=1001)
     assert not valid(path, now=1001, key="another-studio-key")
+    assert not signature_valid(KEY, path, expires=expires, signature="é", now=1001)
 
 
 def test_short_keys_are_refused() -> None:

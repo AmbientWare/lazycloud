@@ -80,6 +80,12 @@ def signed(path: str) -> str:
     return sign_path(studio_key(), path, now=time.time(), ttl_seconds=SIGNED_URL_SECONDS)
 
 
+def valid_signature(path: str, expires: int, signature: str) -> bool:
+    return signature_valid(
+        studio_key(), path, expires=expires, signature=signature, now=time.time()
+    )
+
+
 def gallery_item(entry: GalleryEntry) -> GalleryItem:
     urls = [signed(f"/api/jobs/{entry.job_id}/images/{n}") for n in range(entry.image_count)]
     return GalleryItem(**entry.model_dump(), image_urls=urls)
@@ -133,7 +139,7 @@ def share(job_id: str, index: ImageIndex) -> ShareLink:
     existing_image(job_id, index)
     try:
         return share_image.spawn(job_id, index).get(timeout_seconds=60)
-    except SdkError as error:
+    except (SdkError, TimeoutError) as error:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from error
 
 
@@ -144,29 +150,27 @@ public = APIRouter(prefix="/api")
 
 @public.get("/jobs/{job_id}/images/{index}")
 def image(job_id: str, index: ImageIndex, expires: int, signature: str) -> FileResponse:
-    path = f"/api/jobs/{job_id}/images/{index}"
-    if not signature_valid(
-        studio_key(), path, expires=expires, signature=signature, now=time.time()
-    ):
+    if not valid_signature(f"/api/jobs/{job_id}/images/{index}", expires, signature):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "the image link is invalid or expired")
-    return FileResponse(existing_image(job_id, index), media_type="image/webp")
+    return FileResponse(
+        existing_image(job_id, index),
+        media_type="image/webp",
+        headers={"Cache-Control": f"private, max-age={SIGNED_URL_SECONDS}, immutable"},
+    )
 
 
 @public.websocket("/jobs/{job_id}/events")
 async def job_events(websocket: WebSocket, job_id: str, expires: int, signature: str) -> None:
-    path = f"/api/jobs/{job_id}/events"
-    if not signature_valid(
-        studio_key(), path, expires=expires, signature=signature, now=time.time()
-    ):
+    if not valid_signature(f"/api/jobs/{job_id}/events", expires, signature):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     await websocket.accept()
-    sending = asyncio.ensure_future(send_events(websocket, Task.from_id(job_id)))
+    sending = asyncio.create_task(send_events(websocket, Task.from_id(job_id)))
     # The browser sends nothing, so a receive ends only when it leaves.
-    client_left = asyncio.ensure_future(websocket.receive())
+    client_left = asyncio.create_task(websocket.receive())
     done, pending = await asyncio.wait({sending, client_left}, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
+    for unfinished in pending:
+        unfinished.cancel()
     if pending:
         await asyncio.wait(pending)
     if sending in done:

@@ -20,9 +20,9 @@ as the `IMAGE_STUDIO_KEY` secret, and downloads about 16 GB of model weights
 into the `image-studio-models` volume on a CPU container. Deploy prints the
 `studio` URL. Open it, enter the key, and generate.
 
-The `studio` URL is public, and the key is what guards the API and the GPU
-behind it. Anyone with the key can spend GPU time, up to 16 queued jobs of at
-most four images each.
+The `studio` URL is public. The key guards the API and the GPU behind it, and
+anyone with the key can spend GPU time, up to 16 queued jobs of at most four
+images each.
 
 The studio container stops two minutes after the last request, and the GPU
 container five minutes after the last job. The cleanup schedule runs nightly at

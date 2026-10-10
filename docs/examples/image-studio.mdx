@@ -6,9 +6,9 @@ description: "A Next.js and FastAPI app that generates images on a GPU, streams 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
 The studio is a web page that turns a prompt into up to four images with
-FLUX.2 [klein] 4B on a GPU and shows each step as it runs. Finished images stay
-in a gallery for seven days and can become public links that expire, and
-nothing runs while nobody uses it.
+FLUX.2 [klein] 4B on a GPU and shows each denoising step as it runs. Finished
+images stay in a gallery for seven days, and any of them can become a public
+link. While nobody uses it, only a nightly cleanup runs.
 
 ## Architecture
 
@@ -37,8 +37,8 @@ download_weights (CPU, once) ──> volume: image-studio-models ──> generat
   runs once on two CPUs instead of on a GPU billed by the minute.
 - **`share_image`, a CPU function.** An artifact belongs to the task that
   saves it, so sharing runs as its own small task and returns a public URL.
-- **`delete_expired_images`, a schedule.** Nightly cleanup keeps the gallery,
-  and the cost of listing it, bounded.
+- **`delete_expired_images`, a schedule.** Nightly cleanup keeps seven days of
+  images, which also bounds what each gallery listing reads.
 - **Two volumes.** `image-studio-models` holds the weights every GPU container
   reads, and `image-studio-gallery` holds finished images, which outlive any
   container.
@@ -122,8 +122,8 @@ def download_weights() -> str:
 
 ## Shared resources
 
-Every workload names its storage from one module. Volumes are created on first
-mount, and the map on its first write.
+Every workload names its storage from one module. LazyCloud creates each
+volume on first mount and the map on its first write.
 
 ```python image_studio/resources.py
 app = App("image_studio")
@@ -259,9 +259,9 @@ def generate_images(request: GenerateRequest) -> GalleryEntry:
     return entry
 ```
 
-`job.json` is written after the last image. A file on a volume becomes visible
-to other containers when its writer closes it, so once the progress record says
-`done`, the studio can list the job.
+The function writes `job.json` after the last image. A file on a volume becomes
+visible to other containers when its writer closes it, so once the progress
+record says `done`, the studio can list the job.
 
 ## Stream progress
 
@@ -306,19 +306,16 @@ ends the connection.
 ```python image_studio/web.py
 @public.websocket("/jobs/{job_id}/events")
 async def job_events(websocket: WebSocket, job_id: str, expires: int, signature: str) -> None:
-    path = f"/api/jobs/{job_id}/events"
-    if not signature_valid(
-        studio_key(), path, expires=expires, signature=signature, now=time.time()
-    ):
+    if not valid_signature(f"/api/jobs/{job_id}/events", expires, signature):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     await websocket.accept()
-    sending = asyncio.ensure_future(send_events(websocket, Task.from_id(job_id)))
+    sending = asyncio.create_task(send_events(websocket, Task.from_id(job_id)))
     # The browser sends nothing, so a receive ends only when it leaves.
-    client_left = asyncio.ensure_future(websocket.receive())
+    client_left = asyncio.create_task(websocket.receive())
     done, pending = await asyncio.wait({sending, client_left}, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
+    for unfinished in pending:
+        unfinished.cancel()
     if pending:
         await asyncio.wait(pending)
     if sending in done:
@@ -366,18 +363,25 @@ def require_key(authorization: Annotated[str | None, Header()] = None) -> None:
 ```
 
 An `<img>` tag and a WebSocket can't send that header, so the keyed routes hand
-out URLs signed with the key. A signature covers one path and expires after an
-hour.
+out URLs signed with the key. A signature covers one path and lasts one to two
+hours. Each URL stays the same for an hour, so a gallery refresh reuses cached
+images instead of downloading them again.
 
 ```python image_studio/auth.py
 def sign_path(key: str, path: str, *, now: float, ttl_seconds: int) -> str:
-    expires = int(now) + ttl_seconds
+    """A URL for `path` that works for `ttl_seconds` to twice that.
+
+    The expiry rounds up to a whole window, so signing a path again inside one
+    window returns the same URL, and the browser reuses its cached copy.
+    """
+    expires = (int(now) // ttl_seconds + 2) * ttl_seconds
     query = urlencode({"expires": expires, "signature": _signature(key, path, expires)})
     return f"{path}?{query}"
 
 
 def signature_valid(key: str, path: str, *, expires: int, signature: str, now: float) -> bool:
-    return now < expires and hmac.compare_digest(signature, _signature(key, path, expires))
+    expected = _signature(key, path, expires).encode()
+    return now < expires and hmac.compare_digest(signature.encode(), expected)
 ```
 
 A new job returns its signed progress URL. A full GPU queue comes back as
@@ -408,7 +412,7 @@ web_image = (
 
 The script fetches a pinned Node.js release, checks its SHA-256, installs from
 `package-lock.json` and builds. It deletes `node_modules` in the same step, so
-the image keeps only the 700 KB of output.
+the image keeps only the exported files.
 
 ```python web/build.py
 def main(output: Path) -> None:
@@ -454,7 +458,8 @@ studio = app.asgi(
 ```
 
 The page itself is plain React. `web/app/api.ts` calls the routes above, and
-its `watchJob` opens the progress socket and reconnects until the job finishes.
+its `watchJob` opens the progress socket and reconnects after a drop until the
+job finishes.
 
 ```ts web/app/api.ts
 export function watchJob(eventsUrl: string, onEvent: (event: JobEvent) => void): () => void {
@@ -538,8 +543,8 @@ curl --fail-with-body "<studio-url>/api/jobs" \
 ```
 
 The reply holds the job ID and its signed `events_url`.
-`uv run lazycloud task list --app image_studio` lists the generation tasks
-with their logs.
+`uv run lazycloud task list --app image_studio` lists the generation tasks,
+and `uv run lazycloud task logs <job-id>` prints one's output.
 
 ## Cost and scaling
 
