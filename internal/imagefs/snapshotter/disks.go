@@ -476,11 +476,6 @@ func (f *diskFile) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrO
 	out.Mode = syscall.S_IFREG | 0o400
 	out.Nlink = 1
 	out.Size = uint64(f.gen.index.Size) //nolint:gosec // sizes are validated positive
-	for _, fr := range f.gen.index.Frames {
-		if !fr.Zero() {
-			out.Blocks += imagefs.FrameSize / 512
-		}
-	}
 	out.Blksize = imagefs.DiskBlockBytes
 	return 0
 }
