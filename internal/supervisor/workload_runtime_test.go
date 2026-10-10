@@ -215,15 +215,19 @@ func TestContainerAPISocketRelaysRequestsToTheAgent(t *testing.T) {
 	}
 }
 
+// waitForSocket waits until the socket at path accepts connections; its
+// file exists from bind, before the server listens.
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
 	for range 100 {
-		if _, err := os.Stat(path); err == nil {
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path)
+		if err == nil {
+			_ = conn.Close()
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("the API socket never appeared")
+	t.Fatal("the API socket never accepted a connection")
 }
 
 func TestInProcessOutputSurvivesLargeWritesAndSplitSecrets(t *testing.T) {

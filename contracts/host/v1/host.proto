@@ -380,6 +380,7 @@ message StorageGrant {
   string secret_access_key = 6;
   string session_token = 7;
   google.protobuf.Timestamp expires_at = 8;
+  bool force_path_style = 9;
 }
 
 // UpdateAgent asks an updatable agent to install a release and restart into

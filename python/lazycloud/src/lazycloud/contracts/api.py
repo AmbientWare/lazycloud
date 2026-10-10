@@ -81,9 +81,7 @@ class TokenStatus(str, Enum):
 class Token(APIModel):
     id: UUID
     name: str
-    prefix: Annotated[
-        str, Field(description="The token's first characters; empty for older tokens.")
-    ]
+    prefix: Annotated[str, Field(description="The token's first characters.")]
     device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
     workspace_id: Annotated[
         UUID | None, Field(description="Set when the token reaches only this workspace.")
@@ -1380,26 +1378,11 @@ class ContainerCounts(APIModel):
     running: Annotated[int, Field(description="Ready or draining.")]
 
 
-class ConcurrencyLimits(APIModel):
-    max_cpu_containers: int
-    max_gpus: int
-
-
-class Concurrency(APIModel):
-    cpu_containers: int
-    gpus: int
-    limits: Annotated[
-        ConcurrencyLimits | None,
-        Field(description="Absent while the account's plan limits are unknown."),
-    ] = None
-
-
 class AccountMetrics(APIModel):
     containers: Annotated[
         ContainerCounts,
         Field(description="Live containers in every workspace the caller is a member of."),
     ]
-    concurrency: Concurrency
 
 
 class ActivityMeasure(str, Enum):

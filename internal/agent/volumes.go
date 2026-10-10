@@ -114,6 +114,9 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if !isUUID(workspace) {
 		return fmt.Errorf("storage grant for %q: not a workspace id", workspace)
 	}
+	if g.GetEndpoint() == "" || g.GetBucket() == "" {
+		return fmt.Errorf("storage grant for %s names no endpoint or bucket", workspace)
+	}
 	dir := v.storageDir(workspace)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create storage directory: %w", err)
@@ -132,7 +135,9 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err := writeFileAtomic(filepath.Join(dir, "config"), []byte(config), 0o644); err != nil { //nolint:gosec // Holds no secret.
 		return fmt.Errorf("write credential config: %w", err)
 	}
-	location, err := json.Marshal(bucketLocation{Endpoint: g.GetEndpoint(), Region: g.GetRegion(), Bucket: g.GetBucket()})
+	location, err := json.Marshal(bucketLocation{
+		Endpoint: g.GetEndpoint(), Region: g.GetRegion(), Bucket: g.GetBucket(), PathStyle: g.GetForcePathStyle(),
+	})
 	if err != nil {
 		return fmt.Errorf("encode grant: %w", err)
 	}
@@ -153,9 +158,10 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 // bucketLocation is where a workspace's bucket is, kept beside its
 // credentials so a restarted agent can remount.
 type bucketLocation struct {
-	Endpoint string `json:"endpoint"`
-	Region   string `json:"region"`
-	Bucket   string `json:"bucket"`
+	Endpoint  string `json:"endpoint"`
+	Region    string `json:"region"`
+	Bucket    string `json:"bucket"`
+	PathStyle bool   `json:"path_style"`
 }
 
 func (v *volumes) location(workspace string) (bucketLocation, error) {
@@ -339,7 +345,7 @@ func (v *volumes) startMounter(ctx context.Context, workspace string) error {
 	}
 	id, err := v.runMount(ctx, mountSpec{
 		name: mounterName(workspace), dir: workspace, creds: v.storageDir(workspace),
-		source: grant.Bucket + ":volumes/", endpoint: grant.Endpoint, region: grant.Region, pathStyle: grant.Endpoint != "",
+		source: grant.Bucket + ":volumes/", endpoint: grant.Endpoint, region: grant.Region, pathStyle: grant.PathStyle,
 		labels: map[string]string{labelKind: kindMount, labelWorkspace: workspace},
 	})
 	if err != nil {
@@ -388,9 +394,7 @@ func (v *volumes) runMount(ctx context.Context, m mountSpec) (string, error) {
 		"-f", "-o", "allow_other", "--uid", uid, "--gid", gid, "--dir-mode", "0777", "--file-mode", "0666",
 		"--fsync-on-close", "--stat-cache-ttl", "1s", "--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--no-preload-dir",
 	}
-	if m.endpoint != "" {
-		args = append(args, "--endpoint", m.endpoint)
-	}
+	args = append(args, "--endpoint", m.endpoint)
 	if m.region != "" {
 		args = append(args, "--region", m.region)
 	}

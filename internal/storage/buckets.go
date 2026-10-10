@@ -60,9 +60,7 @@ const grantLifetime = time.Hour
 
 // Grant is a credential that reaches one workspace bucket until ExpiresAt.
 type Grant struct {
-	Endpoint        string
-	Region          string
-	Bucket          string
+	Location
 	AccessKeyID     string
 	SecretAccessKey string
 	SessionToken    string
@@ -286,7 +284,7 @@ func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime
 		// The key reaches nothing yet; delete it now rather than at expiry.
 		return Grant{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
 	}
-	return Grant{Bucket: bucket, AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, ExpiresAt: expires}, true, nil
+	return Grant{Location: Location{Bucket: bucket}, AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, ExpiresAt: expires}, true, nil
 }
 
 func (g *garageBuckets) revoke(ctx context.Context, accessKeyID string) error {
@@ -339,7 +337,7 @@ func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime ti
 	}
 	c := out.Credentials
 	return Grant{
-		Bucket: bucket, AccessKeyID: aws.ToString(c.AccessKeyId), SecretAccessKey: aws.ToString(c.SecretAccessKey),
+		Location: Location{Bucket: bucket}, AccessKeyID: aws.ToString(c.AccessKeyId), SecretAccessKey: aws.ToString(c.SecretAccessKey),
 		SessionToken: aws.ToString(c.SessionToken), ExpiresAt: aws.ToTime(c.Expiration),
 	}, false, nil
 }

@@ -2342,9 +2342,6 @@ type AccountActivitySeries struct {
 
 // AccountMetrics defines model for AccountMetrics.
 type AccountMetrics struct {
-	// Concurrency Live containers in the workspaces the caller owns, which plan limits apply to.
-	Concurrency Concurrency `json:"concurrency"`
-
 	// Containers Live containers in every workspace the caller is a member of.
 	Containers ContainerCounts `json:"containers"`
 }
@@ -2909,21 +2906,6 @@ type ComputeWorkload struct {
 type ComputeWorkloadPage struct {
 	NextCursor *string           `json:"next_cursor,omitempty"`
 	Workloads  []ComputeWorkload `json:"workloads"`
-}
-
-// Concurrency Live containers in the workspaces the caller owns, which plan limits apply to.
-type Concurrency struct {
-	CpuContainers int `json:"cpu_containers"`
-	Gpus          int `json:"gpus"`
-
-	// Limits Absent while the account's plan limits are unknown.
-	Limits *ConcurrencyLimits `json:"limits,omitempty"`
-}
-
-// ConcurrencyLimits defines model for ConcurrencyLimits.
-type ConcurrencyLimits struct {
-	MaxCpuContainers int `json:"max_cpu_containers"`
-	MaxGpus          int `json:"max_gpus"`
 }
 
 // Container defines model for Container.
@@ -5105,7 +5087,7 @@ type Token struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	Name       string     `json:"name"`
 
-	// Prefix The token's first characters; empty for older tokens.
+	// Prefix The token's first characters.
 	Prefix string      `json:"prefix"`
 	Status TokenStatus `json:"status"`
 

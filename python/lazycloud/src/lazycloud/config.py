@@ -26,11 +26,9 @@ DEFAULT_PROFILE = "default"
 CONFIG_FILE_MODE = 0o600
 CONFIG_DIRECTORY_MODE = 0o700
 
-# Placeholder hosted control-plane endpoint shipped in the published `lazycloud`
-# dist. It is the final fallback in the endpoint resolution order (flag > env >
-# stored profile > this default), so plain `lazycloud login` targets the hosted
-# platform with no configuration. Swapped for the real hosted domain at first
-# publish.
+# The hosted control plane. It is the final fallback in the endpoint resolution
+# order (flag > env > stored profile > this default), so plain `lazycloud login`
+# targets the hosted platform with no configuration.
 PACKAGED_DEFAULT_ENDPOINT = "https://lazycloud.dev"
 
 # `open(O_NOFOLLOW)` on a symlink reports `ELOOP` on Linux and macOS and

@@ -170,16 +170,15 @@ func (q *Queries) ContainerStarts(ctx context.Context, arg ContainerStartsParams
 }
 
 const liveContainerCounts = `-- name: LiveContainerCounts :many
-select c.workspace_id, c.state, count(*)::int as containers
+select c.state, count(*)::int as containers
 from containers c
 where c.workspace_id = any($1::uuid[]) and c.state <> 'stopped'
-group by 1, 2
+group by 1
 `
 
 type LiveContainerCountsRow struct {
-	WorkspaceID uuid.UUID
-	State       string
-	Containers  int32
+	State      string
+	Containers int32
 }
 
 // From the containers_live_workspace partial index of each workspace.
@@ -192,7 +191,7 @@ func (q *Queries) LiveContainerCounts(ctx context.Context, workspaceIds []uuid.U
 	var items []LiveContainerCountsRow
 	for rows.Next() {
 		var i LiveContainerCountsRow
-		if err := rows.Scan(&i.WorkspaceID, &i.State, &i.Containers); err != nil {
+		if err := rows.Scan(&i.State, &i.Containers); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

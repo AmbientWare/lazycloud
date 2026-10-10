@@ -2550,7 +2550,7 @@ paths:
     get:
       operationId: getAccountMetrics
       tags: [observability]
-      summary: Live containers across the caller's workspaces and concurrency against plan limits
+      summary: Live containers across the caller's workspaces
       responses:
         "200":
           description: The account's metrics
@@ -4150,7 +4150,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         prefix:
-          description: The token's first characters; empty for older tokens.
+          description: The token's first characters.
           type: string
         device:
           description: Minted by `lazycloud login`.
@@ -6680,32 +6680,13 @@ components:
           description: Ready or draining.
           type: integer
 
-    ConcurrencyLimits:
-      type: object
-      required: [max_cpu_containers, max_gpus]
-      properties:
-        max_cpu_containers: { type: integer }
-        max_gpus: { type: integer }
-
-    Concurrency:
-      description: Live containers in the workspaces the caller owns, which plan limits apply to.
-      type: object
-      required: [cpu_containers, gpus]
-      properties:
-        cpu_containers: { type: integer }
-        gpus: { type: integer }
-        limits:
-          description: Absent while the account's plan limits are unknown.
-          allOf: [{ $ref: "#/components/schemas/ConcurrencyLimits" }]
-
     AccountMetrics:
       type: object
-      required: [containers, concurrency]
+      required: [containers]
       properties:
         containers:
           description: Live containers in every workspace the caller is a member of.
           allOf: [{ $ref: "#/components/schemas/ContainerCounts" }]
-        concurrency: { $ref: "#/components/schemas/Concurrency" }
 
     ActivityMeasure:
       type: string

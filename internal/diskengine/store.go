@@ -27,8 +27,7 @@ type Credentials struct {
 }
 
 // Store locates a workspace bucket. Object keys are Prefix +
-// "disks/<disk id>/...", so a non-empty Prefix ends with "/". Endpoint is
-// empty for AWS S3.
+// "disks/<disk id>/...", so a non-empty Prefix ends with "/".
 type Store struct {
 	Endpoint       string
 	Region         string
@@ -58,8 +57,8 @@ type objectStore struct {
 }
 
 func openStore(store Store) (*objectStore, error) {
-	if store.Region == "" || store.Bucket == "" || store.Credentials == nil {
-		return nil, fmt.Errorf("%w: a store needs a region, a bucket and credentials", ErrInvalid)
+	if store.Endpoint == "" || store.Region == "" || store.Bucket == "" || store.Credentials == nil {
+		return nil, fmt.Errorf("%w: a store needs an endpoint, a region, a bucket and credentials", ErrInvalid)
 	}
 	fetch := store.Credentials
 	provider := aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
@@ -96,9 +95,7 @@ func openStore(store Store) (*objectStore, error) {
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 		RetryMaxAttempts:           5,
-	}
-	if store.Endpoint != "" {
-		options.BaseEndpoint = aws.String(store.Endpoint)
+		BaseEndpoint:               aws.String(store.Endpoint),
 	}
 	return &objectStore{client: s3.New(options), bucket: store.Bucket, prefix: store.Prefix}, nil
 }

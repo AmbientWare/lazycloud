@@ -3,6 +3,7 @@ package hostsession
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,10 +47,13 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 			if err != nil {
 				return nil, err
 			}
+			loc, err := storage.CloudBucketLocation(*b)
+			if err != nil {
+				return nil, fmt.Errorf("cloud bucket at %s: %w", m.MountPath, err)
+			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
-				Bucket: b.Bucket, Prefix: deref(b.Prefix), Region: deref(b.Region), Endpoint: deref(b.Endpoint),
-				ForcePathStyle: b.ForcePathStyle != nil && *b.ForcePathStyle,
-				AccessKeyId:    keys[access], SecretAccessKey: keys[secret],
+				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
+				ForcePathStyle: loc.PathStyle, AccessKeyId: keys[access], SecretAccessKey: keys[secret],
 			}}
 		}
 		out[n] = mount
@@ -97,7 +101,7 @@ func (sess *session) ensureGrant(ctx context.Context, workspace identity.Workspa
 	msg := &hostproto.ServerMessage{
 		CommandId: "grant:" + workspace.String() + ":" + grant.ExpiresAt.Format(time.RFC3339),
 		Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
-			WorkspaceId: workspace.String(), Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket,
+			WorkspaceId: workspace.String(), Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
 			AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
 			ExpiresAt: timestamppb.New(grant.ExpiresAt),
 		}},

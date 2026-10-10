@@ -16,10 +16,9 @@ import (
 
 // RefreshZoneOfferings reads which catalog types EC2 offers in each zone
 // of the platform's networks, one call and one transaction per region. EC2
-// sells some types in only some zones of a region (on 2026-10-02 use1-az3
-// offered 2 of the catalog's 55), and a launch into a zone without its type
-// is refused. A region whose read fails keeps its last offerings. It
-// reports how many zone and type pairs it stored.
+// sells some types in only some zones of a region, and a launch into a zone
+// without its type is refused. A region whose read fails keeps its last
+// offerings. It reports how many zone and type pairs it stored.
 func (c *Compute) RefreshZoneOfferings(ctx context.Context, logger *slog.Logger) (int, error) {
 	stored := 0
 	var failed error
