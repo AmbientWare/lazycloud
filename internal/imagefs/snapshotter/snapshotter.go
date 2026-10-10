@@ -114,25 +114,17 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 		cancel()
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.Root, disksDir), 0o700); err != nil {
-		cancel()
-		return nil, fmt.Errorf("create the disk directory: %w", err)
-	}
-	served, err := mountDisks(filepath.Join(cfg.Root, disksDir), cache, cfg.HTTP, cfg.Logger)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
+	served := newDisks(filepath.Join(cfg.Root, disksDir), cache, cfg.HTTP, cfg.Logger)
 	ms, err := storage.NewMetaStore(filepath.Join(cfg.Root, "metadata.db"))
 	if err != nil {
 		cancel()
-		return nil, errors.Join(fmt.Errorf("open snapshot metadata: %w", err), served.close())
+		return nil, fmt.Errorf("open snapshot metadata: %w", err)
 	}
 	ov, err := overlay.NewSnapshotter(cfg.Root, overlay.WithMetaStore(ms))
 	if err != nil {
 		cancel()
 		_ = ms.Close()
-		return nil, errors.Join(fmt.Errorf("open overlay snapshotter: %w", err), served.close())
+		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
 	s := &snapshotter{
 		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, log: cfg.Logger, cancel: cancel,

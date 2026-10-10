@@ -63,10 +63,7 @@ func serveDisks(t *testing.T, transport http.RoundTripper, bound int64) *disks {
 		t.Fatal("the snapshotter tests mount FUSE filesystems and run as root")
 	}
 	c := newTestCache(t, transport, bound)
-	d, err := mountDisks(t.TempDir(), c, &http.Client{Transport: transport}, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
+	d := newDisks(t.TempDir(), c, &http.Client{Transport: transport}, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() {
 		if err := d.close(); err != nil {
 			t.Error(err)

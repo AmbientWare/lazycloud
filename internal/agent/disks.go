@@ -368,9 +368,13 @@ func fenced(err error) bool { return status.Code(err) == codes.FailedPreconditio
 // counts as released, and the local copy, which may hold writes the disk's
 // next holder never saw, is deleted too.
 func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
-	local, err := a.hasLocalDisk(ctx, d.ID)
-	if err != nil {
-		return err
+	// A host that cannot attach disks never attached this one.
+	local := false
+	if a.diskErr == nil {
+		var err error
+		if local, err = a.hasLocalDisk(ctx, d.ID); err != nil {
+			return err
+		}
 	}
 	lost := false
 	if local {
@@ -386,7 +390,7 @@ func (a *Agent) release(ctx context.Context, container string, d *heldDisk) erro
 			return err
 		}
 	}
-	_, err = a.host.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
+	_, err := a.host.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
 	if err != nil && !fenced(err) {
 		return fmt.Errorf("release: %w", err)
 	}

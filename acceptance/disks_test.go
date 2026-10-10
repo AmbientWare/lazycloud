@@ -24,8 +24,12 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 		t.Skip(err)
 	}
 	p := startPlatform(t)
-	p.runAgent()
 	ctx := t.Context()
+	var err error
+	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p.runAgent()
 	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
 		var online int
 		if err := p.pool.QueryRow(ctx, "select count(*) from hosts where state = 'online'").Scan(&online); err != nil {

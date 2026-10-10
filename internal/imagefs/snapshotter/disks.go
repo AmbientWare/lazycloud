@@ -11,6 +11,7 @@ import (
 	"iter"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -44,11 +45,13 @@ const diskTraceWindow = time.Minute
 type disks struct {
 	cache  *frameCache
 	dir    string
-	root   *gofs.Inode
-	server *fuse.Server
 	http   *http.Client
 	log    *slog.Logger
 	inodes atomic.Uint64
+	// root and server are the mounted directory, set by mount.
+	mountMu sync.Mutex
+	root    *gofs.Inode
+	server  *fuse.Server
 
 	mu   sync.Mutex
 	byID map[string]*disk
@@ -88,14 +91,25 @@ type diskGeneration struct {
 	cache      *frameCache
 }
 
-// mountDisks mounts the directory disk generations are served in at dir.
-// Only its owner reads it: the snapshotter, the disk engine's daemons and
-// the agent all run as root.
-func mountDisks(dir string, cache *frameCache, client *http.Client, log *slog.Logger) (*disks, error) {
-	d := &disks{cache: cache, dir: dir, http: client, log: log, byID: map[string]*disk{}}
+func newDisks(dir string, cache *frameCache, client *http.Client, log *slog.Logger) *disks {
+	return &disks{cache: cache, dir: dir, http: client, log: log, byID: map[string]*disk{}}
+}
+
+// mount mounts the directory disk generations are served in, once, when
+// the first generation is served. Only its owner reads it: the snapshotter,
+// the disk engine's daemons and the agent all run as root.
+func (d *disks) mount() error {
+	d.mountMu.Lock()
+	defer d.mountMu.Unlock()
+	if d.server != nil {
+		return nil
+	}
+	if err := os.MkdirAll(d.dir, 0o700); err != nil {
+		return fmt.Errorf("create the disk directory: %w", err)
+	}
 	root := &gofs.Inode{}
 	zero := time.Duration(0)
-	server, err := gofs.Mount(dir, root, &gofs.Options{
+	server, err := gofs.Mount(d.dir, root, &gofs.Options{
 		MountOptions: fuse.MountOptions{
 			FsName: "disks",
 			// Reads return bytes in memory; there is no file to splice.
@@ -113,14 +127,20 @@ func mountDisks(dir string, cache *frameCache, client *http.Client, log *slog.Lo
 		NullPermissions: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("mount the disk directory at %s: %w", dir, err)
+		return fmt.Errorf("mount the disk directory at %s: %w", d.dir, err)
 	}
 	d.root, d.server = root, server
-	return d, nil
+	return nil
 }
 
-// close unmounts the directory. Files still open fail their reads.
+// close unmounts the directory, if mounted. Files still open fail their
+// reads.
 func (d *disks) close() error {
+	d.mountMu.Lock()
+	defer d.mountMu.Unlock()
+	if d.server == nil {
+		return nil
+	}
 	if err := d.server.Unmount(); err != nil {
 		return fmt.Errorf("unmount the disk directory: %w", err)
 	}
@@ -235,6 +255,9 @@ func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (
 
 // open fetches a generation's index and adds its file.
 func (d *disks) open(ctx context.Context, k *disk, req *imagefsproto.ServeDiskRequest) (*diskGeneration, error) {
+	if err := d.mount(); err != nil {
+		return nil, err
+	}
 	var raw []byte
 	err := retry(ctx, func() error {
 		grant, err := k.liveGrant()
