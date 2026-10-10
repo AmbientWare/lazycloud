@@ -102,3 +102,38 @@ LazyCloud calls that webhook with execution events as the task changes state,
 so another system can react without polling. Endpoints and ASGI apps call it
 once per request after the response ends, with the request's status code and
 response size; `task_id` is the request's `X-Request-Id`.
+
+Each callback is a JSON `POST` with the task's `status`, `attempt_number`,
+`max_attempts`, `error` and `finished_at`. `data` carries the result up to
+256 KiB: a call made with JSON arguments, such as `lazycloud --json run`, gets
+`{"encoding": "json", "value": ...}`, and a call from Python's `.remote()` or
+`.spawn()` gets the pickled bytes with their encoding. Larger results set
+`data_omitted` instead.
+
+A delivery gets 5 seconds and three tries, 250 ms and 750 ms apart, and
+retries on network errors, 408, 425, 429 and any 5xx. `Idempotency-Key` stays
+the same across tries of one event, so a receiver can drop repeats. A receiver
+that scales to zero may miss the first event while it starts.
+
+### Verify a callback
+
+`X-Task-Signature` is a hex HMAC-SHA256, keyed by the workspace secret
+`LAZYCLOUD_CALLBACK_SIGNING_KEY`, of the base64-encoded body, a colon and the
+`X-Task-Timestamp` header in Unix seconds. LazyCloud creates the secret with
+the first delivery. A receiver that lists it in `secrets=` needs it to exist
+before deploying, so create it yourself with a random `whsec_` value first.
+
+```python
+import base64
+import hashlib
+import hmac
+import time
+
+
+def verify(key: str, body: bytes, signature: str, timestamp: str) -> bool:
+    if not timestamp.isdecimal() or abs(time.time() - int(timestamp)) > 300:
+        return False
+    signed = base64.b64encode(body) + b":" + timestamp.encode()
+    expected = hmac.new(key.encode(), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected.encode(), signature.encode())
+```
