@@ -418,10 +418,7 @@ func (v *volumes) start(ctx context.Context, m *mounter, what string, spec mount
 	defer poll.Stop()
 	var reason mountFailure
 	for reason == "" {
-		if mounted(m.dir) {
-			v.mu.Lock()
-			m.up = true
-			v.mu.Unlock()
+		if mounted(m.dir) && v.markUp(m) {
 			return nil
 		}
 		select {
@@ -593,11 +590,7 @@ func (v *volumes) watch(ctx context.Context, m *mounter, id string) {
 			return
 		}
 	}
-	close(m.exited)
-	v.mu.Lock()
-	lost := m.up && !m.stopping
-	v.mu.Unlock()
-	if !lost {
+	if !v.markExited(m) {
 		return
 	}
 	output := v.a.containerOutput(ctx, m.name)
@@ -605,6 +598,28 @@ func (v *volumes) watch(ctx context.Context, m *mounter, id string) {
 	if c := v.a.lookup(m.container); c != nil {
 		c.failVolume(ctx, "the volume mount "+m.name+" exited: "+output)
 	}
+}
+
+// markUp records that m mounted, unless its container exited first.
+func (v *volumes) markUp(m *mounter) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	select {
+	case <-m.exited:
+		return false
+	default:
+		m.up = true
+		return true
+	}
+}
+
+// markExited records that m's container exited and reports whether that lost
+// a mount in use: one that came up and was not stopped on purpose.
+func (v *volumes) markExited(m *mounter) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	close(m.exited)
+	return m.up && !m.stopping
 }
 
 // stop stops m's container, whose script unmounts on SIGTERM, then removes
