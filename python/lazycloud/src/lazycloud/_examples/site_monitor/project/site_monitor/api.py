@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException
 from lazycloud import Map
 
-from site_monitor.models import MAX_WATCHES, Watch, WatchRequest
+from site_monitor.models import MAX_WATCHES, Watch, WatchRequest, load_watches
 
 
 def create_api(watches: Map, snapshots: Map) -> FastAPI:
@@ -11,11 +11,7 @@ def create_api(watches: Map, snapshots: Map) -> FastAPI:
 
     @api.get("/watches")
     def list_watches() -> list[Watch]:
-        found = (watches.get(key) for key in watches)
-        return sorted(
-            (Watch.model_validate(value) for value in found if value is not None),
-            key=lambda watch: str(watch.url),
-        )
+        return load_watches(watches)
 
     @api.post("/watches")
     def add_watch(request: WatchRequest) -> Watch:

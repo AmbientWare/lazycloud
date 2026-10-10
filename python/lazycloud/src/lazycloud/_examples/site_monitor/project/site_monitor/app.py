@@ -11,7 +11,7 @@ from lazycloud import App, Autoscaler, Image, Map, Secret, current_task_id
 
 from site_monitor.api import create_api
 from site_monitor.checks import check_watch
-from site_monitor.models import MAX_WATCHES, CheckResult, SweepReport, Watch
+from site_monitor.models import MAX_WATCHES, CheckResult, SweepReport, Watch, load_watches
 
 app = App("site_monitor")
 
@@ -72,17 +72,14 @@ def sweep() -> SweepReport:
     run_id = current_task_id()
     if not run_id:
         raise RuntimeError("run the sweep remotely: uv run lazycloud run site_monitor.app:sweep")
-    watches = [Watch.model_validate(value) for key in WATCHES if (value := WATCHES.get(key))]
+    watches = load_watches(WATCHES)
     results = list(check_page.map([(watch, run_id) for watch in watches]))
-    report = SweepReport(
-        run_id=run_id,
+    return SweepReport(
         results=[result for result in results if result is not None],
         failed=[
             str(watch.url) for watch, result in zip(watches, results, strict=True) if result is None
         ],
     )
-    print(report.model_dump_json(), flush=True)
-    return report
 
 
 api = create_api(WATCHES, SNAPSHOTS)

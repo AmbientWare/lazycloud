@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints
 
@@ -37,6 +38,15 @@ class Watch(WatchRequest):
         return cls(id=hashlib.sha256(key.encode()).hexdigest()[:16], **request.model_dump())
 
 
+def load_watches(watches: Mapping[str, Any]) -> list[Watch]:
+    """Every watch in the map, by URL. A watch removed while listing is skipped."""
+    found = (watches.get(key) for key in watches)
+    return sorted(
+        (Watch.model_validate(value) for value in found if value is not None),
+        key=lambda watch: str(watch.url),
+    )
+
+
 class Outcome(StrEnum):
     BASELINE = "baseline"
     UNCHANGED = "unchanged"
@@ -66,6 +76,5 @@ class CheckResult(BaseModel):
 
 
 class SweepReport(BaseModel):
-    run_id: str
     results: list[CheckResult]
     failed: list[str]
