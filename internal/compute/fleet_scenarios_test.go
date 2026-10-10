@@ -17,10 +17,10 @@ import (
 )
 
 // The scenarios run PlanFleet against a fleet simulation calibrated to the
-// recorded prod runs (testdata/fleetrun): measured lifecycle timings,
-// placement oldest first, rate-card revenue and recorded Spot prices. They print what each policy spends and bills and how long work
-// waits (go test -v) and assert invariants; the replay guard holds the
-// simulation to what prod recorded.
+// recorded prod run (testdata/fleetrun): measured lifecycle timings,
+// placement oldest first and rate-card revenue. They print what each policy
+// spends and how long work waits (go test -v) and assert invariants; the
+// replay guard holds the simulation to what prod recorded.
 
 const (
 	simTick = time.Second
@@ -62,7 +62,8 @@ type simContainer struct {
 	ends    time.Time
 	host    *HostID
 	build   bool
-	// market is the market its placement counts as an arrival in.
+	// market is the reserve market its placement counts in: its GPU
+	// model's, else its CPU market.
 	market ReserveMarket
 	// fn names the work; started is when it was placed.
 	fn      string
@@ -89,10 +90,10 @@ type simResult struct {
 	// launched, refused, reserveBought and retired are when each launch,
 	// refused launch, reserve purchase and retirement happened.
 	launched, refused, reserveBought, retired []time.Time
-	// unused counts serving hosts that left without running a container,
-	// unusedOnDemand the on-demand ones; onDemand counts on-demand hosts
-	// bought to serve; mostHosts is the most hosts that served at once.
-	unused, unusedOnDemand, onDemand, mostHosts int
+	// unused counts serving hosts that left without running a container;
+	// onDemand counts on-demand hosts bought to serve; mostHosts is the most
+	// hosts that served at once.
+	unused, onDemand, mostHosts int
 	// pinnedWaits are the waits of work that cannot run on Spot; mostWarm
 	// is the largest warm target the Spot market kept.
 	pinnedWaits []time.Duration
@@ -269,9 +270,6 @@ func (s *sim) advance() {
 		gone := h.State == FleetDraining && len(h.containers) == 0
 		if gone && !h.served {
 			s.r.unused++
-			if h.Market == MarketOnDemand {
-				s.r.unusedOnDemand++
-			}
 		}
 		return gone
 	})
@@ -397,35 +395,27 @@ func (s *sim) plan() time.Duration {
 			builds[b.market] = builds[b.market].Upper(b.shape)
 		}
 	}
-	// Arrivals are every market's placed containers within the policy's
-	// demand window, as RecentArrivals reads them; older ones drop out of
-	// the log.
-	window := s.p.ArrivalWindow
-	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= window })
-	var ats []time.Time
-	var shapes []FleetCapacity
-	idx := []int{}
-	for i, c := range s.placedLog {
+	// Arrived is what the Spot CPU market's placed work created within the
+	// arrival window reserves, less its largest batch; older containers drop
+	// out of the log.
+	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= s.p.ArrivalWindow })
+	var spot []*simContainer
+	for _, c := range s.placedLog {
 		if !c.build && c.market == (ReserveMarket{Preemptible: true}) {
-			idx = append(idx, i)
+			spot = append(spot, c)
 		}
 	}
-	slices.SortStableFunc(idx, func(a, b int) int { return s.placedLog[a].arrived.Compare(s.placedLog[b].arrived) })
-	for _, i := range idx {
-		ats = append(ats, s.placedLog[i].arrived)
-		shapes = append(shapes, reservedShape(s.placedLog[i].need))
-	}
-	var sum, largest, cur FleetCapacity
+	slices.SortStableFunc(spot, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
+	var sum, largest, batch FleetCapacity
 	var start, last time.Time
-	for i, at := range ats {
-		if at.Sub(last) >= s.p.Batch.Quiet || at.Sub(start) >= s.p.Batch.Max {
-			largest, start, cur = largest.Upper(cur), at, FleetCapacity{}
+	for _, c := range spot {
+		if c.arrived.Sub(last) >= s.p.Batch.Quiet || c.arrived.Sub(start) >= s.p.Batch.Max {
+			largest, start, batch = largest.Upper(batch), c.arrived, FleetCapacity{}
 		}
-		cur, last = cur.Plus(shapes[i]), at
-		sum = sum.Plus(shapes[i])
+		shape := reservedShape(c.need)
+		sum, batch, last = sum.Plus(shape), batch.Plus(shape), c.arrived
 	}
-	largest = largest.Upper(cur)
-	arrived := map[ReserveMarket]FleetCapacity{{Preemptible: true}: sum.Minus(largest).Clamp()}
+	arrived := map[ReserveMarket]FleetCapacity{{Preemptible: true}: sum.Minus(largest.Upper(batch)).Clamp()}
 	if s.prices != nil {
 		s.in.Spot = s.prices(s.now)
 	}
@@ -499,7 +489,8 @@ func (s *sim) plan() time.Duration {
 func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 	// A cheaper pool may lack the quota room the hosts and the pass's
 	// earlier starts left.
-	used := QuotaUse(snapshot.Hosts, s.in.Catalog)
+	quotaUsed := QuotaUse(snapshot.Hosts, s.in.Catalog)
+	used := maps.Clone(quotaUsed)
 	for _, a := range plan.Actions {
 		if a.Offer == nil {
 			continue
@@ -523,7 +514,6 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			}
 		}
 	}
-	quotaUsed := QuotaUse(snapshot.Hosts, s.in.Catalog)
 	resumed := map[HostID]bool{}
 	for _, a := range plan.Actions {
 		if a.Kind == ActionResume {
@@ -538,7 +528,8 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			class, _ := QuotaClassOf(h.InstanceType)
 			key := QuotaKey{Region: h.Region, Class: class, Market: h.Market}
 			limit, known := s.quotas[key]
-			full := s.knowQuota && known && quotaUsed[key]+catalogVCPUs(s.in.Catalog, h.InstanceType) > limit
+			typ, _ := CatalogTypeNamed(h.InstanceType)
+			full := s.knowQuota && known && quotaUsed[key]+typ.VCPUs() > limit
 			if !h.resumable() || resumed[h.ID] || full {
 				continue
 			}
@@ -549,15 +540,6 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			}
 		}
 	}
-}
-
-// catalogVCPUs is the vCPUs of a catalog type.
-func catalogVCPUs(catalog []CatalogType, name string) int64 {
-	i := slices.IndexFunc(catalog, func(t CatalogType) bool { return t.Name == name })
-	if i < 0 {
-		return 0
-	}
-	return catalog[i].VCPUs()
 }
 
 func (s *sim) host(id HostID) *simHost {

@@ -391,8 +391,6 @@ func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 	}
 }
 
-// An idle host leaves once idle for the idle timeout; a host pending work
-// fits is not idle.
 // An idle Spot host that holds no warm slot leaves after the Spot idle
 // timeout, a launch away from being replaced, while an on-demand one waits
 // out the idle timeout.
@@ -409,6 +407,8 @@ func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
 	}
 }
 
+// An idle host leaves once idle for the idle timeout; a host pending work
+// fits is not idle.
 func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)
