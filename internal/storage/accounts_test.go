@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,7 +156,7 @@ func (c *connectedStorage) deleteWorkspace(ws identity.WorkspaceID) {
 		c.t.Fatal(err)
 	}
 	for n := 0; ; n++ {
-		empty, err := c.storage.DeleteWorkspaceStorage(ctx, ws)
+		empty, err := c.storage.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), ws)
 		if err != nil {
 			c.t.Fatalf("delete workspace storage: %v", err)
 		}
@@ -279,6 +280,35 @@ func TestPlatformWorkspaceKeepsItsStorageInThePlatformAccount(t *testing.T) {
 	c.deleteWorkspace(ws)
 	if _, err := storagetest.Client().HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)}); err == nil {
 		t.Fatal("the workspace's bucket outlived the workspace")
+	}
+}
+
+// A workspace whose connected account no longer authorizes the platform
+// is still deleted: its bucket, with the data in it, stays in the
+// customer's account, and the account can then be disconnected.
+func TestWorkspaceDeletionOutlivesItsAccountsAuthorization(t *testing.T) {
+	ctx := t.Context()
+	c := newConnectedStorage(t)
+	ws := c.workspace(&c.connection)
+	if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); err != nil {
+		t.Fatal(err)
+	}
+	bucket, _, _ := c.bucketRow(ws)
+	if _, err := c.accountClient().PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("volumes/x/kept"), Body: strings.NewReader("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.pool.Exec(ctx, `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
+		t.Fatal(err)
+	}
+	// The scheduler deletes workspaces with storage of its own, which holds
+	// no credentials of the connection yet.
+	c.storage = NewStorage(c.pool, c.cfg, c.compute)
+	c.deleteWorkspace(ws)
+	if _, err := c.accountClient().HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String("volumes/x/kept")}); err != nil {
+		t.Fatalf("the customer's data left their account: %v", err)
+	}
+	if _, err := c.compute.Disconnect(ctx, c.user); err != nil {
+		t.Fatalf("disconnect after the workspace went: %v", err)
 	}
 }
 

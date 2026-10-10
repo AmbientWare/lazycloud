@@ -122,7 +122,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	if _, err := ident.GetWorkspace(ctx, admin, "doomed"); err == nil {
 		t.Fatal("workspace remains")
 	}
-	if empty, err := store.DeleteWorkspaceStorage(ctx, doomed.ID); err != nil || !empty {
+	if empty, err := store.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), doomed.ID); err != nil || !empty {
 		t.Fatalf("objects left: empty %v err %v", empty, err)
 	}
 	var rows int

@@ -132,7 +132,7 @@ func (a *accountLoops) deleteWorkspaces(ctx context.Context) (more bool) {
 		if live > 0 {
 			continue
 		}
-		empty, err := a.storage.DeleteWorkspaceStorage(ctx, ws.ID)
+		empty, err := a.storage.DeleteWorkspaceStorage(ctx, a.logger, ws.ID)
 		if err != nil {
 			a.logger.ErrorContext(ctx, "delete workspace storage", "workspace", ws.Name, "error", err)
 			continue

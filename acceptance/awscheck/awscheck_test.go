@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -264,7 +265,7 @@ func TestConnectedAccountKeepsTheWorkspaceBucket(t *testing.T) {
 		t.Errorf("write outside volumes/ and disks/: %v, want AccessDenied", err)
 	}
 	for range 5 {
-		empty, err := store.DeleteWorkspaceStorage(ctx, workspace)
+		empty, err := store.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), workspace)
 		if err != nil {
 			t.Fatalf("delete workspace storage: %v", err)
 		}

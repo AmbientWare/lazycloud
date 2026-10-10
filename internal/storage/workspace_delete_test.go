@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
@@ -22,14 +23,14 @@ func TestDeleteWorkspaceStorageIsBoundedPerCall(t *testing.T) {
 	prefix := fmt.Sprintf("workspaces/%s/", ws)
 	putObjects(t, cfg.Bucket, prefix, 1001)
 
-	empty, err := s.DeleteWorkspaceStorage(ctx, ws)
+	empty, err := s.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), ws)
 	if err != nil || empty {
 		t.Fatalf("first call: empty %v err %v, want more objects left", empty, err)
 	}
 	if left := countObjects(t, cfg.Bucket, prefix); left != 1 {
 		t.Fatalf("%d objects left after the first call, want 1", left)
 	}
-	if empty, err = s.DeleteWorkspaceStorage(ctx, ws); err != nil || !empty {
+	if empty, err = s.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), ws); err != nil || !empty {
 		t.Fatalf("second call: empty %v err %v, want empty", empty, err)
 	}
 	if left := countObjects(t, cfg.Bucket, prefix); left != 0 {
