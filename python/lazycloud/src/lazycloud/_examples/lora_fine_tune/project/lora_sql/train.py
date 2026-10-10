@@ -1,7 +1,6 @@
 """Train a LoRA adapter on a GPU, resuming from the run's last checkpoint."""
 
 import time
-from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -65,7 +64,7 @@ class TrainingResult(BaseModel):
     # and the run resumes from its last checkpoint.
     retries=0,
 )
-def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -> TrainingResult:
+def train(run: str = DEFAULT_RUN, settings: TrainingConfig | None = None) -> TrainingResult:
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import (
@@ -77,7 +76,7 @@ def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -
     )
 
     started = time.monotonic()
-    config = TrainingConfig.model_validate(settings or {})
+    config = settings or TrainingConfig()
     path = run_dir(run)
     record_settings(path / "settings.json", config)
     require_base_model()

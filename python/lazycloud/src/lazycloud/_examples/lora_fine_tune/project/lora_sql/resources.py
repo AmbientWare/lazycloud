@@ -21,8 +21,8 @@ GPUS = [GpuType.L4, GpuType.A10G]
 
 # Base weights, prepared data, checkpoints and adapters share one volume, so
 # every container reads them from storage instead of the network.
-storage = Volume("lora-sql", "/lora-sql")
 STORAGE = Path("/lora-sql")
+storage = Volume("lora-sql", str(STORAGE))
 BASE_MODEL_DIR = STORAGE / "base-model"
 DATA_DIR = STORAGE / "data"
 RUNS_DIR = STORAGE / "runs"
