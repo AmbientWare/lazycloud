@@ -127,7 +127,7 @@ func TestHostGrantMountsAVolume(t *testing.T) {
 	store := storage.NewStorage(pool, storage.Config{
 		Region:     e.region,
 		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
-	}, nil)
+	}, compute.NewCompute(pool, nil, compute.Config{}))
 	var ws uuid.UUID
 	if err := pool.QueryRow(ctx, "insert into workspaces (name) values ('aws-check') returning id").Scan(&ws); err != nil {
 		t.Fatal(err)

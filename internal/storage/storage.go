@@ -107,7 +107,7 @@ type Storage struct {
 
 // NewStorage returns the storage owner over pool and the configured bucket.
 // connections reaches the connected accounts whose workspaces keep their
-// volumes and disks there; without it such workspaces have none.
+// volumes and disks there.
 func NewStorage(pool *pgxpool.Pool, cfg Config, connections *compute.Compute) *Storage {
 	var endpoint *string
 	if cfg.Endpoint != "" {

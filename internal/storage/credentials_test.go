@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/compute"
 )
 
 // isolate keeps the default chain from reading this machine's AWS files or
@@ -134,7 +136,7 @@ func TestSignedURLsOutlastCredentialRotation(t *testing.T) {
 	}))
 	t.Cleanup(endpoint.Close)
 	t.Setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", endpoint.URL+"/v1/credentials")
-	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"}, nil)
+	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"}, compute.NewCompute(nil, nil, compute.Config{}))
 	for range 2 {
 		lifetime, err := s.signedLifetime(t.Context(), s.platform.client, time.Hour)
 		if err != nil {

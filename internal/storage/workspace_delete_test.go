@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
@@ -18,7 +19,8 @@ import (
 func TestDeleteWorkspaceStorageIsBoundedPerCall(t *testing.T) {
 	ctx := t.Context()
 	cfg := storagetest.Config(t)
-	s := NewStorage(dbtest.New(t), cfg, nil)
+	pool := dbtest.New(t)
+	s := NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{}))
 	ws := identity.WorkspaceID(uuid.New())
 	prefix := fmt.Sprintf("workspaces/%s/", ws)
 	putObjects(t, cfg.Bucket, prefix, 1001)

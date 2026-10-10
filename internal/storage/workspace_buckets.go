@@ -64,9 +64,6 @@ func (s *Storage) storeOf(ctx context.Context, name, region string, connection *
 		b.name = name
 		return b, nil
 	}
-	if connection != nil && s.connections == nil {
-		return bucketClient{}, ErrBucketsUnconfigured
-	}
 	key := region
 	if connection != nil {
 		key += " " + connection.String()
@@ -221,9 +218,6 @@ func (s *Storage) workspaceStore(ctx context.Context, workspace identity.Workspa
 func (s *Storage) createWorkspaceBucket(ctx context.Context, workspace identity.WorkspaceID, connection *uuid.UUID) (bucketClient, error) {
 	account, region := s.config.Workspaces.AccountID, s.config.Region
 	if connection != nil {
-		if s.connections == nil {
-			return bucketClient{}, ErrBucketsUnconfigured
-		}
 		connected, err := s.connectedAccount(ctx, *connection)
 		if err != nil {
 			return bucketClient{}, err
