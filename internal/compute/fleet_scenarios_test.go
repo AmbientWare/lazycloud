@@ -722,10 +722,9 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 	}
 }
 
-// TestFleetQuotaScenario is Oregon with a G Spot quota of 0, as on
-// 2026-09-18: Spot-tolerant T4 work can only use Spot there. Without the
-// quota every pass tries another G type and is refused; with it nothing is
-// tried.
+// TestFleetQuotaScenario is Oregon with a G Spot quota of 0, where
+// Spot-tolerant T4 work can only use Spot. Without the quota every pass
+// tries another G type and is refused; with it nothing is tried.
 func TestFleetQuotaScenario(t *testing.T) {
 	need := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}
 	arrivals := []simArrival{{at: 10 * time.Minute, need: need, count: 2, runs: 10 * time.Minute}}

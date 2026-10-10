@@ -142,8 +142,7 @@ func (c reserveCase) name() string {
 }
 
 // launchReserve asks for a reserve of the case and launches it through the
-// launcher, in the next zone when one refuses the type for capacity (on
-// 2026-10-02 us-east-2a and us-east-2c each refused m7i.large).
+// launcher, in the next zone when one refuses the type for capacity.
 func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.Network, c reserveCase, timings *lifecycleTimings) (liveReserve, time.Time) {
 	typ, ok := compute.CatalogTypeNamed(c.instanceType)
 	if !ok {

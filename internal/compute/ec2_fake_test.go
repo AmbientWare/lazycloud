@@ -300,8 +300,8 @@ func (f *fakeEC2) cancel(call awsCall) awsReply {
 func (f *fakeEC2) run(call awsCall) awsReply {
 	if call.Form.Get("InstanceInitiatedShutdownBehavior") == "terminate" &&
 		call.Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") == "persistent" {
-		// EC2's answer on 2026-10-02: a persistent request's instance
-		// cannot terminate itself.
+		// EC2 refuses a persistent request whose instance would terminate
+		// itself.
 		return ec2Error(http.StatusBadRequest, "InvalidParameterCombination", "The request with instanceInitiatedShutdownBehavior "+
 			"'terminate' is not supported when instanceInterruptionBehavior is set to '"+
 			call.Form.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior")+"'.")
