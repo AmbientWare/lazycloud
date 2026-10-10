@@ -29,9 +29,7 @@ MODEL_API_RANGE = "160.79.104.0/23"
 
 
 class SandboxCommandError(RuntimeError):
-    def __init__(self, command: list[str], exit_code: int, output: str) -> None:
-        super().__init__(f"{command[0]} exited with {exit_code}: {output[-2000:]}")
-        self.exit_code = exit_code
+    pass
 
 
 class ModelApiAddressError(RuntimeError):
@@ -80,7 +78,8 @@ def run_checked(
     """Run a command to completion and return its stdout; a non-zero exit raises."""
     response = instance.run(command, cwd=cwd, env=env, timeout_seconds=timeout_seconds)
     if response.exit_code != 0:
-        raise SandboxCommandError(command, response.exit_code, response.stdout + response.stderr)
+        output = (response.stdout + response.stderr)[-2000:]
+        raise SandboxCommandError(f"{command[0]} exited with {response.exit_code}: {output}")
     return response.stdout
 
 
@@ -140,10 +139,17 @@ def run_agent(instance: SandboxInstance, *, cwd: str, prompt: str, api_key: str)
 
 
 def parse_agent_output(stdout: str, stderr: str, exit_code: int) -> AgentRun:
-    """Claude Code prints one JSON result, also when it stops at a limit."""
+    """Claude Code prints one JSON result, also when it stops at a limit.
+
+    A limit stops a run with its own subtype. An API failure, such as a rejected
+    key, reports subtype "success" with is_error set, and raises here.
+    """
     try:
-        return AgentRun.model_validate_json(stdout.strip())
+        run = AgentRun.model_validate_json(stdout.strip())
     except ValidationError as exc:
         raise AgentOutputError(
             f"claude exited with {exit_code} without a JSON result: {(stdout + stderr)[-2000:]}"
         ) from exc
+    if run.is_error and run.subtype == "success":
+        raise AgentOutputError(f"claude failed: {run.result[-2000:]}")
+    return run

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 from lazycloud import SandboxInstance, SandboxProcessTimeoutError
@@ -52,7 +51,6 @@ class RepoSnapshot(BaseModel):
     image_id: str
     commit: str
     branch: str
-    created_at: datetime
 
 
 class PatchTooLargeError(RuntimeError):
@@ -91,6 +89,12 @@ def solve_issue(
     )
     agent = run_agent(instance, cwd=REPO_DIR, prompt=prompt, api_key=api_key)
     tests = run_tests(instance)
+    outcome = IssueOutcome(
+        issue=job.number,
+        pull_request=None,
+        tests_passed=tests.passed,
+        agent_cost_usd=agent.total_cost_usd,
+    )
     with tempfile.TemporaryDirectory(prefix="issue-") as directory:
         workdir = Path(directory)
         patch = download_patch(instance, snapshot.commit, workdir / "agent.patch")
@@ -98,12 +102,7 @@ def solve_issue(
             github.comment(
                 job.number, f"The agent finished without changing any files.\n\n{agent.result}"
             )
-            return IssueOutcome(
-                issue=job.number,
-                pull_request=None,
-                tests_passed=tests.passed,
-                agent_cost_usd=agent.total_cost_usd,
-            )
+            return outcome
         branch = f"agent/issue-{job.number}"
         (workdir / "repo").mkdir()
         push_patch(
@@ -121,12 +120,7 @@ def solve_issue(
         title=job.title,
         body=pull_request_body(job, agent, tests),
     )
-    return IssueOutcome(
-        issue=job.number,
-        pull_request=pull.html_url,
-        tests_passed=tests.passed,
-        agent_cost_usd=agent.total_cost_usd,
-    )
+    return outcome.model_copy(update={"pull_request": pull.html_url})
 
 
 def run_tests(instance: SandboxInstance) -> SuiteResult:

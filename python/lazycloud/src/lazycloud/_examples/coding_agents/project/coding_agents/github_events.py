@@ -17,7 +17,6 @@ class IssueJob(BaseModel):
     number: int
     title: str
     body: str
-    url: str
 
     @property
     def claim_key(self) -> str:
@@ -32,7 +31,6 @@ class _Issue(BaseModel):
     number: int
     title: str
     body: str | None
-    html_url: str
 
 
 class _Repository(BaseModel):
@@ -50,8 +48,8 @@ def signature_matches(secret: bytes, body: bytes, signature: str | None) -> bool
     """Whether X-Hub-Signature-256 is the HMAC of the exact body bytes under secret."""
     if signature is None:
         return False
-    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    expected = b"sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest().encode()
+    return hmac.compare_digest(expected, signature.encode())
 
 
 def issue_job(event: str, body: bytes) -> IssueJob | None:
@@ -78,5 +76,4 @@ def issue_job(event: str, body: bytes) -> IssueJob | None:
         number=delivery.issue.number,
         title=delivery.issue.title,
         body=text,
-        url=delivery.issue.html_url,
     )

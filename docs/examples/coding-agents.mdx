@@ -22,7 +22,7 @@ GitHub "labeled" ──> webhook (ASGI) ──spawn──> solve-issue ──> i
                                                                   │
 laptop: snapshot ──> repo-builder sandbox ──filesystem image──────┘
 
-schedule: nightly-eval ──.map──> eval-task × 5 ──> eval sandbox each ──> issue comment
+schedule: nightly-eval ──spawn_map──> eval-task × 5 ──> eval sandbox each ──> issue comment
 ```
 
 - **`agent-box`, a devbox.** It is a container you reach over SSH whose root
@@ -35,13 +35,13 @@ schedule: nightly-eval ──.map──> eval-task × 5 ──> eval sandbox eac
   logs, result and time limit. An autoscaler caps runs at three at once, and
   `max_pending_tasks` caps the waiting line at 20.
 - **Sandboxes for the agent.** A function's container runs this project's
-  code. A sandbox runs the agent's commands: it starts on demand from an
-  image you choose, its network can be cut to one address range, and it is
-  terminated when the run ends. Each issue and each eval task gets its own.
+  code. A sandbox runs the agent's commands. It starts on demand from an
+  image you choose, its network can be cut to one address range, and the run
+  terminates it when it ends. Each issue and each eval task gets its own.
 - **A filesystem image as the repository snapshot.** Agent sandboxes cannot
   reach PyPI or GitHub, so the repository and its installed dependencies come
   with the image. `repo-builder` is the only sandbox with open network.
-- **`nightly-eval`, a schedule, fanning out with `.map`.** The five tasks are
+- **`nightly-eval`, a schedule, fanning out with `spawn_map`.** The five tasks are
   independent, so each runs in its own `eval-task` call and sandbox at the same
   time.
 - **A map.** `coding-agents` holds the snapshot record and a claim per issue in
@@ -186,7 +186,9 @@ agent_image = (
 Three sandboxes build on it. `repo-builder` has open network and half an hour
 of idle time, enough to publish a large filesystem. The eval and issue
 sandboxes allow only `MODEL_API_RANGE`, and each stops five minutes after its
-last command if the function driving it dies.
+last command if the function driving it dies. They run on capacity that is not
+reclaimed, since a reclaim would throw away the model spend of a run in
+progress.
 
 ```python coding_agents/app.py
 # Clones the repository and installs its dependencies, so it is the only agent
@@ -207,6 +209,7 @@ eval_sandbox = app.sandbox(
     memory="1Gi",
     allow_list=[MODEL_API_RANGE],
     keep_warm_seconds=300,
+    preemptible=False,
 )
 
 
@@ -223,6 +226,7 @@ def issue_sandbox(image_id: str) -> Sandbox:
         memory="4Gi",
         allow_list=[MODEL_API_RANGE],
         keep_warm_seconds=300,
+        preemptible=False,
     )
 ```
 
@@ -249,9 +253,10 @@ def started(sandbox: Sandbox) -> Iterator[SandboxInstance]:
 An allow list holds address ranges, not hostnames, and it blocks DNS too.
 Anthropic publishes a fixed inbound range for its API. The function resolves
 `api.anthropic.com` where DNS works, checks the address falls inside that
-range, and pins it in the sandbox's `/etc/hosts`. A prompt injected through an
-issue can make the agent misbehave inside the sandbox, but it cannot send
-your code or key anywhere else.
+range, and pins it in the sandbox's `/etc/hosts`. Instructions planted in an
+issue can still steer the agent, but only model API traffic and the change the
+function pushes leave the sandbox. The agent holds the model API key and could
+write it into that change, so the label belongs on issues someone has read.
 
 ```python coding_agents/agent.py
 # Anthropic's published inbound range for its API. Agent sandboxes reach
@@ -327,7 +332,8 @@ def run_agent(instance: SandboxInstance, *, cwd: str, prompt: str, api_key: str)
 ```
 
 Claude Code prints one JSON object, also when a limit stops it, so the caller
-always learns the turns and spend:
+learns the turns and spend. `parse_agent_output` raises when the object reports
+a failed API call, such as a rejected key.
 
 ```python coding_agents/agent.py
 class AgentRun(BaseModel):
@@ -391,9 +397,7 @@ def build_snapshot(token: str) -> RepoSnapshot:
         )
         commit, branch = revision.split()
         image_id = instance.create_image_from_filesystem()
-    return RepoSnapshot(
-        image_id=image_id, commit=commit, branch=branch, created_at=datetime.now(UTC)
-    )
+    return RepoSnapshot(image_id=image_id, commit=commit, branch=branch)
 ```
 
 ```python coding_agents/github.py
@@ -422,8 +426,8 @@ def signature_matches(secret: bytes, body: bytes, signature: str | None) -> bool
     """Whether X-Hub-Signature-256 is the HMAC of the exact body bytes under secret."""
     if signature is None:
         return False
-    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    expected = b"sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest().encode()
+    return hmac.compare_digest(expected, signature.encode())
 
 
 def issue_job(event: str, body: bytes) -> IssueJob | None:
@@ -450,7 +454,6 @@ def issue_job(event: str, body: bytes) -> IssueJob | None:
         number=delivery.issue.number,
         title=delivery.issue.title,
         body=text,
-        url=delivery.issue.html_url,
     )
 ```
 
@@ -530,9 +533,9 @@ webhook = app.asgi(
 ## Solve an issue
 
 The worker reads the snapshot record, starts a sandbox on it, and reports any
-failure on the issue before the task fails. `retries=0` because a second
-attempt would spend the model budget again. A preempted call still retries,
-and one branch per issue makes that safe.
+failure on the issue before the task fails. `retries=0` and
+`preemptible=False` keep a run from starting over and spending the model
+budget again.
 
 ```python coding_agents/app.py
 @app.function(
@@ -542,6 +545,7 @@ and one branch per issue makes that safe.
     memory="512Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
     retries=0,
+    preemptible=False,
     max_pending_tasks=MAX_WAITING_ISSUES,
     autoscaler=Autoscaler(max_containers=MAX_PARALLEL_ISSUES),
     secrets=[ANTHROPIC_API_KEY.name, GITHUB_TOKEN.name],
@@ -597,6 +601,12 @@ def solve_issue(
     )
     agent = run_agent(instance, cwd=REPO_DIR, prompt=prompt, api_key=api_key)
     tests = run_tests(instance)
+    outcome = IssueOutcome(
+        issue=job.number,
+        pull_request=None,
+        tests_passed=tests.passed,
+        agent_cost_usd=agent.total_cost_usd,
+    )
     with tempfile.TemporaryDirectory(prefix="issue-") as directory:
         workdir = Path(directory)
         patch = download_patch(instance, snapshot.commit, workdir / "agent.patch")
@@ -604,12 +614,7 @@ def solve_issue(
             github.comment(
                 job.number, f"The agent finished without changing any files.\n\n{agent.result}"
             )
-            return IssueOutcome(
-                issue=job.number,
-                pull_request=None,
-                tests_passed=tests.passed,
-                agent_cost_usd=agent.total_cost_usd,
-            )
+            return outcome
         branch = f"agent/issue-{job.number}"
         (workdir / "repo").mkdir()
         push_patch(
@@ -627,12 +632,7 @@ def solve_issue(
         title=job.title,
         body=pull_request_body(job, agent, tests),
     )
-    return IssueOutcome(
-        issue=job.number,
-        pull_request=pull.html_url,
-        tests_passed=tests.passed,
-        agent_cost_usd=agent.total_cost_usd,
-    )
+    return outcome.model_copy(update={"pull_request": pull.html_url})
 ```
 
 The patch covers everything since the snapshot's commit, including commits
@@ -671,8 +671,7 @@ def download_patch(instance: SandboxInstance, base_commit: str, target: Path) ->
 
 Each issue has one branch, `agent/issue-<number>`. `push_patch` force-pushes
 it and `open_pull_request` updates the pull request already open from it, so a
-relabel or a retried call replaces the earlier attempt instead of adding a
-second pull request.
+relabel replaces the earlier attempt instead of adding a second pull request.
 
 ```python coding_agents/github.py
     def open_pull_request(self, *, branch: str, base: str, title: str, body: str) -> PullRequest:
@@ -753,6 +752,7 @@ counts as a failed task, with its error and no invented cost.
     memory="256Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 15 * 60,
     retries=0,
+    preemptible=False,
     autoscaler=Autoscaler(max_containers=len(task_names())),
     secrets=[ANTHROPIC_API_KEY.name],
 )
@@ -769,6 +769,7 @@ def eval_task(name: str) -> EvalResult:
     memory="256Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
     retries=0,
+    preemptible=False,
     secrets=[GITHUB_TOKEN.name],
 )
 def nightly_eval() -> EvalReport:
@@ -873,8 +874,9 @@ suite wants more.
   the eval track the work you actually hand to the agent.
 - A CI job that runs `uv run python -m coding_agents.snapshot` after each merge
   keeps pull requests close to the default branch.
-- A comment-triggered retry fits the same webhook: handle `issue_comment`
-  events in `issue_job` and check the commenter's permission first.
+- The same webhook can take a retry command from a comment, through
+  `issue_comment` events in `issue_job` and a check of the commenter's
+  permission.
 
 ## Clean up
 
@@ -890,5 +892,5 @@ uv run python -c "from coding_agents.app import STATE; STATE.delete()"
 
 Remove the webhook in the repository's settings, and delete the `agent/issue-*`
 branches you no longer need. Snapshot images stay in the workspace, since the
-CLI has no command to delete an image. `deployment stop nightly-eval` pauses only the
-eval.
+CLI has no command to delete an image. `deployment stop nightly-eval` pauses
+only the eval.
