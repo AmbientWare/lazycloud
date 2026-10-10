@@ -1,0 +1,586 @@
+---
+title: "Image studio"
+description: "A Next.js and FastAPI app that generates images on a GPU, streams progress over a WebSocket and keeps a gallery."
+---
+
+import ExampleSetup from '/snippets/example-setup.mdx';
+
+The studio is a web page that turns a prompt into up to four images with
+FLUX.2 [klein] 4B on a GPU and shows each step as it runs. Finished images stay
+in a gallery for seven days and can become public links that expire, and
+nothing runs while nobody uses it.
+
+## Architecture
+
+```text
+browser ──HTTPS + WebSocket──> studio (ASGI, CPU) ──.spawn──> generate_images (GPU)
+                                  │      │                        │        │
+                                  │      └── map: image-studio-progress <──┘
+                                  │                                        │
+                                  └──── volume: image-studio-gallery <─────┘
+                                  │
+                                  └──.spawn──> share_image (CPU) ──> artifact link
+
+schedule 04:00 UTC ──> delete_expired_images (CPU) ──> volume: image-studio-gallery
+download_weights (CPU, once) ──> volume: image-studio-models ──> generate_images
+```
+
+- **`studio`, an ASGI app.** One FastAPI app serves the Next.js page, the JSON
+  API and the progress WebSocket from a quarter CPU. The page and API share an
+  origin, so there is no CORS and one key guards both. It scales to zero two
+  minutes after the last request.
+- **`generate_images`, a GPU function.** Each job is one call, queued by
+  `.spawn()`, so the platform's task queue holds waiting jobs, caps them at 16
+  and reports why a job waits. FLUX.2 [klein] 4B needs about 16 GB of GPU
+  memory, so an L4 or A10G fits, and the model loads once per container.
+- **`download_weights`, a CPU function.** Fetching 16 GB is network work, so it
+  runs once on two CPUs instead of on a GPU billed by the minute.
+- **`share_image`, a CPU function.** An artifact belongs to the task that
+  saves it, so sharing runs as its own small task and returns a public URL.
+- **`delete_expired_images`, a schedule.** Nightly cleanup keeps the gallery,
+  and the cost of listing it, bounded.
+- **Two volumes.** `image-studio-models` holds the weights every GPU container
+  reads, and `image-studio-gallery` holds finished images, which outlive any
+  container.
+- **A map.** `image-studio-progress` holds one small record per running job,
+  written by the GPU and read by the WebSocket, and expires after a day.
+- **A secret.** `IMAGE_STUDIO_KEY` is the studio key. The page sends it to the
+  API, and the API signs image and WebSocket URLs with it.
+
+## Download and set up
+
+<ExampleSetup />
+
+```bash
+lazycloud example download image-studio
+cd image-studio
+uv sync
+uv run lazycloud login
+```
+
+`uv sync` installs FastAPI locally, since the CLI imports the app to deploy it.
+PyTorch and diffusers live in the `gpu` group and the Hugging Face client in
+the `weights` group, which only the remote images install.
+
+```toml pyproject.toml
+weights = ["huggingface-hub>=1.32,<2"]
+gpu = [
+    "accelerate==1.15.0",
+    "diffusers==0.41.0",
+    "torch==2.14.1",
+    "transformers==5.19.0",
+]
+```
+
+The configure script asks you to choose a studio key, stores it as a secret,
+and downloads the weights:
+
+```bash
+uv run python -m image_studio.configure
+```
+
+```python image_studio/configure.py
+def main() -> None:
+    key = getpass(f"Choose a studio key of {MIN_KEY_LENGTH} or more characters: ")
+    try:
+        access_key.set(check_key_strength(key))
+    except WeakKeyError as error:
+        raise SystemExit(str(error)) from error
+    print(f"Stored the key in the {access_key.name} secret.")
+    print(download_weights.remote())
+```
+
+The download pins a model revision and skips the repository's single-file copy
+of the transformer. The marker file goes last, so a GPU container never loads
+half a download, and a second run returns at once.
+
+```python image_studio/weights.py
+@app.function(
+    image=weights_image,
+    cpu=2,
+    memory="4Gi",
+    volumes=[models],
+    timeout_seconds=3600,
+    retries=2,
+)
+def download_weights() -> str:
+    from huggingface_hub import snapshot_download
+
+    if COMPLETE_MARKER.exists():
+        return f"{MODEL_REPO} is already in {WEIGHTS_DIR}"
+    snapshot_download(
+        MODEL_REPO,
+        revision=MODEL_REVISION,
+        local_dir=WEIGHTS_DIR,
+        allow_patterns=WEIGHT_FILES,
+    )
+    COMPLETE_MARKER.write_text(MODEL_REVISION)
+    return f"Downloaded {MODEL_REPO} to {WEIGHTS_DIR}"
+```
+
+{/* MEASURE: weights download wall time and cost */}
+
+## Shared resources
+
+Every workload names its storage from one module. Volumes are created on first
+mount, and the map on its first write.
+
+```python image_studio/resources.py
+app = App("image_studio")
+
+# The project's own dependencies, without the GPU group.
+app_image = Image.from_uv(".")
+
+MODELS_DIR = Path("/models")
+GALLERY_DIR = Path("/gallery")
+
+models = Volume("image-studio-models", str(MODELS_DIR))
+gallery = Volume("image-studio-gallery", str(GALLERY_DIR))
+job_progress = Map("image-studio-progress")
+access_key = Secret("IMAGE_STUDIO_KEY")
+```
+
+## The request
+
+A request is a Pydantic model, so FastAPI rejects anything outside the limits
+before it reaches a GPU: a prompt of 1 to 500 characters, one to four images, a
+known style and shape, and an optional 32-bit seed.
+
+```python image_studio/generation.py
+class GenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_PROMPT_CHARS)
+    ]
+    style: Style = Style.NONE
+    aspect: Aspect = Aspect.SQUARE
+    count: Annotated[int, Field(ge=1, le=MAX_IMAGES_PER_JOB)] = 1
+    seed: Annotated[int | None, Field(ge=0, lt=2**32)] = None
+
+    def full_prompt(self) -> str:
+        phrase = STYLE_PHRASES[self.style]
+        return f"{self.prompt}, {phrase}" if phrase else self.prompt
+```
+
+## Generate on the GPU
+
+`on_start` loads the pipeline before the container accepts a job, and
+`@cache` keeps it for every later call. A runner calls each hook with a context
+argument, which this one ignores.
+
+```python image_studio/generate.py
+@cache
+def pipeline() -> "Flux2KleinPipeline":
+    import torch
+    from diffusers import Flux2KleinPipeline
+
+    if not COMPLETE_MARKER.exists():
+        raise WeightsMissingError(
+            f"no weights in {WEIGHTS_DIR}; run `uv run python -m image_studio.configure` first"
+        )
+    return Flux2KleinPipeline.from_pretrained(
+        WEIGHTS_DIR, torch_dtype=torch.bfloat16, device_map="cuda"
+    )
+
+
+def load_pipeline(_context: object) -> None:
+    pipeline()
+```
+
+The function's task ID is the job ID. Gallery paths and the progress record
+use it, so the API never writes job state and no two writers share a key.
+`retries=0` because a failed generation would fail the same way again, while a
+preempted one still retries. `keep_warm=300` holds the loaded model for five
+minutes of prompt tweaking.
+
+```python image_studio/generate.py
+@app.function(
+    image=gpu_image,
+    gpu=[GpuType.L4, GpuType.A10G],
+    cpu=2,
+    memory="12Gi",
+    volumes=[models, gallery],
+    on_start=load_pipeline,
+    keep_warm=300,
+    timeout_seconds=300,
+    retries=0,
+    max_pending_tasks=16,
+)
+def generate_images(request: GenerateRequest) -> GalleryEntry:
+    import torch
+
+    job_id = current_task_id()
+    seed = request.seed if request.seed is not None else secrets.randbelow(2**32)
+    width, height = ASPECT_SIZES[request.aspect]
+    total_steps = request.count * STEPS_PER_IMAGE
+    completed_steps = 0
+
+    def report(stage: JobStage, error: str | None = None) -> None:
+        progress = JobProgress(
+            stage=stage, completed_steps=completed_steps, total_steps=total_steps, error=error
+        )
+        job_progress.set(job_id, progress.model_dump(mode="json"), ttl=PROGRESS_TTL_SECONDS)
+
+    def on_step_end(_pipe: object, _step: int, _timestep: object, tensors: dict) -> dict:
+        nonlocal completed_steps
+        completed_steps += 1
+        report(JobStage.GENERATING)
+        return tensors
+
+    report(JobStage.GENERATING)
+    try:
+        job_directory(GALLERY_DIR, job_id).mkdir(exist_ok=True)
+        for index in range(request.count):
+            image = pipeline()(
+                prompt=request.full_prompt(),
+                width=width,
+                height=height,
+                num_inference_steps=STEPS_PER_IMAGE,
+                guidance_scale=1.0,
+                generator=torch.Generator("cuda").manual_seed(seed + index),
+                callback_on_step_end=on_step_end,
+            ).images[0]
+            image.save(image_path(GALLERY_DIR, job_id, index), format="WEBP", quality=92)
+        entry = GalleryEntry(
+            job_id=job_id,
+            prompt=request.prompt,
+            style=request.style,
+            aspect=request.aspect,
+            seed=seed,
+            image_count=request.count,
+            created_at=datetime.now(UTC),
+        )
+        write_entry(GALLERY_DIR, entry)
+    except Exception as error:
+        report(JobStage.FAILED, error=f"{type(error).__name__}: {error}"[:300])
+        raise
+    report(JobStage.DONE)
+    return entry
+```
+
+`job.json` is written after the last image. A file on a volume becomes visible
+to other containers when its writer closes it, so once the progress record says
+`done`, the studio can list the job.
+
+## Stream progress
+
+The GPU reports steps, but it can't report what happens before it runs, such as
+waiting for a machine or loading the model. The task view from the platform
+covers that part, and one pure function merges the two.
+
+```python image_studio/progress.py
+def describe_job(
+    progress: JobProgress | None, *, task_status: str, pending_message: str | None
+) -> JobEvent:
+    """Combine the function's own progress with the platform's view of its task.
+
+    The task status covers what the function cannot report itself: waiting for
+    a GPU, loading the model, and failures that stop it before it writes.
+    """
+    if progress is not None and progress.stage in FINISHED_STAGES:
+        message = "Done" if progress.stage is JobStage.DONE else progress.error or "Failed"
+        return JobEvent(
+            stage=progress.stage,
+            message=message,
+            completed_steps=progress.completed_steps,
+            total_steps=progress.total_steps,
+        )
+    if task_status in ("failed", "cancelled"):
+        return JobEvent(stage=JobStage.FAILED, message=f"The generation task {task_status}")
+    if progress is None:
+        return JobEvent(stage=JobStage.QUEUED, message=pending_message or "Starting")
+    return JobEvent(
+        stage=JobStage.GENERATING,
+        message=f"Step {progress.completed_steps} of {progress.total_steps}",
+        completed_steps=progress.completed_steps,
+        total_steps=progress.total_steps,
+    )
+```
+
+The WebSocket route polls both once a second and sends only changes. Each
+message carries the whole state, so a page that reconnects picks up where it
+was. A second task waits for the browser to leave, and whichever finishes first
+ends the connection.
+
+```python image_studio/web.py
+@public.websocket("/jobs/{job_id}/events")
+async def job_events(websocket: WebSocket, job_id: str, expires: int, signature: str) -> None:
+    path = f"/api/jobs/{job_id}/events"
+    if not signature_valid(
+        studio_key(), path, expires=expires, signature=signature, now=time.time()
+    ):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await websocket.accept()
+    sending = asyncio.ensure_future(send_events(websocket, Task.from_id(job_id)))
+    # The browser sends nothing, so a receive ends only when it leaves.
+    client_left = asyncio.ensure_future(websocket.receive())
+    done, pending = await asyncio.wait({sending, client_left}, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending)
+    if sending in done:
+        sending.result()
+        await websocket.close()
+
+
+async def send_events(websocket: WebSocket, task: Task) -> None:
+    last: JobEvent | None = None
+    for _ in range(EVENTS_MAX_POLLS):
+        event = await asyncio.to_thread(read_event, task)
+        if event != last:
+            await websocket.send_json(event.model_dump(mode="json"))
+            last = event
+        if event.stage in FINISHED_STAGES:
+            return
+        await asyncio.sleep(EVENTS_POLL_SECONDS)
+
+
+def read_event(task: Task) -> JobEvent:
+    raw = job_progress.get(task.task_id)
+    progress = JobProgress.model_validate(raw) if raw is not None else None
+    view = task.view()
+    return describe_job(
+        progress,
+        task_status=view.status.value,
+        pending_message=view.pending.message if view.pending else None,
+    )
+```
+
+## Guard it with the studio key
+
+The studio URL is public, because a browser can't send a LazyCloud token. The
+key takes its place. Routes that spend compute or show the gallery expect it as
+a bearer token:
+
+```python image_studio/web.py
+def require_key(authorization: Annotated[str | None, Header()] = None) -> None:
+    if not bearer_matches(authorization, studio_key()):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "a valid studio key is required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+```
+
+An `<img>` tag and a WebSocket can't send that header, so the keyed routes hand
+out URLs signed with the key. A signature covers one path and expires after an
+hour.
+
+```python image_studio/auth.py
+def sign_path(key: str, path: str, *, now: float, ttl_seconds: int) -> str:
+    expires = int(now) + ttl_seconds
+    query = urlencode({"expires": expires, "signature": _signature(key, path, expires)})
+    return f"{path}?{query}"
+
+
+def signature_valid(key: str, path: str, *, expires: int, signature: str, now: float) -> bool:
+    return now < expires and hmac.compare_digest(signature, _signature(key, path, expires))
+```
+
+A new job returns its signed progress URL. A full GPU queue comes back as
+`503` instead of a job.
+
+```python image_studio/web.py
+@keyed.post("/jobs", status_code=status.HTTP_202_ACCEPTED)
+def create_job(request: GenerateRequest) -> JobCreated:
+    try:
+        call = generate_images.spawn(request)
+    except SdkError as error:
+        # Raised when the GPU queue is past max_pending_tasks, among other refusals.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from error
+    return JobCreated(job_id=call.task_id, events_url=signed(f"/api/jobs/{call.task_id}/events"))
+```
+
+## Serve the page
+
+The Next.js app in `web/` is a static export. The web image adds `web/` to the
+build context and runs a build script, so the page ships inside the image and
+your machine needs no Node.js.
+
+```python image_studio/web.py
+web_image = (
+    Image.from_uv(".").add_local_path("web").add_commands([f"python web/build.py {STATIC_DIR}"])
+)
+```
+
+The script fetches a pinned Node.js release, checks its SHA-256, installs from
+`package-lock.json` and builds. It deletes `node_modules` in the same step, so
+the image keeps only the 700 KB of output.
+
+```python web/build.py
+def main(output: Path) -> None:
+    with TemporaryDirectory() as scratch:
+        node_bin = install_node(Path(scratch))
+        env = {
+            **os.environ,
+            "PATH": f"{node_bin}{os.pathsep}{os.environ['PATH']}",
+            "NEXT_TELEMETRY_DISABLED": "1",
+        }
+        subprocess.run(["npm", "ci", "--no-audit", "--no-fund"], cwd=WEB_DIR, env=env, check=True)
+        subprocess.run(["npm", "run", "build"], cwd=WEB_DIR, env=env, check=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(WEB_DIR / "out", output)
+    # Removed in the same build step, so the image layer never holds them.
+    shutil.rmtree(WEB_DIR / "node_modules")
+    shutil.rmtree(WEB_DIR / ".next")
+```
+
+FastAPI mounts the export after the API routes. A quarter CPU covers this, since
+the app serves files, makes a few API calls and waits.
+`concurrent_requests=32` leaves room for open progress sockets.
+
+```python image_studio/web.py
+api = FastAPI(title="Image studio")
+api.include_router(keyed)
+api.include_router(public)
+# The Next.js export, built into the image; mounted last so /api routes match first.
+api.mount("/", StaticFiles(directory=STATIC_DIR, html=True, check_dir=False), name="ui")
+
+studio = app.asgi(
+    name="studio",
+    image=web_image,
+    cpu=0.25,
+    memory="512Mi",
+    concurrent_requests=32,
+    keep_warm_seconds=120,
+    # A browser can't send a platform token, so the studio key guards the API instead.
+    authorized=False,
+    secrets=[access_key.name],
+    volumes=[gallery],
+)(api)
+```
+
+The page itself is plain React. `web/app/api.ts` calls the routes above, and
+its `watchJob` opens the progress socket and reconnects until the job finishes.
+
+```ts web/app/api.ts
+export function watchJob(eventsUrl: string, onEvent: (event: JobEvent) => void): () => void {
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  let socket: WebSocket | undefined;
+  let finished = false;
+  let reconnects = 0;
+```
+
+## Share and clean up
+
+A share link is an artifact with a public URL. The function copies the image
+under a readable name, saves it and asks for a seven-day link. Your plan's
+artifact retention can shorten that, and the reply says when it ends.
+
+```python image_studio/share.py
+def share_image(job_id: str, index: int) -> ShareLink:
+    with TemporaryDirectory() as scratch:
+        # The artifact keeps the file's name, which becomes the download's name.
+        named = Path(scratch) / f"image-studio-{job_id[:8]}-{index + 1}.webp"
+        shutil.copyfile(image_path(GALLERY_DIR, job_id, index), named)
+        artifact = Artifact.file(named, content_type="image/webp")
+        saved = artifact.save()
+    url = artifact.public_url(expires=SHARE_LINK_SECONDS)
+    # The platform caps a link at the artifact's retention, which depends on the plan.
+    expires_at = datetime.now(UTC) + timedelta(seconds=SHARE_LINK_SECONDS)
+    if saved.expires_at is not None:
+        expires_at = min(expires_at, saved.expires_at)
+    return ShareLink(url=url, expires_at=expires_at)
+```
+
+The nightly schedule deletes jobs older than seven days, including directories
+a failed job left without a `job.json`.
+
+```python image_studio/cleanup.py
+@app.function(
+    image=app_image,
+    cron="0 4 * * *",
+    cpu=0.25,
+    memory="256Mi",
+    volumes=[gallery],
+    timeout_seconds=900,
+    retries=2,
+)
+def delete_expired_images() -> int:
+    expired = expired_directories(GALLERY_DIR, now=datetime.now(UTC), keep_for=KEEP_IMAGES_FOR)
+    for directory in expired:
+        shutil.rmtree(directory)
+    print(f"Deleted {len(expired)} jobs older than {KEEP_IMAGES_FOR.days} days", flush=True)
+    return len(expired)
+```
+
+## Deploy
+
+```bash
+uv run lazycloud deploy image_studio.app:app
+```
+
+`image_studio/app.py` imports the web app and the cleanup schedule, which
+import everything else, so one deploy covers all five workloads. The first
+deploy builds three images. Deploy prints the `studio` URL.
+{/* MEASURE: first deploy time, and build time of the web and gpu images */}
+
+## Use it
+
+Open the `studio` URL and enter your key. The page keeps the key in the
+browser's local storage. Type a prompt, pick a style, a shape and a count, and
+select Generate. The progress card shows the platform's reason while the job
+waits for a GPU, then each denoising step, and the images appear in the
+gallery. Hover an image and select Share to copy a public link.
+"Use these settings" puts a gallery entry's prompt, style and seed back in the
+form, and the same seed redraws the same image.
+
+The API works without the page:
+
+```bash
+curl --fail-with-body "<studio-url>/api/jobs" \
+  -H "Authorization: Bearer $IMAGE_STUDIO_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a red fox in fresh snow, morning light", "style": "photo", "count": 2}'
+```
+
+The reply holds the job ID and its signed `events_url`.
+`uv run lazycloud task list --app image_studio` lists the generation tasks
+with their logs.
+
+## Cost and scaling
+
+The studio and the GPU both scale to zero, so an idle studio costs only its
+storage, about 16 GB of weights plus the last seven days of images. A first job
+after a quiet spell waits for a GPU machine and the model load, and later jobs
+inside the five-minute window start at once.
+
+{/* MEASURE: GPU cold start, from submit to first step, on L4 */}
+{/* MEASURE: warm time per 1024x1024 image on L4 and on A10G */}
+{/* MEASURE: studio cold start, first page load after idle */}
+{/* MEASURE: compute cost of one four-image job, warm and cold */}
+{/* MEASURE: idle cost per day with everything deployed */}
+
+One GPU container takes one job at a time, and up to 16 more wait in the queue.
+More throughput comes from `autoscaler=Autoscaler(max_containers=...)` on
+`generate_images`, since each job is independent. A longer `keep_warm` trades
+idle GPU minutes for fewer cold starts.
+
+## Adapt it
+
+- Another diffusers model needs its repository, revision and file patterns in
+  `weights.py`, the pipeline class in `generate.py`, and a GPU with enough
+  memory.
+- Styles and shapes live in `generation.py`, and the page reads them from
+  `/api/options`, so it needs no change.
+- Several users with their own galleries would need real accounts in place of
+  one shared key.
+- `cd web && npm install && npm run dev` serves the page locally for UI work.
+  Its API calls then need a running studio on the same origin.
+
+## Clean up
+
+```bash
+uv run lazycloud app delete image_studio
+uv run lazycloud volume delete image-studio-models
+uv run lazycloud volume delete image-studio-gallery
+uv run lazycloud secret delete IMAGE_STUDIO_KEY
+uv run python -c "from image_studio.resources import job_progress; job_progress.delete()"
+```
+
+Shared links stop working when their artifacts expire.
+`uv run lazycloud artifact list` and `uv run lazycloud artifact delete <artifact-id>`
+remove them sooner.
