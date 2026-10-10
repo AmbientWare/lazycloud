@@ -39,5 +39,5 @@ two secrets when you no longer need them.
 
 `pyproject.toml` pins the SDK version that supplied this example. `uv sync`
 creates the local environment and `uv.lock`. Commit the lockfile with your
-code; use `uv sync --locked` in CI. Remote images install the `check` group
-from the same lockfile.
+code; use `uv sync --locked` in CI. Both remote images install from the same
+lockfile, and the browser image adds the `check` group.

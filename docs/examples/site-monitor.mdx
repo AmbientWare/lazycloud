@@ -187,7 +187,7 @@ the text changed, so a quiet page costs no tokens.
 
 ```python site_monitor/judge.py
 def judge_change(watch: Watch, diff: str) -> Verdict:
-    client = OpenAI(timeout=60, max_retries=2)
+    client = OpenAI(timeout=30, max_retries=2)
     response = client.responses.parse(
         model=MODEL,
         instructions=INSTRUCTIONS,
@@ -237,9 +237,10 @@ changes without alerting, and alert on the rest.
 
 A retried call reruns from the top, so the snapshot carries the run's ID. A
 retry in the same run finds its own snapshot and goes straight to delivery. It
-resends an alert that failed to deliver and never sends one twice. The one gap
-is a crash between Slack accepting the post and the second map write, which
-would send a duplicate.
+resends an alert that failed to deliver and skips one already sent. Two cases
+can still send a duplicate: a crash between Slack accepting the post and the
+second map write, and a retried sweep that checks a page while the first
+attempt's check of it still runs.
 
 ```python site_monitor/checks.py
 def check_watch(
@@ -301,8 +302,9 @@ browser_image = (
 `check-page` runs four pages at a time per container, each in its own process
 with its own Chromium, on 2 CPUs and 4 GiB. The autoscaler adds a container per
 four queued pages, up to five, so at most 20 browsers run at once.
-`max_pending_tasks` matches the 100-page cap, so a full sweep always fits in the
-queue. Two retries 15 seconds apart cover a page that times out or a model call
+`max_pending_tasks` leaves room for two full sweeps, since a retried sweep
+submits every page again while the first attempt's checks may still be queued.
+Two retries 15 seconds apart cover a page that times out or a model call
 that fails. The browser, OpenAI and Slack modules import inside the function
 because only the remote image has their packages.
 
@@ -314,7 +316,8 @@ because only the remote image has their packages.
     memory="4Gi",
     concurrency=4,
     autoscaler=Autoscaler(max_containers=5, tasks_per_container=4),
-    max_pending_tasks=MAX_WATCHES,
+    # A retried sweep submits every page again while the first attempt's checks may still queue.
+    max_pending_tasks=2 * MAX_WATCHES,
     timeout_seconds=180,
     retries=2,
     retry_delay_seconds=15,
@@ -356,17 +359,14 @@ def sweep() -> SweepReport:
     run_id = current_task_id()
     if not run_id:
         raise RuntimeError("run the sweep remotely: uv run lazycloud run site_monitor.app:sweep")
-    watches = [Watch.model_validate(value) for key in WATCHES if (value := WATCHES.get(key))]
+    watches = load_watches(WATCHES)
     results = list(check_page.map([(watch, run_id) for watch in watches]))
-    report = SweepReport(
-        run_id=run_id,
+    return SweepReport(
         results=[result for result in results if result is not None],
         failed=[
             str(watch.url) for watch, result in zip(watches, results, strict=True) if result is None
         ],
     )
-    print(report.model_dump_json(), flush=True)
-    return report
 ```
 
 The API is a plain FastAPI app bound to a module attribute, which the
@@ -398,11 +398,7 @@ def create_api(watches: Map, snapshots: Map) -> FastAPI:
 
     @api.get("/watches")
     def list_watches() -> list[Watch]:
-        found = (watches.get(key) for key in watches)
-        return sorted(
-            (Watch.model_validate(value) for value in found if value is not None),
-            key=lambda watch: str(watch.url),
-        )
+        return load_watches(watches)
 
     @api.post("/watches")
     def add_watch(request: WatchRequest) -> Watch:
@@ -462,8 +458,8 @@ for the next quarter hour:
 uv run lazycloud run site_monitor.app:sweep
 ```
 
-The result lists each page's outcome, `baseline`, `unchanged`, `minor_change`
-or `alerted`, plus any pages that failed. Every check is its own task, so
+The result lists each page's outcome, one of `baseline`, `unchanged`,
+`minor_change` and `alerted`, and the pages that failed. Every check is its own task, so
 `uv run lazycloud task list --app site_monitor` shows each page's logs and
 retries. Pages whose text changed log the judge's summary, including the minor
 changes that didn't alert. {/* MEASURE: sweep wall time for 10 pages, cold and warm */}
@@ -478,10 +474,9 @@ of browser time. The OpenAI call happens only when the text changed.
 {/* MEASURE: compute cost of one sweep over 10 pages, and per day at 96 sweeps */}
 {/* MEASURE: idle cost per day with the schedule deployed and no requests */}
 
-The 100-page cap, `max_pending_tasks` and the autoscaler bound each sweep.
-More pages need all three raised together. A wider autoscaler finishes a
-sweep sooner but starts more containers, each of which pulls the Chromium
-image.
+`MAX_WATCHES` in `models.py` bounds each sweep, and `max_pending_tasks`
+follows it. A wider autoscaler finishes a sweep sooner but starts more
+containers, and each one pulls the Chromium image.
 
 ## Adapt it
 
