@@ -5,10 +5,10 @@ description: "A Next.js and FastAPI app that generates images on a GPU, streams 
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
-A web page where you type a prompt, pick a style and shape, and watch
-FLUX.2 [klein] 4B draw up to four images on a GPU. Finished images stay in a
-gallery for seven days, and any of them can become a public link that expires.
-When nobody uses it, nothing runs.
+The studio is a web page that turns a prompt into up to four images with
+FLUX.2 [klein] 4B on a GPU and shows each step as it runs. Finished images stay
+in a gallery for seven days and can become public links that expire, and
+nothing runs while nobody uses it.
 
 ## Architecture
 
@@ -63,8 +63,6 @@ PyTorch and diffusers live in the `gpu` group and the Hugging Face client in
 the `weights` group, which only the remote images install.
 
 ```toml pyproject.toml
-[dependency-groups]
-dev = ["lazycloud-client"]
 weights = ["huggingface-hub>=1.32,<2"]
 gpu = [
     "accelerate==1.15.0",
@@ -321,7 +319,8 @@ async def job_events(websocket: WebSocket, job_id: str, expires: int, signature:
     done, pending = await asyncio.wait({sending, client_left}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
+    if pending:
+        await asyncio.wait(pending)
     if sending in done:
         sending.result()
         await websocket.close()
@@ -545,7 +544,7 @@ with their logs.
 ## Cost and scaling
 
 The studio and the GPU both scale to zero, so an idle studio costs only its
-storage: about 16 GB of weights plus the last seven days of images. A first job
+storage, about 16 GB of weights plus the last seven days of images. A first job
 after a quiet spell waits for a GPU machine and the model load, and later jobs
 inside the five-minute window start at once.
 

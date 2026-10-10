@@ -167,7 +167,8 @@ async def job_events(websocket: WebSocket, job_id: str, expires: int, signature:
     done, pending = await asyncio.wait({sending, client_left}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
+    if pending:
+        await asyncio.wait(pending)
     if sending in done:
         sending.result()
         await websocket.close()
