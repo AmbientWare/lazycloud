@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -581,16 +580,16 @@ exit 1`, target, strings.Join(quoted, " "))
 // it never mounted, the mount under its workload is dead, so the workload
 // stops and reports the exit rather than run on with a broken volume.
 func (v *volumes) watch(ctx context.Context, m *mounter, id string) {
-	wait := v.a.docker.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: containertypes.WaitConditionNotRunning})
-	select {
-	case <-ctx.Done():
-		return
-	case <-wait.Result:
-	case err := <-wait.Error:
-		if !cerrdefs.IsNotFound(err) {
-			if ctx.Err() == nil {
-				v.a.log.Warn("watching a volume mount failed", "mount", m.name, "error", err)
-			}
+	for {
+		exited, err := v.a.waitExit(ctx, id)
+		if exited {
+			break
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		v.a.log.Warn("watching a volume mount failed", "mount", m.name, "error", err)
+		if !sleep(ctx, time.Second) {
 			return
 		}
 	}

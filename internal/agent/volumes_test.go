@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"net"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
@@ -19,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -337,16 +340,72 @@ func TestPlatformVolumesShareOneMounter(t *testing.T) {
 	}
 }
 
+// dockerProxy passes the agent's Docker connections through to the daemon;
+// cut drops those open, as a daemon restart does.
+type dockerProxy struct {
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+// proxyDocker points the agents the test starts at a new dockerProxy.
+func proxyDocker(t *testing.T) *dockerProxy {
+	t.Helper()
+	daemon := strings.TrimPrefix(cmp.Or(os.Getenv("DOCKER_HOST"), "unix:///var/run/docker.sock"), "unix://")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(shortDir(t), "docker.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	t.Setenv("DOCKER_HOST", "unix://"+listener.Addr().String())
+	p := &dockerProxy{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			upstream, err := (&net.Dialer{}).DialContext(context.Background(), "unix", daemon)
+			if err != nil {
+				_ = conn.Close()
+				continue
+			}
+			p.mu.Lock()
+			p.conns = append(p.conns, conn, upstream)
+			p.mu.Unlock()
+			go pipe(conn, upstream)
+			go pipe(upstream, conn)
+		}
+	}()
+	return p
+}
+
+func pipe(dst, src net.Conn) {
+	_, _ = io.Copy(dst, src)
+	_ = dst.Close()
+	_ = src.Close()
+}
+
+func (p *dockerProxy) cut() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, conn := range p.conns {
+		_ = conn.Close()
+	}
+	p.conns = nil
+}
+
 // TestAMountThatDiesFailsOnlyItsContainer: two containers on one volume each
 // have a mount of their own. One's mount dying, as an out-of-memory kill
-// would, stops that container only; the other reads and writes on, and its
-// mount and slice go when it stops.
+// would, stops that container only, also after the agent lost its watch on
+// Docker; the other reads and writes on, and its mount and slice go when it
+// stops.
 func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	store := newTestStore(t)
 	e := newEnv(t)
 	t.Cleanup(e.stopMounts)
 	e.geesefs = geesefs
+	docker := proxyDocker(t)
 	e.startAgent()
 	s := e.session()
 	source := serveSource(t, "testdata/volumes")
@@ -356,6 +415,7 @@ func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
 	other := e.startVolume(s, source, workspace, volume)
 	e.write(heavy, "/volumes/data/shared.txt", "shared")
 
+	docker.cut()
 	e.killGeeseFS(e.mounter(heavy).ID)
 	if exit := s.phase(t, heavy, exited).GetExit(); !strings.Contains(exit.GetMessage(), "volume mount") {
 		t.Fatalf("exit of the container on the dead mount: %v", exit)
