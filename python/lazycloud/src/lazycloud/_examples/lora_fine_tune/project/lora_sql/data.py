@@ -105,7 +105,9 @@ def read_examples(path: Path) -> list[SqlExample]:
 
 def require_base_model() -> None:
     if not BASE_MODEL_READY.exists():
-        raise FileNotFoundError(f"{BASE_MODEL_DIR} is missing; run lora_sql.data:prepare_data first")
+        raise FileNotFoundError(
+            f"{BASE_MODEL_DIR} is missing; run lora_sql.data:prepare_data first"
+        )
 
 
 def _download_base_model() -> None:

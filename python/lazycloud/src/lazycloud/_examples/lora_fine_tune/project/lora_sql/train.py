@@ -120,7 +120,7 @@ def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -
         data_collator=DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=IGNORED_LABEL),
     )
     output = trainer.train(resume_from_checkpoint=str(resume) if resume else None)
-    model.save_pretrained(adapter_dir(run))
+    model.save_pretrained(str(adapter_dir(run)))
     return TrainingResult(
         run=run,
         steps=output.global_step,

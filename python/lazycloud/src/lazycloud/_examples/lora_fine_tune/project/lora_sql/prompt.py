@@ -3,6 +3,8 @@
 import re
 import sqlite3
 
+from openai.types.chat import ChatCompletionMessageParam
+
 SYSTEM_PROMPT = (
     "You write SQLite queries. Given a database and a question, "
     "reply with one SQL query that answers the question and nothing else."
@@ -11,7 +13,7 @@ SYSTEM_PROMPT = (
 _FENCED = re.compile(r"```(?:sql)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
-def chat_messages(context: str, question: str) -> list[dict[str, str]]:
+def chat_messages(context: str, question: str) -> list[ChatCompletionMessageParam]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Database:\n{context}\n\nQuestion: {question}"},
