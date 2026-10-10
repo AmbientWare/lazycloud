@@ -20,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // startingWith inserts a starting container of a release with spec.
@@ -85,6 +86,82 @@ func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
 	var inUse *storage.ConflictError
 	if err := h.store.DeleteVolume(t.Context(), ws, "data"); !errors.As(err, &inUse) {
 		t.Fatalf("delete of a mounted volume: %v", err)
+	}
+}
+
+// TestStorageRefusalsFailOnlyTheirContainer: on a server without workspace
+// buckets, a start that mounts a volume and one that needs the storage
+// grant for a disk each fail with the cause, and the session goes on to
+// start the host's other container.
+func TestStorageRefusalsFailOnlyTheirContainer(t *testing.T) {
+	cfg := storagetest.Config(t)
+	cfg.Workspaces = storage.WorkspaceBuckets{}
+	h := serveWith(t, dbtest.New(t), cfg)
+	host, ctx := h.enroll()
+	_, volume := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "data", "mount_path": "data"}]}`)
+	_, disk := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"disks": [{"name": "root", "size_bytes": 1073741824, "mount_path": "/data"}]}`)
+	_, plain := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"}}`)
+	stream := open(t, ctx, h.client)
+
+	for {
+		msg := receive(t, stream)
+		if id := msg.GetStart().GetContainerId(); id == volume.String() || id == disk.String() {
+			t.Fatalf("sent the start of %s, whose storage is unavailable", id)
+		}
+		if msg.GetStart().GetContainerId() == plain.String() {
+			break
+		}
+	}
+	for container, want := range map[uuid.UUID]string{
+		volume: "volumes unavailable: workspace buckets are not configured",
+		disk:   "storage grant unavailable: workspace buckets are not configured",
+	} {
+		var state, reason, message string
+		if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '')
+from containers where id = $1`, container).Scan(&state, &reason, &message); err != nil {
+			t.Fatal(err)
+		}
+		if state != "stopped" || reason != "start_failed" || message != want {
+			t.Errorf("container %s %s/%s %q, want start_failed %q", container, state, reason, message, want)
+		}
+	}
+}
+
+// TestUnacknowledgedGrantsAreSentAgain: a storage grant the host has not
+// acknowledged is sent again at a later sync, and one it acknowledged is
+// not.
+func TestUnacknowledgedGrantsAreSentAgain(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "data", "mount_path": "data"}]}`)
+	stream := open(t, ctx, h.client)
+	first := receive(t, stream)
+	if first.GetStorageGrant() == nil {
+		t.Fatalf("first command %v, want a storage grant", first)
+	}
+	if receive(t, stream).GetStart() == nil {
+		t.Fatal("the start did not follow the grant")
+	}
+	again := receive(t, stream)
+	if again.GetCommandId() != first.GetCommandId() {
+		t.Fatalf("next command %v, want the unacknowledged grant again", again)
+	}
+	if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: again.GetCommandId()}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan *hostproto.ServerMessage, 1)
+	go func() {
+		if msg, err := stream.Recv(); err == nil {
+			got <- msg
+		}
+	}()
+	select {
+	case msg := <-got:
+		t.Fatalf("sent %v after the host acknowledged its grant", msg)
+	case <-time.After(5 * time.Second):
 	}
 }
 
