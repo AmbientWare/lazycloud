@@ -12,17 +12,15 @@ uv run lazycloud login --token <token>
 uv run lazycloud deploy image_studio.app:app
 ```
 
-No repository access is required. Each project's README covers setup, expected
-results, and cleanup. The [public guides](https://docs.lazycloud.dev/examples)
-show the full workflows.
+Downloads need no repository access. Each README covers setup, results and
+cleanup, and the [public guides](https://docs.lazycloud.dev/examples) walk
+through the code.
 
 ## Maintain the catalog
 
-Canonical sources live under
-[the SDK's example assets](src/lazycloud/_examples).
-Each directory contains `example.json` and a `project/` directory.
-The CLI reads these directories through Python package resources; it has no
-per-example registry.
+Sources live in [the SDK's example assets](src/lazycloud/_examples), one
+directory per example with `example.json` and `project/`. The CLI reads them as
+package resources, so adding a directory adds an example.
 
 To add an example, create one directory with metadata:
 
@@ -46,9 +44,9 @@ Guides quote project files in code blocks titled with the file's path, such
 as ```` ```python image_studio/app.py ````. `tests/examples/test_example_docs.py`
 fails when a quoted block differs from the shipped file.
 
-Update an example in place. Remove its catalog directory to remove it from
-future SDK releases. No CLI code change is needed. Update the corresponding
-guide in the same change; existing user downloads are independent copies.
+Deleting a directory drops the example from the next SDK release. Change the
+guide in the same commit as its project. Downloads already made are the
+user's own copies.
 
 ## Check a change
 
@@ -58,12 +56,8 @@ From the repository root, download the real project into a temporary directory:
 uv run --group workspace lazycloud example download my-example --output /tmp/my-example
 ```
 
-Verify its imports and documented commands from that directory with the current
-client wheels installed. Build both an sdist and wheel for the client and verify
-the catalog from the wheel built from that sdist; source-checkout success alone
-does not prove that users receive the assets.
+Run its imports and guide commands from that directory. A source checkout can
+hide missing assets, so check the catalog from a wheel built from the sdist.
 
-Example behavior tests live under
-[the SDK owner tests](tests/examples).
-Run the tests for the example you changed, plus relevant SDK checks. Clean up
-temporary downloads and any resources a live run creates.
+Example tests live in [tests/examples](tests/examples). A live run leaves
+resources behind; each guide's cleanup section removes them.
