@@ -3497,7 +3497,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
-            /** @description The token's first characters; empty for older tokens. */
+            /** @description The token's first characters. */
             prefix: string;
             /** @description Minted by `lazycloud login`. */
             device: boolean;

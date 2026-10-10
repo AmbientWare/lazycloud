@@ -4150,7 +4150,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         prefix:
-          description: The token's first characters; empty for older tokens.
+          description: The token's first characters.
           type: string
         device:
           description: Minted by `lazycloud login`.

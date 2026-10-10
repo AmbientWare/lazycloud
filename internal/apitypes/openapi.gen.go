@@ -5105,7 +5105,7 @@ type Token struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	Name       string     `json:"name"`
 
-	// Prefix The token's first characters; empty for older tokens.
+	// Prefix The token's first characters.
 	Prefix string      `json:"prefix"`
 	Status TokenStatus `json:"status"`
 
