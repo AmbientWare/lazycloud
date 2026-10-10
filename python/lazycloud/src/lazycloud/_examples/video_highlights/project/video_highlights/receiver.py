@@ -42,7 +42,7 @@ class TaskEvent(BaseModel):
 
 def signature_matches(key: str, body: bytes, timestamp: str, signature: str, now: float) -> bool:
     """Check X-Task-Signature: hex HMAC-SHA256 of the base64 body, a colon and the timestamp."""
-    if not timestamp.isdigit() or abs(now - int(timestamp)) > MAX_CLOCK_SKEW_SECONDS:
+    if not timestamp.isdecimal() or abs(now - int(timestamp)) > MAX_CLOCK_SKEW_SECONDS:
         return False
     message = base64.b64encode(body) + b":" + timestamp.encode()
     expected = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()

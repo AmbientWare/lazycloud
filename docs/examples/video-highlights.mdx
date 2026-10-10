@@ -106,7 +106,8 @@ OPENAI_MODEL = "gpt-5.4-mini"
 ```
 
 The setup script asks for that user's access key pair and an OpenAI API key,
-and stores all three as workspace secrets. Nothing it reads is echoed:
+and stores all three as workspace secrets. Nothing it reads is echoed. It also
+creates the workspace's callback signing key if there is none yet:
 
 ```bash
 uv run python -m video_highlights.configure
@@ -151,7 +152,8 @@ through the S3 mount. {/* MEASURE: inspect_video time on a 1 GB MP4 through the 
 `pipeline.py` declares everything the workloads share. The bucket mounts
 read-only at `/videos`, so no step can change your source files. The CPU image
 adds ffmpeg from Debian. The GPU image starts from NVIDIA's CUDA runtime image
-and downloads the Whisper weights while it builds. The OpenAI image installs
+with cuDNN, which faster-whisper needs, and downloads the Whisper weights while
+it builds. The OpenAI image installs
 only the `llm` group.
 
 ```python video_highlights/pipeline.py
@@ -174,7 +176,7 @@ ffmpeg_image = Image.from_uv(".").add_commands(
     ]
 )
 whisper_image = Image.from_uv(
-    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-runtime-ubuntu24.04"
+    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04"
 ).add_commands(
     [
         "python -c 'from faster_whisper import download_model; "
@@ -435,7 +437,7 @@ add to your own app:
 ```python video_highlights/receiver.py
 def signature_matches(key: str, body: bytes, timestamp: str, signature: str, now: float) -> bool:
     """Check X-Task-Signature: hex HMAC-SHA256 of the base64 body, a colon and the timestamp."""
-    if not timestamp.isdigit() or abs(now - int(timestamp)) > MAX_CLOCK_SKEW_SECONDS:
+    if not timestamp.isdecimal() or abs(now - int(timestamp)) > MAX_CLOCK_SKEW_SECONDS:
         return False
     message = base64.b64encode(body) + b":" + timestamp.encode()
     expected = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
@@ -443,8 +445,8 @@ def signature_matches(key: str, body: bytes, timestamp: str, signature: str, now
 ```
 
 The route reads at most 512 KiB, rejects a bad signature or a timestamp more
-than five minutes old, and only then parses the event. A replayed or forged
-request gets `401`.
+than five minutes old, and only then parses the event. A forged request, or one
+replayed after five minutes, gets `401`.
 
 ```python video_highlights/receiver.py
 @api.post("/video-highlights", status_code=204)
@@ -504,10 +506,9 @@ uv run lazycloud deploy video_highlights.pipeline:app
 The first deploy builds three images. The GPU image takes longest, since it
 downloads about 1.6 GB of Whisper weights. {/* MEASURE: first deploy time and each image's build time */}
 Skip the receiver and leave `CALLBACK_URL` as `None` if you only want the
-manifest. The workspace creates its signing key with its first callback,
-which is also the request that first starts the receiver. The three delivery
-attempts span about 15 seconds, so a receiver that starts slower than that
-misses the first callback. {/* MEASURE: whether the first callback reaches a cold receiver, and its cold start */}
+manifest. Each delivery attempt waits five seconds for an answer, so a
+receiver that is cold for longer than the three attempts, about 15 seconds,
+misses that callback. {/* MEASURE: whether the first callback reaches a cold receiver, and its cold start */}
 
 ## Use it
 

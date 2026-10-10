@@ -66,7 +66,7 @@ ffmpeg_image = Image.from_uv(".").add_commands(
     ]
 )
 whisper_image = Image.from_uv(
-    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-runtime-ubuntu24.04"
+    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04"
 ).add_commands(
     [
         "python -c 'from faster_whisper import download_model; "

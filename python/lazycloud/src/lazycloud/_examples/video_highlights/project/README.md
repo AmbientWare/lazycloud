@@ -18,7 +18,8 @@ uv run lazycloud --json run video_highlights.pipeline:highlight_video talks/keyn
 
 Set `BUCKET_NAME` and `BUCKET_REGION` in `video_highlights/settings.py`
 first. `configure` asks for an access key that can read the bucket and an
-OpenAI API key, and stores them as workspace secrets. Transcripts stay in the
+OpenAI API key, stores them as workspace secrets, and creates the callback
+signing key if the workspace has none. Transcripts stay in the
 `video-highlights-work` volume, so a second run of the same video skips the
 GPU.
 
