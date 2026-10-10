@@ -532,7 +532,7 @@ webhook = app.asgi(
 The worker reads the snapshot record, starts a sandbox on it, and reports any
 failure on the issue before the task fails. `retries=0` because a second
 attempt would spend the model budget again. A preempted call still retries,
-and the next section shows why that is safe.
+and one branch per issue makes that safe.
 
 ```python coding_agents/app.py
 @app.function(
@@ -857,7 +857,7 @@ terminated when its run ends.
 {/* MEASURE: compute cost of one nightly eval, excluding model spend */}
 {/* MEASURE: issue sandbox cold start from the snapshot image */}
 
-Model spend usually dwarfs compute. `AGENT_MAX_BUDGET_USD` caps each run, and
+Model spend is separate from compute. `AGENT_MAX_BUDGET_USD` caps each run, and
 `MAX_PARALLEL_ISSUES` and `MAX_WAITING_ISSUES` cap how many runs a burst of
 labels can start. The worker holds a quarter CPU while it waits on its
 sandbox. The sandbox gets one CPU and 4 GiB for your test suite, so a heavier
@@ -889,5 +889,6 @@ uv run python -c "from coding_agents.app import STATE; STATE.delete()"
 ```
 
 Remove the webhook in the repository's settings, and delete the `agent/issue-*`
-branches you no longer need. `deployment stop nightly-eval` pauses only the
+branches you no longer need. Snapshot images stay in the workspace, since the
+CLI has no command to delete an image. `deployment stop nightly-eval` pauses only the
 eval.
