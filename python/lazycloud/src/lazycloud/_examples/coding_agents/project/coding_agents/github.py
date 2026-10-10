@@ -20,6 +20,10 @@ class GitHubError(RuntimeError):
         self.status = status
 
 
+class GitCommandError(RuntimeError):
+    pass
+
+
 class PullRequest(BaseModel):
     number: int
     html_url: str
@@ -122,7 +126,7 @@ def push_patch(
             check=False,
         )
         if done.returncode != 0:
-            raise RuntimeError(f"git {args[0]} failed: {done.stderr.strip()[-1000:]}")
+            raise GitCommandError(f"git {args[0]} failed: {done.stderr.strip()[-1000:]}")
         return done.stdout.strip()
 
     git("init", "--quiet")

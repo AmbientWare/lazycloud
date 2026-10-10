@@ -1,0 +1,893 @@
+---
+title: "Coding agents"
+description: "Work with an agent on a devbox, turn labeled GitHub issues into pull requests in sandboxes, and score the agent nightly."
+---
+
+import ExampleSetup from '/snippets/example-setup.mdx';
+
+You get three ways to use a coding agent on one repository. A devbox you SSH
+into to work alongside Claude Code or Codex. A GitHub webhook that hands each
+issue labeled `agent` to Claude Code in its own sandbox and opens a pull
+request with the result. And a nightly eval that runs the agent on five small
+tasks in parallel sandboxes and posts the pass rate and spend.
+
+## Architecture
+
+```text
+you ──ssh──> agent-box (devbox, disk)
+
+GitHub "labeled" ──> webhook (ASGI) ──spawn──> solve-issue ──> issue sandbox ──> pull request
+                        │                         │               ▲
+                        └── map: coding-agents ───┘               │ image
+                                                                  │
+laptop: snapshot ──> repo-builder sandbox ──filesystem image──────┘
+
+schedule: nightly-eval ──.map──> eval-task × 5 ──> eval sandbox each ──> issue comment
+```
+
+- **`agent-box`, a devbox.** It is a container you reach over SSH whose root
+  filesystem is a disk, so clones, agent logins and tmux sessions survive a
+  restart. It runs only while you are connected, plus an hour.
+- **`webhook`, an ASGI app.** GitHub needs one stable HTTPS route that answers
+  in under ten seconds. The route checks the signature, claims the issue and
+  starts a worker. It scales to zero five minutes after the last delivery.
+- **`solve-issue`, a function.** One call per issue, so each run has its own
+  logs, result and time limit. An autoscaler caps runs at three at once, and
+  `max_pending_tasks` caps the waiting line at 20.
+- **Sandboxes for the agent.** A function's container runs this project's
+  code. A sandbox runs the agent's commands: it starts on demand from an
+  image you choose, its network can be cut to one address range, and it is
+  terminated when the run ends. Each issue and each eval task gets its own.
+- **A filesystem image as the repository snapshot.** Agent sandboxes cannot
+  reach PyPI or GitHub, so the repository and its installed dependencies come
+  with the image. `repo-builder` is the only sandbox with open network.
+- **`nightly-eval`, a schedule, fanning out with `.map`.** The five tasks are
+  independent, so each runs in its own `eval-task` call and sandbox at the same
+  time.
+- **A map.** `coding-agents` holds the snapshot record and a claim per issue in
+  progress. Both are small keyed values, which suits a map.
+- **Three secrets.** `ANTHROPIC_API_KEY` reaches the functions that start
+  agents and the devbox. `GITHUB_TOKEN` reaches the issue worker, the eval and
+  the devbox. `GITHUB_WEBHOOK_SECRET` reaches only the webhook.
+
+## Download and set up
+
+<ExampleSetup />
+
+```bash
+lazycloud example download coding-agents
+cd coding-agents
+uv sync
+uv run lazycloud login
+```
+
+`uv sync` installs FastAPI, httpx and Pydantic locally, because the CLI imports
+the app to deploy it. Remote functions install the same locked set.
+
+Point the system at a repository in `settings.py`. The setup command runs once,
+with network, when the snapshot is built. The test command runs offline in the
+issue sandbox, so it must work with what setup installed. The defaults suit a
+uv project with pytest.
+
+```python coding_agents/settings.py
+# The GitHub repository the agents work on, as owner/name.
+REPOSITORY = "your-org/your-repo"
+# Adding this label to an issue hands the issue to an agent.
+TRIGGER_LABEL = "agent"
+# Nightly eval scores are posted as a comment on this issue; None only logs them.
+EVAL_ISSUE: int | None = None
+
+# Run inside the repository as the agent user. Setup runs once, when the
+# snapshot is built with network access; tests run offline inside the sandbox.
+SETUP_COMMAND = "uv sync --locked"
+TEST_COMMAND = "uv run --offline --locked pytest -q"
+
+# Claude Code settings for every agent run.
+AGENT_MODEL = "sonnet"
+AGENT_MAX_TURNS = 60
+AGENT_MAX_BUDGET_USD = 5.0
+AGENT_TIMEOUT_SECONDS = 30 * 60
+TEST_TIMEOUT_SECONDS = 10 * 60
+```
+
+The system needs three credentials:
+
+- An [Anthropic API key](https://platform.claude.com/settings/keys).
+- A fine-grained GitHub token for the repository with read and write access to
+  contents, issues and pull requests.
+- A webhook secret, any long random string, for example from
+  `openssl rand -hex 32`. GitHub gets the same value in the next step.
+
+```bash
+uv run python -m coding_agents.configure
+```
+
+```python coding_agents/configure.py
+if __name__ == "__main__":
+    for secret, label in (
+        (ANTHROPIC_API_KEY, "Anthropic API key"),
+        (
+            GITHUB_TOKEN,
+            "GitHub token with read and write access to contents, issues and pull requests",
+        ),
+        (GITHUB_WEBHOOK_SECRET, "GitHub webhook secret"),
+    ):
+        value = getpass(f"{label}: ")
+        if value:
+            secret.set(value)
+```
+
+## The devbox
+
+The devbox installs Claude Code and Codex when its image builds, along with
+tmux, ripgrep, jq, the GitHub CLI and uv. `ANTHROPIC_API_KEY` and
+`GITHUB_TOKEN` arrive as environment variables, so `claude` and `gh` work on
+the first connection. [Devboxes](/concepts/dev-machines) covers the basics.
+
+```python coding_agents/app.py
+# You work with an agent here over SSH. The root disk keeps clones, logins and
+# shell history between sessions; an hour of idle time lets an agent left
+# running in tmux finish after you disconnect.
+devbox = app.devbox(
+    "agent-box",
+    image=Image(python_version="3.12")
+    .add_commands(
+        [
+            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "--no-install-recommends gh jq ripgrep tmux && rm -rf /var/lib/apt/lists/*"
+        ]
+    )
+    .add_python_packages(["uv==0.11.32"]),
+    agent_harnesses=[AgentHarness.ClaudeCode, AgentHarness.Codex],
+    disk="50Gi",
+    cpu=2,
+    memory="8Gi",
+    keep_warm=60 * 60,
+    secrets=[ANTHROPIC_API_KEY.name, GITHUB_TOKEN.name],
+)
+```
+
+The idle window counts from your last SSH connection, not from the agent's
+last keystroke. A devbox's default of 30 minutes would stop a long agent run
+you left in tmux, so this one waits an hour.
+
+## The agent image and its sandboxes
+
+Every agent sandbox starts from one image. It installs Node.js from a
+checksum-verified tarball, a pinned Claude Code, and uv and pytest. It also
+creates an `agent` user. Agents run as that user, so they cannot edit
+`/etc/hosts` or anything else root owns.
+
+```python coding_agents/app.py
+# Agents work in this image as the unprivileged `agent` user, with Claude Code
+# on a checksum-verified Node.js and uv and pytest for Python repositories.
+agent_image = (
+    Image(python_version="3.12")
+    .add_commands(
+        [
+            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "--no-install-recommends ca-certificates curl git xz-utils "
+            "&& rm -rf /var/lib/apt/lists/*",
+            "curl -fsSL -o /tmp/node.tar.xz "
+            "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz "
+            "&& echo 'df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de  "
+            "/tmp/node.tar.xz' | sha256sum --check "
+            "&& tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 "
+            "&& rm /tmp/node.tar.xz",
+            "npm install --global --no-audit --no-fund @anthropic-ai/claude-code@2.1.282 "
+            "&& npm cache clean --force",
+            "useradd --create-home --shell /bin/bash agent",
+        ]
+    )
+    .add_python_packages(["uv==0.11.32", "pytest==9.1.1"])
+)
+```
+
+Three sandboxes build on it. `repo-builder` has open network and half an hour
+of idle time, enough to publish a large filesystem. The eval and issue
+sandboxes allow only `MODEL_API_RANGE`, and each stops five minutes after its
+last command if the function driving it dies.
+
+```python coding_agents/app.py
+# Clones the repository and installs its dependencies, so it is the only agent
+# sandbox with open network. Its filesystem becomes the repository snapshot.
+repo_builder = app.sandbox(
+    name="repo-builder",
+    image=agent_image,
+    cpu=2,
+    memory="4Gi",
+    keep_warm_seconds=30 * 60,
+)
+
+# Each eval task starts from the clean agent image. It reaches only the model API.
+eval_sandbox = app.sandbox(
+    name="eval",
+    image=agent_image,
+    cpu=0.5,
+    memory="1Gi",
+    allow_list=[MODEL_API_RANGE],
+    keep_warm_seconds=300,
+)
+
+
+def issue_sandbox(image_id: str) -> Sandbox:
+    """A sandbox on the repository snapshot that reaches only the model API.
+
+    The image is the newest snapshot, known only at run time, so each run
+    declares the sandbox on its own App object under this app's name.
+    """
+    return App(APP_NAME).sandbox(
+        name="issue",
+        image=Image.from_id(image_id),
+        cpu=1,
+        memory="4Gi",
+        allow_list=[MODEL_API_RANGE],
+        keep_warm_seconds=300,
+    )
+```
+
+The network rules come from the sandbox definition. A function's container
+cannot change a sandbox's network once it runs, so the rules have to be right
+at creation.
+
+Every run wraps its sandbox in `started`, which terminates it however the run
+ends:
+
+```python coding_agents/agent.py
+@contextmanager
+def started(sandbox: Sandbox) -> Iterator[SandboxInstance]:
+    """A running sandbox, terminated however the block ends so it stops billing."""
+    instance = sandbox.create(timeout_seconds=600)
+    try:
+        yield instance
+    finally:
+        instance.terminate()
+```
+
+## Let the agent reach only the model API
+
+An allow list holds address ranges, not hostnames, and it blocks DNS too.
+Anthropic publishes a fixed inbound range for its API. The function resolves
+`api.anthropic.com` where DNS works, checks the address falls inside that
+range, and pins it in the sandbox's `/etc/hosts`. A prompt injected through an
+issue can make the agent misbehave inside the sandbox, but it cannot send
+your code or key anywhere else.
+
+```python coding_agents/agent.py
+# Anthropic's published inbound range for its API. Agent sandboxes reach
+# nothing else, DNS included, so the API hostname is pinned in /etc/hosts.
+MODEL_API_HOST = "api.anthropic.com"
+MODEL_API_RANGE = "160.79.104.0/23"
+```
+
+```python coding_agents/agent.py
+def address_in_range(addresses: Iterable[str], network: str) -> str:
+    """The first address inside network, so the allow list covers the pinned host."""
+    allowed = ipaddress.ip_network(network)
+    for address in addresses:
+        if ipaddress.ip_address(address) in allowed:
+            return address
+    raise ModelApiAddressError(
+        f"{MODEL_API_HOST} resolves outside {network}; update MODEL_API_RANGE"
+    )
+
+
+def pin_model_api(instance: SandboxInstance) -> None:
+    """Resolve the model API here, where DNS works, and pin the address in the sandbox."""
+    resolved = socket.getaddrinfo(MODEL_API_HOST, 443, socket.AF_INET, socket.SOCK_STREAM)
+    address = address_in_range((str(entry[4][0]) for entry in resolved), MODEL_API_RANGE)
+    run_checked(
+        instance,
+        ["sh", "-c", 'printf "%s %s\\n" "$1" "$2" >> /etc/hosts', "sh", address, MODEL_API_HOST],
+        cwd="/",
+        timeout_seconds=30,
+    )
+```
+
+## Run Claude Code headless
+
+`run_agent` starts one Claude Code session as the `agent` user. `--bare` skips
+hooks, plugins and MCP servers found in the repository. Bypassing permission
+prompts is reasonable here only because the sandbox is the boundary. Three
+limits end a run early: turns, the dollar budget Claude Code estimates, and the
+sandbox process timeout. The API key reaches only this process, not the
+sandbox's environment, so test runs never see it.
+
+```python coding_agents/agent.py
+def run_agent(instance: SandboxInstance, *, cwd: str, prompt: str, api_key: str) -> AgentRun:
+    """Run one headless Claude Code session in cwd and return its result.
+
+    --bare skips hooks, plugins and MCP servers found on disk, so a run depends
+    only on these flags. The turn, budget and time limits each end a run early.
+    """
+    command = as_agent(
+        "claude",
+        "--bare",
+        "--print",
+        "--output-format",
+        "json",
+        "--model",
+        AGENT_MODEL,
+        "--max-turns",
+        str(AGENT_MAX_TURNS),
+        "--max-budget-usd",
+        f"{AGENT_MAX_BUDGET_USD:.2f}",
+        "--permission-mode",
+        "bypassPermissions",
+        "--no-session-persistence",
+        prompt,
+    )
+    env = {
+        **AGENT_ENV,
+        "ANTHROPIC_API_KEY": api_key,
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    response = instance.run(command, cwd=cwd, env=env, timeout_seconds=AGENT_TIMEOUT_SECONDS)
+    return parse_agent_output(response.stdout, response.stderr, response.exit_code)
+```
+
+Claude Code prints one JSON object, also when a limit stops it, so the caller
+always learns the turns and spend:
+
+```python coding_agents/agent.py
+class AgentRun(BaseModel):
+    """The fields of Claude Code's JSON result this system reads."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    subtype: str
+    is_error: bool
+    result: str = ""
+    num_turns: int
+    total_cost_usd: float
+```
+
+## Snapshot the repository
+
+`build_snapshot` runs on your machine. It clones the repository in
+`repo-builder`, runs the setup command as the agent, and publishes the
+sandbox's filesystem as an image. The token reaches git through environment
+variables only, so no file in the image holds it. The clone lives in the
+agent's home because `/workspace` is a mount, and mounts stay out of the
+image.
+
+```python coding_agents/snapshot.py
+def build_snapshot(token: str) -> RepoSnapshot:
+    """Clone and set up the repository in a sandbox, then save its filesystem as an image.
+
+    The token reaches git only through the clone's environment, so it is in no
+    file of the image. /workspace is a mount and stays out of the image, so the
+    clone lives in the agent's home.
+    """
+    with started(repo_builder) as instance:
+        run_checked(
+            instance,
+            as_agent(
+                "git",
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                f"https://github.com/{REPOSITORY}.git",
+                REPO_DIR,
+            ),
+            cwd=AGENT_HOME,
+            env={**AGENT_ENV, **git_auth_env(token)},
+            timeout_seconds=15 * 60,
+        )
+        run_checked(
+            instance,
+            as_agent("sh", "-c", SETUP_COMMAND),
+            cwd=REPO_DIR,
+            env=AGENT_ENV,
+            timeout_seconds=30 * 60,
+        )
+        revision = run_checked(
+            instance,
+            as_agent("git", "rev-parse", "HEAD", "--abbrev-ref", "HEAD"),
+            cwd=REPO_DIR,
+            env=AGENT_ENV,
+            timeout_seconds=30,
+        )
+        commit, branch = revision.split()
+        image_id = instance.create_image_from_filesystem()
+    return RepoSnapshot(
+        image_id=image_id, commit=commit, branch=branch, created_at=datetime.now(UTC)
+    )
+```
+
+```python coding_agents/github.py
+def git_auth_env(token: str) -> dict[str, str]:
+    """Git settings that send token to github.com without writing it to any file or argument."""
+    credentials = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {credentials}",
+    }
+```
+
+The snapshot runs from your machine because a function's container cannot
+publish a sandbox's filesystem. Pull requests branch from the snapshot's
+commit. Run the snapshot again when the default branch has moved, or from CI
+after each merge.
+
+## From webhook to worker
+
+GitHub signs each delivery with the shared secret. The webhook recomputes the
+HMAC over the exact bytes it received and compares it in constant time.
+
+```python coding_agents/github_events.py
+def signature_matches(secret: bytes, body: bytes, signature: str | None) -> bool:
+    """Whether X-Hub-Signature-256 is the HMAC of the exact body bytes under secret."""
+    if signature is None:
+        return False
+    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def issue_job(event: str, body: bytes) -> IssueJob | None:
+    """The job a delivery asks for, or None unless it labels an issue of REPOSITORY.
+
+    Only people with triage access can label issues, so the label is the approval
+    step between an issue anyone can open and an agent that spends money on it.
+    """
+    if event != "issues":
+        return None
+    delivery = _IssuesEvent.model_validate_json(body)
+    if (
+        delivery.action != "labeled"
+        or delivery.label is None
+        or delivery.label.name != TRIGGER_LABEL
+        or delivery.repository.full_name.lower() != REPOSITORY.lower()
+    ):
+        return None
+    text = delivery.issue.body or ""
+    if len(text) > MAX_ISSUE_CHARS:
+        text = text[:MAX_ISSUE_CHARS] + "\n\n[The issue continues; it was cut to fit.]"
+    return IssueJob(
+        repository=delivery.repository.full_name,
+        number=delivery.issue.number,
+        title=delivery.issue.title,
+        body=text,
+        url=delivery.issue.html_url,
+    )
+```
+
+The route caps the body at 1 MB, rejects a bad signature with `401`, answers
+GitHub's `ping`, and hands real jobs to `start`. When the worker refuses new
+work, GitHub sees `503` and the delivery can be resent from the repository's
+webhook settings.
+
+```python coding_agents/webhook.py
+    @api.post("/github")
+    async def github_delivery(
+        request: Request,
+        x_github_event: Annotated[str, Header()],
+        x_hub_signature_256: Annotated[str | None, Header()] = None,
+    ) -> Delivery:
+        body = await request.body()
+        if len(body) > MAX_DELIVERY_BYTES:
+            raise HTTPException(413, "delivery too large")
+        secret = os.environ[secret_name].encode()
+        if not signature_matches(secret, body, x_hub_signature_256):
+            raise HTTPException(401, "signature does not match")
+        if x_github_event == "ping":
+            return Delivery(status="pong")
+        try:
+            job = issue_job(x_github_event, body)
+        except ValidationError as exc:
+            raise HTTPException(422, "not an issues event GitHub sends") from exc
+        if job is None:
+            return Delivery(status="ignored")
+        try:
+            task_id = await run_in_threadpool(start, job)
+        except SdkError as exc:
+            raise HTTPException(
+                503, "the issue worker is not accepting work; redeliver later"
+            ) from exc
+        if task_id is None:
+            return Delivery(status="already_running")
+        return Delivery(status="started", task_id=task_id)
+```
+
+`start_issue` claims the issue in the map before spawning, so a second label or
+a redelivery doesn't start a second run. The claim expires after two hours in
+case a worker dies without releasing it.
+
+```python coding_agents/app.py
+def start_issue(job: IssueJob) -> str | None:
+    """Claim the issue and start a worker on it; an issue already claimed keeps its run.
+
+    The webhook runs one request at a time in one container, so the check and
+    the claim cannot race.
+    """
+    if job.claim_key in STATE:
+        return None
+    STATE.set(job.claim_key, job.number, ttl=CLAIM_TTL_SECONDS)
+    try:
+        return solve.spawn(job).task_id
+    except SdkError:
+        del STATE[job.claim_key]
+        raise
+
+
+api = create_api(start_issue, secret_name=GITHUB_WEBHOOK_SECRET.name)
+# GitHub cannot send a LazyCloud token, so the route is public and every
+# delivery must carry the webhook secret's signature.
+webhook = app.asgi(
+    name="webhook",
+    image=function_image,
+    cpu=0.25,
+    memory="256Mi",
+    timeout_seconds=30,
+    keep_warm_seconds=300,
+    authorized=False,
+    secrets=[GITHUB_WEBHOOK_SECRET.name],
+)(api)
+```
+
+## Solve an issue
+
+The worker reads the snapshot record, starts a sandbox on it, and reports any
+failure on the issue before the task fails. `retries=0` because a second
+attempt would spend the model budget again. A preempted call still retries,
+and the next section shows why that is safe.
+
+```python coding_agents/app.py
+@app.function(
+    name="solve-issue",
+    image=function_image,
+    cpu=0.25,
+    memory="512Mi",
+    timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
+    retries=0,
+    max_pending_tasks=MAX_WAITING_ISSUES,
+    autoscaler=Autoscaler(max_containers=MAX_PARALLEL_ISSUES),
+    secrets=[ANTHROPIC_API_KEY.name, GITHUB_TOKEN.name],
+)
+def solve(job: IssueJob) -> IssueOutcome:
+    token = os.environ[GITHUB_TOKEN.name]
+    with GitHub(job.repository, token) as github:
+        try:
+            record = STATE.get(SNAPSHOT_KEY)
+            if record is None:
+                raise SnapshotMissingError("run `uv run python -m coding_agents.snapshot` first")
+            snapshot = RepoSnapshot.model_validate(record)
+            with started(issue_sandbox(snapshot.image_id)) as instance:
+                return solve_issue(
+                    job,
+                    instance,
+                    snapshot,
+                    github,
+                    api_key=os.environ[ANTHROPIC_API_KEY.name],
+                    token=token,
+                )
+        except Exception as exc:
+            failure = f"{type(exc).__name__}: {exc}"[:1000]
+            github.comment(job.number, f"The agent run failed:\n\n```\n{failure}\n```")
+            raise
+        finally:
+            STATE.pop(job.claim_key, None)
+```
+
+`solve_issue` pins the model API, runs the agent, then runs your tests itself
+so the pull request reports a verdict the agent didn't write. The GitHub token
+never enters the sandbox. The function downloads the change as a patch and
+pushes it from its own container.
+
+```python coding_agents/issues.py
+def solve_issue(
+    job: IssueJob,
+    instance: SandboxInstance,
+    snapshot: RepoSnapshot,
+    github: GitHub,
+    *,
+    api_key: str,
+    token: str,
+) -> IssueOutcome:
+    """Run the agent on job in instance, a sandbox started from snapshot, and open a PR."""
+    pin_model_api(instance)
+    prompt = ISSUE_PROMPT.format(
+        number=job.number,
+        repository=job.repository,
+        test_command=TEST_COMMAND,
+        title=job.title,
+        body=job.body,
+    )
+    agent = run_agent(instance, cwd=REPO_DIR, prompt=prompt, api_key=api_key)
+    tests = run_tests(instance)
+    with tempfile.TemporaryDirectory(prefix="issue-") as directory:
+        workdir = Path(directory)
+        patch = download_patch(instance, snapshot.commit, workdir / "agent.patch")
+        if patch is None:
+            github.comment(
+                job.number, f"The agent finished without changing any files.\n\n{agent.result}"
+            )
+            return IssueOutcome(
+                issue=job.number,
+                pull_request=None,
+                tests_passed=tests.passed,
+                agent_cost_usd=agent.total_cost_usd,
+            )
+        branch = f"agent/issue-{job.number}"
+        (workdir / "repo").mkdir()
+        push_patch(
+            remote=f"https://github.com/{job.repository}.git",
+            base_commit=snapshot.commit,
+            branch=branch,
+            patch=patch,
+            message=f"{job.title}\n\nCloses #{job.number}",
+            workdir=workdir / "repo",
+            env=git_auth_env(token),
+        )
+    pull = github.open_pull_request(
+        branch=branch,
+        base=snapshot.branch,
+        title=job.title,
+        body=pull_request_body(job, agent, tests),
+    )
+    return IssueOutcome(
+        issue=job.number,
+        pull_request=pull.html_url,
+        tests_passed=tests.passed,
+        agent_cost_usd=agent.total_cost_usd,
+    )
+```
+
+The patch covers everything since the snapshot's commit, including commits
+the agent made despite the prompt. `--binary` keeps images and other binary
+files intact, and `.gitignore` keeps virtualenvs out.
+
+```python coding_agents/issues.py
+def download_patch(instance: SandboxInstance, base_commit: str, target: Path) -> Path | None:
+    """Every change since base_commit, committed or not, as a binary-safe patch file.
+
+    git add honours .gitignore, so virtualenvs and caches stay out of the patch.
+    None means the agent changed nothing.
+    """
+    run_checked(
+        instance,
+        as_agent(
+            "sh",
+            "-c",
+            'git add --all && git diff --cached --binary "$1" > "$2"',
+            "sh",
+            base_commit,
+            PATCH_PATH,
+        ),
+        cwd=REPO_DIR,
+        env=AGENT_ENV,
+        timeout_seconds=120,
+    )
+    size = instance.fs.stat_file(PATCH_PATH).size
+    if size == 0:
+        return None
+    if size > MAX_PATCH_BYTES:
+        raise PatchTooLargeError(f"the change is {size} bytes; the limit is {MAX_PATCH_BYTES}")
+    instance.fs.download_file(PATCH_PATH, target)
+    return target
+```
+
+Each issue has one branch, `agent/issue-<number>`. `push_patch` force-pushes
+it and `open_pull_request` updates the pull request already open from it, so a
+relabel or a retried call replaces the earlier attempt instead of adding a
+second pull request.
+
+```python coding_agents/github.py
+    def open_pull_request(self, *, branch: str, base: str, title: str, body: str) -> PullRequest:
+        """Open a pull request from branch, or update the one already open from it."""
+        owner = self.repository.split("/")[0]
+        found = self._send("GET", "/pulls", params={"head": f"{owner}:{branch}", "state": "open"})
+        existing = _PULL_REQUESTS.validate_json(found.content)
+        content = {"title": title, "body": body}
+        if existing:
+            updated = self._send("PATCH", f"/pulls/{existing[0].number}", json=content)
+            return PullRequest.model_validate_json(updated.content)
+        created = self._send("POST", "/pulls", json={**content, "head": branch, "base": base})
+        return PullRequest.model_validate_json(created.content)
+```
+
+## The nightly eval
+
+Each task is a directory: instructions, starting files with a few visible
+checks, and hidden checks the agent never sees.
+
+```text
+eval_tasks/
+  csv_totals/      fix a CSV reader that splits quoted commas
+  lru_cache/       implement an LRU cache
+  page_count/      fix an off-by-one in pagination
+  parse_duration/  parse "1h30m" into seconds and reject bad input
+  slugify/         turn titles into URL slugs
+    task.md
+    workspace/slug.py
+    workspace/checks.py
+    hidden_checks.py
+```
+
+`run_eval_task` uploads the starting files, runs the agent, then uploads the
+hidden checks and runs them as the agent user. `--noconftest` stops a
+`conftest.py` the agent wrote from changing how they run.
+
+```python coding_agents/evals.py
+def run_eval_task(instance: SandboxInstance, name: str, *, api_key: str) -> EvalResult:
+    """Give the agent one task, then score its work with checks it could not read."""
+    task = TASKS / name
+    began = time.monotonic()
+    pin_model_api(instance)
+    for source in sorted((task / "workspace").iterdir()):
+        instance.fs.upload_file(source, f"{TASK_DIR}/{source.name}")
+    run_checked(instance, ["chown", "-R", "agent:agent", TASK_DIR], cwd="/", timeout_seconds=30)
+    prompt = EVAL_PROMPT.format(instructions=(task / "task.md").read_text(encoding="utf-8"))
+    agent = run_agent(instance, cwd=TASK_DIR, prompt=prompt, api_key=api_key)
+    # Uploaded after the agent stops; --noconftest keeps a conftest.py the
+    # agent wrote from changing how the hidden checks run.
+    instance.fs.upload_file(task / HIDDEN_CHECKS, f"{TASK_DIR}/{HIDDEN_CHECKS}")
+    checks = instance.run(
+        as_agent(
+            "python", "-m", "pytest", "-q", "--noconftest", "-p", "no:cacheprovider", HIDDEN_CHECKS
+        ),
+        cwd=TASK_DIR,
+        env=AGENT_ENV,
+        timeout_seconds=120,
+    )
+    return EvalResult(
+        task=name,
+        passed=checks.exit_code == 0,
+        agent_cost_usd=agent.total_cost_usd,
+        agent_turns=agent.num_turns,
+        seconds=time.monotonic() - began,
+    )
+```
+
+The schedule fans the tasks out, one call and one sandbox each, and the
+autoscaler lets all five run at once. A call that failed outright still
+counts as a failed task, with its error and no invented cost.
+
+```python coding_agents/app.py
+@app.function(
+    name="eval-task",
+    image=function_image,
+    cpu=0.25,
+    memory="256Mi",
+    timeout_seconds=AGENT_TIMEOUT_SECONDS + 15 * 60,
+    retries=0,
+    autoscaler=Autoscaler(max_containers=len(task_names())),
+    secrets=[ANTHROPIC_API_KEY.name],
+)
+def eval_task(name: str) -> EvalResult:
+    with started(eval_sandbox) as instance:
+        return run_eval_task(instance, name, api_key=os.environ[ANTHROPIC_API_KEY.name])
+
+
+@app.function(
+    name="nightly-eval",
+    cron="0 6 * * *",
+    image=function_image,
+    cpu=0.125,
+    memory="256Mi",
+    timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
+    retries=0,
+    secrets=[GITHUB_TOKEN.name],
+)
+def nightly_eval() -> EvalReport:
+    names = task_names()
+    calls = eval_task.spawn_map([(name,) for name in names])
+    results: list[EvalResult] = []
+    for name, call in zip(names, calls, strict=True):
+        outcome = call.result(wait=True)
+        if outcome.value is None:
+            results.append(EvalResult(task=name, passed=False, error=outcome.error))
+        else:
+            results.append(outcome.value)
+    report = EvalReport(day=datetime.now(UTC).date(), results=results)
+    print(report.markdown(), flush=True)
+    if EVAL_ISSUE is not None:
+        with GitHub(REPOSITORY, os.environ[GITHUB_TOKEN.name]) as github:
+            github.comment(EVAL_ISSUE, report.markdown())
+    return report
+```
+
+## Deploy
+
+```bash
+uv run lazycloud deploy coding_agents.app:app
+uv run python -m coding_agents.snapshot
+```
+
+The deploy builds the function and devbox images, starts the webhook and
+registers the schedule. It prints the webhook URL. Sandboxes aren't deployed;
+the snapshot command builds the agent image the first time it creates
+`repo-builder`, then prints the snapshot's image ID and commit.
+{/* MEASURE: first deploy time, agent image build time, snapshot time for a small repository */}
+
+In the repository's settings, add a webhook with these values:
+
+- Payload URL: the printed webhook URL followed by `/github`.
+- Content type: `application/json`.
+- Secret: the webhook secret you stored.
+- Events: Issues only.
+
+GitHub sends a `ping` right away, and the delivery log shows `pong`.
+
+## Use it
+
+Create an `agent` label in the repository, open an issue, and apply the label.
+The webhook answers with the worker's task ID:
+
+```bash
+uv run lazycloud task list --app coding_agents
+uv run lazycloud task logs <task-id>
+```
+
+A pull request from `agent/issue-<number>` closes the issue when merged. Its
+description holds the agent's summary, the test verdict, the turns and spend.
+{/* MEASURE: time from label to pull request for a one-file fix: sandbox start, agent run, tests, push */}
+
+Connect to the devbox:
+
+```bash
+uv run lazycloud devbox agent-box ssh
+```
+
+Inside, clone the repository, start `tmux`, and run `claude` or `codex`.
+`uv run lazycloud devbox agent-box login codex` signs Codex in from your
+laptop's browser. For VS Code or Cursor, `uv run lazycloud ssh-config` adds the
+devbox as an SSH host.
+
+Run the eval now instead of waiting for 06:00 UTC:
+
+```bash
+uv run lazycloud run coding_agents.app:nightly_eval
+```
+
+The result is a table of tasks with pass or fail, turns, model spend and time.
+With `EVAL_ISSUE` set, the same table appears as a comment on that issue.
+{/* MEASURE: eval wall time, pass rate and model spend with AGENT_MODEL = "sonnet" */}
+
+## Cost and scaling
+
+With no labeled issues and no SSH session, only the map and the devbox disk
+cost anything, plus one eval a night. The webhook stops five minutes after the
+last delivery, a worker stops when its issue is done, and every sandbox is
+terminated when its run ends.
+{/* MEASURE: idle cost per day with the app deployed, no issues and the devbox stopped */}
+{/* MEASURE: compute cost of one issue run, sandbox plus worker, excluding model spend */}
+{/* MEASURE: compute cost of one nightly eval, excluding model spend */}
+{/* MEASURE: issue sandbox cold start from the snapshot image */}
+
+Model spend usually dwarfs compute. `AGENT_MAX_BUDGET_USD` caps each run, and
+`MAX_PARALLEL_ISSUES` and `MAX_WAITING_ISSUES` cap how many runs a burst of
+labels can start. The worker holds a quarter CPU while it waits on its
+sandbox. The sandbox gets one CPU and 4 GiB for your test suite, so a heavier
+suite wants more.
+
+## Adapt it
+
+- Another stack needs its tools in `agent_image` and its commands in
+  `SETUP_COMMAND` and `TEST_COMMAND`, for example `npm ci` and `npm test`.
+- `AGENT_MODEL` takes `opus` or a full model name. The eval is the place to
+  compare models on cost and pass rate before switching.
+- Tasks in `eval_tasks/` that come from your own repository's history make
+  the eval track the work you actually hand to the agent.
+- A CI job that runs `uv run python -m coding_agents.snapshot` after each merge
+  keeps pull requests close to the default branch.
+- A comment-triggered retry fits the same webhook: handle `issue_comment`
+  events in `issue_job` and check the commenter's permission first.
+
+## Clean up
+
+```bash
+uv run lazycloud app delete coding_agents
+uv run lazycloud disk delete agent-box
+uv run lazycloud ssh-config --prune
+uv run lazycloud secret delete ANTHROPIC_API_KEY
+uv run lazycloud secret delete GITHUB_TOKEN
+uv run lazycloud secret delete GITHUB_WEBHOOK_SECRET
+uv run python -c "from coding_agents.app import STATE; STATE.delete()"
+```
+
+Remove the webhook in the repository's settings, and delete the `agent/issue-*`
+branches you no longer need. `deployment stop nightly-eval` pauses only the
+eval.

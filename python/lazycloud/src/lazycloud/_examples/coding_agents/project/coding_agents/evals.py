@@ -77,7 +77,7 @@ def task_names() -> list[str]:
 def run_eval_task(instance: SandboxInstance, name: str, *, api_key: str) -> EvalResult:
     """Give the agent one task, then score its work with checks it could not read."""
     task = TASKS / name
-    started = time.monotonic()
+    began = time.monotonic()
     pin_model_api(instance)
     for source in sorted((task / "workspace").iterdir()):
         instance.fs.upload_file(source, f"{TASK_DIR}/{source.name}")
@@ -100,5 +100,5 @@ def run_eval_task(instance: SandboxInstance, name: str, *, api_key: str) -> Eval
         passed=checks.exit_code == 0,
         agent_cost_usd=agent.total_cost_usd,
         agent_turns=agent.num_turns,
-        seconds=time.monotonic() - started,
+        seconds=time.monotonic() - began,
     )
