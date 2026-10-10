@@ -3825,8 +3825,8 @@ func (x *PlatformVolume) GetPrefix() string {
 	return ""
 }
 
-// CloudBucket is a user's bucket, located by the server like a grant: the
-// endpoint is always set and force_path_style is the addressing to use.
+// CloudBucket is a user's bucket. The server resolves its endpoint and
+// addressing as it does a grant's, so the endpoint is always set.
 type CloudBucket struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Bucket          string                 `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`

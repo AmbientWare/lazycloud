@@ -579,8 +579,8 @@ message PlatformVolume {
   string prefix = 3;
 }
 
-// CloudBucket is a user's bucket, located by the server like a grant: the
-// endpoint is always set and force_path_style is the addressing to use.
+// CloudBucket is a user's bucket. The server resolves its endpoint and
+// addressing as it does a grant's, so the endpoint is always set.
 message CloudBucket {
   string bucket = 1;
   string prefix = 2;

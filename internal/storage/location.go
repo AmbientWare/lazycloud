@@ -11,7 +11,7 @@ import (
 var ErrNoRegion = errors.New("an AWS S3 bucket needs a region")
 
 // Location is a bucket's address as hosts receive it. Endpoint is always
-// set: the mount tools hosts run have their own non-AWS default endpoints.
+// set, because the mount tools on hosts default to stores other than AWS.
 type Location struct {
 	Endpoint  string
 	Region    string
