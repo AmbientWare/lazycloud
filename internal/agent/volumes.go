@@ -48,7 +48,7 @@ const (
 	// mounterMemoryBytes the whole mount container.
 	geesefsMemoryMiB   = 512
 	mounterMemoryBytes = 1 << 30
-	mounterPidsLimit   = 256
+	mounterPidsLimit   = 1024
 	// grantMargin is how long a stored key must still be valid to mount.
 	grantMargin = time.Minute
 )
