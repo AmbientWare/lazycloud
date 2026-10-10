@@ -1259,10 +1259,14 @@ func (ps *pass) warmPending(v *marketView) FleetCapacity {
 }
 
 // retain releases the idle hosts the market no longer needs once each has
-// been idle for the timeout.
+// been idle for its market's timeout.
 func (ps *pass) retain(v *marketView) {
+	timeout := ps.p.IdleTimeout
+	if v.m.spotCPU() {
+		timeout = ps.p.SpotIdleTimeout
+	}
 	for _, h := range ps.leavers(v) {
-		if ps.idleLong(*h) {
+		if ps.s.Now.Sub(ps.plan.IdleSince[h.ID]) >= timeout {
 			ps.leave(v, h)
 		}
 	}
