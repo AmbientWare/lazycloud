@@ -54,7 +54,7 @@ func TestAnOldAgentWithALiveVolumeUpdatesInPlace(t *testing.T) {
 		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
 	}
 	head := buildRelease(t, dist)
-	agent := p.startHostAgent(installRelease(t, old))
+	agent := p.startHostAgent(p.installRelease(old))
 	p.awaitHost()
 	if v := p.agentVersion(); v != old.version {
 		t.Fatalf("the host runs %q, want the old release %s", v, old.version)
@@ -100,7 +100,7 @@ func TestAnOldAgentRestartingAfterTheTargetChangedTakesNoWorkUntilItUpdates(t *t
 		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
 	}
 	head := buildRelease(t, dist)
-	root, state := installRelease(t, old)
+	root, state := p.installRelease(old)
 	agent := p.startHostAgent(root, state)
 	p.awaitHost()
 	agent.stop()
@@ -228,9 +228,10 @@ func copyFile(t *testing.T, from, to string) {
 
 // installRelease lays r out in a new agent root as the install script
 // does, and returns the root and a state directory.
-func installRelease(t *testing.T, r release) (root, state string) {
+func (p *platform) installRelease(r release) (root, state string) {
+	t := p.t
 	t.Helper()
-	root, state = t.TempDir(), t.TempDir()
+	root, state = p.dir(), p.dir()
 	dir := filepath.Join(root, "releases", r.version)
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Test files.
 		t.Fatal(err)

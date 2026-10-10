@@ -142,6 +142,8 @@ type platform struct {
 	images  *images.Images
 	hosts   string
 	join    string
+	// dirs holds agents' directories; see dir.
+	dirs string
 	// ctx ends when the test does; wg holds the platform's goroutines,
 	// which cleanup waits for.
 	ctx    context.Context //nolint:containedctx // The platform's lifetime.
@@ -449,6 +451,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		geesefs = ""
 	}
 	p.geesefs = geesefs
+	p.dirs = t.TempDir()
 	// Cleanups run last first: this one stops everything before the
 	// database and directories go.
 	t.Cleanup(func() {
@@ -457,6 +460,17 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		removeContainers(t)
 	})
 	return p
+}
+
+// dir is a new directory that outlasts the platform's agents: mounts in it
+// are gone before it is removed.
+func (p *platform) dir() string {
+	p.t.Helper()
+	dir, err := os.MkdirTemp(p.dirs, "")
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	return dir
 }
 
 // ociRuntime is the Docker runtime workloads run with:
@@ -472,7 +486,7 @@ func ociRuntime() string {
 // Its volume mounts trust only the HTTPS store's CA.
 func (p *platform) runAgent() {
 	p.t.Helper()
-	stateDir := p.t.TempDir()
+	stateDir := p.dir()
 	runtime := runtimeDir(p.t)
 	p.wg.Go(func() {
 		err := agent.Run(p.ctx, agent.Config{
