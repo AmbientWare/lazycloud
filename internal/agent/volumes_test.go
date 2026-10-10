@@ -760,9 +760,12 @@ func TestAMountThatDiesDuringItsStartFailsIt(t *testing.T) {
 	s.send(t, start)
 	bucket := filepath.Join(e.stateDir, "mounts", mounterName(id, 0))
 	e.eventually("the bucket mounts", func() bool { return mounted(bucket) })
+	// The start sees the mount within a poll; a mount that dies sooner fails
+	// it as one that never came up.
+	time.Sleep(3 * mountPoll)
 
 	e.killGeeseFS(e.mounter(id).ID)
-	if r := s.settle(t, id); r.GetPhase() != exited || !strings.Contains(r.GetExit().GetMessage(), "exited") {
+	if r := s.settle(t, id); r.GetPhase() != exited || !strings.Contains(r.GetExit().GetMessage(), "volume mount "+mounterName(id, 0)+" exited") {
 		t.Fatalf("a start whose mount died: %v", r)
 	}
 }

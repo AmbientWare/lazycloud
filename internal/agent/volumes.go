@@ -43,6 +43,8 @@ const (
 	// mountWait bounds how long a new mount takes to appear once its
 	// container runs.
 	mountWait = 30 * time.Second
+	// mountPoll is how often a start looks for its new mount.
+	mountPoll = 100 * time.Millisecond
 	// GeeseFS reserves its buffers before reading and stays under
 	// geesefsMemoryMiB (--use-enomem), and its runtime collects garbage
 	// before geesefsGoMemoryMiB. Without the reservation, readahead in
@@ -421,7 +423,7 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 	v.a.goOwned(func(ctx context.Context) { v.watch(ctx, m) })
 	timer := time.NewTimer(mountWait)
 	defer timer.Stop()
-	poll := time.NewTicker(100 * time.Millisecond)
+	poll := time.NewTicker(mountPoll)
 	defer poll.Stop()
 	var failure string
 	for failure == "" {
