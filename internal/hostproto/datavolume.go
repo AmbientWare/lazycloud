@@ -5,9 +5,13 @@ package hostproto
 // FrameCacheBytes and DiskDirtyBytes per disk the host holds; a host offers
 // as many disk slots as its volume has room for.
 const (
-	DataRoot        = "/var/lib/lazycloud-data"
+	DataRoot = "/var/lib/lazycloud-data"
+	// FrameCacheBytes holds image layers' frames and a dozen disks' working
+	// sets, which a devbox-like session measured at about 0.8 GiB.
 	FrameCacheBytes = 32 << 30
 	// DiskDirtyBytes is the room a disk keeps for writes not yet published.
-	// A disk publishes once half of it is used.
-	DiskDirtyBytes = 8 << 30
+	// A disk publishes once half of it is used. Publishing runs at about
+	// 335 MiB/s on an 8-vCPU host, faster than a gp3 data volume's 125 MiB/s
+	// baseline writes, so a disk stays within it.
+	DiskDirtyBytes = 4 << 30
 )
