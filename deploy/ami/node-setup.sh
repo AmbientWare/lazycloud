@@ -153,15 +153,16 @@ docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'
 docker info --format '{{.Driver}}' | grep -qx lazycloud
 systemctl show -p CPUWeight system.slice | grep -qx 'CPUWeight=1000'
 
-# Disks keep their local copies on a volume of their own, mounted at the
-# disk engine's directory before the agent starts: the EBS volume the
-# launcher maps at /dev/sdf (internal/compute/launcher.go), or on a type
-# with NVMe instance store, its first instance store volume. Instance store
-# is empty after every stop, so a volume without a filesystem is formatted.
+# The snapshotter's frame cache and disks' unpublished writes share a data
+# volume, mounted at layersource.DataRoot before the snapshotter and the
+# agent start: the EBS volume the launcher maps at /dev/sdf
+# (internal/compute/launcher.go), or on a type with NVMe instance store, its
+# first instance store volume. Instance store is empty after every stop, so
+# a volume without a filesystem is formatted.
 cat >/usr/local/sbin/lazycloud-data-volume <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
-target=/var/lib/lazycloud/agent/disks/engine
+target=/var/lib/lazycloud-data
 mountpoint -q "$target" && exit 0
 device=""
 for _ in $(seq 120); do
@@ -185,7 +186,7 @@ SCRIPT
 chmod 0755 /usr/local/sbin/lazycloud-data-volume
 cat >/etc/systemd/system/lazycloud-data-volume.service <<'UNIT'
 [Unit]
-Description=LazyCloud disk data volume
+Description=LazyCloud data volume
 
 [Service]
 Type=oneshot
@@ -199,15 +200,18 @@ systemctl daemon-reload
 systemctl enable lazycloud-data-volume.service
 # The bake instance has a data volume of each variant's kind.
 systemctl start lazycloud-data-volume.service
-mountpoint -q /var/lib/lazycloud/agent/disks/engine
-umount /var/lib/lazycloud/agent/disks/engine
+mountpoint -q /var/lib/lazycloud-data
+umount /var/lib/lazycloud-data
 systemctl stop lazycloud-data-volume.service
 
 # The agent's unit (written by its install-service) runs workloads under
-# runsc on these hosts and starts once the data volume is mounted.
-mkdir -p /etc/systemd/system/lazycloud-agent.service.d
+# runsc on these hosts and starts once the data volume is mounted, as does
+# the snapshotter's (written by install-snapshotter).
+mkdir -p /etc/systemd/system/lazycloud-agent.service.d /etc/systemd/system/lazycloud-snapshotter.service.d
 printf '[Unit]\nRequires=lazycloud-data-volume.service\nAfter=lazycloud-data-volume.service\n\n[Service]\nEnvironment=LAZYCLOUD_OCI_RUNTIME=runsc\n' \
   >/etc/systemd/system/lazycloud-agent.service.d/node-image.conf
+printf '[Unit]\nRequires=lazycloud-data-volume.service\nAfter=lazycloud-data-volume.service\n' \
+  >/etc/systemd/system/lazycloud-snapshotter.service.d/node-image.conf
 
 # A reserve launched able to hibernate writes its memory to a swap file on
 # the root volume. hibinit-agent creates the file at each cold boot and puts

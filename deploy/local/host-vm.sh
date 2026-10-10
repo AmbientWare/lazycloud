@@ -56,7 +56,7 @@ data_disk_exists() { "$limactl" disk list --json 2>/dev/null | grep -q "\"name\"
 create() {
   mkdir -p "$state/vm" "$LIMA_HOME"
   fetch "$state/vm/$AL2023_IMAGE" "https://cdn.amazonlinux.com/al2023/os-images/$AL2023_RELEASE/kvm/$AL2023_IMAGE" "$AL2023_SHA256"
-  data_disk_exists || "$limactl" disk create "$data_disk" --size "${LAZYCLOUD_VM_DATA_DISK:-20GiB}" --format raw
+  data_disk_exists || "$limactl" disk create "$data_disk" --size "${LAZYCLOUD_VM_DATA_DISK:-64GiB}" --format raw
   cat >"$state/vm/$vm.yaml" <<YAML
 vmType: qemu
 arch: x86_64
