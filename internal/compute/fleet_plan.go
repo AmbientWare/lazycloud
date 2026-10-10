@@ -420,9 +420,12 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		v := &marketView{m: m, retired: map[HostID]bool{}}
 		v.load = ps.marketLoad(m)
 		largest := ps.s.Recent[m]
-		// Pending containers are arrivals too, so a burst counts whole
-		// while capacity for it is still being bought.
-		arrivals := slices.Clone(ps.s.Arrivals[m])
+		// Purchases cover pending containers themselves, so the steady
+		// demand headroom buys for counts only placed ones; the peak it
+		// remembers counts pending ones too, so a burst counts whole while
+		// capacity for it is still being bought.
+		placed := ps.s.Arrivals[m]
+		arrivals := slices.Clone(placed)
 		for _, it := range items {
 			if it.market == m {
 				v.load = v.load.Plus(reservedShape(it.need))
@@ -434,14 +437,15 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		now, carried := ps.s.Now, ps.s.Peaks[m]
 		warm := DemandOf(arrivals, now, r.Warm.Lead, ps.p.Batch)
 		v.peaks.Warm = carried.Warm.after(warm.Steady.Plus(warm.Burst), now, r.Warm.Memory)
-		v.warm = r.Warm.Of(warm.Steady)
+		v.warm = r.Warm.Of(DemandOf(placed, now, r.Warm.Lead, ps.p.Batch).Steady)
 		v.slots = ps.p.slots(r.Warm, v.warm, r.Warm.Of(v.peaks.Warm.Demand))
 		if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
 			v.slots = append(v.slots, warmSlot{shape: build.Lower(ps.p.LargestShape.Cap), kind: slotBuild})
 		}
 		stopped := DemandOf(arrivals, now, r.Stopped.Lead, ps.p.Batch)
 		v.peaks.Stopped = carried.Stopped.after(stopped.Steady.Plus(stopped.Burst), now, r.Stopped.Memory)
-		v.stopped, v.keep = r.Stopped.Of(stopped.Steady), r.Stopped.Of(v.peaks.Stopped.Demand)
+		v.stopped = r.Stopped.Of(DemandOf(placed, now, r.Stopped.Lead, ps.p.Batch).Steady)
+		v.keep = r.Stopped.Of(v.peaks.Stopped.Demand)
 		if r.FitLargest {
 			v.largest = ps.p.LargestShape.of(m, largest)
 			floor := r.Stopped.Floor.Plus(v.largest)
