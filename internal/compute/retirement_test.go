@@ -39,7 +39,7 @@ func terminated(e *awsEmulator) []string {
 // market's free room beyond its warm target covers them; a one-time Spot
 // host cannot stop, so it drains and terminates.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
-	o, emulator, _ := launchFleet(t, compute.Fleet{IdleTimeout: 5 * time.Minute})
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("TerminateInstances", terminateInstancesReply)
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -93,6 +93,11 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	run(t, o.pool, "update hosts set launched_at = now() - interval '20 minutes' where id = $1", uuid.UUID(slow))
 	starting := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseProvisioning, Region: "us-east-2", InstanceID: "i-0000000000000b004"})
 	stopped := cloudHost(t, o, compute.MarketOnDemand, "i-0000000000000b007")
+	// A Spot host EC2 reclaimed as its notice announced.
+	reclaimed := cloudHost(t, o, compute.MarketSpot, "i-0000000000000b009")
+	if err := o.compute.ReportInterruption(t.Context(), reclaimed, "spot", time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	// A launch whose answer was lost: the host is still requested.
 	unanswered := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseRequested, Region: "us-east-2"})
 	w := runningAttempt(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), vanished)
@@ -110,6 +115,7 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 			ec2Instance{ID: "i-0000000000000b006", State: "pending", Tags: tags(unanswered.String())},
 			ec2Instance{ID: "i-0000000000000b007", State: "stopped", Tags: tags(stopped.String())},
 			ec2Instance{ID: "i-0000000000000b008", State: "terminated", Tags: tags(uuid.NewString())},
+			ec2Instance{ID: "i-0000000000000b009", State: "terminated", Tags: tags(reclaimed.String())},
 		)
 	})
 	emulator.on("TerminateInstances", terminateInstancesReply)
@@ -136,6 +142,7 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	}{
 		gone:       {compute.PhaseDeleted, ""},
 		vanished:   {compute.PhaseFailed, compute.FailureProviderGone},
+		reclaimed:  {compute.PhaseDeleted, ""},
 		slow:       {compute.PhaseFailed, compute.FailureBootstrapTimedOut},
 		starting:   {compute.PhaseBooting, ""},
 		stopped:    {compute.PhaseFailed, compute.FailureProviderStopped},

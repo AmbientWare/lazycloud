@@ -141,7 +141,7 @@ func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	network := func(zone, id string) Network {
 		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone, ZoneID: id}}}
 	}
-	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, IdleTimeout: 5 * time.Minute, Networks: map[string]Network{
+	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, Networks: map[string]Network{
 		"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3"),
 	}}})
 	costExec(t, pool, `insert into images (digest, id, dockerfile, python_version, architecture)

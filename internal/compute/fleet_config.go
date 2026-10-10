@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 )
@@ -47,11 +46,6 @@ func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	var err error
 	if f.MaxHosts, err = intEnv(getenv, "LAZYCLOUD_FLEET_MAX_HOSTS"); err != nil {
 		return Fleet{}, err
-	}
-	if raw := getenv("LAZYCLOUD_FLEET_IDLE_TIMEOUT"); raw != "" {
-		if f.IdleTimeout, err = time.ParseDuration(raw); err != nil {
-			return Fleet{}, fmt.Errorf("LAZYCLOUD_FLEET_IDLE_TIMEOUT: %w", err)
-		}
 	}
 	// Without networks or a principal the platform makes no AWS call, so
 	// it reads no AWS credentials either.

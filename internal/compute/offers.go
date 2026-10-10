@@ -32,10 +32,6 @@ type Fleet struct {
 	// and of each connected account; the platform may hold as many
 	// stopped reserves besides.
 	MaxHosts int
-	// IdleTimeout is how long a ready instance may run no container before
-	// it leaves; a platform host also waits out the fleet policy's light
-	// use window.
-	IdleTimeout time.Duration
 	// BootTimeout is how long a launched instance may take to enroll.
 	BootTimeout time.Duration
 	// CapacityCooldown is how long an offer that lacked capacity is skipped.
@@ -80,9 +76,6 @@ func (f Fleet) withDefaults() Fleet {
 	}
 	if f.MaxHosts == 0 {
 		f.MaxHosts = 20
-	}
-	if f.IdleTimeout == 0 {
-		f.IdleTimeout = 5 * time.Minute
 	}
 	if f.BootTimeout == 0 {
 		f.BootTimeout = 10 * time.Minute

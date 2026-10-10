@@ -119,6 +119,8 @@ update hosts h
 set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired',
     token_hash = null, updated_at = now()
 where h.provider = 'aws' and h.phase = 'draining' and h.instance_id is not null
+  and (h.interruption_at is null
+       or h.interruption_at < now() - make_interval(secs => $1::float8))
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id, h.connection_id, h.region, h.instance_id
 `
@@ -130,9 +132,11 @@ type ClaimTerminationsRow struct {
 	InstanceID   *string
 }
 
-// Draining cloud hosts that run nothing move to terminating.
-func (q *Queries) ClaimTerminations(ctx context.Context) ([]ClaimTerminationsRow, error) {
-	rows, err := q.db.Query(ctx, claimTerminations)
+// Draining cloud hosts that run nothing move to terminating. An interrupted
+// host is left for the provider to reclaim until @reclaim_grace_seconds
+// past its reclaim time.
+func (q *Queries) ClaimTerminations(ctx context.Context, reclaimGraceSeconds float64) ([]ClaimTerminationsRow, error) {
+	rows, err := q.db.Query(ctx, claimTerminations, reclaimGraceSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +252,8 @@ func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) (int64, erro
 }
 
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at
+select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
+       interruption_at
 from hosts
 where provider = 'aws' and region = $1
   and connection_id is not distinct from $2::uuid
@@ -271,6 +276,7 @@ type FleetHostsInRegionRow struct {
 	PhaseAt         time.Time
 	UpdatingUntil   *time.Time
 	StopRequestedAt *time.Time
+	InterruptionAt  *time.Time
 }
 
 // Cloud hosts of one owner and region the provider should know about.
@@ -293,6 +299,7 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 			&i.PhaseAt,
 			&i.UpdatingUntil,
 			&i.StopRequestedAt,
+			&i.InterruptionAt,
 		); err != nil {
 			return nil, err
 		}

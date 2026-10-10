@@ -925,22 +925,24 @@ func TestAReserveWokenByABuildReturnsWithoutARebuy(t *testing.T) {
 	}
 }
 
-// Recurring bursts keep their reserves: a burst's share of load holds the
-// stopped target for the cost horizon, so the next burst resumes those
-// reserves rather than the market retiring and rebuying them. They retire
-// once the horizon passes without a burst.
+// Recurring bursts keep their reserves: in a market whose stopped target
+// shares load, a burst's share holds the target for the cost horizon, so
+// the next burst resumes those reserves rather than the market retiring
+// and rebuying them. They retire once the horizon passes without a burst.
 func TestRecurringBurstsKeepTheirReserves(t *testing.T) {
-	spot := cpuNeed(1000, 2)
-	spot.Preemptible = true
+	need := cpuNeed(1000, 2)
 	var arrivals []simArrival
 	for _, at := range []time.Duration{time.Hour, 100 * time.Minute, 140 * time.Minute} {
-		arrivals = append(arrivals, simArrival{at: at, need: spot, count: 100, runs: 20 * time.Minute})
+		arrivals = append(arrivals, simArrival{at: at, need: need, count: 100, runs: 20 * time.Minute})
 	}
 	s := newProdSim(t, false)
 	r := s.run(4*time.Hour, arrivals)
-	t.Log(r.row("three bursts of 100 Spot containers"))
+	t.Log(r.row("three bursts of 100 on-demand containers"))
 	if len(r.waits) != 300 || len(r.violations) > 0 {
 		t.Fatalf("placed %d of 300, violations %v", len(r.waits), r.violations)
+	}
+	if r.resumes == 0 {
+		t.Fatal("no burst resumed a reserve")
 	}
 	lastPeak := offerNow.Add(145 * time.Minute)
 	for _, at := range r.retired {
