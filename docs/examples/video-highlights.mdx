@@ -257,7 +257,7 @@ because only the GPU image installs it.
     image=whisper_image,
     volumes=[work],
     gpu=[GpuType.L4, GpuType.A10G, GpuType.T4],
-    cpu=4,
+    cpu=2,
     memory="8Gi",
     timeout_seconds=3600,
     retries=2,
@@ -279,7 +279,8 @@ def transcribe(video: SourceVideo) -> Transcript:
 ```
 
 Whisper `large-v3-turbo` in float16 fits on any of the three GPUs, so the
-list takes the first one free. `keep_warm=60` holds the loaded model for a
+list takes the first one free. Two cores and 8 GiB fit the smallest machine
+of each GPU type; asking for more would buy the next size up. `keep_warm=60` holds the loaded model for a
 minute, which helps when several videos arrive together. The batched pipeline
 decodes 16 audio chunks at a time:
 
@@ -481,7 +482,6 @@ receiver = inbox.asgi(
     cpu=0.25,
     memory="256Mi",
     concurrent_requests=8,
-    keep_warm_seconds=600,
     # Callbacks carry a signature, not a workspace token; the route checks it.
     authorized=False,
     secrets=[SIGNING_KEY],
@@ -559,8 +559,8 @@ Another project can call the deployed pipeline through a typed client from
 ## Cost and scaling
 
 Between runs nothing runs. Every function scales to zero, the GPU container
-stops a minute after its last call and the receiver ten minutes after its last
-callback. During a run the GPU bills only for transcription. Audio extraction,
+stops a minute after its last call and the receiver three minutes after its
+last callback. During a run the GPU bills only for transcription. Audio extraction,
 the model call and clip cutting each run on CPUs that cost less.
 {/* MEASURE: cost of one 60-minute talk by step: extract_audio, transcribe, pick_highlights, cut_clip */}
 {/* MEASURE: OpenAI tokens and cost for a 60-minute transcript with the default model */}

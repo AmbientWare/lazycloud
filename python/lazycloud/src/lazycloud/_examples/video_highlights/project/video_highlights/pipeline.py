@@ -141,7 +141,7 @@ def extract_audio(video: SourceVideo) -> None:
     image=whisper_image,
     volumes=[work],
     gpu=[GpuType.L4, GpuType.A10G, GpuType.T4],
-    cpu=4,
+    cpu=2,
     memory="8Gi",
     timeout_seconds=3600,
     retries=2,

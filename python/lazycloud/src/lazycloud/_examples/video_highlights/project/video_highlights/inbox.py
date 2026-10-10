@@ -16,7 +16,6 @@ receiver = inbox.asgi(
     cpu=0.25,
     memory="256Mi",
     concurrent_requests=8,
-    keep_warm_seconds=600,
     # Callbacks carry a signature, not a workspace token; the route checks it.
     authorized=False,
     secrets=[SIGNING_KEY],
