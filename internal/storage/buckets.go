@@ -83,7 +83,7 @@ type bucketProvider interface {
 	ensureBucket(ctx context.Context, store bucketClient) error
 	// issue returns a credential for bucket alone. revocable means the key
 	// must be deleted after it expires.
-	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
+	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (creds aws.Credentials, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
@@ -248,10 +248,10 @@ func (g *garageBuckets) ensureBucket(ctx context.Context, store bucketClient) er
 	return g.allow(ctx, id, g.platformKey, garagePerms{Read: true, Write: true, Owner: true})
 }
 
-func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
+func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
 	id, err := g.bucketID(ctx, bucket)
 	if err != nil {
-		return Grant{}, false, err
+		return aws.Credentials{}, false, err
 	}
 	expires := time.Now().Add(lifetime).UTC().Truncate(time.Second)
 	var key struct {
@@ -261,13 +261,13 @@ func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime
 	if err := g.call(ctx, http.MethodPost, "CreateKey", nil, map[string]any{
 		"name": name, "expiration": expires.Format(time.RFC3339),
 	}, &key); err != nil {
-		return Grant{}, false, err
+		return aws.Credentials{}, false, err
 	}
 	if err := g.allow(ctx, id, key.AccessKeyID, garagePerms{Read: true, Write: true}); err != nil {
 		// The key reaches nothing yet; delete it now rather than at expiry.
-		return Grant{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
+		return aws.Credentials{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
 	}
-	return Grant{Location: Location{Bucket: bucket}, AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, ExpiresAt: expires}, true, nil
+	return aws.Credentials{AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, CanExpire: true, Expires: expires}, true, nil
 }
 
 func (g *garageBuckets) revoke(ctx context.Context, accessKeyID string) error {
@@ -306,19 +306,16 @@ func (a *awsBuckets) ensureBucket(ctx context.Context, store bucketClient) error
 	return nil
 }
 
-func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
+func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
 	policy, err := json.Marshal(hostPolicy(bucket, a.account))
 	if err != nil {
-		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
+		return aws.Credentials{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
 	creds, err := a.assume(ctx, name, string(policy), lifetime)
 	if err != nil {
-		return Grant{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
+		return aws.Credentials{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
 	}
-	return Grant{
-		Location: Location{Bucket: bucket}, AccessKeyID: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey,
-		SessionToken: creds.SessionToken, ExpiresAt: creds.Expires,
-	}, false, nil
+	return creds, false, nil
 }
 
 func (a *awsBuckets) revoke(context.Context, string) error { return nil }

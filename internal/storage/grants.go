@@ -24,24 +24,27 @@ func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace 
 	if err != nil {
 		return Grant{}, err
 	}
-	grant, revocable, err := provider.issue(ctx, store.name, "lazycloud-host-"+host.String(), grantLifetime)
+	creds, revocable, err := provider.issue(ctx, store.name, "lazycloud-host-"+host.String(), grantLifetime)
 	if err != nil {
 		return Grant{}, storeError(fmt.Errorf("issue storage grant: %w", err))
 	}
 	if revocable {
 		if err := s.queries.InsertStorageGrant(ctx, InsertStorageGrantParams{
-			AccessKeyID: grant.AccessKeyID, WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), ExpiresAt: grant.ExpiresAt,
+			AccessKeyID: creds.AccessKeyID, WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), ExpiresAt: creds.Expires,
 		}); err != nil {
 			return Grant{}, fmt.Errorf("record storage grant: %w", err)
 		}
 	}
 	// Hosts address the bucket as the server's own client does.
 	endpoint := s.endpointOf(store.connection)
-	grant.Location, err = locate(endpoint, store.region, grant.Bucket, endpoint != "")
+	location, err := locate(endpoint, store.region, store.name, endpoint != "")
 	if err != nil {
 		return Grant{}, fmt.Errorf("locate workspace bucket: %w", err)
 	}
-	return grant, nil
+	return Grant{
+		Location: location, AccessKeyID: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey,
+		SessionToken: creds.SessionToken, ExpiresAt: creds.Expires,
+	}, nil
 }
 
 // HostMountWorkspaces lists the workspaces whose volumes or disks the host's
