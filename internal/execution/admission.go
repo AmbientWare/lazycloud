@@ -85,7 +85,8 @@ type SubmitRequest struct {
 // one function so max_pending_tasks counts exactly; the tasks and their
 // inputs insert in one statement, pinned to the target release. A task whose
 // upstream tasks have not all succeeded waits until they do; one whose
-// upstream already failed fails at once. Planning and waiting claims wake
+// upstream already failed fails at once, as do all of them when RetryStarts
+// holds the release after a failed start. Planning and waiting claims wake
 // when the transaction commits.
 func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, error) {
 	ctx, span := telemetry.Start(ctx, "execution.submit", trace.WithAttributes(attribute.Int("lazycloud.tasks", len(req.Inputs))))
@@ -170,6 +171,11 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		if _, err := billing.Admit(ctx, tx, admit); err != nil {
 			return err
 		}
+		retries, err := RetryStarts(ctx, tx, []uuid.UUID{fn.ReleaseID})
+		if err != nil {
+			return err
+		}
+		retry := retries[fn.ReleaseID]
 
 		var parent, root *uuid.UUID
 		if req.Parent != nil {
@@ -260,11 +266,24 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 			// New tasks have no dependents yet.
 			return e.failQueued(ctx, tx, ids, releases, failure, false)
 		}
-		if err := failNew(doomed, Failure{Kind: FailureDependencyFailed, Message: "an upstream task failed or was cancelled"}); err != nil {
-			return err
-		}
-		if err := failNew(tooLarge, dependenciesTooLarge()); err != nil {
-			return err
+		switch retry.Outcome {
+		case StartHeld:
+			// The release's last start just failed: the tasks fail with its
+			// error rather than wait for a start that will not come.
+			all := make([]int, len(rows))
+			for n := range all {
+				all[n] = n
+			}
+			if err := failNew(all, *retry.Failure); err != nil {
+				return err
+			}
+		case StartAllowed, StartRetried:
+			if err := failNew(doomed, Failure{Kind: FailureDependencyFailed, Message: "an upstream task failed or was cancelled"}); err != nil {
+				return err
+			}
+			if err := failNew(tooLarge, dependenciesTooLarge()); err != nil {
+				return err
+			}
 		}
 		if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {
 			return err

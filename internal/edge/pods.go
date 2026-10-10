@@ -203,12 +203,18 @@ func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.
 		}
 		if !woken {
 			wokeAt = time.Now().Add(-time.Second)
-			if err := e.execution.WakePod(ctx, t.workspace, t.workload, execution.WakeConnection); err != nil {
+			retry, err := e.execution.WakePod(ctx, t.workspace, t.workload)
+			if err != nil {
 				var conflict *execution.ConflictError
 				if errors.As(err, &conflict) {
 					return execution.PodContainer{}, woken, errPodStopped
 				}
 				return execution.PodContainer{}, woken, err
+			}
+			switch retry.Outcome {
+			case execution.StartHeld:
+				return execution.PodContainer{}, woken, fmt.Errorf("%w: %s", errPodStartFailed, retry.Failure.Message)
+			case execution.StartAllowed, execution.StartRetried:
 			}
 			woken = true
 		}

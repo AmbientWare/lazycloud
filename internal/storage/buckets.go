@@ -45,8 +45,8 @@ type WorkspaceBuckets struct {
 	// maxPrefix characters. A connection role manages only the buckets
 	// named <prefix>-<its account id>-*.
 	Prefix string
-	// AccountID is the platform's AWS account, which names its workspace
-	// buckets. AWS needs it.
+	// AccountID is the platform's 12-digit account id, which names its
+	// workspace buckets.
 	AccountID string
 	// GarageAdminURL and GarageAdminToken reach the Garage admin API.
 	GarageAdminURL   string

@@ -36,8 +36,8 @@ func (c Config) Validate() error {
 	if c.Workspaces.Provider == ProviderAWS && c.Workspaces.RoleARN == "" {
 		return errors.New("AWS workspace buckets need the role host credentials are issued for")
 	}
-	if c.Workspaces.Provider == ProviderAWS && !accountPattern.MatchString(c.Workspaces.AccountID) {
-		return errors.New("AWS workspace buckets need the platform's 12-digit AWS account id, which names them")
+	if c.Workspaces.Provider != "" && !accountPattern.MatchString(c.Workspaces.AccountID) {
+		return errors.New("workspace buckets need the platform's 12-digit account id, which names them")
 	}
 	if c.Workspaces.Prefix != "" && !prefixPattern.MatchString(c.Workspaces.Prefix) {
 		return fmt.Errorf("the workspace bucket prefix %q must be up to %d lowercase letters, digits and hyphens, starting with a letter or digit", c.Workspaces.Prefix, maxPrefix)
