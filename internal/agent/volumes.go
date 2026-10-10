@@ -434,8 +434,8 @@ func (e *mountError) Error() string {
 	return fmt.Sprintf("%s %s: %s", e.mount, what, output)
 }
 
-// start runs m's container and waits for its mount. One that does not mount
-// within mountWait is removed.
+// start runs m's container and waits for its mount, at most mountWait;
+// release removes it after a failure.
 func (v *volumes) start(ctx context.Context, m *mounter, image string, spec mountSpec) error {
 	id, err := v.runMount(ctx, m, image, spec)
 	if err != nil {
@@ -461,12 +461,7 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 			return fmt.Errorf("wait for %s: %w", spec.what, ctx.Err())
 		}
 	}
-	cleanup := context.WithoutCancel(ctx)
-	failure := &mountError{mount: spec.what, reason: reason, output: v.a.containerOutput(cleanup, m.name)}
-	if err := v.stop(cleanup, m); err != nil {
-		v.a.log.Warn("removing a volume mount that did not mount failed", "mount", m.name, "error", err)
-	}
-	return failure
+	return &mountError{mount: spec.what, reason: reason, output: v.a.containerOutput(context.WithoutCancel(ctx), m.name)}
 }
 
 // mountSpec is what one GeeseFS mount container mounts.
