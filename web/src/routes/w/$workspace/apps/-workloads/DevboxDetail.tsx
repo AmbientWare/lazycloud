@@ -237,7 +237,11 @@ export function DevboxConnect({
   workspace: string;
   workload: Schemas["Workload"];
 }) {
-  const status = useQuery(devboxQueryOptions(workspace, workload));
+  const status = useQuery({
+    ...devboxQueryOptions(workspace, workload),
+    // DevboxActions polls the status this view reads.
+    refetchInterval: false,
+  });
   const devbox = status.data;
 
   if (status.isError) return <PanelError message={status.error.message} />;
@@ -373,7 +377,11 @@ export function DevboxWorkspace({
   workload: Schemas["Workload"];
   spec: Schemas["WorkloadSpec"];
 }) {
-  const status = useQuery(devboxQueryOptions(workspace, workload));
+  const status = useQuery({
+    ...devboxQueryOptions(workspace, workload),
+    // DevboxActions polls the status this view reads.
+    refetchInterval: false,
+  });
   const devbox = status.data;
 
   return (
@@ -431,11 +439,7 @@ export function DevboxWorkspace({
         contentClassName="p-4"
         action={
           devbox?.container_id ? (
-            <MetricsUpdated
-              workspace={workspace}
-              containerId={devbox.container_id}
-              live={devbox.state === "running"}
-            />
+            <MetricsUpdated workspace={workspace} containerId={devbox.container_id} />
           ) : null
         }
       >
@@ -479,16 +483,9 @@ function DevboxMetrics({
   );
 }
 
-function MetricsUpdated({
-  workspace,
-  containerId,
-  live,
-}: {
-  workspace: string;
-  containerId: string;
-  live: boolean;
-}) {
-  const metrics = useQuery(containerMetricsQueryOptions(workspace, containerId, live));
+function MetricsUpdated({ workspace, containerId }: { workspace: string; containerId: string }) {
+  // DevboxMetrics polls the samples this label reads.
+  const metrics = useQuery(containerMetricsQueryOptions(workspace, containerId, false));
   const latest = metrics.data?.points.at(-1)?.timestamp;
   if (!latest) return null;
   return (
