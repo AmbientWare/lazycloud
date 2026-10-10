@@ -436,6 +436,7 @@ const (
 	ChangeTopicContainers     ChangeTopic = "containers"
 	ChangeTopicDeployments    ChangeTopic = "deployments"
 	ChangeTopicRequests       ChangeTopic = "requests"
+	ChangeTopicStorageDisks   ChangeTopic = "storage.disks"
 	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
 	ChangeTopicStorageVolumes ChangeTopic = "storage.volumes"
 	ChangeTopicTasks          ChangeTopic = "tasks"
@@ -452,6 +453,8 @@ func (e ChangeTopic) Valid() bool {
 	case ChangeTopicDeployments:
 		return true
 	case ChangeTopicRequests:
+		return true
+	case ChangeTopicStorageDisks:
 		return true
 	case ChangeTopicStorageSecrets:
 		return true

@@ -1179,6 +1179,7 @@ class ChangeTopic(str, Enum):
     containers = "containers"
     storage_secrets = "storage.secrets"
     storage_volumes = "storage.volumes"
+    storage_disks = "storage.disks"
     usage = "usage"
 
 
