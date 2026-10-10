@@ -270,6 +270,11 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 			return nil, err
 		}
 		for i, s := range group {
+			// A cloud bucket's prefixes come from the user; a directory
+			// below them must stay inside the mount.
+			if dirs[i] != "" && !filepath.IsLocal(dirs[i]) {
+				return nil, fmt.Errorf("the volume at %s names a prefix outside its bucket's mount", s.GetMountPath())
+			}
 			source := filepath.Join(m.dir, dirs[i])
 			if err := os.MkdirAll(source, 0o755); err != nil { //nolint:gosec // GeeseFS gives every directory --dir-mode.
 				return nil, fmt.Errorf("create the directory of the volume at %s: %w", s.GetMountPath(), err)

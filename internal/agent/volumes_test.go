@@ -496,18 +496,54 @@ func TestVolumeMountsSurviveAnAgentUpgrade(t *testing.T) {
 	}
 }
 
-func cloudBucketStart(e *env, store testStore, prefix string) *hostproto.ServerMessage {
+// bucketMount mounts prefix of the store's bucket read-only at path.
+func (s testStore) bucketMount(path, prefix string) *hostproto.VolumeMount {
+	return &hostproto.VolumeMount{
+		MountPath: path, ReadOnly: true,
+		Source: &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
+			Bucket: s.bucket, Prefix: prefix, Region: s.region, Endpoint: s.endpoint, ForcePathStyle: true,
+			AccessKeyId: s.accessKey, SecretAccessKey: s.secretKey,
+		}},
+	}
+}
+
+// cloudBucketStart starts a container on mounts of one bucket.
+func cloudBucketStart(e *env, mounts ...*hostproto.VolumeMount) *hostproto.ServerMessage {
 	start := e.startCommand("app:handle", 1)
 	start.GetStart().Source = serveSource(e.t, "testdata/volumes")
-	start.GetStart().Volumes = []*hostproto.VolumeMount{{
-		MountPath: "/models", ReadOnly: true,
-		Source: &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
-			Bucket: store.bucket, Prefix: prefix, Region: store.region, Endpoint: store.endpoint, ForcePathStyle: true,
-			AccessKeyId: store.accessKey, SecretAccessKey: store.secretKey,
-		}},
-	}}
+	start.GetStart().Volumes = mounts
 	reserveMounters(start, 1)
 	return start
+}
+
+// settle waits until container is ready or has exited.
+func (s *serverSession) settle(t *testing.T, container string) *hostproto.ContainerReport {
+	t.Helper()
+	return s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
+		r := m.GetContainer()
+		return r.GetContainerId() == container && (r.GetPhase() == ready || r.GetPhase() == exited)
+	}).GetContainer()
+}
+
+// TestABucketPrefixStaysInsideItsMount: a container's mounts of one bucket
+// share a mounter, and each binds its own directory of the mount. A prefix
+// that climbs out of the mount fails the start instead of binding the
+// agent's state.
+func TestABucketPrefixStaysInsideItsMount(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	store := newTestStore(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent()
+	s := e.session()
+	start := cloudBucketStart(e, store.bucketMount("/inside", "a/"), store.bucketMount("/outside", "a/../../"))
+	s.send(t, start)
+	r := s.settle(t, start.GetStart().GetContainerId())
+	if r.GetPhase() != exited || r.GetExit().GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED ||
+		!strings.Contains(r.GetExit().GetMessage(), "outside its bucket's mount") {
+		t.Fatalf("a start with a prefix outside its mount: %v", r)
+	}
 }
 
 // TestAdoptKeepsLiveMountsAndRemovesOrphans: a restarted agent keeps a
@@ -527,7 +563,7 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	kept := e.startVolume(s, source, workspace, volume)
 	e.write(kept, "/volumes/data/kept.txt", "kept")
 	lost := e.startVolume(s, source, workspace, volume)
-	bucket := cloudBucketStart(e, store, "test-buckets/"+uuid.NewString()+"/")
+	bucket := cloudBucketStart(e, store.bucketMount("/models", "test-buckets/"+uuid.NewString()+"/"))
 	gone := bucket.GetStart().GetContainerId()
 	s.send(t, bucket)
 	s.phase(t, gone, ready)
@@ -580,7 +616,7 @@ func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	start := cloudBucketStart(e, store, prefix)
+	start := cloudBucketStart(e, store.bucketMount("/models", prefix))
 	id := start.GetStart().GetContainerId()
 	s.send(t, start)
 	s.phase(t, id, ready)
