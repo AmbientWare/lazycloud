@@ -123,6 +123,9 @@ type Config struct {
 	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
 	// buckets; empty means the host mounts no volumes.
 	GeeseFSPath string
+	// TrustBundle is the CA bundle GeeseFS verifies object stores against;
+	// required with GeeseFSPath.
+	TrustBundle string
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
@@ -257,6 +260,14 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if _, err := os.Stat(cfg.SupervisorPath); err != nil {
 		return fmt.Errorf("supervisor binary: %w", err)
+	}
+	if cfg.GeeseFSPath != "" {
+		if cfg.TrustBundle == "" {
+			return errors.New("volume mounts need a CA bundle: set --trust-bundle or SSL_CERT_FILE")
+		}
+		if _, err := os.Stat(cfg.TrustBundle); err != nil {
+			return fmt.Errorf("CA bundle: %w", err)
+		}
 	}
 	docker, err := client.New(client.FromEnv)
 	if err != nil {

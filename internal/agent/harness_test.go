@@ -428,6 +428,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		SupervisorPath:  supervisorBinary,
 		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
+		TrustBundle:     HostTrustBundle(),
 		BuildNetwork:    "host",
 		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},
 		Labels:          map[string]string{"lazycloud.agent": e.id},

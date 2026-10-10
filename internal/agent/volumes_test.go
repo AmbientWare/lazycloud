@@ -2,7 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/pem"
 	"io"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +127,44 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 			t.Fatalf("exit of a container on a dead mount: %v", report.GetExit())
 		}
 		delete(pending, report.GetContainerId())
+	}
+}
+
+// TestVolumesMountThroughAnHTTPSStore: a mount verifies its store's
+// certificate against the agent's trust bundle.
+func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	cfg := storagetest.Config(t)
+	target, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Made before the agent so that the mounts stop before the store goes.
+	store := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+	t.Cleanup(store.Close)
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: store.Certificate().Raw}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent(func(c *Config) { c.TrustBundle = bundle })
+	s := e.session()
+	workspace, volume := uuid.NewString(), uuid.NewString()
+
+	start := volumeStart(e, serveSource(t, "testdata/volumes"), workspace, volume, false)
+	s.send(t, start)
+	time.Sleep(500 * time.Millisecond)
+	s.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
+		WorkspaceId: workspace, Endpoint: store.URL, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
+		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
+	}}})
+	id := start.GetStart().GetContainerId()
+	s.phase(t, id, ready)
+	attempt := e.task(id, `{"args": ["write", "/volumes/data/hello.txt", "over https"]}`)
+	if got := result(t, e.completion(attempt)); got != "10" {
+		t.Fatalf("write: %s", got)
 	}
 }
 
