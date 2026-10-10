@@ -36,7 +36,8 @@ browser_image = (
     memory="4Gi",
     concurrency=4,
     autoscaler=Autoscaler(max_containers=5, tasks_per_container=4),
-    max_pending_tasks=MAX_WATCHES,
+    # A retried sweep submits every page again while the first attempt's checks may still queue.
+    max_pending_tasks=2 * MAX_WATCHES,
     timeout_seconds=180,
     retries=2,
     retry_delay_seconds=15,

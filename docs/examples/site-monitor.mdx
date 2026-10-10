@@ -187,7 +187,7 @@ the text changed, so a quiet page costs no tokens.
 
 ```python site_monitor/judge.py
 def judge_change(watch: Watch, diff: str) -> Verdict:
-    client = OpenAI(timeout=60, max_retries=2)
+    client = OpenAI(timeout=30, max_retries=2)
     response = client.responses.parse(
         model=MODEL,
         instructions=INSTRUCTIONS,
@@ -301,8 +301,9 @@ browser_image = (
 `check-page` runs four pages at a time per container, each in its own process
 with its own Chromium, on 2 CPUs and 4 GiB. The autoscaler adds a container per
 four queued pages, up to five, so at most 20 browsers run at once.
-`max_pending_tasks` matches the 100-page cap, so a full sweep always fits in the
-queue. Two retries 15 seconds apart cover a page that times out or a model call
+`max_pending_tasks` leaves room for two full sweeps, since a retried sweep
+submits every page again while the first attempt's checks may still be queued.
+Two retries 15 seconds apart cover a page that times out or a model call
 that fails. The browser, OpenAI and Slack modules import inside the function
 because only the remote image has their packages.
 
@@ -314,7 +315,8 @@ because only the remote image has their packages.
     memory="4Gi",
     concurrency=4,
     autoscaler=Autoscaler(max_containers=5, tasks_per_container=4),
-    max_pending_tasks=MAX_WATCHES,
+    # A retried sweep submits every page again while the first attempt's checks may still queue.
+    max_pending_tasks=2 * MAX_WATCHES,
     timeout_seconds=180,
     retries=2,
     retry_delay_seconds=15,
@@ -478,8 +480,8 @@ of browser time. The OpenAI call happens only when the text changed.
 {/* MEASURE: compute cost of one sweep over 10 pages, and per day at 96 sweeps */}
 {/* MEASURE: idle cost per day with the schedule deployed and no requests */}
 
-The 100-page cap, `max_pending_tasks` and the autoscaler bound each sweep.
-More pages need all three raised together. A wider autoscaler finishes a
+`MAX_WATCHES` in `models.py` bounds each sweep, and `max_pending_tasks`
+follows it. A wider autoscaler finishes a
 sweep sooner but starts more containers, each of which pulls the Chromium
 image.
 

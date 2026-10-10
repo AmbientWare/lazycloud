@@ -18,7 +18,7 @@ class JudgeError(RuntimeError):
 
 
 def judge_change(watch: Watch, diff: str) -> Verdict:
-    client = OpenAI(timeout=60, max_retries=2)
+    client = OpenAI(timeout=30, max_retries=2)
     response = client.responses.parse(
         model=MODEL,
         instructions=INSTRUCTIONS,
