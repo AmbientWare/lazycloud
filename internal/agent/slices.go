@@ -40,16 +40,13 @@ func (v *volumes) systemd(ctx context.Context) (*systemd.Conn, error) {
 		return nil, fmt.Errorf("connect to systemd: %w", err)
 	}
 	v.mu.Lock()
-	current := v.bus
-	if current == conn {
-		v.bus = fresh
-	}
-	v.mu.Unlock()
-	if current != conn {
+	defer v.mu.Unlock()
+	if v.bus != conn {
 		// Another call connected again first.
 		fresh.Close()
-		return current, nil
+		return v.bus, nil
 	}
+	v.bus = fresh
 	if conn != nil {
 		conn.Close()
 	}
@@ -59,11 +56,10 @@ func (v *volumes) systemd(ctx context.Context) (*systemd.Conn, error) {
 // close closes the connection to systemd once nothing uses it.
 func (v *volumes) close() {
 	v.mu.Lock()
-	conn := v.bus
-	v.bus = nil
-	v.mu.Unlock()
-	if conn != nil {
-		conn.Close()
+	defer v.mu.Unlock()
+	if v.bus != nil {
+		v.bus.Close()
+		v.bus = nil
 	}
 }
 
