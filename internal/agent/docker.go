@@ -39,6 +39,14 @@ const (
 	labelRuntime = "lazycloud.runtime"
 )
 
+// hostLabels are the configured labels with this host's.
+func (a *Agent) hostLabels() map[string]string {
+	labels := map[string]string{}
+	maps.Copy(labels, a.cfg.Labels)
+	labels[labelHost] = a.identity.HostID
+	return labels
+}
+
 // httpLabels records an HTTP workload's serving configuration.
 func httpLabels(labels map[string]string, h *hostproto.HttpServing) {
 	if h == nil {
@@ -69,7 +77,7 @@ const pidsLimit = 4096
 // its sandbox kernel.
 const runtimeRunsc = "runsc"
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, gpus []string, restore *restorePoint) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime, slice string, binds []mount.Mount, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -95,12 +103,8 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	if err != nil {
 		return fmt.Errorf("encode runtime label: %w", err)
 	}
-	labels := maps.Clone(a.cfg.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
+	labels := a.hostLabels()
 	labels[labelContainer] = c.id
-	labels[labelHost] = a.identity.HostID
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
 	httpLabels(labels, c.http)
@@ -149,9 +153,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		}
 	}
 	resources := containerResources(spec.GetResources(), a.capacity, a.topology, pidsLimit, gpus)
-	if len(spec.GetVolumes()) > 0 {
-		resources.CgroupParent = a.workloadSlice(c.id)
-	}
+	resources.CgroupParent = slice
 	options := client.ContainerCreateOptions{
 		Name: c.dockerName(),
 		Config: &containertypes.Config{
