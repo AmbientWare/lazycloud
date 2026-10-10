@@ -80,9 +80,9 @@ type bucketProvider interface {
 	// ensureBucket creates the store's bucket if it is missing and lets
 	// the store's client use it.
 	ensureBucket(ctx context.Context, store workspaceStore) error
-	// issue returns a credential for bucket alone. revocable means the key
-	// must be deleted after it expires.
-	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
+	// issue returns a credential for the store's bucket alone. revocable
+	// means the key must be deleted after it expires.
+	issue(ctx context.Context, store workspaceStore, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
@@ -252,7 +252,8 @@ func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) 
 	return g.allow(ctx, id, g.platformKey, garagePerms{Read: true, Write: true, Owner: true})
 }
 
-func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
+func (g *garageBuckets) issue(ctx context.Context, store workspaceStore, name string, lifetime time.Duration) (Grant, bool, error) {
+	bucket := store.name
 	id, err := g.bucketID(ctx, bucket)
 	if err != nil {
 		return Grant{}, false, err
@@ -308,8 +309,9 @@ func (a *awsBuckets) ensureBucket(ctx context.Context, store workspaceStore) err
 	return nil
 }
 
-func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
-	policy, err := json.Marshal(hostPolicy(bucket))
+func (a *awsBuckets) issue(ctx context.Context, store workspaceStore, name string, lifetime time.Duration) (Grant, bool, error) {
+	bucket := store.name
+	policy, err := json.Marshal(hostPolicy(bucket, store.account))
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
@@ -328,10 +330,13 @@ func (a *awsBuckets) revoke(context.Context, string) error { return nil }
 // hostPolicy is the STS session policy of a host grant: object reads,
 // writes and multipart uploads under the bucket's volumes/ and disks/
 // prefixes, listing those prefixes, and listing the bucket's multipart
-// uploads, which S3 does not condition on a prefix. It grants nothing else
-// on the bucket itself, such as its policy, lifecycle or deletion.
-func hostPolicy(bucket string) map[string]any {
+// uploads, which S3 does not condition on a prefix. Every statement holds
+// only while account owns the bucket, so a bucket of the same name in
+// another account is out of reach. It grants nothing else on the bucket
+// itself, such as its policy, lifecycle or deletion.
+func hostPolicy(bucket, account string) map[string]any {
 	arn := "arn:aws:s3:::" + bucket
+	owned := map[string]any{"s3:ResourceAccount": account}
 	return map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []map[string]any{
@@ -341,18 +346,23 @@ func hostPolicy(bucket string) map[string]any {
 					"s3:GetObject", "s3:PutObject", "s3:DeleteObject",
 					"s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
 				},
-				"Resource": []string{arn + "/volumes/*", arn + "/disks/*"},
-			},
-			{
-				"Effect":    "Allow",
-				"Action":    []string{"s3:ListBucket"},
-				"Resource":  []string{arn},
-				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}}},
+				"Resource":  []string{arn + "/volumes/*", arn + "/disks/*"},
+				"Condition": map[string]any{"StringEquals": owned},
 			},
 			{
 				"Effect":   "Allow",
-				"Action":   []string{"s3:ListBucketMultipartUploads"},
+				"Action":   []string{"s3:ListBucket"},
 				"Resource": []string{arn},
+				"Condition": map[string]any{
+					"StringEquals": owned,
+					"StringLike":   map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}},
+				},
+			},
+			{
+				"Effect":    "Allow",
+				"Action":    []string{"s3:ListBucketMultipartUploads"},
+				"Resource":  []string{arn},
+				"Condition": map[string]any{"StringEquals": owned},
 			},
 		},
 	}

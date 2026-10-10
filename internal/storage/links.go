@@ -146,7 +146,7 @@ func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, er
 	if err != nil {
 		return bucketClient{}, fmt.Errorf("read link bucket: %w", err)
 	}
-	store, err := s.storeOf(row.Bucket, row.Region, row.ConnectionID)
+	store, err := s.storeOf(ctx, row.Bucket, row.Region, row.ConnectionID)
 	return store.bucketClient, err
 }
 

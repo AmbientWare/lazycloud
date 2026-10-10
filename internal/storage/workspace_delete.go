@@ -36,7 +36,7 @@ func (s *Storage) DeleteWorkspaceStorage(ctx context.Context, workspace identity
 	if err != nil {
 		return false, fmt.Errorf("read workspace bucket: %w", err)
 	}
-	store, err := s.storeOf(row.Bucket, row.Region, row.ConnectionID)
+	store, err := s.storeOf(ctx, row.Bucket, row.Region, row.ConnectionID)
 	if err != nil {
 		return false, err
 	}

@@ -148,7 +148,7 @@ func diskPrefix(disk uuid.UUID) string { return "disks/" + disk.String() + "/" }
 // once it is empty, the row. A nil bucket means the workspace never had
 // one.
 func (s *Storage) emptyThenDelete(ctx context.Context, bucket, region *string, connection *uuid.UUID, prefix string, deleteRow func() error) (bool, error) {
-	store, ok, err := s.storeAt(bucket, region, connection)
+	store, ok, err := s.storeAt(ctx, bucket, region, connection)
 	if err != nil {
 		return false, err
 	}
@@ -212,7 +212,7 @@ func (s *Storage) measureVolumes(ctx context.Context, logger *slog.Logger) (int,
 // storedBytes is the size of the objects under prefix in a workspace
 // bucket.
 func (s *Storage) storedBytes(ctx context.Context, bucket, region string, connection *uuid.UUID, prefix string) (int64, error) {
-	store, err := s.storeOf(bucket, region, connection)
+	store, err := s.storeOf(ctx, bucket, region, connection)
 	if err != nil {
 		return 0, err
 	}
@@ -243,7 +243,7 @@ func (s *Storage) sweepOrphans(ctx context.Context, logger *slog.Logger) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("claim an orphan check: %w", err)
 	}
-	store, err := s.storeOf(claim.Bucket, claim.Region, claim.ConnectionID)
+	store, err := s.storeOf(ctx, claim.Bucket, claim.Region, claim.ConnectionID)
 	if err != nil {
 		return 0, err
 	}

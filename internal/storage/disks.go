@@ -269,7 +269,7 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 			return invalid("base generation %d is past the recorded generation %d", base, row.Generation)
 		}
 		if len(keys) > 0 {
-			store, ok, err := s.storeAt(row.Bucket, row.Region, row.ConnectionID)
+			store, ok, err := s.storeAt(ctx, row.Bucket, row.Region, row.ConnectionID)
 			if err != nil {
 				return err
 			}

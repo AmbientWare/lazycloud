@@ -51,11 +51,17 @@ resource "aws_iam_role_policy" "workspace_storage" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = ["s3:ListBucket", "s3:ListBucketMultipartUploads"], Resource = local.workspace_bucket_arn },
       {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
-        Resource = "${local.workspace_bucket_arn}/*"
+        Effect    = "Allow"
+        Action    = ["s3:ListBucket", "s3:ListBucketMultipartUploads"]
+        Resource  = local.workspace_bucket_arn
+        Condition = { StringEquals = { "s3:ResourceAccount" = local.account_id } }
+      },
+      {
+        Effect    = "Allow"
+        Action    = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+        Resource  = "${local.workspace_bucket_arn}/*"
+        Condition = { StringEquals = { "s3:ResourceAccount" = local.account_id } }
       },
     ]
   })

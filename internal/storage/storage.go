@@ -108,6 +108,11 @@ func NewStorage(pool *pgxpool.Pool, cfg Config, connections *compute.Compute) *S
 	if cfg.Endpoint != "" {
 		endpoint = aws.String(cfg.Endpoint)
 	}
+	var options []func(*s3.Options)
+	if cfg.Workspaces.Provider == ProviderAWS {
+		// The platform's buckets are all in its own account.
+		options = append(options, expectOwner(cfg.Workspaces.AccountID))
+	}
 	client := s3.New(s3.Options{
 		Region:       cfg.Region,
 		BaseEndpoint: endpoint,
@@ -117,7 +122,7 @@ func NewStorage(pool *pgxpool.Pool, cfg Config, connections *compute.Compute) *S
 		// differ in their support for the SDK's default trailing checksums.
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
-	})
+	}, options...)
 	replicas := make(map[string]layerReplica, len(cfg.LayerReplicas))
 	for region, bucket := range cfg.LayerReplicas {
 		regional := s3.New(client.Options(), func(o *s3.Options) { o.Region = region })

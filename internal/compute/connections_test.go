@@ -212,7 +212,8 @@ func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
 }
 
 // The connection role reaches storage only in buckets named for the
-// deployment and the customer's own account, and the objects in them.
+// deployment and the customer's own account, and the objects in them, and
+// only while that account owns the bucket.
 func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 	o, _, _ := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -223,8 +224,11 @@ func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 				Policies []struct {
 					PolicyDocument struct {
 						Statement []struct {
-							Action   any
-							Resource any
+							Action    any
+							Resource  any
+							Condition struct {
+								StringEquals map[string]any
+							}
 						}
 					}
 				}
@@ -251,6 +255,9 @@ func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 					arn, _ := sub["Fn::Sub"].(string)
 					if arn != buckets && arn != buckets+"/*" {
 						t.Errorf("%s grants %s on %v", name, action, statement.Resource)
+					}
+					if owner, _ := statement.Condition.StringEquals["s3:ResourceAccount"].(map[string]any); owner["Ref"] != "AWS::AccountId" {
+						t.Errorf("%s grants %s on buckets of account %q, want the stack's own", name, action, owner)
 					}
 					scoped[arn] = true
 				}
