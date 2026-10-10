@@ -1,0 +1,4 @@
+{
+  "name": "coding-agents",
+  "description": "Work with an agent on a devbox, turn labeled GitHub issues into pull requests in sandboxes, and score the agent nightly."
+}

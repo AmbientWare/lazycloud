@@ -1,0 +1,16 @@
+[project]
+name = "coding-agents"
+version = "0.1.0"
+description = "A devbox for coding agents, GitHub issues solved in sandboxes, and a nightly agent eval."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "httpx>=0.28,<1",
+    "pydantic>=2.12,<3",
+]
+
+[dependency-groups]
+dev = ["lazycloud-client"]
+
+[tool.uv]
+package = false
