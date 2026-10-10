@@ -88,7 +88,8 @@ function errorMessage(detail: unknown): string | undefined {
 const MAX_RECONNECTS = 5;
 
 // Follows a job until it finishes. The server sends the whole state each time,
-// so a dropped connection reconnects and carries on. Returns a function that stops.
+// so a dropped connection reconnects and carries on, up to MAX_RECONNECTS drops
+// in a row. Returns a function that stops.
 export function watchJob(eventsUrl: string, onEvent: (event: JobEvent) => void): () => void {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   let socket: WebSocket | undefined;

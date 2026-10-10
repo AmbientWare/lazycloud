@@ -6,9 +6,9 @@ description: "A Next.js and FastAPI app that generates images on a GPU, streams 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
 The studio is a web page that turns a prompt into up to four images with
-FLUX.2 [klein] 4B on a GPU and shows each step as it runs. Finished images stay
-in a gallery for seven days and can become public links that expire, and
-nothing runs while nobody uses it.
+FLUX.2 [klein] 4B on a GPU and shows each denoising step as it runs. Finished
+images stay in a gallery for seven days, and any of them can become a public
+link. While nobody uses it, only a nightly cleanup runs.
 
 ## Architecture
 
@@ -37,8 +37,8 @@ download_weights (CPU, once) ──> volume: image-studio-models ──> generat
   runs once on two CPUs instead of on a GPU billed by the minute.
 - **`share_image`, a CPU function.** An artifact belongs to the task that
   saves it, so sharing runs as its own small task and returns a public URL.
-- **`delete_expired_images`, a schedule.** Nightly cleanup keeps the gallery,
-  and the cost of listing it, bounded.
+- **`delete_expired_images`, a schedule.** Nightly cleanup keeps seven days of
+  images, which also bounds what each gallery listing reads.
 - **Two volumes.** `image-studio-models` holds the weights every GPU container
   reads, and `image-studio-gallery` holds finished images, which outlive any
   container.
@@ -122,8 +122,8 @@ def download_weights() -> str:
 
 ## Shared resources
 
-Every workload names its storage from one module. Volumes are created on first
-mount, and the map on its first write.
+Every workload names its storage from one module. LazyCloud creates each
+volume on first mount and the map on its first write.
 
 ```python image_studio/resources.py
 app = App("image_studio")
@@ -259,9 +259,9 @@ def generate_images(request: GenerateRequest) -> GalleryEntry:
     return entry
 ```
 
-`job.json` is written after the last image. A file on a volume becomes visible
-to other containers when its writer closes it, so once the progress record says
-`done`, the studio can list the job.
+The function writes `job.json` after the last image. A file on a volume becomes
+visible to other containers when its writer closes it, so once the progress
+record says `done`, the studio can list the job.
 
 ## Stream progress
 
@@ -412,7 +412,7 @@ web_image = (
 
 The script fetches a pinned Node.js release, checks its SHA-256, installs from
 `package-lock.json` and builds. It deletes `node_modules` in the same step, so
-the image keeps only the 700 KB of output.
+the image keeps only the exported files.
 
 ```python web/build.py
 def main(output: Path) -> None:
@@ -458,7 +458,8 @@ studio = app.asgi(
 ```
 
 The page itself is plain React. `web/app/api.ts` calls the routes above, and
-its `watchJob` opens the progress socket and reconnects until the job finishes.
+its `watchJob` opens the progress socket and reconnects after a drop until the
+job finishes.
 
 ```ts web/app/api.ts
 export function watchJob(eventsUrl: string, onEvent: (event: JobEvent) => void): () => void {
