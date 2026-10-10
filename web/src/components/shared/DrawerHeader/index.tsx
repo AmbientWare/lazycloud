@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils";
  * The bar every drawer opens with.
  *
  * `pr-12` leaves room for the sheet's own close control, which sits over this
- * bar rather than inside it — the one measurement a drawer header cannot be
- * written without, and the one a fourth hand-rolled copy of it loses.
+ * bar rather than inside it, the one measurement a drawer header cannot be
+ * written without.
  */
 export function DrawerHeader({ children, className }: { children: ReactNode; className?: string }) {
   return (
