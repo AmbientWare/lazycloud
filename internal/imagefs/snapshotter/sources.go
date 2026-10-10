@@ -115,7 +115,7 @@ func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.Prefet
 		if int(r.GetLayer()) >= len(layers) {
 			return nil, status.Errorf(codes.InvalidArgument, "read %d names layer %d of %d", i, r.GetLayer(), len(layers))
 		}
-		reads[i] = frameKey{layer: layers[r.GetLayer()], frame: int(r.GetFrame())}
+		reads[i] = frameKey{object: string(layers[r.GetLayer()]), frame: int(r.GetFrame())}
 	}
 	s.cache.traces.claim(request.GetName(), layers)
 	//nolint:contextcheck // a prefetch lives with the cache, not the call

@@ -27,6 +27,11 @@ func (p diskPaths) runDir() string    { return filepath.Join(p.dir(), "run") }
 func (p diskPaths) qmpSocket() string { return filepath.Join(p.runDir(), "qmp.sock") }
 func (p diskPaths) nbdSocket() string { return filepath.Join(p.runDir(), "nbd.sock") }
 func (p diskPaths) pidFile() string   { return filepath.Join(p.runDir(), "qsd.pid") }
+
+// baseIndex holds the stored index of the generation the stack is on, and
+// pendingIndex that of the generation awaiting commit.
+func (p diskPaths) baseIndex() string    { return filepath.Join(p.dir(), "base.index") }
+func (p diskPaths) pendingIndex() string { return filepath.Join(p.dir(), "pending.index") }
 func (p diskPaths) layerPath(l layer) string {
 	return filepath.Join(p.layerDir(), l.file())
 }
@@ -47,174 +52,124 @@ func (p diskPaths) checkSocketPaths() error {
 	return nil
 }
 
-// layerFormat is how a layer file stores its contents.
-type layerFormat string
-
-const (
-	formatQcow2 layerFormat = "qcow2"
-	formatRaw   layerFormat = "raw"
-)
-
-// layer is one file in the local chain. The last layer is the writable head.
-// Every layer below it is sealed and never written again, except by a
-// compaction committing published layers into the base.
+// layer is one qcow2 file of the local stack. The last layer is the
+// writable head; every layer below it is sealed and never written again.
+// Layers hold only writes since the base generation; none names its
+// backing, which the engine always gives.
 type layer struct {
 	Seq int `json:"seq"`
-	// Generation is the published generation whose content the chain up to
-	// and including this layer equals; 0 while the layer is unpublished.
-	Generation int64 `json:"generation"`
-	// Raw marks a base restored from a flattened generation, which holds the
-	// disk's contents as a sparse raw file rather than as qcow2.
-	Raw bool `json:"raw,omitempty"`
 }
 
-func (l layer) format() layerFormat {
-	if l.Raw {
-		return formatRaw
-	}
-	return formatQcow2
-}
-
-func (l layer) file() string { return fmt.Sprintf("%06d.%s", l.Seq, l.format()) }
+func (l layer) file() string { return fmt.Sprintf("%06d.qcow2", l.Seq) }
 func (l layer) node() string { return fmt.Sprintf("layer%d", l.Seq) }
+func (l layer) fileNode() string {
+	return fmt.Sprintf("file%d", l.Seq)
+}
+
+func baseNode(generation int64) string { return fmt.Sprintf("base%d", generation) }
 
 type attachment struct {
 	Mountpoint string `json:"mountpoint"`
 	DaemonPID  int    `json:"daemon_pid"`
 	Device     string `json:"device,omitempty"`
 	Mounted    bool   `json:"mounted"`
+	// BasePath is the served file the daemon's base node reads, and
+	// BaseDevice the device of the snapshotter's mount it is on, which a
+	// restarted snapshotter changes.
+	BasePath   string `json:"base_path,omitempty"`
+	BaseDevice uint64 `json:"base_device,omitempty"`
 }
 
-// publishResult is an upload as the state file records it.
-type publishResult struct {
-	ManifestKey      string `json:"manifest_key"`
-	ManifestSHA256   string `json:"manifest_sha256"`
-	StoredBytesAdded int64  `json:"stored_bytes_added"`
-	Generation       int64  `json:"generation"`
-	ParentGeneration int64  `json:"parent_generation"`
+// collectKey is an object a committed generation no longer reads.
+type collectKey struct {
+	Key   string `json:"key"`
+	Bytes int64  `json:"bytes"`
 }
 
-// pendingPublish is an upload whose generation the control plane has not yet
-// confirmed. A retried publish of the same layer returns it unchanged, so
-// the added bytes are not lost to chunks the first attempt already stored.
+// collection is what CollectDisk deletes once Generation is recorded.
+type collection struct {
+	Generation int64        `json:"generation"`
+	Keys       []collectKey `json:"keys"`
+}
+
+// pendingPublish is an upload whose generation the control plane has not
+// yet confirmed. A retried publish returns it unchanged.
 type pendingPublish struct {
-	Seq    int           `json:"seq"`
-	Flat   bool          `json:"flatten"`
-	Result publishResult `json:"result"`
+	Generation     int64  `json:"generation"`
+	ManifestKey    string `json:"manifest_key"`
+	ManifestSHA256 string `json:"manifest_sha256"`
+	AddedBytes     int64  `json:"added_bytes"`
+	// Through is the newest layer the generation holds.
+	Through int `json:"through"`
+	// Dirty are the frames the generation replaced, cached before the live
+	// stack moves onto it.
+	Dirty []uint32 `json:"dirty"`
+	// Collect is what the committed generation no longer reads.
+	Collect []collectKey `json:"collect"`
 }
 
 func (p *pendingPublish) published() *Published {
-	return &Published{
-		Generation:       p.Result.Generation,
-		ParentGeneration: p.Result.ParentGeneration,
-		ManifestKey:      p.Result.ManifestKey,
-		ManifestSHA256:   p.Result.ManifestSHA256,
-		AddedBytes:       p.Result.StoredBytesAdded,
-		Flat:             p.Flat,
-	}
-}
-
-// publishedRecord is a generation this host knows the control plane recorded,
-// kept so collect can tell which manifests and chunks are still reachable.
-type publishedRecord struct {
-	Generation       int64  `json:"generation"`
-	ParentGeneration int64  `json:"parent_generation"`
-	ManifestKey      string `json:"manifest_key"`
-	ManifestSHA256   string `json:"manifest_sha256"`
+	return &Published{Generation: p.Generation, ManifestKey: p.ManifestKey, ManifestSHA256: p.ManifestSHA256, AddedBytes: p.AddedBytes}
 }
 
 type diskState struct {
-	DiskID    string  `json:"disk_id"`
-	SizeBytes int64   `json:"size_bytes"`
-	Layers    []layer `json:"layers"`
-	NextSeq   int     `json:"next_seq"`
+	DiskID    string `json:"disk_id"`
+	SizeBytes int64  `json:"size_bytes"`
+	// Base is the committed generation the stack is on; nil for a disk
+	// never published.
+	Base    *Generation `json:"base,omitempty"`
+	Layers  []layer     `json:"layers"`
+	NextSeq int         `json:"next_seq"`
 	// HeadFresh is true while the engine created the head empty under the
 	// running daemon, so the daemon's write statistics cover all of it.
 	HeadFresh bool `json:"head_fresh"`
-	// Unformatted is true from creating a new disk's base until mkfs has
-	// written its filesystem, so an attach that stopped between the two
-	// formats it next time instead of mounting an empty device.
+	// Unformatted is true from creating a new disk until mkfs has written
+	// its filesystem, so an attach that stopped between the two formats it
+	// next time instead of mounting an empty device.
 	Unformatted bool `json:"unformatted,omitempty"`
 	// GrowFilesystem is true while the disk has grown and its ext4 has not
 	// yet been resized to fill it.
-	GrowFilesystem          bool              `json:"grow_filesystem,omitempty"`
-	PublishedGeneration     int64             `json:"published_generation"`
-	PublishedManifestSHA256 string            `json:"published_manifest_sha256"`
-	Published               []publishedRecord `json:"published"`
-	Pending                 *pendingPublish   `json:"pending_publish,omitempty"`
-	Attachment              *attachment       `json:"attachment,omitempty"`
-	LastUsedAt              time.Time         `json:"last_used_at"`
-}
-
-func (s *diskState) record(generation int64) (publishedRecord, bool) {
-	for _, record := range s.Published {
-		if record.Generation == generation {
-			return record, true
-		}
-	}
-	return publishedRecord{}, false
+	GrowFilesystem bool            `json:"grow_filesystem,omitempty"`
+	Pending        *pendingPublish `json:"pending_publish,omitempty"`
+	Collect        *collection     `json:"collect,omitempty"`
+	Attachment     *attachment     `json:"attachment,omitempty"`
+	LastUsedAt     time.Time       `json:"last_used_at"`
 }
 
 func (s *diskState) head() layer { return s.Layers[len(s.Layers)-1] }
+
+func (s *diskState) sealed() []layer { return s.Layers[:len(s.Layers)-1] }
 
 func (s *diskState) newLayer() layer {
 	s.NextSeq++
 	return layer{Seq: s.NextSeq}
 }
 
-func (s *diskState) oldestUnpublished() int {
-	for i := range len(s.Layers) - 1 {
-		if s.Layers[i].Generation == 0 {
-			return i
-		}
-	}
-	return -1
-}
-
-func (s *diskState) unpublishedSealed() int {
-	count := 0
-	for i := range len(s.Layers) - 1 {
-		if s.Layers[i].Generation == 0 {
-			count++
-		}
-	}
-	return count
-}
-
-// chainDepth counts the committed generations from the newest parentless one
-// up to the newest committed generation.
-func (s *diskState) chainDepth() (int, error) {
-	depth := 0
-	for generation := s.PublishedGeneration; generation != 0; depth++ {
-		record, known := s.record(generation)
-		if !known {
-			return 0, fmt.Errorf("disk %s has no record of generation %d", s.DiskID, generation)
-		}
-		generation = record.ParentGeneration
-	}
-	return depth, nil
-}
-
-// commitPending marks the pending upload's layer as its generation.
-func (s *diskState) commitPending() error {
+// commitPending makes the pending upload the base: the layers it holds
+// leave the stack, which returns them for deletion, and what it no longer
+// reads awaits collection.
+func (s *diskState) commitPending(p diskPaths) ([]layer, error) {
 	pending := s.Pending
-	for i := range s.Layers {
-		if s.Layers[i].Seq != pending.Seq {
-			continue
-		}
-		s.Layers[i].Generation = pending.Result.Generation
-		s.Published = append(s.Published, publishedRecord{
-			Generation:       pending.Result.Generation,
-			ParentGeneration: pending.Result.ParentGeneration,
-			ManifestKey:      pending.Result.ManifestKey,
-			ManifestSHA256:   pending.Result.ManifestSHA256,
-		})
-		s.PublishedGeneration = pending.Result.Generation
-		s.PublishedManifestSHA256 = pending.Result.ManifestSHA256
-		s.Pending = nil
-		return nil
+	if err := os.Rename(p.pendingIndex(), p.baseIndex()); err != nil {
+		return nil, fmt.Errorf("keep the index of generation %d: %w", pending.Generation, err)
 	}
-	return fmt.Errorf("disk %s no longer holds the layer uploaded as generation %d", s.DiskID, pending.Result.Generation)
+	var held, kept []layer
+	for _, l := range s.Layers {
+		if l.Seq <= pending.Through {
+			held = append(held, l)
+		} else {
+			kept = append(kept, l)
+		}
+	}
+	s.Layers = kept
+	s.Base = &Generation{Generation: pending.Generation, ManifestKey: pending.ManifestKey, ManifestSHA256: pending.ManifestSHA256}
+	var keys []collectKey
+	if s.Collect != nil {
+		keys = s.Collect.Keys
+	}
+	s.Collect = &collection{Generation: pending.Generation, Keys: append(keys, pending.Collect...)}
+	s.Pending = nil
+	return held, nil
 }
 
 // loadState returns nil without error for a disk with no local state.

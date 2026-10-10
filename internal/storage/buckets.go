@@ -83,6 +83,9 @@ type bucketProvider interface {
 	// issue returns a credential for bucket alone. revocable means the key
 	// must be deleted after it expires.
 	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
+	// issueRead returns a credential that reads the objects under prefix
+	// in bucket, or where the store cannot scope it, the bucket.
+	issueRead(ctx context.Context, bucket, prefix, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
@@ -253,6 +256,11 @@ func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) 
 }
 
 func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
+	return g.issueWith(ctx, bucket, name, lifetime, garagePerms{Read: true, Write: true})
+}
+
+// issueWith creates a key expiring after lifetime with perms on bucket.
+func (g *garageBuckets) issueWith(ctx context.Context, bucket, name string, lifetime time.Duration, perms garagePerms) (Grant, bool, error) {
 	id, err := g.bucketID(ctx, bucket)
 	if err != nil {
 		return Grant{}, false, err
@@ -267,7 +275,7 @@ func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime
 	}, &key); err != nil {
 		return Grant{}, false, err
 	}
-	if err := g.allow(ctx, id, key.AccessKeyID, garagePerms{Read: true, Write: true}); err != nil {
+	if err := g.allow(ctx, id, key.AccessKeyID, perms); err != nil {
 		// The key reaches nothing yet; delete it now rather than at expiry.
 		return Grant{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
 	}
@@ -313,7 +321,12 @@ func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime ti
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
-	creds, err := a.assume(ctx, name, string(policy), lifetime)
+	return a.issueWith(ctx, bucket, name, string(policy), lifetime)
+}
+
+// issueWith assumes the role for bucket under the session policy.
+func (a *awsBuckets) issueWith(ctx context.Context, bucket, name, policy string, lifetime time.Duration) (Grant, bool, error) {
+	creds, err := a.assume(ctx, name, policy, lifetime)
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
 	}

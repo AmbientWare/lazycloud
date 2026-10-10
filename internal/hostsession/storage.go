@@ -274,8 +274,8 @@ func (s *Server) AcquireDisk(ctx context.Context, req *hostproto.AcquireDiskRequ
 	out := &hostproto.AcquireDiskResponse{
 		DiskId: lease.Disk.String(), WorkspaceId: lease.Workspace.String(), SizeBytes: lease.SizeBytes, LeaseToken: lease.Token,
 	}
-	for _, g := range lease.Chain {
-		out.Chain = append(out.Chain, &hostproto.DiskGeneration{Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256})
+	if g := lease.Newest; g != nil {
+		out.Generation = &hostproto.DiskGeneration{Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256}
 	}
 	return out, nil
 }
@@ -287,8 +287,7 @@ func (s *Server) RecordDiskGeneration(ctx context.Context, req *hostproto.Record
 		return nil, err
 	}
 	if err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), storage.PublishedGeneration{
-		Generation: req.GetGeneration(), ParentGeneration: req.GetParentGeneration(),
-		ManifestKey: req.GetManifestKey(), ManifestSHA256: req.GetManifestSha256(), AddedBytes: req.GetAddedBytes(), Flat: req.GetFlat(),
+		Generation: req.GetGeneration(), ManifestKey: req.GetManifestKey(), ManifestSHA256: req.GetManifestSha256(), AddedBytes: req.GetAddedBytes(),
 	}); err != nil {
 		return nil, s.diskError(ctx, err)
 	}
@@ -301,10 +300,28 @@ func (s *Server) CollectDisk(ctx context.Context, req *hostproto.CollectDiskRequ
 	if err != nil {
 		return nil, err
 	}
-	if err := s.storage.CollectDisk(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), req.GetBaseGeneration(), req.GetKeys(), req.GetRemovedBytes()); err != nil {
+	if err := s.storage.CollectDisk(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), req.GetGeneration(), req.GetKeys(), req.GetRemovedBytes()); err != nil {
 		return nil, s.diskError(ctx, err)
 	}
 	return &hostproto.CollectDiskResponse{}, nil
+}
+
+// GrantDiskRead issues the lease holder's snapshotter a read-only
+// credential for the disk's objects.
+func (s *Server) GrantDiskRead(ctx context.Context, req *hostproto.GrantDiskReadRequest) (*hostproto.GrantDiskReadResponse, error) {
+	container, disk, err := parseDiskCall(req.GetContainerId(), req.GetDiskId())
+	if err != nil {
+		return nil, err
+	}
+	grant, err := s.storage.GrantDiskRead(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken())
+	if err != nil {
+		return nil, s.diskError(ctx, err)
+	}
+	return &hostproto.GrantDiskReadResponse{
+		Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
+		AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
+		ExpiresAt: timestamppb.New(grant.ExpiresAt),
+	}, nil
 }
 
 // ReleaseDisk ends a lease.

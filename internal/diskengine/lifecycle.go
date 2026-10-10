@@ -5,41 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
-	"time"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// flattenDepth is the committed chain depth at which the next publish
-// flattens the chain into one self-contained generation, bounding how many
-// layers a restore downloads.
-const flattenDepth = 64
-
-// jobPoll is how often a block job's status is read.
-const jobPoll = 200 * time.Millisecond
-
-func requireLiveAttachment(p diskPaths, state *diskState) error {
-	a := state.Attachment
-	if a == nil || !a.Mounted {
-		return fmt.Errorf("%w: disk %s", ErrNotAttached, p.id)
-	}
-	if !daemonAlive(p, a.DaemonPID) {
-		return fmt.Errorf("%w: qemu-storage-daemon %d for disk %s is not running", ErrAttachmentLost, a.DaemonPID, p.id)
-	}
-	return nil
-}
-
 // Seal makes everything written to an attached disk so far part of a sealed
 // layer, which Publish then uploads. It flushes the filesystem and freezes
-// it only when the head took writes. An attachment whose daemon, device or
-// mount is gone is released and its head sealed with the writes that
-// reached it; Seal then returns ErrAttachmentLost and the disk is detached.
-// A detached disk whose head may hold unsealed writes is sealed without a
-// daemon. Sealing a disk with nothing new succeeds without change.
+// it only when the head took writes. An attachment whose daemon, device,
+// mount or served base is gone is released and its head sealed with the
+// writes that reached it; Seal then returns ErrAttachmentLost, saying what
+// went, and the disk is detached. A detached disk whose head may hold
+// unsealed writes is sealed without a daemon. Sealing a disk with nothing
+// new succeeds without change.
 func (e *Engine) Seal(ctx context.Context, diskID string) error {
 	p, err := e.paths(diskID)
 	if err != nil {
@@ -60,57 +37,64 @@ func (e *Engine) Seal(ctx context.Context, diskID string) error {
 		}
 		return sealOrphanedHead(ctx, p, state)
 	}
-	healthy, err := attachmentHealthy(p, state)
-	if err != nil {
-		return err
-	}
-	if !healthy {
-		lost := *state.Attachment
+	if lost := attachmentLost(p, state); lost != nil {
+		mountpoint := state.Attachment.Mountpoint
 		if err := releaseAttachment(ctx, p, state); err != nil {
-			return err
+			return errors.Join(lost, err)
 		}
-		e.log.WarnContext(ctx, "disk attachment lost; sealed what reached it", "disk_id", p.id,
-			"daemon_pid", lost.DaemonPID, "device", lost.Device, "unpublished_layers", state.unpublishedSealed())
-		return fmt.Errorf("%w: disk %s at %s lost its daemon, device or mount", ErrAttachmentLost, p.id, lost.Mountpoint)
+		e.log.WarnContext(ctx, "disk attachment lost; sealed what reached it", "disk_id", p.id, "cause", lost)
+		return fmt.Errorf("disk %s at %s: %w", p.id, mountpoint, lost)
 	}
 	return telemetry.Step(ctx, "diskengine.seal", func(ctx context.Context) error { return seal(ctx, p, state) })
 }
 
-// Publish uploads the oldest sealed layer of the disk not yet published and
-// returns nil when none awaits; it never seals. The upload stays pending
-// until CommitPublished; until then a retry returns the same upload. Once the
-// committed chain is flattenDepth deep the upload flattens the chain into a
-// parentless generation.
-func (e *Engine) Publish(ctx context.Context, diskID string, store Store) (*Published, error) {
+// attachmentLost says what of a recorded attachment is gone, as an
+// ErrAttachmentLost, or nil while all of it runs.
+func attachmentLost(p diskPaths, state *diskState) error {
+	a := state.Attachment
+	if err := baseLost(a); err != nil {
+		return fmt.Errorf("%w: %w", ErrAttachmentLost, err)
+	}
+	healthy, err := attachmentHealthy(p, state)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrAttachmentLost, err)
+	case healthy:
+		return nil
+	}
+	if !daemonAlive(p, a.DaemonPID) {
+		return fmt.Errorf("%w: qemu-storage-daemon %d stopped", ErrAttachmentLost, a.DaemonPID)
+	}
+	return fmt.Errorf("%w: its NBD device %s or mount at %s went", ErrAttachmentLost, a.Device, a.Mountpoint)
+}
+
+// Status reports the bytes the disk's layers hold that no committed
+// generation does, which the disk's dirty budget bounds, and an
+// ErrAttachmentLost saying what went when an attachment stopped working.
+// It takes no lock and changes nothing.
+func (e *Engine) Status(diskID string) (int64, error) {
 	p, err := e.paths(diskID)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.release()
 	state, err := requireState(p)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	depth, err := state.chainDepth()
-	if err != nil {
-		return nil, err
+	if state.Attachment != nil && state.Attachment.Mounted {
+		if err := attachmentLost(p, state); err != nil {
+			return 0, err
+		}
 	}
-	uploadCtx, span := telemetry.Start(ctx, "diskengine.upload_layer", trace.WithAttributes(attribute.Bool("lazycloud.flat", depth >= flattenDepth)))
-	published, err := publishOldest(uploadCtx, p, state, store, depth >= flattenDepth)
-	if published != nil {
-		span.SetAttributes(attribute.Int64("lazycloud.bytes", published.AddedBytes), attribute.Int64("lazycloud.generation", published.Generation))
+	var dirty int64
+	for _, l := range state.Layers {
+		n, err := allocatedBytes(p.layerPath(l))
+		if err != nil {
+			return 0, err
+		}
+		dirty += n
 	}
-	telemetry.Fail(span, err)
-	if err != nil || published == nil {
-		return published, err
-	}
-	e.log.InfoContext(ctx, "disk layer uploaded", "disk_id", p.id, "generation", published.Generation,
-		"parent_generation", published.ParentGeneration, "added_bytes", published.AddedBytes, "flat", published.Flat)
-	return published, nil
+	return dirty, nil
 }
 
 // seal flushes the mounted filesystem and, when the head took writes, freezes
@@ -159,7 +143,7 @@ func sealFrozen(ctx context.Context, p diskPaths, state *diskState, client *qmpC
 	}
 	next := state.newLayer()
 	path := p.layerPath(next)
-	if err := createOverlay(ctx, path, head, state.SizeBytes); err != nil {
+	if err := createLayer(ctx, path, state.SizeBytes); err != nil {
 		return false, err
 	}
 	// Recorded before the switch; reconcileHead drops it again if the switch
@@ -175,14 +159,7 @@ func sealFrozen(ctx context.Context, p diskPaths, state *diskState, client *qmpC
 		state.HeadFresh = wasFresh
 		return false, errors.Join(cause, saveState(p, state), removeIfExists(path))
 	}
-	err = client.execute(ctx, "blockdev-add", map[string]any{
-		"driver":    string(formatQcow2),
-		"node-name": next.node(),
-		"discard":   "unmap",
-		"file":      fileChild(path),
-		"backing":   nil,
-	}, nil)
-	if err != nil {
+	if err := client.execute(ctx, "blockdev-add", layerBlockdev(p, next, nil, true), nil); err != nil {
 		return rollback(err)
 	}
 	err = client.execute(ctx, "transaction", map[string]any{
@@ -198,75 +175,10 @@ func sealFrozen(ctx context.Context, p diskPaths, state *diskState, client *qmpC
 	return true, nil
 }
 
-// publishOldest uploads the oldest sealed unpublished layer, or with flat the
-// chain up to it as one parentless layer, and records the upload as pending.
-func publishOldest(ctx context.Context, p diskPaths, state *diskState, store Store, flat bool) (*Published, error) {
-	index := state.oldestUnpublished()
-	if index < 0 {
-		return nil, nil // Nothing awaits publishing.
-	}
-	target := state.Layers[index]
-	if pending := state.Pending; pending != nil && pending.Seq == target.Seq {
-		return pending.published(), nil
-	}
-	below := int64(0)
-	if index > 0 {
-		below = state.Layers[index-1].Generation
-	}
-	generation := max(below, state.PublishedGeneration) + 1
-	objects, err := openStore(store)
-	if err != nil {
-		return nil, err
-	}
-	var result publishResult
-	if flat {
-		result, err = uploadFlattened(ctx, objects, p, state.Layers[:index+1], generation)
-	} else {
-		result, err = uploadFile(ctx, objects, p.id, p.layerPath(target), generation, below)
-	}
-	if err != nil {
-		return nil, err
-	}
-	state.Pending = &pendingPublish{Seq: target.Seq, Flat: flat, Result: result}
-	if err := saveState(p, state); err != nil {
-		return nil, err
-	}
-	return state.Pending.published(), nil
-}
-
-// CommitPublished marks generation, the pending upload, as published once
-// the control plane has recorded it. Committing the newest committed
-// generation again succeeds. It waits for the disk's other operations.
-func (e *Engine) CommitPublished(diskID string, generation int64) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(context.Background(), p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil {
-		return err
-	}
-	if state.Pending == nil || state.Pending.Result.Generation != generation {
-		if state.Pending == nil && state.PublishedGeneration == generation {
-			return nil
-		}
-		return fmt.Errorf("%w: disk %s has no uploaded generation %d awaiting commit", ErrInvalid, p.id, generation)
-	}
-	if err := state.commitPending(); err != nil {
-		return err
-	}
-	return saveState(p, state)
-}
-
-// Detach unmounts the disk, disconnects its device and stops its daemon. The
-// local copy stays for the next attach, holding any writes no Publish
-// sealed, so a release publishes before detaching. Detaching a detached disk
-// succeeds.
+// Detach unmounts the disk, disconnects its device, stops its daemon and
+// has the snapshotter stop serving its generations. The local stack stays
+// for the next attach, holding any writes no Publish sealed, so a release
+// publishes before detaching. Detaching a detached disk succeeds.
 func (e *Engine) Detach(ctx context.Context, diskID string) error {
 	p, err := e.paths(diskID)
 	if err != nil {
@@ -281,156 +193,22 @@ func (e *Engine) Detach(ctx context.Context, diskID string) error {
 	if err != nil || state == nil {
 		return err
 	}
-	return teardown(ctx, p, state)
-}
-
-// Compact commits the published layers above the base of an attached disk
-// into the base and deletes them, so the chain stops growing with each
-// publish. The head and unpublished layers are untouched.
-func (e *Engine) Compact(ctx context.Context, diskID string) error {
-	p, err := e.paths(diskID)
-	if err != nil {
+	if err := teardown(ctx, p, state); err != nil {
 		return err
 	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil {
-		return err
-	}
-	if err := requireLiveAttachment(p, state); err != nil {
-		return err
-	}
-	compacted, err := compactLayers(ctx, p, state)
-	if err != nil || compacted == 0 {
-		return err
-	}
-	e.log.InfoContext(ctx, "disk compacted", "disk_id", p.id, "layers", compacted)
-	return nil
-}
-
-// compactLayers commits the run of published layers above a published base
-// into it through the running daemon and returns how many it removed.
-func compactLayers(ctx context.Context, p diskPaths, state *diskState) (int, error) {
-	// Published layers form a prefix of the chain; the head is never committed.
-	top := 0
-	for i := 1; i < len(state.Layers)-1 && state.Layers[0].Generation > 0 && state.Layers[i].Generation > 0; i++ {
-		top = i
-	}
-	if top == 0 {
-		return 0, nil
-	}
-	client, err := dialQMP(ctx, p.qmpSocket())
-	if err != nil {
-		return 0, err
-	}
-	removed, err := func() ([]layer, error) {
-		if err := reconcileHead(ctx, p, state, client); err != nil {
-			return nil, err
-		}
-		base := state.Layers[0]
-		jobID := fmt.Sprintf("compact-%d", state.Layers[top].Seq)
-		err := client.execute(ctx, "block-commit", map[string]any{
-			"job-id":       jobID,
-			"device":       state.head().node(),
-			"top-node":     state.Layers[top].node(),
-			"base-node":    base.node(),
-			"backing-file": base.file(),
-			"auto-dismiss": false,
-		}, nil)
-		if err != nil {
-			return nil, err
-		}
-		if err := awaitJob(ctx, client, jobID); err != nil {
-			return nil, err
-		}
-		removed := slices.Clone(state.Layers[1 : top+1])
-		state.Layers[0].Generation = state.Layers[top].Generation
-		state.Layers = slices.Delete(state.Layers, 1, top+1)
-		if err := saveState(p, state); err != nil {
-			return nil, err
-		}
-		return removed, releaseNodes(ctx, client, removed)
-	}()
-	if err = errors.Join(err, client.close()); err != nil {
-		return 0, err
-	}
-	for _, l := range removed {
-		if err := removeIfExists(p.layerPath(l)); err != nil {
-			return 0, err
-		}
-	}
-	return len(removed), nil
-}
-
-type namedNode struct {
-	NodeName string `json:"node-name"`
-}
-
-// releaseNodes deletes the committed layers' nodes the daemon still holds,
-// newest first. The monitor holds the daemon's top node at startup and every
-// head a seal added, and keeps them and the older layers they back open after
-// the commit drops them from the chain. Without this a compaction frees no
-// space until the disk is detached.
-func releaseNodes(ctx context.Context, client *qmpClient, layers []layer) error {
-	for _, l := range slices.Backward(layers) {
-		var nodes []namedNode
-		if err := client.execute(ctx, "query-named-block-nodes", map[string]any{"flat": true}, &nodes); err != nil {
-			return err
-		}
-		open := slices.ContainsFunc(nodes, func(node namedNode) bool { return node.NodeName == l.node() })
-		if !open {
-			continue
-		}
-		if err := client.execute(ctx, "blockdev-del", map[string]any{"node-name": l.node()}, nil); err != nil {
-			return fmt.Errorf("release committed layer %s: %w", l.file(), err)
-		}
+	if err := e.bases.ReleaseDisk(ctx, p.id, 0); err != nil {
+		return fmt.Errorf("release the served generations: %w", err)
 	}
 	return nil
-}
-
-type blockJob struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  string `json:"error"`
-}
-
-func awaitJob(ctx context.Context, client *qmpClient, id string) error {
-	for {
-		var jobs []blockJob
-		if err := client.execute(ctx, "query-jobs", nil, &jobs); err != nil {
-			return err
-		}
-		index := slices.IndexFunc(jobs, func(job blockJob) bool { return job.ID == id })
-		if index < 0 {
-			return fmt.Errorf("block job %s disappeared before concluding", id)
-		}
-		if job := jobs[index]; job.Status == "concluded" {
-			if err := client.execute(ctx, "job-dismiss", map[string]any{"id": id}, nil); err != nil {
-				return err
-			}
-			if job.Error != "" {
-				return fmt.Errorf("block job %s failed: %s", id, job.Error)
-			}
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("block job %s still running: %w", id, ctx.Err())
-		case <-time.After(jobPoll):
-		}
-	}
 }
 
 // Recover releases whatever an attachment from a previous agent still holds,
 // unmounting, disconnecting and stopping its daemon, and seals a head that
 // may hold writes nobody sealed so the next Publish uploads them. The writes
 // are crash-consistent: whatever had reached the file. Call it for every
-// disk List reports when the agent starts. A disk with no local state, or
-// detached with a head known to be empty, needs nothing.
+// disk List reports attached whose container no longer runs when the agent
+// starts. A disk with no local state, or detached with a head known to be
+// empty, needs nothing.
 func (e *Engine) Recover(ctx context.Context, diskID string) error {
 	p, err := e.paths(diskID)
 	if err != nil {
@@ -452,7 +230,7 @@ func (e *Engine) Recover(ctx context.Context, diskID string) error {
 	} else if err := sealOrphanedHead(ctx, p, state); err != nil {
 		return err
 	}
-	e.log.InfoContext(ctx, "disk recovered", "disk_id", p.id, "unpublished_layers", state.unpublishedSealed())
+	e.log.InfoContext(ctx, "disk recovered", "disk_id", p.id, "sealed_layers", len(state.sealed()))
 	return nil
 }
 
@@ -470,14 +248,13 @@ func releaseAttachment(ctx context.Context, p diskPaths, state *diskState) error
 // sealOrphanedHead seals, with no daemon running, a head that holds writes
 // nobody sealed.
 func sealOrphanedHead(ctx context.Context, p diskPaths, state *diskState) error {
-	head := state.head()
-	held, err := layerHoldsData(ctx, p.layerPath(head), head.format())
+	held, err := layerHoldsData(ctx, p, state.head())
 	if err != nil {
 		return err
 	}
 	if held {
 		next := state.newLayer()
-		if err := createOverlay(ctx, p.layerPath(next), head, state.SizeBytes); err != nil {
+		if err := createLayer(ctx, p.layerPath(next), state.SizeBytes); err != nil {
 			return err
 		}
 		state.Layers = append(state.Layers, next)
@@ -486,14 +263,14 @@ func sealOrphanedHead(ctx context.Context, p diskPaths, state *diskState) error 
 	return saveState(p, state)
 }
 
-// layerHoldsData reports whether the top layer of an image maps any range of
-// its own, data or zeroes, instead of passing it through to its backing file.
-func layerHoldsData(ctx context.Context, path string, format layerFormat) (bool, error) {
-	extents, err := mapImage(ctx, path, format, false)
+// layerHoldsData reports whether a layer maps any range of its own, data or
+// zeroes, instead of passing it through to the layer below.
+func layerHoldsData(ctx context.Context, p diskPaths, l layer) (bool, error) {
+	extents, err := mapLayers(ctx, p, []layer{l})
 	if err != nil {
 		return false, err
 	}
-	return slices.ContainsFunc(extents, func(extent mappedExtent) bool { return extent.Depth == 0 && extent.Present }), nil
+	return len(extents) > 0, nil
 }
 
 // Evict deletes a detached disk's local copy. Writes no committed generation
@@ -524,8 +301,8 @@ func (e *Engine) Evict(diskID string) error {
 }
 
 // List describes every disk kept under the root, for recovering them at
-// startup and choosing what to evict. A directory without state is a restore
-// that never finished and holds nothing unpublished.
+// startup and choosing what to evict. A directory without state is an
+// attach that never finished and holds nothing unpublished.
 func (e *Engine) List(ctx context.Context) ([]LocalDisk, error) {
 	entries, err := os.ReadDir(e.root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -573,7 +350,7 @@ func describeDisk(ctx context.Context, p diskPaths) (LocalDisk, error) {
 	if err != nil {
 		return disk, err
 	}
-	disk.Unpublished = state.unpublishedSealed() > 0 || dirty
+	disk.Unpublished = len(state.sealed()) > 0 || state.Pending != nil || dirty
 	return disk, nil
 }
 

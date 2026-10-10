@@ -101,3 +101,84 @@ message EndTraceResponse {
   // none of its bytes and every read reached the trace.
   bool complete = 2;
 }
+
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+service DiskSources {
+  // GrantDisk records the credential the disk's frames are read with,
+  // replacing the disk's current one unless that expires later.
+  rpc GrantDisk(GrantDiskRequest) returns (GrantDiskResponse);
+  // ServeDisk serves a generation and returns its file, reading its stored
+  // index through the disk's grant. Serving a served generation again
+  // returns the same file. It returns once the frames in warm are cached or
+  // the call's deadline passes.
+  rpc ServeDisk(ServeDiskRequest) returns (ServeDiskResponse);
+  // ReleaseDisk stops serving every generation of the disk but keep, 0 for
+  // none. A file still open keeps reading.
+  rpc ReleaseDisk(ReleaseDiskRequest) returns (ReleaseDiskResponse);
+  // DiskReads returns the frames the disk read: its start trace and those
+  // the cache holds now.
+  rpc DiskReads(DiskReadsRequest) returns (DiskReadsResponse);
+}
+
+// DiskGrant reads the objects under <prefix>disks/<disk id>/ of one bucket.
+message DiskGrant {
+  string endpoint = 1;
+  string region = 2;
+  string bucket = 3;
+  // Ends with "/" when set.
+  string prefix = 4;
+  bool force_path_style = 5;
+  string access_key_id = 6;
+  string secret_access_key = 7;
+  string session_token = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}
+
+message GrantDiskRequest {
+  string disk_id = 1;
+  DiskGrant grant = 2;
+}
+
+message GrantDiskResponse {}
+
+message ServeDiskRequest {
+  string disk_id = 1;
+  int64 generation = 2;
+  // The generation's stored DiskIndex and the sha256 of its bytes.
+  string index_key = 3;
+  string index_sha256 = 4;
+  // Starts the disk's start trace and fetches the index's start_frames,
+  // then its recent_frames, in the background, bounded by the cache's size
+  // and a time limit. An attach sets it.
+  bool prefetch = 5;
+  // Frames to cache before the call returns.
+  repeated uint32 warm = 6;
+}
+
+message ServeDiskResponse {
+  // The read-only file holding the generation's bytes.
+  string path = 1;
+}
+
+message ReleaseDiskRequest {
+  string disk_id = 1;
+  int64 keep = 2;
+}
+
+message ReleaseDiskResponse {}
+
+message DiskReadsRequest {
+  string disk_id = 1;
+}
+
+message DiskReadsResponse {
+  // The frames read in the first minute after the latest serve that
+  // prefetched, in order of first read; empty until that minute has passed.
+  repeated uint32 start_frames = 1;
+  // The disk's frames the cache holds, most recently read first, at most as
+  // many as a prefetch fetches.
+  repeated uint32 recent_frames = 2;
+}

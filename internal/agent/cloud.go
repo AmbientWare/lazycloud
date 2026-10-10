@@ -128,6 +128,7 @@ func (a *Agent) watchInterruptions(ctx context.Context) {
 				a.log.Warn("the provider will reclaim this host", "reason", notice.reason, "reclaim_at", notice.reclaimAt)
 				a.report(notice.message())
 			}
+			a.reclaimed.Do(func() { close(a.reclaiming) })
 		}
 		select {
 		case <-ctx.Done():

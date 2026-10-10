@@ -1,14 +1,18 @@
-// Package snapshotter is the host service that gives containerd, and so
-// Docker, lazily read image layers. It is containerd's overlay snapshotter
-// plus lazy layers: a layer pulled with layersource.LazyLabel becomes a
-// committed snapshot holding only the layer's index, mounted over FUSE
-// while a container uses it, its files read by frame from the layer store
-// through the URLs the agent grants, and kept in a bounded local cache.
-// Every other snapshot is a plain overlay snapshot.
+// Package snapshotter is the host service that reads stored frames lazily:
+// the layers of containerd's, and so Docker's, images, and the published
+// generations of durable disks. It is containerd's overlay snapshotter plus
+// lazy layers: a layer pulled with layersource.LazyLabel becomes a committed
+// snapshot holding only the layer's index, mounted over FUSE while a
+// container uses it, its files read by frame from the layer store through
+// the URLs the agent grants. Every other snapshot is a plain overlay
+// snapshot. A disk generation is a read-only FUSE file the disk engine
+// stacks the disk's local writes on, its frames read from the workspace
+// bucket. Both keep their frames in one bounded cache.
 //
 // The process holding the FUSE mounts must outlive every container using
 // them, so it runs as its own service that agent updates never restart. It
-// has no database access and no store credential.
+// has no database access. Its only store credentials are the read-only
+// grants, scoped to disks/<disk id>/, of the disks attached to its host.
 package snapshotter
 
 import (
@@ -41,14 +45,21 @@ const (
 	// prepareSuffix names the active snapshot a lazy layer is committed
 	// from.
 	prepareSuffix = "/lazy-prepare"
+	// disksDir, under the root, is where disk generations are served.
+	disksDir = "disks"
 )
 
 // Config configures the snapshotter Serve runs.
 type Config struct {
-	// Root holds the snapshot metadata, the snapshots and the frame cache.
+	// Root holds the snapshot metadata, the snapshots and the directory
+	// disk generations are served in.
 	Root string
-	// CacheBytes bounds the frame cache on disk.
-	CacheBytes int64
+	// CacheDir holds the frame cache, on the volume disks keep their
+	// unpublished writes on.
+	CacheDir string
+	// CacheBytes bounds the frame cache, and ReserveBytes is the space it
+	// leaves free on its volume.
+	CacheBytes, ReserveBytes int64
 	// Fetches bounds the frames read from the store at once.
 	Fetches int
 	// FillBytes is the largest layer, in uncompressed bytes, whose frames
@@ -68,6 +79,7 @@ type snapshotter struct {
 	root   string
 	ms     *storage.MetaStore
 	cache  *frameCache
+	disks  *disks
 	log    *slog.Logger
 	cancel context.CancelFunc
 
@@ -97,7 +109,16 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 		return nil, err
 	}
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	cache, err := newFrameCache(life, filepath.Join(cfg.Root, "cache"), cfg)
+	cache, err := newFrameCache(life, cfg.CacheDir, cfg)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.Root, disksDir), 0o700); err != nil {
+		cancel()
+		return nil, fmt.Errorf("create the disk directory: %w", err)
+	}
+	served, err := mountDisks(filepath.Join(cfg.Root, disksDir), cache, cfg.HTTP, cfg.Logger)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -105,22 +126,23 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 	ms, err := storage.NewMetaStore(filepath.Join(cfg.Root, "metadata.db"))
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("open snapshot metadata: %w", err)
+		return nil, errors.Join(fmt.Errorf("open snapshot metadata: %w", err), served.close())
 	}
 	ov, err := overlay.NewSnapshotter(cfg.Root, overlay.WithMetaStore(ms))
 	if err != nil {
 		cancel()
 		_ = ms.Close()
-		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
+		return nil, errors.Join(fmt.Errorf("open overlay snapshotter: %w", err), served.close())
 	}
 	s := &snapshotter{
-		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, log: cfg.Logger, cancel: cancel,
+		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, log: cfg.Logger, cancel: cancel,
 		requests: make(chan func()),
 		done:     make(chan struct{}),
 		mounted:  make(map[string]*mountedLayer),
 		holds:    make(map[string]int),
 	}
 	cache.background.Go(func() { cache.starts.run(life) })
+	cache.background.Go(func() { cache.trim(life) })
 	go s.run(life)
 	if err := s.reconcileNow(ctx); err != nil {
 		_ = s.Close()
@@ -130,8 +152,8 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 }
 
 // Close stops the snapshotter's work and closes its metadata. Mounts stay
-// in place: containers may still read them while the process lives, and
-// the next start detaches what is left.
+// in place: containers and disks may still read them while the process
+// lives, and the next start detaches what is left.
 func (s *snapshotter) Close() error {
 	s.cancel()
 	<-s.done

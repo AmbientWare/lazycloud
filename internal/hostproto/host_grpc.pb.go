@@ -27,6 +27,7 @@ const (
 	HostService_AcquireDisk_FullMethodName             = "/lazycloud.host.v1.HostService/AcquireDisk"
 	HostService_RecordDiskGeneration_FullMethodName    = "/lazycloud.host.v1.HostService/RecordDiskGeneration"
 	HostService_CollectDisk_FullMethodName             = "/lazycloud.host.v1.HostService/CollectDisk"
+	HostService_GrantDiskRead_FullMethodName           = "/lazycloud.host.v1.HostService/GrantDiskRead"
 	HostService_ReleaseDisk_FullMethodName             = "/lazycloud.host.v1.HostService/ReleaseDisk"
 	HostService_RecordDiskFailure_FullMethodName       = "/lazycloud.host.v1.HostService/RecordDiskFailure"
 	HostService_ContainerAPI_FullMethodName            = "/lazycloud.host.v1.HostService/ContainerAPI"
@@ -66,11 +67,15 @@ type HostServiceClient interface {
 	// RecordDiskGeneration records an uploaded generation under the lease. A
 	// stale lease returns FAILED_PRECONDITION.
 	RecordDiskGeneration(ctx context.Context, in *RecordDiskGenerationRequest, opts ...grpc.CallOption) (*RecordDiskGenerationResponse, error)
-	// CollectDisk deletes objects of the disk no restore reaches and records
-	// the chain's new base. The server deletes them while it holds the lease,
-	// so a host that lost the disk deletes nothing a newer holder stored. A
-	// stale lease returns FAILED_PRECONDITION.
+	// CollectDisk deletes objects of the disk the generation it names no
+	// longer reads. The server deletes them while it holds the lease, so a
+	// host that lost the disk deletes nothing a newer holder stored. A stale
+	// lease returns FAILED_PRECONDITION.
 	CollectDisk(ctx context.Context, in *CollectDiskRequest, opts ...grpc.CallOption) (*CollectDiskResponse, error)
+	// GrantDiskRead issues a credential that reads the disk's objects and
+	// nothing else, with which the host's snapshotter serves its generations.
+	// A stale lease returns FAILED_PRECONDITION.
+	GrantDiskRead(ctx context.Context, in *GrantDiskReadRequest, opts ...grpc.CallOption) (*GrantDiskReadResponse, error)
 	// ReleaseDisk ends the lease after the final publish.
 	ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error)
 	// RecordDiskFailure records why the holder's last publish or release
@@ -188,6 +193,16 @@ func (c *hostServiceClient) CollectDisk(ctx context.Context, in *CollectDiskRequ
 	return out, nil
 }
 
+func (c *hostServiceClient) GrantDiskRead(ctx context.Context, in *GrantDiskReadRequest, opts ...grpc.CallOption) (*GrantDiskReadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantDiskReadResponse)
+	err := c.cc.Invoke(ctx, HostService_GrantDiskRead_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *hostServiceClient) ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReleaseDiskResponse)
@@ -291,11 +306,15 @@ type HostServiceServer interface {
 	// RecordDiskGeneration records an uploaded generation under the lease. A
 	// stale lease returns FAILED_PRECONDITION.
 	RecordDiskGeneration(context.Context, *RecordDiskGenerationRequest) (*RecordDiskGenerationResponse, error)
-	// CollectDisk deletes objects of the disk no restore reaches and records
-	// the chain's new base. The server deletes them while it holds the lease,
-	// so a host that lost the disk deletes nothing a newer holder stored. A
-	// stale lease returns FAILED_PRECONDITION.
+	// CollectDisk deletes objects of the disk the generation it names no
+	// longer reads. The server deletes them while it holds the lease, so a
+	// host that lost the disk deletes nothing a newer holder stored. A stale
+	// lease returns FAILED_PRECONDITION.
 	CollectDisk(context.Context, *CollectDiskRequest) (*CollectDiskResponse, error)
+	// GrantDiskRead issues a credential that reads the disk's objects and
+	// nothing else, with which the host's snapshotter serves its generations.
+	// A stale lease returns FAILED_PRECONDITION.
+	GrantDiskRead(context.Context, *GrantDiskReadRequest) (*GrantDiskReadResponse, error)
 	// ReleaseDisk ends the lease after the final publish.
 	ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error)
 	// RecordDiskFailure records why the holder's last publish or release
@@ -353,6 +372,9 @@ func (UnimplementedHostServiceServer) RecordDiskGeneration(context.Context, *Rec
 }
 func (UnimplementedHostServiceServer) CollectDisk(context.Context, *CollectDiskRequest) (*CollectDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CollectDisk not implemented")
+}
+func (UnimplementedHostServiceServer) GrantDiskRead(context.Context, *GrantDiskReadRequest) (*GrantDiskReadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantDiskRead not implemented")
 }
 func (UnimplementedHostServiceServer) ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseDisk not implemented")
@@ -529,6 +551,24 @@ func _HostService_CollectDisk_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_GrantDiskRead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantDiskReadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).GrantDiskRead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_GrantDiskRead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).GrantDiskRead(ctx, req.(*GrantDiskReadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HostService_ReleaseDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReleaseDiskRequest)
 	if err := dec(in); err != nil {
@@ -678,6 +718,10 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CollectDisk",
 			Handler:    _HostService_CollectDisk_Handler,
+		},
+		{
+			MethodName: "GrantDiskRead",
+			Handler:    _HostService_GrantDiskRead_Handler,
 		},
 		{
 			MethodName: "ReleaseDisk",

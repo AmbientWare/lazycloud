@@ -1,7 +1,7 @@
 // Command lazycloud-snapshotter serves containerd's snapshotter API with
-// lazily read image layers on a host. It runs as root in its own systemd
-// unit, which agent updates never restart: the FUSE mounts it serves die
-// with it.
+// lazily read image layers, and the disk engine its disks' published
+// generations, on a host. It runs as root in its own systemd unit, which
+// agent updates never restart: the FUSE mounts it serves die with it.
 //
 //	lazycloud-snapshotter
 package main
@@ -21,9 +21,7 @@ import (
 )
 
 const (
-	// cacheBytes bounds the frame cache on disk.
-	cacheBytes = 20 << 30
-	// fetches bounds the frames read from the layer store at once.
+	// fetches bounds the frames read from the stores at once.
 	fetches = 16
 	// fillBytes is the largest layer, uncompressed, fetched whole in the
 	// background once mounted.
@@ -71,7 +69,10 @@ func run(args []string) int {
 	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
 	transport.MaxIdleConnsPerHost = fetches
 	cfg := snapshotter.Config{
-		Root: layersource.Root, CacheBytes: cacheBytes, Fetches: fetches, FillBytes: fillBytes,
+		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: layersource.CacheBytes,
+		// A disk's writes past its half budget wait for a publish; the
+		// cache keeps one budget free for them.
+		ReserveBytes: layersource.DiskDirtyBytes, Fetches: fetches, FillBytes: fillBytes,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {

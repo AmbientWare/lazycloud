@@ -276,12 +276,14 @@ func (s *snapshotter) needed(ctx context.Context) (map[string]lazyRef, error) {
 	return needed, nil
 }
 
-// clearStale detaches the layer mounts a previous process left under root.
-// Their FUSE connections died with it, so containers still using them get
-// I/O errors, never another layer's files.
+// clearStale detaches the layer and disk mounts a previous process left
+// under root. Their FUSE connections died with it, so containers and disks
+// still using them get I/O errors, never another layer's or disk's bytes.
 func clearStale(root string) error {
-	if err := mount.UnmountRecursive(filepath.Join(root, "snapshots"), unix.MNT_DETACH); err != nil {
-		return fmt.Errorf("detach stale layer mounts: %w", err)
+	for _, dir := range []string{"snapshots", disksDir} {
+		if err := mount.UnmountRecursive(filepath.Join(root, dir), unix.MNT_DETACH); err != nil {
+			return fmt.Errorf("detach stale mounts under %s: %w", dir, err)
+		}
 	}
 	return nil
 }

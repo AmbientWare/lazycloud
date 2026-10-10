@@ -313,3 +313,249 @@ var LayerSources_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "imagefs/v1/source.proto",
 }
+
+const (
+	DiskSources_GrantDisk_FullMethodName   = "/lazycloud.imagefs.v1.DiskSources/GrantDisk"
+	DiskSources_ServeDisk_FullMethodName   = "/lazycloud.imagefs.v1.DiskSources/ServeDisk"
+	DiskSources_ReleaseDisk_FullMethodName = "/lazycloud.imagefs.v1.DiskSources/ReleaseDisk"
+	DiskSources_DiskReads_FullMethodName   = "/lazycloud.imagefs.v1.DiskSources/DiskReads"
+)
+
+// DiskSourcesClient is the client API for DiskSources service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+type DiskSourcesClient interface {
+	// GrantDisk records the credential the disk's frames are read with,
+	// replacing the disk's current one unless that expires later.
+	GrantDisk(ctx context.Context, in *GrantDiskRequest, opts ...grpc.CallOption) (*GrantDiskResponse, error)
+	// ServeDisk serves a generation and returns its file, reading its stored
+	// index through the disk's grant. Serving a served generation again
+	// returns the same file. It returns once the frames in warm are cached or
+	// the call's deadline passes.
+	ServeDisk(ctx context.Context, in *ServeDiskRequest, opts ...grpc.CallOption) (*ServeDiskResponse, error)
+	// ReleaseDisk stops serving every generation of the disk but keep, 0 for
+	// none. A file still open keeps reading.
+	ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error)
+	// DiskReads returns the frames the disk read: its start trace and those
+	// the cache holds now.
+	DiskReads(ctx context.Context, in *DiskReadsRequest, opts ...grpc.CallOption) (*DiskReadsResponse, error)
+}
+
+type diskSourcesClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewDiskSourcesClient(cc grpc.ClientConnInterface) DiskSourcesClient {
+	return &diskSourcesClient{cc}
+}
+
+func (c *diskSourcesClient) GrantDisk(ctx context.Context, in *GrantDiskRequest, opts ...grpc.CallOption) (*GrantDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantDiskResponse)
+	err := c.cc.Invoke(ctx, DiskSources_GrantDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *diskSourcesClient) ServeDisk(ctx context.Context, in *ServeDiskRequest, opts ...grpc.CallOption) (*ServeDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServeDiskResponse)
+	err := c.cc.Invoke(ctx, DiskSources_ServeDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *diskSourcesClient) ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseDiskResponse)
+	err := c.cc.Invoke(ctx, DiskSources_ReleaseDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *diskSourcesClient) DiskReads(ctx context.Context, in *DiskReadsRequest, opts ...grpc.CallOption) (*DiskReadsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiskReadsResponse)
+	err := c.cc.Invoke(ctx, DiskSources_DiskReads_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DiskSourcesServer is the server API for DiskSources service.
+// All implementations must embed UnimplementedDiskSourcesServer
+// for forward compatibility.
+//
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+type DiskSourcesServer interface {
+	// GrantDisk records the credential the disk's frames are read with,
+	// replacing the disk's current one unless that expires later.
+	GrantDisk(context.Context, *GrantDiskRequest) (*GrantDiskResponse, error)
+	// ServeDisk serves a generation and returns its file, reading its stored
+	// index through the disk's grant. Serving a served generation again
+	// returns the same file. It returns once the frames in warm are cached or
+	// the call's deadline passes.
+	ServeDisk(context.Context, *ServeDiskRequest) (*ServeDiskResponse, error)
+	// ReleaseDisk stops serving every generation of the disk but keep, 0 for
+	// none. A file still open keeps reading.
+	ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error)
+	// DiskReads returns the frames the disk read: its start trace and those
+	// the cache holds now.
+	DiskReads(context.Context, *DiskReadsRequest) (*DiskReadsResponse, error)
+	mustEmbedUnimplementedDiskSourcesServer()
+}
+
+// UnimplementedDiskSourcesServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedDiskSourcesServer struct{}
+
+func (UnimplementedDiskSourcesServer) GrantDisk(context.Context, *GrantDiskRequest) (*GrantDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantDisk not implemented")
+}
+func (UnimplementedDiskSourcesServer) ServeDisk(context.Context, *ServeDiskRequest) (*ServeDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ServeDisk not implemented")
+}
+func (UnimplementedDiskSourcesServer) ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseDisk not implemented")
+}
+func (UnimplementedDiskSourcesServer) DiskReads(context.Context, *DiskReadsRequest) (*DiskReadsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiskReads not implemented")
+}
+func (UnimplementedDiskSourcesServer) mustEmbedUnimplementedDiskSourcesServer() {}
+func (UnimplementedDiskSourcesServer) testEmbeddedByValue()                     {}
+
+// UnsafeDiskSourcesServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to DiskSourcesServer will
+// result in compilation errors.
+type UnsafeDiskSourcesServer interface {
+	mustEmbedUnimplementedDiskSourcesServer()
+}
+
+func RegisterDiskSourcesServer(s grpc.ServiceRegistrar, srv DiskSourcesServer) {
+	// If the following call panics, it indicates UnimplementedDiskSourcesServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&DiskSources_ServiceDesc, srv)
+}
+
+func _DiskSources_GrantDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).GrantDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_GrantDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).GrantDisk(ctx, req.(*GrantDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DiskSources_ServeDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServeDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).ServeDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_ServeDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).ServeDisk(ctx, req.(*ServeDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DiskSources_ReleaseDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).ReleaseDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_ReleaseDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).ReleaseDisk(ctx, req.(*ReleaseDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DiskSources_DiskReads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiskReadsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).DiskReads(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_DiskReads_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).DiskReads(ctx, req.(*DiskReadsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// DiskSources_ServiceDesc is the grpc.ServiceDesc for DiskSources service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var DiskSources_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lazycloud.imagefs.v1.DiskSources",
+	HandlerType: (*DiskSourcesServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GrantDisk",
+			Handler:    _DiskSources_GrantDisk_Handler,
+		},
+		{
+			MethodName: "ServeDisk",
+			Handler:    _DiskSources_ServeDisk_Handler,
+		},
+		{
+			MethodName: "ReleaseDisk",
+			Handler:    _DiskSources_ReleaseDisk_Handler,
+		},
+		{
+			MethodName: "DiskReads",
+			Handler:    _DiskSources_DiskReads_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "imagefs/v1/source.proto",
+}

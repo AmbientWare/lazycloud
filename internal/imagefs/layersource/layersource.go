@@ -1,6 +1,8 @@
 // Package layersource is the agent's side of the host's snapshotter: the
 // client of its LayerSources service, which hands it the presigned read URLs
-// of the layers the host may mount, and the names a lazy pull uses.
+// of the layers the host may mount, and of its DiskSources service, which
+// serves disks' published generations; the names a lazy pull uses; and
+// where the host keeps its data volume.
 package layersource
 
 import (
@@ -20,9 +22,22 @@ const (
 	// Socket is where the snapshotter serves containerd's snapshotter API
 	// and LayerSources on a host.
 	Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
-	// Root holds the snapshotter's metadata, snapshots and frame cache on a
-	// host. containerd mounts the snapshots below it.
+	// Root holds the snapshotter's metadata and snapshots on a host, and
+	// the directory it serves disk generations in. containerd mounts the
+	// snapshots below it.
 	Root = "/var/lib/lazycloud-snapshotter"
+	// DataRoot is the host's data volume. It holds the frame cache, at
+	// CacheDir, and the disk engine's disks, at DiskRoot, whose unpublished
+	// writes the cache leaves room for.
+	DataRoot = "/var/lib/lazycloud-data"
+	CacheDir = DataRoot + "/cache"
+	DiskRoot = DataRoot + "/disks"
+	// CacheBytes bounds the frame cache.
+	CacheBytes = 32 << 30
+	// DiskDirtyBytes is the room each disk a host holds keeps on the data
+	// volume for writes not yet published. A disk publishes once half of
+	// it is used.
+	DiskDirtyBytes = 8 << 30
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"
@@ -37,6 +52,7 @@ const (
 type Client struct {
 	conn    *grpc.ClientConn
 	sources imagefsproto.LayerSourcesClient
+	disks   imagefsproto.DiskSourcesClient
 }
 
 // Dial returns a client of the snapshotter at socket. It connects on first
@@ -46,7 +62,43 @@ func Dial(socket string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshotter client: %w", err)
 	}
-	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn)}, nil
+	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn), disks: imagefsproto.NewDiskSourcesClient(conn)}, nil
+}
+
+// GrantDisk gives the snapshotter the credential it reads disk's objects
+// with.
+func (c *Client) GrantDisk(ctx context.Context, disk string, grant *imagefsproto.DiskGrant) error {
+	if _, err := c.disks.GrantDisk(ctx, &imagefsproto.GrantDiskRequest{DiskId: disk, Grant: grant}); err != nil {
+		return fmt.Errorf("grant disk %s to the snapshotter: %w", disk, err)
+	}
+	return nil
+}
+
+// ServeDisk serves a disk generation and returns its file.
+func (c *Client) ServeDisk(ctx context.Context, req *imagefsproto.ServeDiskRequest) (string, error) {
+	served, err := c.disks.ServeDisk(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("serve disk %s generation %d: %w", req.GetDiskId(), req.GetGeneration(), err)
+	}
+	return served.GetPath(), nil
+}
+
+// ReleaseDisk stops serving every generation of disk but keep, 0 for none.
+func (c *Client) ReleaseDisk(ctx context.Context, disk string, keep int64) error {
+	if _, err := c.disks.ReleaseDisk(ctx, &imagefsproto.ReleaseDiskRequest{DiskId: disk, Keep: keep}); err != nil {
+		return fmt.Errorf("release disk %s from the snapshotter: %w", disk, err)
+	}
+	return nil
+}
+
+// DiskReads returns disk's start trace, empty until its first minute has
+// passed, and the frames the cache holds for it, most recent first.
+func (c *Client) DiskReads(ctx context.Context, disk string) (start, recent []uint32, err error) {
+	reads, err := c.disks.DiskReads(ctx, &imagefsproto.DiskReadsRequest{DiskId: disk})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read disk %s's reads: %w", disk, err)
+	}
+	return reads.GetStartFrames(), reads.GetRecentFrames(), nil
 }
 
 // Grant gives the snapshotter grants. Each replaces its layer's current

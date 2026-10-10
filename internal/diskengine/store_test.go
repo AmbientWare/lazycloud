@@ -22,10 +22,13 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 		current.ExpiresAt = due.Add(credentialMargin)
 		return current, err
 	}
-	objects := mustOpenStore(t, store)
+	objects, err := openStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	head := func() {
 		t.Helper()
-		if _, err := objects.exists(t.Context(), store.Prefix+"absent"); err != nil {
+		if err := objects.put(t.Context(), store.Prefix+"present", []byte("x")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,8 +48,11 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 		current.ExpiresAt = time.Now().Add(-time.Second)
 		return current, err
 	}
-	_, err := mustOpenStore(t, store).exists(t.Context(), store.Prefix+"absent")
-	if !errors.Is(err, ErrCredentialsExpired) {
+	expired, err := openStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := expired.put(t.Context(), store.Prefix+"present", []byte("x")); !errors.Is(err, ErrCredentialsExpired) {
 		t.Fatalf("expired credentials returned %v", err)
 	}
 }

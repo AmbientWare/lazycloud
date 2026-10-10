@@ -6,13 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // Credentials sign requests to a workspace bucket. A zero ExpiresAt never
@@ -41,9 +38,6 @@ type Store struct {
 // credentialMargin is how long before its credentials expire the engine asks
 // for new ones.
 const credentialMargin = 2 * time.Minute
-
-// transferConcurrency bounds the chunk requests one layer has in flight.
-const transferConcurrency = 8
 
 // deleteBatchSize is the most keys one DeleteObjects request accepts, and so
 // the most one Remover call is given.
@@ -99,44 +93,25 @@ func openStore(store Store) (*objectStore, error) {
 	return &objectStore{client: s3.New(options), bucket: store.Bucket, prefix: store.Prefix}, nil
 }
 
-func (s *objectStore) diskPrefix(diskID string) string { return s.prefix + "disks/" + diskID + "/" }
-
-func (s *objectStore) chunkKey(diskID, sum string) string {
-	return s.diskPrefix(diskID) + "chunks/" + sum[:2] + "/" + sum
+// diskKey is the key of the disk's object name, such as a frame's.
+func (s *objectStore) diskKey(diskID, name string) string {
+	return s.prefix + "disks/" + diskID + "/" + name
 }
 
-// manifestKey names a manifest by generation and content digest, so an
-// upload never replaces a different manifest of the same generation, such
-// as one a stale holder wrote after the disk changed hands.
+// manifestKey names a generation's index by its number and digest, so an
+// upload never replaces a different index of the same generation, such as
+// one a stale holder wrote after the disk changed hands.
 func (s *objectStore) manifestKey(diskID string, generation int64, digest string) string {
-	return fmt.Sprintf("%smanifests/%012d-%s.json", s.diskPrefix(diskID), generation, digest)
+	return s.diskKey(diskID, fmt.Sprintf("manifests/%012d-%s", generation, digest))
 }
 
-func notFound(err error) bool {
-	var missing *types.NoSuchKey
-	var response *smithyhttp.ResponseError
-	return errors.As(err, &missing) ||
-		(errors.As(err, &response) && response.HTTPStatusCode() == http.StatusNotFound)
-}
-
-func (s *objectStore) exists(ctx context.Context, key string) (bool, error) {
-	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &key})
-	if err == nil {
-		return true, nil
-	}
-	if notFound(err) {
-		return false, nil
-	}
-	return false, fmt.Errorf("head s3://%s/%s: %w", s.bucket, key, err)
-}
-
-func (s *objectStore) put(ctx context.Context, key string, body []byte, contentType string) error {
+func (s *objectStore) put(ctx context.Context, key string, body []byte) error {
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        &s.bucket,
 		Key:           &key,
 		Body:          bytes.NewReader(body),
 		ContentLength: aws.Int64(int64(len(body))),
-		ContentType:   aws.String(contentType),
+		ContentType:   aws.String("application/octet-stream"),
 	})
 	if err != nil {
 		return fmt.Errorf("put s3://%s/%s: %w", s.bucket, key, err)
@@ -162,23 +137,4 @@ func (s *objectStore) get(ctx context.Context, key string, limit int64) ([]byte,
 		return nil, fmt.Errorf("s3://%s/%s is larger than %d bytes", s.bucket, key, limit)
 	}
 	return data, nil
-}
-
-type storedObject struct {
-	Key  string
-	Size int64
-}
-
-func (s *objectStore) list(ctx context.Context, prefix string, visit func(storedObject)) error {
-	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("list s3://%s/%s: %w", s.bucket, prefix, err)
-		}
-		for _, object := range page.Contents {
-			visit(storedObject{Key: aws.ToString(object.Key), Size: aws.ToInt64(object.Size)})
-		}
-	}
-	return nil
 }

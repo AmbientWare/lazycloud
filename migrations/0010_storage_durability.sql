@@ -20,3 +20,9 @@ alter table workspace_buckets
     alter column region set not null,
     drop constraint workspace_buckets_workspace_id_fkey,
     add foreign key (workspace_id) references workspaces (id);
+
+-- Each disk generation's index names every frame of the disk, so no
+-- generation builds on another.
+alter table disk_generations
+    drop column parent_generation,
+    drop column flat;

@@ -136,43 +136,44 @@ func (c *qmpClient) roundTrip(ctx context.Context, name string, payload []byte, 
 	}
 }
 
-func fileChild(path string) map[string]any {
-	return map[string]any{"driver": "file", "filename": path}
+// baseBlockdev is the read-only node of the served generation's file.
+func baseBlockdev(generation int64, path string) map[string]any {
+	return map[string]any{
+		"driver": "raw", "node-name": baseNode(generation), "read-only": true,
+		"file": map[string]any{"driver": "file", "filename": path, "node-name": baseNode(generation) + "-file", "read-only": true},
+	}
 }
 
-// layerNodes describes the chain as one blockdev per layer, each naming the
-// layer below by node name, so seal and compact can address layers directly.
-func layerNodes(p diskPaths, state *diskState) []map[string]any {
-	head := len(state.Layers) - 1
-	// Compaction commits zeroes a discard left in the head into the base;
-	// detecting them there frees its space instead of writing them.
-	compacts := head > 0
-	nodes := make([]map[string]any, 0, len(state.Layers))
+// layerBlockdev is layer l of the stack over the node below, or none, as
+// blockdev-add takes it.
+func layerBlockdev(p diskPaths, l layer, below any, head bool) map[string]any {
+	node := map[string]any{
+		"driver":    "qcow2",
+		"node-name": l.node(),
+		"file":      map[string]any{"driver": "file", "filename": p.layerPath(l), "node-name": l.fileNode()},
+		"backing":   below,
+	}
+	if head {
+		node["discard"] = "unmap"
+	} else {
+		node["read-only"] = true
+	}
+	return node
+}
+
+// stackBlockdevs describes the stack as one blockdev per node, base first,
+// each naming the node below by name, so seal and rebase address layers
+// directly.
+func stackBlockdevs(p diskPaths, state *diskState, basePath string) []map[string]any {
+	var nodes []map[string]any
+	var below any // JSON null: the bottom layer of a disk never published
+	if state.Base != nil {
+		nodes = append(nodes, baseBlockdev(state.Base.Generation, basePath))
+		below = baseNode(state.Base.Generation)
+	}
 	for i, l := range state.Layers {
-		node := map[string]any{
-			"driver":    string(l.format()),
-			"node-name": l.node(),
-			"file":      fileChild(p.layerPath(l)),
-		}
-		if i < head {
-			// Sealed; a commit into it reopens it for writing.
-			node["read-only"] = true
-			node["auto-read-only"] = true
-		}
-		switch {
-		case i > 0:
-			node["backing"] = state.Layers[i-1].node()
-		case !l.Raw:
-			// A raw base takes no backing option at all.
-			node["backing"] = nil
-		}
-		if i == head || (compacts && i == 0) {
-			node["discard"] = "unmap"
-		}
-		if compacts && i == 0 {
-			node["detect-zeroes"] = "unmap"
-		}
-		nodes = append(nodes, node)
+		nodes = append(nodes, layerBlockdev(p, l, below, i == len(state.Layers)-1))
+		below = l.node()
 	}
 	return nodes
 }
@@ -182,7 +183,7 @@ func layerNodes(p diskPaths, state *diskState) []map[string]any {
 // service leaves the disk served. The daemon detaches once its sockets
 // listen and exports the head over NBD on the disk's unix socket. A caller
 // other than root gets a scope of its user manager.
-func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error) {
+func startDaemon(ctx context.Context, p diskPaths, state *diskState, basePath string) (int, error) {
 	if err := p.checkSocketPaths(); err != nil {
 		return 0, err
 	}
@@ -206,7 +207,7 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 		"--chardev", "socket,id=monitor,path="+p.qmpSocket()+",server=on,wait=off",
 		"--monitor", "chardev=monitor",
 	)
-	for _, node := range layerNodes(p, state) {
+	for _, node := range stackBlockdevs(p, state, basePath) {
 		spec, err := json.Marshal(node)
 		if err != nil {
 			return 0, fmt.Errorf("encode blockdev: %w", err)
@@ -365,4 +366,69 @@ func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (bool
 		return headWritten(ctx, client, state.head().node())
 	}()
 	return written, errors.Join(err, client.close())
+}
+
+// namedNodes lists the nodes the daemon holds by name.
+func namedNodes(ctx context.Context, client *qmpClient) (map[string]bool, error) {
+	var nodes []struct {
+		NodeName string `json:"node-name"`
+	}
+	if err := client.execute(ctx, "query-named-block-nodes", map[string]any{"flat": true}, &nodes); err != nil {
+		return nil, err
+	}
+	names := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		names[n.NodeName] = true
+	}
+	return names, nil
+}
+
+// rebase moves the running stack onto the pending generation's file at
+// path: the lowest layer the generation does not hold takes its node as
+// backing, and the nodes of the layers it holds and of the old base go,
+// newest first. blockdev-reopen drains that one layer, so writes pause for
+// the switch alone. A rebase interrupted part way finishes when run again.
+func rebase(ctx context.Context, p diskPaths, state *diskState, path string) error {
+	pending := state.Pending
+	client, err := dialQMP(ctx, p.qmpSocket())
+	if err != nil {
+		return err
+	}
+	err = func() error {
+		if err := reconcileHead(ctx, p, state, client); err != nil {
+			return err
+		}
+		names, err := namedNodes(ctx, client)
+		if err != nil {
+			return err
+		}
+		next := baseNode(pending.Generation)
+		if !names[next] {
+			if err := client.execute(ctx, "blockdev-add", baseBlockdev(pending.Generation, path), nil); err != nil {
+				return err
+			}
+		}
+		kept := slices.IndexFunc(state.Layers, func(l layer) bool { return l.Seq > pending.Through })
+		above := layerBlockdev(p, state.Layers[kept], next, kept == len(state.Layers)-1)
+		above["file"] = state.Layers[kept].fileNode()
+		if err := client.execute(ctx, "blockdev-reopen", map[string]any{"options": []any{above}}, nil); err != nil {
+			return fmt.Errorf("move disk %s onto generation %d: %w", p.id, pending.Generation, err)
+		}
+		gone := make([]string, 0, kept+1)
+		for _, l := range slices.Backward(state.Layers[:kept]) {
+			gone = append(gone, l.node())
+		}
+		if state.Base != nil {
+			gone = append(gone, baseNode(state.Base.Generation))
+		}
+		for _, name := range gone {
+			if names[name] {
+				if err := client.execute(ctx, "blockdev-del", map[string]any{"node-name": name}, nil); err != nil {
+					return fmt.Errorf("release node %s: %w", name, err)
+				}
+			}
+		}
+		return nil
+	}()
+	return errors.Join(err, client.close())
 }

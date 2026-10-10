@@ -38,8 +38,8 @@ func TestStaleHolderCannotReplaceARecordedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := generation(lease.Disk, 1, 0)
-	g.ManifestKey = fmt.Sprintf("disks/%s/manifests/%012d.json", lease.Disk, 1)
+	g := generation(lease.Disk, 1)
+	g.ManifestKey = fmt.Sprintf("disks/%s/manifests/%012d", lease.Disk, 1)
 	var bad *InvalidError
 	if err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g); !errors.As(err, &bad) {
 		t.Fatalf("manifest key without its digest: %v", err)

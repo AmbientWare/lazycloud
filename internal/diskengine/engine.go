@@ -1,9 +1,16 @@
-// Package diskengine keeps durable disks on a host. Each disk is a qcow2
-// layer chain under <root>/<disk id>/, served by a qemu-storage-daemon in a
-// systemd scope of its own, so it outlives the call and the process that
-// started it, exposed through a kernel NBD device and mounted as ext4. Sealed layers publish to the workspace bucket as
-// content-defined chunks plus a manifest; the control plane records each
-// published generation and the engine commits it once that record exists.
+// Package diskengine keeps durable disks on a host. A disk is the newest
+// generation it published, which the host's snapshotter serves as a
+// read-only file whose frames it reads from the workspace bucket on first
+// use, under a stack of qcow2 layers in <root>/<disk id>/ holding the
+// writes since. A qemu-storage-daemon in a systemd scope of its own, so it
+// outlives the call and the process that started it, serves the stack
+// through a kernel NBD device mounted as ext4.
+//
+// Publishing seals the head, reads the frames the sealed layers changed,
+// stores those the bucket lacks and writes the next generation's index,
+// which names every frame of the disk. The control plane records the
+// generation; committing it moves the live stack onto the new generation's
+// file and deletes the sealed layers it holds.
 //
 // Every operation on a disk holds a flock outside the disk's directory, so
 // calls from several goroutines or processes serialize per disk. One root
@@ -19,92 +26,68 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 // Errors callers branch on. Others are wrapped failures.
 var (
 	// ErrInvalid marks a request the engine refuses without touching the
-	// disk: a malformed id, size, chain or store, or a call out of order.
+	// disk: a malformed id, size, generation or store, or a call out of
+	// order.
 	ErrInvalid = errors.New("invalid disk request")
-	// ErrInsufficientSpace marks a restore that does not fit under the root.
-	// The error is an *InsufficientSpaceError naming the shortfall; evicting
-	// cached disks and retrying may succeed.
-	ErrInsufficientSpace = errors.New("insufficient space")
 	// ErrNotAttached marks an operation that needs the disk mounted here.
 	ErrNotAttached = errors.New("disk is not attached")
-	// ErrNoLocalState marks a disk this host never restored, as after a
+	// ErrNoLocalState marks a disk this host never attached, as after a
 	// failed attach: it holds nothing to publish.
 	ErrNoLocalState = errors.New("disk has no local state")
 	// ErrCredentialsExpired marks store credentials the callback returned
 	// already expired.
 	ErrCredentialsExpired = errors.New("storage credentials expired")
-	// ErrAttachmentLost marks an attached disk whose daemon, device or mount
-	// had gone. The engine released what remained and sealed what had
-	// reached the head, so the disk is detached and its writes publish.
+	// ErrAttachmentLost marks an attached disk whose daemon, device, mount
+	// or served generation had gone. Seal releases what remained and seals
+	// what had reached the head, so the disk is detached and its writes
+	// publish.
 	ErrAttachmentLost = errors.New("disk attachment lost")
-	// ErrManifestTooLarge marks a layer with more chunks than a manifest
-	// restores hold; publishing it would leave a generation no attach reads.
-	ErrManifestTooLarge = errors.New("disk layer manifest too large")
 )
 
-// InsufficientSpaceError says how far a restore is from fitting.
-type InsufficientSpaceError struct {
-	Root    string
-	Need    int64
-	Have    int64
-	Reserve int64
-}
-
-func (e *InsufficientSpaceError) Error() string {
-	return fmt.Sprintf("insufficient space on %s: need %d, have %d free, reserve %d", e.Root, e.Need, e.Have, e.Reserve)
-}
-
-// Is matches ErrInsufficientSpace.
-func (e *InsufficientSpaceError) Is(target error) bool { return target == ErrInsufficientSpace }
-
-// Generation is one published generation in a disk's chain.
+// Generation is a published generation of a disk: its stored index and the
+// sha256 of the index's bytes.
 type Generation struct {
 	Generation     int64
 	ManifestKey    string
 	ManifestSHA256 string
 }
 
-// AttachRequest attaches a disk at Mountpoint. Chain lists the published
-// generations to restore, base first; it is empty for a disk never published.
+// AttachRequest attaches a disk at Mountpoint.
 type AttachRequest struct {
 	DiskID    string
 	SizeBytes int64
-	Chain     []Generation
+	// Base is the newest published generation; nil for a disk never
+	// published, which attaches empty and is formatted.
+	Base *Generation
 	// Mountpoint is an absolute path, created if missing.
 	Mountpoint string
-	Store      Store
-	// MinFreeBytes is the space the filesystem under the root must keep free
-	// after a restore.
-	MinFreeBytes int64
 }
 
 // AttachResult describes an attached disk.
 type AttachResult struct {
 	// Generation is the newest published generation the disk holds.
 	Generation int64
-	// Reused is true when the local copy already held Generation.
+	// Reused is true when the local stack already held Generation.
 	Reused bool
 	// Formatted is true when this attach created the filesystem.
 	Formatted bool
 }
 
-// Published is an uploaded layer awaiting CommitPublished. ParentGeneration
-// is 0 for a self-contained generation, which Flat marks when the engine
-// flattened the chain into it.
+// Published is an uploaded generation awaiting CommitPublished.
 type Published struct {
-	Generation       int64
-	ParentGeneration int64
-	ManifestKey      string
-	ManifestSHA256   string
-	// AddedBytes counts chunk bytes this upload stored that the bucket did
-	// not hold before.
+	Generation     int64
+	ManifestKey    string
+	ManifestSHA256 string
+	// AddedBytes counts the stored bytes of the frames this generation
+	// added to the bucket.
 	AddedBytes int64
-	Flat       bool
 }
 
 // LocalDisk is a disk kept under the root.
@@ -120,17 +103,19 @@ type LocalDisk struct {
 
 // Engine operates the disks under one root directory.
 type Engine struct {
-	root string
-	log  *slog.Logger
+	root  string
+	bases *layersource.Client
+	log   *slog.Logger
 }
 
-// New returns an engine for the disks under root. Unix socket paths under
-// root are limited to 107 bytes, so root must be short.
-func New(root string, logger *slog.Logger) *Engine {
+// New returns an engine for the disks under root, whose published
+// generations bases, the host's snapshotter, serves. Unix socket paths
+// under root are limited to 107 bytes, so root must be short.
+func New(root string, bases *layersource.Client, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Engine{root: filepath.Clean(root), log: logger}
+	return &Engine{root: filepath.Clean(root), bases: bases, log: logger}
 }
 
 const (
@@ -147,7 +132,7 @@ const (
 
 // Check reports what this host lacks to attach disks: a required tool, the
 // nbd kernel module, systemd or root privileges.
-func (e *Engine) Check() error {
+func Check() error {
 	var missing []error
 	for _, tool := range []string{toolDaemon, toolImage, toolNBDClient, toolMkfs, toolResizeFS, toolRunUnit} {
 		if _, err := exec.LookPath(tool); err != nil {

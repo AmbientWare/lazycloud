@@ -220,43 +220,6 @@ func (q *Queries) DeletingDisks(ctx context.Context, maxRows int32) ([]DeletingD
 	return items, nil
 }
 
-const diskChain = `-- name: DiskChain :many
-select g.generation, g.manifest_key, g.manifest_sha256
-from disk_generations g
-where g.disk_id = $1
-  and g.generation >= coalesce((
-      select max(b.generation) from disk_generations b where b.disk_id = $1 and b.parent_generation = 0
-  ), 1)
-order by g.generation
-`
-
-type DiskChainRow struct {
-	Generation     int64
-	ManifestKey    string
-	ManifestSha256 string
-}
-
-// Generations from the newest parentless one to the newest.
-func (q *Queries) DiskChain(ctx context.Context, diskID uuid.UUID) ([]DiskChainRow, error) {
-	rows, err := q.db.Query(ctx, diskChain, diskID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DiskChainRow
-	for rows.Next() {
-		var i DiskChainRow
-		if err := rows.Scan(&i.Generation, &i.ManifestKey, &i.ManifestSha256); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const diskGeneration = `-- name: DiskGeneration :one
 select manifest_sha256 from disk_generations where disk_id = $1 and generation = $2
 `
@@ -305,27 +268,23 @@ func (q *Queries) InsertDisk(ctx context.Context, arg InsertDiskParams) error {
 }
 
 const insertDiskGeneration = `-- name: InsertDiskGeneration :exec
-insert into disk_generations (disk_id, generation, parent_generation, manifest_key, manifest_sha256, flat)
-values ($1, $2, $3, $4, $5, $6)
+insert into disk_generations (disk_id, generation, manifest_key, manifest_sha256)
+values ($1, $2, $3, $4)
 `
 
 type InsertDiskGenerationParams struct {
-	DiskID           uuid.UUID
-	Generation       int64
-	ParentGeneration int64
-	ManifestKey      string
-	ManifestSha256   string
-	Flat             bool
+	DiskID         uuid.UUID
+	Generation     int64
+	ManifestKey    string
+	ManifestSha256 string
 }
 
 func (q *Queries) InsertDiskGeneration(ctx context.Context, arg InsertDiskGenerationParams) error {
 	_, err := q.db.Exec(ctx, insertDiskGeneration,
 		arg.DiskID,
 		arg.Generation,
-		arg.ParentGeneration,
 		arg.ManifestKey,
 		arg.ManifestSha256,
-		arg.Flat,
 	)
 	return err
 }
@@ -459,7 +418,7 @@ func (q *Queries) LockActiveDisk(ctx context.Context, arg LockActiveDiskParams) 
 }
 
 const lockLeasedDisk = `-- name: LockLeasedDisk :one
-select d.id, d.generation, b.bucket, b.region, b.connection_id
+select d.id, d.generation, d.workspace_id, b.bucket, b.region, b.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
@@ -480,6 +439,7 @@ type LockLeasedDiskParams struct {
 type LockLeasedDiskRow struct {
 	ID           uuid.UUID
 	Generation   int64
+	WorkspaceID  uuid.UUID
 	Bucket       *string
 	Region       *string
 	ConnectionID *uuid.UUID
@@ -499,6 +459,7 @@ func (q *Queries) LockLeasedDisk(ctx context.Context, arg LockLeasedDiskParams) 
 	err := row.Scan(
 		&i.ID,
 		&i.Generation,
+		&i.WorkspaceID,
 		&i.Bucket,
 		&i.Region,
 		&i.ConnectionID,
@@ -513,6 +474,26 @@ update disks set state = 'deleting', deleted_at = now(), updated_at = now() wher
 func (q *Queries) MarkDiskDeleting(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markDiskDeleting, id)
 	return err
+}
+
+const newestDiskGeneration = `-- name: NewestDiskGeneration :one
+select g.generation, g.manifest_key, g.manifest_sha256
+from disks d
+join disk_generations g on g.disk_id = d.id and g.generation = d.generation
+where d.id = $1
+`
+
+type NewestDiskGenerationRow struct {
+	Generation     int64
+	ManifestKey    string
+	ManifestSha256 string
+}
+
+func (q *Queries) NewestDiskGeneration(ctx context.Context, diskID uuid.UUID) (NewestDiskGenerationRow, error) {
+	row := q.db.QueryRow(ctx, newestDiskGeneration, diskID)
+	var i NewestDiskGenerationRow
+	err := row.Scan(&i.Generation, &i.ManifestKey, &i.ManifestSha256)
+	return i, err
 }
 
 const releaseDisk = `-- name: ReleaseDisk :execrows

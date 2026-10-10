@@ -609,6 +609,526 @@ func (x *EndTraceResponse) GetComplete() bool {
 	return false
 }
 
+// DiskGrant reads the objects under <prefix>disks/<disk id>/ of one bucket.
+type DiskGrant struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Endpoint string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	Region   string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
+	Bucket   string                 `protobuf:"bytes,3,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	// Ends with "/" when set.
+	Prefix          string                 `protobuf:"bytes,4,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	ForcePathStyle  bool                   `protobuf:"varint,5,opt,name=force_path_style,json=forcePathStyle,proto3" json:"force_path_style,omitempty"`
+	AccessKeyId     string                 `protobuf:"bytes,6,opt,name=access_key_id,json=accessKeyId,proto3" json:"access_key_id,omitempty"`
+	SecretAccessKey string                 `protobuf:"bytes,7,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
+	SessionToken    string                 `protobuf:"bytes,8,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *DiskGrant) Reset() {
+	*x = DiskGrant{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiskGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiskGrant) ProtoMessage() {}
+
+func (x *DiskGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiskGrant.ProtoReflect.Descriptor instead.
+func (*DiskGrant) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *DiskGrant) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetBucket() string {
+	if x != nil {
+		return x.Bucket
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetForcePathStyle() bool {
+	if x != nil {
+		return x.ForcePathStyle
+	}
+	return false
+}
+
+func (x *DiskGrant) GetAccessKeyId() string {
+	if x != nil {
+		return x.AccessKeyId
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetSecretAccessKey() string {
+	if x != nil {
+		return x.SecretAccessKey
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
+func (x *DiskGrant) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+type GrantDiskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	Grant         *DiskGrant             `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantDiskRequest) Reset() {
+	*x = GrantDiskRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantDiskRequest) ProtoMessage() {}
+
+func (x *GrantDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantDiskRequest.ProtoReflect.Descriptor instead.
+func (*GrantDiskRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GrantDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *GrantDiskRequest) GetGrant() *DiskGrant {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+type GrantDiskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantDiskResponse) Reset() {
+	*x = GrantDiskResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantDiskResponse) ProtoMessage() {}
+
+func (x *GrantDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantDiskResponse.ProtoReflect.Descriptor instead.
+func (*GrantDiskResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{14}
+}
+
+type ServeDiskRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	DiskId     string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	Generation int64                  `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	// The generation's stored DiskIndex and the sha256 of its bytes.
+	IndexKey    string `protobuf:"bytes,3,opt,name=index_key,json=indexKey,proto3" json:"index_key,omitempty"`
+	IndexSha256 string `protobuf:"bytes,4,opt,name=index_sha256,json=indexSha256,proto3" json:"index_sha256,omitempty"`
+	// Starts the disk's start trace and fetches the index's start_frames,
+	// then its recent_frames, in the background, bounded by the cache's size
+	// and a time limit. An attach sets it.
+	Prefetch bool `protobuf:"varint,5,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
+	// Frames to cache before the call returns.
+	Warm          []uint32 `protobuf:"varint,6,rep,packed,name=warm,proto3" json:"warm,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServeDiskRequest) Reset() {
+	*x = ServeDiskRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServeDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServeDiskRequest) ProtoMessage() {}
+
+func (x *ServeDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServeDiskRequest.ProtoReflect.Descriptor instead.
+func (*ServeDiskRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ServeDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *ServeDiskRequest) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *ServeDiskRequest) GetIndexKey() string {
+	if x != nil {
+		return x.IndexKey
+	}
+	return ""
+}
+
+func (x *ServeDiskRequest) GetIndexSha256() string {
+	if x != nil {
+		return x.IndexSha256
+	}
+	return ""
+}
+
+func (x *ServeDiskRequest) GetPrefetch() bool {
+	if x != nil {
+		return x.Prefetch
+	}
+	return false
+}
+
+func (x *ServeDiskRequest) GetWarm() []uint32 {
+	if x != nil {
+		return x.Warm
+	}
+	return nil
+}
+
+type ServeDiskResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The read-only file holding the generation's bytes.
+	Path          string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServeDiskResponse) Reset() {
+	*x = ServeDiskResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServeDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServeDiskResponse) ProtoMessage() {}
+
+func (x *ServeDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServeDiskResponse.ProtoReflect.Descriptor instead.
+func (*ServeDiskResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ServeDiskResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type ReleaseDiskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	Keep          int64                  `protobuf:"varint,2,opt,name=keep,proto3" json:"keep,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseDiskRequest) Reset() {
+	*x = ReleaseDiskRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseDiskRequest) ProtoMessage() {}
+
+func (x *ReleaseDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseDiskRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseDiskRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ReleaseDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *ReleaseDiskRequest) GetKeep() int64 {
+	if x != nil {
+		return x.Keep
+	}
+	return 0
+}
+
+type ReleaseDiskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseDiskResponse) Reset() {
+	*x = ReleaseDiskResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseDiskResponse) ProtoMessage() {}
+
+func (x *ReleaseDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseDiskResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseDiskResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{18}
+}
+
+type DiskReadsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiskReadsRequest) Reset() {
+	*x = DiskReadsRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiskReadsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiskReadsRequest) ProtoMessage() {}
+
+func (x *DiskReadsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiskReadsRequest.ProtoReflect.Descriptor instead.
+func (*DiskReadsRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *DiskReadsRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+type DiskReadsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The frames read in the first minute after the latest serve that
+	// prefetched, in order of first read; empty until that minute has passed.
+	StartFrames []uint32 `protobuf:"varint,1,rep,packed,name=start_frames,json=startFrames,proto3" json:"start_frames,omitempty"`
+	// The disk's frames the cache holds, most recently read first, at most as
+	// many as a prefetch fetches.
+	RecentFrames  []uint32 `protobuf:"varint,2,rep,packed,name=recent_frames,json=recentFrames,proto3" json:"recent_frames,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiskReadsResponse) Reset() {
+	*x = DiskReadsResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiskReadsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiskReadsResponse) ProtoMessage() {}
+
+func (x *DiskReadsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiskReadsResponse.ProtoReflect.Descriptor instead.
+func (*DiskReadsResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *DiskReadsResponse) GetStartFrames() []uint32 {
+	if x != nil {
+		return x.StartFrames
+	}
+	return nil
+}
+
+func (x *DiskReadsResponse) GetRecentFrames() []uint32 {
+	if x != nil {
+		return x.RecentFrames
+	}
+	return nil
+}
+
 var File_imagefs_v1_source_proto protoreflect.FileDescriptor
 
 const file_imagefs_v1_source_proto_rawDesc = "" +
@@ -644,14 +1164,54 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"e\n" +
 	"\x10EndTraceResponse\x125\n" +
 	"\x05reads\x18\x01 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x1a\n" +
-	"\bcomplete\x18\x02 \x01(\bR\bcomplete2\xde\x03\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xc9\x02\n" +
+	"\tDiskGrant\x12\x1a\n" +
+	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x16\n" +
+	"\x06region\x18\x02 \x01(\tR\x06region\x12\x16\n" +
+	"\x06bucket\x18\x03 \x01(\tR\x06bucket\x12\x16\n" +
+	"\x06prefix\x18\x04 \x01(\tR\x06prefix\x12(\n" +
+	"\x10force_path_style\x18\x05 \x01(\bR\x0eforcePathStyle\x12\"\n" +
+	"\raccess_key_id\x18\x06 \x01(\tR\vaccessKeyId\x12*\n" +
+	"\x11secret_access_key\x18\a \x01(\tR\x0fsecretAccessKey\x12#\n" +
+	"\rsession_token\x18\b \x01(\tR\fsessionToken\x129\n" +
+	"\n" +
+	"expires_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"b\n" +
+	"\x10GrantDiskRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x125\n" +
+	"\x05grant\x18\x02 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x05grant\"\x13\n" +
+	"\x11GrantDiskResponse\"\xbb\x01\n" +
+	"\x10ServeDiskRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x02 \x01(\x03R\n" +
+	"generation\x12\x1b\n" +
+	"\tindex_key\x18\x03 \x01(\tR\bindexKey\x12!\n" +
+	"\findex_sha256\x18\x04 \x01(\tR\vindexSha256\x12\x1a\n" +
+	"\bprefetch\x18\x05 \x01(\bR\bprefetch\x12\x12\n" +
+	"\x04warm\x18\x06 \x03(\rR\x04warm\"'\n" +
+	"\x11ServeDiskResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"A\n" +
+	"\x12ReleaseDiskRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x12\n" +
+	"\x04keep\x18\x02 \x01(\x03R\x04keep\"\x15\n" +
+	"\x13ReleaseDiskResponse\"+\n" +
+	"\x10DiskReadsRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\"[\n" +
+	"\x11DiskReadsResponse\x12!\n" +
+	"\fstart_frames\x18\x01 \x03(\rR\vstartFrames\x12#\n" +
+	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames2\xde\x03\n" +
 	"\fLayerSources\x12P\n" +
 	"\x05Grant\x12\".lazycloud.imagefs.v1.GrantRequest\x1a#.lazycloud.imagefs.v1.GrantResponse\x12Y\n" +
 	"\bPrefetch\x12%.lazycloud.imagefs.v1.PrefetchRequest\x1a&.lazycloud.imagefs.v1.PrefetchResponse\x12e\n" +
 	"\fStopPrefetch\x12).lazycloud.imagefs.v1.StopPrefetchRequest\x1a*.lazycloud.imagefs.v1.StopPrefetchResponse\x12_\n" +
 	"\n" +
 	"StartTrace\x12'.lazycloud.imagefs.v1.StartTraceRequest\x1a(.lazycloud.imagefs.v1.StartTraceResponse\x12Y\n" +
-	"\bEndTrace\x12%.lazycloud.imagefs.v1.EndTraceRequest\x1a&.lazycloud.imagefs.v1.EndTraceResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
+	"\bEndTrace\x12%.lazycloud.imagefs.v1.EndTraceRequest\x1a&.lazycloud.imagefs.v1.EndTraceResponse2\x8b\x03\n" +
+	"\vDiskSources\x12\\\n" +
+	"\tGrantDisk\x12&.lazycloud.imagefs.v1.GrantDiskRequest\x1a'.lazycloud.imagefs.v1.GrantDiskResponse\x12\\\n" +
+	"\tServeDisk\x12&.lazycloud.imagefs.v1.ServeDiskRequest\x1a'.lazycloud.imagefs.v1.ServeDiskResponse\x12b\n" +
+	"\vReleaseDisk\x12(.lazycloud.imagefs.v1.ReleaseDiskRequest\x1a).lazycloud.imagefs.v1.ReleaseDiskResponse\x12\\\n" +
+	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
 
 var (
 	file_imagefs_v1_source_proto_rawDescOnce sync.Once
@@ -665,7 +1225,7 @@ func file_imagefs_v1_source_proto_rawDescGZIP() []byte {
 	return file_imagefs_v1_source_proto_rawDescData
 }
 
-var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_imagefs_v1_source_proto_goTypes = []any{
 	(*LayerGrant)(nil),            // 0: lazycloud.imagefs.v1.LayerGrant
 	(*GrantRequest)(nil),          // 1: lazycloud.imagefs.v1.GrantRequest
@@ -679,28 +1239,47 @@ var file_imagefs_v1_source_proto_goTypes = []any{
 	(*StartTraceResponse)(nil),    // 9: lazycloud.imagefs.v1.StartTraceResponse
 	(*EndTraceRequest)(nil),       // 10: lazycloud.imagefs.v1.EndTraceRequest
 	(*EndTraceResponse)(nil),      // 11: lazycloud.imagefs.v1.EndTraceResponse
-	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
+	(*DiskGrant)(nil),             // 12: lazycloud.imagefs.v1.DiskGrant
+	(*GrantDiskRequest)(nil),      // 13: lazycloud.imagefs.v1.GrantDiskRequest
+	(*GrantDiskResponse)(nil),     // 14: lazycloud.imagefs.v1.GrantDiskResponse
+	(*ServeDiskRequest)(nil),      // 15: lazycloud.imagefs.v1.ServeDiskRequest
+	(*ServeDiskResponse)(nil),     // 16: lazycloud.imagefs.v1.ServeDiskResponse
+	(*ReleaseDiskRequest)(nil),    // 17: lazycloud.imagefs.v1.ReleaseDiskRequest
+	(*ReleaseDiskResponse)(nil),   // 18: lazycloud.imagefs.v1.ReleaseDiskResponse
+	(*DiskReadsRequest)(nil),      // 19: lazycloud.imagefs.v1.DiskReadsRequest
+	(*DiskReadsResponse)(nil),     // 20: lazycloud.imagefs.v1.DiskReadsResponse
+	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
 }
 var file_imagefs_v1_source_proto_depIdxs = []int32{
-	12, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
+	21, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: lazycloud.imagefs.v1.GrantRequest.layers:type_name -> lazycloud.imagefs.v1.LayerGrant
 	3,  // 2: lazycloud.imagefs.v1.PrefetchRequest.reads:type_name -> lazycloud.imagefs.v1.FrameRead
 	3,  // 3: lazycloud.imagefs.v1.EndTraceResponse.reads:type_name -> lazycloud.imagefs.v1.FrameRead
-	1,  // 4: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
-	4,  // 5: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
-	6,  // 6: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
-	8,  // 7: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
-	10, // 8: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
-	2,  // 9: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
-	5,  // 10: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
-	7,  // 11: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
-	9,  // 12: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
-	11, // 13: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
-	9,  // [9:14] is the sub-list for method output_type
-	4,  // [4:9] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	21, // 4: lazycloud.imagefs.v1.DiskGrant.expires_at:type_name -> google.protobuf.Timestamp
+	12, // 5: lazycloud.imagefs.v1.GrantDiskRequest.grant:type_name -> lazycloud.imagefs.v1.DiskGrant
+	1,  // 6: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
+	4,  // 7: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
+	6,  // 8: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
+	8,  // 9: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
+	10, // 10: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
+	13, // 11: lazycloud.imagefs.v1.DiskSources.GrantDisk:input_type -> lazycloud.imagefs.v1.GrantDiskRequest
+	15, // 12: lazycloud.imagefs.v1.DiskSources.ServeDisk:input_type -> lazycloud.imagefs.v1.ServeDiskRequest
+	17, // 13: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:input_type -> lazycloud.imagefs.v1.ReleaseDiskRequest
+	19, // 14: lazycloud.imagefs.v1.DiskSources.DiskReads:input_type -> lazycloud.imagefs.v1.DiskReadsRequest
+	2,  // 15: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
+	5,  // 16: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
+	7,  // 17: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
+	9,  // 18: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
+	11, // 19: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
+	14, // 20: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
+	16, // 21: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
+	18, // 22: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
+	20, // 23: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
+	15, // [15:24] is the sub-list for method output_type
+	6,  // [6:15] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_imagefs_v1_source_proto_init() }
@@ -714,9 +1293,9 @@ func file_imagefs_v1_source_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_imagefs_v1_source_proto_rawDesc), len(file_imagefs_v1_source_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   21,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_imagefs_v1_source_proto_goTypes,
 		DependencyIndexes: file_imagefs_v1_source_proto_depIdxs,

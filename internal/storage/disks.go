@@ -67,7 +67,8 @@ func lockedHolder(d LockActiveDiskRow) holder {
 	return holder{d.HolderContainerID, d.HolderState, d.HolderStopReason, d.HolderHostState, d.ReleasedAt != nil}
 }
 
-// DiskGeneration is one published generation of a disk chain.
+// DiskGeneration is one published generation of a disk: its stored index
+// and the index's sha256.
 type DiskGeneration struct {
 	Generation     int64
 	ManifestKey    string
@@ -76,14 +77,13 @@ type DiskGeneration struct {
 
 // DiskLease is a container's hold on a disk. Token fences every publish.
 type DiskLease struct {
-	Disk       uuid.UUID
-	Workspace  identity.WorkspaceID
-	SizeBytes  int64
-	Generation int64
-	Token      []byte
-	// Chain runs from the newest parentless generation to the newest, base
-	// first.
-	Chain  []DiskGeneration
+	Disk      uuid.UUID
+	Workspace identity.WorkspaceID
+	SizeBytes int64
+	Token     []byte
+	// Newest is the newest published generation; nil for a disk never
+	// published.
+	Newest *DiskGeneration
 	Bucket string
 }
 
@@ -171,15 +171,15 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 				return fmt.Errorf("grow disk: %w", err)
 			}
 		}
-		chain, err := q.DiskChain(ctx, disk.ID)
+		lease.Disk, lease.SizeBytes, lease.Token = disk.ID, size, token
+		if disk.Generation == 0 {
+			return nil
+		}
+		newest, err := q.NewestDiskGeneration(ctx, disk.ID)
 		if err != nil {
-			return fmt.Errorf("read disk chain: %w", err)
+			return fmt.Errorf("read newest disk generation: %w", err)
 		}
-		lease.Disk, lease.SizeBytes, lease.Generation, lease.Token = disk.ID, size, disk.Generation, token
-		lease.Chain = make([]DiskGeneration, len(chain))
-		for n, g := range chain {
-			lease.Chain[n] = DiskGeneration{Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSHA256: g.ManifestSha256}
-		}
+		lease.Newest = &DiskGeneration{Generation: newest.Generation, ManifestKey: newest.ManifestKey, ManifestSHA256: newest.ManifestSha256}
 		return nil
 	})
 	if err != nil {
@@ -190,10 +190,9 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 
 // PublishedGeneration is a generation a host uploaded.
 type PublishedGeneration struct {
-	Generation, ParentGeneration int64
-	ManifestKey, ManifestSHA256  string
-	AddedBytes                   int64
-	Flat                         bool
+	Generation                  int64
+	ManifestKey, ManifestSHA256 string
+	AddedBytes                  int64
 }
 
 // diskLease holds a fenced lease for the length of fn.
@@ -223,18 +222,17 @@ func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID,
 			}
 			return conflict("generation %d is already recorded", g.Generation)
 		}
-		if g.Generation != row.Generation+1 || (g.ParentGeneration != 0 && g.ParentGeneration != row.Generation) {
-			return conflict("generation %d with parent %d does not follow %d", g.Generation, g.ParentGeneration, row.Generation)
+		if g.Generation != row.Generation+1 {
+			return conflict("generation %d does not follow %d", g.Generation, row.Generation)
 		}
-		// The key carries the manifest digest, so no upload can replace a
-		// recorded manifest.
-		want := fmt.Sprintf("disks/%s/manifests/%012d-%s.json", disk, g.Generation, g.ManifestSHA256)
+		// The key carries the index digest, so no upload can replace a
+		// recorded index.
+		want := fmt.Sprintf("%smanifests/%012d-%s", diskPrefix(disk), g.Generation, g.ManifestSHA256)
 		if g.ManifestKey != want {
 			return invalid("manifest key %q, want %q", g.ManifestKey, want)
 		}
 		if err := q.InsertDiskGeneration(ctx, InsertDiskGenerationParams{
-			DiskID: disk, Generation: g.Generation, ParentGeneration: g.ParentGeneration,
-			ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256, Flat: g.Flat,
+			DiskID: disk, Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256,
 		}); err != nil {
 			return fmt.Errorf("record generation: %w", err)
 		}
@@ -249,24 +247,24 @@ func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID,
 // maxCollectKeys bounds the keys one CollectDisk call deletes.
 const maxCollectKeys = 1000
 
-// CollectDisk deletes keys, objects of the disk no restore reaches, and
-// forgets generations older than base, the newest parentless one. The keys
-// are deleted while the lease's row lock is held: no other container can take
-// the disk or record a generation until they are gone, and a holder that lost
-// the lease deletes nothing. Keys outside the disk's manifests below base
-// and its chunks are refused.
+// CollectDisk deletes keys, objects of the disk that generation, a recorded
+// one, no longer reads, and forgets older generations. The keys are deleted
+// while the lease's row lock is held: no other container can take the disk
+// or record a generation until they are gone, and a holder that lost the
+// lease deletes nothing. Keys outside the disk's indexes below generation
+// and its frames are refused.
 func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, base int64, keys []string, removedBytes int64) error {
 	if len(keys) > maxCollectKeys {
 		return invalid("collect at most %d keys at once, got %d", maxCollectKeys, len(keys))
 	}
 	for _, key := range keys {
 		if !collectable(disk, base, key) {
-			return invalid("key %q is not a manifest below generation %d or a chunk of disk %s", key, base, disk)
+			return invalid("key %q is not an index below generation %d or a frame of disk %s", key, base, disk)
 		}
 	}
 	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
 		if base > row.Generation {
-			return invalid("base generation %d is past the recorded generation %d", base, row.Generation)
+			return invalid("generation %d is past the recorded generation %d", base, row.Generation)
 		}
 		if len(keys) > 0 {
 			store, ok, err := s.storeAt(row.Bucket, row.Region, row.ConnectionID)
@@ -292,23 +290,22 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 }
 
 var (
-	collectManifest = regexp.MustCompile(`^manifests/(\d{12})-[0-9a-f]{64}\.json$`)
-	collectChunk    = regexp.MustCompile(`^chunks/([0-9a-f]{2})/([0-9a-f]{64})$`)
+	collectIndex = regexp.MustCompile(`^manifests/(\d{12})-[0-9a-f]{64}$`)
+	collectFrame = regexp.MustCompile(`^frames/[0-9a-f]{64}$`)
 )
 
-// collectable reports whether key names a manifest of disk below base or
-// one of its chunks, as the disk engine stores them.
+// collectable reports whether key names an index of disk below base or one
+// of its frames, as the disk engine stores them.
 func collectable(disk uuid.UUID, base int64, key string) bool {
 	rest, ok := strings.CutPrefix(key, diskPrefix(disk))
 	if !ok {
 		return false
 	}
-	if m := collectManifest.FindStringSubmatch(rest); m != nil {
+	if m := collectIndex.FindStringSubmatch(rest); m != nil {
 		generation, err := strconv.ParseInt(m[1], 10, 64)
 		return err == nil && generation < base
 	}
-	m := collectChunk.FindStringSubmatch(rest)
-	return m != nil && strings.HasPrefix(m[2], m[1])
+	return collectFrame.MatchString(rest)
 }
 
 // ReleaseDisk ends a lease after the holder's final publish, clearing any
