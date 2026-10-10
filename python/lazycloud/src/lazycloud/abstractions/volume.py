@@ -7,19 +7,10 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud._shared.enums import StringEnum
-from lazycloud._shared.mounts import normalize_mount_prefix
 from lazycloud.control import ResourceControlBinding, storage_client
 
 # Declaring a volume loads no storage client or API models.
@@ -48,15 +39,11 @@ class CloudBucketConfig(BaseModel):
     workspace secrets that `access_key` and `secret_key` name; hosts have no
     credentials of their own for it."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
-    provider: str = "s3"
     prefix: str = ""
     region: str | None = None
-    endpoint: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("endpoint", "endpoint_url"),
-    )
+    endpoint: str | None = None
     read_only: bool = False
     force_path_style: bool = False
     access_key: str = Field(min_length=1)
@@ -66,44 +53,13 @@ class CloudBucketConfig(BaseModel):
     @field_validator("prefix")
     @classmethod
     def prefix_must_be_mountpoint_compatible(cls, value: str) -> str:
-        return normalize_mount_prefix(value)
-
-    @model_validator(mode="after")
-    def supported_provider(self) -> CloudBucketConfig:
-        if self.provider != "s3":
-            msg = f"unsupported cloud bucket provider: {self.provider!r}"
+        normalized = value.strip().lstrip("/")
+        if not normalized:
+            return ""
+        if ".." in normalized.split("/"):
+            msg = "mount prefix cannot contain '..' path segments"
             raise ValueError(msg)
-        return self
-
-    def __init__(
-        self,
-        *,
-        access_key: str,
-        secret_key: str,
-        provider: str = "s3",
-        prefix: str = "",
-        region: str | None = None,
-        endpoint: str | None = None,
-        endpoint_url: str | None = None,
-        read_only: bool = False,
-        force_path_style: bool = False,
-        bucket: str | None = None,
-    ) -> None:
-        super().__init__(
-            provider=provider,
-            prefix=prefix,
-            region=region,
-            endpoint=endpoint if endpoint is not None else endpoint_url,
-            read_only=read_only,
-            force_path_style=force_path_style,
-            access_key=access_key,
-            secret_key=secret_key,
-            bucket=bucket,
-        )
-
-    @property
-    def endpoint_url(self) -> str | None:
-        return self.endpoint
+        return normalized if normalized.endswith("/") else normalized + "/"
 
 
 @dataclass(frozen=True)
@@ -475,7 +431,7 @@ def _cloud_bucket_config(name: str, config: CloudBucketConfig) -> dict[str, Json
         "prefix": config.prefix,
         "access_key": config.access_key,
         "secret_key": config.secret_key,
-        "endpoint_url": config.endpoint_url or "",
+        "endpoint_url": config.endpoint or "",
         "region": config.region or "",
         "read_only": config.read_only,
         "force_path_style": config.force_path_style,
