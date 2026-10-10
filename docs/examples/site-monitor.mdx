@@ -237,9 +237,10 @@ changes without alerting, and alert on the rest.
 
 A retried call reruns from the top, so the snapshot carries the run's ID. A
 retry in the same run finds its own snapshot and goes straight to delivery. It
-resends an alert that failed to deliver and never sends one twice. The one gap
-is a crash between Slack accepting the post and the second map write, which
-would send a duplicate.
+resends an alert that failed to deliver and skips one already sent. Two cases
+can still send a duplicate: a crash between Slack accepting the post and the
+second map write, and a retried sweep that checks a page while the first
+attempt's check of it still runs.
 
 ```python site_monitor/checks.py
 def check_watch(
@@ -457,8 +458,8 @@ for the next quarter hour:
 uv run lazycloud run site_monitor.app:sweep
 ```
 
-The result lists each page's outcome, `baseline`, `unchanged`, `minor_change`
-or `alerted`, plus any pages that failed. Every check is its own task, so
+The result lists each page's outcome, one of `baseline`, `unchanged`,
+`minor_change` and `alerted`, and the pages that failed. Every check is its own task, so
 `uv run lazycloud task list --app site_monitor` shows each page's logs and
 retries. Pages whose text changed log the judge's summary, including the minor
 changes that didn't alert. {/* MEASURE: sweep wall time for 10 pages, cold and warm */}
@@ -474,9 +475,8 @@ of browser time. The OpenAI call happens only when the text changed.
 {/* MEASURE: idle cost per day with the schedule deployed and no requests */}
 
 `MAX_WATCHES` in `models.py` bounds each sweep, and `max_pending_tasks`
-follows it. A wider autoscaler finishes a
-sweep sooner but starts more containers, each of which pulls the Chromium
-image.
+follows it. A wider autoscaler finishes a sweep sooner but starts more
+containers, and each one pulls the Chromium image.
 
 ## Adapt it
 
