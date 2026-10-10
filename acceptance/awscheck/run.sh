@@ -84,12 +84,13 @@ aws iam create-role --role-name "$role" --max-session-duration 3600 --tags $tags
   --assume-role-policy-document "$(jq -nc --arg account "$account" \
     '{Version: "2012-10-17", Statement: [{Effect: "Allow", Principal: {AWS: "arn:aws:iam::\($account):root"}, Action: "sts:AssumeRole"}]}')" \
   --query Role.Arn --output text >/dev/null
-aws iam put-role-policy --role-name "$role" --policy-name buckets --policy-document "$(jq -nc --arg prefix "$prefix" '{
+aws iam put-role-policy --role-name "$role" --policy-name buckets --policy-document "$(jq -nc --arg prefix "$prefix" --arg account "$account" '{
   Version: "2012-10-17",
   Statement: [
     {Effect: "Allow", Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
-     Resource: "arn:aws:s3:::\($prefix)-*/*"},
-    {Effect: "Allow", Action: ["s3:ListBucket", "s3:ListBucketMultipartUploads"], Resource: "arn:aws:s3:::\($prefix)-*"}
+     Resource: "arn:aws:s3:::\($prefix)-*/*", Condition: {StringEquals: {"s3:ResourceAccount": $account}}},
+    {Effect: "Allow", Action: ["s3:ListBucket", "s3:ListBucketMultipartUploads"], Resource: "arn:aws:s3:::\($prefix)-*",
+     Condition: {StringEquals: {"s3:ResourceAccount": $account}}}
   ]}')"
 role_arn="arn:aws:iam::$account:role/$role"
 
@@ -108,7 +109,8 @@ aws iam put-role-policy --profile default-test --role-name "$connection_role" --
     Version: "2012-10-17",
     Statement: [.Resources.ConnectionRole.Properties.Policies[].PolicyDocument.Statement[]
       | select(.Sid == "WorkspaceBuckets" or .Sid == "WorkspaceObjects")
-      | .Resource |= (.["Fn::Sub"] | sub("\\$\\{AWS::Partition\\}"; "aws") | sub("\\$\\{BucketPrefix\\}"; $prefix) | sub("\\$\\{AWS::AccountId\\}"; $account))]
+      | .Resource |= (.["Fn::Sub"] | sub("\\$\\{AWS::Partition\\}"; "aws") | sub("\\$\\{BucketPrefix\\}"; $prefix) | sub("\\$\\{AWS::AccountId\\}"; $account))
+      | .Condition.StringEquals["s3:ResourceAccount"] = $account]
   }' "$template")"
 connection_role_arn="arn:aws:iam::$connected:role/$connection_role"
 
