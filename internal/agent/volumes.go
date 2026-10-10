@@ -19,6 +19,7 @@ import (
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
@@ -50,6 +51,9 @@ const (
 	geesefsMemoryMiB   = 192
 	geesefsGoMemoryMiB = 320
 	mounterPidsLimit   = 1024
+	// mounterConcurrency bounds the mounters of one container that start
+	// or stop at once.
+	mounterConcurrency = 4
 	// grantMargin is how long a stored key must still be valid to mount.
 	grantMargin = time.Minute
 )
@@ -240,8 +244,14 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 			return nil, fmt.Errorf("volume mount path %q is not absolute", s.GetMountPath())
 		}
 	}
+	groups := mounterGroups(specs)
+	mounters := make([]*mounter, len(groups))
+	for n := range groups {
+		mounters[n] = v.newMounter(mounterName(c.id, n), c.id)
+	}
+	// Tracked first, so that release removes what is made for them.
 	v.mu.Lock()
-	v.mounts[c.id] = nil
+	v.mounts[c.id] = mounters
 	v.mu.Unlock()
 	budget := containerResources(spec.GetResources(), v.a.capacity, v.a.topology, pidsLimit, nil)
 	budget.Memory += spec.GetResources().GetMountReserveBytes()
@@ -252,37 +262,36 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	if err != nil {
 		return nil, err
 	}
+	dirs := make([][]string, len(groups))
+	starts, startCtx := errgroup.WithContext(ctx)
+	starts.SetLimit(mounterConcurrency)
+	for n, group := range groups {
+		starts.Go(func() error {
+			var ms mountSpec
+			var err error
+			if group[0].GetCloudBucket() != nil {
+				ms, dirs[n], err = v.bucketSpec(mounters[n].name, group)
+			} else {
+				ms, dirs[n], err = v.volumeSpec(startCtx, group)
+			}
+			if err != nil {
+				return err
+			}
+			return v.start(startCtx, mounters[n], image, ms)
+		})
+	}
+	if err := starts.Wait(); err != nil {
+		return nil, err //nolint:wrapcheck // Each mount's error names it.
+	}
 	binds := make([]mount.Mount, 0, len(specs))
-	for n, group := range mounterGroups(specs) {
-		m := v.newMounter(mounterName(c.id, n), c.id)
-		// Tracked first, so that release deletes keys written for it.
-		v.mu.Lock()
-		v.mounts[c.id] = append(v.mounts[c.id], m)
-		v.mu.Unlock()
-		var ms mountSpec
-		var dirs []string
-		var what string
-		var err error
-		if b := group[0].GetCloudBucket(); b != nil {
-			what = "the mount of cloud bucket " + b.GetBucket()
-			ms, dirs, err = v.bucketSpec(m.name, group)
-		} else {
-			what = "the mount of the workspace's volumes"
-			ms, dirs, err = v.volumeSpec(ctx, group)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err := v.start(ctx, m, image, what, ms); err != nil {
-			return nil, err
-		}
+	for n, group := range groups {
 		for i, s := range group {
 			// A cloud bucket's prefixes come from the user; a directory
 			// below them must stay inside the mount.
-			if dirs[i] != "" && !filepath.IsLocal(dirs[i]) {
+			if dirs[n][i] != "" && !filepath.IsLocal(dirs[n][i]) {
 				return nil, fmt.Errorf("the volume at %s names a prefix outside its bucket's mount", s.GetMountPath())
 			}
-			source := filepath.Join(m.dir, dirs[i])
+			source := filepath.Join(mounters[n].dir, dirs[n][i])
 			err := os.MkdirAll(source, 0o755) //nolint:gosec // GeeseFS gives every directory --dir-mode.
 			if errors.Is(err, syscall.EROFS) {
 				// A read-only mount cannot make the directory of a prefix
@@ -350,7 +359,7 @@ func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount
 		return mountSpec{}, nil, err
 	}
 	return mountSpec{
-		creds: v.storageDir(workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region,
+		what: "the mount of the workspace's volumes", creds: v.storageDir(workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region,
 		pathStyle: loc.PathStyle,
 	}, dirs, nil
 }
@@ -365,14 +374,20 @@ func (v *volumes) release(ctx context.Context, container string) {
 	if !ok {
 		return
 	}
+	var stops errgroup.Group
+	stops.SetLimit(mounterConcurrency)
 	for _, m := range mounts {
-		if err := v.stop(ctx, m); err != nil {
-			v.a.log.Warn("stopping a volume mount failed", "mount", m.name, "error", err)
-		}
-		if err := os.RemoveAll(v.bucketKeys(m.name)); err != nil {
-			v.a.log.Warn("removing cloud bucket keys failed", "mount", m.name, "error", err)
-		}
+		stops.Go(func() error {
+			if err := v.stop(ctx, m); err != nil {
+				v.a.log.Warn("stopping a volume mount failed", "mount", m.name, "error", err)
+			}
+			if err := os.RemoveAll(v.bucketKeys(m.name)); err != nil {
+				v.a.log.Warn("removing cloud bucket keys failed", "mount", m.name, "error", err)
+			}
+			return nil
+		})
 	}
+	_ = stops.Wait()
 	if err := v.stopSlices(ctx, v.a.workloadSlice(container)); err != nil {
 		v.a.log.Warn("stopping a container's slice failed", "container", container, "error", err)
 	}
@@ -421,7 +436,7 @@ func (e *mountError) Error() string {
 
 // start runs m's container and waits for its mount. One that does not mount
 // within mountWait is removed.
-func (v *volumes) start(ctx context.Context, m *mounter, image, what string, spec mountSpec) error {
+func (v *volumes) start(ctx context.Context, m *mounter, image string, spec mountSpec) error {
 	id, err := v.runMount(ctx, m, image, spec)
 	if err != nil {
 		return err
@@ -443,11 +458,11 @@ func (v *volumes) start(ctx context.Context, m *mounter, image, what string, spe
 		case <-timer.C:
 			reason = mountTimedOut
 		case <-ctx.Done():
-			return fmt.Errorf("wait for %s: %w", what, ctx.Err())
+			return fmt.Errorf("wait for %s: %w", spec.what, ctx.Err())
 		}
 	}
 	cleanup := context.WithoutCancel(ctx)
-	failure := &mountError{mount: what, reason: reason, output: v.a.containerOutput(cleanup, m.name)}
+	failure := &mountError{mount: spec.what, reason: reason, output: v.a.containerOutput(cleanup, m.name)}
 	if err := v.stop(cleanup, m); err != nil {
 		v.a.log.Warn("removing a volume mount that did not mount failed", "mount", m.name, "error", err)
 	}
@@ -456,8 +471,9 @@ func (v *volumes) start(ctx context.Context, m *mounter, image, what string, spe
 
 // mountSpec is what one GeeseFS mount container mounts.
 type mountSpec struct {
-	// creds holds its credential_process files.
-	creds string
+	// what names the mount in errors; creds holds its credential_process
+	// files.
+	what, creds string
 	// source is bucket:prefix.
 	source, endpoint, region string
 	pathStyle, readOnly      bool
