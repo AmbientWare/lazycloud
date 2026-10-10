@@ -916,9 +916,8 @@ func TestAReserveWokenByABuildReturnsWithoutARebuy(t *testing.T) {
 }
 
 // Recurring bursts keep their reserves: the stopped target remembers a
-// burst for its memory, so the next burst resumes those reserves rather
-// than the market retiring and rebuying them. They retire once the memory
-// passes without a burst.
+// burst for its memory, so the hosts a burst bought wait stopped and the
+// next burst resumes them, launching fewer hosts than the first did.
 func TestRecurringBurstsKeepTheirReserves(t *testing.T) {
 	need := cpuNeed(1000, 2)
 	var arrivals []simArrival
@@ -934,11 +933,14 @@ func TestRecurringBurstsKeepTheirReserves(t *testing.T) {
 	if r.resumes == 0 {
 		t.Fatal("no burst resumed a reserve")
 	}
-	forgotten := offerNow.Add(140*time.Minute + s.p.OnDemand.Stopped.Memory)
-	for _, at := range r.retired {
-		if at.Before(forgotten) {
-			t.Errorf("retired a reserve at %s, within the memory of a burst", at.Format(time.TimeOnly))
+	launches := make([]int, 3)
+	for _, at := range r.launched {
+		if n := int(at.Sub(offerNow.Add(time.Hour)) / (40 * time.Minute)); n >= 0 && n < len(launches) {
+			launches[n]++
 		}
+	}
+	if launches[1] >= launches[0] || launches[2] >= launches[0] {
+		t.Errorf("launches per burst %v, want later bursts to launch fewer than the first", launches)
 	}
 }
 

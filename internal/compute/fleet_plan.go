@@ -306,12 +306,11 @@ type marketView struct {
 	slots []warmSlot
 	// warm is the warm target the slots hold, but a build's.
 	warm FleetCapacity
-	// stopped is the reserve target purchases keep and reserves woken for a
-	// burst return to.
-	stopped FleetCapacity
-	// burst is the largest batch the reserve target remembers; while it
-	// holds, the reserves a burst bought or woke wait for the next one.
-	burst FleetCapacity
+	// stopped is the reserve target purchases keep: the floor or the steady
+	// rate. keep adds the largest burst the target remembers: hosts a
+	// burst bought return to the reserve and stay there up to it, so the
+	// next burst resumes them, while no host is bought for it.
+	stopped, keep FleetCapacity
 	// largest is the shape one of the market's reserves fits; empty for
 	// none. loaded is set while demand, not the floor beside the largest
 	// shape, sets the stopped target.
@@ -418,13 +417,13 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
 			v.slots = append(v.slots, warmSlot{shape: build.Lower(ps.p.LargestShape.Cap), kind: slotBuild})
 		}
-		v.stopped = r.Stopped.Of(arrivals, ps.s.Now, ps.p.Batch)
-		v.burst = DemandOf(arrivals, ps.s.Now, r.Stopped.Lead, r.Stopped.Memory, ps.p.Batch).Burst
+		d := DemandOf(arrivals, ps.s.Now, r.Stopped.Lead, r.Stopped.Memory, ps.p.Batch)
+		v.stopped, v.keep = r.Stopped.Floor.Upper(d.Steady), r.Stopped.Floor.Upper(d.Steady.Plus(d.Burst))
 		if r.FitLargest {
 			v.largest = ps.p.LargestShape.of(m, largest)
 			floor := r.Stopped.Floor.Plus(v.largest)
 			v.loaded = !floor.Covers(v.stopped)
-			v.stopped = v.stopped.Upper(floor)
+			v.stopped, v.keep = v.stopped.Upper(floor), v.keep.Upper(floor)
 		}
 		ps.byMarket[m] = v
 		views = append(views, v)
@@ -1248,13 +1247,12 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 }
 
 // leave returns a leaving host to the reserve when EC2 can stop it and the
-// market's reserve falls short, which the burst it remembers keeps it while
-// a reserve woken for that burst serves, or holds nothing that fits the
-// largest shape while the host does. A host launched able to hibernate
+// market's reserves hold less than they keep for the burst they remember,
+// or nothing that fits the largest shape while the host does. A host launched able to hibernate
 // does where hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
-	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
+	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.keep) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
 		if h.HibernationConfigured && hibernates(t) {
@@ -1469,12 +1467,10 @@ func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
 // older agent release, then the costliest to hold.
 // It keeps the ready capacity the target needs, so a pending reserve never
 // stands in for a ready one, and a reserve that fits the largest shape.
-// While the reserve target remembers a burst it keeps every reserve it
-// would buy again that is ready or being prepared, so the reserves a burst
-// bought or woke wait stopped for the next burst rather than retiring as
-// its load falls.
+// It keeps what the market keeps for the burst it remembers, so the
+// reserves a burst bought or woke wait stopped for the next burst rather
+// than retiring as its load falls.
 func (ps *pass) retire(v *marketView) {
-	holding := !v.burst.Empty()
 	ready := FleetHost.resumable
 	needReady := ps.floor(v, HostID{}, ready).Lower(v.stopped)
 	growable := func(h *FleetHost) bool {
@@ -1488,10 +1484,7 @@ func (ps *pass) retire(v *marketView) {
 			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 	})
 	for _, h := range candidates {
-		if holding && growable(h) && (ready(*h) && h.Current || h.State == FleetPreparing) {
-			continue
-		}
-		if !ps.floor(v, h.ID, FleetHost.reserve).Covers(v.stopped) || !ps.floor(v, h.ID, ready).Covers(needReady) ||
+		if !ps.floor(v, h.ID, FleetHost.reserve).Covers(v.keep) || !ps.floor(v, h.ID, ready).Covers(needReady) ||
 			!ps.holdsLargest(v, h.ID) {
 			continue
 		}

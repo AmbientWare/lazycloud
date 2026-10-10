@@ -591,15 +591,16 @@ func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 		}
 		return h
 	}
-	// A burst of 24 CPU keeps a 24 CPU stopped target; the reserves hold 20.
+	// 25 CPU arriving at a steady rate keep a 24 CPU stopped target; the
+	// reserves hold 20.
 	s := planSnapshot(t, host(1, "c6a.8xlarge", FleetServing), host(2, "c6a.8xlarge", FleetServing), host(3, "c6a.8xlarge", FleetServing),
 		host(4, "c6a.8xlarge", FleetStopped), host(5, "c6a.2xlarge", FleetStopped))
 	s.Offers.Catalog = FleetCatalog()
 	for _, typ := range s.Offers.Catalog {
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ.Name, HourlyMicros: 10_000 * typ.VCPUs(), ObservedAt: offerNow})
 	}
-	for range 24 {
-		s.Arrivals[spot] = append(s.Arrivals[spot], Arrival{At: offerNow, Shape: cpuGiB(1000, 2)})
+	for n := range 25 {
+		s.Arrivals[spot] = append(s.Arrivals[spot], Arrival{At: offerNow.Add(-time.Duration(n) * 10 * time.Second), Shape: cpuGiB(1000, 2)})
 	}
 	s.FloorShortSince = map[ReserveMarket]time.Time{spot: offerNow.Add(-time.Hour)}
 	plan := PlanFleet(p, s)

@@ -208,7 +208,7 @@ func DefaultPolicy() Policy {
 	// tens of seconds; reserves serve until a purchase does, minutes. Each
 	// keeps room for the largest recent burst.
 	warm := func(floor FleetCapacity) HeadroomTarget {
-		return HeadroomTarget{Floor: floor, Lead: 2 * time.Minute, Memory: 30 * time.Minute}
+		return HeadroomTarget{Floor: floor, Lead: 2 * time.Minute, Memory: 5 * time.Minute}
 	}
 	stopped := func(floor FleetCapacity) HeadroomTarget {
 		return HeadroomTarget{Floor: floor, Lead: 5 * time.Minute, Memory: time.Hour}
