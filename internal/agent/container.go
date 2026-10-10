@@ -405,10 +405,11 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
+	var slice string
 	var binds []mount.Mount
 	err = telemetry.Step(ctx, "agent.volumes", func(ctx context.Context) error {
 		var err error
-		binds, err = c.a.volumes.mount(ctx, c, spec)
+		slice, binds, err = c.a.volumes.mount(ctx, c, spec)
 		return err
 	}, attribute.Int("lazycloud.volumes", len(spec.GetVolumes())))
 	if err != nil {
@@ -441,7 +442,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 		}
 	}
 	err = telemetry.Step(ctx, "agent.create", func(ctx context.Context) error {
-		return c.a.createAndStart(ctx, c, spec, runtime, binds, gpus, restore)
+		return c.a.createAndStart(ctx, c, spec, runtime, slice, binds, gpus, restore)
 	}, attribute.Bool("lazycloud.restore", restore != nil))
 	if err != nil {
 		return err

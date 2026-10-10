@@ -1,11 +1,11 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,8 +73,10 @@ type volumes struct {
 
 // mounter is one mount container.
 type mounter struct {
-	// name is the Docker name; dir the host path of the mount.
-	name, dir string
+	// name is the Docker name, which also names its mount and cloud bucket
+	// keys; dir is the host path of the mount; id is the Docker id once it
+	// runs.
+	name, dir, id string
 	// container is the workload the mount serves.
 	container string
 	// exited closes when the mount container stops running.
@@ -97,22 +99,18 @@ func (v *volumes) storageDir(workspace string) string {
 
 func (v *volumes) mountDir() string { return filepath.Join(v.a.cfg.StateDir, "mounts") }
 
-const mountPrefix = "lazycloud-mount-"
-
 // newMounter is the mount container name, serving container. Each mounts in
 // its own directory directly in the mount directory, so no mount lies inside
 // another's.
 func (v *volumes) newMounter(name, container string) *mounter {
-	return &mounter{
-		name: name, dir: filepath.Join(v.mountDir(), strings.TrimPrefix(name, mountPrefix)),
-		container: container, exited: make(chan struct{}),
-	}
+	return &mounter{name: name, dir: filepath.Join(v.mountDir(), name), container: container, exited: make(chan struct{})}
 }
 
 func mounterName(container string, n int) string {
-	return mountPrefix + container + "-" + strconv.Itoa(n)
+	return "lazycloud-mount-" + container + "-" + strconv.Itoa(n)
 }
 
+// grantChannel closes once workspace's grant is stored; v.mu is held.
 func (v *volumes) grantChannel(workspace string) chan struct{} {
 	ch, ok := v.granted[workspace]
 	if !ok {
@@ -120,6 +118,16 @@ func (v *volumes) grantChannel(workspace string) chan struct{} {
 		v.granted[workspace] = ch
 	}
 	return ch
+}
+
+// markGranted closes workspace's grant channel; v.mu is held.
+func (v *volumes) markGranted(workspace string) {
+	ch := v.grantChannel(workspace)
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
 }
 
 // processCredentials is the AWS credential_process output GeeseFS reads,
@@ -147,8 +155,12 @@ func writeCredentials(dir string, creds processCredentials) error {
 	if err := writeFileAtomic(filepath.Join(dir, "credentials.json"), data, 0o600); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
-	config := "[default]\ncredential_process = cat /creds/credentials.json\n"
-	if err := writeFileAtomic(filepath.Join(dir, "config"), []byte(config), 0o644); err != nil { //nolint:gosec // Holds no secret.
+	config := filepath.Join(dir, "config")
+	if _, err := os.Stat(config); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	text := "[default]\ncredential_process = cat /creds/credentials.json\n"
+	if err := writeFileAtomic(config, []byte(text), 0o644); err != nil { //nolint:gosec // Holds no secret.
 		return fmt.Errorf("write credential config: %w", err)
 	}
 	return nil
@@ -180,12 +192,7 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 		return fmt.Errorf("write bucket location: %w", err)
 	}
 	v.mu.Lock()
-	ch := v.grantChannel(workspace)
-	select {
-	case <-ch:
-	default:
-		close(ch)
-	}
+	v.markGranted(workspace)
 	v.mu.Unlock()
 	return nil
 }
@@ -229,19 +236,19 @@ func (v *volumes) waitGrant(ctx context.Context, workspace string) error {
 }
 
 // mount starts the container's slice and its mounters, and returns the
-// binds of its mounts. What it started goes in release, also after a
-// failure.
-func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.StartContainer) ([]mount.Mount, error) {
+// slice and the binds of its mounts. What it started goes in release, also
+// after a failure.
+func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.StartContainer) (string, []mount.Mount, error) {
 	specs := spec.GetVolumes()
 	if len(specs) == 0 {
-		return nil, nil
+		return "", nil, nil
 	}
 	if v.a.cfg.GeeseFSPath == "" {
-		return nil, errNoVolumeSupport
+		return "", nil, errors.New("this agent has no GeeseFS binary for volume mounts")
 	}
 	for _, s := range specs {
 		if !filepath.IsAbs(s.GetMountPath()) {
-			return nil, fmt.Errorf("volume mount path %q is not absolute", s.GetMountPath())
+			return "", nil, fmt.Errorf("volume mount path %q is not absolute", s.GetMountPath())
 		}
 	}
 	groups := mounterGroups(specs)
@@ -255,12 +262,13 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	v.mu.Unlock()
 	budget := containerResources(spec.GetResources(), v.a.capacity, v.a.topology, pidsLimit, nil)
 	budget.Memory += spec.GetResources().GetMountReserveBytes()
-	if err := v.startSlice(ctx, v.a.workloadSlice(c.id), budget); err != nil {
-		return nil, err
+	slice := v.a.workloadSlice(c.id)
+	if err := v.startSlice(ctx, slice, budget); err != nil {
+		return "", nil, err
 	}
 	image, err := v.a.platformImage(ctx, platformimages.Mount)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	dirs := make([][]string, len(groups))
 	starts, startCtx := errgroup.WithContext(ctx)
@@ -281,7 +289,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		})
 	}
 	if err := starts.Wait(); err != nil {
-		return nil, err //nolint:wrapcheck // Each mount's error names it.
+		return "", nil, err //nolint:wrapcheck // Each mount's error names it.
 	}
 	binds := make([]mount.Mount, 0, len(specs))
 	for n, group := range groups {
@@ -289,7 +297,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 			// A cloud bucket's prefixes come from the user; a directory
 			// below them must stay inside the mount.
 			if dirs[n][i] != "" && !filepath.IsLocal(dirs[n][i]) {
-				return nil, fmt.Errorf("the volume at %s names a prefix outside its bucket's mount", s.GetMountPath())
+				return "", nil, fmt.Errorf("the volume at %s names a prefix outside its bucket's mount", s.GetMountPath())
 			}
 			source := filepath.Join(mounters[n].dir, dirs[n][i])
 			err := os.MkdirAll(source, 0o755) //nolint:gosec // GeeseFS gives every directory --dir-mode.
@@ -300,12 +308,12 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 				err = os.MkdirAll(source, 0o555) //nolint:gosec // Workloads of any user list it.
 			}
 			if err != nil {
-				return nil, fmt.Errorf("create the directory of the volume at %s: %w", s.GetMountPath(), err)
+				return "", nil, fmt.Errorf("create the directory of the volume at %s: %w", s.GetMountPath(), err)
 			}
 			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
 		}
 	}
-	return binds, nil
+	return slice, binds, nil
 }
 
 // mounterGroups splits a container's mounts among its mounters: one for all
@@ -403,65 +411,35 @@ func mounted(path string) bool {
 	return self.Dev != parent.Dev
 }
 
-// mountFailure is why a new mount did not come up.
-type mountFailure string
-
-const (
-	mountExited   mountFailure = "exited"
-	mountTimedOut mountFailure = "timed out"
-)
-
-// mountError is a new mount that did not come up. Its container is removed;
-// output is the end of what it printed.
-type mountError struct {
-	mount  string
-	reason mountFailure
-	output string
-}
-
-func (e *mountError) Error() string {
-	var what string
-	switch e.reason {
-	case mountExited:
-		what = "exited before it mounted"
-	case mountTimedOut:
-		what = fmt.Sprintf("did not mount within %v", mountWait)
-	}
-	output := e.output
-	if output == "" {
-		output = "it printed nothing"
-	}
-	return fmt.Sprintf("%s %s: %s", e.mount, what, output)
-}
-
 // start runs m's container and waits for its mount, at most mountWait;
-// release removes it after a failure.
+// release removes it after a failure, which carries the end of what it
+// printed.
 func (v *volumes) start(ctx context.Context, m *mounter, image string, spec mountSpec) error {
-	id, err := v.runMount(ctx, m, image, spec)
-	if err != nil {
+	if err := v.runMount(ctx, m, image, spec); err != nil {
 		return err
 	}
-	v.a.goOwned(func(ctx context.Context) { v.watch(ctx, m, id) })
+	v.a.goOwned(func(ctx context.Context) { v.watch(ctx, m) })
 	timer := time.NewTimer(mountWait)
 	defer timer.Stop()
 	poll := time.NewTicker(100 * time.Millisecond)
 	defer poll.Stop()
-	var reason mountFailure
-	for reason == "" {
+	var failure string
+	for failure == "" {
 		if mounted(m.dir) && v.markUp(m) {
 			return nil
 		}
 		select {
 		case <-poll.C:
 		case <-m.exited:
-			reason = mountExited
+			failure = "exited before it mounted"
 		case <-timer.C:
-			reason = mountTimedOut
+			failure = fmt.Sprintf("did not mount within %v", mountWait)
 		case <-ctx.Done():
 			return fmt.Errorf("wait for %s: %w", spec.what, ctx.Err())
 		}
 	}
-	return &mountError{mount: spec.what, reason: reason, output: v.a.containerOutput(context.WithoutCancel(ctx), m.name)}
+	output := cmp.Or(v.a.containerOutput(context.WithoutCancel(ctx), m.name), "it printed nothing")
+	return fmt.Errorf("%s %s: %s", spec.what, failure, output)
 }
 
 // mountSpec is what one GeeseFS mount container mounts.
@@ -497,16 +475,15 @@ func HostTrustBundle() string {
 	return ""
 }
 
-// runMount starts m's GeeseFS mount container in its container's slice and
-// returns its id.
-func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec mountSpec) (string, error) {
+// runMount starts m's GeeseFS mount container in its container's slice.
+func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec mountSpec) error {
 	// Only the agent (and root, which Docker runs as) may walk into the
 	// mounts; workloads reach their own volume through a bind.
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
-		return "", fmt.Errorf("create mount directory: %w", err)
+		return fmt.Errorf("create mount directory: %w", err)
 	}
 	if err := os.Chmod(v.mountDir(), 0o700); err != nil { //nolint:gosec // A directory needs its search bit.
-		return "", fmt.Errorf("restrict mount directory: %w", err)
+		return fmt.Errorf("restrict mount directory: %w", err)
 	}
 	uid, gid := "0", "0"
 	if os.Geteuid() != 0 {
@@ -544,15 +521,12 @@ wait $pid
 while kill -0 $pid 2>/dev/null; do wait $pid; done
 umount -l %[1]s 2>/dev/null
 exit 1`, target, strings.Join(quoted, " "))
-	labels := maps.Clone(v.a.cfg.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
+	labels := v.a.hostLabels()
 	labels[labelKind] = kindMount
 	labels[labelContainer] = m.container
-	labels[labelHost] = v.a.identity.HostID
 	pids := int64(mounterPidsLimit)
-	id, err := v.a.createContainer(ctx, m.name, client.ContainerCreateOptions{
+	var err error
+	m.id, err = v.a.createContainer(ctx, m.name, client.ContainerCreateOptions{
 		Name: m.name,
 		Config: &containertypes.Config{
 			Image:      image,
@@ -587,20 +561,20 @@ exit 1`, target, strings.Join(quoted, " "))
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("create volume mount container: %w", err)
+		return fmt.Errorf("create volume mount container: %w", err)
 	}
 	if err := v.a.startDocker(ctx, m.name, client.ContainerStartOptions{}); err != nil {
-		return "", fmt.Errorf("start volume mount container: %w", err)
+		return fmt.Errorf("start volume mount container: %w", err)
 	}
-	return id, nil
+	return nil
 }
 
-// watch waits for m's container, id, to stop. Unless the agent stopped it or
+// watch waits for m's container to stop. Unless the agent stopped it or
 // it never mounted, the mount under its workload is dead, so the workload
 // stops and reports the exit rather than run on with a broken volume.
-func (v *volumes) watch(ctx context.Context, m *mounter, id string) {
+func (v *volumes) watch(ctx context.Context, m *mounter) {
 	for {
-		exited, err := v.a.waitExit(ctx, id)
+		exited, err := v.a.waitExit(ctx, m.id)
 		if exited {
 			break
 		}
@@ -667,20 +641,21 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 // adopt takes over the mounts and slices a previous agent left and the
 // grants it stored; the agent has tracked the workload containers. A mount
 // whose container runs on and that still mounts is kept; any other is
-// removed, with the keys of every cloud bucket not mounted and the slices of
+// removed, with the keys and directories no kept mount has and the slices of
 // containers the agent does not track. A running container bound into a
 // mount that is gone fails.
 func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary) error {
-	live, ids := map[string]*mounter{}, map[*mounter]string{}
+	live := map[string]*mounter{}
 	var dead []*mounter
 	for _, s := range summaries {
 		if s.Labels[labelKind] != kindMount || len(s.Names) == 0 {
 			continue
 		}
 		m := v.newMounter(strings.TrimPrefix(s.Names[0], "/"), s.Labels[labelContainer])
+		m.id = s.ID
 		if c := v.a.lookup(m.container); c != nil && !c.hasExited() && s.State == containertypes.StateRunning && mounted(m.dir) {
 			m.up = true
-			live[m.dir], ids[m] = m, s.ID
+			live[m.name] = m
 		} else {
 			dead = append(dead, m)
 		}
@@ -696,7 +671,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			if point.Type != mount.TypeBind || err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 				continue
 			}
-			if dir, _, _ := strings.Cut(rel, string(filepath.Separator)); live[filepath.Join(v.mountDir(), dir)] == nil {
+			if name, _, _ := strings.Cut(rel, string(filepath.Separator)); live[name] == nil {
 				lost = append(lost, id)
 				break
 			}
@@ -721,8 +696,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	}
 	v.mu.Unlock()
 	for _, m := range live {
-		id := ids[m]
-		v.a.goOwned(func(ctx context.Context) { v.watch(ctx, m, id) })
+		v.a.goOwned(func(ctx context.Context) { v.watch(ctx, m) })
 	}
 	for _, id := range lost {
 		if c := v.a.lookup(id); c != nil {
@@ -737,27 +711,18 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	if err := v.stopSlices(ctx, orphans...); err != nil {
 		return err
 	}
-	keys, err := os.ReadDir(v.bucketKeys(""))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("list cloud bucket keys: %w", err)
-	}
-	for _, entry := range keys {
-		if live[v.newMounter(entry.Name(), "").dir] == nil {
-			if err := os.RemoveAll(v.bucketKeys(entry.Name())); err != nil {
-				return fmt.Errorf("remove cloud bucket keys: %w", err)
-			}
+	// Starts and stops cut short leave keys and directories no mounter has.
+	// A directory goes only when nothing is mounted on it and it is empty.
+	for dir, remove := range map[string]func(string) error{v.bucketKeys(""): os.RemoveAll, v.mountDir(): os.Remove} {
+		entries, err := os.ReadDir(dir)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("list %s: %w", dir, err)
 		}
-	}
-	// A directory no mounter has is left by a stop cut short; one still
-	// mounted or holding files is kept.
-	dirs, err := os.ReadDir(v.mountDir())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("list mount directories: %w", err)
-	}
-	for _, entry := range dirs {
-		if dir := filepath.Join(v.mountDir(), entry.Name()); live[dir] == nil {
-			if err := os.Remove(dir); err != nil {
-				v.a.log.Warn("removing a mount directory failed", "dir", dir, "error", err)
+		for _, entry := range entries {
+			if path := filepath.Join(dir, entry.Name()); live[entry.Name()] == nil {
+				if err := remove(path); err != nil {
+					v.a.log.Warn("removing what no volume mount uses failed", "path", path, "error", err)
+				}
 			}
 		}
 	}
@@ -791,14 +756,13 @@ func (v *volumes) adoptGrants() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for _, entry := range entries {
-		c, err := v.credentials(entry.Name())
-		if _, statErr := os.Stat(filepath.Join(v.storageDir(entry.Name()), "location.json")); err == nil && statErr == nil && time.Until(c.expires) > grantMargin {
-			ch := v.grantChannel(entry.Name())
-			select {
-			case <-ch:
-			default:
-				close(ch)
-			}
+		workspace := entry.Name()
+		if !isUUID(workspace) {
+			continue
+		}
+		c, err := v.credentials(workspace)
+		if _, statErr := os.Stat(filepath.Join(v.storageDir(workspace), "location.json")); err == nil && statErr == nil && time.Until(c.expires) > grantMargin {
+			v.markGranted(workspace)
 		}
 	}
 }
@@ -824,8 +788,6 @@ func (v *volumes) credentials(workspace string) (storedCredentials, error) {
 	}
 	return c, nil
 }
-
-var errNoVolumeSupport = errors.New("this agent has no GeeseFS binary for volume mounts")
 
 func isUUID(s string) bool {
 	_, err := uuid.Parse(s)

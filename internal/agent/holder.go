@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"maps"
 
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -47,11 +46,7 @@ func (a *Agent) startHolder(ctx context.Context, c *container) error {
 	if err != nil {
 		return fmt.Errorf("network holder: %w", err)
 	}
-	labels := maps.Clone(a.cfg.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels[labelHost] = a.identity.HostID
+	labels := a.hostLabels()
 	labels[labelKind] = kindHolder
 	labels[labelContainer] = c.id
 	pids := int64(holderPids)

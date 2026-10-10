@@ -799,7 +799,7 @@ func TestAMountThatDiesDuringItsStartFailsIt(t *testing.T) {
 	reserveMounters(start, 2)
 	id := start.GetStart().GetContainerId()
 	s.send(t, start)
-	bucket := filepath.Join(e.stateDir, "mounts", strings.TrimPrefix(mounterName(id, 0), mountPrefix))
+	bucket := filepath.Join(e.stateDir, "mounts", mounterName(id, 0))
 	e.eventually("the bucket mounts", func() bool { return mounted(bucket) })
 
 	e.killGeeseFS(e.mounter(id).ID)
