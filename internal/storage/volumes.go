@@ -554,6 +554,9 @@ func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 			if b.Prefix != nil && *b.Prefix != "" && !strings.HasSuffix(*b.Prefix, "/") {
 				return invalid("cloud bucket %s: prefix %q must end with /", spec.Name, *b.Prefix)
 			}
+			if _, err := CloudBucketLocation(*b); err != nil {
+				return invalid("cloud bucket %s: name its region, or the endpoint of an S3-compatible store", spec.Name)
+			}
 		}
 		target := MountPath(spec)
 		if names[spec.Name] || paths[target] {

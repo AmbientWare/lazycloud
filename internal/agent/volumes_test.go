@@ -65,7 +65,7 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	// The start waits for the workspace's grant.
 	time.Sleep(500 * time.Millisecond)
 	s.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
-		WorkspaceId: workspace, Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket,
+		WorkspaceId: workspace, Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
 		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	}}})
 	writer := start.GetStart().GetContainerId()

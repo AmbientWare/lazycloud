@@ -54,7 +54,7 @@ func TestAttachRefusesMalformedRequests(t *testing.T) {
 	}
 	valid := AttachRequest{
 		DiskID: "0b6f6c3e-5d0a-4c55-9a51-2f1f4c1d7e10", SizeBytes: 1 << 30, Mountpoint: "/mnt/d",
-		Store: Store{Region: "us-east-2", Bucket: "b", Credentials: credentials},
+		Store: Store{Endpoint: "https://s3.us-east-2.amazonaws.com", Region: "us-east-2", Bucket: "b", Credentials: credentials},
 	}
 	// Only where the host cannot attach, so the valid request stops at Check.
 	if e.Check() != nil {

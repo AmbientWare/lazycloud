@@ -25,8 +25,8 @@ func bucketMountName(container string, n int) string {
 // bucketBind mounts a cloud bucket for container and returns its bind.
 func (v *volumes) bucketBind(ctx context.Context, container string, n int, spec *hostproto.VolumeMount) (mount.Mount, error) {
 	b := spec.GetCloudBucket()
-	if b.GetBucket() == "" || b.GetAccessKeyId() == "" || b.GetSecretAccessKey() == "" {
-		return mount.Mount{}, fmt.Errorf("cloud bucket at %s needs a bucket and keys", spec.GetMountPath())
+	if b.GetBucket() == "" || b.GetEndpoint() == "" || b.GetAccessKeyId() == "" || b.GetSecretAccessKey() == "" {
+		return mount.Mount{}, fmt.Errorf("cloud bucket at %s needs a bucket, an endpoint and keys", spec.GetMountPath())
 	}
 	name := bucketMountName(container, n)
 	creds := filepath.Join(v.a.cfg.StateDir, "storage", "buckets", name)
@@ -50,7 +50,7 @@ func (v *volumes) bucketBind(ctx context.Context, container string, n int, spec 
 	id, err := v.runMount(ctx, mountSpec{
 		name: name, dir: name, creds: creds,
 		source: b.GetBucket() + ":" + b.GetPrefix(), endpoint: b.GetEndpoint(), region: b.GetRegion(),
-		pathStyle: b.GetForcePathStyle() || b.GetEndpoint() != "", readOnly: spec.GetReadOnly(),
+		pathStyle: b.GetForcePathStyle(), readOnly: spec.GetReadOnly(),
 		labels: map[string]string{labelKind: kindBucket, labelContainer: container},
 	})
 	if err != nil {

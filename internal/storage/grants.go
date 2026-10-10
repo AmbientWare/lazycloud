@@ -32,7 +32,10 @@ func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace 
 			return Grant{}, fmt.Errorf("record storage grant: %w", err)
 		}
 	}
-	grant.Endpoint, grant.Region = s.config.Endpoint, s.config.Region
+	grant.Location, err = locate(s.config.Endpoint, s.config.Region, grant.Bucket, false)
+	if err != nil {
+		return Grant{}, fmt.Errorf("locate workspace bucket: %w", err)
+	}
 	return grant, nil
 }
 

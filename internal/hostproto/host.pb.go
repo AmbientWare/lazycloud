@@ -2557,8 +2557,9 @@ func (x *PublishFilesystem) GetDeadline() *timestamppb.Timestamp {
 // volumes and disks. The server sends one before the first container that
 // needs it and a fresh one before it expires. Hosts keep it from containers.
 type StorageGrant struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	WorkspaceId     string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// The store's URL, always set; AWS S3 is its regional endpoint.
 	Endpoint        string                 `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	Region          string                 `protobuf:"bytes,3,opt,name=region,proto3" json:"region,omitempty"`
 	Bucket          string                 `protobuf:"bytes,4,opt,name=bucket,proto3" json:"bucket,omitempty"`
@@ -2566,6 +2567,7 @@ type StorageGrant struct {
 	SecretAccessKey string                 `protobuf:"bytes,6,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
 	SessionToken    string                 `protobuf:"bytes,7,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ForcePathStyle  bool                   `protobuf:"varint,9,opt,name=force_path_style,json=forcePathStyle,proto3" json:"force_path_style,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2654,6 +2656,13 @@ func (x *StorageGrant) GetExpiresAt() *timestamppb.Timestamp {
 		return x.ExpiresAt
 	}
 	return nil
+}
+
+func (x *StorageGrant) GetForcePathStyle() bool {
+	if x != nil {
+		return x.ForcePathStyle
+	}
+	return false
 }
 
 // UpdateAgent asks an updatable agent to install a release and restart into
@@ -3816,6 +3825,8 @@ func (x *PlatformVolume) GetPrefix() string {
 	return ""
 }
 
+// CloudBucket is a user's bucket, located by the server like a grant: the
+// endpoint is always set and force_path_style is the addressing to use.
 type CloudBucket struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Bucket          string                 `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`
@@ -7101,7 +7112,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"repository\x12+\n" +
 	"\x11insecure_registry\x18\x04 \x01(\bR\x10insecureRegistry\x12D\n" +
 	"\rregistry_auth\x18\x05 \x01(\v2\x1f.lazycloud.host.v1.RegistryAuthR\fregistryAuth\x126\n" +
-	"\bdeadline\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\"\xad\x02\n" +
+	"\bdeadline\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\"\xd7\x02\n" +
 	"\fStorageGrant\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x1a\n" +
 	"\bendpoint\x18\x02 \x01(\tR\bendpoint\x12\x16\n" +
@@ -7111,7 +7122,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x11secret_access_key\x18\x06 \x01(\tR\x0fsecretAccessKey\x12#\n" +
 	"\rsession_token\x18\a \x01(\tR\fsessionToken\x129\n" +
 	"\n" +
-	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"Q\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12(\n" +
+	"\x10force_path_style\x18\t \x01(\bR\x0eforcePathStyle\"Q\n" +
 	"\vUpdateAgent\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n" +

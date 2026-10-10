@@ -373,6 +373,7 @@ message PublishFilesystem {
 // needs it and a fresh one before it expires. Hosts keep it from containers.
 message StorageGrant {
   string workspace_id = 1;
+  // The store's URL, always set; AWS S3 is its regional endpoint.
   string endpoint = 2;
   string region = 3;
   string bucket = 4;
@@ -380,6 +381,7 @@ message StorageGrant {
   string secret_access_key = 6;
   string session_token = 7;
   google.protobuf.Timestamp expires_at = 8;
+  bool force_path_style = 9;
 }
 
 // UpdateAgent asks an updatable agent to install a release and restart into
@@ -577,6 +579,8 @@ message PlatformVolume {
   string prefix = 3;
 }
 
+// CloudBucket is a user's bucket, located by the server like a grant: the
+// endpoint is always set and force_path_style is the addressing to use.
 message CloudBucket {
   string bucket = 1;
   string prefix = 2;
