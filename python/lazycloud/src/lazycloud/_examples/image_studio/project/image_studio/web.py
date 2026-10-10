@@ -149,7 +149,11 @@ def image(job_id: str, index: ImageIndex, expires: int, signature: str) -> FileR
         studio_key(), path, expires=expires, signature=signature, now=time.time()
     ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "the image link is invalid or expired")
-    return FileResponse(existing_image(job_id, index), media_type="image/webp")
+    return FileResponse(
+        existing_image(job_id, index),
+        media_type="image/webp",
+        headers={"Cache-Control": f"private, max-age={SIGNED_URL_SECONDS}, immutable"},
+    )
 
 
 @public.websocket("/jobs/{job_id}/events")

@@ -366,12 +366,18 @@ def require_key(authorization: Annotated[str | None, Header()] = None) -> None:
 ```
 
 An `<img>` tag and a WebSocket can't send that header, so the keyed routes hand
-out URLs signed with the key. A signature covers one path and expires after an
-hour.
+out URLs signed with the key. A signature covers one path and lasts one to two
+hours. Each URL stays the same for an hour, so a gallery refresh reuses cached
+images instead of downloading them again.
 
 ```python image_studio/auth.py
 def sign_path(key: str, path: str, *, now: float, ttl_seconds: int) -> str:
-    expires = int(now) + ttl_seconds
+    """A URL for `path` that works for `ttl_seconds` to twice that.
+
+    The expiry rounds up to a whole window, so signing a path again inside one
+    window returns the same URL, and the browser reuses its cached copy.
+    """
+    expires = (int(now) // ttl_seconds + 2) * ttl_seconds
     query = urlencode({"expires": expires, "signature": _signature(key, path, expires)})
     return f"{path}?{query}"
 
