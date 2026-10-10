@@ -412,6 +412,9 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 			if _, err := p.execution.PlanServing(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan serving: %v", err)
 			}
+			if _, err := p.execution.PlanPods(passCtx, logger); err != nil && ctx.Err() == nil {
+				t.Logf("plan pods: %v", err)
+			}
 			if _, err := sched.Place(passCtx); err != nil && ctx.Err() == nil {
 				t.Logf("place: %v", err)
 			}
