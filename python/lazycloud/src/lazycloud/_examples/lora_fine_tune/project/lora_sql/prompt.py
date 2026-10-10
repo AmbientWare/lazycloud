@@ -2,8 +2,10 @@
 
 import re
 import sqlite3
+from typing import TYPE_CHECKING
 
-from openai.types.chat import ChatCompletionMessageParam
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 SYSTEM_PROMPT = (
     "You write SQLite queries. Given a database and a question, "
@@ -13,7 +15,7 @@ SYSTEM_PROMPT = (
 _FENCED = re.compile(r"```(?:sql)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
-def chat_messages(context: str, question: str) -> list[ChatCompletionMessageParam]:
+def chat_messages(context: str, question: str) -> "list[ChatCompletionMessageParam]":
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Database:\n{context}\n\nQuestion: {question}"},
