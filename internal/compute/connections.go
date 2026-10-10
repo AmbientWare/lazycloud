@@ -765,7 +765,7 @@ func (c *Compute) S3Endpoint() string { return c.fleet.Endpoints.S3 }
 // non-empty policy narrows the session to what it allows. AWS's refusal
 // keeps its API error.
 func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAccount, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-	creds, err := stscreds.NewAssumeRoleProvider(c.aws().sts(awsScope{}, ""), account.role, func(o *stscreds.AssumeRoleOptions) {
+	creds, err := stscreds.NewAssumeRoleProvider(c.sts, account.role, func(o *stscreds.AssumeRoleOptions) {
 		o.ExternalID, o.RoleSessionName, o.Duration = aws.String(account.externalID), session, lifetime
 		if policy != "" {
 			o.Policy = aws.String(policy)

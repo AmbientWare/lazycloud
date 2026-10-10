@@ -352,6 +352,33 @@ func TestWorkspaceDeletionOutlivesItsAccountsAuthorization(t *testing.T) {
 	}
 }
 
+// A connection's credentials are assumed once for its buckets in every
+// region.
+func TestAConnectionsRegionsShareItsCredentials(t *testing.T) {
+	c := newConnectedStorage(t)
+	ctx := t.Context()
+	near, far := c.workspace(&c.connection), c.workspace(&c.connection)
+	if _, err := c.pool.Exec(ctx, `insert into workspace_buckets (workspace_id, bucket, region) values ($1, 'far-away', 'ap-south-1')`, uuid.UUID(far)); err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range []identity.WorkspaceID{near, far} {
+		if _, err := c.storage.CreateVolume(ctx, ws, "data"); err != nil {
+			t.Fatal(err)
+		}
+		// The far bucket is not in the test store; only the signing matters.
+		_, _ = c.storage.ListVolumeFiles(ctx, ws, "data", "", "", 10)
+	}
+	sessions := 0
+	for _, call := range c.assumedCalls() {
+		if call.session == "lazycloud-storage" {
+			sessions++
+		}
+	}
+	if sessions != 1 {
+		t.Fatalf("the connection's role was assumed %d times for two regions, want once", sessions)
+	}
+}
+
 // Servers that create a workspace's bucket at once use the bucket the
 // first one recorded.
 func TestAWorkspaceUsesTheBucketRecordedFirst(t *testing.T) {

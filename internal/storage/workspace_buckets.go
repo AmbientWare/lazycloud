@@ -154,10 +154,15 @@ func (s *Storage) connectedAccount(ctx context.Context, connection uuid.UUID) (c
 }
 
 // connectionCredentials are the connection role's, for storage's own
-// requests on the account's buckets, renewed credentialWindow before they
-// expire.
+// requests on the account's buckets in every region, renewed
+// credentialWindow before they expire.
 func (s *Storage) connectionCredentials(connection uuid.UUID) aws.CredentialsProvider {
-	return aws.NewCredentialsCache(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cached, ok := s.credentials[connection]; ok {
+		return cached
+	}
+	credentials := aws.NewCredentialsCache(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 		account, err := s.connectedAccount(ctx, connection)
 		if err != nil {
 			return aws.Credentials{}, err
@@ -168,6 +173,8 @@ func (s *Storage) connectionCredentials(connection uuid.UUID) aws.CredentialsPro
 		}
 		return creds, nil
 	}), renewEarly)
+	s.credentials[connection] = credentials
+	return credentials
 }
 
 // providerOf is the provider that creates store's bucket and issues host

@@ -95,9 +95,12 @@ type Storage struct {
 	// connections reaches connected AWS accounts, which hold the buckets
 	// of the workspaces that live in them.
 	connections *compute.Compute
-	// mu guards clients, storeOf's clients by account and region.
-	mu      sync.Mutex
-	clients map[string]bucketClient
+	// mu guards clients, storeOf's clients by account and region, and
+	// credentials, each connection's role credentials, which its clients
+	// in every region share.
+	mu          sync.Mutex
+	clients     map[string]bucketClient
+	credentials map[uuid.UUID]aws.CredentialsProvider
 	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
 	orphanAge time.Duration
 }
@@ -135,7 +138,8 @@ func NewStorage(pool *pgxpool.Pool, cfg Config, connections *compute.Compute) *S
 	}
 	return &Storage{
 		pool: pool, queries: New(pool), platform: platform, layers: layers, replicas: replicas, config: cfg,
-		buckets: newBucketProvider(cfg), connections: connections, clients: map[string]bucketClient{}, orphanAge: orphanAge,
+		buckets: newBucketProvider(cfg), connections: connections, clients: map[string]bucketClient{},
+		credentials: map[uuid.UUID]aws.CredentialsProvider{}, orphanAge: orphanAge,
 	}
 }
 
