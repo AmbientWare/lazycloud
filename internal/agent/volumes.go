@@ -248,6 +248,10 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	binds := make([]mount.Mount, 0, len(specs))
 	for n, group := range mounterGroups(specs) {
 		m := v.newMounter(mounterName(c.id, n), c.id)
+		// Tracked first, so that release deletes keys written for it.
+		v.mu.Lock()
+		v.mounts[c.id] = append(v.mounts[c.id], m)
+		v.mu.Unlock()
 		var ms mountSpec
 		var dirs []string
 		var what string
@@ -262,9 +266,6 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		if err != nil {
 			return nil, err
 		}
-		v.mu.Lock()
-		v.mounts[c.id] = append(v.mounts[c.id], m)
-		v.mu.Unlock()
 		if err := v.start(ctx, m, what, ms); err != nil {
 			return nil, err
 		}
@@ -687,20 +688,18 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			}
 		}
 	}
-	sliced := map[string]string{}
-	if v.a.cfg.GeeseFSPath != "" {
-		var err error
-		if sliced, err = v.a.hostSlices(ctx); err != nil {
-			return err
-		}
+	sliced, err := v.a.hostSlices(ctx)
+	if err != nil {
+		return err
 	}
 	var orphans []string
 	v.mu.Lock()
-	for container, slice := range sliced {
-		if v.a.lookup(container) == nil {
-			orphans = append(orphans, slice)
+	for _, slice := range sliced {
+		container, err := uuid.Parse(strings.TrimSuffix(strings.TrimPrefix(slice, v.a.slicePrefix()), ".slice"))
+		if err == nil && v.a.lookup(container.String()) != nil {
+			v.mounts[container.String()] = nil
 		} else {
-			v.mounts[container] = nil
+			orphans = append(orphans, slice)
 		}
 	}
 	for _, m := range live {
@@ -735,7 +734,36 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			}
 		}
 	}
+	// A directory no mounter has is left by a stop cut short; one still
+	// mounted or holding files is kept.
+	dirs, err := os.ReadDir(v.mountDir())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("list mount directories: %w", err)
+	}
+	for _, entry := range dirs {
+		if dir := filepath.Join(v.mountDir(), entry.Name()); live[dir] == nil {
+			if err := os.Remove(dir); err != nil {
+				v.a.log.Warn("removing a mount directory failed", "dir", dir, "error", err)
+			}
+		}
+	}
 	v.adoptGrants()
+	return nil
+}
+
+// removeAll stops this host's slices and deletes the storage keys it holds,
+// once its containers are gone.
+func (v *volumes) removeAll(ctx context.Context) error {
+	sliced, err := v.a.hostSlices(ctx)
+	if err != nil {
+		return err
+	}
+	if err := stopSlices(ctx, sliced...); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Join(v.a.cfg.StateDir, "storage")); err != nil {
+		return fmt.Errorf("remove storage keys: %w", err)
+	}
 	return nil
 }
 

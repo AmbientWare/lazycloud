@@ -7,7 +7,6 @@ import (
 
 	systemd "github.com/coreos/go-systemd/v22/dbus"
 	"github.com/godbus/dbus/v5"
-	"github.com/google/uuid"
 	containertypes "github.com/moby/moby/api/types/container"
 )
 
@@ -85,20 +84,16 @@ func awaitJob(ctx context.Context, what string, done <-chan string) error {
 	}
 }
 
-// hostSlices lists this host's container slices by container id.
-func (a *Agent) hostSlices(ctx context.Context) (map[string]string, error) {
-	out := map[string]string{}
+// hostSlices lists this host's container slices.
+func (a *Agent) hostSlices(ctx context.Context) ([]string, error) {
+	var out []string
 	err := withSystemd(ctx, func(conn *systemd.Conn) error {
 		units, err := conn.ListUnitsByPatternsContext(ctx, nil, []string{a.slicePrefix() + "*.slice"})
 		if err != nil {
 			return fmt.Errorf("list container slices: %w", err)
 		}
 		for _, unit := range units {
-			id, err := uuid.Parse(strings.TrimSuffix(strings.TrimPrefix(unit.Name, a.slicePrefix()), ".slice"))
-			if err != nil {
-				return fmt.Errorf("slice %s names no container: %w", unit.Name, err)
-			}
-			out[id.String()] = unit.Name
+			out = append(out, unit.Name)
 		}
 		return nil
 	})

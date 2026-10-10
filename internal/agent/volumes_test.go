@@ -147,6 +147,21 @@ func (e *env) sliceDir(container string) string {
 	return filepath.Join(cgroupRoot, "lazycloud.slice", "lazycloud-workloads.slice", a.workloadSlice(container))
 }
 
+// plantSlice makes a slice of this host's that names no container and
+// returns its cgroup.
+func (e *env) plantSlice() string {
+	e.t.Helper()
+	name := (&Agent{identity: identity{HostID: e.server.hostID}}).slicePrefix() + "planted.slice"
+	if err := startSlice(e.t.Context(), name, containertypes.Resources{Memory: 64 << 20, CPUShares: 1024}); err != nil {
+		e.t.Fatal(err)
+	}
+	dir := filepath.Join(cgroupRoot, "lazycloud.slice", "lazycloud-workloads.slice", name)
+	if _, err := os.Stat(dir); err != nil {
+		e.t.Fatal(err)
+	}
+	return dir
+}
+
 // cgroupOf is the cgroup of the Docker container id's first process.
 func (e *env) cgroupOf(id string) string {
 	e.t.Helper()
@@ -608,7 +623,8 @@ func TestABucketPrefixStaysInsideItsMount(t *testing.T) {
 
 // TestAdoptKeepsLiveMountsAndRemovesOrphans: a restarted agent keeps a
 // running container's mount, fails a container whose mount died while it
-// was away, and removes the mount, keys and slice of a container that went.
+// was away, and removes the mount, keys and slice of a container that went,
+// a slice that names no container and a mount directory without a mounter.
 func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	store := newTestStore(t)
@@ -636,7 +652,15 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	if _, err := e.docker.ContainerRemove(t.Context(), "lazycloud-"+gone, client.ContainerRemoveOptions{Force: true}); err != nil {
 		t.Fatal(err)
 	}
+	stray := filepath.Join(e.stateDir, "mounts", "stray")
+	if err := os.Mkdir(stray, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	planted := e.plantSlice()
 
+	// The agent comes back without GeeseFS, which adopting needs no more
+	// than removing does.
+	e.geesefs = ""
 	e.startAgent()
 	s = e.session()
 	s.adoptedReady(t, kept)
@@ -653,8 +677,10 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	if _, err := os.Stat(keys); !os.IsNotExist(err) {
 		t.Fatalf("the orphaned bucket's keys were left: %v", err)
 	}
-	if _, err := os.Stat(e.sliceDir(gone)); !os.IsNotExist(err) {
-		t.Fatalf("the orphaned slice was left: %v", err)
+	for _, left := range []string{e.sliceDir(gone), planted, stray} {
+		if _, err := os.Stat(left); !os.IsNotExist(err) {
+			t.Fatalf("%s was left: %v", left, err)
+		}
 	}
 	e.eventually("the dead mount goes with its container", func() bool { return len(e.mounters(true, lost)) == 0 })
 }
