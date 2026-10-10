@@ -14,7 +14,8 @@ import (
 )
 
 // startFailureLimit is how many consecutive containers of a release may fail
-// preparation before its queued tasks fail instead of waiting for another.
+// preparation before its queued tasks fail instead of waiting for another;
+// then only a user action, through RetryStarts, starts the release again.
 const startFailureLimit = 3
 
 // ContainerExit describes why a container stopped.

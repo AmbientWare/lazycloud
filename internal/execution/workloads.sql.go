@@ -1030,24 +1030,6 @@ func (q *Queries) RecordNetworkApplied(ctx context.Context, arg RecordNetworkApp
 	return id, err
 }
 
-const retryFailedRelease = `-- name: RetryFailedRelease :exec
-update releases set start_failures = 0, load_error = null
-where id = $1 and (start_failures >= $2::int or load_error is not null)
-`
-
-type RetryFailedReleaseParams struct {
-	ID                uuid.UUID
-	StartFailureLimit int32
-}
-
-// A start retries a release that stopped starting or failed to load. One
-// still backing off between failed starts keeps its count, so repeated
-// starts wait out the backoff.
-func (q *Queries) RetryFailedRelease(ctx context.Context, arg RetryFailedReleaseParams) error {
-	_, err := q.db.Exec(ctx, retryFailedRelease, arg.ID, arg.StartFailureLimit)
-	return err
-}
-
 const sandboxCreatedDays = `-- name: SandboxCreatedDays :many
 select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
