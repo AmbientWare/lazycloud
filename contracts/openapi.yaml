@@ -5133,7 +5133,7 @@ components:
 
     CloudBucketSpec:
       type: object
-      required: [bucket]
+      required: [bucket, access_key_secret, secret_key_secret]
       properties:
         bucket:
           type: string

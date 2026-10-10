@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"mime"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -544,19 +545,17 @@ func (s *Storage) AbortVolumeUpload(ctx context.Context, workspace identity.Work
 var reservedMountRoots = [...]string{"/opt/lazycloud", "/run/lazycloud", "/workspace", "/proc", "/sys", "/dev"} //nolint:gochecknoglobals // A constant table.
 
 // ValidateVolumes checks a workload's volume specs: unique names and mount
-// paths, none on a path the runtime owns, and cloud buckets that name the
-// workspace secrets holding both keys. Hosts have no ambient credentials of
-// their own to mount a bucket with.
+// paths, none on a path the runtime owns, and cloud bucket prefixes made of
+// key segments, each ending in /, none empty, . or .., so a prefix stays
+// below the bucket's root.
 func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 	names := map[string]bool{}
 	paths := map[string]bool{}
 	for _, spec := range specs {
 		if b := spec.CloudBucket; b != nil {
-			if b.AccessKeySecret == nil || *b.AccessKeySecret == "" || b.SecretKeySecret == nil || *b.SecretKeySecret == "" {
-				return invalid("cloud bucket %s: name the workspace secrets holding its access key and secret key", spec.Name)
-			}
-			if b.Prefix != nil && *b.Prefix != "" && !strings.HasSuffix(*b.Prefix, "/") {
-				return invalid("cloud bucket %s: prefix %q must end with /", spec.Name, *b.Prefix)
+			if p := deref(b.Prefix); p != "" && (!strings.HasSuffix(p, "/") || slices.ContainsFunc(strings.Split(strings.TrimSuffix(p, "/"), "/"),
+				func(segment string) bool { return segment == "" || segment == "." || segment == ".." })) {
+				return invalid("cloud bucket %s: prefix %q must be key segments each ending in /, none empty, . or ..", spec.Name, p)
 			}
 			if _, err := CloudBucketLocation(*b); err != nil {
 				return invalid("cloud bucket %s: name its region, or the endpoint of an S3-compatible store", spec.Name)

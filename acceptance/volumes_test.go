@@ -50,7 +50,7 @@ func TestCloudBucketsMountOverHTTPS(t *testing.T) {
 		readOnly := true
 		return apitypes.VolumeMountSpec{Name: name, MountPath: &mountPath, ReadOnly: &readOnly, CloudBucket: &apitypes.CloudBucketSpec{
 			Bucket: objectStore.Bucket, Prefix: &prefix, Region: &objectStore.Region, Endpoint: &tlsStore.Endpoint,
-			ForcePathStyle: &pathStyle, AccessKeySecret: ptr("STORE_KEY"), SecretKeySecret: ptr("STORE_SECRET"),
+			ForcePathStyle: &pathStyle, AccessKeySecret: "STORE_KEY", SecretKeySecret: "STORE_SECRET",
 		}}
 	}
 	s := endpointSpec(p.upload(map[string]string{"app.py": bucketApp}), "read", "app:read", "/")

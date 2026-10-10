@@ -163,10 +163,27 @@ func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
 	}
 	bucket := "my-videos"
 	noRegion := apitypes.VolumeMountSpec{Name: "videos", CloudBucket: &apitypes.CloudBucketSpec{
-		Bucket: bucket, AccessKeySecret: &bucket, SecretKeySecret: &bucket,
+		Bucket: bucket, AccessKeySecret: "KEY", SecretKeySecret: "SECRET",
 	}}
 	if err := ValidateVolumes([]apitypes.VolumeMountSpec{noRegion}); err == nil {
 		t.Fatal("deployed an AWS bucket without a region")
+	}
+}
+
+// TestCloudBucketPrefixesStayBelowTheRoot: deploy accepts a cloud bucket
+// prefix of key segments each ending in /, and refuses one that is
+// absolute, unterminated, or holds an empty, . or .. segment.
+func TestCloudBucketPrefixesStayBelowTheRoot(t *testing.T) {
+	for prefix, ok := range map[string]bool{
+		"": true, "data/": true, "data/2026/": true, "a.b/..c/": true,
+		"data": false, "/data/": false, "data//x/": false, "./": false, "data/./": false, "../": false, "data/../x/": false, "/": false,
+	} {
+		spec := apitypes.VolumeMountSpec{Name: "data", CloudBucket: &apitypes.CloudBucketSpec{
+			Bucket: "my-data", Region: aws.String("us-east-2"), Prefix: &prefix, AccessKeySecret: "KEY", SecretKeySecret: "SECRET",
+		}}
+		if err := ValidateVolumes([]apitypes.VolumeMountSpec{spec}); (err == nil) != ok {
+			t.Errorf("prefix %q: %v, want accepted %v", prefix, err, ok)
+		}
 	}
 }
 

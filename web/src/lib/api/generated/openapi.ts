@@ -4105,9 +4105,9 @@ export interface components {
             /** @default false */
             force_path_style?: boolean;
             /** @description The workspace secret holding the access key id. */
-            access_key_secret?: components["schemas"]["SecretName"];
+            access_key_secret: components["schemas"]["SecretName"];
             /** @description The workspace secret holding the secret access key. */
-            secret_key_secret?: components["schemas"]["SecretName"];
+            secret_key_secret: components["schemas"]["SecretName"];
         };
         Volume: {
             /** Format: uuid */

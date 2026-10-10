@@ -76,7 +76,7 @@ func bucketKeys(spec apitypes.WorkloadSpec) []string {
 	if spec.Volumes != nil {
 		for _, v := range *spec.Volumes {
 			if b := v.CloudBucket; b != nil {
-				names = append(names, deref(b.AccessKeySecret), deref(b.SecretKeySecret))
+				names = append(names, b.AccessKeySecret, b.SecretKeySecret)
 			}
 		}
 	}
@@ -108,7 +108,7 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand,
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
 				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
-				ForcePathStyle: loc.PathStyle, AccessKeyId: secrets[deref(b.AccessKeySecret)], SecretAccessKey: secrets[deref(b.SecretKeySecret)],
+				ForcePathStyle: loc.PathStyle, AccessKeyId: secrets[b.AccessKeySecret], SecretAccessKey: secrets[b.SecretKeySecret],
 			}}
 		}
 		out[n] = mount
