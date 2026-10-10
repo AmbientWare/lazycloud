@@ -188,8 +188,6 @@ async def send_events(websocket: WebSocket, task: Task) -> None:
 def read_event(task: Task) -> JobEvent:
     raw = job_progress.get(task.task_id)
     progress = JobProgress.model_validate(raw) if raw is not None else None
-    if progress is not None and progress.stage in FINISHED_STAGES:
-        return describe_job(progress, task_status="", pending_message=None)
     view = task.view()
     return describe_job(
         progress,
