@@ -58,7 +58,7 @@ class TrainingResult(BaseModel):
     image=gpu_image,
     gpu=GPUS,
     cpu=4,
-    memory="24Gi",
+    memory="16Gi",
     volumes=[storage],
     timeout_seconds=3 * 3600,
     # A failure here would fail again; preemption restarts the call anyway,
