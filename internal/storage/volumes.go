@@ -41,7 +41,7 @@ func (s *Storage) CreateVolume(ctx context.Context, workspace identity.Workspace
 	if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
 		return apitypes.Volume{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 	}
-	if err := s.queries.InsertVolume(ctx, InsertVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: name}); err != nil {
+	if err := s.queries.InsertVolumes(ctx, InsertVolumesParams{WorkspaceID: uuid.UUID(workspace), Names: []string{name}}); err != nil {
 		return apitypes.Volume{}, fmt.Errorf("insert volume: %w", err)
 	}
 	return s.GetVolume(ctx, workspace, name)
@@ -139,7 +139,6 @@ type Mount struct {
 	// Volume is set for platform volumes, which mount from the workspace
 	// bucket under Prefix.
 	Volume    *uuid.UUID
-	Bucket    string
 	Prefix    string
 	MountPath string
 	ReadOnly  bool
@@ -159,47 +158,52 @@ func MountPath(spec apitypes.VolumeMountSpec) string {
 }
 
 // MountVolumes records that container mounts the platform volumes in specs,
-// creating volumes on first use, and returns every mount. Each volume is
-// locked FOR SHARE while its mount row is written, so a concurrent delete
-// either sees the mount or finishes first, in which case a new volume of the
-// name is created. It is idempotent per container.
+// creating volumes on first use, and returns every mount. The volumes are
+// locked FOR SHARE while their mount rows are written, so a concurrent
+// delete either sees the mount or finishes first, which fails this call
+// for the start to try again with a new volume of the name. It is
+// idempotent per container.
 func (s *Storage) MountVolumes(ctx context.Context, workspace identity.WorkspaceID, container uuid.UUID, specs []apitypes.VolumeMountSpec) ([]Mount, error) {
 	mounts := make([]Mount, len(specs))
-	platform := false
+	var names []string
 	for n, spec := range specs {
 		mounts[n] = Mount{MountPath: MountPath(spec), ReadOnly: spec.ReadOnly != nil && *spec.ReadOnly, CloudBucket: spec.CloudBucket}
-		platform = platform || spec.CloudBucket == nil
+		if spec.CloudBucket == nil {
+			names = append(names, spec.Name)
+		}
 	}
-	if !platform {
+	if len(names) == 0 {
 		return mounts, nil
 	}
-	store, err := s.workspaceStore(ctx, workspace)
-	if err != nil {
-		return nil, err
-	}
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	ids := make(map[string]uuid.UUID, len(names))
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
-		for n, spec := range specs {
-			if spec.CloudBucket != nil {
-				continue
-			}
-			key := ShareActiveVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: spec.Name}
-			if err := q.InsertVolume(ctx, InsertVolumeParams(key)); err != nil {
-				return fmt.Errorf("create volume %s: %w", spec.Name, err)
-			}
-			id, err := q.ShareActiveVolume(ctx, key)
-			if err != nil {
-				return fmt.Errorf("lock volume %s: %w", spec.Name, err)
-			}
-			if err := q.InsertVolumeMount(ctx, InsertVolumeMountParams{VolumeID: id, ContainerID: container}); err != nil {
-				return fmt.Errorf("record mount of %s: %w", spec.Name, err)
-			}
-			mounts[n].Volume, mounts[n].Bucket, mounts[n].Prefix = &id, store.name, volumePrefix(id)
+		if err := q.InsertVolumes(ctx, InsertVolumesParams{WorkspaceID: uuid.UUID(workspace), Names: names}); err != nil {
+			return fmt.Errorf("create volumes: %w", err)
+		}
+		rows, err := q.ShareActiveVolumes(ctx, ShareActiveVolumesParams{WorkspaceID: uuid.UUID(workspace), Names: names})
+		if err != nil {
+			return fmt.Errorf("lock volumes: %w", err)
+		}
+		if len(rows) != len(names) {
+			return errors.New("a volume was deleted while it was mounted")
+		}
+		volumes := make([]uuid.UUID, len(rows))
+		for n, row := range rows {
+			volumes[n], ids[row.Name] = row.ID, row.ID
+		}
+		if err := q.InsertVolumeMounts(ctx, InsertVolumeMountsParams{VolumeIds: volumes, ContainerID: container}); err != nil {
+			return fmt.Errorf("record mounts: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mount volumes: %w", err)
+	}
+	for n, spec := range specs {
+		if id, ok := ids[spec.Name]; ok && spec.CloudBucket == nil {
+			mounts[n].Volume, mounts[n].Prefix = &id, volumePrefix(id)
+		}
 	}
 	return mounts, nil
 }

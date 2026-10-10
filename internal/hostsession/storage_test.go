@@ -115,7 +115,7 @@ func TestStorageRefusalsFailOnlyTheirContainer(t *testing.T) {
 		}
 	}
 	for container, want := range map[uuid.UUID]string{
-		volume: "volumes unavailable: workspace buckets are not configured",
+		volume: "storage grant unavailable: workspace buckets are not configured",
 		disk:   "storage grant unavailable: workspace buckets are not configured",
 	} {
 		var state, reason, message string

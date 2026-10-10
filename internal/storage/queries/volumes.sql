@@ -23,8 +23,8 @@ returning bucket, region;
 -- name: DeleteWorkspaceBucket :exec
 delete from workspace_buckets where workspace_id = @workspace_id;
 
--- name: InsertVolume :exec
-insert into volumes (workspace_id, name) values (@workspace_id, @name)
+-- name: InsertVolumes :exec
+insert into volumes (workspace_id, name) select @workspace_id, unnest(@names::text[])
 on conflict (workspace_id, name) where state = 'active' do nothing;
 
 -- name: ActiveVolume :one
@@ -37,9 +37,10 @@ select id from volumes
 where workspace_id = @workspace_id and name = @name and state = 'active'
 for update;
 
--- name: ShareActiveVolume :one
-select id from volumes
-where workspace_id = @workspace_id and name = @name and state = 'active'
+-- name: ShareActiveVolumes :many
+select id, name from volumes
+where workspace_id = @workspace_id and name = any(@names::text[]) and state = 'active'
+order by id
 for share;
 
 -- name: ListVolumes :many
@@ -72,8 +73,8 @@ limit 1;
 -- name: MarkVolumeDeleting :exec
 update volumes set state = 'deleting', deleted_at = now() where id = @id;
 
--- name: InsertVolumeMount :exec
-insert into volume_mounts (volume_id, container_id) values (@volume_id, @container_id)
+-- name: InsertVolumeMounts :exec
+insert into volume_mounts (volume_id, container_id) select unnest(@volume_ids::uuid[]), @container_id
 on conflict do nothing;
 
 -- name: DeletingVolumes :many

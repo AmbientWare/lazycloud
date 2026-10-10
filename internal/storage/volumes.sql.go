@@ -253,33 +253,33 @@ func (q *Queries) InsertStorageGrant(ctx context.Context, arg InsertStorageGrant
 	return err
 }
 
-const insertVolume = `-- name: InsertVolume :exec
-insert into volumes (workspace_id, name) values ($1, $2)
-on conflict (workspace_id, name) where state = 'active' do nothing
-`
-
-type InsertVolumeParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-}
-
-func (q *Queries) InsertVolume(ctx context.Context, arg InsertVolumeParams) error {
-	_, err := q.db.Exec(ctx, insertVolume, arg.WorkspaceID, arg.Name)
-	return err
-}
-
-const insertVolumeMount = `-- name: InsertVolumeMount :exec
-insert into volume_mounts (volume_id, container_id) values ($1, $2)
+const insertVolumeMounts = `-- name: InsertVolumeMounts :exec
+insert into volume_mounts (volume_id, container_id) select unnest($1::uuid[]), $2
 on conflict do nothing
 `
 
-type InsertVolumeMountParams struct {
-	VolumeID    uuid.UUID
+type InsertVolumeMountsParams struct {
+	VolumeIds   []uuid.UUID
 	ContainerID uuid.UUID
 }
 
-func (q *Queries) InsertVolumeMount(ctx context.Context, arg InsertVolumeMountParams) error {
-	_, err := q.db.Exec(ctx, insertVolumeMount, arg.VolumeID, arg.ContainerID)
+func (q *Queries) InsertVolumeMounts(ctx context.Context, arg InsertVolumeMountsParams) error {
+	_, err := q.db.Exec(ctx, insertVolumeMounts, arg.VolumeIds, arg.ContainerID)
+	return err
+}
+
+const insertVolumes = `-- name: InsertVolumes :exec
+insert into volumes (workspace_id, name) select $1, unnest($2::text[])
+on conflict (workspace_id, name) where state = 'active' do nothing
+`
+
+type InsertVolumesParams struct {
+	WorkspaceID uuid.UUID
+	Names       []string
+}
+
+func (q *Queries) InsertVolumes(ctx context.Context, arg InsertVolumesParams) error {
+	_, err := q.db.Exec(ctx, insertVolumes, arg.WorkspaceID, arg.Names)
 	return err
 }
 
@@ -463,22 +463,41 @@ func (q *Queries) RecordVolumeSize(ctx context.Context, arg RecordVolumeSizePara
 	return err
 }
 
-const shareActiveVolume = `-- name: ShareActiveVolume :one
-select id from volumes
-where workspace_id = $1 and name = $2 and state = 'active'
+const shareActiveVolumes = `-- name: ShareActiveVolumes :many
+select id, name from volumes
+where workspace_id = $1 and name = any($2::text[]) and state = 'active'
+order by id
 for share
 `
 
-type ShareActiveVolumeParams struct {
+type ShareActiveVolumesParams struct {
 	WorkspaceID uuid.UUID
-	Name        string
+	Names       []string
 }
 
-func (q *Queries) ShareActiveVolume(ctx context.Context, arg ShareActiveVolumeParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, shareActiveVolume, arg.WorkspaceID, arg.Name)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+type ShareActiveVolumesRow struct {
+	ID   uuid.UUID
+	Name string
+}
+
+func (q *Queries) ShareActiveVolumes(ctx context.Context, arg ShareActiveVolumesParams) ([]ShareActiveVolumesRow, error) {
+	rows, err := q.db.Query(ctx, shareActiveVolumes, arg.WorkspaceID, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ShareActiveVolumesRow
+	for rows.Next() {
+		var i ShareActiveVolumesRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const volumeUsers = `-- name: VolumeUsers :many
