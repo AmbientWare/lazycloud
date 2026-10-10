@@ -106,9 +106,9 @@ class ParquetExampleConfig:
     region: str
     input_prefix: str
     output_key: str
-    endpoint: str = ""
-    access_key_secret: str = DEFAULT_ACCESS_KEY_SECRET
-    secret_key_secret: str = DEFAULT_SECRET_KEY_SECRET
+    endpoint: str
+    access_key_secret: str
+    secret_key_secret: str
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> ParquetExampleConfig:
@@ -129,11 +129,11 @@ class ParquetExampleConfig:
 
         endpoint = validate_endpoint(values.get(ENDPOINT_ENV, ""))
         access_key_secret = validate_secret_name(
-            values.get(ACCESS_KEY_SECRET_ENV) or DEFAULT_ACCESS_KEY_SECRET,
+            values.get(ACCESS_KEY_SECRET_ENV, DEFAULT_ACCESS_KEY_SECRET),
             field="access-key secret",
         )
         secret_key_secret = validate_secret_name(
-            values.get(SECRET_KEY_SECRET_ENV) or DEFAULT_SECRET_KEY_SECRET,
+            values.get(SECRET_KEY_SECRET_ENV, DEFAULT_SECRET_KEY_SECRET),
             field="secret-key secret",
         )
         return cls(
@@ -152,11 +152,11 @@ class ParquetExampleConfig:
             REGION_ENV: self.region,
             INPUT_PREFIX_ENV: self.input_prefix,
             OUTPUT_KEY_ENV: self.output_key,
+            ACCESS_KEY_SECRET_ENV: self.access_key_secret,
+            SECRET_KEY_SECRET_ENV: self.secret_key_secret,
         }
         if self.endpoint:
             values[ENDPOINT_ENV] = self.endpoint
-        values[ACCESS_KEY_SECRET_ENV] = self.access_key_secret
-        values[SECRET_KEY_SECRET_ENV] = self.secret_key_secret
         return values
 
 

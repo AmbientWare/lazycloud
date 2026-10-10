@@ -50,19 +50,14 @@ input files.
 read -rsp "S3 access key ID: " PARQUET_S3_ACCESS_KEY_ID; echo
 read -rsp "S3 secret access key: " PARQUET_S3_SECRET_ACCESS_KEY; echo
 export PARQUET_S3_ACCESS_KEY_ID PARQUET_S3_SECRET_ACCESS_KEY
-
-export LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET="PARQUET_S3_ACCESS_KEY_ID"
-export LAZYCLOUD_PARQUET_SECRET_KEY_SECRET="PARQUET_S3_SECRET_ACCESS_KEY"
-
 uv run python -m parallel_parquet.configure
-unset PARQUET_S3_ACCESS_KEY_ID PARQUET_S3_SECRET_ACCESS_KEY
 ```
 
 `configure.py` reads the two credential values from your environment and uses
-`Secret(...).set(...)` to store them under the names in the app's configuration.
-Running it again replaces those values. The `LAZYCLOUD_PARQUET_*` variables
-hold bucket settings and secret names. Keep them exported in the shell that
-runs the batch.
+`Secret(...).set(...)` to store them as workspace secrets with the same names.
+Running it again replaces those values. `LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET`
+and `LAZYCLOUD_PARQUET_SECRET_KEY_SECRET` pick other secret names. Keep the
+`LAZYCLOUD_PARQUET_*` variables exported in the shell that runs the batch.
 
 The app declares one `CloudBucket` and attaches it to all four functions with
 `volumes=[data_bucket]`. Edit that definition to change the mount path or
