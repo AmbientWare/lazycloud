@@ -13,11 +13,25 @@ import (
 )
 
 const authenticateSession = `-- name: AuthenticateSession :one
+with renewed as (
+    update sessions s
+    set expires_at = least(now() + make_interval(secs => $2::float8),
+                           s.created_at + make_interval(secs => $3::float8))
+    where s.token_hash = $1 and s.expires_at > now()
+      and s.expires_at <= now() + make_interval(secs => $4::float8)
+)
 select s.id, s.user_id, u.email, u.is_admin
 from sessions s
 join users u on u.id = s.user_id
 where s.token_hash = $1 and s.expires_at > now() and u.status = 'active'
 `
+
+type AuthenticateSessionParams struct {
+	TokenHash          []byte
+	IdleSeconds        float64
+	MaxAgeSeconds      float64
+	RenewWithinSeconds float64
+}
 
 type AuthenticateSessionRow struct {
 	ID      uuid.UUID
@@ -26,8 +40,15 @@ type AuthenticateSessionRow struct {
 	IsAdmin bool
 }
 
-func (q *Queries) AuthenticateSession(ctx context.Context, tokenHash []byte) (AuthenticateSessionRow, error) {
-	row := q.db.QueryRow(ctx, authenticateSession, tokenHash)
+// A live session's user. A session expiring within renew_within renews to
+// expire idle after now, at most max_age after it began.
+func (q *Queries) AuthenticateSession(ctx context.Context, arg AuthenticateSessionParams) (AuthenticateSessionRow, error) {
+	row := q.db.QueryRow(ctx, authenticateSession,
+		arg.TokenHash,
+		arg.IdleSeconds,
+		arg.MaxAgeSeconds,
+		arg.RenewWithinSeconds,
+	)
 	var i AuthenticateSessionRow
 	err := row.Scan(
 		&i.ID,
