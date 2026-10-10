@@ -52,6 +52,15 @@ values (@user_id, @token_hash, @expires_at)
 returning id;
 
 -- name: AuthenticateSession :one
+-- A live session's user. A session expiring within renew_within renews to
+-- expire idle after now, at most max_age after it began.
+with renewed as (
+    update sessions s
+    set expires_at = least(now() + make_interval(secs => @idle_seconds::float8),
+                           s.created_at + make_interval(secs => @max_age_seconds::float8))
+    where s.token_hash = @token_hash and s.expires_at > now()
+      and s.expires_at <= now() + make_interval(secs => @renew_within_seconds::float8)
+)
 select s.id, s.user_id, u.email, u.is_admin
 from sessions s
 join users u on u.id = s.user_id
