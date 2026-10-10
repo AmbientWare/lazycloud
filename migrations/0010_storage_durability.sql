@@ -32,3 +32,12 @@ alter table disk_generations
 -- The disks a host holds at once, as its agent offers them: its data
 -- volume keeps room for each one's unpublished writes.
 alter table hosts add column disk_slots int not null default 0 check (disk_slots >= 0);
+
+-- The volume mounters a release's container runs: one for all its platform
+-- volumes and one per distinct cloud bucket, whatever the prefix.
+create function release_mounters(spec jsonb) returns integer
+language sql immutable
+return (
+    select count(distinct coalesce((v -> 'cloud_bucket') - 'prefix', 'null'))
+    from jsonb_array_elements(coalesce(spec -> 'volumes', '[]'::jsonb)) v
+);

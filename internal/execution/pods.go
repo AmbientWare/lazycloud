@@ -137,7 +137,7 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 		}
 		created, err := q.CreatePendingPodContainers(ctx, CreatePendingPodContainersParams{
 			WorkspaceID: row.WorkspaceID, ReleaseID: row.ReleaseID,
-			CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes, GpuCount: row.GpuCount,
+			CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters), GpuCount: row.GpuCount,
 			RateClass:       string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			KeepWarmSeconds: keepWarm, BlockNetwork: row.BlockNetwork, AllowList: row.AllowList,
 			Count:       int32(count), //nolint:gosec // Bounded by the pod's count.

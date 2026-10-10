@@ -627,7 +627,7 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 		PythonVersion: version,
 		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)},
 		Resources: &hostproto.Resources{
-			CpuMillis: int64(start.CPUMillis), MemoryBytes: start.MemoryBytes,
+			CpuMillis: int64(start.CPUMillis), MemoryBytes: start.MemoryBytes, MountReserveBytes: start.MountReserveBytes,
 			CpuLimitMillis: int64(start.CPULimitMillis), MemoryLimitBytes: start.MemoryLimitBytes,
 			DiskLimitBytes: diskLimit,
 			GpuCount:       gpusOf(start.Spec.Resources),

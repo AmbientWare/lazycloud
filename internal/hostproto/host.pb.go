@@ -4361,11 +4361,15 @@ func (x *Source) GetUrlExpiresAt() *timestamppb.Timestamp {
 // container may use more up to the limits. The host caps cpu_limit_millis at
 // its own size.
 type Resources struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	CpuMillis        int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
-	MemoryBytes      int64                  `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
-	CpuLimitMillis   int64                  `protobuf:"varint,3,opt,name=cpu_limit_millis,json=cpuLimitMillis,proto3" json:"cpu_limit_millis,omitempty"`
-	MemoryLimitBytes int64                  `protobuf:"varint,4,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	CpuMillis int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
+	// Includes mount_reserve_bytes.
+	MemoryBytes int64 `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	// The memory of memory_bytes the container's volume mounters take: one
+	// for its platform volumes and one per cloud bucket.
+	MountReserveBytes int64 `protobuf:"varint,5,opt,name=mount_reserve_bytes,json=mountReserveBytes,proto3" json:"mount_reserve_bytes,omitempty"`
+	CpuLimitMillis    int64 `protobuf:"varint,3,opt,name=cpu_limit_millis,json=cpuLimitMillis,proto3" json:"cpu_limit_millis,omitempty"`
+	MemoryLimitBytes  int64 `protobuf:"varint,4,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
 	// The writable layer limit; zero is the host default.
 	DiskLimitBytes int64 `protobuf:"varint,40,opt,name=disk_limit_bytes,json=diskLimitBytes,proto3" json:"disk_limit_bytes,omitempty"`
 	// GPUs the host gives the container; the host picks free devices.
@@ -4414,6 +4418,13 @@ func (x *Resources) GetCpuMillis() int64 {
 func (x *Resources) GetMemoryBytes() int64 {
 	if x != nil {
 		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *Resources) GetMountReserveBytes() int64 {
+	if x != nil {
+		return x.MountReserveBytes
 	}
 	return 0
 }
@@ -7647,11 +7658,12 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x06Source\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12@\n" +
-	"\x0eurl_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\furlExpiresAt\"\xec\x01\n" +
+	"\x0eurl_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\furlExpiresAt\"\x9c\x02\n" +
 	"\tResources\x12\x1d\n" +
 	"\n" +
 	"cpu_millis\x18\x01 \x01(\x03R\tcpuMillis\x12!\n" +
-	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\x12(\n" +
+	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\x12.\n" +
+	"\x13mount_reserve_bytes\x18\x05 \x01(\x03R\x11mountReserveBytes\x12(\n" +
 	"\x10cpu_limit_millis\x18\x03 \x01(\x03R\x0ecpuLimitMillis\x12,\n" +
 	"\x12memory_limit_bytes\x18\x04 \x01(\x03R\x10memoryLimitBytes\x12(\n" +
 	"\x10disk_limit_bytes\x18( \x01(\x03R\x0ediskLimitBytes\x12\x1b\n" +

@@ -677,7 +677,11 @@ message Source {
 // its own size.
 message Resources {
   int64 cpu_millis = 1;
+  // Includes mount_reserve_bytes.
   int64 memory_bytes = 2;
+  // The memory of memory_bytes the container's volume mounters take: one
+  // for its platform volumes and one per cloud bucket.
+  int64 mount_reserve_bytes = 5;
   int64 cpu_limit_millis = 3;
   int64 memory_limit_bytes = 4;
   // The writable layer limit; zero is the host default.

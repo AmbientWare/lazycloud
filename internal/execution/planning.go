@@ -241,7 +241,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 			ReleaseID:   release.ReleaseID,
 			Slots:       release.Slots,
 			CpuMillis:   cpu.Millis(release.CpuMillis),
-			MemoryBytes: release.MemoryBytes,
+			MemoryBytes: release.MemoryBytes + mountReserve(release.Mounters),
 			GpuCount:    release.GpuCount,
 			RateClass:   string(billing.RateClassFor(release.Pinned, release.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
