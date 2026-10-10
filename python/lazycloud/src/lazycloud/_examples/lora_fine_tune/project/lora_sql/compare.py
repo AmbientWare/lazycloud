@@ -52,7 +52,7 @@ class Comparison(BaseModel):
 async def compare(question: Question, context: Context) -> Comparison:
     """Ask both models, then run each query against the database `context` creates."""
     try:
-        run_query(context, "SELECT 1")
+        await asyncio.to_thread(run_query, context, "SELECT 1")
     except SchemaError as exc:
         raise ValidationError(f"the database statements fail: {exc}", field="context") from exc
     async with AsyncOpenAI(
@@ -77,6 +77,6 @@ async def _answer(client: AsyncOpenAI, model: str, context: str, question: str) 
     )
     sql = extract_sql(completion.choices[0].message.content or "")
     try:
-        return Answer(sql=sql, result=run_query(context, sql), error=None)
+        return Answer(sql=sql, result=await asyncio.to_thread(run_query, context, sql), error=None)
     except QueryError as exc:
         return Answer(sql=sql, result=None, error=str(exc))

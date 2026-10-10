@@ -278,12 +278,34 @@ def prepare_data(train_size: int = 10_000, eval_size: int = 500) -> PreparedData
 ```python lora_sql/train.py
 def tokenize(
     tokenizer: "PreTrainedTokenizerBase", example: SqlExample, max_tokens: int
+) -> dict[str, list[int]] | None:
+    """Token ids for one example with the loss on the answer only, or None when too long."""
+    messages = chat_messages(example.context, example.question)
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    full = tokenizer.apply_chat_template(
+        [*messages, {"role": "assistant", "content": example.sql}], tokenize=False
+    )
+    if not isinstance(prompt, str) or not isinstance(full, str) or not full.startswith(prompt):
+        raise ValueError("the chat template does not extend the prompt with the answer")
+    prompt_ids: list[int] = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    answer_ids: list[int] = tokenizer(full[len(prompt) :], add_special_tokens=False)["input_ids"]
+    input_ids = prompt_ids + answer_ids
+    if len(input_ids) > max_tokens:
+        return None
+    return {
+        "input_ids": input_ids,
+        "attention_mask": [1] * len(input_ids),
+        "labels": [IGNORED_LABEL] * len(prompt_ids) + answer_ids,
+    }
 ```
 
 LoRA trains small matrices beside every linear layer and leaves the 1.5B base
 weights frozen. At rank 16 the adapter is about 75 MB, and every run shares
 the base weights in the volume. `TrainingConfig` holds the settings and their
-bounds, and a JSON object on the command line overrides them.
+bounds, and a JSON object on the command line overrides them. Each forward
+pass takes two sequences and gradient accumulation makes up the rest of
+`batch_size`: the logits over Qwen's 152k-token vocabulary are what fill a
+24 GB card.
 
 ```python lora_sql/train.py
 @app.function(
@@ -341,7 +363,8 @@ def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -
         args=TrainingArguments(
             output_dir=str(checkpoints),
             num_train_epochs=config.epochs,
-            per_device_train_batch_size=config.batch_size,
+            per_device_train_batch_size=DEVICE_BATCH,
+            gradient_accumulation_steps=config.batch_size // DEVICE_BATCH,
             learning_rate=config.learning_rate,
             lr_scheduler_type="cosine",
             warmup_steps=0.03,
@@ -461,8 +484,8 @@ def score(cases: Sequence[ScoringCase]) -> list[bool]:
     return [correct for result in results if result is not None for correct in result]
 ```
 
-`evaluate` puts the steps together and saves the report. The share link works
-for seven days and the artifact itself follows your plan's retention.
+`evaluate` puts the steps together and saves the report. The share link lasts
+seven days, or less when your plan keeps artifacts for a shorter time.
 
 ```python lora_sql/evaluate.py
 @app.function(
@@ -544,7 +567,8 @@ sql_server = app.pod(
 
 `compare` asks both models at once and runs each answer against the database
 in the request. A database that fails to build is a `400`. A query that fails
-is part of the answer.
+is part of the answer. SQLite runs in a thread, so a slow query doesn't stall
+the other requests the container is serving.
 
 ```python lora_sql/compare.py
 @app.endpoint(
@@ -562,7 +586,7 @@ is part of the answer.
 async def compare(question: Question, context: Context) -> Comparison:
     """Ask both models, then run each query against the database `context` creates."""
     try:
-        run_query(context, "SELECT 1")
+        await asyncio.to_thread(run_query, context, "SELECT 1")
     except SchemaError as exc:
         raise ValidationError(f"the database statements fail: {exc}", field="context") from exc
     async with AsyncOpenAI(
@@ -588,7 +612,7 @@ async def _answer(client: AsyncOpenAI, model: str, context: str, question: str) 
     )
     sql = extract_sql(completion.choices[0].message.content or "")
     try:
-        return Answer(sql=sql, result=run_query(context, sql), error=None)
+        return Answer(sql=sql, result=await asyncio.to_thread(run_query, context, sql), error=None)
     except QueryError as exc:
         return Answer(sql=sql, result=None, error=str(exc))
 ```
@@ -636,8 +660,8 @@ uv run lazycloud run lora_sql.evaluate:evaluate sql-r32
 
 Create an access token in the dashboard under Settings, then Tokens. It has
 the same reach as your sign-in, so a short expiry suits it. The setup script
-asks for the token and the `sql-server` URL from the deploy output, and stores
-both as secrets:
+asks for the token and the `sql-server` URL from the deploy output, the one
+whose host ends in `-8000`, and stores both as secrets:
 
 ```bash
 uv run python -m lora_sql.configure

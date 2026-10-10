@@ -10,7 +10,7 @@ from .compare import server_token, server_url
 
 
 def configure() -> None:
-    url = input("sql-server URL from the deploy output: ").strip()
+    url = input("sql-server URL from the deploy output, the host ending in -8000: ").strip()
     if not url.startswith("https://"):
         raise SystemExit("the URL starts with https://")
     token = getpass("LazyCloud access token for the compare endpoint: ").strip()
