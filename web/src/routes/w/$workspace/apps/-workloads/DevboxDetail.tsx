@@ -5,6 +5,7 @@ import { Loader2, Play, Square } from "lucide-react";
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { CopyButton } from "@/components/shared/CopyButton";
+import { DiskFailure } from "@/components/shared/DiskFailure";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
@@ -280,6 +281,7 @@ export function DevboxConnect({
             value={devbox.disk ? formatBytes(devbox.disk.size_bytes) : "Created on first start"}
           />
         </FactGrid>
+        {devbox.disk?.failure ? <DiskFailure failure={devbox.disk.failure} /> : null}
         {devbox.phase === "failed" && (devbox.phase_reason || devbox.failed_container_id) ? (
           <div className="flex min-w-0 items-start gap-3 text-xs">
             {devbox.phase_reason ? (
