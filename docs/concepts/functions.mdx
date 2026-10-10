@@ -144,7 +144,7 @@ results cap at 16 MiB each, so larger output goes in a
 `timeout_seconds` caps one attempt, and `retries`, 3 by default, adds attempts
 after a failure. One call can therefore run four times, so writes should be
 safe to repeat, for example keyed on the input, or `retries=0`. A `RetryPolicy`
-adds backoff:
+replaces the default and adds backoff:
 
 ```python
 import urllib.request
@@ -179,7 +179,7 @@ from lazycloud import GpuType
 MODEL = {}
 
 
-def load_model() -> None:
+def load_model(context: object) -> None:
     MODEL["classifier"] = load_classifier()  # your loading code
 
 
@@ -188,8 +188,9 @@ def classify(text: str) -> str:
     return MODEL["classifier"](text)
 ```
 
-Per-call hooks are `on_running`, `on_success`, `on_error`, `on_retry`,
-`on_failure`, and `on_finish`. `lazycloud.current_task_id()` returns the
+Every hook receives one context argument naming the container and, for
+per-call hooks, the task. Per-call hooks are `on_running`, `on_success`,
+`on_error`, `on_retry`, `on_failure`, and `on_finish`. `lazycloud.current_task_id()` returns the
 current call's ID inside the function or a hook.
 
 ## Stop and clean up
