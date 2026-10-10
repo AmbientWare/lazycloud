@@ -345,7 +345,8 @@ func (q *Queries) NotifyHosts(ctx context.Context, arg NotifyHostsParams) error 
 
 const pendingDemand = `-- name: PendingDemand :many
 with batch as (
-    select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent
+    select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,
+           c.created_at
     from containers c
     where c.state = 'pending'
     order by c.created_at
@@ -361,7 +362,8 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
-       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents
+       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents,
+       array_agg(b.created_at order by b.id)::timestamptz[] as created
 from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
@@ -383,6 +385,7 @@ type PendingDemandRow struct {
 	Ids          []uuid.UUID
 	Bought       []uuid.UUID
 	Traceparents []string
+	Created      []time.Time
 }
 
 // The oldest pending containers, up to the batch, grouped by what they need
@@ -412,6 +415,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 			&i.Ids,
 			&i.Bought,
 			&i.Traceparents,
+			&i.Created,
 		); err != nil {
 			return nil, err
 		}
@@ -592,17 +596,13 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 }
 
 const recentArrivals = `-- name: RecentArrivals :many
-select created_at, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
-       cpu_millis, memory_bytes, gpu_count
-from (
-    select c.created_at, c.rate_class, c.gpu_type, c.cpu_millis, c.memory_bytes, c.gpu_count, c.billing_owner,
-           c.assigned_at, c.image_build_id
-    from containers c
-    where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
-    order by c.id desc
-    limit $2
-) recent
-where billing_owner = 'platform_fleet' and assigned_at is not null and image_build_id is null
+select c.created_at, c.stopped_at, (c.rate_class in ('auto', 'pinned'))::bool as preemptible, c.gpu_type,
+       c.cpu_millis, c.memory_bytes, c.gpu_count
+from containers c
+where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
+  and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.image_build_id is null
+order by c.id desc
+limit $2
 `
 
 type RecentArrivalsParams struct {
@@ -612,6 +612,7 @@ type RecentArrivalsParams struct {
 
 type RecentArrivalsRow struct {
 	CreatedAt   time.Time
+	StoppedAt   *time.Time
 	Preemptible bool
 	GpuType     string
 	CpuMillis   cpu.Millis
@@ -619,11 +620,11 @@ type RecentArrivalsRow struct {
 	GpuCount    int32
 }
 
-// The placed platform containers among the newest containers created
-// within the window, up to the sample: what each market's headroom
+// The placed platform containers created within the window, newest first
+// up to the sample, and when each stopped: what each market's headroom
 // measures demand by. Build containers keep their own warm slot instead.
-// The sample is taken before the filter, so the read follows the primary
-// key for at most sample_size containers whatever the history or backlog.
+// The read follows containers_placed_arrivals, so it reads at most
+// sample_size containers whatever the history or the unplaced backlog.
 func (q *Queries) RecentArrivals(ctx context.Context, arg RecentArrivalsParams) ([]RecentArrivalsRow, error) {
 	rows, err := q.db.Query(ctx, recentArrivals, arg.WindowSeconds, arg.SampleSize)
 	if err != nil {
@@ -635,6 +636,7 @@ func (q *Queries) RecentArrivals(ctx context.Context, arg RecentArrivalsParams) 
 		var i RecentArrivalsRow
 		if err := rows.Scan(
 			&i.CreatedAt,
+			&i.StoppedAt,
 			&i.Preemptible,
 			&i.GpuType,
 			&i.CpuMillis,

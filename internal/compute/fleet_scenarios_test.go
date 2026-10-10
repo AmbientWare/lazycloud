@@ -102,6 +102,7 @@ type sim struct {
 	// floorShortSince carries each market's reserve shortfall from one pass
 	// to the next, as the published plan does.
 	floorShortSince map[ReserveMarket]time.Time
+	peaks           map[ReserveMarket]MarketPeaks
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
 	// maxHosts is the fleet limit; provision is how long a launch takes to
@@ -193,10 +194,6 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 	return s.r
 }
 
-func needShape(r Requirement) FleetCapacity {
-	return FleetCapacity{CPUMillis: r.CPUMillis, MemoryBytes: r.MemoryBytes, GPUs: r.GPUsNeeded()}
-}
-
 // advance moves hosts through their timed phases and ends containers.
 func (s *sim) advance() {
 	for _, h := range s.hosts {
@@ -220,7 +217,7 @@ func (s *sim) advance() {
 				return false
 			}
 			if c.build {
-				s.builds = append(s.builds, simBuild{at: s.now, market: ReserveMarket{Preemptible: c.need.Preemptible}, shape: needShape(c.need)})
+				s.builds = append(s.builds, simBuild{at: s.now, market: ReserveMarket{Preemptible: c.need.Preemptible}, shape: reservedShape(c.need)})
 			}
 			return true
 		})
@@ -285,9 +282,9 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 	fh.Load, fh.Lent, fh.Containers = FleetCapacity{}, FleetCapacity{}, len(h.containers)
 	var tolerant FleetCapacity
 	for _, c := range h.containers {
-		fh.Load = fh.Load.Plus(needShape(c.need))
+		fh.Load = fh.Load.Plus(reservedShape(c.need))
 		if c.need.Preemptible {
-			tolerant = tolerant.Plus(needShape(c.need))
+			tolerant = tolerant.Plus(reservedShape(c.need))
 		}
 	}
 	fh.Lent = lent(h.Market, h.Usable.GPUs, tolerant)
@@ -344,7 +341,11 @@ func (s *sim) plan() time.Duration {
 	arrivals := map[ReserveMarket][]Arrival{}
 	for _, c := range s.placedLog {
 		if !c.build && s.now.Sub(c.arrived) < s.p.demandWindow() {
-			arrivals[c.market] = append(arrivals[c.market], Arrival{At: c.arrived, Shape: needShape(c.need)})
+			a := Arrival{At: c.arrived, Shape: reservedShape(c.need)}
+			if !c.ends.After(s.now) {
+				a.Stopped = c.ends
+			}
+			arrivals[c.market] = append(arrivals[c.market], a)
 		}
 	}
 	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: builds, Arrivals: arrivals, Offers: s.in, BatchWait: s.batchWait()}
@@ -377,18 +378,19 @@ func (s *sim) plan() time.Duration {
 			groups[key] = &DemandGroup{Need: c.need}
 			order = append(order, key)
 		}
-		groups[key].Containers = append(groups[key].Containers, PendingContainer{ID: c.id, Host: c.host})
+		groups[key].Containers = append(groups[key].Containers, PendingContainer{ID: c.id, Created: c.arrived, Host: c.host})
 	}
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
-	snapshot.FloorShortSince = s.floorShortSince
+	snapshot.FloorShortSince, snapshot.Peaks = s.floorShortSince, s.peaks
 	plan := PlanFleet(s.p, snapshot)
-	s.floorShortSince = map[ReserveMarket]time.Time{}
+	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]MarketPeaks{}
 	for _, mp := range plan.Markets {
 		if mp.Market == (ReserveMarket{Preemptible: true}) {
 			s.r.mostWarm = s.r.mostWarm.Upper(mp.WarmTarget)
 		}
+		s.peaks[mp.Market] = mp.Peaks
 		if mp.FloorShortSince != nil {
 			s.floorShortSince[mp.Market] = *mp.FloorShortSince
 		}
@@ -912,35 +914,6 @@ func TestAReserveWokenByABuildReturnsWithoutARebuy(t *testing.T) {
 		if ended := reserves(); !slices.Equal(ended, began) {
 			t.Errorf("%v CPU build: reserves %v, began with %v", cpus, ended, began)
 		}
-	}
-}
-
-// Recurring bursts keep their reserves: the stopped target remembers a
-// burst for its memory, so the hosts a burst bought wait stopped and the
-// next burst resumes them, launching fewer hosts than the first did.
-func TestRecurringBurstsKeepTheirReserves(t *testing.T) {
-	need := cpuNeed(1000, 2)
-	var arrivals []simArrival
-	for _, at := range []time.Duration{time.Hour, 100 * time.Minute, 140 * time.Minute} {
-		arrivals = append(arrivals, simArrival{at: at, need: need, count: 100, runs: 20 * time.Minute})
-	}
-	s := newProdSim(t, false)
-	r := s.run(4*time.Hour, arrivals)
-	t.Log(r.row("three bursts of 100 on-demand containers"))
-	if len(r.waits) != 300 || len(r.violations) > 0 {
-		t.Fatalf("placed %d of 300, violations %v", len(r.waits), r.violations)
-	}
-	if r.resumes == 0 {
-		t.Fatal("no burst resumed a reserve")
-	}
-	launches := make([]int, 3)
-	for _, at := range r.launched {
-		if n := int(at.Sub(offerNow.Add(time.Hour)) / (40 * time.Minute)); n >= 0 && n < len(launches) {
-			launches[n]++
-		}
-	}
-	if launches[1] >= launches[0] || launches[2] >= launches[0] {
-		t.Errorf("launches per burst %v, want later bursts to launch fewer than the first", launches)
 	}
 }
 

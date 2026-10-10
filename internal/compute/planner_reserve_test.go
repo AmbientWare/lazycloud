@@ -88,19 +88,20 @@ values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uu
 	}
 }
 
-// The Spot market keeps warm what a steady stream of work placed within
-// the arrival window, less its largest batch: four batches of four
-// one-CPU containers 20 seconds apart keep twelve, while one burst of
-// sixteen, arriving over a second and a half across a clock's five-second
-// boundary, keeps only its share of load.
-func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
+// The Spot market's warm target follows the containers its work placed,
+// as the planner reads them: sixteen running one-CPU containers keep
+// sixteen, sixteen that each stopped three seconds after it started keep
+// only the floor, and a newer backlog of unplaced containers, older than
+// the lead, hides neither.
+func TestSpotHeadroomFollowsWhatPlacedWorkHoldsRunning(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		created string
-		want    cpu.Millis
+		name, state, stopped string
+		backlog              int
+		want                 cpu.Millis
 	}{
-		{"steady", "now() - make_interval(secs => 20 * (n / 4))", 13_000},
-		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 4_000},
+		{"running", "ready", "null", 0, 16_000},
+		{"short", "stopped", "created_at + interval '3 seconds'", 0, 1000},
+		{"behind a backlog", "ready", "null", 3000, 16_000},
 	} {
 		o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 		host := fleetHost(t, o, compute.PhaseReady, "c6a.8xlarge", "i-0000000000000b001")
@@ -109,8 +110,13 @@ func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
 		ws := newWorkspace(t, o.pool, "dev", alice)
 		release := newRelease(t, o.pool, ws, `{}`)
 		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, created_at)
-select $1, $2, 'ready', $3, 1, 1000, 1 << 30, now(), now(), `+c.created+`
-from generate_series(0, 15) n`, ws, release, uuid.UUID(host))
+select $1, $2, $4, $3, 1, 1000, 1 << 30, now(), now(), now() - make_interval(secs => 5 * n)
+from generate_series(0, 15) n`, ws, release, uuid.UUID(host), c.state)
+		run(t, o.pool, "update containers set stopped_at = "+c.stopped+" where state = 'stopped'")
+		for range c.backlog {
+			pendingContainer(t, o.pool, ws, release, 1000, gib)
+		}
+		run(t, o.pool, "update containers set created_at = now() - interval '1 hour' where state = 'pending'")
 		if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 			t.Fatal(err)
 		}
@@ -434,11 +440,12 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 	}
 }
 
-// The warm target shares the load containers hold now: what the market's
-// hosts run and what its pending containers ask for. The stopped target is
-// the floor beside the largest shape, 8 CPU by default, in Spot as well as
-// on-demand.
-func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
+// A market's load and its warm target both count what its hosts run and
+// what its pending containers ask for: sixteen CPU placed and thirty-two
+// pending, all created together, are one burst of 48 the warm target
+// keeps room for. The stopped target is the floor beside the largest
+// shape, 8 CPU by default.
+func TestTargetsFollowRunningAndPendingWork(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -451,9 +458,9 @@ select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate
 		pendingContainer(t, o.pool, dev, release, 4000, 4*gib)
 	}
 	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 12_000 ||
+	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 48_000 ||
 		spot.StoppedTarget.CPUMillis != 3000+8000 {
-		t.Fatalf("Spot market %+v, want warm 25%% of 16 running and 32 pending CPU and the stopped floors", spot)
+		t.Fatalf("Spot market %+v, want 48 CPU of load, room for the 48 CPU burst and the stopped floors", spot)
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
@@ -776,7 +783,8 @@ where plan ? 'floor_short_since'`)
 
 // A burst that resumes the floor reserve buys no replacement: not while the
 // floor has been short for less than the idle timeout, and not while the
-// host, done and idle, is due back; once idle for the timeout it returns.
+// host, done and idle, is due back; once idle for the timeout, with the
+// burst past the warm memory, it returns.
 func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
@@ -801,6 +809,7 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 		t.Fatal("bought a floor reserve while the idle resumed host is due back")
 	}
 	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{peaks,warm,at}', to_jsonb(now() - interval '6 minutes'))`)
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) || floorBought(t, o) != 0 {
 		t.Fatalf("plan %+v, floor host %s, %d floor reserves bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, floor).Phase, floorBought(t, o))

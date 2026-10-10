@@ -105,24 +105,18 @@ func reserveMarketOf(market Market, gpu string) ReserveMarket {
 	return ReserveMarket{Preemptible: market == MarketSpot, GPU: gpu}
 }
 
-// HeadroomTarget is spare capacity kept as safety stock: what arrived at a
-// steady rate within Lead, about how long new capacity of the layer takes
-// to serve, and the largest batch within Memory, so a market that saw a
-// burst keeps room for the next one; at least the floor.
+// HeadroomTarget is spare capacity kept as safety stock: a layer buys for
+// the steady demand of arrivals within Lead, about how long its new
+// capacity takes to serve, and keeps what it has up to the most that
+// demand reached within Memory, so a market that saw a burst keeps room
+// for the next one; at least the floor.
 type HeadroomTarget struct {
 	Floor        FleetCapacity
 	Lead, Memory time.Duration
 }
 
-// Of is the target arrivals set at now.
-func (t HeadroomTarget) Of(arrivals []Arrival, now time.Time, batch BatchWindow) FleetCapacity {
-	d := t.demand(arrivals, now, batch)
-	return t.Floor.Upper(d.Steady.Plus(d.Burst))
-}
-
-func (t HeadroomTarget) demand(arrivals []Arrival, now time.Time, batch BatchWindow) Demand {
-	return DemandOf(arrivals, now, t.Lead, t.Memory, batch)
-}
+// Of is the target demand sets.
+func (t HeadroomTarget) Of(demand FleetCapacity) FleetCapacity { return t.Floor.Upper(demand) }
 
 // MarketReserve is the running headroom a market keeps warm and the
 // headroom it keeps as stopped machines.
@@ -208,21 +202,16 @@ type Policy struct {
 
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
-	// Warm room serves arrivals until a reserve resumes or a launch serves,
-	// tens of seconds, and remembers a burst briefly; reserves serve until a
-	// purchase does, minutes, and keep a burst's hosts for an hour.
+	// Warm room serves two minutes of arrivals and remembers their peak as
+	// long. Launches serve in about 25 s and resumes in about 12 s, so
+	// reserves sized to demand cost more than the starts they speed up:
+	// every market keeps only its floor stopped.
 	warm := func(floor FleetCapacity) HeadroomTarget {
-		return HeadroomTarget{Floor: floor, Lead: 2 * time.Minute, Memory: 5 * time.Minute}
-	}
-	stopped := func(floor FleetCapacity) HeadroomTarget {
-		return HeadroomTarget{Floor: floor, Lead: 5 * time.Minute, Memory: time.Hour}
+		return HeadroomTarget{Floor: floor, Lead: 2 * time.Minute, Memory: 2 * time.Minute}
 	}
 	cpuFloor, reserveFloor := FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}
-	onDemand := MarketReserve{Warm: warm(cpuFloor), Stopped: stopped(reserveFloor), FitLargest: true}
-	// Spot launches serve in about 25 s, so Spot keeps only the floor
-	// stopped.
-	spot := MarketReserve{Warm: warm(cpuFloor), Stopped: HeadroomTarget{Floor: reserveFloor}, FitLargest: true}
-	card := MarketReserve{Warm: warm(FleetCapacity{}), Stopped: stopped(FleetCapacity{}), FitLargest: true}
+	cpuMarket := MarketReserve{Warm: warm(cpuFloor), Stopped: HeadroomTarget{Floor: reserveFloor}, FitLargest: true}
+	card := MarketReserve{Warm: warm(FleetCapacity{}), FitLargest: true}
 	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
 	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
 	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
@@ -232,7 +221,7 @@ func DefaultPolicy() Policy {
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
-		Spot:             spot, OnDemand: onDemand,
+		Spot:             cpuMarket, OnDemand: cpuMarket,
 		GPU:          map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
 		LargestShape: LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
 		BuildWindow:  time.Hour,
@@ -245,11 +234,12 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// demandWindow is the longest any market's headroom looks back.
+// demandWindow is the longest lead any market's headroom reads arrivals
+// within; remembered bursts carry the longer memories.
 func (p Policy) demandWindow() time.Duration {
 	var out time.Duration
 	for _, r := range slices.Concat([]MarketReserve{p.Spot, p.OnDemand}, slices.Collect(maps.Values(p.GPU))) {
-		out = max(out, r.Warm.Lead, r.Warm.Memory, r.Stopped.Lead, r.Stopped.Memory)
+		out = max(out, r.Warm.Lead, r.Stopped.Lead)
 	}
 	return out
 }
@@ -273,9 +263,11 @@ type slotKind string
 const (
 	// slotFloor is part of the market's floor.
 	slotFloor slotKind = "floor"
-	// slotLoad is part of the share of load the market adds beyond its
-	// floor; it follows the load.
+	// slotLoad is the steady demand the market adds beyond its floor.
 	slotLoad slotKind = "load"
+	// slotBurst is room for the peak demand the market remembers: held on
+	// room it has, never bought or resumed for.
+	slotBurst slotKind = "burst"
 	// slotBuild is a recent build's shape.
 	slotBuild slotKind = "build"
 )
@@ -286,13 +278,12 @@ type warmSlot struct {
 	kind  slotKind
 }
 
-// slots are the warm slots that hold warm, a target's headroom: its floor,
-// then what warm adds beyond it. Each part splits into the fewest equal
-// slots within its bound, the cap for the floor and the floor for the
-// rest, so the slots hold the whole headroom and one fits a start of the
-// floor's shape.
-func (p Policy) slots(target HeadroomTarget, warm FleetCapacity) []warmSlot {
-	rest := warm.Minus(target.Floor).Clamp()
+// slots are the warm slots of a target's headroom: its floor, then what
+// buy adds beyond it, then what keep adds beyond buy. Each part splits into
+// the fewest equal slots within its bound, the cap for the floor and the
+// floor for the rest, so the slots hold the whole headroom and one fits a
+// start of the floor's shape.
+func (p Policy) slots(target HeadroomTarget, buy, keep FleetCapacity) []warmSlot {
 	bound := p.LargestShape.Cap
 	if !target.Floor.Empty() {
 		bound = target.Floor.Lower(bound)
@@ -301,8 +292,11 @@ func (p Policy) slots(target HeadroomTarget, warm FleetCapacity) []warmSlot {
 	for _, shape := range split(target.Floor, p.LargestShape.Cap) {
 		out = append(out, warmSlot{shape: shape, kind: slotFloor})
 	}
-	for _, shape := range split(rest, bound) {
+	for _, shape := range split(buy.Minus(target.Floor).Clamp(), bound) {
 		out = append(out, warmSlot{shape: shape, kind: slotLoad})
+	}
+	for _, shape := range split(keep.Minus(buy.Upper(target.Floor)).Clamp(), bound) {
+		out = append(out, warmSlot{shape: shape, kind: slotBurst})
 	}
 	return out
 }

@@ -251,7 +251,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes,
 		}}}
 		for n, id := range r.Ids {
-			c := PendingContainer{ID: id}
+			c := PendingContainer{ID: id, Created: r.Created[n]}
 			if r.Bought[n] != uuid.Nil {
 				c.Host = ptr(HostID(r.Bought[n]))
 			}
@@ -295,7 +295,11 @@ func arrivalsByMarket(rows []RecentArrivalsRow) map[ReserveMarket][]Arrival {
 	out := map[ReserveMarket][]Arrival{}
 	for _, r := range rows {
 		if m, ok := shapeMarket(r.Preemptible, r.GpuType, int(r.GpuCount)); ok {
-			out[m] = append(out[m], Arrival{At: r.CreatedAt, Shape: FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.GpuCount)}})
+			a := Arrival{At: r.CreatedAt, Shape: FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.GpuCount)}}
+			if r.StoppedAt != nil {
+				a.Stopped = *r.StoppedAt
+			}
+			out[m] = append(out[m], a)
 		}
 	}
 	return out

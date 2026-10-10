@@ -21,8 +21,11 @@ type PublishedMarket struct {
 	Reason        MarketReason  `json:"reason"`
 	// FloorShortSince is when the stopped target went short; the next pass
 	// reads it back.
-	FloorShortSince *time.Time           `json:"floor_short_since,omitempty"`
-	States          []FleetStateCapacity `json:"states"`
+	FloorShortSince *time.Time `json:"floor_short_since,omitempty"`
+	// Peaks are the demand peaks the market's headroom remembers; the next
+	// pass reads them back.
+	Peaks  MarketPeaks          `json:"peaks"`
+	States []FleetStateCapacity `json:"states"`
 	// Decision summarizes the market's plan; the planner logs it when it
 	// changes.
 	Decision string `json:"decision"`
@@ -38,7 +41,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out := PublishedMarket{
 		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Load: mp.Load, WarmTarget: mp.WarmTarget, WarmFree: mp.WarmFree,
 		StoppedTarget: mp.StoppedTarget, ReserveReady: mp.ReserveReady, Reason: mp.Reason, States: mp.States,
-		FloorShortSince: mp.FloorShortSince,
+		FloorShortSince: mp.FloorShortSince, Peaks: mp.Peaks,
 	}
 	var names []string
 	for _, a := range actions {

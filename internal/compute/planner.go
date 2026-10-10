@@ -332,7 +332,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Arrivals: arrivalsByMarket(ps.r.arrivals), Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 	}
-	s.FloorShortSince = ps.carried()
+	s.FloorShortSince, s.Peaks = ps.carried()
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
 	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
 	bought, err := ps.apply(plan, nil)
@@ -550,10 +550,10 @@ func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
 }
 
 // carried is what each market's published plan carries to the next pass:
-// when its stopped target went short. An unreadable plan reads as never
-// short.
-func (ps *fleetPass) carried() map[ReserveMarket]time.Time {
-	since := map[ReserveMarket]time.Time{}
+// when its stopped target went short, and the demand peaks its headroom
+// remembers. An unreadable plan reads as never short and remembering none.
+func (ps *fleetPass) carried() (map[ReserveMarket]time.Time, map[ReserveMarket]MarketPeaks) {
+	since, peaks := map[ReserveMarket]time.Time{}, map[ReserveMarket]MarketPeaks{}
 	for _, m := range ps.r.markets {
 		var stored PublishedMarket
 		if json.Unmarshal(m.Plan, &stored) != nil {
@@ -563,13 +563,14 @@ func (ps *fleetPass) carried() map[ReserveMarket]time.Time {
 		if stored.FloorShortSince != nil {
 			since[market] = *stored.FloorShortSince
 		}
+		peaks[market] = stored.Peaks
 	}
-	return since
+	return since, peaks
 }
 
 // publish writes every platform market's plan when the pass acted, a
-// market's reserve shortfall began or ended, or the last plan is
-// planRefresh old, and logs each decision that changed.
+// market's reserve shortfall began or ended, a remembered demand peak moved, or
+// the last plan is planRefresh old, and logs each decision that changed.
 func (ps *fleetPass) publish(plan FleetPlan) error {
 	var last time.Time
 	for _, m := range ps.r.markets {
@@ -577,10 +578,10 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 			last = m.GeneratedAt
 		}
 	}
-	stored := ps.carried()
+	stored, peaks := ps.carried()
 	moved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
 		since, ok := stored[mp.Market]
-		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince)
+		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince) || !peaks[mp.Market].equal(mp.Peaks)
 	})
 	if len(plan.Actions) == 0 && !moved && ps.r.now.Sub(last) < planRefresh {
 		return nil
