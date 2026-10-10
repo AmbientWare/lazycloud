@@ -1,0 +1,602 @@
+---
+title: "Video to highlight clips"
+description: "A pipeline from your S3 bucket through transcription, LLM highlight picks and parallel clip cutting, with a signed callback when each run ends."
+---
+
+import ExampleSetup from '/snippets/example-setup.mdx';
+
+You give the pipeline the key of a video in your S3 bucket. It transcribes the
+speech, has an OpenAI model choose chapters and the moments worth sharing, and
+cuts each one into an MP4 clip with a thumbnail. The run returns a manifest of
+share links and posts a signed callback to your app when it finishes.
+
+## Architecture
+
+```text
+your S3 bucket (read-only mount)
+   │
+highlight_video ──> extract_audio ──> transcribe ──> pick_highlights ──.map──> cut_clip × N
+   │                  CPU, ffmpeg       GPU, Whisper    OpenAI API              CPU, ffmpeg
+   │                       └── volume: video-highlights-work ──┘                    │
+   └── manifest artifact ──> callback_url ──> your app                       clip artifacts
+```
+
+Each step runs on the hardware its work needs, and each one bills only while
+it runs.
+
+- **`highlight_video`, the coordinating function.** It checks the video,
+  calls each step in turn and writes the manifest. It mostly waits, so a
+  quarter CPU is enough, and it is the only workload with a `callback_url`.
+- **`extract_audio`, a CPU function.** Reading a multi-gigabyte video from S3
+  and decoding its soundtrack is I/O and ffmpeg work. Running it on a GPU
+  would bill the GPU for minutes of downloading. The step writes a small FLAC
+  file to a volume instead.
+- **`transcribe`, a GPU function.** faster-whisper's `large-v3-turbo` model
+  turns the FLAC file into timed segments. The model's weights are part of the
+  image, so a new container doesn't download them.
+- **`pick_highlights`, a function with a secret.** It sends the transcript to
+  the OpenAI API with the `OPENAI_API_KEY` secret. That call can hit rate
+  limits, so it retries.
+- **`cut_clip`, a function fanned out with `.map`.** Each highlight is an
+  independent ffmpeg job, so up to ten run in parallel containers. A clip that
+  fails after its retries is listed in the manifest, and the other clips are
+  kept.
+- **A cloud bucket mount and a volume.** The bucket mounts read-only from your
+  account with keys held in two secrets. The `video-highlights-work` volume
+  keeps each video's transcript, so later runs of the same video skip the GPU.
+- **Artifacts and a callback.** Clips, thumbnails and the manifest are
+  artifacts with public links. The callback carries the manifest to a webhook
+  that checks LazyCloud's signature.
+
+## Download and set up
+
+<ExampleSetup />
+
+```bash
+lazycloud example download video-highlights
+cd video-highlights
+uv sync
+uv run lazycloud login
+```
+
+`uv sync` installs FastAPI and Pydantic locally, since the CLI imports the
+modules to deploy them. faster-whisper and the OpenAI client are in their own
+dependency groups, which only the remote images install.
+
+```toml pyproject.toml
+llm = ["openai>=3.28,<4"]
+transcribe = ["faster-whisper==1.2.1"]
+```
+
+### Give the pipeline read access to your bucket
+
+Create an IAM user, or use an existing one, with a policy that can only list
+and read the bucket. Replace `my-video-bucket` with your bucket:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::my-video-bucket"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::my-video-bucket/*"
+    }
+  ]
+}
+```
+
+Then put the bucket's name and region in `settings.py`:
+
+```python video_highlights/settings.py
+# The S3 bucket that holds your videos, mounted read-only.
+BUCKET_NAME = "my-video-bucket"
+BUCKET_REGION = "us-east-1"
+
+# Receives a signed POST when a run is retried or finishes. None sends nothing.
+CALLBACK_URL: str | None = None
+
+# Any OpenAI model that supports structured outputs; each run can override it.
+OPENAI_MODEL = "gpt-5.4-mini"
+```
+
+The setup script asks for that user's access key pair and an OpenAI API key,
+and stores all three as workspace secrets. Nothing it reads is echoed:
+
+```bash
+uv run python -m video_highlights.configure
+```
+
+A workspace in a [connected AWS account](/platform/compute#your-own-aws-account)
+runs these containers in your own account, so a bucket in the same region is
+read without leaving it. The mount still reads the bucket with the keys from
+the secrets.
+
+## Check the video first
+
+`inspect_video` runs before any step that costs money. It refuses keys that
+leave the bucket, files that aren't videos, files over 20 GiB, videos without
+a soundtrack and anything longer than two hours. The `job_id` hashes the key,
+size and modification time, so a replaced video gets fresh work files.
+
+```python video_highlights/media.py
+def inspect_video(root: Path, key: str) -> SourceVideo:
+    path = video_path(root, key)
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        raise VideoRejected(f"no object at {key}") from None
+    if stat.st_size > MAX_VIDEO_BYTES:
+        raise VideoRejected(f"{key} is larger than {MAX_VIDEO_BYTES} bytes")
+    probe = run(["ffprobe", "-v", "error", "-of", "json", "-show_format", "-show_streams", path])
+    version = f"{key}\n{stat.st_size}\n{stat.st_mtime_ns}".encode()
+    return SourceVideo(
+        key=key,
+        size_bytes=stat.st_size,
+        duration_seconds=read_duration(probe),
+        job_id=hashlib.sha256(version).hexdigest()[:16],
+    )
+```
+
+`ffprobe` reads only the file's headers, so the check takes seconds even
+through the S3 mount. {/* MEASURE: inspect_video time on a 1 GB MP4 through the bucket mount */}
+
+## Images, mounts and secrets
+
+`pipeline.py` declares everything the workloads share. The bucket mounts
+read-only at `/videos`, so no step can change your source files. The CPU image
+adds ffmpeg from Debian. The GPU image starts from NVIDIA's CUDA runtime image
+and downloads the Whisper weights while it builds. The OpenAI image installs
+only the `llm` group.
+
+```python video_highlights/pipeline.py
+source = CloudBucket(
+    settings.BUCKET_NAME,
+    str(VIDEOS),
+    CloudBucketConfig(
+        access_key=BUCKET_ACCESS_KEY.name,
+        secret_key=BUCKET_SECRET_KEY.name,
+        region=settings.BUCKET_REGION,
+        read_only=True,
+    ),
+)
+work = Volume("video-highlights-work", str(WORK))
+
+ffmpeg_image = Image.from_uv(".").add_commands(
+    [
+        "apt-get update && apt-get install -y --no-install-recommends ffmpeg"
+        " && rm -rf /var/lib/apt/lists/*"
+    ]
+)
+whisper_image = Image.from_uv(
+    ".", groups=["transcribe"], base_image="nvidia/cuda:12.8.1-runtime-ubuntu24.04"
+).add_commands(
+    [
+        "python -c 'from faster_whisper import download_model; "
+        f'download_model("{WHISPER_MODEL}", output_dir="{WHISPER_DIR}")\''
+    ]
+)
+openai_image = Image.from_uv(".", groups=["llm"])
+```
+
+## Run the steps
+
+`highlight_video` is the function you call. It runs each step with
+`.remote()`, skips the audio and GPU steps when the volume already holds this
+video's transcript, and fans the clips out with `.map`. `.map` yields `None`
+for a clip that failed after its retries, and those picks land in
+`failed_highlights`.
+
+```python video_highlights/pipeline.py
+@app.function(
+    image=ffmpeg_image,
+    volumes=[source, work],
+    cpu=0.25,
+    memory="1Gi",
+    concurrency=4,
+    timeout_seconds=3 * 3600,
+    retries=0,
+    preemptible=False,
+    callback_url=settings.CALLBACK_URL,
+)
+def highlight_video(
+    video_key: str, model: str = settings.OPENAI_MODEL, max_highlights: int = 6
+) -> HighlightRun:
+    """Run every step for one video and return its manifest and share link."""
+    if not 1 <= max_highlights <= MAX_HIGHLIGHTS:
+        raise ValueError(f"max_highlights must be between 1 and {MAX_HIGHLIGHTS}")
+    video = inspect_video(VIDEOS, video_key)
+    transcript = saved_transcript(video)
+    if transcript is None:
+        extract_audio.remote(video)
+        transcript = transcribe.remote(video)
+    plan = pick_highlights.remote(transcript, model, max_highlights)
+    picks = list(enumerate(plan.highlights, start=1))
+    clips = list(cut_clip.map([(video, number, pick) for number, pick in picks]))
+    manifest = HighlightManifest(
+        video_key=video.key,
+        duration_seconds=video.duration_seconds,
+        language=transcript.language,
+        model=model,
+        summary=plan.summary,
+        chapters=plan.chapters,
+        clips=[clip for clip in clips if clip is not None],
+        failed_highlights=[
+            pick for (_, pick), clip in zip(picks, clips, strict=True) if clip is None
+        ],
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "manifest.json"
+        path.write_text(manifest.model_dump_json(indent=2))
+        return HighlightRun(manifest_url=share(path, "application/json"), manifest=manifest)
+```
+
+The coordinator doesn't retry, because a bad key or a missing soundtrack fails
+the same way every time. The steps it calls retry on their own. It also runs
+with `preemptible=False`. It waits through the whole run, and if a reclaimed
+machine restarted it, the steps it had already started would run twice. On
+a quarter CPU the premium is small. `concurrency=4` lets one container
+coordinate four videos at once.
+
+## Transcribe on the GPU
+
+`transcribe` reads the FLAC file from the volume, saves the transcript next to
+it and deletes the audio. Writing to `.part` and renaming means a reader never
+sees half a transcript. `faster_whisper` is imported inside the function
+because only the GPU image installs it.
+
+```python video_highlights/pipeline.py
+@app.function(
+    image=whisper_image,
+    volumes=[work],
+    gpu=[GpuType.L4, GpuType.A10G, GpuType.T4],
+    cpu=4,
+    memory="8Gi",
+    timeout_seconds=3600,
+    retries=2,
+    retry_delay_seconds=10,
+    keep_warm=60,
+    autoscaler=Autoscaler(max_containers=2),
+)
+def transcribe(video: SourceVideo) -> Transcript:
+    """Transcribe the extracted audio, keep the transcript and drop the audio."""
+    from video_highlights.speech import transcribe_file
+
+    directory = WORK / video.job_id
+    transcript = transcribe_file(WHISPER_DIR, directory / AUDIO)
+    partial = directory / f"{TRANSCRIPT}.part"
+    partial.write_text(transcript.model_dump_json())
+    partial.rename(directory / TRANSCRIPT)
+    (directory / AUDIO).unlink()
+    return transcript
+```
+
+Whisper `large-v3-turbo` in float16 fits on any of the three GPUs, so the
+list takes the first one free. `keep_warm=60` holds the loaded model for a
+minute, which helps when several videos arrive together. The batched pipeline
+decodes 16 audio chunks at a time:
+
+```python video_highlights/speech.py
+@cache
+def load_model(model_dir: str) -> BatchedInferencePipeline:
+    """Load the weights once per container; later calls reuse them."""
+    return BatchedInferencePipeline(WhisperModel(model_dir, device="cuda", compute_type="float16"))
+
+
+def transcribe_file(model_dir: str, audio: Path) -> Transcript:
+    segments, info = load_model(model_dir).transcribe(str(audio), batch_size=16)
+    return Transcript(
+        language=info.language,
+        duration_seconds=info.duration,
+        segments=[
+            Segment(start=segment.start, end=segment.end, text=text)
+            for segment in segments
+            if (text := segment.text.strip())
+        ],
+    )
+```
+
+{/* MEASURE: transcribe time for one hour of speech on L4, and the transcribe cold start */}
+
+## Pick the highlights
+
+The OpenAI client parses the reply straight into `HighlightPlan`, a Pydantic
+model, through structured outputs. The instructions ask for self-contained
+moments of 10 to 90 seconds, best first.
+
+```python video_highlights/llm.py
+def draft_plan(transcript: Transcript, model: str, max_highlights: int) -> HighlightPlan:
+    # OPENAI_API_KEY comes from the workspace secret the function lists.
+    client = OpenAI(timeout=300.0)
+    response = client.responses.parse(
+        model=model,
+        instructions=INSTRUCTIONS.format(
+            max_highlights=max_highlights,
+            min_seconds=MIN_CLIP_SECONDS,
+            max_seconds=MAX_CLIP_SECONDS,
+        ),
+        input=transcript.timed_text(),
+        text_format=HighlightPlan,
+    )
+    if response.output_parsed is None:
+        raise ModelRefused(f"{model} returned no highlight plan")
+    return response.output_parsed
+```
+
+Models round timestamps and sometimes overlap their picks, so the plan goes
+through `normalize_plan` before any clip is cut. Each pick widens to the
+whole transcript segments it touches, so no clip starts mid-sentence. Picks
+that overlap a better one, or fall under 10 seconds, are dropped.
+
+```python video_highlights/highlights.py
+def snap_to_segments(pick: Highlight, segments: list[Segment]) -> Highlight | None:
+    """Widen a pick to the segments it touches, so no clip starts or ends mid-sentence.
+
+    A pick longer than MAX_CLIP_SECONDS ends at the last segment that fits; one
+    shorter than MIN_CLIP_SECONDS, or touching no speech, is dropped.
+    """
+    touched = [s for s in segments if s.end > pick.start_seconds and s.start < pick.end_seconds]
+    if not touched:
+        return None
+    start = touched[0].start
+    end = touched[-1].end
+    if end - start > MAX_CLIP_SECONDS:
+        end = max(
+            (s.end for s in touched if s.end - start <= MAX_CLIP_SECONDS),
+            default=start + MAX_CLIP_SECONDS,
+        )
+    if end - start < MIN_CLIP_SECONDS:
+        return None
+    return pick.model_copy(update={"start_seconds": start, "end_seconds": end})
+```
+
+`pick_highlights` sets `retries=3` with a 20-second delay. The OpenAI client
+already retries a rate limit twice within one attempt, and the platform
+retry covers longer outages.
+
+## Cut the clips
+
+`cut_clip` re-encodes each highlight from the mounted source, grabs a
+thumbnail from its middle and saves both as artifacts. `-ss` before `-i`
+seeks by reading only the part of the file it needs, which matters when the
+file is in S3.
+
+```python video_highlights/pipeline.py
+@app.function(
+    image=ffmpeg_image,
+    volumes=[source],
+    cpu=2,
+    memory="2Gi",
+    timeout_seconds=900,
+    retries=2,
+    retry_delay_seconds=10,
+    autoscaler=Autoscaler(max_containers=MAX_HIGHLIGHTS),
+)
+def cut_clip(video: SourceVideo, number: int, pick: Highlight) -> Clip:
+    """Cut one highlight and its thumbnail, and share both."""
+    source_path = VIDEOS / video.key
+    middle = (pick.start_seconds + pick.end_seconds) / 2
+    with tempfile.TemporaryDirectory() as directory:
+        clip_path = Path(directory) / f"clip-{number:02d}.mp4"
+        thumbnail_path = Path(directory) / f"clip-{number:02d}.jpg"
+        write_clip(source_path, pick.start_seconds, pick.end_seconds, clip_path)
+        write_thumbnail(source_path, middle, thumbnail_path)
+        return Clip(
+            number=number,
+            title=pick.title,
+            reason=pick.reason,
+            start_seconds=pick.start_seconds,
+            end_seconds=pick.end_seconds,
+            video_url=share(clip_path, "video/mp4"),
+            thumbnail_url=share(thumbnail_path, "image/jpeg"),
+        )
+```
+
+Clip numbers follow the model's ranking, so `clip-01.mp4` is its top pick.
+Re-encoding keeps cuts frame-accurate where a stream copy would jump to the
+previous keyframe. Clips are scaled down to 1080 lines at most:
+
+```python video_highlights/media.py
+def write_clip(video: Path, start: float, end: float, target: Path) -> None:
+    """Re-encode so the clip starts on the exact frame, not the previous keyframe."""
+    window: list[str | Path] = ["-ss", f"{start:.3f}", "-i", video, "-t", f"{end - start:.3f}"]
+    streams = ["-map", "0:v:0", "-map", "0:a:0"]
+    video_codec = ["-vf", f"scale=-2:min(ih\\,{CLIP_MAX_HEIGHT})", "-c:v", "libx264"]
+    encoding = ["-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k"]
+    ffmpeg([*window, *streams, *video_codec, *encoding, "-movflags", "+faststart", target])
+```
+
+`share` saves a file on the current task and returns a link anyone can open.
+Links last seven days at most. Your plan's artifact retention can end them
+sooner; Free keeps artifacts for one day.
+
+```python video_highlights/pipeline.py
+def share(path: Path, content_type: str) -> str:
+    """Save a file as an artifact of the current task and return a public link."""
+    artifact = Artifact.file(path, content_type=content_type)
+    artifact.save()
+    return artifact.public_url(expires=SHARE_SECONDS)
+```
+
+## Receive the callback
+
+When a run with a `callback_url` is retried or ends, LazyCloud POSTs a JSON
+event to that URL. A succeeded run carries the result, here the manifest. The
+`X-Task-Signature` header is an HMAC-SHA256 of the base64 body and the
+`X-Task-Timestamp` header, keyed by the workspace's
+`LAZYCLOUD_CALLBACK_SIGNING_KEY` secret. `receiver.py` is the route you would
+add to your own app:
+
+```python video_highlights/receiver.py
+def signature_matches(key: str, body: bytes, timestamp: str, signature: str, now: float) -> bool:
+    """Check X-Task-Signature: hex HMAC-SHA256 of the base64 body, a colon and the timestamp."""
+    if not timestamp.isdigit() or abs(now - int(timestamp)) > MAX_CLOCK_SKEW_SECONDS:
+        return False
+    message = base64.b64encode(body) + b":" + timestamp.encode()
+    expected = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+```
+
+The route reads at most 512 KiB, rejects a bad signature or a timestamp more
+than five minutes old, and only then parses the event. A replayed or forged
+request gets `401`.
+
+```python video_highlights/receiver.py
+@api.post("/video-highlights", status_code=204)
+async def run_finished(
+    request: Request,
+    x_task_signature: Annotated[str, Header()],
+    x_task_timestamp: Annotated[str, Header()],
+) -> None:
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_BODY_BYTES:
+            raise HTTPException(413, "callback body too large")
+    key = os.environ[SIGNING_KEY]
+    if not signature_matches(key, bytes(body), x_task_timestamp, x_task_signature, time.time()):
+        raise HTTPException(401, "signature does not match")
+    # Your app would store the manifest or notify someone; this prints it.
+    print(describe(TaskEvent.model_validate_json(body)), flush=True)
+```
+
+LazyCloud tries each callback up to three times and sends an `Idempotency-Key`
+header, so an app that stores manifests can key on it and ignore repeats.
+
+To try it before your own app is ready, `inbox.py` hosts the same FastAPI app
+on LazyCloud. It is public because callbacks carry a signature, not a
+workspace token. The signing key reaches it as a secret:
+
+```python video_highlights/inbox.py
+receiver = inbox.asgi(
+    name="highlights-receiver",
+    image=Image.from_uv("."),
+    cpu=0.25,
+    memory="256Mi",
+    concurrent_requests=8,
+    keep_warm_seconds=600,
+    # Callbacks carry a signature, not a workspace token; the route checks it.
+    authorized=False,
+    secrets=[SIGNING_KEY],
+)(api)
+```
+
+## Deploy
+
+Deploy the receiver first to get its URL:
+
+```bash
+uv run lazycloud deploy video_highlights.inbox:inbox
+```
+
+Set `CALLBACK_URL` in `settings.py` to the printed URL followed by
+`/video-highlights`, then deploy the pipeline:
+
+```bash
+uv run lazycloud deploy video_highlights.pipeline:app
+```
+
+The first deploy builds three images. The GPU image takes longest, since it
+downloads about 1.6 GB of Whisper weights. {/* MEASURE: first deploy time and each image's build time */}
+Skip the receiver and leave `CALLBACK_URL` as `None` if you only want the
+manifest. The workspace creates its signing key with its first callback,
+which is also the request that first starts the receiver. The three delivery
+attempts span about 15 seconds, so a receiver that starts slower than that
+misses the first callback. {/* MEASURE: whether the first callback reaches a cold receiver, and its cold start */}
+
+## Use it
+
+Upload a talk or a recorded meeting to the bucket, then run the pipeline on
+it:
+
+```bash
+aws s3 cp keynote.mp4 s3://my-video-bucket/talks/keynote.mp4
+uv run lazycloud --json run video_highlights.pipeline:highlight_video talks/keynote.mp4
+```
+
+The logs show each step, and the result is the manifest with its share link:
+
+```json
+{
+  "manifest_url": "https://...",
+  "manifest": {
+    "video_key": "talks/keynote.mp4",
+    "language": "en",
+    "summary": "...",
+    "chapters": [{"start_seconds": 0.0, "title": "..."}],
+    "clips": [{"number": 1, "title": "...", "video_url": "https://...", "thumbnail_url": "https://..."}],
+    "failed_highlights": []
+  }
+}
+```
+
+`--json` sends the arguments as JSON, so the result comes back as JSON and the
+callback carries the manifest. A call from Python with `.remote()` or
+`.spawn()` sends pickled values, and the callback then reports only the task
+ID and status. Extra arguments pick another model and the number of clips:
+
+```bash
+uv run lazycloud --json run video_highlights.pipeline:highlight_video talks/keynote.mp4 gpt-5.4 8
+```
+
+That second run reuses the saved transcript, so it skips the audio and GPU
+steps. {/* MEASURE: end-to-end time for a 60-minute talk, first run and rerun */}
+The receiver's log shows each verified callback:
+
+```bash
+uv run lazycloud logs --deployment highlights-receiver --follow
+```
+
+Another project can call the deployed pipeline through a typed client from
+`uv run lazycloud app export video_highlights`. Those calls send JSON too.
+
+## Cost and scaling
+
+Between runs nothing runs. Every function scales to zero, the GPU container
+stops a minute after its last call and the receiver ten minutes after its last
+callback. During a run the GPU bills only for transcription. Audio extraction,
+the model call and clip cutting each run on CPUs that cost less.
+{/* MEASURE: cost of one 60-minute talk by step: extract_audio, transcribe, pick_highlights, cut_clip */}
+{/* MEASURE: OpenAI tokens and cost for a 60-minute transcript with the default model */}
+{/* MEASURE: idle cost per day with both apps deployed */}
+
+The autoscalers bound how much runs at once: four audio extractions, two GPU
+containers and ten clip cutters. More videos at a time need wider limits on
+`extract_audio` and `transcribe`, and `concurrency` on `highlight_video`
+raised to match. The volume keeps only transcripts, a few hundred kilobytes
+each, since `transcribe` deletes the audio once it has the text.
+
+## Adapt it
+
+- `MAX_HIGHLIGHTS`, `MIN_CLIP_SECONDS` and `MAX_CLIP_SECONDS` in
+  `highlights.py` set the clip count and length limits. Vertical clips for
+  phones need a crop filter in `write_clip`.
+- `INSTRUCTIONS` in `llm.py` decides what counts as a highlight, for example
+  product demos only, or questions from the audience.
+- `WHISPER_MODEL` in `pipeline.py` picks the transcription model.
+  `distil-large-v3.5` is English-only and faster.
+- Pointing `CloudBucketConfig` at another S3-compatible store needs its
+  `endpoint`.
+- A schedule that lists new keys under a prefix and spawns `highlight_video`
+  for each one turns the pipeline into a drop folder.
+
+## Clean up
+
+```bash
+uv run lazycloud app delete video_highlights
+uv run lazycloud app delete video_highlights_inbox
+uv run lazycloud volume delete video-highlights-work
+uv run lazycloud secret delete VIDEO_BUCKET_ACCESS_KEY
+uv run lazycloud secret delete VIDEO_BUCKET_SECRET_KEY
+uv run lazycloud secret delete OPENAI_API_KEY
+```
+
+Clips, thumbnails and manifests expire with your plan's retention.
+`uv run lazycloud artifact list` and `artifact delete` remove them sooner.
+Your bucket and its videos are unchanged, since the pipeline mounts it
+read-only.

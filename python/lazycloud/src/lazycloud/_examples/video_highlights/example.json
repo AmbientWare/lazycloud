@@ -1,0 +1,4 @@
+{
+  "name": "video-highlights",
+  "description": "Turn videos in your S3 bucket into chapters, highlight clips and thumbnails, with a signed callback when each run finishes."
+}
