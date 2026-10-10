@@ -346,8 +346,9 @@ func (a *awsBuckets) revoke(context.Context, string) error { return nil }
 
 // hostPolicy is the STS session policy of a host grant: object reads,
 // writes and multipart uploads under the bucket's volumes/ and disks/
-// prefixes, and listing those prefixes. It grants nothing on the bucket
-// itself, such as its policy, lifecycle or deletion.
+// prefixes, listing those prefixes, and listing the bucket's multipart
+// uploads, which S3 does not condition on a prefix. It grants nothing else
+// on the bucket itself, such as its policy, lifecycle or deletion.
 func hostPolicy(bucket string) map[string]any {
 	arn := "arn:aws:s3:::" + bucket
 	return map[string]any{
@@ -363,9 +364,14 @@ func hostPolicy(bucket string) map[string]any {
 			},
 			{
 				"Effect":    "Allow",
-				"Action":    []string{"s3:ListBucket", "s3:ListBucketMultipartUploads"},
+				"Action":    []string{"s3:ListBucket"},
 				"Resource":  []string{arn},
 				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}}},
+			},
+			{
+				"Effect":   "Allow",
+				"Action":   []string{"s3:ListBucketMultipartUploads"},
+				"Resource": []string{arn},
 			},
 		},
 	}
