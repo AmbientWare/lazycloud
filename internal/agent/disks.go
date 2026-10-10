@@ -284,10 +284,15 @@ func (c *container) publishLoop(ctx context.Context) {
 		c.disks.mu.Unlock()
 		for _, d := range disks {
 			dirty, err := c.a.diskEngine.Status(d.ID)
-			if errors.Is(err, diskengine.ErrAttachmentLost) {
+			lost := errors.Is(err, diskengine.ErrAttachmentLost)
+			switch {
+			case lost:
 				c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
+			case err != nil:
+				c.log.Warn("reading a disk's status failed", "disk", d.Name, "error", err)
+				continue
 			}
-			if !now && err == nil && dirty < hostproto.DiskDirtyBytes/2 {
+			if !now && !lost && dirty < hostproto.DiskDirtyBytes/2 {
 				if err := c.a.grantRead(ctx, c.id, d); err != nil {
 					c.log.Warn("granting a disk's reads failed", "disk", d.Name, "error", err)
 				}
