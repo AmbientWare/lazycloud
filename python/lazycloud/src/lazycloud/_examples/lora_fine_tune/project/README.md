@@ -16,8 +16,9 @@ uv run lazycloud run lora_sql.evaluate:evaluate
 ```
 
 `evaluate` prints the base and tuned accuracy and a link to the Markdown
-report. To try the server, create an access token in the dashboard, store it
-with the `sql-server` URL from the deploy output, and ask a question:
+report. To try the server, create an access token in the dashboard. The
+configure script stores it with the `sql-server` URL from the deploy output,
+the one whose host ends in `-8000`. Then ask a question:
 
 ```bash
 uv run python -m lora_sql.configure

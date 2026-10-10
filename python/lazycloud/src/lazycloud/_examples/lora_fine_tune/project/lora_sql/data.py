@@ -115,7 +115,7 @@ def _download_base_model() -> None:
 
     if BASE_MODEL_READY.exists():
         return
-    # Download to local disk first: the hub's file locks need a local filesystem.
+    # The hub's file locks need a local filesystem, so the download lands there first.
     with tempfile.TemporaryDirectory() as local:
         snapshot_download(
             BASE_MODEL, local_dir=local, allow_patterns=["*.json", "*.safetensors", "*.txt"]

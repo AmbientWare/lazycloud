@@ -1,7 +1,6 @@
 """Train a LoRA adapter on a GPU, resuming from the run's last checkpoint."""
 
 import time
-from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +26,10 @@ if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 IGNORED_LABEL = -100
+# Sequences per forward pass. Logits over Qwen's 152k-token vocabulary dominate
+# GPU memory, so larger passes on long examples overflow a 24 GB card; gradient
+# accumulation makes up the rest of batch_size.
+DEVICE_BATCH = 2
 
 
 class TrainingConfig(BaseModel):
@@ -37,7 +40,7 @@ class TrainingConfig(BaseModel):
     lora_rank: int = Field(default=16, ge=4, le=MAX_LORA_RANK)
     lora_alpha: int = Field(default=32, ge=1, le=256)
     lora_dropout: float = Field(default=0.05, ge=0, lt=1)
-    batch_size: int = Field(default=16, ge=1, le=64)
+    batch_size: int = Field(default=16, ge=DEVICE_BATCH, le=64, multiple_of=DEVICE_BATCH)
     max_tokens: int = Field(default=1024, ge=128, le=MAX_MODEL_LEN)
     save_steps: int = Field(default=50, ge=10)
 
@@ -54,14 +57,14 @@ class TrainingResult(BaseModel):
     image=gpu_image,
     gpu=GPUS,
     cpu=4,
-    memory="24Gi",
+    memory="16Gi",
     volumes=[storage],
     timeout_seconds=3 * 3600,
     # A failure here would fail again; preemption restarts the call anyway,
     # and the run resumes from its last checkpoint.
     retries=0,
 )
-def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -> TrainingResult:
+def train(run: str = DEFAULT_RUN, settings: TrainingConfig | None = None) -> TrainingResult:
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import (
@@ -73,7 +76,7 @@ def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -
     )
 
     started = time.monotonic()
-    config = TrainingConfig.model_validate(settings or {})
+    config = settings or TrainingConfig()
     path = run_dir(run)
     record_settings(path / "settings.json", config)
     require_base_model()
@@ -105,7 +108,8 @@ def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -
         args=TrainingArguments(
             output_dir=str(checkpoints),
             num_train_epochs=config.epochs,
-            per_device_train_batch_size=config.batch_size,
+            per_device_train_batch_size=DEVICE_BATCH,
+            gradient_accumulation_steps=config.batch_size // DEVICE_BATCH,
             learning_rate=config.learning_rate,
             lr_scheduler_type="cosine",
             warmup_steps=0.03,
