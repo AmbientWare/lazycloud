@@ -44,8 +44,8 @@ type session struct {
 	// sent holds the ids of derived commands this session already sent, so
 	// each is sent once per session. It keeps only ids still derived.
 	sent map[string]bool
-	// grants holds the expiry of the storage grant sent per workspace.
-	grants map[identity.WorkspaceID]time.Time
+	// grants holds the storage grant sent per workspace.
+	grants map[identity.WorkspaceID]*hostGrant
 	// layers holds the layer grants sent per image reference, and
 	// layersListed whether the host's live references were listed yet.
 	layers       map[string]layerGrant
@@ -57,10 +57,8 @@ type session struct {
 	// networks holds the newest policy version recorded per container, so
 	// a report restating it writes nothing.
 	networks map[execution.ContainerID]int32
-	// reserve is the PrepareReserve awaiting its answer, and agent the
-	// release the Hello stated.
+	// reserve is the PrepareReserve awaiting its answer.
 	reserve *reserveAttempt
-	agent   compute.AgentState
 	// builds wakes the session when an image build a start waits for, or
 	// a platform image conversion, changes.
 	builds watch
@@ -160,7 +158,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, opened: time.Now(), again: make(chan struct{}, 1), sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
-		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
+		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]*hostGrant{}, layers: map[string]layerGrant{},
 		platform: platformState{
 			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
 			running: slices.Compact(slices.Sorted(slices.Values(hello.GetRunningPlatformImages()))),
@@ -178,7 +176,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	for _, r := range reports {
 		sess.observe(r)
 	}
-	update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+	update, err := s.compute.UpdateFor(ctx, host)
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
@@ -266,7 +264,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			}
 			// A release published while the session is open, or widened
 			// to this host, reaches it here.
-			update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+			update, err := s.compute.UpdateFor(ctx, host)
 			if err != nil {
 				return s.grpcError(ctx, err)
 			}
@@ -328,7 +326,8 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
-		// outcome.
+		// outcome. A storage grant counts as held once acknowledged.
+		sess.grantAcked(body.Ack.GetCommandId())
 		return nil
 	case *hostproto.HostMessage_Hello:
 		return status.Error(codes.InvalidArgument, "Hello is only the first message")
@@ -467,7 +466,13 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 		sess.waiting(ctx, start.Container, "image", "")
 		return true, nil
 	}
-	if reason, permanent := permanentStartFailure(err); permanent {
+	if err == nil && usesWorkspaceBucket(msg.GetStart()) {
+		var refused *storageRefusal
+		if err = sess.ensureGrant(ctx, start.Workspace); err != nil && !errors.As(err, &refused) {
+			return false, err
+		}
+	}
+	if reason, failed := startFailure(err); failed {
 		// The container fails like a failed preparation and stops being
 		// derived; the host's other containers are unaffected.
 		sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(), "container", start.Container.String(), "error", err)
@@ -486,11 +491,6 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 	if !recorded {
 		sess.endStart(ctx, start.Container, "", startDropped)
 		return false, nil
-	}
-	if usesWorkspaceBucket(msg.GetStart()) {
-		if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
-			return false, err
-		}
 	}
 	msg.GetStart().Traceparent = telemetry.TraceParentOf(ctx)
 	if err := sess.send(msg); err != nil {
@@ -784,12 +784,15 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 	return sess.send(updateMessage(update))
 }
 
-// permanentStartFailure says whether err means the start can never be
-// built, and the reason the container's owner is shown.
-func permanentStartFailure(err error) (string, bool) {
+// startFailure says whether err fails the start's container rather than
+// the session: the start can never be built as asked, or the storage owner
+// refused storage it needs. It returns the reason the container's owner is
+// shown.
+func startFailure(err error) (string, bool) {
 	var missing *secrets.NotFoundError
 	var unreadable *secrets.UnreadableError
 	var unconvertible *images.ConversionError
+	var refused *storageRefusal
 	switch {
 	case err == nil:
 		return "", false
@@ -801,6 +804,8 @@ func permanentStartFailure(err error) (string, bool) {
 		return "the release's image has no pinned reference; deploy it again", true
 	case errors.As(err, &unconvertible):
 		return unconvertible.Error(), true
+	case errors.As(err, &refused):
+		return refused.reason, true
 	}
 	return "", false
 }

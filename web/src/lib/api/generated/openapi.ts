@@ -5493,7 +5493,7 @@ export interface components {
             gpu_count: number;
         };
         /**
-         * @description A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
+         * @description A host's place in the fleet. preparing is a host becoming a stopped reserve; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
          * @enum {string}
          */
         FleetState: "serving" | "starting" | "draining" | "preparing" | "stopping" | "unavailable" | "terminating" | "stopped" | "hibernate_unverified" | "image_saved";

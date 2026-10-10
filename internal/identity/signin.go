@@ -20,11 +20,15 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Sign-in timing. A browser session lasts SessionTTL from sign-in; a
-// sign-in started but not finished is abandoned after SignInTTL.
+// Sign-in timing. A browser session expires SessionIdle after its last
+// use, renewed at most once per sessionRenewal, and SessionMaxAge after
+// sign-in at the latest; a sign-in started but not finished is abandoned
+// after SignInTTL.
 const (
-	SessionTTL = 12 * time.Hour
-	SignInTTL  = 10 * time.Minute
+	SessionIdle    = 7 * 24 * time.Hour
+	SessionMaxAge  = 30 * 24 * time.Hour
+	sessionRenewal = 24 * time.Hour
+	SignInTTL      = 10 * time.Minute
 	// GitHubCallbackPath is where GitHub returns the browser, under the
 	// public URL.
 	GitHubCallbackPath = "/auth/github/callback"
@@ -306,16 +310,21 @@ func openSession(ctx context.Context, q *Queries, user UserID) (Session, error) 
 	if err != nil {
 		return Session{}, err
 	}
-	expires := time.Now().Add(SessionTTL)
-	if _, err := q.InsertSession(ctx, InsertSessionParams{UserID: uuid.UUID(user), TokenHash: digest, ExpiresAt: expires}); err != nil {
+	now := time.Now()
+	if _, err := q.InsertSession(ctx, InsertSessionParams{UserID: uuid.UUID(user), TokenHash: digest, ExpiresAt: now.Add(SessionIdle)}); err != nil {
 		return Session{}, fmt.Errorf("insert session: %w", err)
 	}
-	return Session{Token: token, ExpiresAt: expires}, nil
+	// The cookie lasts as long as the session can; the row's expiry rolls.
+	return Session{Token: token, ExpiresAt: now.Add(SessionMaxAge)}, nil
 }
 
-// AuthenticateSession resolves a session cookie to its principal.
+// AuthenticateSession resolves a session cookie to its principal and
+// renews the session.
 func (i *Identity) AuthenticateSession(ctx context.Context, token string) (Principal, error) {
-	row, err := i.queries.AuthenticateSession(ctx, HashToken(token))
+	row, err := i.queries.AuthenticateSession(ctx, AuthenticateSessionParams{
+		TokenHash: HashToken(token), IdleSeconds: SessionIdle.Seconds(), MaxAgeSeconds: SessionMaxAge.Seconds(),
+		RenewWithinSeconds: (SessionIdle - sessionRenewal).Seconds(),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, ErrUnauthenticated
 	}

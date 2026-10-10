@@ -3628,7 +3628,7 @@ type FleetNode struct {
 	Ready  bool   `json:"ready"`
 	Region string `json:"region"`
 
-	// State A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
+	// State A host's place in the fleet. preparing is a host becoming a stopped reserve; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 	State FleetState `json:"state"`
 }
 
@@ -3642,7 +3642,7 @@ type FleetNodePage struct {
 	ObservedAt time.Time   `json:"observed_at"`
 }
 
-// FleetState A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
+// FleetState A host's place in the fleet. preparing is a host becoming a stopped reserve; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 type FleetState string
 
 // FleetStateCapacity defines model for FleetStateCapacity.
@@ -3651,7 +3651,7 @@ type FleetStateCapacity struct {
 	Capacity  FleetCapacity `json:"capacity"`
 	Machines  int           `json:"machines"`
 
-	// State A host's place in the fleet. preparing is a host becoming a stopped reserve, bought for one or refreshing; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
+	// State A host's place in the fleet. preparing is a host becoming a stopped reserve; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
 	State FleetState `json:"state"`
 }
 

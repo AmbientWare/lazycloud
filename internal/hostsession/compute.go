@@ -68,16 +68,15 @@ func gpusOf(r apitypes.Resources) int32 {
 func sessionOpenIn(hello *hostproto.Hello) compute.SessionOpen {
 	open := compute.SessionOpen{
 		BootID: hello.GetBootId(), Capacity: capacityIn(hello.GetCapacity()), AgentVersion: hello.GetAgentVersion(),
-		SleptSeconds: hello.GetSleptSeconds(),
+		AgentUpdatable: hello.GetUpdatable(), SleptSeconds: hello.GetSleptSeconds(),
+	}
+	if rejected := hello.GetRejectedVersion(); rejected != "" {
+		open.AgentRejected = &rejected
 	}
 	if attempt, err := uuid.Parse(hello.GetSleepAttemptId()); err == nil {
 		open.SleepAttempt = &attempt
 	}
 	return open
-}
-
-func agentStateIn(hello *hostproto.Hello) compute.AgentState {
-	return compute.AgentState{Version: hello.GetAgentVersion(), Rejected: hello.GetRejectedVersion(), Updatable: hello.GetUpdatable()}
 }
 
 // reserveAttempt is the PrepareReserve this session sent and awaits.
@@ -91,7 +90,7 @@ type reserveAttempt struct {
 // it may stop, and asks again with a fresh attempt when an answer is
 // overdue. Only the newest attempt's answer counts.
 func (sess *session) syncReserve(ctx context.Context) error {
-	step, request, err := sess.server.compute.ReserveSync(ctx, sess.host, sess.agent)
+	step, request, err := sess.server.compute.ReserveSync(ctx, sess.host)
 	if err != nil {
 		return sess.server.grpcError(ctx, err)
 	}

@@ -151,8 +151,10 @@ def read_text_file(key: str) -> str:
 
 `access_key` and `secret_key` name [secrets](/concepts/secrets); both are
 required. `bucket`, `prefix`, `endpoint`,
-`force_path_style`, and `read_only` cover other layouts and stores. The bucket
-must already exist. See the [Parquet example](/examples/parallel-parquet-s3).
+`force_path_style`, and `read_only` cover other layouts and stores. Requests
+name the bucket in the host name, as AWS expects; stores such as MinIO that
+take the bucket in the path need `force_path_style=True`. A bucket name with a
+dot always goes in the path. The bucket must already exist.
 
 ## Delete stored data
 

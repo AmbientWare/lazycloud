@@ -116,9 +116,9 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 		}
 		switch n.State {
 		case FleetServing:
-			n.Ready = onRelease(n.ID, &r.AgentVersion, target)
+			n.Ready = onRelease(r.RolloutBucket, &r.AgentVersion, target)
 		case FleetStopped, FleetHibernateUnverified, FleetImageSaved:
-			n.Ready = onRelease(n.ID, r.PreparedAgentVersion, target)
+			n.Ready = onRelease(r.RolloutBucket, r.PreparedAgentVersion, target)
 		case FleetStarting, FleetDraining, FleetPreparing, FleetStopping, FleetUnavailable, FleetTerminating:
 		}
 		out = append(out, n)

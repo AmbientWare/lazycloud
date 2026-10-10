@@ -100,28 +100,27 @@ func (a *Agent) diskStore(workspace string) (diskengine.Store, error) {
 //
 // A devbox's disk at / is its root filesystem: it is mounted at devboxRoot,
 // where the supervisor seeds it and switches into it.
-func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAttachment, devbox bool) ([]mount.Mount, []string, error) {
+func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAttachment, devbox bool) ([]mount.Mount, error) {
 	if len(specs) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	if c.a.diskErr != nil {
-		return nil, nil, fmt.Errorf("this host cannot attach disks: %w", c.a.diskErr)
+		return nil, fmt.Errorf("this host cannot attach disks: %w", c.a.diskErr)
 	}
 	var binds []mount.Mount
-	var workspaces []string
 	for _, spec := range specs {
 		target := spec.GetMountPath()
 		switch {
 		case target == "/" && devbox:
 			target = devboxRoot
 		case target == "/" || !filepath.IsAbs(target):
-			return nil, nil, fmt.Errorf("disk %s: Docker hosts mount disks at an absolute directory, not %q", spec.GetName(), spec.GetMountPath())
+			return nil, fmt.Errorf("disk %s: Docker hosts mount disks at an absolute directory, not %q", spec.GetName(), spec.GetMountPath())
 		}
 		ctx, span := telemetry.Start(ctx, "agent.disk_attach", trace.WithAttributes(attribute.String("lazycloud.disk", spec.GetName())))
 		lease, err := c.acquire(ctx, spec.GetName())
 		if err != nil {
 			telemetry.Fail(span, err)
-			return nil, nil, err
+			return nil, err
 		}
 		held := &heldDisk{ID: lease.GetDiskId(), Name: spec.GetName(), Workspace: lease.GetWorkspaceId(), Token: lease.GetLeaseToken()}
 		c.disks.mu.Lock()
@@ -129,14 +128,14 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 		err = c.a.saveLeases(c.id, c.disks.disks)
 		c.disks.mu.Unlock()
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if err := c.a.volumes.waitGrant(ctx, held.Workspace); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		store, err := c.a.diskStore(held.Workspace)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		chain := make([]diskengine.Generation, len(lease.GetChain()))
 		for n, g := range lease.GetChain() {
@@ -152,13 +151,12 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 		}
 		telemetry.Fail(span, err)
 		if err != nil {
-			return nil, nil, fmt.Errorf("attach disk %s: %w", spec.GetName(), err)
+			return nil, fmt.Errorf("attach disk %s: %w", spec.GetName(), err)
 		}
 		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: request.Mountpoint, Target: target})
-		workspaces = append(workspaces, held.Workspace)
 	}
 	c.a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.
-	return binds, workspaces, nil
+	return binds, nil
 }
 
 // acquire takes a lease, waiting while another container still holds the

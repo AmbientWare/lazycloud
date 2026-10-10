@@ -19,8 +19,8 @@ update agent_releases set target = false where target and version <> @version;
 -- name: SetTargetRelease :execrows
 update agent_releases set target = true where version = @version;
 
--- name: HostArchitecture :one
-select architecture from hosts where id = @id;
+-- name: AgentUpdate :one
+select version, architecture, sha256 from agent_updates where host_id = @id;
 
 -- name: MarkUpdating :exec
 -- An agent told to update restarts; until this passes it is not lost.

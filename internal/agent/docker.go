@@ -69,7 +69,7 @@ const pidsLimit = 4096
 // its sandbox kernel.
 const runtimeRunsc = "runsc"
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string, restore *restorePoint) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -106,9 +106,6 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	httpLabels(labels, c.http)
 	if err := c.podLabels(labels); err != nil {
 		return err
-	}
-	if len(workspaces) > 0 {
-		labels[labelWorkspaces] = strings.Join(workspaces, ",")
 	}
 	labels[labelRuntime] = string(runtimeLabel)
 	if len(gpus) > 0 {
@@ -276,7 +273,6 @@ func (a *Agent) adopt(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
-	a.volumes.adopt(list.Items)
 	var holders []containertypes.Summary
 	for _, summary := range list.Items {
 		switch summary.Labels[labelKind] {
@@ -349,6 +345,11 @@ func (a *Agent) adopt(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	// Mounts are adopted once their users are tracked, so the users of a
+	// mount that died can fail.
+	if err := a.volumes.adopt(ctx, list.Items); err != nil {
+		return err
 	}
 	entries, err := os.ReadDir(filepath.Join(a.cfg.StateDir, "containers"))
 	if err != nil {

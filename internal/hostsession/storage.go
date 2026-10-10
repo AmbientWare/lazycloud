@@ -19,8 +19,55 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-// grantRefresh is how long before expiry a host gets a fresh storage grant.
-const grantRefresh = 30 * time.Minute
+const (
+	// grantRefresh is how long before expiry a host gets a fresh storage
+	// grant.
+	grantRefresh = 30 * time.Minute
+	// grantAckWait is how long a host may take to confirm it stored a
+	// grant; a later sync sends it again.
+	grantAckWait = 2 * time.Second
+)
+
+// storageRefusal is storage a start needs that the storage owner refused:
+// its volume mounts or the workspace's storage grant. The container fails
+// with reason; the host's other containers and its session are unaffected.
+type storageRefusal struct {
+	reason string
+	err    error
+}
+
+func (e *storageRefusal) Error() string { return e.err.Error() }
+
+func (e *storageRefusal) Unwrap() error { return e.err }
+
+// refusal returns err as a *storageRefusal of what, such as "volumes" or
+// "cloud bucket at /data", when it is one of the storage owner's typed
+// refusals, with the cause its owner is shown. Any other error, such as the
+// database's or the object store's failure, is returned as it is, so the
+// start is tried again.
+func refusal(what string, err error) error {
+	var (
+		invalid  *storage.InvalidError
+		conflict *storage.ConflictError
+		refused  *storage.StoreRefusedError
+		cause    string
+	)
+	switch {
+	case errors.Is(err, storage.ErrBucketsUnconfigured):
+		cause = storage.ErrBucketsUnconfigured.Error()
+	case errors.Is(err, storage.ErrNoRegion):
+		cause = storage.ErrNoRegion.Error()
+	case errors.As(err, &invalid):
+		cause = invalid.Reason
+	case errors.As(err, &conflict):
+		cause = conflict.Reason
+	case errors.As(err, &refused):
+		cause = "the object store refused it (" + refused.Code + ")"
+	default:
+		return err
+	}
+	return &storageRefusal{reason: what + " unavailable: " + cause, err: fmt.Errorf("%s: %w", what, err)}
+}
 
 // volumeMounts records the container's volume mounts and returns them as the
 // host sees them.
@@ -30,7 +77,7 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 	}
 	mounts, err := s.storage.MountVolumes(ctx, start.Workspace, uuid.UUID(start.Container), *start.Spec.Volumes)
 	if err != nil {
-		return nil, err
+		return nil, refusal("volumes", err)
 	}
 	out := make([]*hostproto.VolumeMount, len(mounts))
 	for n, m := range mounts {
@@ -50,7 +97,7 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 			}
 			loc, err := storage.CloudBucketLocation(*b)
 			if err != nil {
-				return nil, fmt.Errorf("cloud bucket at %s: %w", m.MountPath, err)
+				return nil, refusal("cloud bucket at "+m.MountPath, err)
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
 				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
@@ -83,13 +130,33 @@ func usesWorkspaceBucket(start *hostproto.StartContainer) bool {
 	return false
 }
 
-// ensureGrant sends the host a storage grant for workspace unless this
-// session sent one that is not close to expiry. Failing to issue one is
-// logged and retried at the next sync: the host keeps using a grant it has,
-// and a container waiting for its first grant fails to start in time.
+// hostGrant is the storage grant this session sent the host for one
+// workspace, and whether the host confirmed it stored it.
+type hostGrant struct {
+	msg     *hostproto.ServerMessage
+	expires time.Time
+	sentAt  time.Time
+	acked   bool
+}
+
+// held reports whether the host holds the grant and may use it now.
+func (g *hostGrant) held() bool {
+	return g != nil && g.acked && time.Now().Before(g.expires)
+}
+
+// ensureGrant keeps a storage grant for workspace on the host. A grant the
+// host has not confirmed within grantAckWait is sent again, and one close
+// to expiry is replaced. A storage refusal while the host holds no grant
+// is a *storageRefusal. Any other failure to issue one is logged and tried
+// again at the next sync: the host keeps using a grant it holds, and a
+// start waiting for its first grant fails if none arrives in time.
 func (sess *session) ensureGrant(ctx context.Context, workspace identity.WorkspaceID) error {
-	if expires, ok := sess.grants[workspace]; ok && time.Until(expires) > grantRefresh {
-		return nil
+	g := sess.grants[workspace]
+	if g != nil && time.Until(g.expires) > grantRefresh {
+		if g.acked || time.Since(g.sentAt) < grantAckWait {
+			return nil
+		}
+		return sess.sendGrant(workspace, g)
 	}
 	grant, err := sess.server.storage.HostGrant(ctx, sess.host, workspace)
 	if err != nil {
@@ -97,25 +164,46 @@ func (sess *session) ensureGrant(ctx context.Context, workspace identity.Workspa
 			return status.FromContextError(ctx.Err()).Err()
 		}
 		sess.server.logger.WarnContext(ctx, "issuing a storage grant failed", "host", sess.host.String(), "workspace", workspace.String(), "error", err)
+		var refused *storageRefusal
+		if err := refusal("storage grant", err); errors.As(err, &refused) && !g.held() {
+			return refused
+		}
 		return nil
 	}
-	msg := &hostproto.ServerMessage{
-		CommandId: "grant:" + workspace.String() + ":" + grant.ExpiresAt.Format(time.RFC3339),
-		Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
-			WorkspaceId: workspace.String(), Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
-			AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
-			ExpiresAt: timestamppb.New(grant.ExpiresAt),
-		}},
-	}
-	if err := sess.stream.Send(msg); err != nil {
+	return sess.sendGrant(workspace, &hostGrant{
+		expires: grant.ExpiresAt,
+		msg: &hostproto.ServerMessage{
+			CommandId: "grant:" + workspace.String() + ":" + grant.ExpiresAt.Format(time.RFC3339),
+			Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
+				WorkspaceId: workspace.String(), Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
+				AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
+				ExpiresAt: timestamppb.New(grant.ExpiresAt),
+			}},
+		},
+	})
+}
+
+func (sess *session) sendGrant(workspace identity.WorkspaceID, g *hostGrant) error {
+	if err := sess.stream.Send(g.msg); err != nil {
 		return err //nolint:wrapcheck // The stream's status ends the session.
 	}
-	sess.grants[workspace] = grant.ExpiresAt
+	g.sentAt = time.Now()
+	sess.grants[workspace] = g
 	return nil
 }
 
+// grantAcked records that the host stored the grant command names.
+func (sess *session) grantAcked(command string) {
+	for _, g := range sess.grants {
+		if g.msg.GetCommandId() == command {
+			g.acked = true
+		}
+	}
+}
+
 // refreshGrants keeps a fresh grant on the host for every workspace whose
-// volumes or disks its live containers use, and forgets the others.
+// volumes or disks its live containers use, and forgets the others. A grant
+// that cannot be issued is tried again at the next sync.
 func (sess *session) refreshGrants(ctx context.Context) error {
 	workspaces, err := sess.server.storage.HostMountWorkspaces(ctx, sess.host)
 	if err != nil {
@@ -124,7 +212,8 @@ func (sess *session) refreshGrants(ctx context.Context) error {
 	live := map[identity.WorkspaceID]bool{}
 	for _, ws := range workspaces {
 		live[ws] = true
-		if err := sess.ensureGrant(ctx, ws); err != nil {
+		var refused *storageRefusal
+		if err := sess.ensureGrant(ctx, ws); err != nil && !errors.As(err, &refused) {
 			return err
 		}
 	}

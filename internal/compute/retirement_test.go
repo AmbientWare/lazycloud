@@ -50,7 +50,7 @@ func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
 	other := cloudHost(t, o, compute.MarketOnDemand, "i-0000000000000a005")
 	idleFor(t, o, oldest, 30*time.Minute)
 	idleFor(t, o, idle, 20*time.Minute)
-	idleFor(t, o, recent, time.Minute)
+	idleFor(t, o, recent, compute.DefaultPolicy().SpotIdleTimeout/2)
 	idleFor(t, o, busy, time.Hour)
 	idleFor(t, o, other, time.Hour)
 	// A container runs on it, so it is not idle.

@@ -154,6 +154,10 @@ type SessionOpen struct {
 	BootID       string
 	Capacity     Capacity
 	AgentVersion string
+	// AgentUpdatable is set when the agent runs under its service and can
+	// update itself; AgentRejected names the release it rolled back from.
+	AgentUpdatable bool
+	AgentRejected  *string
 	// SleepAttempt is the reserve stop the host last proved, nil when none;
 	// SleptSeconds how long it slept since, in this boot.
 	SleepAttempt *uuid.UUID
@@ -172,6 +176,7 @@ func (c *Compute) OpenSession(ctx context.Context, host HostID, open SessionOpen
 		var err error
 		epoch, err = c.queries.WithTx(tx).OpenHostSession(ctx, OpenHostSessionParams{
 			ID: uuid.UUID(host), BootID: open.BootID, AgentVersion: open.AgentVersion,
+			AgentUpdatable: open.AgentUpdatable, AgentRejectedVersion: open.AgentRejected,
 			CpuMillis: open.Capacity.CPUMillis, MemoryBytes: open.Capacity.MemoryBytes,
 			GpuType: open.Capacity.GPUType, GpuCount: int32(open.Capacity.GPUCount), //nolint:gosec // GPU counts are small.
 		})
