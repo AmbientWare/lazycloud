@@ -9,19 +9,20 @@ description: "List and download standalone uv projects bundled with the SDK."
 lazycloud example list
 ```
 
-The catalog includes quickstart, YOLO training, a vLLM service, document
-processing, a coding agent, parallel Parquet processing, artifacts, and a
-workload tour. These projects ship inside the client package. Downloading
+The catalog includes quickstart, an image generation studio, LoRA
+fine-tuning, a video highlights pipeline, coding agents, a website change
+monitor, artifacts, and a workload tour. These projects ship inside the client package. Downloading
 needs no repository access, GitHub token, or LazyCloud login.
 
 ## Download a project
 
 ```bash
-lazycloud example download yolo-training
-cd yolo-training
+lazycloud example download image-studio
+cd image-studio
 uv sync
 uv run lazycloud login
-uv run lazycloud run app:train_yolo
+uv run python -m image_studio.configure
+uv run lazycloud deploy image_studio.app:app
 ```
 
 Running this example uses a GPU and incurs compute and storage charges.
