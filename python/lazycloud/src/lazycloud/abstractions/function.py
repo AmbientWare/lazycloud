@@ -134,9 +134,9 @@ class FunctionOptions(TypedDict, total=False):
     keep_warm: int | None
     max_pending_tasks: int | None
     autoscaler: Autoscaler | Mapping[str, Any] | None
-    retries: int
+    retries: int | None
     retry_policy: RetryPolicyInput
-    retry_delay_seconds: float
+    retry_delay_seconds: float | None
     callback_url: str | None
     authorized: bool | None
     env: dict[str, str] | None
@@ -178,9 +178,9 @@ class Function(Generic[P, R]):
     keep_warm: int | None = None
     max_pending_tasks: int | None = None
     autoscaler: Autoscaler | Mapping[str, Any] | None = None
-    retries: int = DEFAULT_FUNCTION_RETRIES
+    retries: int | None = None
     retry_policy: RetryPolicyInput = None
-    retry_delay_seconds: float = 0.0
+    retry_delay_seconds: float | None = None
     callback_url: str | None = None
     authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED
     env: dict[str, str] = field(default_factory=dict)
@@ -283,6 +283,7 @@ class Function(Generic[P, R]):
                 self.retry_policy,
                 retries=self.retries,
                 retry_delay_seconds=self.retry_delay_seconds,
+                default_retries=DEFAULT_FUNCTION_RETRIES,
             ),
             lifecycle_hooks=lifecycle_hooks(
                 on_start=self.on_start,
@@ -813,6 +814,7 @@ class Function(Generic[P, R]):
             self.retry_policy,
             retries=self.retries,
             retry_delay_seconds=self.retry_delay_seconds,
+            default_retries=DEFAULT_FUNCTION_RETRIES,
         )
         return policy if policy is not None else RetryPolicy(max_attempts=1)
 
@@ -1075,9 +1077,9 @@ def _function(
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    retries: int = DEFAULT_FUNCTION_RETRIES,
+    retries: int | None = None,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
+    retry_delay_seconds: float | None = None,
     callback_url: str | None = None,
     authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
     env: dict[str, str] | None = None,
@@ -1121,9 +1123,9 @@ def _function(
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    retries: int = DEFAULT_FUNCTION_RETRIES,
+    retries: int | None = None,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
+    retry_delay_seconds: float | None = None,
     callback_url: str | None = None,
     authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
     env: dict[str, str] | None = None,
@@ -1166,9 +1168,9 @@ def _function(
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    retries: int = DEFAULT_FUNCTION_RETRIES,
+    retries: int | None = None,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
+    retry_delay_seconds: float | None = None,
     callback_url: str | None = None,
     authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
     env: dict[str, str] | None = None,

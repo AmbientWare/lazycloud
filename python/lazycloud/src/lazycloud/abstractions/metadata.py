@@ -106,7 +106,14 @@ def retry_policy_config(
     *,
     retries: int | None = None,
     retry_delay_seconds: float | None = None,
+    default_retries: int = 0,
 ) -> RetryPolicy | None:
+    """Resolve a workload's retries; `retries` and the delay override a policy's fields.
+
+    `default_retries` applies only when the caller set none of the three.
+    """
+    if value is None and retries is None and retry_delay_seconds is None:
+        retries = default_retries
     if (
         value is None
         and (retries is None or retries <= 0)
