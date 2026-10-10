@@ -203,6 +203,78 @@ test "$(cat /mnt/v/a.txt)" = hello
 test "$(wc -c </mnt/v/big)" -eq 20000000`)
 }
 
+// A workspace in a connected account keeps its bucket there: the storage
+// owner creates it through the connection role, which the platform's
+// credentials assume with the external ID, and names it for that account.
+// A host grant assumes the same role with the session policy, reaches the
+// workspace's volume objects and nothing else, and the platform's own
+// credentials cannot reach the bucket. Deleting the workspace's storage
+// deletes the bucket.
+func TestConnectedAccountKeepsTheWorkspaceBucket(t *testing.T) {
+	e := checkEnv(t)
+	connected, role, externalID := os.Getenv("LAZYCLOUD_AWS_CHECK_CONNECTED_ACCOUNT"),
+		os.Getenv("LAZYCLOUD_AWS_CHECK_CONNECTED_ROLE_ARN"), os.Getenv("LAZYCLOUD_AWS_CHECK_EXTERNAL_ID")
+	if connected == "" || role == "" || externalID == "" {
+		t.Skip("acceptance/awscheck/run.sh sets up the connected account")
+	}
+	ctx := t.Context()
+	pool := dbtest.New(t)
+	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(e.region))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comp := compute.NewCompute(pool, nil, compute.Config{Fleet: compute.Fleet{AWS: awsConfig}})
+	store := storage.NewStorage(pool, storage.Config{
+		Region:     e.region,
+		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
+	}, comp)
+	var ws uuid.UUID
+	if err := pool.QueryRow(ctx, `with owner as (
+		insert into users (email) values ('aws-check@example.test') returning id
+	), connection as (
+		insert into cloud_connections (account_id, aws_account_id, phase) select id, $1, 'ready' from owner returning id
+	), authorization as (
+		insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region)
+		select id, 1, 'existing_role', 'active', 'ready', $2, $3, $4 from connection
+	)
+	insert into workspaces (name, connection_id) select 'aws-check-connected', id from connection returning id`,
+		connected, role, externalID, e.region).Scan(&ws); err != nil {
+		t.Fatal(err)
+	}
+	workspace := identity.WorkspaceID(ws)
+	grant, err := store.HostGrant(ctx, compute.HostID(uuid.New()), workspace)
+	if err != nil {
+		t.Fatalf("host grant: %v", err)
+	}
+	if !strings.HasPrefix(grant.Bucket, e.prefix+"-"+connected+"-") || len(grant.Bucket) > 63 || grant.Region != e.region {
+		t.Fatalf("bucket %s in %s, want %s-%s-<workspace> in %s", grant.Bucket, grant.Region, e.prefix, connected, e.region)
+	}
+	if _, err := platformClient(t, e.region).ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(grant.Bucket)}); errorCode(err) != "AccessDenied" {
+		t.Errorf("the platform's own credentials listing the connected bucket: %v, want AccessDenied", err)
+	}
+	host := s3.New(s3.Options{
+		Region: grant.Region, BaseEndpoint: aws.String(grant.Endpoint),
+		Credentials: credentials.NewStaticCredentialsProvider(grant.AccessKeyID, grant.SecretAccessKey, grant.SessionToken),
+	})
+	key := "volumes/" + uuid.NewString() + "/seed"
+	if _, err := host.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(grant.Bucket), Key: aws.String(key), Body: strings.NewReader("seed")}); err != nil {
+		t.Fatalf("write a volume object: %v", err)
+	}
+	if _, err := host.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(grant.Bucket), Key: aws.String("other/x"), Body: strings.NewReader("x")}); errorCode(err) != "AccessDenied" {
+		t.Errorf("write outside volumes/ and disks/: %v, want AccessDenied", err)
+	}
+	for range 5 {
+		empty, err := store.DeleteWorkspaceStorage(ctx, workspace)
+		if err != nil {
+			t.Fatalf("delete workspace storage: %v", err)
+		}
+		if empty {
+			return
+		}
+	}
+	t.Fatal("the connected bucket is still not deleted")
+}
+
 // A user's bucket whose name holds a dot is addressed by path, so TLS
 // verifies against the endpoint's own certificate, and GeeseFS mounts it.
 func TestDottedCloudBucketMountsByPath(t *testing.T) {
