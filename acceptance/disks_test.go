@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 )
 
@@ -42,9 +43,13 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 			t.Fatal("the second host did not join within a minute")
 		}
 	}
-	// Disks come with the Team plan.
-	if _, err := p.pool.Exec(ctx, `insert into billing_accounts (user_id, terms_version) select id, 'team-v3' from users
-on conflict (user_id) do update set terms_version = 'team-v3'`); err != nil {
+	// Disks come with paid plans; the account is waived, as the local
+	// stack's is.
+	var owner uuid.UUID
+	if err := p.pool.QueryRow(ctx, "select id from users limit 1").Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := billing.NewBilling(p.pool, billing.Config{}, p.logger).SetComplimentary(ctx, owner, true); err != nil {
 		t.Fatal(err)
 	}
 	box := spec("box", "", p.upload(map[string]string{"app.py": ""}), nil)
