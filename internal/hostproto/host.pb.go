@@ -2557,9 +2557,8 @@ func (x *PublishFilesystem) GetDeadline() *timestamppb.Timestamp {
 // volumes and disks. The server sends one before the first container that
 // needs it and a fresh one before it expires. Hosts keep it from containers.
 type StorageGrant struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	// The store's URL, always set; AWS S3 is its regional endpoint.
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId     string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
 	Endpoint        string                 `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	Region          string                 `protobuf:"bytes,3,opt,name=region,proto3" json:"region,omitempty"`
 	Bucket          string                 `protobuf:"bytes,4,opt,name=bucket,proto3" json:"bucket,omitempty"`
@@ -3825,8 +3824,6 @@ func (x *PlatformVolume) GetPrefix() string {
 	return ""
 }
 
-// CloudBucket is a user's bucket. The server resolves its endpoint and
-// addressing as it does a grant's, so the endpoint is always set.
 type CloudBucket struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Bucket          string                 `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`

@@ -28,9 +28,8 @@ func TestHostPolicyReachesOnlyVolumeAndDiskObjects(t *testing.T) {
 	}
 }
 
-// TestBucketsReachAnExplicitEndpoint: every bucket address hosts receive
-// names its endpoint, so their mount tools never fall back to a default of
-// their own. An AWS bucket without a region is refused at deploy.
+// TestBucketsReachAnExplicitEndpoint: a bucket without an endpoint is AWS S3
+// in its region, and deploy refuses an AWS bucket without a region.
 func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
 	aws, err := locate("", "us-east-2", "lc-ws-1", false)
 	if err != nil || aws != (Location{Endpoint: "https://s3.us-east-2.amazonaws.com", Region: "us-east-2", Bucket: "lc-ws-1"}) {

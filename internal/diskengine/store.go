@@ -27,8 +27,7 @@ type Credentials struct {
 }
 
 // Store locates a workspace bucket. Object keys are Prefix +
-// "disks/<disk id>/...", so a non-empty Prefix ends with "/". Endpoint is
-// the store's URL, AWS S3's regional one included.
+// "disks/<disk id>/...", so a non-empty Prefix ends with "/".
 type Store struct {
 	Endpoint       string
 	Region         string
