@@ -20,6 +20,9 @@ type Fleet struct {
 	AccountID string
 	// PrincipalARN is the platform principal connection roles trust.
 	PrincipalARN string
+	// BucketPrefix starts the names of workspace buckets, which a connected
+	// account holds as <prefix>-<account id>-*.
+	BucketPrefix string
 	// NodeRoleARN and InstanceProfile are what platform instances run as.
 	NodeRoleARN     string
 	InstanceProfile string

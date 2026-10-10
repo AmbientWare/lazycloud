@@ -27,7 +27,7 @@ var connectionTemplate string
 
 // TemplateVersion names the connection template; validation refuses stacks
 // made from another one.
-const TemplateVersion = "2026-10-01.v1"
+const TemplateVersion = "2026-10-10.v1"
 
 // connectionRegion is where connection stacks are created.
 const connectionRegion = "us-east-2"
@@ -444,6 +444,7 @@ func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 			AccountID: conn.AWSAccountID, Region: p.Region, TemplateSHA256: p.TemplateSHA256,
 			StackName: p.StackName, TemplateBody: connectionTemplate,
 			Parameters: [][2]string{
+				{"BucketPrefix", ""},
 				{"ConnectionRoleName", p.StackName},
 				{"ExternalId", p.externalID},
 				{"FleetName", "lazycloud"},
@@ -487,7 +488,8 @@ func authorizationOf(a CloudAuthorization) Authorization {
 // ExternalID is the external ID an existing-role authorization requires.
 func (a Authorization) ExternalID() string { return a.externalID }
 
-// fillPrincipal sets the platform principal in a stack action's parameters.
+// fillPrincipal sets the platform's principal, fleet name and workspace
+// bucket prefix in a stack action's parameters.
 func (c *Compute) fillPrincipal(conn *Connection) {
 	if conn.Stack == nil {
 		return
@@ -498,6 +500,8 @@ func (c *Compute) fillPrincipal(conn *Connection) {
 			conn.Stack.Parameters[n][1] = c.fleet.PrincipalARN
 		case "FleetName":
 			conn.Stack.Parameters[n][1] = c.fleet.Name
+		case "BucketPrefix":
+			conn.Stack.Parameters[n][1] = c.fleet.BucketPrefix
 		}
 	}
 }

@@ -143,7 +143,7 @@ func (c *customerAWS) setStatus(name, status string) {
 func connectionFleet(t *testing.T) (owners, *awsEmulator, *customerAWS) {
 	t.Helper()
 	emulator := newAWS(t)
-	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{PrincipalARN: platformPrincipal})))
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{PrincipalARN: platformPrincipal, BucketPrefix: "lazycloud-ws-test"})))
 	return o, emulator, newCustomerAWS(emulator)
 }
 
@@ -211,6 +211,57 @@ func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
 	}
 }
 
+// The connection role reaches storage only in buckets named for the
+// deployment and the customer's own account, and the objects in them.
+func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
+	o, _, _ := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	stack := o.compute.View(connect(t, o, alice, "111111111111")).Stack
+	var template struct {
+		Resources map[string]struct {
+			Properties struct {
+				Policies []struct {
+					PolicyDocument struct {
+						Statement []struct {
+							Action   any
+							Resource any
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(stack.TemplateBody), &template); err != nil {
+		t.Fatal(err)
+	}
+	buckets := "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*"
+	scoped := map[string]bool{}
+	for name, resource := range template.Resources {
+		for _, policy := range resource.Properties.Policies {
+			for _, statement := range policy.PolicyDocument.Statement {
+				actions, _ := statement.Action.([]any)
+				if action, ok := statement.Action.(string); ok {
+					actions = []any{action}
+				}
+				for _, action := range actions {
+					if !strings.HasPrefix(action.(string), "s3:") { //nolint:forcetypeassert // IAM actions are strings.
+						continue
+					}
+					sub, _ := statement.Resource.(map[string]any)
+					arn, _ := sub["Fn::Sub"].(string)
+					if arn != buckets && arn != buckets+"/*" {
+						t.Errorf("%s grants %s on %v", name, action, statement.Resource)
+					}
+					scoped[arn] = true
+				}
+			}
+		}
+	}
+	if !scoped[buckets] || !scoped[buckets+"/*"] {
+		t.Fatalf("the template grants storage on %v, want the account's buckets and their objects", scoped)
+	}
+}
+
 func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	ctx := t.Context()
 	o, _, _ := connectionFleet(t)
@@ -246,7 +297,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 		params[p[0]] = p[1]
 	}
 	if len(params["ExternalId"]) < 32 || params["PlatformPrincipalArn"] != platformPrincipal ||
-		params["FleetName"] != "lazycloud-test" || params["TargetAccountId"] != "111111111111" {
+		params["FleetName"] != "lazycloud-test" || params["TargetAccountId"] != "111111111111" || params["BucketPrefix"] != "lazycloud-ws-test" {
 		t.Fatalf("stack parameters %v", params)
 	}
 	again := connect(t, o, alice, "111111111111")
