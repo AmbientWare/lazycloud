@@ -1,11 +1,86 @@
 {
   "pythonVersion": "3.12",
   "typeCheckingMode": "standard",
-  "include": ["python"],
-  "exclude": ["**/__pycache__", "**/node_modules", ".venv", ".pytest_cache", ".ruff_cache"],
+  "include": [
+    "python"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache"
+  ],
   "reportMissingTypeStubs": false,
   "reportUnknownArgumentType": "error",
   "reportUnknownMemberType": "error",
   "reportUnknownParameterType": "error",
-  "reportUnknownVariableType": "error"
+  "reportUnknownVariableType": "error",
+  "executionEnvironments": [
+    {
+      "root": "python/lazycloud/src/lazycloud/_examples/coding_agents/project",
+      "extraPaths": [
+        "python/lazycloud/src/lazycloud/_examples/coding_agents/project"
+      ],
+      "reportMissingImports": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none"
+    },
+    {
+      "root": "python/lazycloud/src/lazycloud/_examples/image_studio/project",
+      "extraPaths": [
+        "python/lazycloud/src/lazycloud/_examples/image_studio/project"
+      ],
+      "reportMissingImports": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none"
+    },
+    {
+      "root": "python/lazycloud/src/lazycloud/_examples/lora_fine_tune/project",
+      "extraPaths": [
+        "python/lazycloud/src/lazycloud/_examples/lora_fine_tune/project"
+      ],
+      "reportMissingImports": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none"
+    },
+    {
+      "root": "python/lazycloud/src/lazycloud/_examples/site_monitor/project",
+      "extraPaths": [
+        "python/lazycloud/src/lazycloud/_examples/site_monitor/project"
+      ],
+      "reportMissingImports": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none"
+    },
+    {
+      "root": "python/lazycloud/src/lazycloud/_examples/video_highlights/project",
+      "extraPaths": [
+        "python/lazycloud/src/lazycloud/_examples/video_highlights/project"
+      ],
+      "reportMissingImports": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none"
+    },
+    {
+      "root": "python/lazycloud/tests/examples",
+      "extraPaths": [
+        "python/lazycloud/src/lazycloud/_examples/coding_agents/project",
+        "python/lazycloud/src/lazycloud/_examples/image_studio/project",
+        "python/lazycloud/src/lazycloud/_examples/lora_fine_tune/project",
+        "python/lazycloud/src/lazycloud/_examples/site_monitor/project",
+        "python/lazycloud/src/lazycloud/_examples/video_highlights/project"
+      ]
+    }
+  ]
 }
