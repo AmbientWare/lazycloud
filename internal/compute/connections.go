@@ -756,15 +756,11 @@ func (c *Compute) ConnectedAccount(ctx context.Context, connection uuid.UUID) (C
 	return ConnectedAccount{AWSAccountID: row.AwsAccountID, Region: row.Region, role: row.RoleArn, externalID: row.ExternalID}, nil
 }
 
-// AssumeConnectionRole returns credentials of the connection's active role
-// for lifetime, assumed through the platform principal with the external
-// ID. A non-empty policy narrows the session to what it allows. AWS's
-// refusal keeps its API error.
-func (c *Compute) AssumeConnectionRole(ctx context.Context, connection uuid.UUID, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-	account, err := c.ConnectedAccount(ctx, connection)
-	if err != nil {
-		return aws.Credentials{}, err
-	}
+// AssumeConnectionRole returns credentials of the account's role for
+// lifetime, assumed through the platform principal with the external ID. A
+// non-empty policy narrows the session to what it allows. AWS's refusal
+// keeps its API error.
+func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAccount, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
 	input := &sts.AssumeRoleInput{
 		RoleArn: aws.String(account.role), RoleSessionName: aws.String(session), ExternalId: aws.String(account.externalID),
 		DurationSeconds: aws.Int32(int32(lifetime.Seconds())),

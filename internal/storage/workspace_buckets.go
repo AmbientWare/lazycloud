@@ -120,13 +120,9 @@ func (s *Storage) clientFor(ctx context.Context, connection *uuid.UUID, region s
 	}
 	account, credentials, options := s.config.Workspaces.AccountID, s.client.Options().Credentials, []func(*s3.Options){}
 	if connection != nil {
-		connected, err := s.connections.ConnectedAccount(ctx, *connection)
-		var refused *compute.ConflictError
-		if errors.As(err, &refused) {
-			return objectClient{}, conflict("%s", refused.Message)
-		}
+		connected, err := s.connectedAccount(ctx, *connection)
 		if err != nil {
-			return objectClient{}, fmt.Errorf("read the workspace's AWS account: %w", err)
+			return objectClient{}, err
 		}
 		account, credentials = connected.AWSAccountID, s.connectionCredentials(*connection)
 		options = append(options, expectOwner(account))
@@ -161,16 +157,42 @@ func expectOwner(account string) func(*s3.Options) {
 	}
 }
 
+// connectedAccount is the account connection reaches and its active role.
+// Without an active authorization the platform cannot act there, which is
+// a *ConflictError: it fails what needs the account's storage rather than
+// being retried.
+func (s *Storage) connectedAccount(ctx context.Context, connection uuid.UUID) (compute.ConnectedAccount, error) {
+	account, err := s.connections.ConnectedAccount(ctx, connection)
+	var refused *compute.ConflictError
+	if errors.As(err, &refused) {
+		return compute.ConnectedAccount{}, conflict("%s", refused.Message)
+	}
+	if err != nil {
+		return compute.ConnectedAccount{}, fmt.Errorf("connection %s: %w", connection, err)
+	}
+	return account, nil
+}
+
+// assumeConnection returns credentials of the connection's active role,
+// narrowed by policy when it is set.
+func (s *Storage) assumeConnection(ctx context.Context, connection uuid.UUID, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
+	account, err := s.connectedAccount(ctx, connection)
+	if err != nil {
+		return aws.Credentials{}, err
+	}
+	creds, err := s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)
+	if err != nil {
+		return aws.Credentials{}, fmt.Errorf("connection %s: %w", connection, err)
+	}
+	return creds, nil
+}
+
 // connectionCredentials are the connection role's, for storage's own
 // requests on the account's buckets, renewed credentialWindow before they
 // expire.
 func (s *Storage) connectionCredentials(connection uuid.UUID) aws.CredentialsProvider {
 	return aws.NewCredentialsCache(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-		creds, err := s.connections.AssumeConnectionRole(ctx, connection, "lazycloud-storage", "", time.Hour)
-		if err != nil {
-			return aws.Credentials{}, fmt.Errorf("connection %s: %w", connection, err)
-		}
-		return creds, nil
+		return s.assumeConnection(ctx, connection, "lazycloud-storage", "", time.Hour)
 	}), renewEarly)
 }
 
@@ -195,7 +217,7 @@ func (s *Storage) providerOf(store workspaceStore) (bucketProvider, error) {
 	}
 	connection := *store.connection
 	return &awsBuckets{assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-		return s.connections.AssumeConnectionRole(ctx, connection, session, policy, lifetime)
+		return s.assumeConnection(ctx, connection, session, policy, lifetime)
 	}}, nil
 }
 
@@ -225,13 +247,9 @@ func (s *Storage) workspaceStore(ctx context.Context, workspace identity.Workspa
 		if s.connections == nil {
 			return workspaceStore{}, ErrBucketsUnconfigured
 		}
-		connected, err := s.connections.ConnectedAccount(ctx, *connection)
-		var refused *compute.ConflictError
-		if errors.As(err, &refused) {
-			return workspaceStore{}, conflict("%s", refused.Message)
-		}
+		connected, err := s.connectedAccount(ctx, *connection)
 		if err != nil {
-			return workspaceStore{}, fmt.Errorf("read the workspace's AWS account: %w", err)
+			return workspaceStore{}, err
 		}
 		account, region = connected.AWSAccountID, connected.Region
 	}

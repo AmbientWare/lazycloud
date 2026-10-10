@@ -283,16 +283,23 @@ func TestPlatformWorkspaceKeepsItsStorageInThePlatformAccount(t *testing.T) {
 }
 
 // A connection without an active authorization cannot hold a workspace's
-// storage: the refusal is a typed conflict that fails the container
-// needing it, not an error the host retries.
+// storage, whether its bucket exists yet or not: the refusal is a typed
+// conflict that fails the container needing it, not an error the host
+// retries.
 func TestConnectionWithoutAuthorizationRefusesStorage(t *testing.T) {
 	c := newConnectedStorage(t)
-	ws := c.workspace(&c.connection)
-	if _, err := c.pool.Exec(t.Context(), `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
+	ctx := context.WithoutCancel(t.Context())
+	fresh, used := c.workspace(&c.connection), c.workspace(&c.connection)
+	if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), used); err != nil {
 		t.Fatal(err)
 	}
-	var refused *ConflictError
-	if _, err := c.storage.HostGrant(context.WithoutCancel(t.Context()), compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {
-		t.Fatalf("grant without an authorization: %v, want a conflict", err)
+	if _, err := c.pool.Exec(ctx, `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
+		t.Fatal(err)
+	}
+	for name, ws := range map[string]identity.WorkspaceID{"new": fresh, "existing": used} {
+		var refused *ConflictError
+		if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {
+			t.Errorf("grant on the %s bucket without an authorization: %v, want a conflict", name, err)
+		}
 	}
 }
