@@ -316,7 +316,7 @@ func (s *Storage) StatVolumeFile(ctx context.Context, workspace identity.Workspa
 }
 
 func (s *Storage) statKey(ctx context.Context, bucket bucketClient, prefix, rel string) (apitypes.VolumeFile, error) {
-	o, err := head(ctx, bucket.client, bucket.name, prefix+rel)
+	o, err := head(ctx, bucket, prefix+rel)
 	if err == nil {
 		return fileOut(prefix, o), nil
 	}
@@ -336,7 +336,7 @@ func (s *Storage) statKey(ctx context.Context, bucket bucketClient, prefix, rel 
 // objectsAt lists the object at rel and every object below it.
 func (s *Storage) objectsAt(ctx context.Context, bucket bucketClient, prefix, rel string) ([]objectInfo, error) {
 	var found []objectInfo
-	if o, err := head(ctx, bucket.client, bucket.name, prefix+rel); err == nil {
+	if o, err := head(ctx, bucket, prefix+rel); err == nil {
 		found = append(found, o)
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err

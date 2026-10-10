@@ -117,23 +117,25 @@ func (s *Storage) abortMultipart(ctx context.Context, b bucketClient, key, uploa
 	return nil
 }
 
-// objectInfo is a stored object.
+// objectInfo is a stored object. Listings leave ETag empty.
 type objectInfo struct {
 	Key      string
 	Size     int64
 	Modified time.Time
+	ETag     string
 }
 
-// head returns the object at key, or ErrNotFound.
-func head(ctx context.Context, client *s3.Client, bucket, key string) (objectInfo, error) {
-	out, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+// head returns the object at key in b, or ErrNotFound. HEAD has no body,
+// so a missing bucket is ErrNotFound too.
+func head(ctx context.Context, b bucketClient, key string) (objectInfo, error) {
+	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.name), Key: aws.String(key)})
 	if isNotFound(err) {
 		return objectInfo{}, ErrNotFound
 	}
 	if err != nil {
-		return objectInfo{}, fmt.Errorf("head object: %w", err)
+		return objectInfo{}, fmt.Errorf("head %s: %w", key, err)
 	}
-	return objectInfo{Key: key, Size: aws.ToInt64(out.ContentLength), Modified: aws.ToTime(out.LastModified)}, nil
+	return objectInfo{Key: key, Size: aws.ToInt64(out.ContentLength), Modified: aws.ToTime(out.LastModified), ETag: aws.ToString(out.ETag)}, nil
 }
 
 // eachObject calls fn for every object under prefix, one listing page at a

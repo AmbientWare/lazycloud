@@ -141,7 +141,7 @@ func (s *Storage) CompleteArtifact(ctx context.Context, workspace identity.Works
 				return err
 			}
 		}
-		o, err := head(ctx, s.platform.client, s.platform.name, key)
+		o, err := head(ctx, s.platform, key)
 		if errors.Is(err, ErrNotFound) {
 			return invalid("the artifact's bytes were not uploaded")
 		}

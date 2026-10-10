@@ -132,7 +132,7 @@ func (s *Storage) LayerReplicated(ctx context.Context, id uuid.UUID, region stri
 		return false, fmt.Errorf("no layer replica in region %q", region)
 	}
 	for _, object := range []LayerObject{LayerIndex, LayerData} {
-		_, err := head(ctx, replica.client, replica.name, layerKey(id, object))
+		_, err := head(ctx, replica, layerKey(id, object))
 		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
@@ -170,7 +170,7 @@ func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerOb
 
 // LayerSize is the size of one object of layer pair id, or ErrNotFound.
 func (s *Storage) LayerSize(ctx context.Context, id uuid.UUID, object LayerObject) (int64, error) {
-	info, err := head(ctx, s.layers.client, s.layers.name, layerKey(id, object))
+	info, err := head(ctx, s.layers, layerKey(id, object))
 	if err != nil {
 		return 0, err
 	}
