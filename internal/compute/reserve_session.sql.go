@@ -99,16 +99,17 @@ func (q *Queries) RecordResumeOutcome(ctx context.Context, arg RecordResumeOutco
 }
 
 const reserveProofHost = `-- name: ReserveProofHost :one
-select id, phase, phase_at, boot_id, gpu_count, preflight from hosts where id = $1 for update
+select id, phase, phase_at, boot_id, gpu_count, preflight, rollout_bucket from hosts where id = $1 for update
 `
 
 type ReserveProofHostRow struct {
-	ID        uuid.UUID
-	Phase     string
-	PhaseAt   time.Time
-	BootID    string
-	GpuCount  int32
-	Preflight []byte
+	ID            uuid.UUID
+	Phase         string
+	PhaseAt       time.Time
+	BootID        string
+	GpuCount      int32
+	Preflight     []byte
+	RolloutBucket int32
 }
 
 func (q *Queries) ReserveProofHost(ctx context.Context, id uuid.UUID) (ReserveProofHostRow, error) {
@@ -121,6 +122,7 @@ func (q *Queries) ReserveProofHost(ctx context.Context, id uuid.UUID) (ReservePr
 		&i.BootID,
 		&i.GpuCount,
 		&i.Preflight,
+		&i.RolloutBucket,
 	)
 	return i, err
 }

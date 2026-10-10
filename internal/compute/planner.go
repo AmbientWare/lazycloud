@@ -181,7 +181,6 @@ type fleetWrites struct {
 	stuck, drains, retirePreparing, retires, returns, hibernate []uuid.UUID
 	buys                                                        []requestedHost
 	resumes                                                     []uuid.UUID
-	refresh                                                     []bool
 	idle                                                        []idleRow
 	cools                                                       []coolRow
 	markets                                                     []marketRow
@@ -455,9 +454,8 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 			}
 			ps.w.buys = append(ps.w.buys, requested(id, connection, *a.Offer, a))
 			hosts[i] = id
-		case ActionResume, ActionRefresh:
+		case ActionResume:
 			ps.w.resumes = append(ps.w.resumes, uuid.UUID(*a.Host))
-			ps.w.refresh = append(ps.w.refresh, a.Kind == ActionRefresh)
 			hosts[i] = uuid.UUID(*a.Host)
 		case ActionReturnToReserve:
 			ps.w.returns = append(ps.w.returns, uuid.UUID(*a.Host))
@@ -500,7 +498,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 		h.ReserveMode = a.Mode
 	case ActionRightsize:
 		h.Replaces = ptr(uuid.UUID(*a.Host))
-	case ActionBuy, ActionResume, ActionRefresh, ActionReturnToReserve, ActionDrain, ActionRetireReserve:
+	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve:
 	}
 	return h
 }
@@ -663,7 +661,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		ps.result.Requested, moved = len(ps.w.buys), true
 	}
 	if len(ps.w.resumes) > 0 {
-		resumed, err := q.ResumeReserves(ctx, ResumeReservesParams{Ids: ps.w.resumes, Refresh: ps.w.refresh})
+		resumed, err := q.ResumeReserves(ctx, ps.w.resumes)
 		if err != nil {
 			return fmt.Errorf("resume reserves: %w", err)
 		}

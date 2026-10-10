@@ -5,7 +5,7 @@ select phase, phase_at, reserve_mode, gpu_count, coalesce(updating_until > now()
 from hosts where id = @id;
 
 -- name: ReserveProofHost :one
-select id, phase, phase_at, boot_id, gpu_count, preflight from hosts where id = @id for update;
+select id, phase, phase_at, boot_id, gpu_count, preflight, rollout_bucket from hosts where id = @id for update;
 
 -- name: LiveHostContainers :one
 select count(*) from containers where host_id = @id and state <> 'stopped';

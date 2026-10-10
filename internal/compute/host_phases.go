@@ -17,7 +17,7 @@ var ErrPhaseTransition = errors.New("host phase transition not allowed")
 //	requested -> provisioning -> booting -> joining -> ready
 //	ready <-> draining -> terminating -> deleted
 //	ready -> preparing -> stopping -> stopped -> resuming -> joining -> ready
-//	joining -> preparing     a host bought for, or refreshing, the reserve
+//	joining -> preparing     a host bought for the reserve
 //	preparing -> ready       the agent refused to stop
 //	preparing -> draining    a pass retires a reserve still preparing
 //	stopping -> resuming     the agent says Hello before EC2 reports it stopped

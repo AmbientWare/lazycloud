@@ -60,17 +60,10 @@ const (
 	ReserveRejoin ReserveStep = "rejoin"
 )
 
-// AgentState is what a session's Hello said about the agent's release.
-type AgentState struct {
-	Version   string
-	Rejected  string
-	Updatable bool
-}
-
 // ReserveSync returns what host's open session does for its reserve phase,
 // and for ReservePrepare what it asks. A host prepared without a mode
 // stops plainly.
-func (c *Compute) ReserveSync(ctx context.Context, host HostID, agent AgentState) (ReserveStep, *ReserveRequest, error) {
+func (c *Compute) ReserveSync(ctx context.Context, host HostID) (ReserveStep, *ReserveRequest, error) {
 	row, err := c.queries.ReserveSessionHost(ctx, uuid.UUID(host))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReserveIdle, nil, nil
@@ -87,7 +80,7 @@ func (c *Compute) ReserveSync(ctx context.Context, host HostID, agent AgentState
 	if row.Updating {
 		return ReserveWait, nil, nil
 	}
-	update, err := c.UpdateFor(ctx, host, agent.Version, agent.Rejected, agent.Updatable)
+	update, err := c.UpdateFor(ctx, host)
 	if err != nil {
 		return "", nil, err
 	}
@@ -143,10 +136,6 @@ func (c *Compute) AnswerReserve(ctx context.Context, host HostID, answer Reserve
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return "", err
 	}
-	want := ""
-	if target.Version != "" && rolloutBucket(host) < target.RolloutPercent {
-		want = target.Version
-	}
 	verdict := ReserveStale
 	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -163,6 +152,10 @@ func (c *Compute) AnswerReserve(ctx context.Context, host HostID, answer Reserve
 		live, err := q.LiveHostContainers(ctx, &row.ID)
 		if err != nil {
 			return fmt.Errorf("count live containers: %w", err)
+		}
+		want := ""
+		if target.Version != "" && int(row.RolloutBucket) < target.RolloutPercent {
+			want = target.Version
 		}
 		if reason := unproven(answer, want, row, live); reason != "" {
 			if err := transition(PhasePreparing, PhaseReady); err != nil {
@@ -229,8 +222,8 @@ func unproven(answer ReserveAnswer, want string, row ReserveProofHostRow, live i
 // a requested resume. A stopping or stopped host that comes
 // back with a sleep or a new boot was not asked to: it is kept out of
 // placement and goes back through preparing, since the planner still holds
-// it as a reserve. A host joining with a reserve mode, bought for the reserve
-// or refreshing, prepares to stop instead of serving.
+// it as a reserve. A host joining with a reserve mode, bought for the
+// reserve, prepares to stop instead of serving.
 func settleSession(ctx context.Context, q *Queries, host uuid.UUID, open SessionOpen) error {
 	h, err := q.ResumeHost(ctx, host)
 	if errors.Is(err, pgx.ErrNoRows) {

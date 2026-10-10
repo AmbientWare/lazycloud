@@ -573,7 +573,7 @@ func (s *sim) apply(plan FleetPlan) {
 			if id, ok := s.launch(a, a.Kind == ActionBuyReserve, waiters); ok {
 				bought[i] = id
 			}
-		case ActionResume, ActionRefresh:
+		case ActionResume:
 			h := s.host(*a.Host)
 			h.until = s.now.Add(simBoot)
 			if h.State == FleetImageSaved {
@@ -709,7 +709,7 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 			want += a.Offer.HourlyMicros
 		case ActionBuyReserve:
 			want += a.Offer.StoppedMicros
-		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionRefresh:
+		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize:
 			t.Fatalf("an empty fleet's first pass %s", a.Kind)
 		}
 	}

@@ -134,7 +134,8 @@ func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
 	var updating compute.HostID
 	for range 40 {
 		host := newHost(t, o.pool, hostSpec{})
-		update, err := o.compute.UpdateFor(ctx, host, "1.0.0", "", true)
+		openAgent(t, o, host, "1.0.0", "")
+		update, err := o.compute.UpdateFor(ctx, host)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,8 +164,61 @@ func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
 	if err := o.compute.PublishAgentRelease(ctx, release); err != nil {
 		t.Fatalf("narrow the rollout: %v", err)
 	}
-	if update, err := o.compute.UpdateFor(ctx, updating, "1.0.0", "", true); err != nil || update != nil {
+	if update, err := o.compute.UpdateFor(ctx, updating); err != nil || update != nil {
 		t.Fatalf("a 0%% rollout offered %+v %v", update, err)
+	}
+}
+
+// A host whose agent must move to the target release takes no work until
+// it runs it; one that cannot update itself, or rolled back from the
+// target, keeps serving on the release it runs.
+func TestOnlyHostsOnTheTargetAgentReleaseTakeWork(t *testing.T) {
+	ctx := t.Context()
+	o := newOwners(t, machineConfig())
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	host := newHost(t, o.pool, hostSpec{})
+	openAgent(t, o, host, "1.0.0", "")
+	if err := o.compute.PublishAgentRelease(ctx, compute.AgentRelease{
+		Version: "2.0.0", SHA256: map[string]string{"amd64": strings.Repeat("c", 64)}, RolloutPercent: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 1000, gib)
+	if n := place(t, o); n != 0 {
+		t.Fatalf("placed %d containers on a host due an agent update", n)
+	}
+	if update, err := o.compute.UpdateFor(ctx, host); err != nil || update == nil || update.Version != "2.0.0" {
+		t.Fatalf("update for an old agent: %+v %v", update, err)
+	}
+	// It restarts on the target.
+	openAgent(t, o, host, "2.0.0", "")
+	if n := place(t, o); n != 1 {
+		t.Fatalf("placed %d containers once the host runs the target, want 1", n)
+	}
+	if got := scan[*uuid.UUID](t, o.pool, "select host_id from containers where id = $1", container); got == nil || *got != uuid.UUID(host) {
+		t.Fatalf("container on %v, want %s", got, host)
+	}
+
+	rejected := newHost(t, o.pool, hostSpec{})
+	openAgent(t, o, rejected, "1.0.0", "2.0.0")
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 1000, gib)
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 3000, gib)
+	if n := place(t, o); n != 2 {
+		t.Fatalf("placed %d containers with a host that rolled back from the target, want 2", n)
+	}
+}
+
+// openAgent opens a session for host as an agent of version that can
+// update itself, having rolled back from rejected when it is set.
+func openAgent(t *testing.T, o owners, host compute.HostID, version, rejected string) {
+	t.Helper()
+	open := compute.SessionOpen{BootID: "boot", Capacity: compute.Capacity{CPUMillis: 4000, MemoryBytes: 8 * gib}, AgentVersion: version, AgentUpdatable: true}
+	if rejected != "" {
+		open.AgentRejected = &rejected
+	}
+	if _, err := o.compute.OpenSession(t.Context(), host, open); err != nil {
+		t.Fatal(err)
 	}
 }
 

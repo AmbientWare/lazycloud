@@ -239,8 +239,8 @@ func (h *harness) stoppedReserve(host compute.HostID, phase, evidence string, mo
 }
 
 // A Hello after a requested resume settles the attempt it names once:
-// memory restored in the same boot or a cold boot in a new one. A reserve
-// the planner refreshes prepares again.
+// memory restored in the same boot or a cold boot in a new one. A host
+// that keeps its reserve mode prepares again.
 func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 	h := start(t)
 	stop := "stop"
@@ -259,7 +259,7 @@ func TestResumeSettlesTheSleepAttempt(t *testing.T) {
 		{"hibernation EC2 had not confirmed", "unknown", nil, "boot-1", 31, "ready", "memory_restored", "saved"},
 		{"silent hibernation failure", "saved", nil, "boot-2", 0, "ready", "cold_boot", "failed"},
 		{"plain stop", "unavailable", nil, "boot-2", 0, "ready", "cold_boot", "unavailable"},
-		{"refresh", "unavailable", &stop, "boot-2", 0, "preparing", "cold_boot", "unavailable"},
+		{"reserve mode kept", "unavailable", &stop, "boot-2", 0, "preparing", "cold_boot", "unavailable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			host, ctx := h.enroll()

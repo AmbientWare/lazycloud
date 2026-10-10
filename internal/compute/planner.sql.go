@@ -472,7 +472,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.updating_until, h.idle_since, h.replaces,
+       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
        h.rightsize_refused_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
@@ -519,6 +519,7 @@ type PlannerHostsRow struct {
 	SpotRequestID         *string
 	ImageEvidence         string
 	PreparedAgentVersion  *string
+	RolloutBucket         int32
 	UpdatingUntil         *time.Time
 	IdleSince             *time.Time
 	Replaces              *uuid.UUID
@@ -569,6 +570,7 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.SpotRequestID,
 			&i.ImageEvidence,
 			&i.PreparedAgentVersion,
+			&i.RolloutBucket,
 			&i.UpdatingUntil,
 			&i.IdleSince,
 			&i.Replaces,
@@ -710,24 +712,17 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 }
 
 const resumeReserves = `-- name: ResumeReserves :many
-update hosts h
+update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = case when v.refresh then h.reserve_mode end, idle_since = null, updated_at = now()
-from (select unnest($1::uuid[]) as id, unnest($2::bool[]) as refresh) v
-where h.id = v.id and h.phase = 'stopped'
-returning h.id
+    reserve_mode = null, idle_since = null, updated_at = now()
+where id = any($1::uuid[]) and phase = 'stopped'
+returning id
 `
 
-type ResumeReservesParams struct {
-	Ids     []uuid.UUID
-	Refresh []bool
-}
-
-// Starts stopped reserves: to serve, the reserve mode cleared, or to
-// refresh, kept so the host prepares and stops again once it joins. Only a
+// Starts stopped reserves to serve, their reserve mode cleared. Only a
 // requested resume serves.
-func (q *Queries) ResumeReserves(ctx context.Context, arg ResumeReservesParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, resumeReserves, arg.Ids, arg.Refresh)
+func (q *Queries) ResumeReserves(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, resumeReserves, ids)
 	if err != nil {
 		return nil, err
 	}

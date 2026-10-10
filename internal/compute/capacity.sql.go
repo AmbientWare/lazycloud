@@ -42,6 +42,7 @@ where h.state = 'online'
   and h.phase = 'ready'
   and h.capacity_state = 'available'
   and h.last_seen_at >= now() - make_interval(secs => $1::float8)
+  and not exists (select 1 from agent_updates u where u.host_id = h.id)
 order by h.id
 `
 
@@ -66,7 +67,9 @@ type AvailableCapacityRow struct {
 }
 
 // Hosts that take new containers, with their capacity minus the resources of
-// their live containers. Reads the live-container partial index per host.
+// their live containers. A host whose agent must move to the target release
+// takes none until it runs it. Reads the live-container partial index per
+// host.
 func (q *Queries) AvailableCapacity(ctx context.Context, timeoutSeconds float64) ([]AvailableCapacityRow, error) {
 	rows, err := q.db.Query(ctx, availableCapacity, timeoutSeconds)
 	if err != nil {

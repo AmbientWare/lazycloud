@@ -57,10 +57,8 @@ type session struct {
 	// networks holds the newest policy version recorded per container, so
 	// a report restating it writes nothing.
 	networks map[execution.ContainerID]int32
-	// reserve is the PrepareReserve awaiting its answer, and agent the
-	// release the Hello stated.
+	// reserve is the PrepareReserve awaiting its answer.
 	reserve *reserveAttempt
-	agent   compute.AgentState
 	// builds wakes the session when an image build a start waits for, or
 	// a platform image conversion, changes.
 	builds watch
@@ -160,7 +158,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, opened: time.Now(), again: make(chan struct{}, 1), sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
-		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
+		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{},
 		platform: platformState{
 			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
 			running: slices.Compact(slices.Sorted(slices.Values(hello.GetRunningPlatformImages()))),
@@ -178,7 +176,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	for _, r := range reports {
 		sess.observe(r)
 	}
-	update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+	update, err := s.compute.UpdateFor(ctx, host)
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
@@ -266,7 +264,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			}
 			// A release published while the session is open, or widened
 			// to this host, reaches it here.
-			update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+			update, err := s.compute.UpdateFor(ctx, host)
 			if err != nil {
 				return s.grpcError(ctx, err)
 			}

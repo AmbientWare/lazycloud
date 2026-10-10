@@ -34,6 +34,23 @@ func (q *Queries) AgentRelease(ctx context.Context, version string) (AgentReleas
 	return i, err
 }
 
+const agentUpdate = `-- name: AgentUpdate :one
+select version, architecture, sha256 from agent_updates where host_id = $1
+`
+
+type AgentUpdateRow struct {
+	Version      string
+	Architecture string
+	Sha256       string
+}
+
+func (q *Queries) AgentUpdate(ctx context.Context, id uuid.UUID) (AgentUpdateRow, error) {
+	row := q.db.QueryRow(ctx, agentUpdate, id)
+	var i AgentUpdateRow
+	err := row.Scan(&i.Version, &i.Architecture, &i.Sha256)
+	return i, err
+}
+
 const clearTargetRelease = `-- name: ClearTargetRelease :exec
 update agent_releases set target = false where target and version <> $1
 `
@@ -41,17 +58,6 @@ update agent_releases set target = false where target and version <> $1
 func (q *Queries) ClearTargetRelease(ctx context.Context, version string) error {
 	_, err := q.db.Exec(ctx, clearTargetRelease, version)
 	return err
-}
-
-const hostArchitecture = `-- name: HostArchitecture :one
-select architecture from hosts where id = $1
-`
-
-func (q *Queries) HostArchitecture(ctx context.Context, id uuid.UUID) (string, error) {
-	row := q.db.QueryRow(ctx, hostArchitecture, id)
-	var architecture string
-	err := row.Scan(&architecture)
-	return architecture, err
 }
 
 const markUpdating = `-- name: MarkUpdating :exec

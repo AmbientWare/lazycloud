@@ -211,8 +211,8 @@ func ProductRegion(region string) string {
 
 // AvailableCapacity returns the hosts that take new containers, with their
 // unreserved resources, read in tx: online, reported within
-// LivenessTimeout, ready and available. The snapshot stays exact only while
-// the caller serializes assignment.
+// LivenessTimeout, ready and available, with no agent update due. The
+// snapshot stays exact only while the caller serializes assignment.
 func AvailableCapacity(ctx context.Context, tx pgx.Tx) ([]HostCapacity, error) {
 	rows, err := New(tx).AvailableCapacity(ctx, LivenessTimeout.Seconds())
 	if err != nil {

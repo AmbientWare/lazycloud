@@ -15,7 +15,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.updating_until, h.idle_since, h.replaces,
+       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
        h.rightsize_refused_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
@@ -215,15 +215,13 @@ from jsonb_to_recordset(@hosts::jsonb) as v(
     holds_memory_bytes bigint);
 
 -- name: ResumeReserves :many
--- Starts stopped reserves: to serve, the reserve mode cleared, or to
--- refresh, kept so the host prepares and stops again once it joins. Only a
+-- Starts stopped reserves to serve, their reserve mode cleared. Only a
 -- requested resume serves.
-update hosts h
+update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = case when v.refresh then h.reserve_mode end, idle_since = null, updated_at = now()
-from (select unnest(@ids::uuid[]) as id, unnest(@refresh::bool[]) as refresh) v
-where h.id = v.id and h.phase = 'stopped'
-returning h.id;
+    reserve_mode = null, idle_since = null, updated_at = now()
+where id = any(@ids::uuid[]) and phase = 'stopped'
+returning id;
 
 -- name: ReturnToReserve :many
 -- Idle serving hosts start proving they may stop into the reserve, each in

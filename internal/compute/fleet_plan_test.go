@@ -121,16 +121,32 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 	}
 }
 
-func TestPlanRefreshesAStaleReserveTheTargetNeedsAndRetiresOneItDoesNot(t *testing.T) {
+// A reserve prepared for an older agent release never resumes: it retires
+// and the target it held is bought again, and work it would fit buys a
+// host instead.
+func TestPlanRetiresAStaleReserveAndBuysItsTargetAgain(t *testing.T) {
 	stale := planHost(1, planSmall, FleetStopped)
 	stale.Current = false
 	needed := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, stale))
-	if got := hostsOf(needed.Actions); len(needed.Actions) != 1 || needed.Actions[0].Kind != ActionRefresh || got[0] != stale.ID {
-		t.Fatalf("needed: %+v", needed.Actions)
+	kinds := func(plan FleetPlan) []FleetActionKind {
+		var out []FleetActionKind
+		for _, a := range plan.Actions {
+			out = append(out, a.Kind)
+		}
+		return out
+	}
+	if got := kinds(needed); !slices.Equal(got, []FleetActionKind{ActionRetireReserve, ActionBuyReserve}) || *needed.Actions[0].Host != stale.ID {
+		t.Fatalf("needed: %v", got)
 	}
 	surplus := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), planSnapshot(t, stale))
-	if len(surplus.Actions) != 1 || surplus.Actions[0].Kind != ActionRetireReserve {
-		t.Fatalf("surplus: %+v", surplus.Actions)
+	if got := kinds(surplus); !slices.Equal(got, []FleetActionKind{ActionRetireReserve}) {
+		t.Fatalf("surplus: %v", got)
+	}
+	snapshot := planSnapshot(t, stale)
+	snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New()}}}}
+	work := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot)
+	if slices.Contains(kinds(work), ActionResume) {
+		t.Fatalf("work resumed a stale reserve: %v", kinds(work))
 	}
 }
 
