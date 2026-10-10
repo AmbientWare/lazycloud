@@ -113,45 +113,6 @@ func (q *Queries) EndpointContainers(ctx context.Context, workloadID uuid.UUID) 
 	return items, nil
 }
 
-const releaseFailures = `-- name: ReleaseFailures :many
-select id, coalesce(load_error, '')::text as load_error, start_failures
-from releases
-where id = any($1::uuid[]) and (load_error is not null or start_failures >= $2::int)
-`
-
-type ReleaseFailuresParams struct {
-	Ids               []uuid.UUID
-	StartFailureLimit int32
-}
-
-type ReleaseFailuresRow struct {
-	ID            uuid.UUID
-	LoadError     string
-	StartFailures int32
-}
-
-// Why containers of these releases cannot start: the handler failed to load
-// since one was last ready, or preparation failed too many times in a row.
-func (q *Queries) ReleaseFailures(ctx context.Context, arg ReleaseFailuresParams) ([]ReleaseFailuresRow, error) {
-	rows, err := q.db.Query(ctx, releaseFailures, arg.Ids, arg.StartFailureLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ReleaseFailuresRow
-	for rows.Next() {
-		var i ReleaseFailuresRow
-		if err := rows.Scan(&i.ID, &i.LoadError, &i.StartFailures); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const servingReleases = `-- name: ServingReleases :many
 with candidates as (
     select c.release_id

@@ -46,3 +46,9 @@ update apps
 set state = @state,
     deleted_at = case when @state = 'deleted' then now() else deleted_at end
 where id = @id;
+
+-- name: ActiveReleasesOfApp :many
+select w.active_release_id::uuid
+from workloads w
+where w.app_id = @app_id and w.desired_state <> 'deleted' and w.active_release_id is not null
+order by w.active_release_id;
