@@ -303,8 +303,8 @@ LoRA trains small matrices beside every linear layer and leaves the 1.5B base
 weights frozen. At rank 16 the adapter is about 75 MB, and every run shares
 the base weights in the volume. `TrainingConfig` holds the settings and their
 bounds, and a JSON object on the command line overrides them. Each forward
-pass takes two sequences and gradient accumulation makes up the rest of
-`batch_size`: the logits over Qwen's 152k-token vocabulary are what fill a
+pass takes two sequences, and gradient accumulation makes up the rest of
+`batch_size`. The logits over Qwen's 152k-token vocabulary are what fill a
 24 GB card.
 
 ```python lora_sql/train.py
@@ -409,7 +409,7 @@ def latest_checkpoint(checkpoints: Path) -> Path | None:
 ```
 
 A run also records its settings and refuses to resume with different ones, so
-a retried run never mixes two configurations.
+a resumed run never mixes two configurations.
 
 ## Score both models
 
