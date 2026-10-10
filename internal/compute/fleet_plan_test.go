@@ -393,6 +393,22 @@ func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 
 // An idle host leaves once idle for the idle timeout; a host pending work
 // fits is not idle.
+// An idle Spot host that holds no warm slot leaves after the Spot idle
+// timeout, a launch away from being replaced, while an on-demand one waits
+// out the idle timeout.
+func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	idleFor := func(id byte, market Market) FleetHost {
+		h := planHost(id, planSmall, FleetServing)
+		h.Market, h.IdleSince = market, ptr(offerNow.Add(-p.SpotIdleTimeout))
+		return h
+	}
+	plan := PlanFleet(p, planSnapshot(t, idleFor(1, MarketSpot), idleFor(2, MarketOnDemand)))
+	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
+		t.Fatalf("left %v, want only the Spot host", got)
+	}
+}
+
 func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)

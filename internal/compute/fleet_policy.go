@@ -194,8 +194,10 @@ type Policy struct {
 	// launch, while a single burst buys no headroom it cannot use.
 	ArrivalWindow time.Duration
 	Batch         BatchWindow
-	// IdleTimeout is how long a serving host stays idle before it leaves.
-	IdleTimeout time.Duration
+	// IdleTimeout is how long a serving host stays idle before it leaves;
+	// SpotIdleTimeout is the same for a Spot CPU host that holds no warm
+	// slot, which a launch replaces in about 25 s.
+	IdleTimeout, SpotIdleTimeout time.Duration
 	// ReturnWait is how long a market waits for a host that could return to
 	// the reserve, as one resumed for a burst or a build does, before it
 	// buys what the reserve lacks.
@@ -230,16 +232,17 @@ func DefaultPolicy() Policy {
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
 		Spot:             spotMarket, OnDemand: cpuMarket,
-		GPU:           map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
-		LargestShape:  LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
-		BuildWindow:   time.Hour,
-		LongestBuild:  time.Hour,
-		ArrivalWindow: 2 * time.Minute,
-		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		IdleTimeout:   2 * time.Minute,
-		ReturnWait:    5 * time.Minute,
-		FloorHold:     time.Minute,
-		SpotPriceAge:  time.Hour,
+		GPU:             map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
+		LargestShape:    LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
+		BuildWindow:     time.Hour,
+		LongestBuild:    time.Hour,
+		ArrivalWindow:   2 * time.Minute,
+		Batch:           BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		IdleTimeout:     2 * time.Minute,
+		SpotIdleTimeout: 30 * time.Second,
+		ReturnWait:      5 * time.Minute,
+		FloorHold:       time.Minute,
+		SpotPriceAge:    time.Hour,
 	}
 }
 
