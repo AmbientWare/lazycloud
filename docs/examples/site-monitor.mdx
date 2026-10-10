@@ -1,0 +1,511 @@
+---
+title: "Website change monitor"
+description: "A scheduled job that checks pages in a real browser, has an LLM judge each change and alerts Slack."
+---
+
+import ExampleSetup from '/snippets/example-setup.mdx';
+
+Every 15 minutes, a schedule opens each watched page in headless Chromium and
+pulls out its readable text. It then compares that text with the previous
+check. When the text differs, an OpenAI model decides whether a person would
+care and writes a one-line summary. Changes that matter post to Slack. A small
+HTTP API adds, lists and removes the pages.
+
+## Architecture
+
+```text
+schedule ──> sweep ──.map──> check-page × N ──> Slack
+               │                 │      │
+               └──── map: site-monitor-watches     map: site-monitor-snapshots
+                             ▲
+watches API (ASGI) ──────────┘
+```
+
+- **`sweep`, a scheduled function.** It runs every 15 minutes on a quarter CPU
+  and only lists pages and waits, so it needs nothing bigger. Each run is a
+  task with its own logs and result.
+- **`check-page`, a function fanned out with `.map`.** Each page is an
+  independent call, so one slow or broken page fails alone and retries alone.
+  Its image carries Chromium, and an autoscaler spreads the calls over up to
+  five containers.
+- **`watches`, an ASGI app.** FastAPI routes manage the watch list behind
+  LazyCloud's bearer-token auth, so the API needs no auth code of its own. It
+  scales to zero a minute after the last request.
+- **Two maps.** `site-monitor-watches` holds the watch list and
+  `site-monitor-snapshots` holds the last text seen for each page. Each entry
+  is small and keyed by watch, and nothing needs files or a database, so a map
+  fits better than a volume.
+- **Two secrets.** `OPENAI_API_KEY` and `SLACK_WEBHOOK_URL` reach only
+  `check-page`, the one workload that calls those services.
+
+## Download and set up
+
+<ExampleSetup />
+
+```bash
+lazycloud example download site-monitor
+cd site-monitor
+uv sync
+uv run lazycloud login
+```
+
+`uv sync` installs FastAPI and Pydantic locally, since the CLI imports the app
+to deploy it. Playwright, trafilatura and the OpenAI client sit in the `check`
+dependency group, which only the remote image installs.
+
+```toml pyproject.toml
+[dependency-groups]
+check = [
+    "httpx>=0.28,<1",
+    "openai>=2,<3",
+    "playwright>=1.55,<2",
+    "trafilatura>=2,<3",
+]
+```
+
+The setup script asks for an OpenAI API key and a Slack
+[incoming webhook](https://api.slack.com/messaging/webhooks) URL, then stores
+both as workspace secrets:
+
+```bash
+uv run python -m site_monitor.configure
+```
+
+```python site_monitor/configure.py
+def main() -> None:
+    openai_key = getpass("OpenAI API key: ").strip()
+    webhook_url = getpass("Slack incoming webhook URL: ").strip()
+    if not webhook_url.startswith("https://hooks.slack.com/"):
+        raise SystemExit("A Slack incoming webhook URL starts with https://hooks.slack.com/")
+    OPENAI_API_KEY.set(openai_key)
+    SLACK_WEBHOOK_URL.set(webhook_url)
+    print(f"Stored {OPENAI_API_KEY.name} and {SLACK_WEBHOOK_URL.name}.")
+```
+
+## The records
+
+`models.py` defines what the API accepts and what each map stores. A watch
+names a page, plus an optional label, a `focus` for the judge and a CSS
+`selector` that narrows the check to one element. Pydantic's `HttpUrl` refuses
+anything but `http` and `https`, so nobody can point the browser at
+`file:///` inside the container.
+
+```python site_monitor/models.py
+class WatchRequest(BaseModel):
+    """A page to watch, optionally narrowed to one element and one kind of change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl
+    label: Label | None = None
+    focus: Focus | None = None
+    selector: Selector | None = None
+
+
+class Watch(WatchRequest):
+    id: str
+
+    @classmethod
+    def from_request(cls, request: WatchRequest) -> Watch:
+        # The same page and element always get the same ID, so adding twice updates.
+        key = f"{request.url}\n{request.selector or ''}"
+        return cls(id=hashlib.sha256(key.encode()).hexdigest()[:16], **request.model_dump())
+```
+
+A snapshot records the text one run saw and what that run decided.
+`pending_alert` holds an alert that was decided but not yet delivered.
+
+```python site_monitor/models.py
+class Snapshot(BaseModel):
+    """The page text one run saw, and what that run decided about it."""
+
+    run_id: str
+    checked_at: datetime
+    text: str
+    outcome: Outcome
+    pending_alert: str | None = None
+```
+
+## Read the page in a browser
+
+Many pages build their content with JavaScript, so a plain HTTP fetch misses
+it. `read_page` loads the page in Chromium and skips images, media and fonts,
+which carry no text. It waits up to five seconds for the network to go quiet,
+then keeps either the selected element's text or the main content that
+trafilatura extracts, without navigation and footers. A `4xx` or `5xx` response
+raises instead of becoming a "change" to an error page.
+
+```python site_monitor/browser.py
+def read_page(watch: Watch) -> str:
+    # A container's /dev/shm is too small for Chromium's shared memory.
+    with (
+        sync_playwright() as playwright,
+        playwright.chromium.launch(args=["--disable-dev-shm-usage"]) as browser,
+    ):
+        page = browser.new_page()
+        page.route("**/*", _skip_heavy_resources)
+        response = page.goto(str(watch.url), wait_until="load", timeout=LOAD_TIMEOUT_MS)
+        if response is not None and not response.ok:
+            raise PageError(f"{watch.url} answered {response.status}")
+        # Pages that poll forever never go idle; read what has rendered by then.
+        with suppress(PlaywrightTimeoutError):
+            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT_MS)
+        if watch.selector is not None:
+            raw = page.locator(watch.selector).first.inner_text(timeout=LOAD_TIMEOUT_MS)
+        else:
+            raw = trafilatura.extract(page.content(), favor_recall=True) or ""
+    return normalize_text(raw)
+```
+
+`normalize_text` collapses whitespace, so a layout shift doesn't count as a
+change. It also caps the text well under the 1 MiB a map value can hold.
+`text_diff` turns two versions into the `-` and `+` lines the judge reads,
+capped at 12,000 characters:
+
+```python site_monitor/changes.py
+def normalize_text(raw: str) -> str:
+    """Collapse whitespace and drop blank lines, so layout shifts do not count as changes."""
+    lines = (" ".join(line.split()) for line in raw.splitlines())
+    return "\n".join(line for line in lines if line)[:MAX_TEXT_CHARS]
+
+
+def text_diff(old: str, new: str) -> str:
+    """Removed lines start with -, added lines with +, with one line of context."""
+    lines = difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=1)
+    diff = "\n".join(list(lines)[2:])
+    if len(diff) <= MAX_DIFF_CHARS:
+        return diff
+    return diff[:MAX_DIFF_CHARS] + "\n[diff truncated]"
+```
+
+## Judge the change
+
+A diff alone can't tell a price change from a rotated banner. The judge sends
+the diff, the page's label and the watch's `focus` to an OpenAI model and
+parses the reply into a `Verdict` with Structured Outputs. It only runs when
+the text changed, so a quiet page costs no tokens.
+
+```python site_monitor/judge.py
+def judge_change(watch: Watch, diff: str) -> Verdict:
+    client = OpenAI(timeout=60, max_retries=2)
+    response = client.responses.parse(
+        model=MODEL,
+        instructions=INSTRUCTIONS,
+        input=(
+            f"Page: {watch.label or watch.url}\n"
+            f"URL: {watch.url}\n"
+            f"Focus: {watch.focus or 'any change to what the page says'}\n\n"
+            f"Diff:\n{diff}"
+        ),
+        text_format=Verdict,
+        reasoning={"effort": "minimal"},
+    )
+    if response.output_parsed is None:
+        raise JudgeError(f"{MODEL} returned no verdict for {watch.url}")
+    return response.output_parsed
+```
+
+## Alert Slack
+
+The summary comes from page text, so a page could slip `<!channel>` into it.
+`_escape` turns Slack's control characters into entities before the message
+goes out. The webhook URL is itself the credential, and httpx quotes the URL in
+its errors, so `post_alert` raises its own error `from None` to keep it out of
+task logs.
+
+```python site_monitor/slack.py
+def alert_message(watch: Watch, summary: str) -> dict[str, str]:
+    title = _escape(watch.label or str(watch.url))
+    return {"text": f"*{title}* changed: {_escape(summary)}\n<{watch.url}|Open the page>"}
+
+
+def post_alert(webhook_url: str, watch: Watch, summary: str) -> None:
+    try:
+        response = httpx.post(webhook_url, json=alert_message(watch, summary), timeout=10)
+    except httpx.HTTPError as exc:
+        # The webhook URL is the credential, and httpx errors quote it.
+        raise SlackError(f"could not reach Slack: {type(exc).__name__}") from None
+    if response.is_error:
+        raise SlackError(f"Slack answered {response.status_code}")
+```
+
+## One check, once per run
+
+`check_watch` ties the steps together. The first check of a page stores a
+baseline. Later checks skip the judge when the text is unchanged, record minor
+changes without alerting, and alert on the rest.
+
+A retried call reruns from the top, so the snapshot carries the run's ID. A
+retry in the same run finds its own snapshot and goes straight to delivery. It
+resends an alert that failed to deliver and never sends one twice. The one gap
+is a crash between Slack accepting the post and the second map write, which
+would send a duplicate.
+
+```python site_monitor/checks.py
+def check_watch(
+    watch: Watch,
+    run_id: str,
+    snapshots: MutableMapping[str, Any],
+    *,
+    read_page: ReadPage,
+    judge: Judge,
+    notify: Notify,
+) -> CheckResult:
+    """Run one check, at most once per run.
+
+    The snapshot is saved before the alert goes out and again once it has, so
+    a retry of the same run resends an undelivered alert without reading or
+    judging the page again, and never resends a delivered one.
+    """
+    stored = snapshots.get(watch.id)
+    previous = Snapshot.model_validate(stored) if stored is not None else None
+    if previous is not None and previous.run_id == run_id:
+        snapshot = previous
+    else:
+        snapshot = _observe(watch, run_id, previous, read_page, judge)
+        snapshots[watch.id] = snapshot.model_dump(mode="json")
+    if snapshot.pending_alert is not None:
+        notify(watch, snapshot.pending_alert)
+        snapshot = snapshot.model_copy(update={"pending_alert": None})
+        snapshots[watch.id] = snapshot.model_dump(mode="json")
+    return CheckResult(watch_id=watch.id, url=str(watch.url), outcome=snapshot.outcome)
+```
+
+The browser, the model and Slack come in as arguments. The tests run the same
+function with plain Python stand-ins and a dict for the map.
+
+## The workloads
+
+`app.py` declares everything that runs remotely. Two images come from the same
+`uv.lock`: a small one with the project's FastAPI and Pydantic, and one that
+adds the `check` group and installs Chromium's headless shell with its system
+libraries.
+
+```python site_monitor/app.py
+app = App("site_monitor")
+
+OPENAI_API_KEY = Secret("OPENAI_API_KEY")
+SLACK_WEBHOOK_URL = Secret("SLACK_WEBHOOK_URL")
+
+WATCHES = Map("site-monitor-watches")
+SNAPSHOTS = Map("site-monitor-snapshots")
+
+image = Image.from_uv(".")
+browser_image = (
+    Image.from_uv(".", groups=["check"])
+    .with_envs({"PLAYWRIGHT_BROWSERS_PATH": "/opt/playwright"})
+    .add_commands(["playwright install --with-deps --only-shell chromium"])
+)
+```
+
+`check-page` runs four pages at a time per container, each in its own process
+with its own Chromium, on 2 CPUs and 4 GiB. The autoscaler adds a container per
+four queued pages, up to five, so at most 20 browsers run at once.
+`max_pending_tasks` matches the 100-page cap, so a full sweep always fits in the
+queue. Two retries 15 seconds apart cover a page that times out or a model call
+that fails. The browser, OpenAI and Slack modules import inside the function
+because only the remote image has their packages.
+
+```python site_monitor/app.py
+@app.function(
+    name="check-page",
+    image=browser_image,
+    cpu=2,
+    memory="4Gi",
+    concurrency=4,
+    autoscaler=Autoscaler(max_containers=5, tasks_per_container=4),
+    max_pending_tasks=MAX_WATCHES,
+    timeout_seconds=180,
+    retries=2,
+    retry_delay_seconds=15,
+    secrets=[OPENAI_API_KEY.name, SLACK_WEBHOOK_URL.name],
+)
+def check_page(watch: Watch, run_id: str) -> CheckResult:
+    from site_monitor.browser import read_page
+    from site_monitor.judge import judge_change
+    from site_monitor.slack import post_alert
+
+    return check_watch(
+        watch,
+        run_id,
+        SNAPSHOTS,
+        read_page=read_page,
+        judge=judge_change,
+        notify=partial(post_alert, os.environ[SLACK_WEBHOOK_URL.name]),
+    )
+```
+
+The sweep uses its own task ID as the run ID. A retry keeps the task ID, so a
+retried sweep fans out again and every check it already finished returns its
+stored outcome at once. `.map` yields `None` for a page whose retries ran out,
+and the report lists those pages under `failed`. A sweep still running at the
+next quarter hour delays that run rather than overlapping it.
+
+```python site_monitor/app.py
+@app.function(
+    name="sweep",
+    image=image,
+    cron="*/15 * * * *",
+    cpu=0.25,
+    memory="256Mi",
+    timeout_seconds=900,
+    retries=1,
+)
+def sweep() -> SweepReport:
+    # Retries keep the task ID, so a retried sweep skips the checks it finished.
+    run_id = current_task_id()
+    if not run_id:
+        raise RuntimeError("run the sweep remotely: uv run lazycloud run site_monitor.app:sweep")
+    watches = [Watch.model_validate(value) for key in WATCHES if (value := WATCHES.get(key))]
+    results = list(check_page.map([(watch, run_id) for watch in watches]))
+    report = SweepReport(
+        run_id=run_id,
+        results=[result for result in results if result is not None],
+        failed=[
+            str(watch.url) for watch, result in zip(watches, results, strict=True) if result is None
+        ],
+    )
+    print(report.model_dump_json(), flush=True)
+    return report
+```
+
+The API is a plain FastAPI app bound to a module attribute, which the
+deployment imports by name:
+
+```python site_monitor/app.py
+api = create_api(WATCHES, SNAPSHOTS)
+service = app.asgi(
+    name="watches",
+    image=image,
+    cpu=0.25,
+    memory="256Mi",
+    concurrent_requests=8,
+    keep_warm_seconds=60,
+)(api)
+```
+
+## The watch API
+
+Watch entries use `ttl=0` because a map key otherwise expires after seven days.
+Snapshots keep the default seven days. Every check rewrites its snapshot, so a
+live watch never loses its snapshot, and one left behind by a removed watch
+expires on its own. Adding the same page and selector again replaces the
+watch. Past 100 pages the API answers `409`.
+
+```python site_monitor/api.py
+def create_api(watches: Map, snapshots: Map) -> FastAPI:
+    api = FastAPI(title="Site monitor")
+
+    @api.get("/watches")
+    def list_watches() -> list[Watch]:
+        found = (watches.get(key) for key in watches)
+        return sorted(
+            (Watch.model_validate(value) for value in found if value is not None),
+            key=lambda watch: str(watch.url),
+        )
+
+    @api.post("/watches")
+    def add_watch(request: WatchRequest) -> Watch:
+        watch = Watch.from_request(request)
+        if watch.id not in watches and len(watches) >= MAX_WATCHES:
+            raise HTTPException(409, f"already watching {MAX_WATCHES} pages")
+        watches.set(watch.id, watch.model_dump(mode="json"), ttl=0)
+        return watch
+
+    @api.delete("/watches/{watch_id}", status_code=204)
+    def remove_watch(watch_id: str) -> None:
+        try:
+            del watches[watch_id]
+        except KeyError:
+            raise HTTPException(404, f"no watch {watch_id}") from None
+        snapshots.pop(watch_id, None)
+
+    return api
+```
+
+## Deploy
+
+```bash
+uv run lazycloud deploy site_monitor.app:app
+```
+
+The deploy builds both images, registers the schedule and prints the
+`watches` URL. The browser image takes longer the first time because it
+installs Chromium. {/* MEASURE: first deploy time, browser image build time */}
+
+## Use it
+
+Requests to the API need an [access token](/platform/auth#ci-and-scripts) for
+the workspace. With `LAZYCLOUD_TOKEN` set and the printed URL in place of
+`<watches-url>`:
+
+```bash
+curl --fail-with-body "<watches-url>/watches" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/pricing", "label": "Pricing", "focus": "price or plan changes"}'
+```
+
+From Python, the deployed service uses your `lazycloud login` sign-in:
+
+```python
+from site_monitor.app import service
+
+response = service.request(method="GET", path="/watches", target="deployed")
+print(response.json())
+```
+
+Each sweep stores a baseline for new pages. To check now instead of waiting
+for the next quarter hour:
+
+```bash
+uv run lazycloud run site_monitor.app:sweep
+```
+
+The result lists each page's outcome, `baseline`, `unchanged`, `minor_change`
+or `alerted`, plus any pages that failed. Every check is its own task, so
+`uv run lazycloud task list --app site_monitor` shows each page's logs and
+retries. Pages whose text changed log the judge's summary, including the minor
+changes that didn't alert. {/* MEASURE: sweep wall time for 10 pages, cold and warm */}
+
+## Cost and scaling
+
+Between sweeps nothing runs. The API container stops a minute after its last
+request, and each `check-page` container stops 10 seconds after its last call.
+A sweep holds a quarter CPU while it waits, and each page costs a few seconds
+of browser time. The OpenAI call happens only when the text changed.
+{/* MEASURE: check-page cold start (image pull plus Chromium launch) */}
+{/* MEASURE: compute cost of one sweep over 10 pages, and per day at 96 sweeps */}
+{/* MEASURE: idle cost per day with the schedule deployed and no requests */}
+
+The 100-page cap, `max_pending_tasks` and the autoscaler bound each sweep.
+More pages need all three raised together. A wider autoscaler finishes a
+sweep sooner but starts more containers, each of which pulls the Chromium
+image.
+
+## Adapt it
+
+- A `selector` such as `#pricing-table` watches one element and ignores the
+  rest of the page, which suits price tables and status badges.
+- `focus` tells the judge what counts, for example "new job postings in
+  Europe" or "any change to the refund policy".
+- The baseline advances on every change, including minor ones. Comparing
+  against the last alerted text instead lets a page that drifts slowly add up
+  to an alert.
+- `cron` sets the interval. `"0 * * * *"` checks hourly and cuts the cost
+  fourfold.
+- `MODEL` in `judge.py` picks the OpenAI model.
+- `notify` can be any function that takes a watch and a summary, such as an
+  email or a ticket in your issue tracker.
+
+## Clean up
+
+```bash
+uv run lazycloud app delete site_monitor
+uv run lazycloud secret delete OPENAI_API_KEY
+uv run lazycloud secret delete SLACK_WEBHOOK_URL
+uv run python -c "from site_monitor.app import SNAPSHOTS, WATCHES; WATCHES.delete(); SNAPSHOTS.delete()"
+```
+
+`deployment stop sweep` pauses only the schedule and keeps the API and the
+stored pages.

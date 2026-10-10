@@ -1,6 +1,6 @@
 """HTTP routes that add, list and remove watched pages."""
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 from lazycloud import Map
 
 from site_monitor.models import MAX_WATCHES, Watch, WatchRequest
@@ -26,12 +26,11 @@ def create_api(watches: Map, snapshots: Map) -> FastAPI:
         return watch
 
     @api.delete("/watches/{watch_id}", status_code=204)
-    def remove_watch(watch_id: str) -> Response:
+    def remove_watch(watch_id: str) -> None:
         try:
             del watches[watch_id]
         except KeyError:
             raise HTTPException(404, f"no watch {watch_id}") from None
         snapshots.pop(watch_id, None)
-        return Response(status_code=204)
 
     return api
