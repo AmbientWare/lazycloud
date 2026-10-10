@@ -100,7 +100,12 @@ where w.name = 'box' and c.state = 'ready' and c.host_id <> $1`, not).Scan(&cont
 			return container, host
 		}
 		if time.Now().After(deadline) {
-			p.t.Fatalf("the devbox was not ready within five minutes: %v", err)
+			var state string
+			_ = p.pool.QueryRow(p.t.Context(), `
+select coalesce(json_agg(json_build_object('state', c.state, 'stop', c.stop_reason, 'error', c.exit_message, 'wait', c.capacity_wait, 'host', c.host_id))::text, '[]')
+       || (select json_agg(json_build_object('host', h.id, 'slots', h.disk_slots))::text from hosts h)
+from containers c join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id where w.name = 'box'`).Scan(&state)
+			p.t.Fatalf("the devbox was not ready within five minutes: %v; its containers and the hosts: %s", err, state)
 		}
 	}
 }
