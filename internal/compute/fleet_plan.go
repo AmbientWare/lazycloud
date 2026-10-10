@@ -276,7 +276,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{}, batched: map[ReserveMarket]bool{},
 		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, byMarket: map[ReserveMarket]*marketView{},
 		claimed: map[HostID]bool{}, holding: map[HostID][]warmSlot{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
-		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog),
+		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), spot: freshSpot(p, s.Offers.Spot, s.Now),
 	}
 	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
 	items := ps.pendingItems()
@@ -316,6 +316,8 @@ type pass struct {
 	// quotaUsed is what running hosts and this pass's starts count
 	// against each vCPU quota.
 	quotaUsed map[QuotaKey]int64
+	// spot is the freshest quote of each Spot pool.
+	spot map[spotPool]SpotQuote
 }
 
 type plannedHost struct {
@@ -974,7 +976,7 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	}
 	compute, priced := t.OnDemandMicros(h.Region)
 	if h.Market == MarketSpot {
-		q, quoted := spotQuote(ps.p, ps.s.Offers.Spot, ps.s.Now, h.Region, h.ZoneID, h.InstanceType)
+		q, quoted := ps.spot[spotPool{h.Region, h.ZoneID, h.InstanceType}]
 		compute, priced = q.HourlyMicros, quoted
 	}
 	switch {

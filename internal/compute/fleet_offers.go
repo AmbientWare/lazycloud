@@ -211,22 +211,23 @@ func cooled(cooldowns []OfferCooldown, now time.Time, region, zoneID, instanceTy
 	})
 }
 
-// spotQuote is the freshest quote for a type in a zone within the policy's
-// age, if any.
-func spotQuote(p Policy, quotes []SpotQuote, now time.Time, region, zoneID, instanceType string) (SpotQuote, bool) {
-	var best *SpotQuote
-	for i, q := range quotes {
-		if q.Region != region || q.ZoneID != zoneID || q.InstanceType != instanceType || now.Sub(q.ObservedAt) > p.SpotPriceAge {
+// spotPool names a Spot pool: an instance type in a zone.
+type spotPool struct{ region, zoneID, instanceType string }
+
+// freshSpot is the freshest quote within the policy's age of each pool
+// quoted.
+func freshSpot(p Policy, quotes []SpotQuote, now time.Time) map[spotPool]SpotQuote {
+	fresh := make(map[spotPool]SpotQuote, len(quotes))
+	for _, q := range quotes {
+		if now.Sub(q.ObservedAt) > p.SpotPriceAge {
 			continue
 		}
-		if best == nil || q.ObservedAt.After(best.ObservedAt) {
-			best = &quotes[i]
+		pool := spotPool{q.Region, q.ZoneID, q.InstanceType}
+		if best, ok := fresh[pool]; !ok || q.ObservedAt.After(best.ObservedAt) {
+			fresh[pool] = q
 		}
 	}
-	if best == nil {
-		return SpotQuote{}, false
-	}
-	return *best, true
+	return fresh
 }
 
 // scoreRange is the best and worst placement score of a shape's pools.
@@ -279,6 +280,7 @@ func placementPenalty(ranges map[string]scoreRange, shape string, score int) int
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
 	scores := placementRanges(p, in)
+	spot := freshSpot(p, in.Spot, in.Now)
 	room := quotaRoom(in.Quotas, in.QuotaUsed)
 	gpus := need.GPUsNeeded()
 	markets := []Market{MarketOnDemand}
@@ -313,7 +315,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					disk := rootDiskMicros(region, t.RootGiB(hibernate), t.PricedMiBps(reserve))
 					compute, penalty := onDemand, int64(0)
 					if market == MarketSpot {
-						q, quoted := spotQuote(p, in.Spot, in.Now, region, subnet.ZoneID, t.Name)
+						q, quoted := spot[spotPool{region, subnet.ZoneID, t.Name}]
 						if !quoted {
 							continue
 						}
@@ -338,15 +340,29 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 			}
 		}
 	}
-	slices.SortStableFunc(offers, func(a, b FleetOffer) int {
-		return cmp.Or(
-			cmp.Compare(GPURank(need.GPUs, a.Type.GPU), GPURank(need.GPUs, b.Type.GPU)),
-			cmp.Compare(a.ranked(a.running()), b.ranked(b.running())),
-			cmp.Compare(in.ZoneHosts[a.ZoneID], in.ZoneHosts[b.ZoneID]),
-			strings.Compare(a.Key(), b.Key()),
-		)
+	// Each offer's ordering is computed once: the comparison runs
+	// n log n times and every argument of cmp.Or is evaluated.
+	type rankedOffer struct {
+		gpu, zoneHosts int
+		cost           int64
+		key            string
+	}
+	ranks := make([]rankedOffer, len(offers))
+	order := make([]int, len(offers))
+	for i, o := range offers {
+		ranks[i] = rankedOffer{gpu: GPURank(need.GPUs, o.Type.GPU), zoneHosts: in.ZoneHosts[o.ZoneID], cost: o.ranked(o.running()), key: o.Key()}
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		ra, rb := ranks[a], ranks[b]
+		return cmp.Or(cmp.Compare(ra.gpu, rb.gpu), cmp.Compare(ra.cost, rb.cost), cmp.Compare(ra.zoneHosts, rb.zoneHosts),
+			strings.Compare(ra.key, rb.key))
 	})
-	return offers
+	sorted := make([]FleetOffer, len(offers))
+	for i, n := range order {
+		sorted[i] = offers[n]
+	}
+	return sorted
 }
 
 // hibernationRAMLimit is the most RAM a reserve hibernates. EC2 writes it
