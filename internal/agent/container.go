@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -265,7 +266,10 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 			reason = hostproto.ExitReason_EXIT_REASON_STOPPED
 		}
 		c.log.Warn("container did not start", "error", err, "reason", reason)
-		c.exited(&hostproto.ContainerExit{Reason: reason, Message: err.Error()})
+		c.mu.Lock()
+		message := cmp.Or(c.volumeLost, err.Error())
+		c.mu.Unlock()
+		c.exited(&hostproto.ContainerExit{Reason: reason, Message: message})
 		return
 	}
 	c.mu.Lock()
@@ -654,8 +658,8 @@ func (c *container) detach() {
 	}
 }
 
-// failVolume stops a container whose volume mount died; its exit reports
-// why.
+// failVolume stops a container whose volume mount died, or its start while
+// it prepares; its exit reports why.
 func (c *container) failVolume(ctx context.Context, reason string) {
 	c.mu.Lock()
 	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
@@ -663,7 +667,11 @@ func (c *container) failVolume(ctx context.Context, reason string) {
 		return
 	}
 	c.volumeLost = reason
+	started := c.started
 	c.mu.Unlock()
+	if !started {
+		c.cancelWork()
+	}
 	if err := c.a.stopDocker(ctx, c.dockerName(), 0); err != nil {
 		c.log.Warn("stopping a container whose volume mount died failed", "error", err)
 	}

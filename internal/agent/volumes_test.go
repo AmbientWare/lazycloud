@@ -745,6 +745,36 @@ func (e *env) stopMounts() {
 	}
 }
 
+// TestAMountThatDiesDuringItsStartFailsIt: a mount that dies while the start
+// waits for another fails the start, so the workload never runs on its dead
+// bind.
+func TestAMountThatDiesDuringItsStartFailsIt(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	store := newTestStore(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent()
+	s := e.session()
+	// The bucket mounts; the volume waits for a grant that never comes.
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = serveSource(t, "testdata/volumes")
+	start.GetStart().Volumes = []*hostproto.VolumeMount{
+		store.bucketMount("/models", "test-buckets/"+uuid.NewString()+"/"),
+		platformVolume(uuid.NewString(), uuid.NewString(), "/volumes/data", false),
+	}
+	reserveMounters(start, 2)
+	id := start.GetStart().GetContainerId()
+	s.send(t, start)
+	bucket := filepath.Join(e.stateDir, "mounts", strings.TrimPrefix(mounterName(id, 0), mountPrefix))
+	e.eventually("the bucket mounts", func() bool { return mounted(bucket) })
+
+	e.killGeeseFS(e.mounter(id).ID)
+	if r := s.settle(t, id); r.GetPhase() != exited || !strings.Contains(r.GetExit().GetMessage(), "exited") {
+		t.Fatalf("a start whose mount died: %v", r)
+	}
+}
+
 // TestADyingMountFailsItsStartOrItsContainer: whichever the agent sees
 // first, a mount appearing or its container exiting, a mount that dies
 // either fails the start that waits for it or is lost to its container.
