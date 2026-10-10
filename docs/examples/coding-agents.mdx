@@ -397,9 +397,7 @@ def build_snapshot(token: str) -> RepoSnapshot:
         )
         commit, branch = revision.split()
         image_id = instance.create_image_from_filesystem()
-    return RepoSnapshot(
-        image_id=image_id, commit=commit, branch=branch, created_at=datetime.now(UTC)
-    )
+    return RepoSnapshot(image_id=image_id, commit=commit, branch=branch)
 ```
 
 ```python coding_agents/github.py
@@ -456,7 +454,6 @@ def issue_job(event: str, body: bytes) -> IssueJob | None:
         number=delivery.issue.number,
         title=delivery.issue.title,
         body=text,
-        url=delivery.issue.html_url,
     )
 ```
 
@@ -604,6 +601,12 @@ def solve_issue(
     )
     agent = run_agent(instance, cwd=REPO_DIR, prompt=prompt, api_key=api_key)
     tests = run_tests(instance)
+    outcome = IssueOutcome(
+        issue=job.number,
+        pull_request=None,
+        tests_passed=tests.passed,
+        agent_cost_usd=agent.total_cost_usd,
+    )
     with tempfile.TemporaryDirectory(prefix="issue-") as directory:
         workdir = Path(directory)
         patch = download_patch(instance, snapshot.commit, workdir / "agent.patch")
@@ -611,12 +614,7 @@ def solve_issue(
             github.comment(
                 job.number, f"The agent finished without changing any files.\n\n{agent.result}"
             )
-            return IssueOutcome(
-                issue=job.number,
-                pull_request=None,
-                tests_passed=tests.passed,
-                agent_cost_usd=agent.total_cost_usd,
-            )
+            return outcome
         branch = f"agent/issue-{job.number}"
         (workdir / "repo").mkdir()
         push_patch(
@@ -634,12 +632,7 @@ def solve_issue(
         title=job.title,
         body=pull_request_body(job, agent, tests),
     )
-    return IssueOutcome(
-        issue=job.number,
-        pull_request=pull.html_url,
-        tests_passed=tests.passed,
-        agent_cost_usd=agent.total_cost_usd,
-    )
+    return outcome.model_copy(update={"pull_request": pull.html_url})
 ```
 
 The patch covers everything since the snapshot's commit, including commits

@@ -70,7 +70,6 @@ def test_only_the_trigger_label_on_the_configured_repository_starts_a_job() -> N
         number=7,
         title="Crash on empty input",
         body="Steps to reproduce",
-        url=f"https://github.com/{REPOSITORY}/issues/7",
     )
     assert issue_job("issues", labeled(label="bug")) is None
     assert issue_job("issues", labeled(repository="someone/else")) is None

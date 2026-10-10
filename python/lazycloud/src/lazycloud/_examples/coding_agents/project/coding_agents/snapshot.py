@@ -6,8 +6,6 @@ have moved far enough that agents should see the change:
     uv run python -m coding_agents.snapshot
 """
 
-from datetime import UTC, datetime
-
 from coding_agents.agent import AGENT_ENV, AGENT_HOME, REPO_DIR, as_agent, run_checked, started
 from coding_agents.app import GITHUB_TOKEN, SNAPSHOT_KEY, STATE, repo_builder
 from coding_agents.github import git_auth_env
@@ -54,9 +52,7 @@ def build_snapshot(token: str) -> RepoSnapshot:
         )
         commit, branch = revision.split()
         image_id = instance.create_image_from_filesystem()
-    return RepoSnapshot(
-        image_id=image_id, commit=commit, branch=branch, created_at=datetime.now(UTC)
-    )
+    return RepoSnapshot(image_id=image_id, commit=commit, branch=branch)
 
 
 if __name__ == "__main__":

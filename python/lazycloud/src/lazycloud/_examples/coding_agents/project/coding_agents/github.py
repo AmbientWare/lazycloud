@@ -15,9 +15,7 @@ from coding_agents.settings import COMMIT_AUTHOR, COMMIT_EMAIL
 
 
 class GitHubError(RuntimeError):
-    def __init__(self, status: int, message: str) -> None:
-        super().__init__(f"GitHub answered {status}: {message}")
-        self.status = status
+    pass
 
 
 class GitCommandError(RuntimeError):
@@ -83,7 +81,7 @@ class GitHub:
     ) -> httpx.Response:
         response = self._http.request(method, path, json=json, params=params)
         if response.is_error:
-            raise GitHubError(response.status_code, response.text[:500])
+            raise GitHubError(f"GitHub answered {response.status_code}: {response.text[:500]}")
         return response
 
 
