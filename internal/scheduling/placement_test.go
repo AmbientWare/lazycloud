@@ -126,6 +126,43 @@ func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
 	}
 }
 
+// A container whose disk was just released goes back to the host that held
+// it, whose frame cache still holds the disk, and each disk takes one of a
+// host's disk slots.
+func TestDisksReturnToTheirWarmHostWithinItsSlots(t *testing.T) {
+	pool := dbtest.New(t)
+	s := newScheduling(pool)
+	tight := newHost(t, pool, 2000, 2*gib, 0)
+	warm := newHost(t, pool, 8000, 8*gib, 0)
+	exec(t, pool, "update hosts set disk_slots = 1")
+	r := newRelease(t, pool)
+	exec(t, pool, `update releases set spec = '{"disks":[{"name":"root","size_bytes":1073741824,"mount_path":"/"}]}' where id = $1`, r.id)
+	var holder uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, host_id, stop_reason, stopped_at)
+values ($1, $2, 'stopped', 1, 1000, $3, $4, 'stopped', now()) returning id`, r.workspace, r.id, gib, warm).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, pool, `insert into disks (workspace_id, name, size_bytes, holder_container_id, lease_token, released_at)
+values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.workspace, holder)
+	first := pendingContainer(t, pool, r, 1000, gib, 2*time.Minute)
+	second := pendingContainer(t, pool, r, 1000, gib, time.Minute)
+	third := pendingContainer(t, pool, r, 1000, gib, 0)
+
+	if result := place(t, s); result.Assigned != 2 {
+		t.Fatalf("assigned %d, want one per host's disk slot", result.Assigned)
+	}
+	for id, want := range map[uuid.UUID]*uuid.UUID{first: &warm, second: &tight, third: nil} {
+		var host *uuid.UUID
+		if err := pool.QueryRow(t.Context(), "select host_id from containers where id = $1", id).Scan(&host); err != nil {
+			t.Fatal(err)
+		}
+		if (host == nil) != (want == nil) || host != nil && *host != *want {
+			t.Errorf("container %s went to %v, want %v", id, host, want)
+		}
+	}
+}
+
 func TestPackChoosesTheTightestFit(t *testing.T) {
 	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
 	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}

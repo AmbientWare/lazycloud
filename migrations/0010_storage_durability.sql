@@ -26,3 +26,7 @@ alter table workspace_buckets
 alter table disk_generations
     drop column parent_generation,
     drop column flat;
+
+-- The disks a host holds at once, as its agent offers them: its data
+-- volume keeps room for each one's unpublished writes.
+alter table hosts add column disk_slots int not null default 0 check (disk_slots >= 0);

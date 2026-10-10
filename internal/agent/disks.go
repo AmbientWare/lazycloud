@@ -109,12 +109,16 @@ func diskSlots(diskErr error) int32 {
 	if diskErr != nil {
 		return 0
 	}
-	var st unix.Statfs_t
-	if err := unix.Statfs(layersource.DataRoot, &st); err != nil {
+	if err := os.MkdirAll(layersource.DiskRoot, 0o700); err != nil {
 		return 0
 	}
-	total := int64(st.Blocks) * st.Bsize                                            //nolint:gosec // Block counts fit an int64.
-	return int32(max(0, (total-layersource.CacheBytes)/layersource.DiskDirtyBytes)) //nolint:gosec // Bounded by the volume.
+	var st unix.Statfs_t
+	if err := unix.Statfs(layersource.DiskRoot, &st); err != nil {
+		return 0
+	}
+	total := int64(st.Blocks) * st.Bsize //nolint:gosec // Block counts fit an int64.
+	// Rounded, since the filesystem keeps a little of the volume for itself.
+	return int32(max(0, (total-layersource.CacheBytes+layersource.DiskDirtyBytes/2)/layersource.DiskDirtyBytes)) //nolint:gosec // Bounded by the volume.
 }
 
 // attachDisks leases and attaches the container's disks and returns their

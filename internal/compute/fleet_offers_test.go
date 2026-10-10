@@ -124,17 +124,17 @@ func TestOfferCostIsComputeVolumesPublicIPv4AndTransfer(t *testing.T) {
 	if len(serving) != 1 || len(reserve) != 1 {
 		t.Fatalf("offers %v %v", offerKeys(serving), offerKeys(reserve))
 	}
-	// A 100 GiB root and a 64 GiB data volume of gp3 at $0.096 a GiB-month
+	// A 100 GiB root and a 48 GiB data volume of gp3 at $0.096 a GiB-month
 	// in us-west-1 over 720 hours, and 0.5 GB an hour for its one core at
 	// $0.02 a GB to and from us-east-1.
-	disk := (164*96_000 + 719) / 720
+	disk := (148*96_000 + 719) / 720
 	transfer := int64(10_000)
 	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
 	// A hibernating reserve adds its 8 GiB of RAM as swap; stopped, it
 	// moves nothing.
-	disk = (172*96_000 + 719) / 720
+	disk = (156*96_000 + 719) / 720
 	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer {
 		t.Fatalf("reserve offer %+v", o)
 	}

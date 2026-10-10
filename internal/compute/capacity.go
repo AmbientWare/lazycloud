@@ -34,6 +34,9 @@ type Requirement struct {
 	GPUCount    int
 	CPUMillis   cpu.Millis
 	MemoryBytes int64
+	// Disks is how many durable disks the container attaches, each taking
+	// one of the host's disk slots.
+	Disks int
 }
 
 // GPUsNeeded is how many GPUs the container reserves: a model list without a
@@ -68,6 +71,7 @@ type HostCapacity struct {
 	FreeCPUMillis   cpu.Millis
 	FreeMemoryBytes int64
 	FreeGPUs        int
+	FreeDiskSlots   int
 }
 
 // Accepts reports whether the host may run a container with r, ignoring
@@ -107,7 +111,7 @@ func (h HostCapacity) Accepts(r Requirement) bool {
 // Fits reports whether the host accepts r and has room for it now.
 func (h HostCapacity) Fits(r Requirement) bool {
 	return h.Accepts(r) && h.FreeCPUMillis >= r.CPUMillis && h.FreeMemoryBytes >= r.MemoryBytes &&
-		h.FreeGPUs >= r.GPUsNeeded()
+		h.FreeGPUs >= r.GPUsNeeded() && h.FreeDiskSlots >= r.Disks
 }
 
 // floorHost reports an on-demand platform CPU host, which keeps the
@@ -165,6 +169,7 @@ func (h *HostCapacity) Reserve(r Requirement) {
 	h.FreeCPUMillis -= r.CPUMillis
 	h.FreeMemoryBytes -= r.MemoryBytes
 	h.FreeGPUs -= r.GPUsNeeded()
+	h.FreeDiskSlots -= r.Disks
 }
 
 // GPUAccepted reports whether a preference takes model. An empty
@@ -238,6 +243,7 @@ func AvailableCapacity(ctx context.Context, tx pgx.Tx) ([]HostCapacity, error) {
 			FreeCPUMillis:   cpu.Millis(row.FreeCpuMillis),
 			FreeMemoryBytes: row.FreeMemoryBytes,
 			FreeGPUs:        int(row.FreeGpus),
+			FreeDiskSlots:   int(row.FreeDiskSlots),
 		})
 	}
 	return hosts, nil
