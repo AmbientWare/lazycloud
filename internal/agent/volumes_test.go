@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -65,15 +66,28 @@ func (s testStore) grant(workspace string) *hostproto.ServerMessage {
 	}}}
 }
 
-func volumeStart(e *env, source *hostproto.Source, workspace, volume string, readOnly bool) *hostproto.ServerMessage {
-	start := e.startCommand("app:handle", 1)
-	start.GetStart().Source = source
-	start.GetStart().Volumes = []*hostproto.VolumeMount{{
-		MountPath: "/volumes/data", ReadOnly: readOnly,
+// reserveMounters adds the memory of n mounters to start's, as the server
+// does.
+func reserveMounters(start *hostproto.ServerMessage, n int64) {
+	r := start.GetStart().GetResources()
+	r.MountReserveBytes = n * hostproto.MounterMemoryBytes
+	r.MemoryBytes += r.MountReserveBytes
+}
+
+func platformVolume(workspace, volume, path string, readOnly bool) *hostproto.VolumeMount {
+	return &hostproto.VolumeMount{
+		MountPath: path, ReadOnly: readOnly,
 		Source: &hostproto.VolumeMount_Volume{Volume: &hostproto.PlatformVolume{
 			VolumeId: volume, WorkspaceId: workspace, Prefix: "volumes/" + volume + "/",
 		}},
-	}}
+	}
+}
+
+func volumeStart(e *env, source *hostproto.Source, workspace, volume string, readOnly bool) *hostproto.ServerMessage {
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = source
+	start.GetStart().Volumes = []*hostproto.VolumeMount{platformVolume(workspace, volume, "/volumes/data", readOnly)}
+	reserveMounters(start, 1)
 	return start
 }
 
@@ -186,7 +200,8 @@ func copyFile(t *testing.T, src string, extra string) string {
 // TestVolumesMountThroughWorkspaceBucket runs two containers on one volume:
 // what one writes lands in the workspace bucket under the volume's prefix
 // and the other reads it, while neither sees a credential. Each has a mount
-// of its own in its slice, which carries the container's memory limit.
+// of its own in its slice. The workload is limited to the memory it asked
+// for and the slice to that plus its mounter's reserve.
 func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	// Made first so that the mounts stop before the bucket goes.
@@ -248,9 +263,77 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 			t.Fatalf("the workload runs in %s and its mount in %s, not both in %s", workload, mount, slice)
 		}
 		limit, err := os.ReadFile(filepath.Join(slice, "memory.max")) //nolint:gosec // A cgroup file.
-		if err != nil || strings.TrimSpace(string(limit)) != strconv.Itoa(256<<20) {
-			t.Fatalf("the slice's memory limit is %q (%v), want the container's", limit, err)
+		if err != nil || strings.TrimSpace(string(limit)) != strconv.Itoa(256<<20+hostproto.MounterMemoryBytes) {
+			t.Fatalf("the slice's memory limit is %q (%v), want the container's with its mounter's", limit, err)
 		}
+		inspect, err := e.docker.ContainerInspect(t.Context(), "lazycloud-"+id, client.ContainerInspectOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := inspect.Container.HostConfig.Resources; r.Memory != 256<<20 || r.MemoryReservation != 256<<20 {
+			t.Fatalf("the workload's memory limit %d and reservation %d, want the 256 MiB it asked for", r.Memory, r.MemoryReservation)
+		}
+	}
+}
+
+// list lists the directory path in container through a task.
+func (e *env) list(container, path string) []string {
+	e.t.Helper()
+	var names []string
+	if err := json.Unmarshal([]byte(result(e.t, e.completion(e.task(container, `{"args": ["list", "`+path+`"]}`)))), &names); err != nil {
+		e.t.Fatal(err)
+	}
+	return names
+}
+
+// TestPlatformVolumesShareOneMounter: a container's two volumes run on one
+// mounter of the workspace's volumes, and the container sees those two
+// only, each at its own path, not a third volume in the same bucket.
+func TestPlatformVolumesShareOneMounter(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	store := newTestStore(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent()
+	s := e.session()
+	workspace, first, second, other := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + other + "/private.txt"), Body: strings.NewReader("not yours"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.send(t, store.grant(workspace))
+
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = serveSource(t, "testdata/volumes")
+	start.GetStart().Volumes = []*hostproto.VolumeMount{
+		platformVolume(workspace, first, "/volumes/first", false),
+		platformVolume(workspace, second, "/volumes/second", true),
+	}
+	reserveMounters(start, 1)
+	id := start.GetStart().GetContainerId()
+	s.send(t, start)
+	s.phase(t, id, ready)
+	e.mounter(id)
+
+	e.write(id, "/volumes/first/a.txt", "first")
+	if got := e.read(id, "/volumes/first/a.txt"); got != `"first"` {
+		t.Fatalf("read: %s", got)
+	}
+	if got := e.list(id, "/volumes"); !slices.Equal(got, []string{"first", "second"}) {
+		t.Fatalf("the container sees volumes %v", got)
+	}
+	if got := e.list(id, "/volumes/second"); len(got) != 0 {
+		t.Fatalf("the second volume holds %v", got)
+	}
+	if failure := e.completion(e.task(id, `{"args": ["write", "/volumes/second/b.txt", "x"]}`)).GetFailure(); failure == nil {
+		t.Fatal("the read-only volume accepted a write")
+	}
+	if _, err := storagetest.Client().HeadObject(t.Context(), &s3.HeadObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + first + "/a.txt"),
+	}); err != nil {
+		t.Fatalf("the first volume's file is not under its prefix: %v", err)
 	}
 }
 
@@ -423,6 +506,7 @@ func cloudBucketStart(e *env, store testStore, prefix string) *hostproto.ServerM
 			AccessKeyId: store.accessKey, SecretAccessKey: store.secretKey,
 		}},
 	}}
+	reserveMounters(start, 1)
 	return start
 }
 

@@ -242,6 +242,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	v.mounts[c.id] = nil
 	v.mu.Unlock()
 	budget := containerResources(spec.GetResources(), v.a.capacity, v.a.topology, pidsLimit, nil)
+	budget.Memory += spec.GetResources().GetMountReserveBytes()
 	if err := startSlice(ctx, v.a.workloadSlice(c.id), budget); err != nil {
 		return nil, err
 	}

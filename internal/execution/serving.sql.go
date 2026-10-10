@@ -151,6 +151,7 @@ select r.id as release_id,
        coalesce((r.spec -> 'http' ->> 'workers')::int, (r.spec ->> 'concurrency')::int, 1)::int as slots,
        (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
+       release_mounters(r.spec) as mounters,
        -- What billing prices and admits, as planning reads it for functions.
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
@@ -218,6 +219,7 @@ type ServingReleasesRow struct {
 	Slots             int32
 	CpuMillis         int64
 	MemoryBytes       int64
+	Mounters          int32
 	GpuCount          int32
 	GpuModels         []string
 	Preemptible       bool
@@ -263,6 +265,7 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 			&i.Slots,
 			&i.CpuMillis,
 			&i.MemoryBytes,
+			&i.Mounters,
 			&i.GpuCount,
 			&i.GpuModels,
 			&i.Preemptible,

@@ -10,6 +10,8 @@ def handle(action, path, text=None):
     if action == "read":
         with open(path) as f:
             return f.read()
+    if action == "list":
+        return sorted(os.listdir(path))
     if action == "env":
         return sorted(k for k in os.environ if "AWS" in k or "SECRET" in k)
     raise ValueError(f"unknown action {action}")

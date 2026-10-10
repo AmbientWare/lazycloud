@@ -198,7 +198,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	declared := billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler)
 	params := InsertInstanceParams{
 		WorkspaceID: uuid.UUID(workspace), ReleaseID: &row.ID,
-		CpuMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
+		CpuMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib)<<20 + mountReserve(row.Mounters),
 		GpuCount:  int32(declared.GPUs), //nolint:gosec // The schema caps gpu_count at 8.
 		RateClass: string(billing.RateClassFor(declared.Pinned, preemptible(spec))),
 		Purpose:   string(PurposeInstance), Command: req.Command, SnapshotID: req.Snapshot,

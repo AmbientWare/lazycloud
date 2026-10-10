@@ -227,7 +227,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 			ReleaseID:   row.ReleaseID,
 			Slots:       row.Slots,
 			CpuMillis:   cpu.Millis(row.CpuMillis),
-			MemoryBytes: row.MemoryBytes,
+			MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters),
 			GpuCount:    row.GpuCount,
 			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.

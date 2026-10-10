@@ -397,13 +397,15 @@ func containerResources(r *hostproto.Resources, host *hostproto.Capacity, topolo
 	}
 	reservation := cpu.Millis(r.GetCpuMillis())
 	reserved, ceiling := topology.VCPUs(reservation), topology.VCPUs(max(cpuLimit, reservation))
-	memoryLimit := max(r.GetMemoryLimitBytes(), r.GetMemoryBytes())
+	// The container's volume mounters take the reserve of its memory.
+	memory := r.GetMemoryBytes() - r.GetMountReserveBytes()
+	memoryLimit := max(r.GetMemoryLimitBytes(), memory)
 	return containertypes.Resources{
 		CPUShares:         max(int64(reserved)*1024/1000, 2),
 		NanoCPUs:          int64(ceiling) * 1_000_000,
-		MemoryReservation: r.GetMemoryBytes(),
+		MemoryReservation: memory,
 		Memory:            memoryLimit,
-		MemorySwap:        memoryLimit + r.GetMemoryBytes(),
+		MemorySwap:        memoryLimit + memory,
 		PidsLimit:         &pids,
 		DeviceRequests:    gpuRequest(gpus),
 	}

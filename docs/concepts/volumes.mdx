@@ -154,6 +154,14 @@ name the bucket in the host name, as AWS expects; stores such as MinIO that
 take the bucket in the path need `force_path_style=True`. A bucket name with a
 dot always goes in the path. The bucket must already exist.
 
+## Memory for mounts
+
+Each bucket a container mounts reserves 512 MiB of memory on top of the
+container's `memory`, billed as memory. All of a container's volumes live in
+its workspace's bucket and count once. Each distinct cloud bucket counts once
+more, so a function with two volumes and one cloud bucket reserves 1 GiB beyond
+what it asks for.
+
 ## Delete stored data
 
 `reports.remove("latest.json")` deletes one file and `reports.delete()` the whole

@@ -13,9 +13,9 @@ import (
 
 // A container with mounts runs in a systemd slice of its own beside Docker's
 // other workloads in lazycloud-workloads.slice, with its mount containers.
-// The slice carries the container's memory limit and CPU weight, so the
-// mounts' memory counts against the container and a mount that outgrows it
-// breaks only that container. Docker's systemd cgroup driver places
+// The slice carries the container's memory limit plus its mounters' reserve,
+// and its CPU weight, so a mount that outgrows it breaks only that
+// container. Docker's systemd cgroup driver places
 // containers in a slice the agent makes through systemd, which takes root or
 // a polkit grant of org.freedesktop.systemd1.manage-units.
 
@@ -38,7 +38,7 @@ func withSystemd(ctx context.Context, fn func(*systemd.Conn) error) error {
 }
 
 // startSlice makes the slice name with the memory limit and CPU weight of
-// budget, the container's cgroup settings.
+// budget: the container's cgroup settings with its mounters' memory added.
 func startSlice(ctx context.Context, name string, budget containertypes.Resources) error {
 	return withSystemd(ctx, func(conn *systemd.Conn) error {
 		done := make(chan string, 1)
