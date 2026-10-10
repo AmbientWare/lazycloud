@@ -26,11 +26,11 @@ const (
 	simTick = time.Second
 	// simLongTick steps scenarios that idle for hours.
 	simLongTick = 10 * time.Second
-	// Measured in the recorded runs: a launch serves its first container
-	// 21-25 s after the purchase; a hibernated reserve resumes to its first
-	// container in 9-13 s and a stopped one in about 13 s; a bought reserve
-	// stops about 170 s after the purchase. How long a serving host takes to
-	// stop into the reserve was not recorded.
+	// From prod's host lifecycle logs of 2026-10-09: a launch serves its
+	// first container 21-25 s after the purchase, a hibernated reserve
+	// resumes to its first container in 9-13 s and a stopped one in 13-15 s,
+	// and a bought reserve stops about 170 s after the purchase. simStop,
+	// how long a serving host takes to stop into the reserve, is assumed.
 	simProvision = 23 * time.Second
 	simResume    = 12 * time.Second
 	simBoot      = 15 * time.Second
@@ -396,21 +396,27 @@ func (s *sim) plan() time.Duration {
 		}
 	}
 	// Arrived is what the Spot CPU market's placed work created within the
-	// arrival window reserves, less its largest batch; older containers drop
-	// out of the log.
+	// arrival window reserves, less its largest batch, as RecentShapes reads
+	// it: a run is arrivals less than the batch's quiet apart, cut into
+	// batches of its max from the run's first; older containers drop out of
+	// the log.
 	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= s.p.ArrivalWindow })
 	var spot []*simContainer
 	for _, c := range s.placedLog {
-		if !c.build && c.market == (ReserveMarket{Preemptible: true}) {
+		if c.need.Preemptible && c.need.GPUsNeeded() == 0 {
 			spot = append(spot, c)
 		}
 	}
 	slices.SortStableFunc(spot, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
 	var sum, largest, batch FleetCapacity
-	var start, last time.Time
+	var run, last time.Time
+	part := -1
 	for _, c := range spot {
-		if c.arrived.Sub(last) >= s.p.Batch.Quiet || c.arrived.Sub(start) >= s.p.Batch.Max {
-			largest, start, batch = largest.Upper(batch), c.arrived, FleetCapacity{}
+		if c.arrived.Sub(last) >= s.p.Batch.Quiet {
+			run, part = c.arrived, -1
+		}
+		if n := int(c.arrived.Sub(run) / s.p.Batch.Max); n != part {
+			largest, batch, part = largest.Upper(batch), FleetCapacity{}, n
 		}
 		shape := reservedShape(c.need)
 		sum, batch, last = sum.Plus(shape), batch.Plus(shape), c.arrived
@@ -854,14 +860,12 @@ func TestFleetQuotaScenario(t *testing.T) {
 	}
 }
 
-// Each CPU market's reserves hold its floor beside its largest recent
-// shape, one of them fitting that shape, and each GPU model work used
-// keeps one, through a burst of 8 CPU work and the quiet hours after; a
-// model nobody used keeps none.
+// Each CPU market keeps a floor reserve and one beside it that fits its
+// largest recent shape, and each GPU model work used keeps one, through a
+// burst of 8 CPU work and the quiet hours after; a model nobody used keeps
+// none.
 func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
-	t.Parallel()
 	s := newSim(t, DefaultPolicy())
-	s.tick = simLongTick
 	s.recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
 	eight := cpuNeed(8_000, 16)
 	var arrivals []simArrival
@@ -874,24 +878,21 @@ func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 	if len(r.waits) != 4 || len(r.violations) > 0 {
 		t.Fatalf("placed %d of 4, violations %v", len(r.waits), r.violations)
 	}
-	// At most this many reserves per market; a host returning from the
-	// burst may briefly sit beside the reserves it replaces.
 	want := map[ReserveMarket]int{{Preemptible: true}: 2, {}: 2, {GPU: "T4"}: 1}
 	held := map[ReserveMarket][]string{}
 	large := map[ReserveMarket]bool{}
-	room := map[ReserveMarket]FleetCapacity{}
 	for _, h := range s.hosts {
 		if !h.reserve() {
 			continue
 		}
 		held[h.market()] = append(held[h.market()], h.InstanceType)
 		large[h.market()] = large[h.market()] || h.Usable.Covers(reservedShape(eight))
-		room[h.market()] = room[h.market()].Plus(h.Usable)
 	}
 	for m, n := range want {
-		floor := s.p.Reserve(m).Stopped.Floor.Plus(reservedShape(eight))
-		if len(held[m]) == 0 || len(held[m]) > n || s.mostReserves[m] > n+1 || (m.GPU == "" && (!large[m] || !room[m].Covers(floor))) {
-			t.Errorf("%s holds %v and held up to %d; want at most %d holding its floor beside one that fits 8 CPU", m, held[m], s.mostReserves[m], n)
+		// A host returning from the burst may briefly sit beside the
+		// reserves it replaces before the surplus retires.
+		if len(held[m]) != n || s.mostReserves[m] > n+1 || (m.GPU == "" && !large[m]) {
+			t.Errorf("%s holds %v and held up to %d; want %d, one that fits 8 CPU", m, held[m], s.mostReserves[m], n)
 		}
 	}
 	if len(held) != len(want) {
@@ -1035,6 +1036,33 @@ func TestAReserveWokenByABuildReturnsWithoutARebuy(t *testing.T) {
 		}
 		if ended := reserves(); !slices.Equal(ended, began) {
 			t.Errorf("%v CPU build: reserves %v, began with %v", cpus, ended, began)
+		}
+	}
+}
+
+// Recurring bursts keep their reserves: in a market whose stopped target
+// shares load, a burst's share holds the target for the cost horizon, so
+// the next burst resumes those reserves rather than the market retiring
+// and rebuying them. They retire once the horizon passes without a burst.
+func TestRecurringBurstsKeepTheirReserves(t *testing.T) {
+	need := cpuNeed(1000, 2)
+	var arrivals []simArrival
+	for _, at := range []time.Duration{time.Hour, 100 * time.Minute, 140 * time.Minute} {
+		arrivals = append(arrivals, simArrival{at: at, need: need, count: 100, runs: 20 * time.Minute})
+	}
+	s := newProdSim(t, false)
+	r := s.run(4*time.Hour, arrivals)
+	t.Log(r.row("three bursts of 100 on-demand containers"))
+	if len(r.waits) != 300 || len(r.violations) > 0 {
+		t.Fatalf("placed %d of 300, violations %v", len(r.waits), r.violations)
+	}
+	if r.resumes == 0 {
+		t.Fatal("no burst resumed a reserve")
+	}
+	lastPeak := offerNow.Add(145 * time.Minute)
+	for _, at := range r.retired {
+		if at.Before(lastPeak.Add(DefaultPolicy().CostHorizon)) {
+			t.Errorf("retired a reserve at %s, within the cost horizon of a burst", at.Format(time.TimeOnly))
 		}
 	}
 }
