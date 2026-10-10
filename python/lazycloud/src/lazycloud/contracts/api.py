@@ -1378,26 +1378,11 @@ class ContainerCounts(APIModel):
     running: Annotated[int, Field(description="Ready or draining.")]
 
 
-class ConcurrencyLimits(APIModel):
-    max_cpu_containers: int
-    max_gpus: int
-
-
-class Concurrency(APIModel):
-    cpu_containers: int
-    gpus: int
-    limits: Annotated[
-        ConcurrencyLimits | None,
-        Field(description="Absent while the account's plan limits are unknown."),
-    ] = None
-
-
 class AccountMetrics(APIModel):
     containers: Annotated[
         ContainerCounts,
         Field(description="Live containers in every workspace the caller is a member of."),
     ]
-    concurrency: Concurrency
 
 
 class ActivityMeasure(str, Enum):

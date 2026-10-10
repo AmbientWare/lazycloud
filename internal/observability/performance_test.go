@@ -195,13 +195,12 @@ func TestAccountMetricsAndActivity(t *testing.T) {
 		{ID: sharedWS, Name: "shared", Role: identity.RoleMember},
 	}
 
-	metrics, err := f.obs.AccountMetrics(t.Context(), identity.UserID(uuid.New()), member)
+	counts, err := f.obs.ContainerCounts(t.Context(), member)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metrics.Containers.Pending != 2 || metrics.Containers.Running != 2 ||
-		metrics.Concurrency.CpuContainers != 3 || metrics.Concurrency.Limits != nil {
-		t.Fatalf("account metrics %+v", metrics)
+	if counts.Pending != 2 || counts.Running != 2 {
+		t.Fatalf("container counts %+v", counts)
 	}
 
 	start := hour.Add(-3 * time.Hour)

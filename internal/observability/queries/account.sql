@@ -1,9 +1,9 @@
 -- name: LiveContainerCounts :many
 -- From the containers_live_workspace partial index of each workspace.
-select c.workspace_id, c.state, count(*)::int as containers
+select c.state, count(*)::int as containers
 from containers c
 where c.workspace_id = any(@workspace_ids::uuid[]) and c.state <> 'stopped'
-group by 1, 2;
+group by 1;
 
 -- name: ContainerStarts :many
 -- Containers created per workspace, app and bucket. Build containers have

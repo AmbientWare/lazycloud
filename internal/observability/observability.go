@@ -7,7 +7,6 @@
 package observability
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,8 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 var (
@@ -38,23 +35,10 @@ const (
 	maxRange   = 31 * 24 * time.Hour
 )
 
-// ConcurrencyLimits are an account's plan limits on live containers.
-type ConcurrencyLimits struct {
-	MaxCPUContainers int
-	MaxGPUs          int
-}
-
-// LimitSource supplies an account's plan limits; without one, account
-// metrics report usage and leave the limits out.
-type LimitSource interface {
-	ConcurrencyLimits(ctx context.Context, account identity.UserID) (*ConcurrencyLimits, error)
-}
-
 // Observability is the observability owner.
 type Observability struct {
 	pool    *pgxpool.Pool
 	queries *Queries
-	limits  LimitSource
 	logger  *slog.Logger
 	ingest  ingestQueue
 	started *startedQueue
@@ -62,8 +46,6 @@ type Observability struct {
 
 // Config wires the owner's optional parts.
 type Config struct {
-	// Limits supplies plan limits; nil leaves them out.
-	Limits LimitSource
 	// Registerer receives the ingest collectors; nil skips them.
 	Registerer prometheus.Registerer
 }
@@ -72,7 +54,7 @@ type Config struct {
 // constructs the package's Queries.
 func NewObservability(pool *pgxpool.Pool, cfg Config, logger *slog.Logger) *Observability {
 	return &Observability{
-		pool: pool, queries: New(pool), limits: cfg.Limits, logger: logger,
+		pool: pool, queries: New(pool), logger: logger,
 		ingest: newIngestQueue(cfg.Registerer), started: newStartedQueue(cfg.Registerer),
 	}
 }

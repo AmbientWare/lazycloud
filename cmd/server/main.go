@@ -358,7 +358,6 @@ func (ls listeners) close() {
 // connections come from session (database.OpenSession).
 func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
-	// No LimitSource is configured, so account metrics leave plan limits out.
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
 	changes := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
 	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelTaskFinished,

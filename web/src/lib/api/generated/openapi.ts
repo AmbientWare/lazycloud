@@ -2303,7 +2303,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Live containers across the caller's workspaces and concurrency against plan limits */
+        /** Live containers across the caller's workspaces */
         get: operations["getAccountMetrics"];
         put?: never;
         post?: never;
@@ -5131,21 +5131,9 @@ export interface components {
             /** @description Ready or draining. */
             running: number;
         };
-        ConcurrencyLimits: {
-            max_cpu_containers: number;
-            max_gpus: number;
-        };
-        /** @description Live containers in the workspaces the caller owns, which plan limits apply to. */
-        Concurrency: {
-            cpu_containers: number;
-            gpus: number;
-            /** @description Absent while the account's plan limits are unknown. */
-            limits?: components["schemas"]["ConcurrencyLimits"];
-        };
         AccountMetrics: {
             /** @description Live containers in every workspace the caller is a member of. */
             containers: components["schemas"]["ContainerCounts"];
-            concurrency: components["schemas"]["Concurrency"];
         };
         /**
          * @default containers
