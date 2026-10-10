@@ -60,6 +60,7 @@ def test_only_the_exact_body_under_the_shared_secret_verifies() -> None:
     assert not signature_matches(SECRET, body + b" ", signed(body))
     assert not signature_matches(SECRET, body, signed(body, b"other-secret"))
     assert not signature_matches(SECRET, body, None)
+    assert not signature_matches(SECRET, body, "sha256=é")
 
 
 def test_only_the_trigger_label_on_the_configured_repository_starts_a_job() -> None:
@@ -169,6 +170,17 @@ def test_agent_results_parse_even_when_a_limit_stops_the_run() -> None:
     )
     with pytest.raises(AgentOutputError, match="Invalid API key"):
         parse_agent_output("", "Invalid API key", 1)
+    rejected = json.dumps(
+        {
+            "subtype": "success",
+            "is_error": True,
+            "result": "Invalid API key",
+            "num_turns": 1,
+            "total_cost_usd": 0,
+        }
+    )
+    with pytest.raises(AgentOutputError, match="Invalid API key"):
+        parse_agent_output(rejected, "", 1)
 
 
 def test_the_pinned_model_api_address_is_inside_the_allow_list() -> None:

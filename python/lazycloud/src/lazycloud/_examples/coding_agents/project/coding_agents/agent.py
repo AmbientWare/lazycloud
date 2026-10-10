@@ -140,10 +140,17 @@ def run_agent(instance: SandboxInstance, *, cwd: str, prompt: str, api_key: str)
 
 
 def parse_agent_output(stdout: str, stderr: str, exit_code: int) -> AgentRun:
-    """Claude Code prints one JSON result, also when it stops at a limit."""
+    """Claude Code prints one JSON result, also when it stops at a limit.
+
+    A limit sets subtype; an API failure, such as a rejected key, keeps subtype
+    "success" and sets is_error, and raises here.
+    """
     try:
-        return AgentRun.model_validate_json(stdout.strip())
+        run = AgentRun.model_validate_json(stdout.strip())
     except ValidationError as exc:
         raise AgentOutputError(
             f"claude exited with {exit_code} without a JSON result: {(stdout + stderr)[-2000:]}"
         ) from exc
+    if run.is_error and run.subtype == "success":
+        raise AgentOutputError(f"claude failed: {run.result[-2000:]}")
+    return run

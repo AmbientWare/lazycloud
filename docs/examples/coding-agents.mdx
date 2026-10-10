@@ -249,9 +249,10 @@ def started(sandbox: Sandbox) -> Iterator[SandboxInstance]:
 An allow list holds address ranges, not hostnames, and it blocks DNS too.
 Anthropic publishes a fixed inbound range for its API. The function resolves
 `api.anthropic.com` where DNS works, checks the address falls inside that
-range, and pins it in the sandbox's `/etc/hosts`. A prompt injected through an
-issue can make the agent misbehave inside the sandbox, but it cannot send
-your code or key anywhere else.
+range, and pins it in the sandbox's `/etc/hosts`. Instructions planted in an
+issue can still steer the agent, but only model API traffic and the change the
+function pushes leave the sandbox. The agent holds the model API key and could
+write it into that change, so the label belongs on issues someone has read.
 
 ```python coding_agents/agent.py
 # Anthropic's published inbound range for its API. Agent sandboxes reach
@@ -327,7 +328,8 @@ def run_agent(instance: SandboxInstance, *, cwd: str, prompt: str, api_key: str)
 ```
 
 Claude Code prints one JSON object, also when a limit stops it, so the caller
-always learns the turns and spend:
+learns the turns and spend. `parse_agent_output` raises when the object reports
+a failed API call, such as a rejected key.
 
 ```python coding_agents/agent.py
 class AgentRun(BaseModel):
@@ -422,8 +424,8 @@ def signature_matches(secret: bytes, body: bytes, signature: str | None) -> bool
     """Whether X-Hub-Signature-256 is the HMAC of the exact body bytes under secret."""
     if signature is None:
         return False
-    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    expected = b"sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest().encode()
+    return hmac.compare_digest(expected, signature.encode())
 
 
 def issue_job(event: str, body: bytes) -> IssueJob | None:

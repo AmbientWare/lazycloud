@@ -50,8 +50,8 @@ def signature_matches(secret: bytes, body: bytes, signature: str | None) -> bool
     """Whether X-Hub-Signature-256 is the HMAC of the exact body bytes under secret."""
     if signature is None:
         return False
-    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    expected = b"sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest().encode()
+    return hmac.compare_digest(expected, signature.encode())
 
 
 def issue_job(event: str, body: bytes) -> IssueJob | None:
