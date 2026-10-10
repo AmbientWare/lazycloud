@@ -1,0 +1,719 @@
+---
+title: "Fine-tune an LLM with LoRA"
+description: "Train a text-to-SQL adapter on a GPU, score it against the base model by running its SQL, and serve both with vLLM."
+---
+
+import ExampleSetup from '/snippets/example-setup.mdx';
+
+This project teaches `Qwen/Qwen2.5-Coder-1.5B-Instruct` to answer questions
+about a database with one SQLite query. It trains a LoRA adapter on a public
+text-to-SQL dataset, then runs every query the base model and the tuned model
+write and counts how often each returns the right rows. A vLLM server hosts
+both models behind one OpenAI-compatible URL, and a small endpoint shows their
+answers side by side.
+
+## Architecture
+
+```text
+prepare_data (CPU) ──> volume lora-sql: base-model/, data/, runs/<run>/
+                                 │
+train (GPU) ─────────────────────┤  checkpoints/, adapter/
+                                 │
+evaluate (CPU) ──> generate_sql (GPU) ──> score_batch × N (CPU, .map) ──> report artifact
+                                 │
+sql-server (GPU pod, vLLM) <──── compare (endpoint) <── you
+```
+
+- **`prepare_data`, a CPU function.** Downloading weights and filtering rows
+  is network and SQLite work, so it never holds a GPU. It writes the base
+  weights and the two datasets to the `lora-sql` volume once.
+- **`train`, a GPU function.** One call trains one adapter on an L4 or A10G
+  and saves checkpoints to the volume as it goes. Preemptible capacity is
+  cheaper, and a preempted call resumes from its last checkpoint.
+- **`generate_sql`, a GPU function.** vLLM answers every held-out question
+  with the base weights and then with the adapter, in one engine and one
+  container.
+- **`score_batch`, a CPU function fanned out with `.map`.** Running SQL needs
+  no GPU. Each call checks 50 answers in throwaway SQLite databases, and an
+  autoscaler spreads the batches over up to ten containers.
+- **`evaluate`, a CPU function.** It calls the two steps above and saves the
+  Markdown report as an artifact with a share link.
+- **`sql-server`, a pod.** vLLM's own OpenAI-compatible server is a command,
+  which is what a pod runs. `authorized=True` makes LazyCloud check the bearer
+  token before a request can wake the GPU.
+- **`compare`, an endpoint.** It sends one question to both models through the
+  official `openai` client and runs both answers. It needs a quarter CPU and
+  scales to zero.
+- **A volume and two secrets.** The volume holds the weights, data,
+  checkpoints and adapters, so no container downloads the model again.
+  `SQL_SERVER_URL` and `SQL_SERVER_TOKEN` reach only `compare`.
+
+## Download and set up
+
+<ExampleSetup />
+
+```bash
+lazycloud example download lora-fine-tune
+cd lora-fine-tune
+uv sync
+uv run lazycloud login
+```
+
+`uv sync` installs the OpenAI client and Pydantic locally, because the CLI
+imports every module to deploy the app. PyTorch, PEFT and vLLM sit in the
+`gpu` dependency group and the dataset tools in `data`. Only the remote
+images install those groups, so your machine needs no GPU libraries.
+
+```toml pyproject.toml
+data = [
+    "huggingface-hub>=1,<3",
+    "pyarrow>=21",
+]
+gpu = [
+    "accelerate>=1.10,<2",
+    "peft>=0.21,<0.22",
+    "transformers>=5.10.4,<5.18",
+    "vllm==0.30.0",
+]
+```
+
+One module holds what every workload shares. The three images build from your
+`uv.lock` with different groups, and every GPU workload uses the same
+`gpu_image`, so it builds once.
+
+```python lora_sql/resources.py
+app = App("lora_sql")
+
+BASE_MODEL = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+DEFAULT_RUN = "sql-v1"
+# The vLLM names of the two models: the base weights and the base plus the adapter.
+BASE_MODEL_NAME = "base"
+TUNED_MODEL_NAME = "tuned"
+# vLLM reserves adapter memory for this rank, so training may not exceed it.
+MAX_LORA_RANK = 32
+MAX_MODEL_LEN = 2048
+MAX_SQL_TOKENS = 256
+# A 1.5B model fits either 24 GB card; the list takes whichever is free first.
+GPUS = [GpuType.L4, GpuType.A10G]
+
+# Base weights, prepared data, checkpoints and adapters share one volume, so
+# every container reads them from storage instead of the network.
+storage = Volume("lora-sql", "/lora-sql")
+STORAGE = Path("/lora-sql")
+BASE_MODEL_DIR = STORAGE / "base-model"
+DATA_DIR = STORAGE / "data"
+RUNS_DIR = STORAGE / "runs"
+RUN_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+```
+
+```python lora_sql/resources.py
+cpu_image = Image.from_uv(".")
+data_image = Image.from_uv(".", groups=["data"])
+# Triton, which vLLM runs its kernels with, compiles a small C launcher on first use.
+gpu_image = Image.from_uv(".", groups=["gpu"]).add_commands(
+    [
+        "apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev "
+        "&& rm -rf /var/lib/apt/lists/*"
+    ]
+)
+```
+
+## The prompt and the answer
+
+Training, evaluation and serving all build the same messages, so the model is
+scored and served on exactly what it learned. The schema and sample rows go in
+the prompt, which shows the model how values such as `'North America'` are
+spelled.
+
+```python lora_sql/prompt.py
+def chat_messages(context: str, question: str) -> "list[ChatCompletionMessageParam]":
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Database:\n{context}\n\nQuestion: {question}"},
+    ]
+```
+
+The base model tends to wrap its query in Markdown and explain it afterwards.
+`extract_sql` takes the first complete statement out of either style, so the
+comparison measures the SQL rather than the formatting.
+
+```python lora_sql/prompt.py
+def extract_sql(reply: str) -> str:
+    """The first SQL statement in a reply, without Markdown fences or explanation."""
+    fenced = _FENCED.search(reply)
+    text = (fenced.group(1) if fenced else reply).strip()
+    # complete_statement skips semicolons inside string literals.
+    for end, character in enumerate(text, start=1):
+        if character == ";" and sqlite3.complete_statement(text[:end]):
+            return text[:end]
+    return text
+```
+
+## Judge SQL by what it returns
+
+Two queries can differ in text and still be right, so scoring runs both and
+compares rows. Every query gets a fresh in-memory database. The authorizer
+refuses `ATTACH`, which could otherwise create files, and the progress handler
+stops a runaway query after two seconds.
+
+```python lora_sql/queries.py
+def run_query(context: str, sql: str, *, seconds: float = QUERY_SECONDS) -> QueryRows:
+    """Create the database from `context`, run one query on it, and return up to MAX_ROWS rows."""
+    deadline = time.monotonic() + seconds
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.set_authorizer(_deny_attach)
+        connection.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
+        try:
+            connection.executescript(context)
+        except sqlite3.Error as exc:
+            raise SchemaError(str(exc)) from exc
+        try:
+            cursor = connection.execute(sql)
+            rows = cursor.fetchmany(MAX_ROWS + 1)
+        except sqlite3.Error as exc:
+            raise QueryError(str(exc)) from exc
+        columns = [column[0] for column in cursor.description or []]
+    finally:
+        connection.close()
+    return QueryRows(
+        columns=columns,
+        rows=[[_cell(value) for value in row] for row in rows[:MAX_ROWS]],
+        truncated=len(rows) > MAX_ROWS,
+    )
+```
+
+Column names and `2` versus `2.0` don't matter. Row order matters only when
+the reference query sorts its result.
+
+```python lora_sql/queries.py
+def execution_match(context: str, reference_sql: str, predicted_sql: str) -> bool:
+    """Whether the predicted query returns the same rows as the reference query.
+
+    Column names may differ. Row order counts only when the reference query
+    orders its result.
+    """
+    expected = run_query(context, reference_sql)
+    try:
+        actual = run_query(context, predicted_sql)
+    except QueryError:
+        return False
+    want = [_comparable(row) for row in expected.rows]
+    got = [_comparable(row) for row in actual.rows]
+    if _orders_result(reference_sql):
+        return want == got
+    return Counter(want) == Counter(got)
+```
+
+## Prepare the data
+
+The dataset is
+[gretelai/synthetic_text_to_sql](https://huggingface.co/datasets/gretelai/synthetic_text_to_sql),
+about 100,000 questions with the tables, sample rows and reference SQL for
+each, under Apache 2.0. Its SQL mixes dialects, so `usable_examples` keeps
+only rows whose reference query runs on SQLite and returns data. The model
+then learns the dialect it is scored in.
+
+```python lora_sql/data.py
+def usable_examples(rows: Iterable[Mapping[str, str]]) -> Iterator[SqlExample]:
+    """The rows whose reference query runs on SQLite and returns data.
+
+    The dataset mixes SQL dialects. Keeping what SQLite runs teaches the model
+    the dialect it is scored and used against.
+    """
+    for row in rows:
+        if (
+            row["sql_task_type"] not in QUERY_TASKS
+            or len(row["sql_context"]) > MAX_CONTEXT_CHARS
+            or len(row["sql_prompt"]) > MAX_QUESTION_CHARS
+        ):
+            continue
+        try:
+            result = run_query(row["sql_context"], row["sql"])
+        except (SchemaError, QueryError):
+            continue
+        if all(cell is None for result_row in result.rows for cell in result_row):
+            continue
+        yield SqlExample(
+            question=row["sql_prompt"],
+            context=row["sql_context"],
+            sql=row["sql"],
+            complexity=row["sql_complexity"],
+        )
+```
+
+`prepare_data` takes 10,000 training rows from the train split and 500
+held-out rows from the test split, and downloads the base weights into the
+volume. Retries are safe because every file is rewritten whole.
+
+```python lora_sql/data.py
+@app.function(
+    image=data_image,
+    volumes=[storage],
+    cpu=2,
+    memory="4Gi",
+    timeout_seconds=1800,
+    retries=2,
+)
+def prepare_data(train_size: int = 10_000, eval_size: int = 500) -> PreparedData:
+    if not 100 <= train_size <= 50_000:
+        raise ValueError("train_size must be between 100 and 50000")
+    if not 50 <= eval_size <= 2_000:
+        raise ValueError("eval_size must be between 50 and 2000")
+    _download_base_model()
+    for split, size in (("train", train_size), ("eval", eval_size)):
+        examples = list(islice(usable_examples(_read_split(split)), size))
+        if len(examples) < size:
+            raise ValueError(f"the {split} split has only {len(examples)} usable examples")
+        write_examples(DATA_DIR / f"{split}.jsonl", examples)
+        print(f"wrote {len(examples)} {split} examples", flush=True)
+    return PreparedData(train_examples=train_size, eval_examples=eval_size)
+```
+
+## Train the adapter
+
+`tokenize` puts the loss on the answer only. The prompt tokens get the label
+`-100`, so the model learns to write SQL rather than to repeat schemas.
+
+```python lora_sql/train.py
+def tokenize(
+    tokenizer: "PreTrainedTokenizerBase", example: SqlExample, max_tokens: int
+```
+
+LoRA trains small matrices beside every linear layer and leaves the 1.5B base
+weights frozen. At rank 16 the adapter is about 75 MB, and every run shares
+the base weights in the volume. `TrainingConfig` holds the settings and their
+bounds, and a JSON object on the command line overrides them.
+
+```python lora_sql/train.py
+@app.function(
+    image=gpu_image,
+    gpu=GPUS,
+    cpu=4,
+    memory="24Gi",
+    volumes=[storage],
+    timeout_seconds=3 * 3600,
+    # A failure here would fail again; preemption restarts the call anyway,
+    # and the run resumes from its last checkpoint.
+    retries=0,
+)
+def train(run: str = DEFAULT_RUN, settings: Mapping[str, float] | None = None) -> TrainingResult:
+    import torch
+    from peft import LoraConfig, get_peft_model
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        DataCollatorForSeq2Seq,
+        Trainer,
+        TrainingArguments,
+    )
+
+    started = time.monotonic()
+    config = TrainingConfig.model_validate(settings or {})
+    path = run_dir(run)
+    record_settings(path / "settings.json", config)
+    require_base_model()
+
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_DIR)
+    examples = read_examples(DATA_DIR / "train.jsonl")
+    features = [
+        feature
+        for example in examples
+        if (feature := tokenize(tokenizer, example, config.max_tokens)) is not None
+    ]
+    print(f"training on {len(features)} of {len(examples)} examples", flush=True)
+
+    model = AutoModelForCausalLM.from_pretrained(BASE_MODEL_DIR, dtype=torch.bfloat16)
+    model = get_peft_model(
+        model,
+        LoraConfig(
+            r=config.lora_rank,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            target_modules="all-linear",
+            task_type="CAUSAL_LM",
+        ),
+    )
+    checkpoints = path / "checkpoints"
+    resume = latest_checkpoint(checkpoints)
+    trainer = Trainer(
+        model=model,
+        args=TrainingArguments(
+            output_dir=str(checkpoints),
+            num_train_epochs=config.epochs,
+            per_device_train_batch_size=config.batch_size,
+            learning_rate=config.learning_rate,
+            lr_scheduler_type="cosine",
+            warmup_steps=0.03,
+            bf16=True,
+            logging_steps=10,
+            save_steps=config.save_steps,
+            save_total_limit=2,
+            report_to="none",
+            disable_tqdm=True,
+        ),
+        train_dataset=features,
+        data_collator=DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=IGNORED_LABEL),
+    )
+    output = trainer.train(resume_from_checkpoint=str(resume) if resume else None)
+    model.save_pretrained(str(adapter_dir(run)))
+    return TrainingResult(
+        run=run,
+        steps=output.global_step,
+        train_loss=output.training_loss,
+        resumed_from=resume.name if resume else None,
+        minutes=round((time.monotonic() - started) / 60, 1),
+    )
+```
+
+The trainer saves a checkpoint every 50 steps and writes `trainer_state.json`
+last. A checkpoint without that file was cut short, so resuming skips it.
+
+```python lora_sql/train.py
+def latest_checkpoint(checkpoints: Path) -> Path | None:
+    """The newest checkpoint that finished saving.
+
+    The trainer writes trainer_state.json last, so a save cut short by
+    preemption leaves a directory without it.
+    """
+    complete = [
+        directory
+        for directory in checkpoints.glob("checkpoint-*")
+        if directory.name.removeprefix("checkpoint-").isdigit()
+        and (directory / "trainer_state.json").exists()
+    ]
+    return max(complete, key=lambda d: int(d.name.removeprefix("checkpoint-")), default=None)
+```
+
+A run also records its settings and refuses to resume with different ones, so
+a retried run never mixes two configurations.
+
+## Score both models
+
+`generate_sql` loads vLLM once and answers every question twice. Greedy
+decoding makes the comparison repeatable.
+
+```python lora_sql/evaluate.py
+@app.function(
+    image=gpu_image,
+    gpu=GPUS,
+    cpu=4,
+    memory="16Gi",
+    volumes=[storage],
+    timeout_seconds=1800,
+    retries=1,
+)
+def generate_sql(run: str, examples: list[SqlExample]) -> Predictions:
+    """Answer every question twice in one vLLM engine: base weights, then base plus adapter."""
+    from vllm import LLM, SamplingParams
+    from vllm.lora.request import LoRARequest
+
+    require_base_model()
+    adapter = adapter_dir(run)
+    if not (adapter / "adapter_config.json").exists():
+        raise FileNotFoundError(f"run {run} has no adapter; run lora_sql.train:train first")
+    llm = LLM(
+        model=str(BASE_MODEL_DIR),
+        enable_lora=True,
+        max_lora_rank=MAX_LORA_RANK,
+        max_model_len=MAX_MODEL_LEN,
+    )
+    conversations = [chat_messages(example.context, example.question) for example in examples]
+    greedy = SamplingParams(temperature=0, max_tokens=MAX_SQL_TOKENS)
+    base = llm.chat(conversations, greedy, use_tqdm=False)
+    tuned = llm.chat(
+        conversations,
+        greedy,
+        use_tqdm=False,
+        lora_request=LoRARequest(TUNED_MODEL_NAME, 1, str(adapter)),
+    )
+    return Predictions(
+        base=[extract_sql(output.outputs[0].text) for output in base],
+        tuned=[extract_sql(output.outputs[0].text) for output in tuned],
+    )
+```
+
+`score` cuts the answers into batches of 50 and fans them out with `.map`. A
+batch that still fails after its retries fails the evaluation instead of
+counting as wrong answers.
+
+```python lora_sql/evaluate.py
+@app.function(
+    image=cpu_image,
+    cpu=0.25,
+    memory="256Mi",
+    timeout_seconds=300,
+    retries=2,
+    max_pending_tasks=200,
+    autoscaler=Autoscaler(max_containers=10, tasks_per_container=1),
+)
+def score_batch(cases: list[ScoringCase]) -> list[bool]:
+    return [execution_match(case.context, case.reference_sql, case.predicted_sql) for case in cases]
+```
+
+```python lora_sql/evaluate.py
+def score(cases: Sequence[ScoringCase]) -> list[bool]:
+    """Run each predicted query against its database, in parallel batches."""
+    results = list(score_batch.map([(list(batch),) for batch in batched(cases, SCORING_BATCH)]))
+    failed = sum(result is None for result in results)
+    if failed:
+        raise RuntimeError(f"{failed} of {len(results)} scoring batches failed")
+    return [correct for result in results if result is not None for correct in result]
+```
+
+`evaluate` puts the steps together and saves the report. The share link works
+for seven days and the artifact itself follows your plan's retention.
+
+```python lora_sql/evaluate.py
+@app.function(
+    image=cpu_image,
+    volumes=[storage],
+    cpu=0.25,
+    memory="512Mi",
+    timeout_seconds=3600,
+    retries=0,
+)
+def evaluate(run: str = DEFAULT_RUN, limit: int = 500) -> EvaluationResult:
+    if not 1 <= limit <= 2_000:
+        raise ValueError("limit must be between 1 and 2000")
+    examples = read_examples(DATA_DIR / "eval.jsonl")[:limit]
+    predictions = generate_sql.remote(run, examples)
+    correct = score(
+        [*scoring_cases(examples, predictions.base), *scoring_cases(examples, predictions.tuned)]
+    )
+    base_correct, tuned_correct = correct[: len(examples)], correct[len(examples) :]
+
+    report = build_report(run, examples, predictions, base_correct, tuned_correct)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / f"evaluation-{run}.md"
+        path.write_text(report, encoding="utf-8")
+        artifact = Artifact.file(path, content_type="text/markdown")
+        artifact.save()
+        report_url = artifact.public_url(expires=REPORT_DAYS * 24 * 3600)
+    return EvaluationResult(
+        run=run,
+        questions=len(examples),
+        base_accuracy=accuracy(base_correct),
+        tuned_accuracy=accuracy(tuned_correct),
+        report_url=report_url,
+    )
+```
+
+## Serve both models
+
+One vLLM server loads the base weights from the volume and the adapter beside
+them. Requests for `base` use the weights alone and requests for `tuned` add
+the adapter, so one GPU serves both. vLLM's `/health` route tells LazyCloud
+when the server is ready for traffic.
+
+```python lora_sql/serve.py
+sql_server = app.pod(
+    name="sql-server",
+    image=gpu_image,
+    command=[
+        "vllm",
+        "serve",
+        str(BASE_MODEL_DIR),
+        "--served-model-name",
+        BASE_MODEL_NAME,
+        "--enable-lora",
+        "--lora-modules",
+        f"{TUNED_MODEL_NAME}={adapter_dir(SERVED_RUN)}",
+        "--max-lora-rank",
+        str(MAX_LORA_RANK),
+        "--max-model-len",
+        str(MAX_MODEL_LEN),
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(SERVER_PORT),
+    ],
+    ports={"http": SERVER_PORT},
+    health_check_path="/health",
+    gpu=GPUS,
+    cpu=4,
+    memory="16Gi",
+    volumes=[storage],
+    # Stop the GPU after five idle minutes; the next request starts it again.
+    keep_warm=300,
+    authorized=True,
+)
+```
+
+## Compare the answers
+
+`compare` asks both models at once and runs each answer against the database
+in the request. A database that fails to build is a `400`. A query that fails
+is part of the answer.
+
+```python lora_sql/compare.py
+@app.endpoint(
+    name="compare",
+    route="/compare",
+    methods=["POST"],
+    image=cpu_image,
+    cpu=0.25,
+    memory="256Mi",
+    concurrency=8,
+    keep_warm=120,
+    timeout_seconds=300,
+    secrets=[server_url.name, server_token.name],
+)
+async def compare(question: Question, context: Context) -> Comparison:
+    """Ask both models, then run each query against the database `context` creates."""
+    try:
+        run_query(context, "SELECT 1")
+    except SchemaError as exc:
+        raise ValidationError(f"the database statements fail: {exc}", field="context") from exc
+    async with AsyncOpenAI(
+        base_url=f"{os.environ[server_url.name].rstrip('/')}/v1",
+        api_key=os.environ[server_token.name],
+        timeout=SERVER_TIMEOUT_SECONDS,
+        max_retries=1,
+    ) as client:
+        base, tuned = await asyncio.gather(
+            _answer(client, BASE_MODEL_NAME, context, question),
+            _answer(client, TUNED_MODEL_NAME, context, question),
+        )
+    return Comparison(question=question, base=base, tuned=tuned)
+```
+
+```python lora_sql/compare.py
+async def _answer(client: AsyncOpenAI, model: str, context: str, question: str) -> Answer:
+    completion = await client.chat.completions.create(
+        model=model,
+        messages=chat_messages(context, question),
+        temperature=0,
+        max_tokens=MAX_SQL_TOKENS,
+    )
+    sql = extract_sql(completion.choices[0].message.content or "")
+    try:
+        return Answer(sql=sql, result=run_query(context, sql), error=None)
+    except QueryError as exc:
+        return Answer(sql=sql, result=None, error=str(exc))
+```
+
+The pod checks a LazyCloud access token, and a container holds no credential
+of its own, so `compare` reads the pod's URL and a token from secrets.
+
+## Run it
+
+Deploy first. Calls made inside a container, such as `evaluate` calling
+`generate_sql`, go to the deployed functions. Deploying starts nothing. The
+pod waits for its first request and the functions wait for calls.
+
+```bash
+uv run lazycloud deploy lora_sql.app:app
+```
+
+The first deploy builds the GPU image with PyTorch and vLLM.
+{/* MEASURE: first deploy time, including the three image builds */}
+
+Then run the three steps in order:
+
+```bash
+uv run lazycloud run lora_sql.data:prepare_data
+uv run lazycloud run lora_sql.train:train
+uv run lazycloud run lora_sql.evaluate:evaluate
+```
+
+{/* MEASURE: prepare_data duration, usable train and eval counts */}
+{/* MEASURE: train duration, steps and final loss for sql-v1 on the GPU it got */}
+{/* MEASURE: evaluate duration, base accuracy and tuned accuracy on 500 questions */}
+
+`evaluate` returns both accuracies and `report_url`. The report breaks the
+accuracy down by query type, such as aggregation, joins and window functions.
+It also lists questions the adapter fixed and ones it still gets wrong.
+
+A second run with other settings gets its own name:
+
+```bash
+uv run lazycloud run lora_sql.train:train sql-r32 '{"lora_rank": 32, "lora_alpha": 64}'
+uv run lazycloud run lora_sql.evaluate:evaluate sql-r32
+```
+
+## Use it
+
+Create an access token in the dashboard under Settings, then Tokens. It has
+the same reach as your sign-in, so a short expiry suits it. The setup script
+asks for the token and the `sql-server` URL from the deploy output, and stores
+both as secrets:
+
+```bash
+uv run python -m lora_sql.configure
+```
+
+Ask through the `compare` endpoint. The `ask` script sends your question with
+the sample database in `lora_sql/shop.sql` and prints both answers:
+
+```bash
+uv run python -m lora_sql.ask "Which customers spent more than 100 in total?"
+```
+
+`--database` points at your own file of `CREATE TABLE` and `INSERT`
+statements. The first request after an idle period starts the GPU pod.
+{/* MEASURE: sql-server cold start until the first answer */}
+{/* MEASURE: warm compare latency for one question */}
+
+Any OpenAI client can call the server directly, with your token as the API
+key and `base` or `tuned` as the model:
+
+```python
+import os
+
+from openai import OpenAI
+
+client = OpenAI(
+    base_url=f"{os.environ['SQL_SERVER_URL']}/v1",
+    api_key=os.environ["LAZYCLOUD_TOKEN"],
+)
+reply = client.chat.completions.create(
+    model="tuned",
+    messages=[
+        {"role": "system", "content": "You write SQLite queries."},
+        {"role": "user", "content": "Database:\nCREATE TABLE t (x INT);\n\nQuestion: How many rows?"},
+    ],
+    temperature=0,
+)
+print(reply.choices[0].message.content)
+```
+
+## Cost and scaling
+
+Nothing holds a GPU while idle. Training and generation release theirs when
+the call returns, `sql-server` stops after five idle minutes, and `compare`
+stops two minutes after its last request. Scoring holds a quarter CPU per
+container and no GPU. The volume bills per GiB-month and holds about 3 GB
+of base weights, plus the adapter and two checkpoints for each run.
+{/* MEASURE: cost of prepare_data, train and evaluate for sql-v1 */}
+{/* MEASURE: volume size after one run */}
+{/* MEASURE: idle cost per day with the app deployed */}
+
+`sql-server` runs one container, and vLLM batches concurrent requests on it.
+`uv run lazycloud deployment scale sql-server --containers 2` adds a second.
+`keep_warm=-1` keeps one up so no request waits for a cold start, at the price
+of an always-on GPU.
+
+## Adapt it
+
+- `BASE_MODEL` in `resources.py` picks another model. A 7B model needs a
+  larger GPU, such as `GpuType.L40S`, in `GPUS`.
+- `usable_examples` takes any rows with a question, the database statements
+  and reference SQL. Your own query logs, in those columns, make a better
+  training set for your own database.
+- `SERVED_RUN` in `serve.py` picks the adapter the server loads. Change it and
+  redeploy to promote a run.
+- More `--lora-modules` entries serve several adapters from one server, one
+  model name each.
+
+## Clean up
+
+```bash
+uv run lazycloud app delete lora_sql
+uv run lazycloud volume delete lora-sql
+uv run lazycloud secret delete SQL_SERVER_URL
+uv run lazycloud secret delete SQL_SERVER_TOKEN
+```
+
+Then delete the access token in the dashboard. Keeping the volume keeps the
+base weights, datasets and adapters for the next run.
