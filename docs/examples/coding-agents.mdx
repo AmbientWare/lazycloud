@@ -22,7 +22,7 @@ GitHub "labeled" ──> webhook (ASGI) ──spawn──> solve-issue ──> i
                                                                   │
 laptop: snapshot ──> repo-builder sandbox ──filesystem image──────┘
 
-schedule: nightly-eval ──.map──> eval-task × 5 ──> eval sandbox each ──> issue comment
+schedule: nightly-eval ──spawn_map──> eval-task × 5 ──> eval sandbox each ──> issue comment
 ```
 
 - **`agent-box`, a devbox.** It is a container you reach over SSH whose root
@@ -35,13 +35,13 @@ schedule: nightly-eval ──.map──> eval-task × 5 ──> eval sandbox eac
   logs, result and time limit. An autoscaler caps runs at three at once, and
   `max_pending_tasks` caps the waiting line at 20.
 - **Sandboxes for the agent.** A function's container runs this project's
-  code. A sandbox runs the agent's commands: it starts on demand from an
-  image you choose, its network can be cut to one address range, and it is
-  terminated when the run ends. Each issue and each eval task gets its own.
+  code. A sandbox runs the agent's commands. It starts on demand from an
+  image you choose, its network can be cut to one address range, and the run
+  terminates it when it ends. Each issue and each eval task gets its own.
 - **A filesystem image as the repository snapshot.** Agent sandboxes cannot
   reach PyPI or GitHub, so the repository and its installed dependencies come
   with the image. `repo-builder` is the only sandbox with open network.
-- **`nightly-eval`, a schedule, fanning out with `.map`.** The five tasks are
+- **`nightly-eval`, a schedule, fanning out with `spawn_map`.** The five tasks are
   independent, so each runs in its own `eval-task` call and sandbox at the same
   time.
 - **A map.** `coding-agents` holds the snapshot record and a claim per issue in
@@ -671,8 +671,7 @@ def download_patch(instance: SandboxInstance, base_commit: str, target: Path) ->
 
 Each issue has one branch, `agent/issue-<number>`. `push_patch` force-pushes
 it and `open_pull_request` updates the pull request already open from it, so a
-relabel or a retried call replaces the earlier attempt instead of adding a
-second pull request.
+relabel replaces the earlier attempt instead of adding a second pull request.
 
 ```python coding_agents/github.py
     def open_pull_request(self, *, branch: str, base: str, title: str, body: str) -> PullRequest:
@@ -875,8 +874,9 @@ suite wants more.
   the eval track the work you actually hand to the agent.
 - A CI job that runs `uv run python -m coding_agents.snapshot` after each merge
   keeps pull requests close to the default branch.
-- A comment-triggered retry fits the same webhook: handle `issue_comment`
-  events in `issue_job` and check the commenter's permission first.
+- The same webhook can take a retry command from a comment, through
+  `issue_comment` events in `issue_job` and a check of the commenter's
+  permission.
 
 ## Clean up
 
@@ -892,5 +892,5 @@ uv run python -c "from coding_agents.app import STATE; STATE.delete()"
 
 Remove the webhook in the repository's settings, and delete the `agent/issue-*`
 branches you no longer need. Snapshot images stay in the workspace, since the
-CLI has no command to delete an image. `deployment stop nightly-eval` pauses only the
-eval.
+CLI has no command to delete an image. `deployment stop nightly-eval` pauses
+only the eval.

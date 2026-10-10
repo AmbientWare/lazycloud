@@ -141,8 +141,8 @@ def run_agent(instance: SandboxInstance, *, cwd: str, prompt: str, api_key: str)
 def parse_agent_output(stdout: str, stderr: str, exit_code: int) -> AgentRun:
     """Claude Code prints one JSON result, also when it stops at a limit.
 
-    A limit sets subtype; an API failure, such as a rejected key, keeps subtype
-    "success" and sets is_error, and raises here.
+    A limit stops a run with its own subtype. An API failure, such as a rejected
+    key, reports subtype "success" with is_error set, and raises here.
     """
     try:
         run = AgentRun.model_validate_json(stdout.strip())
