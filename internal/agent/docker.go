@@ -276,7 +276,6 @@ func (a *Agent) adopt(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
-	a.volumes.adopt(list.Items)
 	var holders []containertypes.Summary
 	for _, summary := range list.Items {
 		switch summary.Labels[labelKind] {
@@ -349,6 +348,11 @@ func (a *Agent) adopt(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	// Mounts are adopted once their users are tracked, so the users of a
+	// mount that died can fail.
+	if err := a.volumes.adopt(ctx, list.Items); err != nil {
+		return err
 	}
 	entries, err := os.ReadDir(filepath.Join(a.cfg.StateDir, "containers"))
 	if err != nil {
