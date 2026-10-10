@@ -18,7 +18,7 @@ from .resources import BASE_MODEL_NAME, MAX_SQL_TOKENS, TUNED_MODEL_NAME, app, c
 server_url = Secret("SQL_SERVER_URL")
 server_token = Secret("SQL_SERVER_TOKEN")
 
-# A cold sql-server can take minutes to start; a warm one answers in about a second.
+# A cold sql-server loads the model before it answers its first request.
 SERVER_TIMEOUT_SECONDS = 240
 
 Question = Annotated[str, Field(min_length=1, max_length=MAX_QUESTION_CHARS)]
