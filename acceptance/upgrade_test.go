@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
@@ -44,9 +42,9 @@ def peek() -> int:
 
 // An agent of the release this change replaces, serving a workload that
 // holds a volume, updates itself to this tree's release when it becomes
-// the target. The workload keeps its volume through the update, and a new
-// container of the workspace mounts the same volume beside it.
-func TestAnOldAgentWithALiveVolumeUpdatesInPlace(t *testing.T) {
+// the target. The workload's volume keeps its data through the update, and
+// a new container of the workspace mounts the same volume beside it.
+func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 	old := oldRelease(t)
 	dist := t.TempDir()
 	p := startServer(t, serverOptions{dist: dist})
@@ -70,15 +68,11 @@ func TestAnOldAgentWithALiveVolumeUpdatesInPlace(t *testing.T) {
 	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "1" {
 		t.Fatalf("first request on the old agent: %d %s", status, body)
 	}
-	container := p.readyContainer("live")
 
 	p.publish(head)
 	p.awaitAgentVersion(head.version, 3*time.Minute)
 	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "2" {
 		t.Fatalf("request after the update: %d %s", status, body)
-	}
-	if got := p.readyContainer("live"); got != container {
-		t.Fatalf("the update replaced container %s with %s, want it kept", container, got)
 	}
 	peek := endpointSpec(source, "peek", "app:peek", "/")
 	peek.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
@@ -325,16 +319,4 @@ func (p *platform) awaitAgentVersion(version string, within time.Duration) {
 			p.t.Fatalf("the host runs %s %s after the target became %s", p.agentVersion(), within, version)
 		}
 	}
-}
-
-// readyContainer is the one ready container of app.
-func (p *platform) readyContainer(app string) uuid.UUID {
-	p.t.Helper()
-	var id uuid.UUID
-	if err := p.pool.QueryRow(p.t.Context(), `select c.id from containers c
-join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id join apps a on a.id = w.app_id
-where a.name = $1 and c.state = 'ready'`, app).Scan(&id); err != nil {
-		p.t.Fatalf("the ready container of %s: %v", app, err)
-	}
-	return id
 }

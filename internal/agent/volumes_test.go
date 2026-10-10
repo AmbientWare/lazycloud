@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,14 +101,12 @@ func (e *env) read(container, path string) string {
 	return result(e.t, e.completion(e.task(container, `{"args": ["read", "`+path+`"]}`)))
 }
 
-// mounters lists the mount containers this test's agents made, with
-// stopped ones when all is set, for one workspace or every cloud bucket.
-func (e *env) mounters(all bool, kind, workspace string) []containertypes.Summary {
+// mounters lists the mount containers of container, with stopped ones when
+// all is set.
+func (e *env) mounters(all bool, container string) []containertypes.Summary {
 	e.t.Helper()
-	filters := client.Filters{}.Add("label", "lazycloud.agent="+e.id).Add("label", labelKind+"="+kind)
-	if workspace != "" {
-		filters = filters.Add("label", labelWorkspace+"="+workspace)
-	}
+	filters := client.Filters{}.Add("label", "lazycloud.agent="+e.id).Add("label", labelKind+"="+kindMount).
+		Add("label", labelContainer+"="+container)
 	list, err := e.docker.ContainerList(context.Background(), client.ContainerListOptions{All: all, Filters: filters})
 	if err != nil {
 		e.t.Fatal(err)
@@ -114,11 +114,45 @@ func (e *env) mounters(all bool, kind, workspace string) []containertypes.Summar
 	return list.Items
 }
 
-// stopMounter stops a mount container as a crash or an operator would.
-func (e *env) stopMounter(id string) {
+// mounter is container's one running mount container.
+func (e *env) mounter(container string) containertypes.Summary {
 	e.t.Helper()
-	timeout := 10
-	if _, err := e.docker.ContainerStop(context.Background(), id, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+	mounters := e.mounters(false, container)
+	if len(mounters) != 1 {
+		e.t.Fatalf("%d mounts run for %s", len(mounters), container)
+	}
+	return mounters[0]
+}
+
+// sliceDir is the cgroup of container's slice.
+func (e *env) sliceDir(container string) string {
+	a := &Agent{identity: identity{HostID: e.server.hostID}}
+	return filepath.Join(cgroupRoot, "lazycloud.slice", "lazycloud-workloads.slice", a.workloadSlice(container))
+}
+
+// cgroupOf is the cgroup of the Docker container id's first process.
+func (e *env) cgroupOf(id string) string {
+	e.t.Helper()
+	inspect, err := e.docker.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir, err := cgroupDir(inspect.Container.State.Pid)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return dir
+}
+
+// killGeeseFS kills the GeeseFS of a mount container, as the kernel's OOM
+// killer would.
+func (e *env) killGeeseFS(id string) {
+	e.t.Helper()
+	kill, err := e.docker.ExecCreate(context.Background(), id, client.ExecCreateOptions{Cmd: []string{"killall", "-KILL", "geesefs"}})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.docker.ExecStart(context.Background(), kill.ID, client.ExecStartOptions{Detach: true}); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -151,7 +185,8 @@ func copyFile(t *testing.T, src string, extra string) string {
 
 // TestVolumesMountThroughWorkspaceBucket runs two containers on one volume:
 // what one writes lands in the workspace bucket under the volume's prefix
-// and the other reads it, while neither sees a credential.
+// and the other reads it, while neither sees a credential. Each has a mount
+// of its own in its slice, which carries the container's memory limit.
 func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	// Made first so that the mounts stop before the bucket goes.
@@ -207,25 +242,56 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 		t.Fatalf("mount directory mode %v err=%v, want 0700", info.Mode().Perm(), err)
 	}
 
-	// Both containers share one mount; when it dies, they stop.
-	mounters := e.mounters(false, kindMount, workspace)
-	if len(mounters) != 1 {
-		t.Fatalf("%d mounts for one workspace", len(mounters))
-	}
-	e.stopMounter(mounters[0].ID)
-	// The two exits arrive in either order.
-	pending := map[string]bool{writer: true, reader.GetStart().GetContainerId(): true}
-	for len(pending) > 0 {
-		report := s.until(t, 60*time.Second, func(m *hostproto.HostMessage) bool {
-			r := m.GetContainer()
-			return pending[r.GetContainerId()] && r.GetPhase() == exited
-		}).GetContainer()
-		if !strings.Contains(report.GetExit().GetMessage(), "volume mount") {
-			t.Fatalf("exit of a container on a dead mount: %v", report.GetExit())
+	for _, id := range []string{writer, reader.GetStart().GetContainerId()} {
+		slice := e.sliceDir(id)
+		if workload, mount := e.cgroupOf("lazycloud-"+id), e.cgroupOf(e.mounter(id).ID); filepath.Dir(workload) != slice || filepath.Dir(mount) != slice {
+			t.Fatalf("the workload runs in %s and its mount in %s, not both in %s", workload, mount, slice)
 		}
-		delete(pending, report.GetContainerId())
+		limit, err := os.ReadFile(filepath.Join(slice, "memory.max")) //nolint:gosec // A cgroup file.
+		if err != nil || strings.TrimSpace(string(limit)) != strconv.Itoa(256<<20) {
+			t.Fatalf("the slice's memory limit is %q (%v), want the container's", limit, err)
+		}
 	}
-	e.eventually("the dead mount is removed", func() bool { return len(e.mounters(true, kindMount, workspace)) == 0 })
+}
+
+// TestAMountThatDiesFailsOnlyItsContainer: two containers on one volume each
+// have a mount of their own. One's mount dying, as an out-of-memory kill
+// would, stops that container only; the other reads and writes on, and its
+// mount and slice go when it stops.
+func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	store := newTestStore(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent()
+	s := e.session()
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	heavy := e.startVolume(s, source, workspace, volume)
+	other := e.startVolume(s, source, workspace, volume)
+	e.write(heavy, "/volumes/data/shared.txt", "shared")
+
+	e.killGeeseFS(e.mounter(heavy).ID)
+	if exit := s.phase(t, heavy, exited).GetExit(); !strings.Contains(exit.GetMessage(), "volume mount") {
+		t.Fatalf("exit of the container on the dead mount: %v", exit)
+	}
+	e.write(other, "/volumes/data/still.txt", "still here")
+	if got := e.read(other, "/volumes/data/shared.txt"); got != `"shared"` {
+		t.Fatalf("the other container reads %s", got)
+	}
+	e.eventually("the dead mount and its slice go", func() bool {
+		_, err := os.Stat(e.sliceDir(heavy))
+		return len(e.mounters(true, heavy)) == 0 && os.IsNotExist(err)
+	})
+
+	s.send(t, stopCommand(other, 1))
+	s.phase(t, other, exited)
+	e.eventually("the mount and slice go with their container", func() bool {
+		_, err := os.Stat(e.sliceDir(other))
+		return len(e.mounters(true, other)) == 0 && os.IsNotExist(err)
+	})
 }
 
 // otherCA is a CA certificate that signed none of the test's servers.
@@ -283,9 +349,9 @@ func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
 	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "certificate") {
 		t.Fatalf("start on an untrusted store: %v", exit)
 	}
-	if left := e.mounters(true, kindMount, workspace); len(left) != 0 {
-		t.Fatalf("a mount that never mounted was left: %v", left[0].Names)
-	}
+	e.eventually("the mount that never mounted is removed", func() bool {
+		return len(e.mounters(true, untrusted.GetStart().GetContainerId())) == 0
+	})
 
 	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: proxy.Certificate().Raw}), 0o600); err != nil {
 		t.Fatal(err)
@@ -299,15 +365,16 @@ func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
 
 // TestVolumeMountsSurviveAnAgentUpgrade: an agent restarted with another
 // GeeseFS and trust bundle keeps the old mount for the workload on it, which
-// reads and writes on, and gives a new start a mount of its own. The old
-// mount stops once its last user goes, and the new one's users run on.
+// reads and writes on, and mounts a new start with its own. The old mount
+// stops with its workload; the new one's runs on.
 func TestVolumeMountsSurviveAnAgentUpgrade(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	store := newTestStore(t)
 	e := newEnv(t)
 	t.Cleanup(e.stopMounts)
+	before, after := copyFile(t, geesefs, ""), copyFile(t, geesefs, "")
 	first := e.startAgent(func(c *Config) {
-		c.GeeseFSPath, c.TrustBundle = copyFile(t, geesefs, ""), copyFile(t, HostTrustBundle(), "")
+		c.GeeseFSPath, c.TrustBundle = before, copyFile(t, HostTrustBundle(), "")
 	})
 	s := e.session()
 	source := serveSource(t, "testdata/volumes")
@@ -318,7 +385,7 @@ func TestVolumeMountsSurviveAnAgentUpgrade(t *testing.T) {
 	first.stop()
 
 	e.startAgent(func(c *Config) {
-		c.GeeseFSPath, c.TrustBundle = copyFile(t, geesefs, ""), copyFile(t, HostTrustBundle(), "\n")
+		c.GeeseFSPath, c.TrustBundle = after, copyFile(t, HostTrustBundle(), "\n")
 	})
 	s = e.session()
 	s.adoptedReady(t, old)
@@ -330,100 +397,19 @@ func TestVolumeMountsSurviveAnAgentUpgrade(t *testing.T) {
 	if got := e.read(current, "/volumes/data/after.txt"); got != `"after"` {
 		t.Fatalf("the new workload reads %s", got)
 	}
-	mounters := e.mounters(false, kindMount, workspace)
-	if len(mounters) != 2 || mounters[0].Labels[labelFingerprint] == mounters[1].Labels[labelFingerprint] {
-		t.Fatalf("mounts after the upgrade: %v", mounters)
+	binds := func(id, path string) bool {
+		return slices.ContainsFunc(e.mounter(id).Mounts, func(m containertypes.MountPoint) bool { return m.Source == path })
+	}
+	if !binds(old, before) || !binds(current, after) {
+		t.Fatal("a mount does not run the GeeseFS of the agent that started it")
 	}
 
 	s.send(t, stopCommand(old, 1))
 	s.phase(t, old, exited)
-	e.eventually("the stale mount stops", func() bool { return len(e.mounters(true, kindMount, workspace)) == 1 })
+	e.eventually("the old mount stops with its workload", func() bool { return len(e.mounters(true, old)) == 0 })
 	e.write(current, "/volumes/data/later.txt", "later")
 	if got := e.read(current, "/volumes/data/before.txt"); got != `"before"` {
 		t.Fatalf("the new workload reads %s after the old mount stopped", got)
-	}
-}
-
-// TestAMountThatDiesFailsOnlyItsOwnUsers: with a stale and a current
-// mount of one workspace, the stale one dying stops only the container on
-// it; the current one's users and new starts carry on.
-func TestAMountThatDiesFailsOnlyItsOwnUsers(t *testing.T) {
-	geesefs := testGeeseFS(t)
-	store := newTestStore(t)
-	e := newEnv(t)
-	t.Cleanup(e.stopMounts)
-	e.geesefs = geesefs
-	bundle := copyFile(t, HostTrustBundle(), "")
-	e.startAgent(func(c *Config) { c.TrustBundle = bundle })
-	s := e.session()
-	source := serveSource(t, "testdata/volumes")
-	workspace, volume := uuid.NewString(), uuid.NewString()
-	s.send(t, store.grant(workspace))
-	stale := e.startVolume(s, source, workspace, volume)
-	before := e.mounters(false, kindMount, workspace)
-	if len(before) != 1 {
-		t.Fatalf("%d mounts for one workspace", len(before))
-	}
-
-	// The host's trust bundle changes; the next start gets a new mount.
-	data, err := os.ReadFile(bundle) //nolint:gosec // The test's own file.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(bundle, append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	current := e.startVolume(s, source, workspace, volume)
-	if n := len(e.mounters(false, kindMount, workspace)); n != 2 {
-		t.Fatalf("%d mounts after the trust bundle changed", n)
-	}
-
-	e.stopMounter(before[0].ID)
-	if exit := s.phase(t, stale, exited).GetExit(); !strings.Contains(exit.GetMessage(), "volume mount") {
-		t.Fatalf("exit of the container on the dead mount: %v", exit)
-	}
-	e.write(current, "/volumes/data/still.txt", "still here")
-	again := e.startVolume(s, source, workspace, volume)
-	if got := e.read(again, "/volumes/data/still.txt"); got != `"still here"` {
-		t.Fatalf("a new start reads %s", got)
-	}
-	if n := len(e.mounters(true, kindMount, workspace)); n != 1 {
-		t.Fatalf("%d mounts after the stale one died, want the current one", n)
-	}
-}
-
-// TestAMountThatDiesWhileTheAgentIsDownFailsItsUsers: a restarted agent
-// stops the containers bound into a mount that exited while it was away,
-// removes the mount, and mounts anew for the next start.
-func TestAMountThatDiesWhileTheAgentIsDownFailsItsUsers(t *testing.T) {
-	geesefs := testGeeseFS(t)
-	store := newTestStore(t)
-	e := newEnv(t)
-	t.Cleanup(e.stopMounts)
-	e.geesefs = geesefs
-	first := e.startAgent()
-	s := e.session()
-	source := serveSource(t, "testdata/volumes")
-	workspace, volume := uuid.NewString(), uuid.NewString()
-	s.send(t, store.grant(workspace))
-	id := e.startVolume(s, source, workspace, volume)
-	e.write(id, "/volumes/data/kept.txt", "kept")
-	first.stop()
-	for _, m := range e.mounters(false, kindMount, workspace) {
-		e.stopMounter(m.ID)
-	}
-
-	e.startAgent()
-	s = e.session()
-	if exit := s.adoptedExit(t, id); !strings.Contains(exit.GetMessage(), "volume mount") {
-		t.Fatalf("exit of a container whose mount died while the agent was away: %v", exit)
-	}
-	if left := e.mounters(true, kindMount, workspace); len(left) != 0 {
-		t.Fatalf("the dead mount was left: %v", left[0].Names)
-	}
-	next := e.startVolume(s, source, workspace, volume)
-	if got := e.read(next, "/volumes/data/kept.txt"); got != `"kept"` {
-		t.Fatalf("read after remounting: %s", got)
 	}
 }
 
@@ -438,6 +424,59 @@ func cloudBucketStart(e *env, store testStore, prefix string) *hostproto.ServerM
 		}},
 	}}
 	return start
+}
+
+// TestAdoptKeepsLiveMountsAndRemovesOrphans: a restarted agent keeps a
+// running container's mount, fails a container whose mount died while it
+// was away, and removes the mount, keys and slice of a container that went.
+func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	store := newTestStore(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	first := e.startAgent()
+	s := e.session()
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	kept := e.startVolume(s, source, workspace, volume)
+	e.write(kept, "/volumes/data/kept.txt", "kept")
+	lost := e.startVolume(s, source, workspace, volume)
+	bucket := cloudBucketStart(e, store, "test-buckets/"+uuid.NewString()+"/")
+	gone := bucket.GetStart().GetContainerId()
+	s.send(t, bucket)
+	s.phase(t, gone, ready)
+	keys := filepath.Join(e.stateDir, "storage", "buckets", mounterName(gone, 0))
+	if _, err := os.Stat(keys); err != nil {
+		t.Fatalf("the bucket's keys: %v", err)
+	}
+	first.stop()
+	e.killGeeseFS(e.mounter(lost).ID)
+	if _, err := e.docker.ContainerRemove(t.Context(), "lazycloud-"+gone, client.ContainerRemoveOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.startAgent()
+	s = e.session()
+	s.adoptedReady(t, kept)
+	e.write(kept, "/volumes/data/again.txt", "again")
+	if got := e.read(kept, "/volumes/data/kept.txt"); got != `"kept"` {
+		t.Fatalf("the adopted container reads %s", got)
+	}
+	if exit := s.adoptedExit(t, lost); !strings.Contains(exit.GetMessage(), "volume mount") {
+		t.Fatalf("exit of a container whose mount died while the agent was away: %v", exit)
+	}
+	if left := e.mounters(true, gone); len(left) != 0 {
+		t.Fatalf("the orphaned mount was left: %v", left[0].Names)
+	}
+	if _, err := os.Stat(keys); !os.IsNotExist(err) {
+		t.Fatalf("the orphaned bucket's keys were left: %v", err)
+	}
+	if _, err := os.Stat(e.sliceDir(gone)); !os.IsNotExist(err) {
+		t.Fatalf("the orphaned slice was left: %v", err)
+	}
+	e.eventually("the dead mount goes with its container", func() bool { return len(e.mounters(true, lost)) == 0 })
 }
 
 // TestCloudBucketMountsWithItsKeys mounts a user's bucket with keys from the
@@ -471,40 +510,11 @@ func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 
 	s.send(t, stopCommand(id, 1))
 	s.phase(t, id, exited)
-	keys := filepath.Join(e.stateDir, "storage", "buckets", bucketMountName(id, 0))
+	keys := filepath.Join(e.stateDir, "storage", "buckets", mounterName(id, 0))
 	e.eventually("the bucket's mount and keys go with its container", func() bool {
 		_, err := os.Stat(keys)
-		return os.IsNotExist(err) && len(e.mounters(true, kindBucket, "")) == 0
+		return os.IsNotExist(err) && len(e.mounters(true, id)) == 0
 	})
-}
-
-// TestAnOrphanedCloudBucketMountIsRemoved: a restarted agent removes a
-// cloud bucket mount whose container went while it was away, and its keys.
-func TestAnOrphanedCloudBucketMountIsRemoved(t *testing.T) {
-	geesefs := testGeeseFS(t)
-	store := newTestStore(t)
-	e := newEnv(t)
-	t.Cleanup(e.stopMounts)
-	e.geesefs = geesefs
-	first := e.startAgent()
-	s := e.session()
-	start := cloudBucketStart(e, store, "test-buckets/"+uuid.NewString()+"/")
-	id := start.GetStart().GetContainerId()
-	s.send(t, start)
-	s.phase(t, id, ready)
-	first.stop()
-	if _, err := e.docker.ContainerRemove(t.Context(), "lazycloud-"+id, client.ContainerRemoveOptions{Force: true}); err != nil {
-		t.Fatal(err)
-	}
-
-	e.startAgent()
-	e.session()
-	if left := e.mounters(true, kindBucket, ""); len(left) != 0 {
-		t.Fatalf("the orphaned bucket mount was left: %v", left[0].Names)
-	}
-	if _, err := os.Stat(filepath.Join(e.stateDir, "storage", "buckets", bucketMountName(id, 0))); !os.IsNotExist(err) {
-		t.Fatalf("the orphaned bucket's keys were left: %v", err)
-	}
 }
 
 // TestAStorageGrantTheHostCannotStoreIsNotAcknowledged: the server sends a
@@ -528,7 +538,7 @@ func TestAStorageGrantTheHostCannotStoreIsNotAcknowledged(t *testing.T) {
 }
 
 // stopMounts stops this test's mount containers so GeeseFS unmounts before
-// the state directory is removed.
+// the state directory is removed, then its slices.
 func (e *env) stopMounts() {
 	ctx := context.Background()
 	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
@@ -541,6 +551,16 @@ func (e *env) stopMounts() {
 	for _, c := range list.Items {
 		if _, err := e.docker.ContainerStop(ctx, c.ID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 			e.t.Errorf("stop mount container: %v", err)
+		}
+	}
+	sliced, err := (&Agent{identity: identity{HostID: e.server.hostID}}).hostSlices(ctx)
+	if err != nil {
+		e.t.Errorf("list slices: %v", err)
+		return
+	}
+	for _, slice := range sliced {
+		if err := stopSlices(ctx, slice); err != nil {
+			e.t.Errorf("stop slice: %v", err)
 		}
 	}
 }

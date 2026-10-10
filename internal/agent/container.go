@@ -404,7 +404,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	var binds []mount.Mount
 	err = telemetry.Step(ctx, "agent.volumes", func(ctx context.Context) error {
 		var err error
-		binds, err = c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+		binds, err = c.a.volumes.mount(ctx, c, spec)
 		return err
 	}, attribute.Int("lazycloud.volumes", len(spec.GetVolumes())))
 	if err != nil {
@@ -618,11 +618,10 @@ func (c *container) cleanup(ctx context.Context) {
 	}
 	c.control.CloseIdleConnections()
 	c.ports.CloseIdleConnections()
-	c.a.volumes.release(c.id)
-	c.a.volumes.releaseBuckets(ctx, c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}
+	c.a.volumes.release(ctx, c.id)
 	if c.checkpointable {
 		if err := c.a.removeContainer(ctx, c.holderName()); err != nil {
 			c.log.Warn("removing the network holder failed", "error", err)

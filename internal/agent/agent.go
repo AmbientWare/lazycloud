@@ -543,7 +543,6 @@ func (a *Agent) pruneExited(ctx context.Context) {
 			}
 		}
 		a.mu.Unlock()
-		a.volumes.pruneIdle(ctx)
 	}
 }
 

@@ -83,7 +83,7 @@ func (a *Agent) runningPlatformImages(ctx context.Context) ([]string, error) {
 	var out []string
 	for _, summary := range list.Items {
 		switch summary.Labels[labelKind] {
-		case kindMount, kindBucket, kindHolder:
+		case kindMount, kindHolder:
 			if !slices.Contains(out, summary.Image) {
 				out = append(out, summary.Image)
 			}
