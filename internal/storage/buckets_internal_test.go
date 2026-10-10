@@ -2,9 +2,16 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
+
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
@@ -79,5 +86,47 @@ func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
 	}}
 	if err := ValidateVolumes([]apitypes.VolumeMountSpec{noRegion}); err == nil {
 		t.Fatal("deployed an AWS bucket without a region")
+	}
+}
+
+// TestOnlyTheStoresLastingRefusalsAreTyped: a 4xx the object store gives
+// for good, such as access denied or a missing bucket, is a
+// *StoreRefusedError with its code; throttling, a timeout, a 5xx or a
+// failure to reach the store stays a plain error the caller retries.
+func TestOnlyTheStoresLastingRefusalsAreTyped(t *testing.T) {
+	aws := func(status int, code string) error {
+		return fmt.Errorf("create workspace bucket: %w", &smithy.OperationError{ServiceID: "S3", OperationName: "CreateBucket", Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
+				Err:      &smithy.GenericAPIError{Code: code},
+			},
+		}})
+	}
+	for _, c := range []struct {
+		err  error
+		code string
+	}{
+		{aws(http.StatusForbidden, "AccessDenied"), "AccessDenied"},
+		{aws(http.StatusBadRequest, "InvalidBucketName"), "InvalidBucketName"},
+		{&garageError{Op: "GetBucketInfo", Status: http.StatusNotFound}, "HTTP 404"},
+		{aws(http.StatusBadRequest, "Throttling"), ""},
+		{aws(http.StatusTooManyRequests, "TooManyRequests"), ""},
+		{aws(http.StatusBadRequest, "RequestTimeout"), ""},
+		{aws(http.StatusServiceUnavailable, "SlowDown"), ""},
+		{aws(http.StatusInternalServerError, "InternalError"), ""},
+		{&garageError{Op: "CreateKey", Status: http.StatusInternalServerError}, ""},
+		{errors.New("dial tcp: connection refused"), ""},
+	} {
+		got := storeError(c.err)
+		var refused *StoreRefusedError
+		typed := errors.As(got, &refused)
+		switch {
+		case !errors.Is(got, c.err):
+			t.Errorf("%v: %v lost the store's error", c.err, got)
+		case c.code == "" && typed:
+			t.Errorf("%v: refused with code %s, want it returned for a retry", c.err, refused.Code)
+		case c.code != "" && (!typed || refused.Code != c.code):
+			t.Errorf("%v: %v, want a refusal with code %s", c.err, got, c.code)
+		}
 	}
 }

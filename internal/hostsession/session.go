@@ -785,15 +785,16 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 }
 
 // startFailure says whether err fails the start's container rather than
-// the session: the start can never be built as asked, or storage it needs
-// is unavailable. It returns the reason the container's owner is shown.
+// the session: the start can never be built as asked, or the storage owner
+// refused storage it needs. It returns the reason the container's owner is
+// shown.
 func startFailure(err error) (string, bool) {
 	var missing *secrets.NotFoundError
 	var unreadable *secrets.UnreadableError
 	var unconvertible *images.ConversionError
 	var refused *storageRefusal
 	switch {
-	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case err == nil:
 		return "", false
 	case errors.As(err, &missing):
 		return missing.Error(), true
@@ -804,7 +805,7 @@ func startFailure(err error) (string, bool) {
 	case errors.As(err, &unconvertible):
 		return unconvertible.Error(), true
 	case errors.As(err, &refused):
-		return refused.reason(), true
+		return refused.reason, true
 	}
 	return "", false
 }

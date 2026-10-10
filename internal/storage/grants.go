@@ -12,7 +12,8 @@ import (
 
 // HostGrant issues host a credential for the workspace bucket, creating the
 // bucket on first use. A key that outlives its expiry reaches nothing;
-// recording it lets the sweep delete it from the provider.
+// recording it lets the sweep delete it from the provider. The object
+// store's refusal is a *StoreRefusedError.
 func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) (Grant, error) {
 	if s.buckets == nil {
 		return Grant{}, ErrBucketsUnconfigured
@@ -23,7 +24,7 @@ func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace 
 	}
 	grant, revocable, err := s.buckets.issue(ctx, bucket, "lazycloud-host-"+host.String(), grantLifetime)
 	if err != nil {
-		return Grant{}, fmt.Errorf("issue storage grant: %w", err)
+		return Grant{}, storeError(fmt.Errorf("issue storage grant: %w", err))
 	}
 	if revocable {
 		if err := s.queries.InsertStorageGrant(ctx, InsertStorageGrantParams{

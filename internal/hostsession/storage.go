@@ -3,9 +3,9 @@ package hostsession
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
-	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -27,45 +27,45 @@ const (
 	grantAckWait = 2 * time.Second
 )
 
-// storageRefusal is storage a start needs that the server could not
-// provide: its volume mounts or the workspace's storage grant. The
-// container fails with the cause; the host's other containers and its
-// session are unaffected.
+// storageRefusal is storage a start needs that the storage owner refused:
+// its volume mounts or the workspace's storage grant. The container fails
+// with reason; the host's other containers and its session are unaffected.
 type storageRefusal struct {
-	// what names the storage: "volumes", "cloud bucket at /data" or
-	// "storage grant".
-	what string
-	err  error
+	reason string
+	err    error
 }
 
-func (e *storageRefusal) Error() string { return e.what + ": " + e.err.Error() }
+func (e *storageRefusal) Error() string { return e.err.Error() }
 
 func (e *storageRefusal) Unwrap() error { return e.err }
 
-// reason is what the container's owner is shown. A refusal states its
-// cause; an object store's refusal its error code. Other failures, such as
-// the database's, say only that the storage failed: their text is the
-// platform's.
-func (e *storageRefusal) reason() string {
+// refusal returns err as a *storageRefusal of what, such as "volumes" or
+// "cloud bucket at /data", when it is one of the storage owner's typed
+// refusals, with the cause its owner is shown. Any other error, such as the
+// database's or the object store's failure, is returned as it is, so the
+// start is tried again.
+func refusal(what string, err error) error {
 	var (
 		invalid  *storage.InvalidError
 		conflict *storage.ConflictError
-		api      smithy.APIError
+		refused  *storage.StoreRefusedError
+		cause    string
 	)
-	cause := "it failed on the platform's side"
 	switch {
-	case errors.Is(e.err, storage.ErrBucketsUnconfigured):
+	case errors.Is(err, storage.ErrBucketsUnconfigured):
 		cause = storage.ErrBucketsUnconfigured.Error()
-	case errors.Is(e.err, storage.ErrNoRegion):
+	case errors.Is(err, storage.ErrNoRegion):
 		cause = storage.ErrNoRegion.Error()
-	case errors.As(e.err, &invalid):
+	case errors.As(err, &invalid):
 		cause = invalid.Reason
-	case errors.As(e.err, &conflict):
+	case errors.As(err, &conflict):
 		cause = conflict.Reason
-	case errors.As(e.err, &api):
-		cause = "the object store refused it (" + api.ErrorCode() + ")"
+	case errors.As(err, &refused):
+		cause = "the object store refused it (" + refused.Code + ")"
+	default:
+		return err
 	}
-	return e.what + " unavailable: " + cause
+	return &storageRefusal{reason: what + " unavailable: " + cause, err: fmt.Errorf("%s: %w", what, err)}
 }
 
 // volumeMounts records the container's volume mounts and returns them as the
@@ -76,7 +76,7 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 	}
 	mounts, err := s.storage.MountVolumes(ctx, start.Workspace, uuid.UUID(start.Container), *start.Spec.Volumes)
 	if err != nil {
-		return nil, &storageRefusal{what: "volumes", err: err}
+		return nil, refusal("volumes", err)
 	}
 	out := make([]*hostproto.VolumeMount, len(mounts))
 	for n, m := range mounts {
@@ -96,7 +96,7 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 			}
 			loc, err := storage.CloudBucketLocation(*b)
 			if err != nil {
-				return nil, &storageRefusal{what: "cloud bucket at " + m.MountPath, err: err}
+				return nil, refusal("cloud bucket at "+m.MountPath, err)
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
 				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
@@ -145,8 +145,10 @@ func (g *hostGrant) held() bool {
 
 // ensureGrant keeps a storage grant for workspace on the host. A grant the
 // host has not confirmed within grantAckWait is sent again, and one close
-// to expiry is replaced. When issuing one fails, the host keeps using a
-// grant it holds; without one, the failure is a *storageRefusal.
+// to expiry is replaced. A storage refusal while the host holds no grant
+// is a *storageRefusal. Any other failure to issue one is logged and tried
+// again at the next sync: the host keeps using a grant it holds, and a
+// start waiting for its first grant fails if none arrives in time.
 func (sess *session) ensureGrant(ctx context.Context, workspace identity.WorkspaceID) error {
 	g := sess.grants[workspace]
 	if g != nil && time.Until(g.expires) > grantRefresh {
@@ -161,10 +163,11 @@ func (sess *session) ensureGrant(ctx context.Context, workspace identity.Workspa
 			return status.FromContextError(ctx.Err()).Err()
 		}
 		sess.server.logger.WarnContext(ctx, "issuing a storage grant failed", "host", sess.host.String(), "workspace", workspace.String(), "error", err)
-		if g.held() {
-			return nil
+		var refused *storageRefusal
+		if err := refusal("storage grant", err); errors.As(err, &refused) && !g.held() {
+			return refused
 		}
-		return &storageRefusal{what: "storage grant", err: err}
+		return nil
 	}
 	return sess.sendGrant(workspace, &hostGrant{
 		expires: grant.ExpiresAt,
