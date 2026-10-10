@@ -659,8 +659,9 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	e.eventually("the dead mount goes with its container", func() bool { return len(e.mounters(true, lost)) == 0 })
 }
 
-// TestCloudBucketMountsWithItsKeys mounts a user's bucket with keys from the
-// start and removes the mount and its keys when the container goes.
+// TestCloudBucketMountsWithItsKeys mounts two prefixes of a user's bucket
+// through one mounter with keys from the start, one of them empty, and
+// removes the mount and its keys when the container goes.
 func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	store := newTestStore(t)
@@ -676,12 +677,16 @@ func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	start := cloudBucketStart(e, store.bucketMount("/models", prefix))
+	start := cloudBucketStart(e, store.bucketMount("/models", prefix), store.bucketMount("/empty", prefix+"nothing/"))
 	id := start.GetStart().GetContainerId()
 	s.send(t, start)
 	s.phase(t, id, ready)
+	e.mounter(id)
 	if got := e.read(id, "/models/weights.txt"); got != `"from the bucket"` {
 		t.Fatalf("read: %s", got)
+	}
+	if got := e.list(id, "/empty"); len(got) != 0 {
+		t.Fatalf("the empty prefix holds %v", got)
 	}
 	attempt := e.task(id, `{"args": ["env", ""]}`)
 	if got := result(t, e.completion(attempt)); got != "[]" {

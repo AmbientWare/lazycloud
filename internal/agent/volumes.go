@@ -275,7 +275,14 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 				return nil, fmt.Errorf("the volume at %s names a prefix outside its bucket's mount", s.GetMountPath())
 			}
 			source := filepath.Join(m.dir, dirs[i])
-			if err := os.MkdirAll(source, 0o755); err != nil { //nolint:gosec // GeeseFS gives every directory --dir-mode.
+			err := os.MkdirAll(source, 0o755) //nolint:gosec // GeeseFS gives every directory --dir-mode.
+			if errors.Is(err, syscall.EROFS) {
+				// A read-only mount cannot make the directory of a prefix
+				// that holds nothing, so the volume shows an empty one.
+				source = filepath.Join(v.a.cfg.StateDir, "empty")
+				err = os.MkdirAll(source, 0o555) //nolint:gosec // Workloads of any user list it.
+			}
+			if err != nil {
 				return nil, fmt.Errorf("create the directory of the volume at %s: %w", s.GetMountPath(), err)
 			}
 			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
