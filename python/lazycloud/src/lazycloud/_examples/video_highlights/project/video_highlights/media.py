@@ -94,7 +94,7 @@ def write_audio(video: Path, target: Path) -> None:
 
 def write_clip(video: Path, start: float, end: float, target: Path) -> None:
     """Re-encode so the clip starts on the exact frame, not the previous keyframe."""
-    window = ["-ss", f"{start:.3f}", "-i", video, "-t", f"{end - start:.3f}"]
+    window: list[str | Path] = ["-ss", f"{start:.3f}", "-i", video, "-t", f"{end - start:.3f}"]
     streams = ["-map", "0:v:0", "-map", "0:a:0"]
     video_codec = ["-vf", f"scale=-2:min(ih\\,{CLIP_MAX_HEIGHT})", "-c:v", "libx264"]
     encoding = ["-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k"]
@@ -102,7 +102,7 @@ def write_clip(video: Path, start: float, end: float, target: Path) -> None:
 
 
 def write_thumbnail(video: Path, at: float, target: Path) -> None:
-    frame = ["-ss", f"{at:.3f}", "-i", video, "-frames:v", "1"]
+    frame: list[str | Path] = ["-ss", f"{at:.3f}", "-i", video, "-frames:v", "1"]
     ffmpeg([*frame, "-vf", f"scale={THUMBNAIL_WIDTH}:-2", "-q:v", "3", target])
 
 
