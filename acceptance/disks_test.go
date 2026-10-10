@@ -43,7 +43,8 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 		}
 	}
 	// Disks come with the Team plan.
-	if _, err := p.pool.Exec(ctx, "update billing_accounts set terms_version = 'team-v3'"); err != nil {
+	if _, err := p.pool.Exec(ctx, `insert into billing_accounts (user_id, terms_version) select id, 'team-v3' from users
+on conflict (user_id) do update set terms_version = 'team-v3'`); err != nil {
 		t.Fatal(err)
 	}
 	box := spec("box", "", p.upload(map[string]string{"app.py": ""}), nil)
