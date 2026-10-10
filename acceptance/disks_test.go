@@ -57,6 +57,13 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 	box.Pod = &apitypes.PodSpec{Kind: apitypes.PodKindDevbox}
 	box.Disks = &[]apitypes.DiskMountSpec{{Name: "box", SizeBytes: 10 << 30, MountPath: "/"}}
 	p.deploy("dev", box)
+	start := func() {
+		t.Helper()
+		if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/dev/workloads/pod/box/devbox/start", nil, nil); status != http.StatusOK {
+			t.Fatalf("start the devbox: %d", status)
+		}
+	}
+	start()
 
 	first, firstHost := p.readyDevbox(uuid.Nil)
 	written := p.shell(first, "head -c 33554432 /dev/urandom > /root/moved && sha256sum /root/moved")
@@ -78,9 +85,7 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 	if _, err := p.pool.Exec(ctx, "update hosts set capacity_state = 'cordoned' where id = $1", firstHost); err != nil {
 		t.Fatal(err)
 	}
-	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/dev/workloads/pod/box/devbox/start", nil, nil); status != http.StatusOK {
-		t.Fatalf("start the devbox: %d", status)
-	}
+	start()
 	second, _ := p.readyDevbox(firstHost)
 	if read := p.shell(second, "sha256sum /root/moved"); read != written {
 		t.Fatalf("the moved disk holds %s, written %s", read, written)
