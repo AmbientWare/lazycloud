@@ -108,6 +108,7 @@ eval_sandbox = app.sandbox(
     memory="1Gi",
     allow_list=[MODEL_API_RANGE],
     keep_warm_seconds=300,
+    preemptible=False,
 )
 
 
@@ -124,6 +125,7 @@ def issue_sandbox(image_id: str) -> Sandbox:
         memory="4Gi",
         allow_list=[MODEL_API_RANGE],
         keep_warm_seconds=300,
+        preemptible=False,
     )
 
 
@@ -138,6 +140,7 @@ class SnapshotMissingError(RuntimeError):
     memory="512Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
     retries=0,
+    preemptible=False,
     max_pending_tasks=MAX_WAITING_ISSUES,
     autoscaler=Autoscaler(max_containers=MAX_PARALLEL_ISSUES),
     secrets=[ANTHROPIC_API_KEY.name, GITHUB_TOKEN.name],
@@ -205,6 +208,7 @@ webhook = app.asgi(
     memory="256Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 15 * 60,
     retries=0,
+    preemptible=False,
     autoscaler=Autoscaler(max_containers=len(task_names())),
     secrets=[ANTHROPIC_API_KEY.name],
 )
@@ -221,6 +225,7 @@ def eval_task(name: str) -> EvalResult:
     memory="256Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
     retries=0,
+    preemptible=False,
     secrets=[GITHUB_TOKEN.name],
 )
 def nightly_eval() -> EvalReport:

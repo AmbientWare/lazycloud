@@ -186,7 +186,9 @@ agent_image = (
 Three sandboxes build on it. `repo-builder` has open network and half an hour
 of idle time, enough to publish a large filesystem. The eval and issue
 sandboxes allow only `MODEL_API_RANGE`, and each stops five minutes after its
-last command if the function driving it dies.
+last command if the function driving it dies. They run on capacity that is not
+reclaimed, since a reclaim would throw away the model spend of a run in
+progress.
 
 ```python coding_agents/app.py
 # Clones the repository and installs its dependencies, so it is the only agent
@@ -207,6 +209,7 @@ eval_sandbox = app.sandbox(
     memory="1Gi",
     allow_list=[MODEL_API_RANGE],
     keep_warm_seconds=300,
+    preemptible=False,
 )
 
 
@@ -223,6 +226,7 @@ def issue_sandbox(image_id: str) -> Sandbox:
         memory="4Gi",
         allow_list=[MODEL_API_RANGE],
         keep_warm_seconds=300,
+        preemptible=False,
     )
 ```
 
@@ -532,9 +536,9 @@ webhook = app.asgi(
 ## Solve an issue
 
 The worker reads the snapshot record, starts a sandbox on it, and reports any
-failure on the issue before the task fails. `retries=0` because a second
-attempt would spend the model budget again. A preempted call still retries,
-and one branch per issue makes that safe.
+failure on the issue before the task fails. `retries=0` and
+`preemptible=False` keep a run from starting over and spending the model
+budget again.
 
 ```python coding_agents/app.py
 @app.function(
@@ -544,6 +548,7 @@ and one branch per issue makes that safe.
     memory="512Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
     retries=0,
+    preemptible=False,
     max_pending_tasks=MAX_WAITING_ISSUES,
     autoscaler=Autoscaler(max_containers=MAX_PARALLEL_ISSUES),
     secrets=[ANTHROPIC_API_KEY.name, GITHUB_TOKEN.name],
@@ -755,6 +760,7 @@ counts as a failed task, with its error and no invented cost.
     memory="256Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 15 * 60,
     retries=0,
+    preemptible=False,
     autoscaler=Autoscaler(max_containers=len(task_names())),
     secrets=[ANTHROPIC_API_KEY.name],
 )
@@ -771,6 +777,7 @@ def eval_task(name: str) -> EvalResult:
     memory="256Mi",
     timeout_seconds=AGENT_TIMEOUT_SECONDS + 30 * 60,
     retries=0,
+    preemptible=False,
     secrets=[GITHUB_TOKEN.name],
 )
 def nightly_eval() -> EvalReport:
