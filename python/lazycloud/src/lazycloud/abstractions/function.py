@@ -72,7 +72,6 @@ from lazycloud.exceptions import (
     FunctionNotDeployedError,
     MapSubmissionError,
     SdkError,
-    UnsupportedFeatureError,
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
@@ -318,25 +317,9 @@ class Function(Generic[P, R]):
             client_contract=client_contract,
         )
 
-    def unsupported_options(self) -> list[str]:
-        """Declared options the platform cannot run yet, by name."""
-        declared = {
-            # Hosts have no credentials of their own for a user's bucket.
-            "cloud bucket without key secrets": any(
-                volume.config is not None and volume.config.get("auth_mode") != "secret_references"
-                for volume in self.volumes
-            ),
-        }
-        return [name for name, present in declared.items() if present]
-
     def handler_reference(self) -> str:
         """The `module:qualname` the runner imports."""
         return dotted_reference(self.func)
-
-    def require_supported(self) -> None:
-        unsupported = self.unsupported_options()
-        if unsupported:
-            raise UnsupportedFeatureError(f"function {self.resource_name}", unsupported)
 
     def workload_spec(
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
@@ -344,7 +327,6 @@ class Function(Generic[P, R]):
         """The API definition of this function for an uploaded source and a ready image."""
         from lazycloud.contracts.api import WorkloadSpec
 
-        self.require_supported()
         policy = self._retry_policy()
         spec: dict[str, Any] = {
             "kind": "function",
@@ -699,7 +681,6 @@ class Function(Generic[P, R]):
         if called_on_import():
             msg = "remote function invocation is unavailable while importing user code"
             raise FunctionOperationError(msg)
-        self.require_supported()
         client, workspace = self._session()
         if is_local():
             # A preview that stopped since its record was written is

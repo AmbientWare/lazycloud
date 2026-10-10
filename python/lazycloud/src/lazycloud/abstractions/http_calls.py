@@ -168,20 +168,6 @@ def http_workload_spec(
         raise FunctionOperationError(msg) from exc
 
 
-def unsupported_http_options(owner: Any) -> list[str]:
-    """Declared options HTTP workloads cannot run yet, by name."""
-    found: list[str] = []
-    declared: dict[str, bool] = {
-        # Hosts have no credentials of their own for a user's bucket.
-        "cloud bucket without key secrets": any(
-            volume.config is not None and volume.config.get("auth_mode") != "secret_references"
-            for volume in owner.volumes
-        ),
-    }
-    found.extend(name for name, present in declared.items() if present)
-    return found
-
-
 def resolve_url(
     owner: Any, *, kind: str, options: InvocationOptions
 ) -> tuple[str, str | None, float]:
@@ -300,5 +286,4 @@ __all__ = [
     "request_timeout",
     "resolve_url",
     "send_request",
-    "unsupported_http_options",
 ]

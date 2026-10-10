@@ -19,7 +19,7 @@ from pydantic import (
 
 from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud._shared.enums import StringEnum
-from lazycloud._shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
+from lazycloud._shared.mounts import normalize_mount_prefix
 from lazycloud.control import ResourceControlBinding, storage_client
 
 # Declaring a volume loads no storage client or API models.
@@ -44,6 +44,10 @@ class PresignedUrlMethod(StringEnum):
 
 
 class CloudBucketConfig(BaseModel):
+    """An S3-compatible bucket a workload mounts with keys held in the
+    workspace secrets that `access_key` and `secret_key` name; hosts have no
+    credentials of their own for it."""
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     provider: str = "s3"
@@ -55,8 +59,8 @@ class CloudBucketConfig(BaseModel):
     )
     read_only: bool = False
     force_path_style: bool = False
-    access_key: str | None = None
-    secret_key: str | None = None
+    access_key: str = Field(min_length=1)
+    secret_key: str = Field(min_length=1)
     bucket: str | None = None
 
     @field_validator("prefix")
@@ -65,16 +69,17 @@ class CloudBucketConfig(BaseModel):
         return normalize_mount_prefix(value)
 
     @model_validator(mode="after")
-    def supported_provider_and_auth(self) -> CloudBucketConfig:
+    def supported_provider(self) -> CloudBucketConfig:
         if self.provider != "s3":
             msg = f"unsupported cloud bucket provider: {self.provider!r}"
             raise ValueError(msg)
-        infer_mount_auth_mode(self.access_key, self.secret_key)
         return self
 
     def __init__(
         self,
         *,
+        access_key: str,
+        secret_key: str,
         provider: str = "s3",
         prefix: str = "",
         region: str | None = None,
@@ -82,8 +87,6 @@ class CloudBucketConfig(BaseModel):
         endpoint_url: str | None = None,
         read_only: bool = False,
         force_path_style: bool = False,
-        access_key: str | None = None,
-        secret_key: str | None = None,
         bucket: str | None = None,
     ) -> None:
         super().__init__(
@@ -101,10 +104,6 @@ class CloudBucketConfig(BaseModel):
     @property
     def endpoint_url(self) -> str | None:
         return self.endpoint
-
-    @property
-    def auth_mode(self) -> MountAuthMode:
-        return infer_mount_auth_mode(self.access_key, self.secret_key)
 
 
 @dataclass(frozen=True)
@@ -474,9 +473,8 @@ def _cloud_bucket_config(name: str, config: CloudBucketConfig) -> dict[str, Json
     return {
         "bucket_name": config.bucket or name,
         "prefix": config.prefix,
-        "auth_mode": config.auth_mode,
-        "access_key": config.access_key or "",
-        "secret_key": config.secret_key or "",
+        "access_key": config.access_key,
+        "secret_key": config.secret_key,
         "endpoint_url": config.endpoint_url or "",
         "region": config.region or "",
         "read_only": config.read_only,

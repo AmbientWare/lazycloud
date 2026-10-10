@@ -35,9 +35,9 @@ uv run lazycloud compute workloads
 
 On the Business plan, one AWS account can back your workspaces. LazyCloud
 launches instances there when work arrives and shuts them down when idle. The
-instances, containers, and the bucket holding the workspace's volumes all live
-in your account. AWS bills the machines, and LazyCloud charges a management
-fee based on compute rates.
+instances, containers, and an S3 bucket per workspace holding its volumes and
+disks all live in your account. AWS bills the machines and the bucket, and
+LazyCloud charges a management fee based on compute rates.
 
 ```bash
 uv run lazycloud cloud connect aws --account-id 123456789012
@@ -56,7 +56,8 @@ sets its own CPU, memory, and GPU.
 
 `cloud status` reports a broken authorization, for example after a role change.
 `cloud reconnect` starts a replacement, and `cloud disconnect --wait` drains and
-removes the connection once no workspace lives in the account.
+removes the connection once no workspace lives in the account. Deleting a
+workspace empties and deletes its bucket first.
 
 ## Your own machines
 

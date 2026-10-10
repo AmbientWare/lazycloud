@@ -90,8 +90,6 @@ is object storage, which sets a few rules:
   its own path, such as `/reports/{task_id}.json`.
 - There are no locks. A [queue or map](/concepts/queues-maps) coordinates turns.
 - Appending to a large file rewrites it, so logs fit better as many small files.
-- Large reads are cached on the machine, which makes volumes good for model
-  weights.
 
 Weights downloaded once serve every container:
 
@@ -159,5 +157,7 @@ dot always goes in the path. The bucket must already exist.
 ## Delete stored data
 
 `reports.remove("latest.json")` deletes one file and `reports.delete()` the whole
-volume. A workload that still mounts it recreates it empty on its next run. The
-[file commands](/cli/storage#files) work from a terminal too.
+volume. Deleting a volume is refused while a running container mounts it, so
+stop those workloads first. A workload that still declares the volume creates it
+empty on its next run. The [file commands](/cli/storage#files) work from a
+terminal too.
