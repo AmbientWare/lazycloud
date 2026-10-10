@@ -47,7 +47,7 @@ func (v *volumes) bucketBind(ctx context.Context, container string, n int, spec 
 	if err := writeFileAtomic(filepath.Join(creds, "config"), []byte(config), 0o644); err != nil { //nolint:gosec // Holds no secret.
 		return mount.Mount{}, fmt.Errorf("write bucket credential config: %w", err)
 	}
-	m := newMounter(name, filepath.Join(v.mountDir(), name))
+	m := newMounter(name, v.mountPath(name))
 	m.users[container] = struct{}{}
 	v.mu.Lock()
 	v.buckets[container] = append(v.buckets[container], m)

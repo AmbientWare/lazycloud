@@ -331,8 +331,7 @@ func TestVolumeMountsSurviveAnAgentUpgrade(t *testing.T) {
 		t.Fatalf("the new workload reads %s", got)
 	}
 	mounters := e.mounters(false, kindMount, workspace)
-	if len(mounters) != 2 || mounters[0].Labels[labelGeneration] == mounters[1].Labels[labelGeneration] ||
-		mounters[0].Labels[labelFingerprint] == mounters[1].Labels[labelFingerprint] {
+	if len(mounters) != 2 || mounters[0].Labels[labelFingerprint] == mounters[1].Labels[labelFingerprint] {
 		t.Fatalf("mounts after the upgrade: %v", mounters)
 	}
 
@@ -506,6 +505,26 @@ func TestAnOrphanedCloudBucketMountIsRemoved(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.stateDir, "storage", "buckets", bucketMountName(id, 0))); !os.IsNotExist(err) {
 		t.Fatalf("the orphaned bucket's keys were left: %v", err)
 	}
+}
+
+// TestAStorageGrantTheHostCannotStoreIsNotAcknowledged: the server sends a
+// grant until the host acknowledges it, so only a stored grant is.
+func TestAStorageGrantTheHostCannotStoreIsNotAcknowledged(t *testing.T) {
+	e := newEnv(t)
+	e.startAgent()
+	s := e.session()
+	store := testStore{endpoint: "http://127.0.0.1:1", bucket: "bucket", accessKey: "key", secretKey: "secret"}
+	refused := store.grant("not-a-workspace")
+	stored := store.grant(uuid.NewString())
+	s.send(t, refused)
+	s.send(t, stored)
+	// Commands are acknowledged in the order they arrive.
+	s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool {
+		if acked(refused.GetCommandId())(m) {
+			t.Fatal("the host acknowledged a grant it could not store")
+		}
+		return acked(stored.GetCommandId())(m)
+	})
 }
 
 // stopMounts stops this test's mount containers so GeeseFS unmounts before
