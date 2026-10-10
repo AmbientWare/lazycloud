@@ -1,0 +1,4 @@
+{
+  "name": "lora-fine-tune",
+  "description": "Fine-tune a small LLM for text-to-SQL with LoRA, score it against the base model, and serve both with vLLM."
+}
