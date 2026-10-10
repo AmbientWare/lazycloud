@@ -141,7 +141,6 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	store := storage.NewStorage(pool, objectStore)
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
 	fleet, err := compute.LoadFleet(ctx, os.Getenv)
@@ -162,6 +161,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	comp := compute.NewCompute(pool, exec, computeConfig)
+	store := storage.NewStorage(pool, objectStore, comp)
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
 	if keyFile == "" {
 		return errors.New("LAZYCLOUD_SECRETS_KEY_FILE is required: callbacks are signed with workspace secrets")
@@ -192,10 +192,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	defer cancelCapacityFleetWake()
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
-	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
-	if err != nil {
-		return err
-	}
+	accounts, cancelAccounts := newAccountLoops(pool, exec, im, store, listener, logger)
 	defer cancelAccounts()
 	planWake, cancelPlanWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelPlanWake()
@@ -471,7 +468,8 @@ func objectStoreFromEnv() (storage.Config, error) {
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
-			Prefix:           os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"),
+			Prefix:           cmp.Or(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"), "lazycloud-ws"),
+			AccountID:        os.Getenv("LAZYCLOUD_FLEET_ACCOUNT_ID"),
 			GarageAdminURL:   os.Getenv("LAZYCLOUD_GARAGE_ADMIN_URL"),
 			GarageAdminToken: os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN"),
 			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),
@@ -479,9 +477,6 @@ func objectStoreFromEnv() (storage.Config, error) {
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, fmt.Errorf("object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
-	}
-	if cfg.Workspaces.Prefix == "" {
-		cfg.Workspaces.Prefix = "lazycloud-ws"
 	}
 	return cfg, nil
 }

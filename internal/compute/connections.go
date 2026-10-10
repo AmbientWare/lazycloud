@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -609,7 +611,8 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 // Disconnect removes the account's connection. An unfinished setup goes at
 // once; a connected account first drains its instances, then the platform
 // deletes the stack and verifies the role is gone. It is refused while a
-// workspace lives in the account.
+// workspace lives in the account; a workspace's bucket there, which holds
+// its volumes and disks, goes before the workspace does.
 func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Connection, error) {
 	var id uuid.UUID
 	removed := false
@@ -634,7 +637,7 @@ func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Con
 			return fmt.Errorf("read workspaces: %w", err)
 		}
 		if len(workspaces) > 0 {
-			return &ConflictError{Message: "delete the workspaces that live in this AWS account before disconnecting it: " + strings.Join(workspaces, ", ")}
+			return &ConflictError{Message: "delete the workspaces that live in this AWS account, with their volumes and disks, before disconnecting it: " + strings.Join(workspaces, ", ")}
 		}
 		if conn.Active == nil {
 			removed = true
@@ -728,6 +731,57 @@ func (c *Compute) WorkspaceConnection(ctx context.Context, account identity.User
 			"the connected AWS account is %s; a workspace can be created there once `lazycloud cloud status` reports ready", conn.Phase)}
 	}
 	return conn.ID, nil
+}
+
+// ConnectedAccount is a connected AWS account as storage reaches it: the
+// account and the region of its active authorization, where the account's
+// workspace buckets are created.
+type ConnectedAccount struct {
+	AWSAccountID string
+	Region       string
+	role         string
+	externalID   string
+}
+
+// ConnectedAccount returns the account of connection. Without an active
+// authorization the platform cannot act there, which is a *ConflictError.
+func (c *Compute) ConnectedAccount(ctx context.Context, connection uuid.UUID) (ConnectedAccount, error) {
+	row, err := c.queries.ConnectionAccess(ctx, connection)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ConnectedAccount{}, &ConflictError{Message: "the AWS account connection has no active authorization"}
+	}
+	if err != nil {
+		return ConnectedAccount{}, fmt.Errorf("read connection access: %w", err)
+	}
+	return ConnectedAccount{AWSAccountID: row.AwsAccountID, Region: row.Region, role: row.RoleArn, externalID: row.ExternalID}, nil
+}
+
+// AssumeConnectionRole returns credentials of the connection's active role
+// for lifetime, assumed through the platform principal with the external
+// ID. A non-empty policy narrows the session to what it allows. AWS's
+// refusal keeps its API error.
+func (c *Compute) AssumeConnectionRole(ctx context.Context, connection uuid.UUID, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
+	account, err := c.ConnectedAccount(ctx, connection)
+	if err != nil {
+		return aws.Credentials{}, err
+	}
+	input := &sts.AssumeRoleInput{
+		RoleArn: aws.String(account.role), RoleSessionName: aws.String(session), ExternalId: aws.String(account.externalID),
+		DurationSeconds: aws.Int32(int32(lifetime.Seconds())),
+	}
+	if policy != "" {
+		input.Policy = aws.String(policy)
+	}
+	out, err := c.aws().sts(awsScope{}, "").AssumeRole(ctx, input)
+	if err != nil {
+		return aws.Credentials{}, fmt.Errorf("assume the connection role %s: %w", account.role, err)
+	}
+	creds := out.Credentials
+	return aws.Credentials{
+		AccessKeyID: aws.ToString(creds.AccessKeyId), SecretAccessKey: aws.ToString(creds.SecretAccessKey),
+		SessionToken: aws.ToString(creds.SessionToken), Source: "lazycloud connection role",
+		CanExpire: true, Expires: aws.ToTime(creds.Expiration),
+	}, nil
 }
 
 func notifyCompute(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {

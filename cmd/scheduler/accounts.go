@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -44,18 +43,9 @@ type accountLoops struct {
 	logger        *slog.Logger
 }
 
-// newAccountLoops reads the Resend and object store settings from the
-// environment. Without LAZYCLOUD_RESEND_API_KEY emails stay queued.
-func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.Images, listener *database.Listener, logger *slog.Logger) (*accountLoops, func(), error) {
-	store := storage.Config{
-		Endpoint: os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"), Region: os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
-		Bucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"), LayerBucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
-		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
-	}
-	if err := store.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("workspace deletion needs the object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
-	}
+// newAccountLoops reads the Resend settings from the environment. Without
+// LAZYCLOUD_RESEND_API_KEY emails stay queued.
+func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.Images, store *storage.Storage, listener *database.Listener, logger *slog.Logger) (*accountLoops, func()) {
 	var sender *notifications.Resend
 	if key := os.Getenv("LAZYCLOUD_RESEND_API_KEY"); key != "" {
 		from := os.Getenv("LAZYCLOUD_RESEND_FROM")
@@ -73,13 +63,13 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.I
 		notifications: notifications.NewNotifications(pool, sender, logger),
 		execution:     exec,
 		images:        im,
-		storage:       storage.NewStorage(pool, store),
+		storage:       store,
 		deliver:       sender != nil,
 		emailWake:     emailWake,
 		deletionWake:  deletionWake,
 		logger:        logger,
 	}
-	return loops, func() { cancelEmail(); cancelDeletion() }, nil
+	return loops, func() { cancelEmail(); cancelDeletion() }
 }
 
 func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace, beats *heartbeats) {
@@ -142,9 +132,9 @@ func (a *accountLoops) deleteWorkspaces(ctx context.Context) (more bool) {
 		if live > 0 {
 			continue
 		}
-		empty, err := a.storage.DeleteWorkspaceObjects(ctx, ws.ID)
+		empty, err := a.storage.DeleteWorkspaceStorage(ctx, ws.ID)
 		if err != nil {
-			a.logger.ErrorContext(ctx, "delete workspace objects", "workspace", ws.Name, "error", err)
+			a.logger.ErrorContext(ctx, "delete workspace storage", "workspace", ws.Name, "error", err)
 			continue
 		}
 		if !empty {

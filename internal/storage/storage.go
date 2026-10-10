@@ -2,7 +2,8 @@
 // volumes, disks, artifacts, queues and maps. PostgreSQL holds metadata and
 // authority; an S3-compatible object store holds the bytes. Each workspace's
 // volumes and disks live in a bucket of their own, so a host can be given
-// short-lived credentials that reach one workspace alone.
+// short-lived credentials that reach one workspace alone; a workspace in a
+// connected AWS account keeps that bucket in the account.
 package storage
 
 import (
@@ -22,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -88,13 +90,20 @@ type Storage struct {
 	// for its own region.
 	replicas map[string]layerReplica
 	config   Config
-	buckets  bucketProvider
+	// buckets is the provider of the platform's workspace buckets.
+	buckets bucketProvider
+	// connections reaches connected AWS accounts, which hold the buckets
+	// of the workspaces that live in them.
+	connections *compute.Compute
+	accounts    *accountClients
 	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
 	orphanAge time.Duration
 }
 
 // NewStorage returns the storage owner over pool and the configured bucket.
-func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
+// connections reaches the connected accounts whose workspaces keep their
+// volumes and disks there; without it such workspaces have none.
+func NewStorage(pool *pgxpool.Pool, cfg Config, connections *compute.Compute) *Storage {
 	var endpoint *string
 	if cfg.Endpoint != "" {
 		endpoint = aws.String(cfg.Endpoint)
@@ -116,7 +125,8 @@ func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
 	}
 	return &Storage{
 		pool: pool, queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket,
-		layers: cfg.LayerBucket, replicas: replicas, config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
+		layers: cfg.LayerBucket, replicas: replicas, config: cfg, buckets: newBucketProvider(cfg), connections: connections,
+		accounts: &accountClients{clients: map[accountRegion]objectClient{}}, orphanAge: orphanAge,
 	}
 }
 
@@ -166,7 +176,7 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 		return SourceUpload{Present: true}, nil
 	}
 
-	lifetime, err := s.signedLifetime(ctx, uploadURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.client, uploadURLLifetime)
 	if err != nil {
 		return SourceUpload{}, err
 	}
@@ -217,7 +227,7 @@ func (s *Storage) storedMatches(ctx context.Context, key string, digest Digest, 
 
 // SourceURL is a presigned GET for a workspace's source archive.
 func (s *Storage) SourceURL(ctx context.Context, workspace identity.WorkspaceID, digest Digest) (string, time.Time, error) {
-	lifetime, err := s.signedLifetime(ctx, downloadURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.client, downloadURLLifetime)
 	if err != nil {
 		return "", time.Time{}, err
 	}

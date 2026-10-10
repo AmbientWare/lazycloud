@@ -245,7 +245,7 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	exec := execution.NewExecution(pool)
-	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore))
+	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore, nil))
 	source, err := im.ManagedSource(ctx, pythonVersion)
 	if err != nil {
 		return err
@@ -306,7 +306,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
-		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore),
+		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore, nil),
 		execution: execution.NewExecution(pool), ctx: ctx, wg: &wg, logger: logger, tel: tel,
 	}
 	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})

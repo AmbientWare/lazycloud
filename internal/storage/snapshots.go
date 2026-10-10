@@ -25,7 +25,7 @@ func snapshotKey(workspace identity.WorkspaceID, id uuid.UUID) string {
 
 // SnapshotUploadURL is where a host PUTs a snapshot's archive.
 func (s *Storage) SnapshotUploadURL(ctx context.Context, workspace identity.WorkspaceID, id uuid.UUID) (string, error) {
-	lifetime, err := s.signedLifetime(ctx, snapshotURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.client, snapshotURLLifetime)
 	if err != nil {
 		return "", err
 	}
@@ -41,7 +41,7 @@ func (s *Storage) SnapshotUploadURL(ctx context.Context, workspace identity.Work
 // SnapshotDownloadURL is where a host GETs a snapshot's archive to restore
 // it.
 func (s *Storage) SnapshotDownloadURL(ctx context.Context, workspace identity.WorkspaceID, id uuid.UUID) (string, error) {
-	lifetime, err := s.signedLifetime(ctx, snapshotURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.client, snapshotURLLifetime)
 	if err != nil {
 		return "", err
 	}

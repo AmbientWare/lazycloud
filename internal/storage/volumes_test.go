@@ -118,7 +118,7 @@ func TestBrowserUploadsFromTheDashboard(t *testing.T) {
 	var s *Storage
 	cfg := withLinks(t, func() *Storage { return s })
 	cfg.BrowserOrigin = "https://dashboard.test/"
-	s = NewStorage(f.pool, cfg)
+	s = NewStorage(f.pool, cfg, nil)
 	if _, err := s.CreateVolume(ctx, f.ws, "data"); err != nil {
 		t.Fatal(err)
 	}

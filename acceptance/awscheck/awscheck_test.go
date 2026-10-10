@@ -36,19 +36,20 @@ import (
 
 const mountImage = "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 
-// env is run.sh's: the role host grants assume, the prefix every bucket of
-// the run starts with, the run's tag and the region.
+// env is run.sh's: the platform account, the role host grants assume, the
+// prefix every bucket of the run starts with, the run's tag and the region.
 type env struct {
-	role, prefix, run, region string
+	account, role, prefix, run, region string
 }
 
 func checkEnv(t *testing.T) env {
 	t.Helper()
 	e := env{
-		role: os.Getenv("LAZYCLOUD_AWS_CHECK_ROLE_ARN"), prefix: os.Getenv("LAZYCLOUD_AWS_CHECK_PREFIX"),
+		account: os.Getenv("LAZYCLOUD_AWS_CHECK_ACCOUNT"),
+		role:    os.Getenv("LAZYCLOUD_AWS_CHECK_ROLE_ARN"), prefix: os.Getenv("LAZYCLOUD_AWS_CHECK_PREFIX"),
 		run: os.Getenv("LAZYCLOUD_AWS_CHECK_RUN"), region: os.Getenv("AWS_REGION"),
 	}
-	if e.role == "" || e.prefix == "" || e.run == "" || e.region == "" {
+	if e.account == "" || e.role == "" || e.prefix == "" || e.run == "" || e.region == "" {
 		t.Skip("acceptance/awscheck/run.sh sets up the AWS check")
 	}
 	return e
@@ -124,8 +125,8 @@ func TestHostGrantMountsAVolume(t *testing.T) {
 	pool := dbtest.New(t)
 	store := storage.NewStorage(pool, storage.Config{
 		Region:     e.region,
-		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, RoleARN: e.role},
-	})
+		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
+	}, nil)
 	var ws uuid.UUID
 	if err := pool.QueryRow(ctx, "insert into workspaces (name) values ('aws-check') returning id").Scan(&ws); err != nil {
 		t.Fatal(err)

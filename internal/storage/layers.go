@@ -74,7 +74,7 @@ func (s *Storage) PresignLayerUpload(ctx context.Context, id uuid.UUID, uploadID
 	if parts > maxParts {
 		return LayerUpload{}, invalid("a %d byte layer needs more than %d parts", dataBytes, maxParts)
 	}
-	lifetime, err := s.signedLifetime(ctx, lifetime)
+	lifetime, err := s.signedLifetime(ctx, s.client, lifetime)
 	if err != nil {
 		return LayerUpload{}, err
 	}
@@ -87,7 +87,7 @@ func (s *Storage) PresignLayerUpload(ctx context.Context, id uuid.UUID, uploadID
 	out := LayerUpload{Index: index.URL, DataParts: make([]string, parts)}
 	for n := range parts {
 		size := min(LayerPartBytes, dataBytes-n*LayerPartBytes)
-		if out.DataParts[n], err = s.presignPart(ctx, s.layers, layerKey(id, LayerData), uploadID, int32(n+1), &size, lifetime); err != nil { //nolint:gosec // At most maxParts.
+		if out.DataParts[n], err = s.presignPart(ctx, s.layerBucket(), layerKey(id, LayerData), uploadID, int32(n+1), &size, lifetime); err != nil { //nolint:gosec // At most maxParts.
 			return LayerUpload{}, fmt.Errorf("presign layer upload: %w", err)
 		}
 	}
@@ -105,7 +105,7 @@ func (s *Storage) CompleteLayerUpload(ctx context.Context, id uuid.UUID, uploadI
 	for n, etag := range etags {
 		parts[n] = apitypes.CompletedPart{Number: n + 1, Etag: etag}
 	}
-	return s.completeMultipart(ctx, s.layers, layerKey(id, LayerData), uploadID, parts)
+	return s.completeMultipart(ctx, s.layerBucket(), layerKey(id, LayerData), uploadID, parts)
 }
 
 // AbortLayerUpload drops the parts of data upload uploadID. An upload
@@ -114,7 +114,7 @@ func (s *Storage) AbortLayerUpload(ctx context.Context, id uuid.UUID, uploadID s
 	if uploadID == "" {
 		return nil
 	}
-	return s.abortMultipart(ctx, s.layers, layerKey(id, LayerData), uploadID)
+	return s.abortMultipart(ctx, s.layerBucket(), layerKey(id, LayerData), uploadID)
 }
 
 // layerReplica is the copy of the layer bucket in one region.
@@ -162,7 +162,7 @@ func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerOb
 		}
 		bucket, presign = replica.bucket, replica.presign
 	}
-	lifetime, err := s.signedLifetime(ctx, min(lifetime, maxPresignLifetime))
+	lifetime, err := s.signedLifetime(ctx, s.client, min(lifetime, maxPresignLifetime))
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -213,7 +213,7 @@ func (s *Storage) DeleteLayers(ctx context.Context, ids []uuid.UUID) ([]uuid.UUI
 	for _, id := range ids {
 		keys = append(keys, layerKey(id, LayerIndex), layerKey(id, LayerData))
 	}
-	failed, err := s.tryDeleteKeys(ctx, s.layers, keys)
+	failed, err := s.tryDeleteKeys(ctx, s.layerBucket(), keys)
 	if err != nil {
 		return nil, err
 	}

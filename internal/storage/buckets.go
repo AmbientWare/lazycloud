@@ -20,14 +20,10 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// BucketProvider names the object store that creates workspace buckets and
-// issues credentials scoped to one of them.
+// BucketProvider names the object store that creates the platform's
+// workspace buckets and issues credentials scoped to one of them.
 type BucketProvider string
 
 const (
@@ -39,22 +35,30 @@ const (
 	ProviderAWS BucketProvider = "aws"
 )
 
-// WorkspaceBuckets configures the buckets that hold volumes and disks.
+// WorkspaceBuckets configures the buckets that hold volumes and disks. A
+// workspace on the platform's compute keeps its bucket in the platform's
+// store; one in a connected AWS account keeps it in that account, created
+// and reached through the connection's role.
 type WorkspaceBuckets struct {
 	Provider BucketProvider
-	// Prefix starts every workspace bucket name: <prefix>-<workspace id hex>.
-	// Bucket names are global on AWS, so deployments use distinct prefixes.
+	// Prefix starts every workspace bucket name (bucketName), at most
+	// maxPrefix characters. A connection role manages only the buckets
+	// named <prefix>-<its account id>-*.
 	Prefix string
+	// AccountID is the platform's AWS account, which names its workspace
+	// buckets. AWS needs it.
+	AccountID string
 	// GarageAdminURL and GarageAdminToken reach the Garage admin API.
 	GarageAdminURL   string
 	GarageAdminToken string
 	// RoleARN is the role STS issues host credentials for. Its permissions
-	// must cover every workspace bucket; the session policy narrows them.
+	// must cover every platform workspace bucket; the session policy
+	// narrows them.
 	RoleARN string
 }
 
 // ErrBucketsUnconfigured means volumes and disks were used on a server
-// without a workspace bucket provider.
+// without a workspace bucket provider for the workspace's account.
 var ErrBucketsUnconfigured = errors.New("workspace buckets are not configured")
 
 // grantLifetime is how long host credentials last. Hosts get new ones well
@@ -73,16 +77,17 @@ type Grant struct {
 // bucketProvider creates workspace buckets and scoped credentials. Garage
 // and AWS are the two object stores the platform runs on.
 type bucketProvider interface {
-	// ensureBucket creates the bucket if it is missing and lets the
-	// platform's own key use it.
-	ensureBucket(ctx context.Context, bucket string) error
+	// ensureBucket creates the store's bucket if it is missing and lets
+	// the store's client use it.
+	ensureBucket(ctx context.Context, store workspaceStore) error
 	// issue returns a credential for bucket alone. revocable means the key
 	// must be deleted after it expires.
 	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
-func newBucketProvider(cfg Config, client *s3.Client) bucketProvider {
+// newBucketProvider is the provider of the platform's workspace buckets.
+func newBucketProvider(cfg Config) bucketProvider {
 	switch cfg.Workspaces.Provider {
 	case ProviderGarage:
 		return &garageBuckets{
@@ -90,83 +95,22 @@ func newBucketProvider(cfg Config, client *s3.Client) bucketProvider {
 			platformKey: cfg.AccessKeyID, http: &http.Client{Timeout: 30 * time.Second},
 		}
 	case ProviderAWS:
-		return &awsBuckets{
-			s3: client, region: cfg.Region, roleARN: cfg.Workspaces.RoleARN,
-			sts: sts.New(sts.Options{Region: cfg.Region, Credentials: credentialProvider(cfg)}),
-		}
-	}
-	return nil
-}
-
-func (s *Storage) bucketName(workspace identity.WorkspaceID) string {
-	return s.config.Workspaces.Prefix + "-" + strings.ReplaceAll(uuid.UUID(workspace).String(), "-", "")
-}
-
-// workspaceBucket returns the workspace's bucket, creating it on first use.
-// The row is written after the provider created the bucket, so a recorded
-// bucket always exists. The object store's refusal is a
-// *StoreRefusedError.
-func (s *Storage) workspaceBucket(ctx context.Context, workspace identity.WorkspaceID) (string, error) {
-	bucket, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
-	if err == nil {
-		return bucket, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("read workspace bucket: %w", err)
-	}
-	if s.buckets == nil {
-		return "", ErrBucketsUnconfigured
-	}
-	bucket = s.bucketName(workspace)
-	if err := s.buckets.ensureBucket(ctx, bucket); err != nil {
-		return "", storeError(fmt.Errorf("create workspace bucket: %w", err))
-	}
-	// Hosts and clients upload volume files in parts; the store discards
-	// parts of uploads nobody completed.
-	if _, err := s.client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
-		Bucket: aws.String(bucket),
-		LifecycleConfiguration: &s3types.BucketLifecycleConfiguration{Rules: []s3types.LifecycleRule{{
-			ID: aws.String("abort-incomplete-uploads"), Status: s3types.ExpirationStatusEnabled,
-			Filter:                         &s3types.LifecycleRuleFilter{Prefix: aws.String("")},
-			AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{DaysAfterInitiation: aws.Int32(1)},
-		}}},
-	}); err != nil {
-		return "", storeError(fmt.Errorf("set workspace bucket lifecycle: %w", err))
-	}
-	if err := s.allowBrowser(ctx, bucket); err != nil {
-		return "", storeError(err)
-	}
-	if err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{WorkspaceID: uuid.UUID(workspace), Bucket: bucket}); err != nil {
-		return "", fmt.Errorf("record workspace bucket: %w", err)
-	}
-	return bucket, nil
-}
-
-// AllowBrowserAccess lets the dashboard's pages use presigned requests on
-// the platform bucket, which holds artifacts. Workspace buckets get the same
-// rule when they are created.
-func (s *Storage) AllowBrowserAccess(ctx context.Context) error {
-	return s.allowBrowser(ctx, s.bucket)
-}
-
-// allowBrowser sets the bucket's CORS rule for the dashboard origin: GET,
-// HEAD and PUT of presigned URLs, with ETag readable so multipart uploads
-// can name their parts.
-func (s *Storage) allowBrowser(ctx context.Context, bucket string) error {
-	if s.config.BrowserOrigin == "" {
-		return nil
-	}
-	if _, err := s.client.PutBucketCors(ctx, &s3.PutBucketCorsInput{
-		Bucket: aws.String(bucket),
-		CORSConfiguration: &s3types.CORSConfiguration{CORSRules: []s3types.CORSRule{{
-			AllowedOrigins: []string{strings.TrimRight(s.config.BrowserOrigin, "/")},
-			AllowedMethods: []string{http.MethodGet, http.MethodHead, http.MethodPut},
-			AllowedHeaders: []string{"*"},
-			ExposeHeaders:  []string{"ETag"},
-			MaxAgeSeconds:  aws.Int32(3600),
-		}}},
-	}); err != nil {
-		return fmt.Errorf("allow the dashboard on bucket %s: %w", bucket, err)
+		client := sts.New(sts.Options{Region: cfg.Region, Credentials: credentialProvider(cfg)})
+		role := cfg.Workspaces.RoleARN
+		return &awsBuckets{assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
+			out, err := client.AssumeRole(ctx, &sts.AssumeRoleInput{
+				RoleArn: aws.String(role), RoleSessionName: aws.String(session),
+				DurationSeconds: aws.Int32(int32(lifetime.Seconds())), Policy: aws.String(policy),
+			})
+			if err != nil {
+				return aws.Credentials{}, fmt.Errorf("assume %s: %w", role, err)
+			}
+			c := out.Credentials
+			return aws.Credentials{
+				AccessKeyID: aws.ToString(c.AccessKeyId), SecretAccessKey: aws.ToString(c.SecretAccessKey),
+				SessionToken: aws.ToString(c.SessionToken), CanExpire: true, Expires: aws.ToTime(c.Expiration),
+			}, nil
+		}}
 	}
 	return nil
 }
@@ -286,7 +230,8 @@ func (g *garageBuckets) bucketID(ctx context.Context, bucket string) (string, er
 	return info.ID, err
 }
 
-func (g *garageBuckets) ensureBucket(ctx context.Context, bucket string) error {
+func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) error {
+	bucket := store.name
 	id, err := g.bucketID(ctx, bucket)
 	var missing *garageError
 	if errors.As(err, &missing) && missing.Status == http.StatusNotFound {
@@ -338,27 +283,27 @@ func (g *garageBuckets) revoke(ctx context.Context, accessKeyID string) error {
 	return err
 }
 
+// awsBuckets creates S3 buckets and issues host credentials by assuming a
+// role with a session policy limited to one bucket: the platform's
+// workspace storage role, or a connected account's connection role.
 type awsBuckets struct {
-	s3      *s3.Client
-	sts     *sts.Client
-	region  string
-	roleARN string
+	assume func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error)
 }
 
-func (a *awsBuckets) ensureBucket(ctx context.Context, bucket string) error {
-	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
-	if a.region != "" && a.region != "us-east-1" {
+func (a *awsBuckets) ensureBucket(ctx context.Context, store workspaceStore) error {
+	input := &s3.CreateBucketInput{Bucket: aws.String(store.name)}
+	if store.region != "us-east-1" {
 		input.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
-			LocationConstraint: s3types.BucketLocationConstraint(a.region),
+			LocationConstraint: s3types.BucketLocationConstraint(store.region),
 		}
 	}
-	_, err := a.s3.CreateBucket(ctx, input)
+	_, err := store.client.CreateBucket(ctx, input)
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "BucketAlreadyOwnedByYou" {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("create bucket %s: %w", bucket, err)
+		return fmt.Errorf("create bucket %s: %w", store.name, err)
 	}
 	return nil
 }
@@ -368,19 +313,13 @@ func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime ti
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
-	out, err := a.sts.AssumeRole(ctx, &sts.AssumeRoleInput{
-		RoleArn:         aws.String(a.roleARN),
-		RoleSessionName: aws.String(name),
-		DurationSeconds: aws.Int32(int32(lifetime.Seconds())),
-		Policy:          aws.String(string(policy)),
-	})
+	creds, err := a.assume(ctx, name, string(policy), lifetime)
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
 	}
-	c := out.Credentials
 	return Grant{
-		Location: Location{Bucket: bucket}, AccessKeyID: aws.ToString(c.AccessKeyId), SecretAccessKey: aws.ToString(c.SecretAccessKey),
-		SessionToken: aws.ToString(c.SessionToken), ExpiresAt: aws.ToTime(c.Expiration),
+		Location: Location{Bucket: bucket}, AccessKeyID: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey,
+		SessionToken: creds.SessionToken, ExpiresAt: creds.Expires,
 	}, false, nil
 }
 

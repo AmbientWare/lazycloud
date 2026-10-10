@@ -36,7 +36,7 @@ func putPart(t *testing.T, url string, body []byte) (int, string) {
 // whole; a part or index of any other length than signed is refused, and an
 // aborted upload stores nothing.
 func TestLayerDataUploadsInSignedParts(t *testing.T) {
-	store := NewStorage(dbtest.New(t), storagetest.Config(t))
+	store := NewStorage(dbtest.New(t), storagetest.Config(t), nil)
 	ctx := t.Context()
 	data := make([]byte, 2*LayerPartBytes+1234)
 	if _, err := rand.Read(data); err != nil {

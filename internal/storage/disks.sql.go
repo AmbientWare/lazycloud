@@ -180,7 +180,7 @@ func (q *Queries) DeleteDiskRow(ctx context.Context, id uuid.UUID) error {
 }
 
 const deletingDisks = `-- name: DeletingDisks :many
-select d.id, coalesce(b.bucket, '')::text as bucket
+select d.id, b.bucket, b.region, b.connection_id
 from disks d
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.state = 'deleting'
@@ -189,8 +189,10 @@ limit $1
 `
 
 type DeletingDisksRow struct {
-	ID     uuid.UUID
-	Bucket string
+	ID           uuid.UUID
+	Bucket       *string
+	Region       *string
+	ConnectionID *uuid.UUID
 }
 
 func (q *Queries) DeletingDisks(ctx context.Context, maxRows int32) ([]DeletingDisksRow, error) {
@@ -202,7 +204,12 @@ func (q *Queries) DeletingDisks(ctx context.Context, maxRows int32) ([]DeletingD
 	var items []DeletingDisksRow
 	for rows.Next() {
 		var i DeletingDisksRow
-		if err := rows.Scan(&i.ID, &i.Bucket); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Bucket,
+			&i.Region,
+			&i.ConnectionID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -452,7 +459,7 @@ func (q *Queries) LockActiveDisk(ctx context.Context, arg LockActiveDiskParams) 
 }
 
 const lockLeasedDisk = `-- name: LockLeasedDisk :one
-select d.id, d.generation, coalesce(b.bucket, '')::text as bucket
+select d.id, d.generation, b.bucket, b.region, b.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
@@ -471,9 +478,11 @@ type LockLeasedDiskParams struct {
 }
 
 type LockLeasedDiskRow struct {
-	ID         uuid.UUID
-	Generation int64
-	Bucket     string
+	ID           uuid.UUID
+	Generation   int64
+	Bucket       *string
+	Region       *string
+	ConnectionID *uuid.UUID
 }
 
 // The disk only while container holds it with token: it has not stopped,
@@ -487,7 +496,13 @@ func (q *Queries) LockLeasedDisk(ctx context.Context, arg LockLeasedDiskParams) 
 		arg.HostID,
 	)
 	var i LockLeasedDiskRow
-	err := row.Scan(&i.ID, &i.Generation, &i.Bucket)
+	err := row.Scan(
+		&i.ID,
+		&i.Generation,
+		&i.Bucket,
+		&i.Region,
+		&i.ConnectionID,
+	)
 	return i, err
 }
 

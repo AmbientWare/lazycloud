@@ -73,7 +73,7 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 		return apitypes.ArtifactUpload{}, fmt.Errorf("artifact id: %w", err)
 	}
 	key := artifactKey(workspace, id)
-	lifetime, err := s.signedLifetime(ctx, uploadLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.client, uploadLifetime)
 	if err != nil {
 		return apitypes.ArtifactUpload{}, err
 	}
@@ -90,7 +90,7 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 		}
 		upload.Parts = []apitypes.UploadPart{{Number: 1, Offset: 0, SizeBytes: req.SizeBytes, Url: r.URL}}
 	} else {
-		uploadID, parts, err := s.startMultipart(ctx, s.bucket, key, contentType, req.SizeBytes, artifactPartBytes, lifetime)
+		uploadID, parts, err := s.startMultipart(ctx, s.platformBucket(), key, contentType, req.SizeBytes, artifactPartBytes, lifetime)
 		if err != nil {
 			return apitypes.ArtifactUpload{}, err
 		}
@@ -106,7 +106,7 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 	})
 	if err != nil {
 		if upload.UploadId != nil {
-			err = errors.Join(err, s.abortMultipart(context.WithoutCancel(ctx), s.bucket, key, *upload.UploadId))
+			err = errors.Join(err, s.abortMultipart(context.WithoutCancel(ctx), s.platformBucket(), key, *upload.UploadId))
 		}
 		return apitypes.ArtifactUpload{}, fmt.Errorf("record artifact: %w", err)
 	}
@@ -137,7 +137,7 @@ func (s *Storage) CompleteArtifact(ctx context.Context, workspace identity.Works
 			if len(parts) == 0 {
 				return invalid("a multipart artifact needs its part ETags")
 			}
-			if err := s.completeMultipart(ctx, s.bucket, key, *row.UploadID, parts); err != nil {
+			if err := s.completeMultipart(ctx, s.platformBucket(), key, *row.UploadID, parts); err != nil {
 				return err
 			}
 		}
@@ -265,8 +265,8 @@ func (s *Storage) PresignArtifact(ctx context.Context, workspace identity.Worksp
 		disposition = "attachment"
 	}
 	expires := time.Now().Add(lifetime)
-	url, err := s.linkURL(ctx, link{
-		Bucket: s.bucket, Key: artifactKey(workspace, id), ContentType: row.ContentType,
+	url, err := s.linkURL(ctx, s.platformBucket(), link{
+		Key: artifactKey(workspace, id), ContentType: row.ContentType,
 		Disposition: mime.FormatMediaType(disposition, map[string]string{"filename": row.Filename}), Expires: expires.Unix(),
 	})
 	if err != nil {
@@ -291,12 +291,12 @@ func (s *Storage) DeleteArtifacts(ctx context.Context, workspace identity.Worksp
 			deleted[n] = row.ID
 			keys[n] = artifactKey(workspace, row.ID)
 			if row.UploadID != nil {
-				if err := s.abortMultipart(ctx, s.bucket, keys[n], *row.UploadID); err != nil {
+				if err := s.abortMultipart(ctx, s.platformBucket(), keys[n], *row.UploadID); err != nil {
 					return err
 				}
 			}
 		}
-		return s.deleteKeys(ctx, s.bucket, keys)
+		return s.deleteKeys(ctx, s.platformBucket(), keys)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("delete artifacts: %w", err)

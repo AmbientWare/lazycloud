@@ -44,6 +44,23 @@ func (q *Queries) ActiveVolume(ctx context.Context, arg ActiveVolumeParams) (Act
 	return i, err
 }
 
+const bucketByName = `-- name: BucketByName :one
+select bucket, region, connection_id from workspace_buckets where bucket = $1
+`
+
+type BucketByNameRow struct {
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
+}
+
+func (q *Queries) BucketByName(ctx context.Context, bucket string) (BucketByNameRow, error) {
+	row := q.db.QueryRow(ctx, bucketByName, bucket)
+	var i BucketByNameRow
+	err := row.Scan(&i.Bucket, &i.Region, &i.ConnectionID)
+	return i, err
+}
+
 const claimOrphanCheck = `-- name: ClaimOrphanCheck :one
 update workspace_buckets
 set orphans_checked_at = now()
@@ -54,12 +71,14 @@ where workspace_id = (
     limit 1
     for update skip locked
 )
-returning workspace_id, bucket
+returning workspace_id, bucket, region, connection_id
 `
 
 type ClaimOrphanCheckRow struct {
-	WorkspaceID uuid.UUID
-	Bucket      string
+	WorkspaceID  uuid.UUID
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
 }
 
 // A workspace bucket whose orphaned prefixes were not checked for an hour;
@@ -67,7 +86,12 @@ type ClaimOrphanCheckRow struct {
 func (q *Queries) ClaimOrphanCheck(ctx context.Context) (ClaimOrphanCheckRow, error) {
 	row := q.db.QueryRow(ctx, claimOrphanCheck)
 	var i ClaimOrphanCheckRow
-	err := row.Scan(&i.WorkspaceID, &i.Bucket)
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Bucket,
+		&i.Region,
+		&i.ConnectionID,
+	)
 	return i, err
 }
 
@@ -89,8 +113,17 @@ func (q *Queries) DeleteVolumeRow(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const deleteWorkspaceBucket = `-- name: DeleteWorkspaceBucket :exec
+delete from workspace_buckets where workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceBucket, workspaceID)
+	return err
+}
+
 const deletingVolumes = `-- name: DeletingVolumes :many
-select v.id, v.workspace_id, coalesce(b.bucket, '')::text as bucket
+select v.id, v.workspace_id, b.bucket, b.region, b.connection_id
 from volumes v
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
@@ -99,9 +132,11 @@ limit $1
 `
 
 type DeletingVolumesRow struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	Bucket      string
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	Bucket       *string
+	Region       *string
+	ConnectionID *uuid.UUID
 }
 
 func (q *Queries) DeletingVolumes(ctx context.Context, maxRows int32) ([]DeletingVolumesRow, error) {
@@ -113,7 +148,13 @@ func (q *Queries) DeletingVolumes(ctx context.Context, maxRows int32) ([]Deletin
 	var items []DeletingVolumesRow
 	for rows.Next() {
 		var i DeletingVolumesRow
-		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.Bucket); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Bucket,
+			&i.Region,
+			&i.ConnectionID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -240,17 +281,25 @@ func (q *Queries) InsertVolumeMount(ctx context.Context, arg InsertVolumeMountPa
 }
 
 const insertWorkspaceBucket = `-- name: InsertWorkspaceBucket :exec
-insert into workspace_buckets (workspace_id, bucket) values ($1, $2)
+insert into workspace_buckets (workspace_id, bucket, region, connection_id)
+values ($1, $2, $3, $4)
 on conflict (workspace_id) do nothing
 `
 
 type InsertWorkspaceBucketParams struct {
-	WorkspaceID uuid.UUID
-	Bucket      string
+	WorkspaceID  uuid.UUID
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
 }
 
 func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) error {
-	_, err := q.db.Exec(ctx, insertWorkspaceBucket, arg.WorkspaceID, arg.Bucket)
+	_, err := q.db.Exec(ctx, insertWorkspaceBucket,
+		arg.WorkspaceID,
+		arg.Bucket,
+		arg.Region,
+		arg.ConnectionID,
+	)
 	return err
 }
 
@@ -476,7 +525,7 @@ func (q *Queries) VolumeUsers(ctx context.Context, arg VolumeUsersParams) ([]Vol
 }
 
 const volumesToMeasure = `-- name: VolumesToMeasure :many
-select v.id, b.bucket
+select v.id, b.bucket, b.region, b.connection_id
 from volumes v
 join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
@@ -491,8 +540,10 @@ type VolumesToMeasureParams struct {
 }
 
 type VolumesToMeasureRow struct {
-	ID     uuid.UUID
-	Bucket string
+	ID           uuid.UUID
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
 }
 
 func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasureParams) ([]VolumesToMeasureRow, error) {
@@ -504,7 +555,12 @@ func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasurePara
 	var items []VolumesToMeasureRow
 	for rows.Next() {
 		var i VolumesToMeasureRow
-		if err := rows.Scan(&i.ID, &i.Bucket); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Bucket,
+			&i.Region,
+			&i.ConnectionID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -516,12 +572,30 @@ func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasurePara
 }
 
 const workspaceBucket = `-- name: WorkspaceBucket :one
-select bucket from workspace_buckets where workspace_id = $1
+select bucket, region, connection_id from workspace_buckets where workspace_id = $1
 `
 
-func (q *Queries) WorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+type WorkspaceBucketRow struct {
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
+}
+
+func (q *Queries) WorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) (WorkspaceBucketRow, error) {
 	row := q.db.QueryRow(ctx, workspaceBucket, workspaceID)
-	var bucket string
-	err := row.Scan(&bucket)
-	return bucket, err
+	var i WorkspaceBucketRow
+	err := row.Scan(&i.Bucket, &i.Region, &i.ConnectionID)
+	return i, err
+}
+
+const workspaceConnection = `-- name: WorkspaceConnection :one
+select connection_id from workspaces where id = $1
+`
+
+// The connected account the workspace lives in; null is the platform's.
+func (q *Queries) WorkspaceConnection(ctx context.Context, id uuid.UUID) (*uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, workspaceConnection, id)
+	var connection_id *uuid.UUID
+	err := row.Scan(&connection_id)
+	return connection_id, err
 }

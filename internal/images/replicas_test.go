@@ -100,7 +100,7 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	cfg := replicated(t)
-	store := storage.NewStorage(pool, cfg)
+	store := storage.NewStorage(pool, cfg, nil)
 	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
 	reference := "registry.test/lazycloud/images/regional@sha256:" + hex64("1")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("base layer"), []byte("app layer")})
@@ -172,10 +172,10 @@ func TestReplicaChecksRunOncePerLayerAcrossServers(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	cfg := replicated(t)
-	store := storage.NewStorage(pool, cfg)
+	store := storage.NewStorage(pool, cfg, nil)
 	servers := []*images.Images{
 		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{}),
-		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg), images.Config{}),
+		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg, nil), images.Config{}),
 	}
 	reference := "registry.test/lazycloud/images/deduped@sha256:" + hex64("2")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("one"), []byte("two"), []byte("three")})

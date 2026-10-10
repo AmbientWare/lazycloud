@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jackc/pgx/v5"
 )
 
 // A SigV4 presigned URL dies with the credentials that signed it, and the
@@ -47,16 +48,17 @@ type link struct {
 	Expires     int64  `json:"e"`
 }
 
-// linkURL returns the link for l, bound to the object's current version.
-func (s *Storage) linkURL(ctx context.Context, l link) (string, error) {
+// linkURL returns the link for l in bucket b, bound to the object's
+// current version.
+func (s *Storage) linkURL(ctx context.Context, b bucketClient, l link) (string, error) {
 	if s.config.Links.URL == "" || len(s.config.Links.Key) == 0 {
 		return "", errors.New("download links are not configured")
 	}
-	etag, err := s.objectETag(ctx, l.Bucket, l.Key)
+	etag, err := s.objectETag(ctx, b, l.Key)
 	if err != nil {
 		return "", err
 	}
-	l.ETag = etag
+	l.Bucket, l.ETag = b.name, etag
 	payload, err := json.Marshal(l)
 	if err != nil {
 		return "", fmt.Errorf("encode link: %w", err)
@@ -92,44 +94,65 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 	if left <= 0 {
 		return "", ErrNotFound
 	}
+	b, err := s.linkBucket(ctx, l.Bucket)
+	if err != nil {
+		return "", err
+	}
 	// The object must still be the one the link was made for. It could be
 	// replaced in the moments before the client follows the redirect.
-	etag, err := s.objectETag(ctx, l.Bucket, l.Key)
+	etag, err := s.objectETag(ctx, b, l.Key)
 	if err != nil {
 		return "", err
 	}
 	if etag == "" || etag != l.ETag {
 		return "", ErrNotFound
 	}
-	lifetime, err := s.signedLifetime(ctx, min(linkRedirect, left))
+	lifetime, err := s.signedLifetime(ctx, b.client, min(linkRedirect, left))
 	if err != nil {
 		return "", err
 	}
 	expires := s3.WithPresignExpires(lifetime)
 	if head {
-		r, err := s.presign.PresignHeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(l.Bucket), Key: aws.String(l.Key)}, expires)
+		r, err := b.presign.PresignHeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.name), Key: aws.String(l.Key)}, expires)
 		if err != nil {
 			return "", fmt.Errorf("presign link head: %w", err)
 		}
 		return r.URL, nil
 	}
-	input := &s3.GetObjectInput{Bucket: aws.String(l.Bucket), Key: aws.String(l.Key)}
+	input := &s3.GetObjectInput{Bucket: aws.String(b.name), Key: aws.String(l.Key)}
 	if l.ContentType != "" {
 		input.ResponseContentType = aws.String(l.ContentType)
 	}
 	if l.Disposition != "" {
 		input.ResponseContentDisposition = aws.String(l.Disposition)
 	}
-	r, err := s.presign.PresignGetObject(ctx, input, expires)
+	r, err := b.presign.PresignGetObject(ctx, input, expires)
 	if err != nil {
 		return "", fmt.Errorf("presign link get: %w", err)
 	}
 	return r.URL, nil
 }
 
-// objectETag is the ETag of bucket/key, or "" when nothing is there.
-func (s *Storage) objectETag(ctx context.Context, bucket, key string) (string, error) {
-	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+// linkBucket is the bucket a link names: the platform bucket or a
+// workspace bucket. A workspace bucket that is gone is ErrNotFound.
+func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, error) {
+	if name == s.bucket {
+		return s.platformBucket(), nil
+	}
+	row, err := s.queries.BucketByName(ctx, name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return bucketClient{}, ErrNotFound
+	}
+	if err != nil {
+		return bucketClient{}, fmt.Errorf("read link bucket: %w", err)
+	}
+	store, err := s.storeOf(row.Bucket, row.Region, row.ConnectionID)
+	return store.bucketClient, err
+}
+
+// objectETag is the ETag of key in b, or "" when nothing is there.
+func (s *Storage) objectETag(ctx context.Context, b bucketClient, key string) (string, error) {
+	head, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.name), Key: aws.String(key)})
 	// HEAD has no body, so a missing bucket is NotFound too.
 	if isNotFound(err) {
 		return "", nil
@@ -140,13 +163,13 @@ func (s *Storage) objectETag(ctx context.Context, bucket, key string) (string, e
 	return aws.ToString(head.ETag), nil
 }
 
-// signedLifetime is want, capped at how long the credentials that sign a
-// presigned URL now stay valid, a minute spared. Expiring credentials come
+// signedLifetime is want, capped at how long client's credentials, which
+// sign a presigned URL, now stay valid, a minute spared. Expiring credentials come
 // from the default chain's cache, which reports them credentialWindow
 // before they expire and renews them then, so a URL lasts at least the
 // window less that minute.
-func (s *Storage) signedLifetime(ctx context.Context, want time.Duration) (time.Duration, error) {
-	provider := s.client.Options().Credentials
+func (s *Storage) signedLifetime(ctx context.Context, client *s3.Client, want time.Duration) (time.Duration, error) {
+	provider := client.Options().Credentials
 	creds, err := provider.Retrieve(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("object store credentials: %w", err)

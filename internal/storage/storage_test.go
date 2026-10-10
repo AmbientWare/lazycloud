@@ -49,7 +49,7 @@ func put(t *testing.T, target *UploadTarget, body []byte) int {
 func TestSourceRegistration(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	s := NewStorage(pool, storagetest.Config(t))
+	s := NewStorage(pool, storagetest.Config(t), nil)
 	ws := workspace(t, pool)
 
 	archive := make([]byte, 4096)

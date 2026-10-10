@@ -103,9 +103,11 @@ data "aws_iam_policy_document" "control_plane" {
     resources = [for arn in local.layer_replica_arns : "${arn}/*"]
   }
 
+  # The server creates a workspace's bucket on first use and deletes it with
+  # the workspace.
   statement {
-    sid       = "CreateWorkspaceBuckets"
-    actions   = ["s3:CreateBucket", "s3:PutLifecycleConfiguration"]
+    sid       = "WorkspaceBucketLifetime"
+    actions   = ["s3:CreateBucket", "s3:PutLifecycleConfiguration", "s3:DeleteBucket"]
     resources = [local.workspace_bucket_arn]
   }
 

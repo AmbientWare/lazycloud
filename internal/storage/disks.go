@@ -128,11 +128,11 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 		return DiskLease{}, invalid("disk %s size %d is not a multiple of 4096 between 1Gi and 1Ti", name, declared.SizeBytes)
 	}
 	workspace := identity.WorkspaceID(declared.WorkspaceID)
-	bucket, err := s.workspaceBucket(ctx, workspace)
+	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
 		return DiskLease{}, err
 	}
-	lease := DiskLease{Workspace: workspace, Bucket: bucket}
+	lease := DiskLease{Workspace: workspace, Bucket: store.name}
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
 		// Creating or growing a disk is held to the plan's disk allowance.
@@ -269,10 +269,14 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 			return invalid("base generation %d is past the recorded generation %d", base, row.Generation)
 		}
 		if len(keys) > 0 {
-			if row.Bucket == "" {
+			store, ok, err := s.storeAt(row.Bucket, row.Region, row.ConnectionID)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				return invalid("disk %s has no workspace bucket", disk)
 			}
-			if err := s.deleteKeys(ctx, row.Bucket, keys); err != nil {
+			if err := s.deleteKeys(ctx, store.bucketClient, keys); err != nil {
 				return fmt.Errorf("delete collected objects: %w", err)
 			}
 		}

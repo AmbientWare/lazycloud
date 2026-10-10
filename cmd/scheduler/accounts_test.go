@@ -33,7 +33,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
-	store := storage.NewStorage(pool, storagetest.Config(t))
+	store := storage.NewStorage(pool, storagetest.Config(t), nil)
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
 		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}), storage: store, logger: logger,
@@ -122,7 +122,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	if _, err := ident.GetWorkspace(ctx, admin, "doomed"); err == nil {
 		t.Fatal("workspace remains")
 	}
-	if empty, err := store.DeleteWorkspaceObjects(ctx, doomed.ID); err != nil || !empty {
+	if empty, err := store.DeleteWorkspaceStorage(ctx, doomed.ID); err != nil || !empty {
 		t.Fatalf("objects left: empty %v err %v", empty, err)
 	}
 	var rows int
@@ -151,7 +151,7 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
-	store := storage.NewStorage(pool, storagetest.Config(t))
+	store := storage.NewStorage(pool, storagetest.Config(t), nil)
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
 		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}),

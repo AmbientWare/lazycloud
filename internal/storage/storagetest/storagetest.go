@@ -41,6 +41,9 @@ const (
 	adminToken      = "local-garage-admin"                                               //nolint:gosec // Development token.
 	// namePrefix starts every test bucket's name.
 	namePrefix = "lazycloud-test-"
+	// platformAccount is the account id the platform's workspace buckets
+	// are named with.
+	platformAccount = "100000000000"
 	// staleAfter outlasts any test binary. Open removes test buckets older
 	// than that, left by a binary that panicked or timed out before its
 	// cleanup ran.
@@ -70,7 +73,8 @@ func Config(t testing.TB) storage.Config {
 func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context) error, err error) {
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
-	// Workspace buckets append a dash and 32 hex digits, within S3's 63.
+	// 23 characters: workspace bucket names append an account id and a
+	// workspace id within S3's 63.
 	prefix := namePrefix + hex.EncodeToString(suffix)
 	admin := garage{url: strings.TrimRight(adminURL(), "/"), http: &http.Client{Timeout: 30 * time.Second}}
 	stale := time.Now().Add(-staleAfter)
@@ -89,6 +93,7 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.ProviderGarage,
 			Prefix:           prefix,
+			AccountID:        platformAccount,
 			GarageAdminURL:   admin.url,
 			GarageAdminToken: adminToken,
 		},
@@ -106,6 +111,39 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 		}
 	}
 	return cfg, remove, nil
+}
+
+// Account is a key of the test Garage that stands in for a connected AWS
+// account's role: it creates buckets through the S3 API and reaches only
+// the buckets it created, so the platform's key cannot reach them.
+type Account struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	// Region is the test Garage's, where the account's buckets go.
+	Region string
+}
+
+// ConnectedAccount creates a key standing in for a connected account and
+// deletes it when t ends. Buckets the key creates under Config's prefix go
+// with Config's.
+func ConnectedAccount(t testing.TB) Account {
+	t.Helper()
+	admin := garage{url: strings.TrimRight(adminURL(), "/"), http: &http.Client{Timeout: 30 * time.Second}}
+	var key struct {
+		AccessKeyID     string `json:"accessKeyId"`
+		SecretAccessKey string `json:"secretAccessKey"`
+	}
+	if err := admin.call(t.Context(), http.MethodPost, "CreateKey", nil, map[string]any{
+		"name": "lazycloud-test-connected", "allow": map[string]bool{"createBucket": true},
+	}, &key); err != nil {
+		t.Fatalf("test object store (docker compose -f compose.test.yaml up -d --wait): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := admin.call(context.Background(), http.MethodPost, "DeleteKey", url.Values{"id": {key.AccessKeyID}}, nil, nil); present(err) != nil {
+			t.Errorf("delete the connected account's key: %v", err)
+		}
+	})
+	return Account{AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, Region: region}
 }
 
 // Client is an S3 client on the test Garage with the development key.
@@ -307,6 +345,13 @@ func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias 
 		} `json:"keys"`
 	}
 	if err := g.call(ctx, http.MethodGet, "GetBucketInfo", url.Values{"id": {id}}, nil, &info); err != nil {
+		return present(err)
+	}
+	// A bucket another key created through the S3 API admits the
+	// development key only once allowed.
+	if err := g.call(ctx, http.MethodPost, "AllowBucketKey", nil, map[string]any{
+		"bucketId": id, "accessKeyId": accessKeyID, "permissions": map[string]bool{"read": true, "write": true, "owner": true},
+	}, nil); err != nil {
 		return present(err)
 	}
 	var errs []error

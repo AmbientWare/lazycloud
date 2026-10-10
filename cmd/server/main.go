@@ -249,6 +249,7 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	cfg.compute.Fleet = fleet
+	cfg.objectStore.Workspaces.AccountID = fleet.AccountID
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
@@ -371,17 +372,17 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	cfg.objectStore.Links = storage.Links{
 		URL: strings.TrimRight(cfg.identity.PublicURL, "/") + api.LinksPath, Key: masterKey.Derive("lazycloud download links"),
 	}
-	store := storage.NewStorage(pool, cfg.objectStore)
+	exec := execution.NewExecution(pool)
+	comp := compute.NewCompute(pool, exec, cfg.compute)
+	store := storage.NewStorage(pool, cfg.objectStore, comp)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
 	// that refuses the rule only costs those browser transfers.
 	if err := store.AllowBrowserAccess(ctx); err != nil {
 		logger.WarnContext(ctx, "dashboard transfers of artifacts will fail", "error", err)
 	}
-	exec := execution.NewExecution(pool)
 	vault := secrets.NewSecrets(pool, masterKey)
 	im := images.NewImages(pool, exec, vault, store, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
-	comp := compute.NewCompute(pool, exec, cfg.compute)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}

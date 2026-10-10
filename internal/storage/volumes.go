@@ -173,7 +173,7 @@ func (s *Storage) MountVolumes(ctx context.Context, workspace identity.Workspace
 	if !platform {
 		return mounts, nil
 	}
-	bucket, err := s.workspaceBucket(ctx, workspace)
+	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func (s *Storage) MountVolumes(ctx context.Context, workspace identity.Workspace
 			if err := q.InsertVolumeMount(ctx, InsertVolumeMountParams{VolumeID: id, ContainerID: container}); err != nil {
 				return fmt.Errorf("record mount of %s: %w", spec.Name, err)
 			}
-			mounts[n].Volume, mounts[n].Bucket, mounts[n].Prefix = &id, bucket, volumePrefix(id)
+			mounts[n].Volume, mounts[n].Bucket, mounts[n].Prefix = &id, store.name, volumePrefix(id)
 		}
 		return nil
 	})
@@ -205,19 +205,19 @@ func (s *Storage) MountVolumes(ctx context.Context, workspace identity.Workspace
 }
 
 // volumeFiles resolves an active volume to its bucket and key prefix.
-func (s *Storage) volumeFiles(ctx context.Context, workspace identity.WorkspaceID, name string) (bucket, prefix string, err error) {
+func (s *Storage) volumeFiles(ctx context.Context, workspace identity.WorkspaceID, name string) (bucketClient, string, error) {
 	row, err := s.queries.ActiveVolume(ctx, ActiveVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: name})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", ErrNotFound
+		return bucketClient{}, "", ErrNotFound
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("read volume: %w", err)
+		return bucketClient{}, "", fmt.Errorf("read volume: %w", err)
 	}
-	bucket, err = s.workspaceBucket(ctx, workspace)
+	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
-		return "", "", err
+		return bucketClient{}, "", err
 	}
-	return bucket, volumePrefix(row.ID), nil
+	return store.bucketClient, volumePrefix(row.ID), nil
 }
 
 // cleanPath normalizes a path relative to the volume root. The root is "".
@@ -271,13 +271,13 @@ func (s *Storage) ListVolumeFiles(ctx context.Context, workspace identity.Worksp
 		listed += rel + "/"
 	}
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket), Prefix: aws.String(listed), Delimiter: aws.String("/"),
+		Bucket: aws.String(bucket.name), Prefix: aws.String(listed), Delimiter: aws.String("/"),
 		MaxKeys: aws.Int32(int32(limit)), //nolint:gosec // The schema caps limit.
 	}
 	if cursor != "" {
 		input.ContinuationToken = aws.String(cursor)
 	}
-	out, err := s.client.ListObjectsV2(ctx, input)
+	out, err := bucket.client.ListObjectsV2(ctx, input)
 	if err != nil {
 		return apitypes.VolumeFilePage{}, fmt.Errorf("list volume files: %w", err)
 	}
@@ -315,15 +315,15 @@ func (s *Storage) StatVolumeFile(ctx context.Context, workspace identity.Workspa
 	return s.statKey(ctx, bucket, prefix, rel)
 }
 
-func (s *Storage) statKey(ctx context.Context, bucket, prefix, rel string) (apitypes.VolumeFile, error) {
-	o, err := head(ctx, s.client, bucket, prefix+rel)
+func (s *Storage) statKey(ctx context.Context, bucket bucketClient, prefix, rel string) (apitypes.VolumeFile, error) {
+	o, err := head(ctx, bucket.client, bucket.name, prefix+rel)
 	if err == nil {
 		return fileOut(prefix, o), nil
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return apitypes.VolumeFile{}, err
 	}
-	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix + rel + "/"), MaxKeys: aws.Int32(1)})
+	out, err := bucket.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket.name), Prefix: aws.String(prefix + rel + "/"), MaxKeys: aws.Int32(1)})
 	if err != nil {
 		return apitypes.VolumeFile{}, fmt.Errorf("stat volume directory: %w", err)
 	}
@@ -334,9 +334,9 @@ func (s *Storage) statKey(ctx context.Context, bucket, prefix, rel string) (apit
 }
 
 // objectsAt lists the object at rel and every object below it.
-func (s *Storage) objectsAt(ctx context.Context, bucket, prefix, rel string) ([]objectInfo, error) {
+func (s *Storage) objectsAt(ctx context.Context, bucket bucketClient, prefix, rel string) ([]objectInfo, error) {
 	var found []objectInfo
-	if o, err := head(ctx, s.client, bucket, prefix+rel); err == nil {
+	if o, err := head(ctx, bucket.client, bucket.name, prefix+rel); err == nil {
 		found = append(found, o)
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
@@ -436,7 +436,7 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 			return apitypes.PresignedUrl{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 		}
 		// A write URL outliving a delete would recreate files.
-		if lifetime, err = s.signedLifetime(ctx, min(lifetime, uploadLifetime)); err != nil {
+		if lifetime, err = s.signedLifetime(ctx, bucket.client, min(lifetime, uploadLifetime)); err != nil {
 			return apitypes.PresignedUrl{}, err
 		}
 	}
@@ -446,15 +446,15 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 	switch req.Method {
 	case apitypes.PresignVolumeFileRequestMethodGet, apitypes.PresignVolumeFileRequestMethodHead:
 		// Reads are links, which the API presigns as they are used.
-		l := link{Bucket: bucket, Key: prefix + rel, Expires: time.Now().Add(lifetime).Unix()}
+		l := link{Key: prefix + rel, Expires: time.Now().Add(lifetime).Unix()}
 		if req.Download != nil && *req.Download {
 			l.Disposition = mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)})
 		}
-		if url, err = s.linkURL(ctx, l); err != nil {
+		if url, err = s.linkURL(ctx, bucket, l); err != nil {
 			return apitypes.PresignedUrl{}, err
 		}
 	case apitypes.PresignVolumeFileRequestMethodPut:
-		r, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: key}, expires)
+		r, err := bucket.presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket.name), Key: key}, expires)
 		if err != nil {
 			return apitypes.PresignedUrl{}, fmt.Errorf("presign put: %w", err)
 		}
@@ -494,7 +494,7 @@ func (s *Storage) CreateVolumeUpload(ctx context.Context, workspace identity.Wor
 	if req.PartSizeBytes != nil {
 		partSize = *req.PartSizeBytes
 	}
-	lifetime, err := s.signedLifetime(ctx, uploadLifetime)
+	lifetime, err := s.signedLifetime(ctx, bucket.client, uploadLifetime)
 	if err != nil {
 		return apitypes.MultipartUpload{}, err
 	}

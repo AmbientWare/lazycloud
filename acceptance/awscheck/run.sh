@@ -77,5 +77,5 @@ for _ in $(seq 30); do
 done
 
 cd "$root"
-LAZYCLOUD_AWS_CHECK_ROLE_ARN="$role_arn" LAZYCLOUD_AWS_CHECK_PREFIX="$prefix" LAZYCLOUD_AWS_CHECK_RUN="$run" \
+LAZYCLOUD_AWS_CHECK_ACCOUNT="$account" LAZYCLOUD_AWS_CHECK_ROLE_ARN="$role_arn" LAZYCLOUD_AWS_CHECK_PREFIX="$prefix" LAZYCLOUD_AWS_CHECK_RUN="$run" \
   go test -count=1 -v -timeout 20m ./acceptance/awscheck

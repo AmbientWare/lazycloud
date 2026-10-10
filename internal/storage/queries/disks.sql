@@ -46,7 +46,7 @@ order by g.generation;
 -- The disk only while container holds it with token: it has not stopped,
 -- or it stopped on a live host and has not released the disk yet, which is
 -- when its host publishes the final generation.
-select d.id, d.generation, coalesce(b.bucket, '')::text as bucket
+select d.id, d.generation, b.bucket, b.region, b.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
@@ -121,7 +121,7 @@ where d.workspace_id = @workspace_id and d.state = 'active' and d.name = @name;
 update disks set state = 'deleting', deleted_at = now(), updated_at = now() where id = @id;
 
 -- name: DeletingDisks :many
-select d.id, coalesce(b.bucket, '')::text as bucket
+select d.id, b.bucket, b.region, b.connection_id
 from disks d
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.state = 'deleting'

@@ -85,7 +85,7 @@ func TestDefaultChainWithoutSourceFails(t *testing.T) {
 func TestConfigValidation(t *testing.T) {
 	ok := []Config{
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l"},
-		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, RoleARN: "arn:aws:iam::1:role/hosts"}},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, Prefix: "lazycloud-prod-workspace", AccountID: "123456789012", RoleARN: "arn:aws:iam::1:role/hosts"}},
 		{Endpoint: "http://garage", Region: "garage", Bucket: "b", LayerBucket: "l", AccessKeyID: "k", SecretAccessKey: "s",
 			Workspaces: WorkspaceBuckets{Provider: ProviderGarage}},
 	}
@@ -100,6 +100,8 @@ func TestConfigValidation(t *testing.T) {
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", AccessKeyID: "k"},
 		{Region: "garage", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderGarage}},
 		{Region: "us-east-2", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderAWS}},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, RoleARN: "arn:aws:iam::1:role/hosts"}},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Prefix: "lazycloud-production-workspace"}},
 	}
 	for _, c := range bad {
 		if err := c.Validate(); err == nil {
@@ -132,9 +134,9 @@ func TestSignedURLsOutlastCredentialRotation(t *testing.T) {
 	}))
 	t.Cleanup(endpoint.Close)
 	t.Setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", endpoint.URL+"/v1/credentials")
-	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"})
+	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"}, nil)
 	for range 2 {
-		lifetime, err := s.signedLifetime(t.Context(), time.Hour)
+		lifetime, err := s.signedLifetime(t.Context(), s.client, time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}

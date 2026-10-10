@@ -1,9 +1,20 @@
 -- name: WorkspaceBucket :one
-select bucket from workspace_buckets where workspace_id = @workspace_id;
+select bucket, region, connection_id from workspace_buckets where workspace_id = @workspace_id;
+
+-- name: BucketByName :one
+select bucket, region, connection_id from workspace_buckets where bucket = @bucket;
+
+-- name: WorkspaceConnection :one
+-- The connected account the workspace lives in; null is the platform's.
+select connection_id from workspaces where id = @id;
 
 -- name: InsertWorkspaceBucket :exec
-insert into workspace_buckets (workspace_id, bucket) values (@workspace_id, @bucket)
+insert into workspace_buckets (workspace_id, bucket, region, connection_id)
+values (@workspace_id, @bucket, @region, sqlc.narg(connection_id))
 on conflict (workspace_id) do nothing;
+
+-- name: DeleteWorkspaceBucket :exec
+delete from workspace_buckets where workspace_id = @workspace_id;
 
 -- name: InsertVolume :exec
 insert into volumes (workspace_id, name) values (@workspace_id, @name)
@@ -59,7 +70,7 @@ insert into volume_mounts (volume_id, container_id) values (@volume_id, @contain
 on conflict do nothing;
 
 -- name: DeletingVolumes :many
-select v.id, v.workspace_id, coalesce(b.bucket, '')::text as bucket
+select v.id, v.workspace_id, b.bucket, b.region, b.connection_id
 from volumes v
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
@@ -70,7 +81,7 @@ limit @max_rows;
 delete from volumes where id = @id and state = 'deleting';
 
 -- name: VolumesToMeasure :many
-select v.id, b.bucket
+select v.id, b.bucket, b.region, b.connection_id
 from volumes v
 join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
@@ -121,7 +132,7 @@ where workspace_id = (
     limit 1
     for update skip locked
 )
-returning workspace_id, bucket;
+returning workspace_id, bucket, region, connection_id;
 
 -- name: KnownVolumes :many
 select id from volumes where id = any(@ids::uuid[]);

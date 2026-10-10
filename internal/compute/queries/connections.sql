@@ -105,3 +105,10 @@ set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authoriz
     phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where authorization_id = @authorization_id and phase in ('ready', 'joining')
 returning id;
+
+-- name: ConnectionAccess :one
+-- The connected account and the role its active authorization grants.
+select cc.aws_account_id, a.region, a.role_arn, a.external_id
+from cloud_connections cc
+join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
+where cc.id = @id;

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -14,7 +15,33 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 )
+
+// TestBucketNamesFitS3: the longest prefix a connection role allows, a
+// 12-digit account id and any workspace id make a valid S3 bucket name
+// within 63 characters, distinct for every account and workspace.
+func TestBucketNamesFitS3(t *testing.T) {
+	prefix := strings.Repeat("p", maxPrefix)
+	if !prefixPattern.MatchString(prefix) || prefixPattern.MatchString(prefix+"p") {
+		t.Fatalf("prefix pattern does not stop at %d characters", maxPrefix)
+	}
+	var highest identity.WorkspaceID
+	for n := range highest {
+		highest[n] = 0xff
+	}
+	valid := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+	seen := map[string]bool{}
+	for _, account := range []string{"123456789012", "210987654321"} {
+		for _, ws := range []identity.WorkspaceID{{}, {1}, highest} {
+			name := bucketName(prefix, account, ws)
+			if !valid.MatchString(name) || seen[name] {
+				t.Errorf("bucket %q (%d characters) is invalid or taken", name, len(name))
+			}
+			seen[name] = true
+		}
+	}
+}
 
 // TestHostPolicyReachesOnlyVolumeAndDiskObjects: an AWS host grant can read
 // and write objects under volumes/ and disks/ and nothing else, lists only
