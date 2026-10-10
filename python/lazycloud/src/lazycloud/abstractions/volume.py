@@ -426,16 +426,18 @@ def _default_mount_path(name: str) -> str:
 
 
 def _cloud_bucket_config(name: str, config: CloudBucketConfig) -> dict[str, JsonValue]:
-    return {
-        "bucket_name": config.bucket or name,
-        "prefix": config.prefix,
-        "access_key": config.access_key,
-        "secret_key": config.secret_key,
-        "endpoint_url": config.endpoint or "",
-        "region": config.region or "",
-        "read_only": config.read_only,
-        "force_path_style": config.force_path_style,
-    }
+    from lazycloud.contracts import api
+
+    spec = api.CloudBucketSpec(
+        bucket=config.bucket or name,
+        prefix=config.prefix,
+        region=config.region,
+        endpoint=config.endpoint,
+        force_path_style=config.force_path_style,
+        access_key_secret=config.access_key,
+        secret_key_secret=config.secret_key,
+    )
+    return spec.model_dump(exclude_none=True)
 
 
 def _relative_path(value: str | Path | PurePosixPath) -> PurePosixPath:
