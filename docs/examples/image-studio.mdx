@@ -306,19 +306,16 @@ ends the connection.
 ```python image_studio/web.py
 @public.websocket("/jobs/{job_id}/events")
 async def job_events(websocket: WebSocket, job_id: str, expires: int, signature: str) -> None:
-    path = f"/api/jobs/{job_id}/events"
-    if not signature_valid(
-        studio_key(), path, expires=expires, signature=signature, now=time.time()
-    ):
+    if not valid_signature(f"/api/jobs/{job_id}/events", expires, signature):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     await websocket.accept()
-    sending = asyncio.ensure_future(send_events(websocket, Task.from_id(job_id)))
+    sending = asyncio.create_task(send_events(websocket, Task.from_id(job_id)))
     # The browser sends nothing, so a receive ends only when it leaves.
-    client_left = asyncio.ensure_future(websocket.receive())
+    client_left = asyncio.create_task(websocket.receive())
     done, pending = await asyncio.wait({sending, client_left}, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
+    for unfinished in pending:
+        unfinished.cancel()
     if pending:
         await asyncio.wait(pending)
     if sending in done:
