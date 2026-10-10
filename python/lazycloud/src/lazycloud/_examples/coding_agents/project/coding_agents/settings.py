@@ -31,8 +31,3 @@ MAX_PATCH_BYTES = 1_000_000
 
 COMMIT_AUTHOR = "coding-agents"
 COMMIT_EMAIL = "coding-agents@users.noreply.github.com"
-
-# Workspace secrets, named after the environment variables they become.
-ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
-GITHUB_TOKEN = "GITHUB_TOKEN"
-GITHUB_WEBHOOK_SECRET = "GITHUB_WEBHOOK_SECRET"

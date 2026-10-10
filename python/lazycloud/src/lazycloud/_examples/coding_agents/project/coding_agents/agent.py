@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 
-from lazycloud import SandboxInstance
+from lazycloud import Sandbox, SandboxInstance
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from coding_agents.settings import (
@@ -53,6 +54,16 @@ class AgentRun(BaseModel):
     total_cost_usd: float
 
 
+@contextmanager
+def started(sandbox: Sandbox) -> Iterator[SandboxInstance]:
+    """A running sandbox, terminated however the block ends so it stops billing."""
+    instance = sandbox.create(timeout_seconds=600)
+    try:
+        yield instance
+    finally:
+        instance.terminate()
+
+
 def as_agent(*args: str) -> list[str]:
     """The command run as the agent user, which cannot change /etc/hosts or root's files."""
     return ["setpriv", f"--reuid={AGENT_USER}", f"--regid={AGENT_USER}", "--init-groups", *args]
@@ -79,7 +90,9 @@ def address_in_range(addresses: Iterable[str], network: str) -> str:
     for address in addresses:
         if ipaddress.ip_address(address) in allowed:
             return address
-    raise ModelApiAddressError(f"{MODEL_API_HOST} resolves outside {network}; update MODEL_API_RANGE")
+    raise ModelApiAddressError(
+        f"{MODEL_API_HOST} resolves outside {network}; update MODEL_API_RANGE"
+    )
 
 
 def pin_model_api(instance: SandboxInstance) -> None:
