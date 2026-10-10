@@ -2,7 +2,7 @@
 // client of its LayerSources service, which hands it the presigned read URLs
 // of the layers the host may mount, and of its DiskSources service, which
 // serves disks' published generations; the names a lazy pull uses; and
-// where the host keeps its data volume.
+// where on the data volume the cache and disks are.
 package layersource
 
 import (
@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -26,18 +27,10 @@ const (
 	// the directory it serves disk generations in. containerd mounts the
 	// snapshots below it.
 	Root = "/var/lib/lazycloud-snapshotter"
-	// DataRoot is the host's data volume. It holds the frame cache, at
-	// CacheDir, and the disk engine's disks, at DiskRoot, whose unpublished
-	// writes the cache leaves room for.
-	DataRoot = "/var/lib/lazycloud-data"
-	CacheDir = DataRoot + "/cache"
-	DiskRoot = DataRoot + "/disks"
-	// CacheBytes bounds the frame cache.
-	CacheBytes = 32 << 30
-	// DiskDirtyBytes is the room each disk a host holds keeps on the data
-	// volume for writes not yet published. A disk publishes once half of
-	// it is used.
-	DiskDirtyBytes = 8 << 30
+	// CacheDir holds the frame cache and DiskRoot the disk engine's disks,
+	// both on the host's data volume.
+	CacheDir = hostproto.DataRoot + "/cache"
+	DiskRoot = hostproto.DataRoot + "/disks"
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"

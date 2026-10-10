@@ -154,7 +154,7 @@ docker info --format '{{.Driver}}' | grep -qx lazycloud
 systemctl show -p CPUWeight system.slice | grep -qx 'CPUWeight=1000'
 
 # The snapshotter's frame cache and disks' unpublished writes share a data
-# volume, mounted at layersource.DataRoot before the snapshotter and the
+# volume, mounted at hostproto.DataRoot before the snapshotter and the
 # agent start: the EBS volume the launcher maps at /dev/sdf
 # (internal/compute/launcher.go), or on a type with NVMe instance store, its
 # first instance store volume. Instance store is empty after every stop, so

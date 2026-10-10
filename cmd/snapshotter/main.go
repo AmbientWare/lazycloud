@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -69,10 +70,10 @@ func run(args []string) int {
 	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
 	transport.MaxIdleConnsPerHost = fetches
 	cfg := snapshotter.Config{
-		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: layersource.CacheBytes,
+		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: hostproto.FrameCacheBytes,
 		// A disk's writes past its half budget wait for a publish; the
 		// cache keeps one budget free for them.
-		ReserveBytes: layersource.DiskDirtyBytes, Fetches: fetches, FillBytes: fillBytes,
+		ReserveBytes: hostproto.DiskDirtyBytes, Fetches: fetches, FillBytes: fillBytes,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {

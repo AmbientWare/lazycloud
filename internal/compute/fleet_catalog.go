@@ -4,7 +4,7 @@ import (
 	"slices"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 // hibernationMemoryLimit is the RAM EC2 hibernates instances under.
@@ -75,7 +75,7 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 
 // Data volumes. A host keeps its frame cache and its disks' unpublished
 // writes on a volume of its own (deploy/ami/node-setup.sh mounts it at
-// layersource.DataRoot): its type's instance store, or a gp3 volume at
+// hostproto.DataRoot): its type's instance store, or a gp3 volume at
 // baseline throughput holding the cache and a dirty budget per disk slot.
 // A type holds a disk per diskSlotCores cores, at least minDiskSlots.
 const (
@@ -94,7 +94,7 @@ func (t CatalogType) DataVolumeGiB() int64 {
 	if t.InstanceStore {
 		return 0
 	}
-	return (layersource.CacheBytes + int64(t.DiskSlots())*layersource.DiskDirtyBytes) / gib
+	return (hostproto.FrameCacheBytes + int64(t.DiskSlots())*hostproto.DiskDirtyBytes) / gib
 }
 
 // volumesMicros is an hour of a host of t's EBS volumes: the root at the

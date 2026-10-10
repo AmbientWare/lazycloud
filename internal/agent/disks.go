@@ -118,7 +118,7 @@ func diskSlots(diskErr error) int32 {
 	}
 	total := int64(st.Blocks) * st.Bsize //nolint:gosec // Block counts fit an int64.
 	// Rounded, since the filesystem keeps a little of the volume for itself.
-	return int32(max(0, (total-layersource.CacheBytes+layersource.DiskDirtyBytes/2)/layersource.DiskDirtyBytes)) //nolint:gosec // Bounded by the volume.
+	return int32(max(0, (total-hostproto.FrameCacheBytes+hostproto.DiskDirtyBytes/2)/hostproto.DiskDirtyBytes)) //nolint:gosec // Bounded by the volume.
 }
 
 // attachDisks leases and attaches the container's disks and returns their
@@ -287,7 +287,7 @@ func (c *container) publishLoop(ctx context.Context) {
 			if errors.Is(err, diskengine.ErrAttachmentLost) {
 				c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
 			}
-			if !now && err == nil && dirty < layersource.DiskDirtyBytes/2 {
+			if !now && err == nil && dirty < hostproto.DiskDirtyBytes/2 {
 				if err := c.a.grantRead(ctx, c.id, d); err != nil {
 					c.log.Warn("granting a disk's reads failed", "disk", d.Name, "error", err)
 				}
