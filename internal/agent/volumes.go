@@ -368,6 +368,29 @@ type mountSpec struct {
 	labels                   map[string]string
 }
 
+// HostTrustBundle is the CA bundle the host's own TLS uses, found as Go
+// finds it on Linux: SSL_CERT_FILE, then the distributions' usual paths.
+// Empty means the host has none.
+func HostTrustBundle() string {
+	for _, path := range []string{
+		os.Getenv("SSL_CERT_FILE"),
+		"/etc/ssl/certs/ca-certificates.crt",
+		"/etc/pki/tls/certs/ca-bundle.crt",
+		"/etc/ssl/ca-bundle.pem",
+		"/etc/pki/tls/cacert.pem",
+		"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+		"/etc/ssl/cert.pem",
+	} {
+		if path == "" {
+			continue
+		}
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() { //nolint:gosec // The host's own setting, as Go's TLS reads it.
+			return path
+		}
+	}
+	return ""
+}
+
 // runMount starts a GeeseFS mount container and returns its id.
 func (v *volumes) runMount(ctx context.Context, m mountSpec) (string, error) {
 	image, err := v.a.platformImage(ctx, platformimages.Mount)
@@ -447,6 +470,7 @@ exit 1`, target, strings.Join(quoted, " "))
 			},
 			Mounts: []mount.Mount{
 				{Type: mount.TypeBind, Source: v.a.cfg.GeeseFSPath, Target: "/opt/lazycloud/bin/geesefs", ReadOnly: true},
+				{Type: mount.TypeBind, Source: v.a.cfg.TrustBundle, Target: "/etc/ssl/certs/ca-certificates.crt", ReadOnly: true},
 				{Type: mount.TypeBind, Source: m.creds, Target: "/creds", ReadOnly: true},
 				{
 					Type: mount.TypeBind, Source: v.mountDir(), Target: "/mnt",

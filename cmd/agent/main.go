@@ -186,6 +186,7 @@ func newJoinFlags(name string) *joinFlags {
 	f.BoolVar(&cfg.AllowPrivilegedDocker, "allow-privileged-docker", os.Getenv("LAZYCLOUD_ALLOW_PRIVILEGED_DOCKER") == "true",
 		"run docker_enabled containers privileged without runsc, which lets them escape to the host; only for trusted tenants")
 	f.StringVar(&cfg.GeeseFSPath, "geesefs", envOr("LAZYCLOUD_GEESEFS", filepath.Join(release, "geesefs")), "pinned GeeseFS binary that mounts volumes; volumes are unavailable without it")
+	f.StringVar(&cfg.TrustBundle, "trust-bundle", agent.HostTrustBundle(), "CA bundle volume mounts verify object stores against")
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	f.StringVar(&j.maxCPU, "max-cpu", os.Getenv("LAZYCLOUD_MAX_CPU"), "CPU cores to offer, such as 2 or 1.5; default detects")
 	f.StringVar(&j.maxMemory, "max-memory", os.Getenv("LAZYCLOUD_MAX_MEMORY"), "memory to offer, such as 16gib or 4096 (MB); default detects")
@@ -258,7 +259,7 @@ func (j *joinFlags) parse(args []string) error {
 	if _, err := os.Stat(cfg.GeeseFSPath); err != nil {
 		cfg.GeeseFSPath = ""
 	}
-	for _, path := range []*string{&cfg.StateDir, &cfg.RuntimeDir, &cfg.SupervisorPath, &cfg.JoinTokenFile, &cfg.GeeseFSPath} {
+	for _, path := range []*string{&cfg.StateDir, &cfg.RuntimeDir, &cfg.SupervisorPath, &cfg.JoinTokenFile, &cfg.GeeseFSPath, &cfg.TrustBundle} {
 		if *path == "" {
 			continue
 		}
