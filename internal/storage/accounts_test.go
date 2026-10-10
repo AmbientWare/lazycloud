@@ -170,7 +170,7 @@ func (c *connectedStorage) accountClient() *s3.Client {
 // bucketRow is the workspace's recorded bucket.
 func (c *connectedStorage) bucketRow(ws identity.WorkspaceID) (bucket, region string, connection *uuid.UUID) {
 	c.t.Helper()
-	if err := c.pool.QueryRow(c.t.Context(), `select bucket, region, connection_id from workspace_buckets where workspace_id = $1`,
+	if err := c.pool.QueryRow(c.t.Context(), `select b.bucket, b.region, w.connection_id from workspace_buckets b join workspaces w on w.id = b.workspace_id where b.workspace_id = $1`,
 		uuid.UUID(ws)).Scan(&bucket, &region, &connection); err != nil {
 		c.t.Fatal(err)
 	}

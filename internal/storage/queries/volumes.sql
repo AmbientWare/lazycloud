@@ -1,18 +1,22 @@
 -- name: WorkspaceBucket :one
-select bucket, region, connection_id from workspace_buckets where workspace_id = @workspace_id;
+-- The connected account the workspace lives in, null for the platform's,
+-- and its bucket once it has one.
+select w.connection_id, b.bucket, b.region
+from workspaces w
+left join workspace_buckets b on b.workspace_id = w.id
+where w.id = @workspace_id;
 
 -- name: BucketByName :one
-select bucket, region, connection_id from workspace_buckets where bucket = @bucket;
-
--- name: WorkspaceConnection :one
--- The connected account the workspace lives in; null is the platform's.
-select connection_id from workspaces where id = @id;
+select b.bucket, b.region, w.connection_id
+from workspace_buckets b
+join workspaces w on w.id = b.workspace_id
+where b.bucket = @bucket;
 
 -- name: InsertWorkspaceBucket :one
 -- The workspace's recorded bucket: this one, or the one another server
 -- recorded first.
-insert into workspace_buckets (workspace_id, bucket, region, connection_id)
-values (@workspace_id, @bucket, @region, sqlc.narg(connection_id))
+insert into workspace_buckets (workspace_id, bucket, region)
+values (@workspace_id, @bucket, @region)
 on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
 returning bucket, region;
 
@@ -73,8 +77,9 @@ insert into volume_mounts (volume_id, container_id) values (@volume_id, @contain
 on conflict do nothing;
 
 -- name: DeletingVolumes :many
-select v.id, v.workspace_id, b.bucket, b.region, b.connection_id
+select v.id, v.workspace_id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
 order by v.deleted_at
@@ -84,8 +89,9 @@ limit @max_rows;
 delete from volumes where id = @id and state = 'deleting';
 
 -- name: VolumesToMeasure :many
-select v.id, b.bucket, b.region, b.connection_id
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
   and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => @every_seconds::float8))
@@ -126,16 +132,17 @@ delete from storage_grants where access_key_id = @access_key_id;
 -- name: ClaimOrphanCheck :one
 -- A workspace bucket whose orphaned prefixes were not checked for an hour;
 -- the claim lasts an hour, so schedulers check different buckets.
-update workspace_buckets
+update workspace_buckets b
 set orphans_checked_at = now()
-where workspace_id = (
-    select b.workspace_id from workspace_buckets b
-    where b.orphans_checked_at is null or b.orphans_checked_at < now() - interval '1 hour'
-    order by b.orphans_checked_at nulls first
+from workspaces w
+where w.id = b.workspace_id and b.workspace_id = (
+    select o.workspace_id from workspace_buckets o
+    where o.orphans_checked_at is null or o.orphans_checked_at < now() - interval '1 hour'
+    order by o.orphans_checked_at nulls first
     limit 1
     for update skip locked
 )
-returning workspace_id, bucket, region, connection_id;
+returning b.workspace_id, b.bucket, b.region, w.connection_id;
 
 -- name: KnownVolumes :many
 select id from volumes where id = any(@ids::uuid[]);

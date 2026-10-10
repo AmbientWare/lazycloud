@@ -247,20 +247,16 @@ func (s *Storage) providerOf(store workspaceStore) (bucketProvider, error) {
 // platform cannot act through a *ConflictError.
 func (s *Storage) workspaceStore(ctx context.Context, workspace identity.WorkspaceID) (workspaceStore, error) {
 	row, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
-	if err == nil {
-		return s.storeOf(ctx, row.Bucket, row.Region, row.ConnectionID)
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return workspaceStore{}, fmt.Errorf("read workspace bucket: %w", err)
-	}
-	connection, err := s.queries.WorkspaceConnection(ctx, uuid.UUID(workspace))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspaceStore{}, ErrNotFound
 	}
 	if err != nil {
-		return workspaceStore{}, fmt.Errorf("read workspace connection: %w", err)
+		return workspaceStore{}, fmt.Errorf("read workspace bucket: %w", err)
 	}
-	return s.createWorkspaceBucket(ctx, workspace, connection)
+	if row.Bucket != nil && row.Region != nil {
+		return s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID)
+	}
+	return s.createWorkspaceBucket(ctx, workspace, row.ConnectionID)
 }
 
 // createWorkspaceBucket creates the workspace's bucket: in the platform's
@@ -310,7 +306,7 @@ func (s *Storage) createWorkspaceBucket(ctx context.Context, workspace identity.
 		return workspaceStore{}, storeError(err)
 	}
 	recorded, err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{
-		WorkspaceID: uuid.UUID(workspace), Bucket: store.name, Region: region, ConnectionID: connection,
+		WorkspaceID: uuid.UUID(workspace), Bucket: store.name, Region: region,
 	})
 	if err != nil {
 		return workspaceStore{}, fmt.Errorf("record workspace bucket: %w", err)

@@ -180,8 +180,9 @@ func (q *Queries) DeleteDiskRow(ctx context.Context, id uuid.UUID) error {
 }
 
 const deletingDisks = `-- name: DeletingDisks :many
-select d.id, b.bucket, b.region, b.connection_id
+select d.id, b.bucket, b.region, w.connection_id
 from disks d
+join workspaces w on w.id = d.workspace_id
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.state = 'deleting'
 order by d.deleted_at
@@ -459,10 +460,11 @@ func (q *Queries) LockActiveDisk(ctx context.Context, arg LockActiveDiskParams) 
 }
 
 const lockLeasedDisk = `-- name: LockLeasedDisk :one
-select d.id, d.generation, b.bucket, b.region, b.connection_id
+select d.id, d.generation, b.bucket, b.region, w.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
+join workspaces w on w.id = d.workspace_id
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.id = $1 and d.holder_container_id = $2 and d.lease_token = $3
   and d.state = 'active' and c.host_id = $4 and h.state not in ('lost', 'retired')

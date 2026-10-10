@@ -45,7 +45,10 @@ func (q *Queries) ActiveVolume(ctx context.Context, arg ActiveVolumeParams) (Act
 }
 
 const bucketByName = `-- name: BucketByName :one
-select bucket, region, connection_id from workspace_buckets where bucket = $1
+select b.bucket, b.region, w.connection_id
+from workspace_buckets b
+join workspaces w on w.id = b.workspace_id
+where b.bucket = $1
 `
 
 type BucketByNameRow struct {
@@ -62,16 +65,17 @@ func (q *Queries) BucketByName(ctx context.Context, bucket string) (BucketByName
 }
 
 const claimOrphanCheck = `-- name: ClaimOrphanCheck :one
-update workspace_buckets
+update workspace_buckets b
 set orphans_checked_at = now()
-where workspace_id = (
-    select b.workspace_id from workspace_buckets b
-    where b.orphans_checked_at is null or b.orphans_checked_at < now() - interval '1 hour'
-    order by b.orphans_checked_at nulls first
+from workspaces w
+where w.id = b.workspace_id and b.workspace_id = (
+    select o.workspace_id from workspace_buckets o
+    where o.orphans_checked_at is null or o.orphans_checked_at < now() - interval '1 hour'
+    order by o.orphans_checked_at nulls first
     limit 1
     for update skip locked
 )
-returning workspace_id, bucket, region, connection_id
+returning b.workspace_id, b.bucket, b.region, w.connection_id
 `
 
 type ClaimOrphanCheckRow struct {
@@ -123,8 +127,9 @@ func (q *Queries) DeleteWorkspaceBucket(ctx context.Context, workspaceID uuid.UU
 }
 
 const deletingVolumes = `-- name: DeletingVolumes :many
-select v.id, v.workspace_id, b.bucket, b.region, b.connection_id
+select v.id, v.workspace_id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
 order by v.deleted_at
@@ -281,17 +286,16 @@ func (q *Queries) InsertVolumeMount(ctx context.Context, arg InsertVolumeMountPa
 }
 
 const insertWorkspaceBucket = `-- name: InsertWorkspaceBucket :one
-insert into workspace_buckets (workspace_id, bucket, region, connection_id)
-values ($1, $2, $3, $4)
+insert into workspace_buckets (workspace_id, bucket, region)
+values ($1, $2, $3)
 on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
 returning bucket, region
 `
 
 type InsertWorkspaceBucketParams struct {
-	WorkspaceID  uuid.UUID
-	Bucket       string
-	Region       string
-	ConnectionID *uuid.UUID
+	WorkspaceID uuid.UUID
+	Bucket      string
+	Region      string
 }
 
 type InsertWorkspaceBucketRow struct {
@@ -302,12 +306,7 @@ type InsertWorkspaceBucketRow struct {
 // The workspace's recorded bucket: this one, or the one another server
 // recorded first.
 func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) (InsertWorkspaceBucketRow, error) {
-	row := q.db.QueryRow(ctx, insertWorkspaceBucket,
-		arg.WorkspaceID,
-		arg.Bucket,
-		arg.Region,
-		arg.ConnectionID,
-	)
+	row := q.db.QueryRow(ctx, insertWorkspaceBucket, arg.WorkspaceID, arg.Bucket, arg.Region)
 	var i InsertWorkspaceBucketRow
 	err := row.Scan(&i.Bucket, &i.Region)
 	return i, err
@@ -535,8 +534,9 @@ func (q *Queries) VolumeUsers(ctx context.Context, arg VolumeUsersParams) ([]Vol
 }
 
 const volumesToMeasure = `-- name: VolumesToMeasure :many
-select v.id, b.bucket, b.region, b.connection_id
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
   and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => $1::float8))
@@ -582,30 +582,23 @@ func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasurePara
 }
 
 const workspaceBucket = `-- name: WorkspaceBucket :one
-select bucket, region, connection_id from workspace_buckets where workspace_id = $1
+select w.connection_id, b.bucket, b.region
+from workspaces w
+left join workspace_buckets b on b.workspace_id = w.id
+where w.id = $1
 `
 
 type WorkspaceBucketRow struct {
-	Bucket       string
-	Region       string
 	ConnectionID *uuid.UUID
+	Bucket       *string
+	Region       *string
 }
 
+// The connected account the workspace lives in, null for the platform's,
+// and its bucket once it has one.
 func (q *Queries) WorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) (WorkspaceBucketRow, error) {
 	row := q.db.QueryRow(ctx, workspaceBucket, workspaceID)
 	var i WorkspaceBucketRow
-	err := row.Scan(&i.Bucket, &i.Region, &i.ConnectionID)
+	err := row.Scan(&i.ConnectionID, &i.Bucket, &i.Region)
 	return i, err
-}
-
-const workspaceConnection = `-- name: WorkspaceConnection :one
-select connection_id from workspaces where id = $1
-`
-
-// The connected account the workspace lives in; null is the platform's.
-func (q *Queries) WorkspaceConnection(ctx context.Context, id uuid.UUID) (*uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, workspaceConnection, id)
-	var connection_id *uuid.UUID
-	err := row.Scan(&connection_id)
-	return connection_id, err
 }

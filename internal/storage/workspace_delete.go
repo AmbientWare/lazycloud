@@ -33,17 +33,17 @@ func (s *Storage) DeleteWorkspaceStorage(ctx context.Context, logger *slog.Logge
 		return false, nil
 	}
 	row, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return true, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("read workspace bucket: %w", err)
 	}
-	empty, err = s.deleteWorkspaceBucket(ctx, row.Bucket, row.Region, row.ConnectionID)
+	if row.Bucket == nil || row.Region == nil {
+		return true, nil
+	}
+	empty, err = s.deleteWorkspaceBucket(ctx, *row.Bucket, *row.Region, row.ConnectionID)
 	var unauthorized *ConflictError
 	if row.ConnectionID != nil && errors.As(err, &unauthorized) {
 		logger.WarnContext(ctx, "the workspace's bucket stays in the connected AWS account, which no longer authorizes the platform",
-			"workspace", workspace.String(), "bucket", row.Bucket, "connection", row.ConnectionID.String(), "error", err)
+			"workspace", workspace.String(), "bucket", *row.Bucket, "connection", row.ConnectionID.String(), "error", err)
 	} else if err != nil || !empty {
 		return false, err
 	}
