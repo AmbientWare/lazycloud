@@ -24,14 +24,16 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
-// Each volume and cloud bucket a container names mounts in a mount container
-// of its own: GeeseFS holds the credentials there, and the workload binds the
-// mount's directory and never sees them. A mount container shares its mount
-// with the host through a shared-propagation bind of the mount directory, so
-// it works for root and unprivileged agents alike and outlives agent
-// restarts, like its workload. Mounts start before their container, stop
-// after it and run in its slice (slices.go), so their memory is the
-// container's.
+// A container's platform volumes share one mount container, which mounts the
+// volumes/ prefix of its workspace bucket; each cloud bucket it names gets
+// one more. GeeseFS holds the credentials there, and the workload binds each
+// volume's own directory of the mount, never the credentials or other
+// volumes.
+// A mount container shares its mount with the host through a
+// shared-propagation bind of the mount directory, so it works for root and
+// unprivileged agents alike and outlives agent restarts, like its workload.
+// Mounts start before their container, stop after it and run in its slice
+// (slices.go), inside the memory the server reserved for them.
 const (
 	labelKind = "lazycloud.kind"
 	kindMount = "volume-mount"
@@ -44,10 +46,9 @@ const (
 	// geesefsMemoryMiB (--use-enomem), and its runtime collects garbage
 	// before geesefsGoMemoryMiB. Without the reservation, readahead in
 	// flight grows with the readers: 256 parallel 32 MiB reads took 2.4 GiB.
-	// With it they peak near 410 MiB, inside mounterMemoryBytes.
+	// With it they peak near 410 MiB, inside hostproto.MounterMemoryBytes.
 	geesefsMemoryMiB   = 192
 	geesefsGoMemoryMiB = 320
-	mounterMemoryBytes = 512 << 20
 	mounterPidsLimit   = 1024
 	// grantMargin is how long a stored key must still be valid to mount.
 	grantMargin = time.Minute
@@ -221,8 +222,9 @@ func (v *volumes) waitGrant(ctx context.Context, workspace string) error {
 	}
 }
 
-// mount starts the container's slice and its mounts, and returns the binds
-// of the mounts. What it started goes in release, also after a failure.
+// mount starts the container's slice and its mounters, and returns the
+// binds of its mounts. What it started goes in release, also after a
+// failure.
 func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.StartContainer) ([]mount.Mount, error) {
 	specs := spec.GetVolumes()
 	if len(specs) == 0 {
@@ -230,6 +232,11 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	}
 	if v.a.cfg.GeeseFSPath == "" {
 		return nil, errNoVolumeSupport
+	}
+	for _, s := range specs {
+		if !filepath.IsAbs(s.GetMountPath()) {
+			return nil, fmt.Errorf("volume mount path %q is not absolute", s.GetMountPath())
+		}
 	}
 	v.mu.Lock()
 	v.mounts[c.id] = nil
@@ -239,17 +246,18 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		return nil, err
 	}
 	binds := make([]mount.Mount, 0, len(specs))
-	for n, s := range specs {
-		if !filepath.IsAbs(s.GetMountPath()) {
-			return nil, fmt.Errorf("volume mount path %q is not absolute", s.GetMountPath())
-		}
+	for n, group := range mounterGroups(specs) {
 		m := v.newMounter(mounterName(c.id, n), c.id)
 		var ms mountSpec
+		var dirs []string
+		var what string
 		var err error
-		if s.GetCloudBucket() != nil {
-			ms, err = v.bucketSpec(m.name, s)
+		if b := group[0].GetCloudBucket(); b != nil {
+			what = "the mount of cloud bucket " + b.GetBucket()
+			ms, dirs, err = v.bucketSpec(m.name, group)
 		} else {
-			ms, err = v.volumeSpec(ctx, s)
+			what = "the mount of the workspace's volumes"
+			ms, dirs, err = v.volumeSpec(ctx, group)
 		}
 		if err != nil {
 			return nil, err
@@ -257,36 +265,74 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		v.mu.Lock()
 		v.mounts[c.id] = append(v.mounts[c.id], m)
 		v.mu.Unlock()
-		if err := v.start(ctx, m, "the volume mount at "+s.GetMountPath(), ms); err != nil {
+		if err := v.start(ctx, m, what, ms); err != nil {
 			return nil, err
 		}
-		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: m.dir, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
+		for i, s := range group {
+			source := filepath.Join(m.dir, dirs[i])
+			if err := os.MkdirAll(source, 0o755); err != nil { //nolint:gosec // GeeseFS gives every directory --dir-mode.
+				return nil, fmt.Errorf("create the directory of the volume at %s: %w", s.GetMountPath(), err)
+			}
+			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
+		}
 	}
 	return binds, nil
 }
 
-// volumeSpec mounts a platform volume's prefix of its workspace bucket with
-// the workspace's grant.
-func (v *volumes) volumeSpec(ctx context.Context, s *hostproto.VolumeMount) (mountSpec, error) {
-	volume := s.GetVolume()
-	if volume == nil {
-		return mountSpec{}, fmt.Errorf("volume at %s names no source", s.GetMountPath())
+// mounterGroups splits a container's mounts among its mounters: one for all
+// its platform volumes and one per distinct cloud bucket, in the order the
+// start names them.
+func mounterGroups(specs []*hostproto.VolumeMount) [][]*hostproto.VolumeMount {
+	type key struct {
+		cloud                                          bool
+		bucket, region, endpoint, accessKey, secretKey string
+		pathStyle                                      bool
 	}
-	workspace, prefix := volume.GetWorkspaceId(), volume.GetPrefix()
-	if !isUUID(workspace) || !isUUID(volume.GetVolumeId()) || prefix != "volumes/"+volume.GetVolumeId()+"/" {
-		return mountSpec{}, fmt.Errorf("volume at %s has an invalid location", s.GetMountPath())
+	var groups [][]*hostproto.VolumeMount
+	index := map[key]int{}
+	for _, s := range specs {
+		var k key
+		if b := s.GetCloudBucket(); b != nil {
+			k = key{true, b.GetBucket(), b.GetRegion(), b.GetEndpoint(), b.GetAccessKeyId(), b.GetSecretAccessKey(), b.GetForcePathStyle()}
+		}
+		n, ok := index[k]
+		if !ok {
+			n = len(groups)
+			index[k] = n
+			groups = append(groups, nil)
+		}
+		groups[n] = append(groups[n], s)
+	}
+	return groups
+}
+
+// volumeSpec mounts the volumes/ prefix of the workspace bucket with the
+// workspace's grant, and returns each volume's directory in it.
+func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount) (mountSpec, []string, error) {
+	workspace := group[0].GetVolume().GetWorkspaceId()
+	dirs := make([]string, len(group))
+	for i, s := range group {
+		volume := s.GetVolume()
+		if volume == nil {
+			return mountSpec{}, nil, fmt.Errorf("volume at %s names no source", s.GetMountPath())
+		}
+		id := volume.GetVolumeId()
+		if volume.GetWorkspaceId() != workspace || !isUUID(workspace) || !isUUID(id) || volume.GetPrefix() != "volumes/"+id+"/" {
+			return mountSpec{}, nil, fmt.Errorf("volume at %s has an invalid location", s.GetMountPath())
+		}
+		dirs[i] = id
 	}
 	if err := v.waitGrant(ctx, workspace); err != nil {
-		return mountSpec{}, err
+		return mountSpec{}, nil, err
 	}
 	loc, err := v.location(workspace)
 	if err != nil {
-		return mountSpec{}, err
+		return mountSpec{}, nil, err
 	}
 	return mountSpec{
-		creds: v.storageDir(workspace), source: loc.Bucket + ":" + prefix, endpoint: loc.Endpoint, region: loc.Region,
-		pathStyle: loc.PathStyle, readOnly: s.GetReadOnly(),
-	}, nil
+		creds: v.storageDir(workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region,
+		pathStyle: loc.PathStyle,
+	}, dirs, nil
 }
 
 // release stops the container's mounts, deletes their keys and stops its
@@ -501,8 +547,8 @@ exit 1`, target, strings.Join(quoted, " "))
 				CgroupParent: v.a.workloadSlice(m.container),
 				Devices:      []containertypes.DeviceMapping{{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"}},
 				// A swapping GeeseFS stalls every reader of the mount.
-				Memory:     mounterMemoryBytes,
-				MemorySwap: mounterMemoryBytes,
+				Memory:     hostproto.MounterMemoryBytes,
+				MemorySwap: hostproto.MounterMemoryBytes,
 				PidsLimit:  &pids,
 			},
 			Mounts: []mount.Mount{
