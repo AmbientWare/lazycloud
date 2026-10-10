@@ -19,9 +19,9 @@ def render(scene: dict[str, float]) -> bytes:
 `cpu` and `memory` are reservations the container always keeps. A pair adds a
 ceiling, so this function reserves 1 CPU and 2 GiB, is throttled at 4 CPUs, and
 is killed above 8 GiB. Smaller reservations start faster. One CPU is one
-physical core, two vCPUs on LazyCloud hosts. Each bucket a container mounts
-adds 512 MiB to its memory reservation and bill, as
-[volumes](/concepts/volumes#memory-for-mounts) explains.
+physical core, two vCPUs on LazyCloud hosts. Volumes and cloud buckets add to
+the memory reservation, as [memory for mounts](/concepts/volumes#memory-for-mounts)
+explains.
 
 `disk` is scratch space, 100 GiB by default, gone when the container stops.
 Files that must last go in a [volume](/concepts/volumes).

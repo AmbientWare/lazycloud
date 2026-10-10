@@ -2,7 +2,7 @@
 
 Guidance lives in AGENTS.md files, which Claude Code also loads; add no
 CLAUDE.md beside them. These files contain development standards and
-constraints. Keep task plans and progress with the task, not in the tree.
+constraints.
 
 ## Architecture
 
@@ -172,7 +172,7 @@ constraints. Keep task plans and progress with the task, not in the tree.
 - When delegating, agree contracts first, then assign disjoint owners and files;
   one integrator owns shared definitions and root build files. Verify returned
   work and integrated evidence.
-- Plan work that spans owners, PRs or parallel agents in a PLANNING.md kept
-  with the task, outside the tree.
+- Plan work that spans owners, PRs or parallel agents in a PLANNING.md. Keep
+  plans and progress with the task, outside the tree.
 - Finish the requested scope, then stop. No commit attribution trailers.
   Report outcomes, blockers and unverified boundaries briefly.
