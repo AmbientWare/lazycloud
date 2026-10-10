@@ -42,6 +42,10 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 			t.Fatal("the second host did not join within a minute")
 		}
 	}
+	// Disks come with the Team plan.
+	if _, err := p.pool.Exec(ctx, "update billing_accounts set terms_version = 'team-v3'"); err != nil {
+		t.Fatal(err)
+	}
 	box := spec("box", "", p.upload(map[string]string{"app.py": ""}), nil)
 	box.Kind, box.Handler = apitypes.WorkloadKindPod, nil
 	box.Pod = &apitypes.PodSpec{Kind: apitypes.PodKindDevbox}
