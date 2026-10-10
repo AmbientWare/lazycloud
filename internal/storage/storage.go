@@ -18,8 +18,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -175,12 +173,15 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 		return SourceUpload{}, fmt.Errorf("read source object: %w", err)
 	}
 
+	// An object of the size, with the digest when the store kept a SHA-256
+	// checksum, is the archive.
 	key := sourceKey(workspace, digest)
-	stored, err := s.storedMatches(ctx, key, digest, size)
-	if err != nil {
+	checksum := base64.StdEncoding.EncodeToString(digest[:])
+	stored, err := head(ctx, s.platform, key)
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return SourceUpload{}, err
 	}
-	if stored {
+	if err == nil && stored.Size == size && (stored.SHA256 == "" || stored.SHA256 == checksum) {
 		if err := s.queries.InsertSourceObject(ctx, InsertSourceObjectParams{
 			WorkspaceID: uuid.UUID(workspace), Sha256: digest[:], SizeBytes: size,
 		}); err != nil {
@@ -198,7 +199,7 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 		Key:            aws.String(key),
 		ContentLength:  aws.Int64(size),
 		ContentType:    aws.String("application/zip"),
-		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(digest[:])),
+		ChecksumSHA256: aws.String(checksum),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return SourceUpload{}, fmt.Errorf("presign source upload: %w", err)
@@ -212,30 +213,6 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 	return SourceUpload{Upload: &UploadTarget{
 		URL: req.URL, Method: req.Method, Headers: headers, ExpiresAt: time.Now().Add(lifetime),
 	}}, nil
-}
-
-// storedMatches reports whether the object at key exists with size bytes and,
-// when the store kept a SHA-256 checksum, the expected digest.
-func (s *Storage) storedMatches(ctx context.Context, key string, digest Digest, size int64) (bool, error) {
-	head, err := s.platform.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket:       aws.String(s.platform.name),
-		Key:          aws.String(key),
-		ChecksumMode: types.ChecksumModeEnabled,
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NotFound" || apiErr.ErrorCode() == "NoSuchKey") {
-			return false, nil
-		}
-		return false, fmt.Errorf("head source object: %w", err)
-	}
-	if head.ContentLength == nil || *head.ContentLength != size {
-		return false, nil
-	}
-	if head.ChecksumSHA256 != nil && *head.ChecksumSHA256 != base64.StdEncoding.EncodeToString(digest[:]) {
-		return false, nil
-	}
-	return true, nil
 }
 
 // SourceURL is a presigned GET for a workspace's source archive.
