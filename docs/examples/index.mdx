@@ -1,6 +1,6 @@
 ---
 title: "Examples"
-description: "Complete applications built on LazyCloud: an image generation app, LLM fine-tuning, a video pipeline, coding agents on a devbox, and a scheduled monitor."
+description: "Complete applications built on LazyCloud: an image generation app, LLM fine-tuning, a video pipeline, coding agents and a scheduled monitor."
 ---
 
 Each workflow is a standalone uv project to download. The source and assets
@@ -13,39 +13,39 @@ Python setup step for them.
 
 <CardGroup cols={2}>
   <Card
-    title="Image generation studio"
+    title="Image studio"
     icon="image"
     href="/examples/image-studio"
   >
-    A Next.js and FastAPI app that generates images on a GPU and keeps a gallery.
+    A Next.js and FastAPI app that generates images on a GPU, streams progress over a WebSocket and keeps a gallery.
   </Card>
   <Card
     title="Fine-tune an LLM with LoRA"
     icon="brain"
     href="/examples/lora-fine-tune"
   >
-    Train a LoRA adapter on a GPU, compare it with the base model, and serve it behind an OpenAI-compatible API.
+    Train an adapter on a GPU, score it in parallel against the base model, and serve it with vLLM.
   </Card>
   <Card
     title="Video to highlight clips"
     icon="film"
     href="/examples/video-highlights"
   >
-    Transcribe, pick chapters with an LLM, and cut clips in parallel, each step on the hardware it needs.
+    A pipeline from your S3 bucket through transcription, LLM highlight picks and parallel clip cutting.
   </Card>
   <Card
-    title="Coding agents on a devbox"
+    title="Coding agents"
     icon="terminal"
-    href="/examples/devbox-agents"
+    href="/examples/coding-agents"
   >
-    Run Claude Code or Codex on a persistent remote machine that keeps working after you disconnect.
+    Work with an agent on a devbox, turn GitHub issues into pull requests in sandboxes, and score the agent nightly.
   </Card>
   <Card
     title="Website change monitor"
     icon="bell"
     href="/examples/site-monitor"
   >
-    A scheduled job that checks pages, has an LLM summarize what changed, and sends an alert.
+    A scheduled job that checks pages in a real browser, has an LLM judge each change and alerts Slack.
   </Card>
 </CardGroup>
 

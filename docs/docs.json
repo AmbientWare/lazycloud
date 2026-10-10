@@ -107,7 +107,7 @@
           "examples/image-studio",
           "examples/lora-fine-tune",
           "examples/video-highlights",
-          "examples/devbox-agents",
+          "examples/coding-agents",
           "examples/site-monitor"
         ]
       },
