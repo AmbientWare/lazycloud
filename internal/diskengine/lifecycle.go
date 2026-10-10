@@ -28,16 +28,57 @@ func requireLiveAttachment(p diskPaths, state *diskState) error {
 		return fmt.Errorf("%w: disk %s", ErrNotAttached, p.id)
 	}
 	if !daemonAlive(p, a.DaemonPID) {
-		return fmt.Errorf("qemu-storage-daemon %d for disk %s is not running; recover it", a.DaemonPID, p.id)
+		return fmt.Errorf("%w: qemu-storage-daemon %d for disk %s is not running", ErrAttachmentLost, a.DaemonPID, p.id)
 	}
 	return nil
 }
 
-// Publish seals the head of an attached disk when it took writes, then
-// uploads the oldest sealed layer not yet published. It returns nil when no
-// sealed layer awaits publishing. The upload stays pending until
-// CommitPublished; until then a retry returns the same upload. A detached
-// disk, such as one Recover sealed, publishes without sealing. Once the
+// Seal makes everything written to an attached disk so far part of a sealed
+// layer, which Publish then uploads. It flushes the filesystem and freezes
+// it only when the head took writes. An attachment whose daemon, device or
+// mount is gone is released and its head sealed with the writes that
+// reached it; Seal then returns ErrAttachmentLost and the disk is detached.
+// A detached disk whose head may hold unsealed writes is sealed without a
+// daemon. Sealing a disk with nothing new succeeds without change.
+func (e *Engine) Seal(ctx context.Context, diskID string) error {
+	p, err := e.paths(diskID)
+	if err != nil {
+		return err
+	}
+	lock, err := lockDisk(ctx, p)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	state, err := requireState(p)
+	if err != nil {
+		return err
+	}
+	if state.Attachment == nil {
+		if state.HeadFresh {
+			return nil
+		}
+		return sealOrphanedHead(ctx, p, state)
+	}
+	healthy, err := attachmentHealthy(p, state)
+	if err != nil {
+		return err
+	}
+	if !healthy {
+		lost := *state.Attachment
+		if err := releaseAttachment(ctx, p, state); err != nil {
+			return err
+		}
+		e.log.WarnContext(ctx, "disk attachment lost; sealed what reached it", "disk_id", p.id,
+			"daemon_pid", lost.DaemonPID, "device", lost.Device, "unpublished_layers", state.unpublishedSealed())
+		return fmt.Errorf("%w: disk %s at %s lost its daemon, device or mount", ErrAttachmentLost, p.id, lost.Mountpoint)
+	}
+	return telemetry.Step(ctx, "diskengine.seal", func(ctx context.Context) error { return seal(ctx, p, state) })
+}
+
+// Publish uploads the oldest sealed layer of the disk not yet published and
+// returns nil when none awaits; it never seals. The upload stays pending
+// until CommitPublished; until then a retry returns the same upload. Once the
 // committed chain is flattenDepth deep the upload flattens the chain into a
 // parentless generation.
 func (e *Engine) Publish(ctx context.Context, diskID string, store Store) (*Published, error) {
@@ -53,14 +94,6 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store) (*Publ
 	state, err := requireState(p)
 	if err != nil {
 		return nil, err
-	}
-	if state.Attachment != nil {
-		if err := requireLiveAttachment(p, state); err != nil {
-			return nil, err
-		}
-		if err := telemetry.Step(ctx, "diskengine.seal", func(ctx context.Context) error { return seal(ctx, p, state) }); err != nil {
-			return nil, err
-		}
 	}
 	depth, err := state.chainDepth()
 	if err != nil {
@@ -80,9 +113,10 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store) (*Publ
 	return published, nil
 }
 
-// seal freezes the mounted filesystem, so everything it wrote reaches the
-// head and nothing more arrives, switches the daemon to a new head when the
-// old one took writes, and thaws.
+// seal flushes the mounted filesystem and, when the head took writes, freezes
+// it, so everything it wrote reaches the head and nothing more arrives,
+// switches the daemon to a new head and thaws. Writes still in the page cache
+// reach the device in the flush, so an idle disk is never frozen.
 func seal(ctx context.Context, p diskPaths, state *diskState) error {
 	client, err := dialQMP(ctx, p.qmpSocket())
 	if err != nil {
@@ -93,10 +127,20 @@ func seal(ctx context.Context, p diskPaths, state *diskState) error {
 			return err
 		}
 		mountpoint := state.Attachment.Mountpoint
+		if err := syncFilesystem(mountpoint); err != nil {
+			return err
+		}
+		written, err := headWritten(ctx, client, state.head().node())
+		if err != nil {
+			return err
+		}
+		if !written && state.HeadFresh {
+			return nil
+		}
 		if err := freezeFilesystem(mountpoint); err != nil {
 			return err
 		}
-		_, err := sealFrozen(ctx, p, state, client)
+		_, err = sealFrozen(ctx, p, state, client)
 		return errors.Join(err, thawFilesystem(mountpoint))
 	}()
 	return errors.Join(err, client.close())
@@ -402,19 +446,25 @@ func (e *Engine) Recover(ctx context.Context, diskID string) error {
 		return err
 	}
 	if state.Attachment != nil {
-		// The agent that attached this disk is gone, so the head's write
-		// statistics may have gone with its daemon; the next seal must not
-		// trust them.
-		state.HeadFresh = false
-		if err := teardown(ctx, p, state); err != nil {
+		if err := releaseAttachment(ctx, p, state); err != nil {
 			return err
 		}
-	}
-	if err := sealOrphanedHead(ctx, p, state); err != nil {
+	} else if err := sealOrphanedHead(ctx, p, state); err != nil {
 		return err
 	}
 	e.log.InfoContext(ctx, "disk recovered", "disk_id", p.id, "unpublished_layers", state.unpublishedSealed())
 	return nil
+}
+
+// releaseAttachment tears down an attachment whose holder is gone or broken
+// and seals, with no daemon running, whatever reached its head. The daemon's
+// write statistics may have gone with it, so the seal does not trust them.
+func releaseAttachment(ctx context.Context, p diskPaths, state *diskState) error {
+	state.HeadFresh = false
+	if err := teardown(ctx, p, state); err != nil {
+		return err
+	}
+	return sealOrphanedHead(ctx, p, state)
 }
 
 // sealOrphanedHead seals, with no daemon running, a head that holds writes

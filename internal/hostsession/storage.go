@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -205,16 +206,16 @@ func (s *Server) RecordDiskGeneration(ctx context.Context, req *hostproto.Record
 	return &hostproto.RecordDiskGenerationResponse{}, nil
 }
 
-// RecordDiskCollection records the bytes a collection removed.
-func (s *Server) RecordDiskCollection(ctx context.Context, req *hostproto.RecordDiskCollectionRequest) (*hostproto.RecordDiskCollectionResponse, error) {
+// CollectDisk deletes a disk's unreachable objects under the lease.
+func (s *Server) CollectDisk(ctx context.Context, req *hostproto.CollectDiskRequest) (*hostproto.CollectDiskResponse, error) {
 	container, disk, err := parseDiskCall(req.GetContainerId(), req.GetDiskId())
 	if err != nil {
 		return nil, err
 	}
-	if err := s.storage.RecordDiskCollection(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), req.GetRemovedBytes(), req.GetBaseGeneration()); err != nil {
+	if err := s.storage.CollectDisk(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), req.GetBaseGeneration(), req.GetKeys(), req.GetRemovedBytes()); err != nil {
 		return nil, s.diskError(ctx, err)
 	}
-	return &hostproto.RecordDiskCollectionResponse{}, nil
+	return &hostproto.CollectDiskResponse{}, nil
 }
 
 // ReleaseDisk ends a lease.
@@ -227,4 +228,30 @@ func (s *Server) ReleaseDisk(ctx context.Context, req *hostproto.ReleaseDiskRequ
 		return nil, s.diskError(ctx, err)
 	}
 	return &hostproto.ReleaseDiskResponse{}, nil
+}
+
+// diskOperations maps the host's disk operations to the API's.
+var diskOperations = map[hostproto.DiskOperation]apitypes.DiskOperation{ //nolint:gochecknoglobals // constant table
+	hostproto.DiskOperation_DISK_OPERATION_PUBLISH: apitypes.DiskOperationPublish,
+	hostproto.DiskOperation_DISK_OPERATION_RELEASE: apitypes.DiskOperationRelease,
+}
+
+// RecordDiskFailure records or clears the holder's last disk failure.
+func (s *Server) RecordDiskFailure(ctx context.Context, req *hostproto.RecordDiskFailureRequest) (*hostproto.RecordDiskFailureResponse, error) {
+	container, disk, err := parseDiskCall(req.GetContainerId(), req.GetDiskId())
+	if err != nil {
+		return nil, err
+	}
+	var failure *storage.DiskFailure
+	if f := req.GetFailure(); f != nil {
+		operation, ok := diskOperations[f.GetOperation()]
+		if !ok {
+			return nil, status.Errorf(codes.InvalidArgument, "unknown disk operation %s", f.GetOperation())
+		}
+		failure = &storage.DiskFailure{Operation: operation, Message: f.GetMessage()}
+	}
+	if err := s.storage.RecordDiskFailure(ctx, container, disk, req.GetLeaseToken(), failure); err != nil {
+		return nil, s.diskError(ctx, err)
+	}
+	return &hostproto.RecordDiskFailureResponse{}, nil
 }

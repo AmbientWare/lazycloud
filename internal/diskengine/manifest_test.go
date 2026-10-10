@@ -2,6 +2,7 @@ package diskengine
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -50,6 +51,28 @@ func TestChainMustIncreaseAndNameDigests(t *testing.T) {
 		}
 	}
 	if err := validateChain([]Generation{{1, "k1", digest}, {4, "k4", digest}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A layer whose manifest no restore would read is refused at publish, so no
+// generation is recorded that cannot be attached.
+func TestManifestRestoresCannotReadIsRefused(t *testing.T) {
+	chunk := manifestChunk{Offset: 1 << 40, Length: minChunkBytes, SHA256: fmt.Sprintf("%064x", 1)}
+	entry, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := make([]manifestChunk, maxManifestBytes/len(entry)+1)
+	for i := range chunks {
+		chunks[i] = chunk
+	}
+	manifest := layerManifest{DiskID: "d1", Generation: 1, VirtualSizeBytes: 1 << 40, LayerSizeBytes: 1 << 40, Filesystem: diskFilesystem, Chunks: chunks}
+	if _, _, err := encodeManifest(manifest); !errors.Is(err, ErrManifestTooLarge) {
+		t.Fatalf("encoding a %d-chunk manifest returned %v, want ErrManifestTooLarge", len(chunks), err)
+	}
+	manifest.Chunks = chunks[:len(chunks)/2]
+	if _, _, err := encodeManifest(manifest); err != nil {
 		t.Fatal(err)
 	}
 }

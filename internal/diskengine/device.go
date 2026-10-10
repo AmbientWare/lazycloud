@@ -271,6 +271,20 @@ func filesystemIoctl(mountpoint string, request uint) error {
 	return nil
 }
 
+// syncFilesystem writes the mounted filesystem's dirty pages and metadata to
+// its device without stopping writers.
+func syncFilesystem(mountpoint string) error {
+	fd, err := unix.Open(mountpoint, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", mountpoint, err)
+	}
+	defer func() { _ = unix.Close(fd) }() // A directory opened for syncfs.
+	if err := unix.Syncfs(fd); err != nil {
+		return fmt.Errorf("sync %s: %w", mountpoint, err)
+	}
+	return nil
+}
+
 func freezeFilesystem(mountpoint string) error {
 	if err := filesystemIoctl(mountpoint, ioctlFreeze); err != nil {
 		return fmt.Errorf("freeze: %w", err)

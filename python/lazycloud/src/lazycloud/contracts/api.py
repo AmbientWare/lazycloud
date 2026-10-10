@@ -624,6 +624,17 @@ class DiskStatus(str, Enum):
     saving = "saving"
 
 
+class DiskOperation(str, Enum):
+    publish = "publish"
+    release = "release"
+
+
+class DiskFailure(APIModel):
+    operation: DiskOperation
+    message: str
+    failed_at: AwareDatetime
+
+
 class State(str, Enum):
     uploading = "uploading"
     stored = "stored"
@@ -2390,6 +2401,7 @@ class DevboxDisk(APIModel):
     stored_bytes: int
     generation: int
     status: DiskStatus
+    failure: DiskFailure | None = None
 
 
 class CreateInstanceRequest(APIModel):
@@ -2845,6 +2857,7 @@ class Disk(APIModel):
     holder: Annotated[
         WorkloadRef | None, Field(description="The workload whose container holds the disk.")
     ] = None
+    failure: DiskFailure | None = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 

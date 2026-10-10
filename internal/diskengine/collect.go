@@ -4,18 +4,26 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-// Collect deletes the disk's objects no restore can reach once chain, the
+// Remover deletes a batch of the disk's objects, naming the chunk bytes they
+// hold, and must refuse once the caller no longer holds the disk: a holder
+// that lost its lease cannot know what a newer holder stored.
+type Remover func(ctx context.Context, keys []string, bytes int64) error
+
+// Collect finds the disk's objects no restore can reach once chain, the
 // control plane's current chain, starts at a parentless generation: every
 // manifest older than chain's base, and every chunk that neither chain, a
 // generation this host committed above its base, nor a pending upload refers
-// to. It returns the chunk bytes deleted, the same bytes Published.AddedBytes
-// counts on the way in. Manifests go first: a manifest whose chunks are gone
-// breaks a restore, while a chunk nothing names waits for the next collect.
-func (e *Engine) Collect(ctx context.Context, diskID string, store Store, chain []Generation) (int64, error) {
+// to. remove deletes them in batches, manifests first: a manifest whose chunks
+// are gone breaks a restore, while a chunk nothing names waits for the next
+// collect. remove is called at least once, with no keys when nothing is
+// unreachable, so the caller can record the new base. Collect returns the chunk bytes removed, the same bytes
+// Published.AddedBytes counts on the way in.
+func (e *Engine) Collect(ctx context.Context, diskID string, store Store, chain []Generation, remove Remover) (int64, error) {
 	p, err := e.paths(diskID)
 	if err != nil {
 		return 0, err
@@ -92,24 +100,42 @@ func (e *Engine) Collect(ctx context.Context, diskID string, store Store, chain 
 	if err != nil {
 		return 0, err
 	}
-	var chunks []string
-	var removed int64
-	err = objects.list(ctx, objects.diskPrefix(p.id)+"chunks/", func(object storedObject) {
-		sum := path.Base(object.Key)
-		if !sha256Pattern.MatchString(sum) || object.Key != objects.chunkKey(p.id, sum) || referenced[sum] {
-			return
+	type object struct {
+		key  string
+		size int64
+	}
+	var chunks []object
+	err = objects.list(ctx, objects.diskPrefix(p.id)+"chunks/", func(stored storedObject) {
+		sum := path.Base(stored.Key)
+		if sha256Pattern.MatchString(sum) && stored.Key == objects.chunkKey(p.id, sum) && !referenced[sum] {
+			chunks = append(chunks, object{stored.Key, stored.Size})
 		}
-		chunks = append(chunks, object.Key)
-		removed += object.Size
 	})
 	if err != nil {
 		return 0, err
 	}
-	if err := objects.deleteKeys(ctx, stale); err != nil {
-		return 0, err
+	if len(stale) == 0 && len(chunks) == 0 {
+		if err := remove(ctx, nil, 0); err != nil {
+			return 0, fmt.Errorf("record the collection: %w", err)
+		}
 	}
-	if err := objects.deleteKeys(ctx, chunks); err != nil {
-		return 0, err
+	for batch := range slices.Chunk(stale, deleteBatchSize) {
+		if err := remove(ctx, batch, 0); err != nil {
+			return 0, fmt.Errorf("remove stale manifests: %w", err)
+		}
+	}
+	var removed int64
+	for batch := range slices.Chunk(chunks, deleteBatchSize) {
+		keys := make([]string, len(batch))
+		var bytes int64
+		for i, chunk := range batch {
+			keys[i] = chunk.key
+			bytes += chunk.size
+		}
+		if err := remove(ctx, keys, bytes); err != nil {
+			return removed, fmt.Errorf("remove unreferenced chunks: %w", err)
+		}
+		removed += bytes
 	}
 
 	kept := state.Published[:0]

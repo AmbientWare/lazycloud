@@ -81,6 +81,9 @@ func (e *Engine) Attach(ctx context.Context, req AttachRequest) (AttachResult, e
 			return AttachResult{}, fmt.Errorf("release the previous attachment: %w", err)
 		}
 	}
+	if err := stopUnrecordedDaemon(ctx, p); err != nil {
+		return AttachResult{}, err
+	}
 
 	prepareCtx, span := telemetry.Start(ctx, "diskengine.restore", trace.WithAttributes(attribute.Int("lazycloud.generations", len(req.Chain))))
 	state, result, err := e.prepare(prepareCtx, p, state, req, store)

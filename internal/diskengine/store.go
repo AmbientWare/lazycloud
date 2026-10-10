@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"golang.org/x/sync/errgroup"
 )
 
 // Credentials sign requests to a workspace bucket. A zero ExpiresAt never
@@ -47,7 +45,8 @@ const credentialMargin = 2 * time.Minute
 // transferConcurrency bounds the chunk requests one layer has in flight.
 const transferConcurrency = 8
 
-// deleteBatchSize is the most keys one DeleteObjects request accepts.
+// deleteBatchSize is the most keys one DeleteObjects request accepts, and so
+// the most one Remover call is given.
 const deleteBatchSize = 1000
 
 type objectStore struct {
@@ -180,36 +179,6 @@ func (s *objectStore) list(ctx context.Context, prefix string, visit func(stored
 		for _, object := range page.Contents {
 			visit(storedObject{Key: aws.ToString(object.Key), Size: aws.ToInt64(object.Size)})
 		}
-	}
-	return nil
-}
-
-func (s *objectStore) deleteKeys(ctx context.Context, keys []string) error {
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(4)
-	for batch := range slices.Chunk(keys, deleteBatchSize) {
-		group.Go(func() error {
-			objects := make([]types.ObjectIdentifier, len(batch))
-			for i, key := range batch {
-				objects[i] = types.ObjectIdentifier{Key: aws.String(key)}
-			}
-			output, err := s.client.DeleteObjects(groupCtx, &s3.DeleteObjectsInput{
-				Bucket: &s.bucket,
-				Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
-			})
-			if err != nil {
-				return fmt.Errorf("delete %d objects from s3://%s: %w", len(batch), s.bucket, err)
-			}
-			if len(output.Errors) > 0 {
-				first := output.Errors[0]
-				return fmt.Errorf("delete s3://%s/%s: %s: %s (and %d more failures)", s.bucket,
-					aws.ToString(first.Key), aws.ToString(first.Code), aws.ToString(first.Message), len(output.Errors)-1)
-			}
-			return nil
-		})
-	}
-	if err := group.Wait(); err != nil {
-		return fmt.Errorf("delete objects: %w", err)
 	}
 	return nil
 }

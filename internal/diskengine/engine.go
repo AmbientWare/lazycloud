@@ -1,7 +1,7 @@
 // Package diskengine keeps durable disks on a host. Each disk is a qcow2
-// layer chain under <root>/<disk id>/, served by a qemu-storage-daemon that
-// outlives the call that started it, exposed through a kernel NBD device and
-// mounted as ext4. Sealed layers publish to the workspace bucket as
+// layer chain under <root>/<disk id>/, served by a qemu-storage-daemon in a
+// systemd scope of its own, so it outlives the call and the process that
+// started it, exposed through a kernel NBD device and mounted as ext4. Sealed layers publish to the workspace bucket as
 // content-defined chunks plus a manifest; the control plane records each
 // published generation and the engine commits it once that record exists.
 //
@@ -38,6 +38,13 @@ var (
 	// ErrCredentialsExpired marks store credentials the callback returned
 	// already expired.
 	ErrCredentialsExpired = errors.New("storage credentials expired")
+	// ErrAttachmentLost marks an attached disk whose daemon, device or mount
+	// had gone. The engine released what remained and sealed what had
+	// reached the head, so the disk is detached and its writes publish.
+	ErrAttachmentLost = errors.New("disk attachment lost")
+	// ErrManifestTooLarge marks a layer with more chunks than a manifest
+	// restores hold; publishing it would leave a generation no attach reads.
+	ErrManifestTooLarge = errors.New("disk layer manifest too large")
 )
 
 // InsufficientSpaceError says how far a restore is from fitting.
@@ -132,20 +139,26 @@ const (
 	toolNBDClient = "nbd-client"
 	toolMkfs      = "mkfs.ext4"
 	toolResizeFS  = "resize2fs"
+	toolRunUnit   = "systemd-run"
 	sysModuleNBD  = "/sys/module/nbd"
+	// systemdRunning exists while systemd is the init system.
+	systemdRunning = "/run/systemd/system"
 )
 
 // Check reports what this host lacks to attach disks: a required tool, the
-// nbd kernel module or root privileges.
+// nbd kernel module, systemd or root privileges.
 func (e *Engine) Check() error {
 	var missing []error
-	for _, tool := range []string{toolDaemon, toolImage, toolNBDClient, toolMkfs, toolResizeFS} {
+	for _, tool := range []string{toolDaemon, toolImage, toolNBDClient, toolMkfs, toolResizeFS, toolRunUnit} {
 		if _, err := exec.LookPath(tool); err != nil {
 			missing = append(missing, fmt.Errorf("%s is not installed: %w", tool, err))
 		}
 	}
 	if _, err := os.Stat(sysModuleNBD); err != nil {
 		missing = append(missing, fmt.Errorf("the nbd kernel module is not loaded (%s is missing); load it at boot with nbds_max=128", sysModuleNBD))
+	}
+	if _, err := os.Stat(systemdRunning); err != nil {
+		missing = append(missing, fmt.Errorf("systemd is not running (%s is missing); each disk's daemon runs in a systemd scope", systemdRunning))
 	}
 	if uid := os.Geteuid(); uid != 0 {
 		missing = append(missing, fmt.Errorf("the disk engine needs root to connect NBD devices and mount, running as uid %d", uid))

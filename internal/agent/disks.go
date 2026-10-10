@@ -28,7 +28,8 @@ import (
 // attaching; once the container has exited, an agent-owned loop publishes
 // the last generation, detaches and releases each lease, retrying until the
 // server accepts, across agent restarts. Until the release the server
-// reports the disk as saving and no other container can take it.
+// reports the disk as saving and no other container can take it. A failed
+// publish or release is recorded on the disk until one succeeds.
 const (
 	publishEvery = 2 * time.Minute
 	// compactAfter is how many committed layers the engine folds together.
@@ -48,6 +49,9 @@ type heldDisk struct {
 	Token     []byte `json:"token"`
 	// Layers counts generations committed since the last compaction.
 	Layers int `json:"layers"`
+	// reported is true while the server holds no failure this agent
+	// recorded for the lease.
+	reported bool
 }
 
 // diskSet is a container's leased disks.
@@ -228,15 +232,25 @@ func (c *container) publishLoop(ctx context.Context) {
 		disks := append([]*heldDisk(nil), c.disks.disks...)
 		c.disks.mu.Unlock()
 		for _, d := range disks {
-			if err := c.a.publish(ctx, c.id, d); err != nil && ctx.Err() == nil {
+			err := c.a.publish(ctx, c.id, d)
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
 				c.log.Warn("publishing disk failed; retrying next round", "disk", d.Name, "error", err)
 			}
+			if errors.Is(err, diskengine.ErrAttachmentLost) {
+				c.failVolume(ctx, "disk "+d.Name+" stopped being served; what reached it is saved")
+			}
+			c.a.reportDisk(ctx, c.id, d, hostproto.DiskOperation_DISK_OPERATION_PUBLISH, err)
 		}
 	}
 }
 
-// publish uploads every unpublished layer of d and records each with the
-// server before committing it locally, so a lost reply is replayed.
+// publish seals what d's container wrote, then uploads every sealed layer
+// not yet published and records each with the server before committing it
+// locally, so a lost reply is replayed. A disk whose attachment was lost
+// publishes what reached it and returns diskengine.ErrAttachmentLost.
 func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) error {
 	lock := a.diskLock(d.ID)
 	lock.Lock()
@@ -245,13 +259,17 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) erro
 	if err != nil {
 		return err
 	}
+	sealErr := a.diskEngine.Seal(ctx, d.ID)
+	if sealErr != nil && !errors.Is(sealErr, diskengine.ErrAttachmentLost) {
+		return fmt.Errorf("seal: %w", sealErr)
+	}
 	for {
 		published, err := a.diskEngine.Publish(ctx, d.ID, store)
 		if err != nil {
 			return fmt.Errorf("publish: %w", err)
 		}
 		if published == nil {
-			return nil
+			return sealErr
 		}
 		if _, err := a.host.RecordDiskGeneration(ctx, &hostproto.RecordDiskGenerationRequest{
 			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token,
@@ -267,17 +285,18 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) erro
 		d.Layers++
 		if published.Flat {
 			chain := []diskengine.Generation{{Generation: published.Generation, ManifestKey: published.ManifestKey, ManifestSHA256: published.ManifestSHA256}}
-			removed, err := a.diskEngine.Collect(ctx, d.ID, store, chain)
-			if err != nil {
+			remove := func(ctx context.Context, keys []string, bytes int64) error {
+				_, err := a.host.CollectDisk(ctx, &hostproto.CollectDiskRequest{
+					ContainerId: container, DiskId: d.ID, LeaseToken: d.Token,
+					BaseGeneration: published.Generation, Keys: keys, RemovedBytes: bytes,
+				})
+				return err //nolint:wrapcheck // Collect wraps it.
+			}
+			if _, err := a.diskEngine.Collect(ctx, d.ID, store, chain, remove); err != nil {
 				return fmt.Errorf("collect: %w", err)
 			}
-			if _, err := a.host.RecordDiskCollection(ctx, &hostproto.RecordDiskCollectionRequest{
-				ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, RemovedBytes: removed, BaseGeneration: published.Generation,
-			}); err != nil {
-				return fmt.Errorf("record collection: %w", err)
-			}
 		}
-		if d.Layers >= compactAfter {
+		if d.Layers >= compactAfter && sealErr == nil {
 			if err := a.diskEngine.Compact(ctx, d.ID); err != nil {
 				return fmt.Errorf("compact: %w", err)
 			}
@@ -286,17 +305,24 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) erro
 	}
 }
 
+// fenced reports whether the server refused a disk call because the lease
+// is no longer this container's.
+func fenced(err error) bool { return status.Code(err) == codes.FailedPrecondition }
+
 // release publishes d's last generation, detaches it and ends its lease. A
 // disk this host never restored has nothing to publish. A lease the server
-// already ended, as after host loss, counts as released.
+// already ended, as after host loss, counts as released, and the local copy,
+// which may hold writes the disk's next holder never saw, is evicted.
 func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
 	local, err := a.hasLocalDisk(ctx, d.ID)
 	if err != nil {
 		return err
 	}
+	lost := false
 	if local {
 		err := a.publish(ctx, container, d)
-		if errors.Is(err, diskengine.ErrNoLocalState) || status.Code(err) == codes.FailedPrecondition {
+		lost = fenced(err)
+		if lost || errors.Is(err, diskengine.ErrNoLocalState) || errors.Is(err, diskengine.ErrAttachmentLost) {
 			err = nil
 		}
 		if err == nil {
@@ -307,13 +333,36 @@ func (a *Agent) release(ctx context.Context, container string, d *heldDisk) erro
 		}
 	}
 	_, err = a.host.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
-	if status.Code(err) == codes.FailedPrecondition {
-		return nil
-	}
-	if err != nil {
+	switch {
+	case fenced(err):
+		lost = true
+	case err != nil:
 		return fmt.Errorf("release: %w", err)
 	}
+	if lost && local {
+		if err := a.diskEngine.Evict(d.ID); err != nil { //nolint:contextcheck // A local file removal.
+			return fmt.Errorf("evict the copy of a lost lease: %w", err)
+		}
+	}
 	return nil
+}
+
+// reportDisk records a failed publish or release on the disk, or clears the
+// failure once one succeeds. A lease the server already ended takes no
+// report.
+func (a *Agent) reportDisk(ctx context.Context, container string, d *heldDisk, operation hostproto.DiskOperation, failure error) {
+	if (failure == nil && d.reported) || fenced(failure) || ctx.Err() != nil {
+		return
+	}
+	req := &hostproto.RecordDiskFailureRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token}
+	if failure != nil {
+		req.Failure = &hostproto.DiskFailure{Operation: operation, Message: failure.Error()}
+	}
+	if _, err := a.host.RecordDiskFailure(ctx, req); err != nil && !fenced(err) {
+		a.log.Warn("recording a disk failure failed", "disk_id", d.ID, "error", err)
+		return
+	}
+	d.reported = failure == nil
 }
 
 // hasLocalDisk reports whether the engine keeps any state of disk here; a
@@ -359,6 +408,7 @@ func (a *Agent) releaseLeases(ctx context.Context) {
 		for _, d := range disks {
 			if err := a.release(ctx, container, d); err != nil {
 				a.log.Warn("releasing a disk failed; retrying", "container_id", container, "disk", d.Name, "error", err)
+				a.reportDisk(ctx, container, d, hostproto.DiskOperation_DISK_OPERATION_RELEASE, err)
 				kept = append(kept, d)
 			}
 		}

@@ -12,6 +12,10 @@ import (
 // diskFilesystem is the filesystem every generation holds.
 const diskFilesystem = "ext4"
 
+// maxManifestBytes bounds the manifest a restore reads, and so the chunks one
+// generation names.
+const maxManifestBytes = 64 << 20
+
 type manifestChunk struct {
 	Offset int64  `json:"offset"`
 	Length int64  `json:"length"`
@@ -42,6 +46,10 @@ func encodeManifest(manifest layerManifest) ([]byte, string, error) {
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, "", fmt.Errorf("encode manifest: %w", err)
+	}
+	if len(data) > maxManifestBytes {
+		return nil, "", fmt.Errorf("%w: generation %d names %d chunks in %d bytes; restores read at most %d",
+			ErrManifestTooLarge, manifest.Generation, len(manifest.Chunks), len(data), maxManifestBytes)
 	}
 	sum := sha256.Sum256(data)
 	return data, hex.EncodeToString(sum[:]), nil

@@ -28,7 +28,8 @@ where id = @id and size_bytes < @size_bytes;
 
 -- name: TakeDiskLease :exec
 update disks
-set holder_container_id = @container_id, lease_token = @lease_token, released_at = null, updated_at = now()
+set holder_container_id = @container_id, lease_token = @lease_token, released_at = null,
+    failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id;
 
 -- name: DiskChain :many
@@ -45,10 +46,11 @@ order by g.generation;
 -- The disk only while container holds it with token: it has not stopped,
 -- or it stopped on a live host and has not released the disk yet, which is
 -- when its host publishes the final generation.
-select d.id, d.generation
+select d.id, d.generation, coalesce(b.bucket, '')::text as bucket
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
+left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.id = @id and d.holder_container_id = @container_id and d.lease_token = @lease_token
   and d.state = 'active' and c.host_id = @host_id and h.state not in ('lost', 'retired')
   and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
@@ -63,12 +65,22 @@ values (@disk_id, @generation, @parent_generation, @manifest_key, @manifest_sha2
 
 -- name: AdvanceDisk :exec
 update disks
-set generation = @generation, stored_bytes = stored_bytes + @added_bytes, updated_at = now()
+set generation = @generation, stored_bytes = stored_bytes + @added_bytes,
+    failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id;
 
 -- name: ReleaseDisk :execrows
-update disks set released_at = now(), updated_at = now()
+update disks
+set released_at = now(), failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id and holder_container_id = @container_id and lease_token = @lease_token;
+
+-- name: SetDiskFailure :execrows
+-- Records or, with a null operation, clears the holder's last failure. A
+-- released lease has nothing left to fail.
+update disks
+set failed_operation = sqlc.narg(operation)::text, failure_message = sqlc.narg(message)::text,
+    failed_at = case when sqlc.narg(operation)::text is null then null else now() end, updated_at = now()
+where id = @id and holder_container_id = @container_id and lease_token = @lease_token and released_at is null;
 
 -- name: ShrinkDiskStored :exec
 update disks set stored_bytes = greatest(stored_bytes - @removed_bytes, 0), updated_at = now()
@@ -80,7 +92,7 @@ delete from disk_generations where disk_id = @disk_id and generation < @generati
 -- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at,
+       d.created_at, d.updated_at, d.failed_operation, d.failure_message, d.failed_at,
        a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
@@ -95,7 +107,7 @@ limit @max_rows;
 -- name: ActiveDisk :one
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at,
+       d.created_at, d.updated_at, d.failed_operation, d.failure_message, d.failed_at,
        a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id

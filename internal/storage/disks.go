@@ -6,6 +6,9 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -243,27 +246,105 @@ func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID,
 	return nil
 }
 
-// RecordDiskCollection records bytes a collection removed and forgets
-// generations older than the newest parentless one, which no restore needs.
-func (s *Storage) RecordDiskCollection(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, removedBytes, base int64) error {
-	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, _ LockLeasedDiskRow) error {
+// maxCollectKeys bounds the keys one CollectDisk call deletes.
+const maxCollectKeys = 1000
+
+// CollectDisk deletes keys, objects of the disk no restore reaches, and
+// forgets generations older than base, the newest parentless one. The keys
+// are deleted while the lease's row lock is held: no other container can take
+// the disk or record a generation until they are gone, and a holder that lost
+// the lease deletes nothing. Keys outside the disk's manifests below base
+// and its chunks are refused.
+func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, base int64, keys []string, removedBytes int64) error {
+	if len(keys) > maxCollectKeys {
+		return invalid("collect at most %d keys at once, got %d", maxCollectKeys, len(keys))
+	}
+	for _, key := range keys {
+		if !collectable(disk, base, key) {
+			return invalid("key %q is not a manifest below generation %d or a chunk of disk %s", key, base, disk)
+		}
+	}
+	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
+		if base > row.Generation {
+			return invalid("base generation %d is past the recorded generation %d", base, row.Generation)
+		}
+		if len(keys) > 0 {
+			if row.Bucket == "" {
+				return invalid("disk %s has no workspace bucket", disk)
+			}
+			if err := s.deleteKeys(ctx, row.Bucket, keys); err != nil {
+				return fmt.Errorf("delete collected objects: %w", err)
+			}
+		}
 		if err := q.ShrinkDiskStored(ctx, ShrinkDiskStoredParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0)}); err != nil {
 			return fmt.Errorf("record collection: %w", err)
 		}
 		return q.DeleteDiskGenerationsBefore(ctx, DeleteDiskGenerationsBeforeParams{DiskID: disk, Generation: base})
 	})
 	if err != nil {
-		return fmt.Errorf("record disk collection: %w", err)
+		return fmt.Errorf("collect disk: %w", err)
 	}
 	return nil
 }
 
-// ReleaseDisk ends a lease after the holder's final publish. It may follow
-// the container's stop, so it checks only the token.
+var (
+	collectManifest = regexp.MustCompile(`^manifests/(\d{12})-[0-9a-f]{64}\.json$`)
+	collectChunk    = regexp.MustCompile(`^chunks/([0-9a-f]{2})/([0-9a-f]{64})$`)
+)
+
+// collectable reports whether key names a manifest of disk below base or
+// one of its chunks, as the disk engine stores them.
+func collectable(disk uuid.UUID, base int64, key string) bool {
+	rest, ok := strings.CutPrefix(key, diskPrefix(disk))
+	if !ok {
+		return false
+	}
+	if m := collectManifest.FindStringSubmatch(rest); m != nil {
+		generation, err := strconv.ParseInt(m[1], 10, 64)
+		return err == nil && generation < base
+	}
+	m := collectChunk.FindStringSubmatch(rest)
+	return m != nil && strings.HasPrefix(m[2], m[1])
+}
+
+// ReleaseDisk ends a lease after the holder's final publish, clearing any
+// failure it recorded. It may follow the container's stop, so it checks only
+// the token.
 func (s *Storage) ReleaseDisk(ctx context.Context, container, disk uuid.UUID, token []byte) error {
 	n, err := s.queries.ReleaseDisk(ctx, ReleaseDiskParams{ID: disk, ContainerID: &container, LeaseToken: token})
 	if err != nil {
 		return fmt.Errorf("release disk: %w", err)
+	}
+	if n == 0 {
+		return ErrStaleLease
+	}
+	return nil
+}
+
+// maxFailureMessage bounds a recorded failure's message, in bytes.
+const maxFailureMessage = 4096
+
+// DiskFailure is why a holder's publish or release failed.
+type DiskFailure struct {
+	Operation apitypes.DiskOperation
+	Message   string
+}
+
+// RecordDiskFailure records the holder's latest failure, or clears it when
+// failure is nil, until the lease is released. A longer message keeps its
+// first maxFailureMessage bytes.
+func (s *Storage) RecordDiskFailure(ctx context.Context, container, disk uuid.UUID, token []byte, failure *DiskFailure) error {
+	params := SetDiskFailureParams{ID: disk, ContainerID: &container, LeaseToken: token}
+	if failure != nil {
+		if !failure.Operation.Valid() {
+			return invalid("unknown disk operation %q", failure.Operation)
+		}
+		message := strings.ToValidUTF8(failure.Message[:min(len(failure.Message), maxFailureMessage)], "")
+		params.Operation, params.Message = (*string)(&failure.Operation), &message
+	}
+	n, err := s.queries.SetDiskFailure(ctx, params)
+	if err != nil {
+		return fmt.Errorf("record disk failure: %w", err)
 	}
 	if n == 0 {
 		return ErrStaleLease
@@ -276,6 +357,9 @@ func diskOut(row ListDisksRow) apitypes.Disk {
 	out := apitypes.Disk{
 		Id: row.ID, Name: row.Name, SizeBytes: row.SizeBytes, StoredBytes: row.StoredBytes, Generation: row.Generation,
 		Status: status, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}
+	if row.FailedOperation != nil && row.FailureMessage != nil && row.FailedAt != nil {
+		out.Failure = &apitypes.DiskFailure{Operation: apitypes.DiskOperation(*row.FailedOperation), Message: *row.FailureMessage, FailedAt: *row.FailedAt}
 	}
 	if status != apitypes.Detached {
 		out.HolderContainerId = row.HolderContainerID

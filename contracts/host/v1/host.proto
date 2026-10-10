@@ -34,10 +34,17 @@ service HostService {
   // RecordDiskGeneration records an uploaded generation under the lease. A
   // stale lease returns FAILED_PRECONDITION.
   rpc RecordDiskGeneration(RecordDiskGenerationRequest) returns (RecordDiskGenerationResponse);
-  // RecordDiskCollection records the bytes a collection removed.
-  rpc RecordDiskCollection(RecordDiskCollectionRequest) returns (RecordDiskCollectionResponse);
+  // CollectDisk deletes objects of the disk no restore reaches and records
+  // the chain's new base. The server deletes them while it holds the lease,
+  // so a host that lost the disk deletes nothing a newer holder stored. A
+  // stale lease returns FAILED_PRECONDITION.
+  rpc CollectDisk(CollectDiskRequest) returns (CollectDiskResponse);
   // ReleaseDisk ends the lease after the final publish.
   rpc ReleaseDisk(ReleaseDiskRequest) returns (ReleaseDiskResponse);
+  // RecordDiskFailure records why the holder's last publish or release
+  // failed, which the disk shows until a later one succeeds. A stale lease
+  // returns FAILED_PRECONDITION.
+  rpc RecordDiskFailure(RecordDiskFailureRequest) returns (RecordDiskFailureResponse);
   // ContainerAPI carries one public API request a container made through its
   // supervisor. The first APIRequest holds the head, later ones the body;
   // the host half-closes after the body. The server answers with the head,
@@ -847,16 +854,21 @@ message RecordDiskGenerationRequest {
 
 message RecordDiskGenerationResponse {}
 
-message RecordDiskCollectionRequest {
+message CollectDiskRequest {
   string container_id = 1;
   string disk_id = 2;
   bytes lease_token = 3;
-  int64 removed_bytes = 4;
-  // The base generation of the chain the collection kept.
-  int64 base_generation = 5;
+  // The parentless generation the current chain starts at. Generations below
+  // it are forgotten.
+  int64 base_generation = 4;
+  // At most 1000 keys under disks/<disk id>/: manifests of generations below
+  // the base, and chunks no generation from the base on names.
+  repeated string keys = 5;
+  // The bytes of the chunks among keys.
+  int64 removed_bytes = 6;
 }
 
-message RecordDiskCollectionResponse {}
+message CollectDiskResponse {}
 
 message ReleaseDiskRequest {
   string container_id = 1;
@@ -865,6 +877,31 @@ message ReleaseDiskRequest {
 }
 
 message ReleaseDiskResponse {}
+
+// DiskOperation is what a disk's holder does with it after attaching.
+enum DiskOperation {
+  DISK_OPERATION_UNSPECIFIED = 0;
+  // Publishing a generation while the container runs.
+  DISK_OPERATION_PUBLISH = 1;
+  // The final publish, detach and release once the container has stopped.
+  DISK_OPERATION_RELEASE = 2;
+}
+
+message DiskFailure {
+  DiskOperation operation = 1;
+  string message = 2;
+}
+
+message RecordDiskFailureRequest {
+  string container_id = 1;
+  string disk_id = 2;
+  bytes lease_token = 3;
+  // Absent clears the recorded failure: the holder's latest attempt
+  // succeeded.
+  DiskFailure failure = 4;
+}
+
+message RecordDiskFailureResponse {}
 
 // APIRequest is one message of a container API call. Only the first carries
 // head; body chunks follow in order.

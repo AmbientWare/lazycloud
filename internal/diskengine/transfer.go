@@ -20,8 +20,6 @@ import (
 // each fetching up to transferConcurrency chunks.
 const layerDownloadConcurrency = 4
 
-const maxManifestBytes = 64 << 20
-
 // layerRun is a contiguous range of a layer's contents that holds data. Its
 // pieces say where each part of it is stored, which for a flattened chain is
 // spread across several layer files.
@@ -126,7 +124,8 @@ func uploadFile(ctx context.Context, store *objectStore, diskID, path string, ge
 }
 
 // uploadLayer stores every non-zero chunk of runs the disk does not already
-// hold, then the manifest naming them. Each run starts a new chunk.
+// hold, then the manifest naming them. Each run starts a new chunk. A
+// manifest restores could not read is refused before any chunk uploads.
 func uploadLayer(ctx context.Context, store *objectStore, manifest layerManifest, runs []*layerRun) (publishResult, error) {
 	type located struct {
 		chunk manifestChunk
@@ -150,6 +149,12 @@ func uploadLayer(ctx context.Context, store *objectStore, manifest layerManifest
 		if err != nil {
 			return publishResult{}, fmt.Errorf("chunk generation %d at %d: %w", manifest.Generation, run.start, err)
 		}
+	}
+	manifest.Filesystem = diskFilesystem
+	manifest.Chunks = chunks
+	data, digest, err := encodeManifest(manifest)
+	if err != nil {
+		return publishResult{}, err
 	}
 
 	var added atomic.Int64
@@ -181,12 +186,6 @@ func uploadLayer(ctx context.Context, store *objectStore, manifest layerManifest
 		return publishResult{}, fmt.Errorf("upload generation %d: %w", manifest.Generation, err)
 	}
 
-	manifest.Filesystem = diskFilesystem
-	manifest.Chunks = chunks
-	data, digest, err := encodeManifest(manifest)
-	if err != nil {
-		return publishResult{}, err
-	}
 	key := store.manifestKey(manifest.DiskID, manifest.Generation, digest)
 	if err := store.put(ctx, key, data, "application/json"); err != nil {
 		return publishResult{}, err

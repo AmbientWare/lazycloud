@@ -133,6 +133,7 @@ func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment u
 	if disk != nil {
 		out.Disk = &apitypes.DevboxDisk{
 			Name: disk.Name, SizeBytes: disk.SizeBytes, StoredBytes: disk.StoredBytes, Generation: disk.Generation, Status: disk.Status,
+			Failure: disk.Failure,
 		}
 	}
 	return out, nil

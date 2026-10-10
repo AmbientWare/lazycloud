@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -180,7 +183,7 @@ func TestPublishedChainRestoresElsewhere(t *testing.T) {
 	}
 
 	flatChain := []Generation{{flat.Generation, flat.ManifestKey, flat.ManifestSHA256}}
-	removed, err := e.Collect(ctx, diskID, store, flatChain)
+	removed, err := e.Collect(ctx, diskID, store, flatChain, storeRemover(objects))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +269,9 @@ func TestAttachMountsAndRestores(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(mountpoint, "data"), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := e.Seal(ctx, diskID); err != nil {
+		t.Fatal(err)
+	}
 	published, err := e.Publish(ctx, diskID, store)
 	if err != nil {
 		t.Fatal(err)
@@ -274,6 +280,9 @@ func TestAttachMountsAndRestores(t *testing.T) {
 		t.Fatalf("publish returned %+v", published)
 	}
 	if err := e.CommitPublished(diskID, published.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Seal(ctx, diskID); err != nil {
 		t.Fatal(err)
 	}
 	if idle, err := e.Publish(ctx, diskID, store); err != nil || idle != nil {
@@ -305,4 +314,67 @@ func TestAttachMountsAndRestores(t *testing.T) {
 	if err := e.Detach(ctx, diskID); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The daemon runs in a systemd scope of its own, so the service that
+// attached the disk can stop or restart while the disk stays served.
+func TestDaemonRunsOutsideTheCallersCgroup(t *testing.T) {
+	requireTools(t, toolDaemon, toolImage, toolRunUnit)
+	e := testEngine(t)
+	_, state, _ := attachUnmounted(t, e, AttachRequest{DiskID: uuid.NewString(), SizeBytes: testDiskBytes, Mountpoint: "/unused", Store: testStore(t)})
+	ours, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(state.Attachment.DaemonPID), "cgroup"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(daemon, ours) || !bytes.Contains(daemon, []byte("/lazycloud-disk-"+state.DiskID+"-")) {
+		t.Fatalf("the daemon runs in cgroup %s; the caller in %s", daemon, ours)
+	}
+}
+
+// A disk whose daemon died is recovered by the next seal: what reached the
+// head is sealed and publishes, and the disk is detached.
+func TestSealRecoversALostDaemon(t *testing.T) {
+	requireTools(t, toolDaemon, toolImage, toolRunUnit, "qemu-io")
+	ctx := t.Context()
+	store := testStore(t)
+	diskID := uuid.NewString()
+	e := testEngine(t)
+	req := AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused", Store: store}
+	p, state, _ := attachUnmounted(t, e, req)
+	writeExport(t, p, 2<<20, 3<<20, 0x5a)
+	want := readExport(t, p)
+	if err := syscall.Kill(state.Attachment.DaemonPID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	for daemonAlive(p, state.Attachment.DaemonPID) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := e.Seal(ctx, diskID); !errors.Is(err, ErrAttachmentLost) {
+		t.Fatalf("sealing a disk whose daemon died returned %v, want ErrAttachmentLost", err)
+	}
+	if state = reload(t, p); state.Attachment != nil || !state.HeadFresh {
+		t.Fatalf("after recovering, the disk is %+v", state)
+	}
+	if err := e.Seal(ctx, diskID); err != nil {
+		t.Fatalf("sealing the recovered disk again: %v", err)
+	}
+	published, err := e.Publish(ctx, diskID, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published == nil || published.Generation != 1 {
+		t.Fatalf("publishing the recovered head returned %+v", published)
+	}
+	if err := e.CommitPublished(diskID, published.Generation); err != nil {
+		t.Fatal(err)
+	}
+	restoredReq := req
+	restoredReq.Chain = []Generation{{published.Generation, published.ManifestKey, published.ManifestSHA256}}
+	q, _, _ := attachUnmounted(t, testEngine(t), restoredReq)
+	requireSameDisk(t, readExport(t, q), want)
 }

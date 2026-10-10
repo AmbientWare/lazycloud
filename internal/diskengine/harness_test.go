@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -36,6 +37,19 @@ func mustOpenStore(t *testing.T, store Store) *objectStore {
 		t.Fatal(err)
 	}
 	return objects
+}
+
+// storeRemover deletes with the test store's own credentials, as the control
+// plane does for a lease holder.
+func storeRemover(objects *objectStore) Remover {
+	return func(ctx context.Context, keys []string, _ int64) error {
+		for _, key := range keys {
+			if _, err := objects.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &objects.bucket, Key: &key}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 func requireTools(t *testing.T, tools ...string) {

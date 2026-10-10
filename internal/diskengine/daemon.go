@@ -177,9 +177,11 @@ func layerNodes(p diskPaths, state *diskState) []map[string]any {
 	return nodes
 }
 
-// startDaemon starts the disk's qemu-storage-daemon, which detaches and
-// keeps serving after this call returns, and exports the head over NBD on
-// the disk's unix socket.
+// startDaemon starts the disk's qemu-storage-daemon in a transient systemd
+// scope, outside the caller's cgroup, so stopping or restarting the caller's
+// service leaves the disk served. The daemon detaches once its sockets
+// listen and exports the head over NBD on the disk's unix socket. A caller
+// other than root gets a scope of its user manager.
 func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error) {
 	if err := p.checkSocketPaths(); err != nil {
 		return 0, err
@@ -192,12 +194,18 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 			return 0, err
 		}
 	}
-	args := []string{
+	// Scope names are unique per start: systemd forgets a scope only some
+	// time after its last process exits.
+	args := []string{"--scope", "--collect", "--quiet", fmt.Sprintf("--unit=lazycloud-disk-%s-%d", p.id, time.Now().UnixNano())}
+	if os.Geteuid() != 0 {
+		args = append([]string{"--user"}, args...)
+	}
+	args = append(args, "--", toolDaemon,
 		"--daemonize",
 		"--pidfile", p.pidFile(),
-		"--chardev", "socket,id=monitor,path=" + p.qmpSocket() + ",server=on,wait=off",
+		"--chardev", "socket,id=monitor,path="+p.qmpSocket()+",server=on,wait=off",
 		"--monitor", "chardev=monitor",
-	}
+	)
 	for _, node := range layerNodes(p, state) {
 		spec, err := json.Marshal(node)
 		if err != nil {
@@ -209,16 +217,37 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 		"--nbd-server", "addr.type=unix,addr.path="+p.nbdSocket(),
 		"--export", "type=nbd,id="+exportID+",node-name="+state.head().node()+",name="+exportName+",writable=on",
 	)
-	if _, err := runTool(ctx, toolDaemon, args...); err != nil {
+	if _, err := runTool(ctx, toolRunUnit, args...); err != nil {
 		return 0, err
 	}
-	raw, err := os.ReadFile(p.pidFile())
+	pid, err := readPID(p.pidFile())
 	if err != nil {
 		return 0, fmt.Errorf("qemu-storage-daemon started without a pid file: %w", err)
 	}
+	return pid, nil
+}
+
+// stopUnrecordedDaemon stops a daemon of this disk that an attach
+// interrupted between starting it and recording it.
+func stopUnrecordedDaemon(ctx context.Context, p diskPaths) error {
+	pid, err := readPID(p.pidFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return stopDaemon(ctx, p, pid)
+}
+
+func readPID(path string) (int, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // A pid file under the root.
+	if err != nil {
+		return 0, fmt.Errorf("read %s: %w", path, err)
+	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", p.pidFile(), err)
+		return 0, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return pid, nil
 }

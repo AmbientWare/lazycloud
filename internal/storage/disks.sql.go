@@ -15,7 +15,7 @@ import (
 const activeDisk = `-- name: ActiveDisk :one
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at,
+       d.created_at, d.updated_at, d.failed_operation, d.failure_message, d.failed_at,
        a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
@@ -44,6 +44,9 @@ type ActiveDiskRow struct {
 	ReleasedAt        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	FailedOperation   *string
+	FailureMessage    *string
+	FailedAt          *time.Time
 	HolderApp         *string
 	HolderKind        *string
 	HolderWorkload    *string
@@ -65,6 +68,9 @@ func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveD
 		&i.ReleasedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailedOperation,
+		&i.FailureMessage,
+		&i.FailedAt,
 		&i.HolderApp,
 		&i.HolderKind,
 		&i.HolderWorkload,
@@ -74,7 +80,8 @@ func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveD
 
 const advanceDisk = `-- name: AdvanceDisk :exec
 update disks
-set generation = $1, stored_bytes = stored_bytes + $2, updated_at = now()
+set generation = $1, stored_bytes = stored_bytes + $2,
+    failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = $3
 `
 
@@ -319,7 +326,7 @@ func (q *Queries) InsertDiskGeneration(ctx context.Context, arg InsertDiskGenera
 const listDisks = `-- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at,
+       d.created_at, d.updated_at, d.failed_operation, d.failure_message, d.failed_at,
        a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
@@ -351,6 +358,9 @@ type ListDisksRow struct {
 	ReleasedAt        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	FailedOperation   *string
+	FailureMessage    *string
+	FailedAt          *time.Time
 	HolderApp         *string
 	HolderKind        *string
 	HolderWorkload    *string
@@ -378,6 +388,9 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDis
 			&i.ReleasedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FailedOperation,
+			&i.FailureMessage,
+			&i.FailedAt,
 			&i.HolderApp,
 			&i.HolderKind,
 			&i.HolderWorkload,
@@ -439,10 +452,11 @@ func (q *Queries) LockActiveDisk(ctx context.Context, arg LockActiveDiskParams) 
 }
 
 const lockLeasedDisk = `-- name: LockLeasedDisk :one
-select d.id, d.generation
+select d.id, d.generation, coalesce(b.bucket, '')::text as bucket
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
+left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.id = $1 and d.holder_container_id = $2 and d.lease_token = $3
   and d.state = 'active' and c.host_id = $4 and h.state not in ('lost', 'retired')
   and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
@@ -459,6 +473,7 @@ type LockLeasedDiskParams struct {
 type LockLeasedDiskRow struct {
 	ID         uuid.UUID
 	Generation int64
+	Bucket     string
 }
 
 // The disk only while container holds it with token: it has not stopped,
@@ -472,7 +487,7 @@ func (q *Queries) LockLeasedDisk(ctx context.Context, arg LockLeasedDiskParams) 
 		arg.HostID,
 	)
 	var i LockLeasedDiskRow
-	err := row.Scan(&i.ID, &i.Generation)
+	err := row.Scan(&i.ID, &i.Generation, &i.Bucket)
 	return i, err
 }
 
@@ -486,7 +501,8 @@ func (q *Queries) MarkDiskDeleting(ctx context.Context, id uuid.UUID) error {
 }
 
 const releaseDisk = `-- name: ReleaseDisk :execrows
-update disks set released_at = now(), updated_at = now()
+update disks
+set released_at = now(), failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = $1 and holder_container_id = $2 and lease_token = $3
 `
 
@@ -498,6 +514,37 @@ type ReleaseDiskParams struct {
 
 func (q *Queries) ReleaseDisk(ctx context.Context, arg ReleaseDiskParams) (int64, error) {
 	result, err := q.db.Exec(ctx, releaseDisk, arg.ID, arg.ContainerID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setDiskFailure = `-- name: SetDiskFailure :execrows
+update disks
+set failed_operation = $1::text, failure_message = $2::text,
+    failed_at = case when $1::text is null then null else now() end, updated_at = now()
+where id = $3 and holder_container_id = $4 and lease_token = $5 and released_at is null
+`
+
+type SetDiskFailureParams struct {
+	Operation   *string
+	Message     *string
+	ID          uuid.UUID
+	ContainerID *uuid.UUID
+	LeaseToken  []byte
+}
+
+// Records or, with a null operation, clears the holder's last failure. A
+// released lease has nothing left to fail.
+func (q *Queries) SetDiskFailure(ctx context.Context, arg SetDiskFailureParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setDiskFailure,
+		arg.Operation,
+		arg.Message,
+		arg.ID,
+		arg.ContainerID,
+		arg.LeaseToken,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -528,7 +575,8 @@ func (q *Queries) ShrinkDiskStored(ctx context.Context, arg ShrinkDiskStoredPara
 
 const takeDiskLease = `-- name: TakeDiskLease :exec
 update disks
-set holder_container_id = $1, lease_token = $2, released_at = null, updated_at = now()
+set holder_container_id = $1, lease_token = $2, released_at = null,
+    failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = $3
 `
 

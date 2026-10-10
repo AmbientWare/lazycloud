@@ -3,12 +3,16 @@ package storage_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 const diskSpec = `{"name":"fn","disks":[{"name":"root","size_bytes":2147483648,"mount_path":"/"}]}`
@@ -108,7 +112,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	if err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, flat); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordDiskCollection(ctx, f.host, second, next.Disk, next.Token, 150, 4); err != nil {
+	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 4, nil, 150); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,5 +130,95 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	page, err := s.ListDisks(ctx, f.ws, "", 100)
 	if err != nil || len(page.Disks) != 0 {
 		t.Fatalf("disks after delete: %+v err=%v", page, err)
+	}
+}
+
+// TestDiskCollectionIsFencedByTheLease covers deleting a disk's unreachable
+// objects: only the current holder deletes, only manifests below the base
+// and chunks of its own disk, and a failure is recorded until a later
+// publish clears it.
+func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t, diskSpec)
+	s := f.storage
+	first := f.container()
+	lease, err := s.AcquireDisk(ctx, f.host, first, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := int64(1); n <= 2; n++ {
+		g := generation(lease.Disk, n, n-1)
+		g.Flat = n == 2
+		if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prefix := "disks/" + lease.Disk.String() + "/"
+	sum := fmt.Sprintf("%064x", 9)
+	oldManifest := generation(lease.Disk, 1, 0).ManifestKey
+	chunk := prefix + "chunks/" + sum[:2] + "/" + sum
+	other := "disks/" + uuid.NewString() + "/chunks/" + sum[:2] + "/" + sum
+	for _, key := range []string{oldManifest, chunk, other} {
+		if _, err := storagetest.Client().PutObject(ctx, &s3.PutObjectInput{Bucket: &lease.Bucket, Key: aws.String(key), Body: strings.NewReader("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	present := func(key string) bool {
+		_, err := storagetest.Client().HeadObject(ctx, &s3.HeadObjectInput{Bucket: &lease.Bucket, Key: aws.String(key)})
+		return err == nil
+	}
+
+	var invalid *InvalidError
+	for _, keys := range [][]string{{other}, {generation(lease.Disk, 2, 1).ManifestKey}, {prefix + "../volumes/x"}} {
+		if err := s.CollectDisk(ctx, f.host, first, lease.Disk, lease.Token, 2, keys, 1); !errors.As(err, &invalid) {
+			t.Errorf("collecting %v: %v, want InvalidError", keys, err)
+		}
+	}
+	if !present(other) {
+		t.Fatal("a refused collection deleted another disk's chunk")
+	}
+
+	// Once the disk changed hands, the old holder deletes nothing.
+	if err := s.RecordDiskFailure(ctx, first, lease.Disk, lease.Token, &DiskFailure{Operation: apitypes.DiskOperationRelease, Message: "upload refused"}); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(first, "host_lost")
+	second := f.container()
+	next, err := s.AcquireDisk(ctx, f.host, second, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk, _ := s.GetDisk(ctx, f.ws, "root"); disk.Failure != nil {
+		t.Fatalf("a new holder shows the old holder's failure %+v", disk.Failure)
+	}
+	if err := s.CollectDisk(ctx, f.host, first, lease.Disk, lease.Token, 2, []string{oldManifest, chunk}, 1); !errors.Is(err, ErrStaleLease) {
+		t.Fatalf("collection by a replaced holder: %v", err)
+	}
+	if !present(oldManifest) || !present(chunk) {
+		t.Fatal("a replaced holder's collection deleted objects")
+	}
+	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 2, []string{oldManifest, chunk}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if present(oldManifest) || present(chunk) || !present(other) {
+		t.Fatal("the holder's collection did not delete exactly its keys")
+	}
+	if disk, _ := s.GetDisk(ctx, f.ws, "root"); disk.StoredBytes != 199 {
+		t.Fatalf("stored bytes after collecting 1 byte of 200: %d", disk.StoredBytes)
+	}
+
+	// A failure shows on the disk until the next generation.
+	if err := s.RecordDiskFailure(ctx, second, next.Disk, next.Token, &DiskFailure{Operation: apitypes.DiskOperationPublish, Message: "chunk upload refused"}); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := s.GetDisk(ctx, f.ws, "root")
+	if err != nil || disk.Failure == nil || disk.Failure.Operation != apitypes.DiskOperationPublish || disk.Failure.Message != "chunk upload refused" {
+		t.Fatalf("disk after a failed publish: %+v err=%v", disk.Failure, err)
+	}
+	if err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(next.Disk, 3, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if disk, _ := s.GetDisk(ctx, f.ws, "root"); disk.Failure != nil {
+		t.Fatalf("a published generation left the failure %+v", disk.Failure)
 	}
 }

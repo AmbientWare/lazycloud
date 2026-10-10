@@ -4230,6 +4230,18 @@ export interface components {
         };
         /** @enum {string} */
         DiskStatus: "detached" | "attached" | "saving";
+        /**
+         * @description publish saves a generation while the container runs; release saves the last one and frees the disk after the container stops.
+         * @enum {string}
+         */
+        DiskOperation: "publish" | "release";
+        /** @description Why the holder's last publish or release failed. It clears once a later one succeeds; until a release succeeds the disk stays saving. */
+        DiskFailure: {
+            operation: components["schemas"]["DiskOperation"];
+            message: string;
+            /** Format: date-time */
+            failed_at: string;
+        };
         Disk: {
             /** Format: uuid */
             id: string;
@@ -4254,6 +4266,7 @@ export interface components {
             holder_container_id?: string;
             /** @description The workload whose container holds the disk. */
             holder?: components["schemas"]["WorkloadRef"];
+            failure?: components["schemas"]["DiskFailure"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -6066,6 +6079,7 @@ export interface components {
             /** Format: int64 */
             generation: number;
             status: components["schemas"]["DiskStatus"];
+            failure?: components["schemas"]["DiskFailure"];
         };
         /** @description Names a release, or a memory snapshot whose release the instance runs. */
         CreateInstanceRequest: {
@@ -11592,6 +11606,7 @@ export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<component
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
 export const diskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskStatus"]> = ["detached", "attached", "saving"];
+export const diskOperationValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskOperation"]> = ["publish", "release"];
 export const artifactStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Artifact"]["state"]> = ["uploading", "stored"];
 export const appStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AppState"]> = ["active", "paused", "deleted"];
 export const liveAppStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LiveAppState"]> = ["active", "paused"];
