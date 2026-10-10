@@ -84,11 +84,12 @@ def sweep() -> SweepReport:
     return report
 
 
-watches_api = app.asgi(
+api = create_api(WATCHES, SNAPSHOTS)
+service = app.asgi(
     name="watches",
     image=image,
     cpu=0.25,
     memory="256Mi",
     concurrent_requests=8,
     keep_warm_seconds=60,
-)(create_api(WATCHES, SNAPSHOTS))
+)(api)
