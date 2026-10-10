@@ -24,7 +24,6 @@ class MediaError(RuntimeError):
 
 class SourceVideo(BaseModel):
     key: str
-    size_bytes: int
     duration_seconds: float
     # Names this exact version of the object, so a replaced video starts fresh.
     job_id: str
@@ -65,7 +64,6 @@ def inspect_video(root: Path, key: str) -> SourceVideo:
     version = f"{key}\n{stat.st_size}\n{stat.st_mtime_ns}".encode()
     return SourceVideo(
         key=key,
-        size_bytes=stat.st_size,
         duration_seconds=read_duration(probe),
         job_id=hashlib.sha256(version).hexdigest()[:16],
     )
