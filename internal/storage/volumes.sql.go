@@ -127,7 +127,7 @@ func (q *Queries) DeleteWorkspaceBucket(ctx context.Context, workspaceID uuid.UU
 }
 
 const deletingVolumes = `-- name: DeletingVolumes :many
-select v.id, v.workspace_id, b.bucket, b.region, w.connection_id
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
 join workspaces w on w.id = v.workspace_id
 left join workspace_buckets b on b.workspace_id = v.workspace_id
@@ -138,7 +138,6 @@ limit $1
 
 type DeletingVolumesRow struct {
 	ID           uuid.UUID
-	WorkspaceID  uuid.UUID
 	Bucket       *string
 	Region       *string
 	ConnectionID *uuid.UUID
@@ -155,7 +154,6 @@ func (q *Queries) DeletingVolumes(ctx context.Context, maxRows int32) ([]Deletin
 		var i DeletingVolumesRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.WorkspaceID,
 			&i.Bucket,
 			&i.Region,
 			&i.ConnectionID,

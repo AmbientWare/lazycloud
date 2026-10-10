@@ -77,7 +77,7 @@ insert into volume_mounts (volume_id, container_id) values (@volume_id, @contain
 on conflict do nothing;
 
 -- name: DeletingVolumes :many
-select v.id, v.workspace_id, b.bucket, b.region, w.connection_id
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
 join workspaces w on w.id = v.workspace_id
 left join workspace_buckets b on b.workspace_id = v.workspace_id

@@ -105,20 +105,7 @@ func (s *Storage) sweepVolumes(ctx context.Context, logger *slog.Logger) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("read deleted volumes: %w", err)
 	}
-	removed := 0
-	for _, row := range rows {
-		ok, err := s.emptyThenDelete(ctx, row.Bucket, row.Region, row.ConnectionID, volumePrefix(row.ID), func() error {
-			return s.queries.DeleteVolumeRow(ctx, row.ID)
-		})
-		if err != nil {
-			logger.WarnContext(ctx, "removing a deleted volume failed", "volume", row.ID.String(), "error", err)
-			continue
-		}
-		if ok {
-			removed++
-		}
-	}
-	return removed, nil
+	return sweepDeleted(ctx, s, logger, "volume", rows, volumePrefix, s.queries.DeleteVolumeRow), nil
 }
 
 func (s *Storage) sweepDisks(ctx context.Context, logger *slog.Logger) (int, error) {
@@ -126,42 +113,38 @@ func (s *Storage) sweepDisks(ctx context.Context, logger *slog.Logger) (int, err
 	if err != nil {
 		return 0, fmt.Errorf("read deleted disks: %w", err)
 	}
-	removed := 0
-	for _, row := range rows {
-		ok, err := s.emptyThenDelete(ctx, row.Bucket, row.Region, row.ConnectionID, diskPrefix(row.ID), func() error {
-			return s.queries.DeleteDiskRow(ctx, row.ID)
-		})
-		if err != nil {
-			logger.WarnContext(ctx, "removing a deleted disk failed", "disk", row.ID.String(), "error", err)
-			continue
-		}
-		if ok {
-			removed++
-		}
-	}
-	return removed, nil
+	return sweepDeleted(ctx, s, logger, "disk", rows, diskPrefix, s.queries.DeleteDiskRow), nil
 }
 
 func diskPrefix(disk uuid.UUID) string { return "disks/" + disk.String() + "/" }
 
-// emptyThenDelete deletes a chunk of prefix in the workspace bucket and,
-// once it is empty, the row. A nil bucket means the workspace never had
-// one.
-func (s *Storage) emptyThenDelete(ctx context.Context, bucket, region *string, connection *uuid.UUID, prefix string, deleteRow func() error) (bool, error) {
-	if bucket != nil && region != nil {
-		store, err := s.storeOf(ctx, *bucket, *region, connection)
+// sweepDeleted deletes a chunk of the files of each deleted volume or disk
+// in rows, under prefix in its workspace bucket, and its row once they are
+// gone; a nil bucket means the workspace never had one. It returns how many
+// rows went. An item's failure is logged and left for the next pass.
+func sweepDeleted[R DeletingVolumesRow | DeletingDisksRow](ctx context.Context, s *Storage, logger *slog.Logger, kind string, rows []R,
+	prefix func(uuid.UUID) string, deleteRow func(context.Context, uuid.UUID) error,
+) int {
+	removed := 0
+	for _, r := range rows {
+		row := DeletingDisksRow(r)
+		empty, err := true, error(nil)
+		if row.Bucket != nil && row.Region != nil {
+			var store bucketClient
+			if store, err = s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID); err == nil {
+				empty, err = s.deletePrefixChunk(ctx, store, prefix(row.ID))
+			}
+		}
+		if err == nil && empty {
+			if err = deleteRow(ctx, row.ID); err == nil {
+				removed++
+			}
+		}
 		if err != nil {
-			return false, err
-		}
-		empty, err := s.deletePrefixChunk(ctx, store, prefix)
-		if err != nil || !empty {
-			return false, err
+			logger.WarnContext(ctx, "removing a deleted "+kind+" failed", kind, row.ID.String(), "error", err)
 		}
 	}
-	if err := deleteRow(); err != nil {
-		return false, fmt.Errorf("delete row: %w", err)
-	}
-	return true, nil
+	return removed
 }
 
 // sweepGrants deletes expired provider keys.
