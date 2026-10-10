@@ -380,12 +380,11 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 		return fmt.Errorf("a devbox needs a disk mounted at /")
 	}
 	var diskBinds []mount.Mount
-	var workspaces []string
 	if len(spec.GetDisks()) > 0 {
 		diskStart := stageEnd
 		err := telemetry.Step(ctx, "agent.disks", func(ctx context.Context) error {
 			var err error
-			diskBinds, workspaces, err = c.attachDisks(ctx, spec.GetDisks(), pod.GetDevbox())
+			diskBinds, err = c.attachDisks(ctx, spec.GetDisks(), pod.GetDevbox())
 			return err
 		}, attribute.Int("lazycloud.disks", len(spec.GetDisks())), attribute.Bool("lazycloud.devbox", pod.GetDevbox()))
 		if err != nil {
@@ -403,21 +402,15 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.link = l
 	c.mu.Unlock()
 	var binds []mount.Mount
-	var volumeWorkspaces []string
 	err = telemetry.Step(ctx, "agent.volumes", func(ctx context.Context) error {
 		var err error
-		binds, volumeWorkspaces, err = c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+		binds, err = c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
 		return err
 	}, attribute.Int("lazycloud.volumes", len(spec.GetVolumes())))
 	if err != nil {
 		return err
 	}
 	binds = append(binds, diskBinds...)
-	for _, ws := range volumeWorkspaces {
-		if !slices.Contains(workspaces, ws) {
-			workspaces = append(workspaces, ws)
-		}
-	}
 	var restore *restorePoint
 	if spec.GetRestore() != nil {
 		err = telemetry.Step(ctx, "agent.restore_fetch", func(ctx context.Context) error {
@@ -444,7 +437,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 		}
 	}
 	err = telemetry.Step(ctx, "agent.create", func(ctx context.Context) error {
-		return c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus, restore)
+		return c.a.createAndStart(ctx, c, spec, runtime, binds, gpus, restore)
 	}, attribute.Bool("lazycloud.restore", restore != nil))
 	if err != nil {
 		return err

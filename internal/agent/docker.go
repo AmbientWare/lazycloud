@@ -69,7 +69,7 @@ const pidsLimit = 4096
 // its sandbox kernel.
 const runtimeRunsc = "runsc"
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string, restore *restorePoint) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -106,9 +106,6 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	httpLabels(labels, c.http)
 	if err := c.podLabels(labels); err != nil {
 		return err
-	}
-	if len(workspaces) > 0 {
-		labels[labelWorkspaces] = strings.Join(workspaces, ",")
 	}
 	labels[labelRuntime] = string(runtimeLabel)
 	if len(gpus) > 0 {

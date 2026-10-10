@@ -45,7 +45,6 @@ import (
 const (
 	labelKind        = "lazycloud.kind"
 	labelWorkspace   = "lazycloud.workspace-id"
-	labelWorkspaces  = "lazycloud.workspaces"
 	labelGeneration  = "lazycloud.mount-generation"
 	labelFingerprint = "lazycloud.mount-fingerprint"
 	kindMount        = "volume-mount"
@@ -274,46 +273,42 @@ func (v *volumes) waitGrant(ctx context.Context, workspace string) error {
 
 // binds prepares the container's volume mounts and returns its bind mounts
 // and the workspaces whose mounts it uses.
-func (v *volumes) binds(ctx context.Context, container string, specs []*hostproto.VolumeMount) ([]mount.Mount, []string, error) {
+func (v *volumes) binds(ctx context.Context, container string, specs []*hostproto.VolumeMount) ([]mount.Mount, error) {
 	var binds []mount.Mount
-	var workspaces []string
 	if len(specs) > 0 && v.a.cfg.GeeseFSPath == "" {
-		return nil, nil, errNoVolumeSupport
+		return nil, errNoVolumeSupport
 	}
 	for n, spec := range specs {
 		if !filepath.IsAbs(spec.GetMountPath()) {
-			return nil, nil, fmt.Errorf("volume mount path %q is not absolute", spec.GetMountPath())
+			return nil, fmt.Errorf("volume mount path %q is not absolute", spec.GetMountPath())
 		}
 		if spec.GetCloudBucket() != nil {
 			bind, err := v.bucketBind(ctx, container, n, spec)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			binds = append(binds, bind)
 			continue
 		}
 		volume := spec.GetVolume()
 		if volume == nil {
-			return nil, nil, fmt.Errorf("volume at %s names no source", spec.GetMountPath())
+			return nil, fmt.Errorf("volume at %s names no source", spec.GetMountPath())
 		}
 		workspace, prefix := volume.GetWorkspaceId(), volume.GetPrefix()
 		if !isUUID(workspace) || !isUUID(volume.GetVolumeId()) || prefix != "volumes/"+volume.GetVolumeId()+"/" {
-			return nil, nil, fmt.Errorf("volume at %s has an invalid location", spec.GetMountPath())
+			return nil, fmt.Errorf("volume at %s has an invalid location", spec.GetMountPath())
 		}
 		root, err := v.ensureMount(ctx, workspace, container)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		source := filepath.Join(root, volume.GetVolumeId())
 		if err := os.MkdirAll(source, 0o777); err != nil { //nolint:gosec // Workloads run as any user.
-			return nil, nil, fmt.Errorf("create volume directory: %w", err)
+			return nil, fmt.Errorf("create volume directory: %w", err)
 		}
 		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: spec.GetMountPath(), ReadOnly: spec.GetReadOnly()})
-		if !slices.Contains(workspaces, workspace) {
-			workspaces = append(workspaces, workspace)
-		}
 	}
-	return binds, workspaces, nil
+	return binds, nil
 }
 
 // ensureMount returns the host path of the workspace's current mount and
