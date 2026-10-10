@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace/noop"
+	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
@@ -147,7 +148,7 @@ func newHost(t *testing.T, cacheBytes int64) *host {
 		}
 		// The snapshotter leaves its mounts for the next start; a dead
 		// FUSE mount must go before its directory can.
-		_ = exec.Command("fusermount3", "-uz", filepath.Join(cfg.Root, "disks")).Run() //nolint:noctx // Cleanup.
+		_ = unix.Unmount(filepath.Join(cfg.Root, "disks"), unix.MNT_DETACH)
 	}
 	t.Cleanup(stop)
 	return &host{engine: New(filepath.Join(dir, "d"), client, logger), bases: client, store: counting, stop: stop}
