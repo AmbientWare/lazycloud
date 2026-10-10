@@ -27,6 +27,8 @@ AL2023_IMAGE=al2023-kvm-$AL2023_RELEASE-kernel-6.1-x86_64.xfs.gpt.qcow2
 AL2023_SHA256=aceaf11d27b8265a9aa681448b1e0223db4e3bfcfd13abde40d6654533e5718f
 
 vm=lazycloud-host
+# The VM's disk data volume, attached as its first extra disk (/dev/vdb).
+data_disk=lazycloud-host-data
 lima=$state/lima-$LIMA_VERSION
 export LIMA_HOME="${LAZYCLOUD_LIMA_HOME:-$state/lima}"
 limactl=$lima/bin/limactl
@@ -49,10 +51,12 @@ install_lima() {
 }
 
 exists() { "$limactl" list --quiet 2>/dev/null | grep -qx "$vm"; }
+data_disk_exists() { "$limactl" disk list --json 2>/dev/null | grep -q "\"name\":\"$data_disk\""; }
 
 create() {
   mkdir -p "$state/vm" "$LIMA_HOME"
   fetch "$state/vm/$AL2023_IMAGE" "https://cdn.amazonlinux.com/al2023/os-images/$AL2023_RELEASE/kvm/$AL2023_IMAGE" "$AL2023_SHA256"
+  data_disk_exists || "$limactl" disk create "$data_disk" --size "${LAZYCLOUD_VM_DATA_DISK:-20GiB}" --format raw
   cat >"$state/vm/$vm.yaml" <<YAML
 vmType: qemu
 arch: x86_64
@@ -63,6 +67,9 @@ images:
   - location: "$state/vm/$AL2023_IMAGE"
     arch: x86_64
 mounts: []
+additionalDisks:
+  - name: $data_disk
+    format: false
 containerd:
   system: false
   user: false
@@ -80,6 +87,11 @@ setup() {
   store=${LAZYCLOUD_OBJECT_STORE_ENDPOINT##*:}
   forwards="${LAZYCLOUD_HTTP_ADDR##*:} ${LAZYCLOUD_GRPC_ADDR##*:} ${LAZYCLOUD_IMAGE_REGISTRY##*:} ${store%/}"
   if ! shell test -f /etc/lazycloud-node-image.json; then
+    # The recipe mounts the data volume a fleet launch maps at /dev/sdf.
+    printf 'KERNEL=="vdb", SYMLINK+="sdf"\n' | shell tee /etc/udev/rules.d/90-lazycloud-data.rules >/dev/null
+    shell udevadm control --reload
+    shell udevadm trigger --action=add /sys/block/vdb
+    shell udevadm settle
     { echo "#!/bin/bash"; sed '/^#/d' deploy/host-pins.sh; echo VARIANT=cpu; sed 1d deploy/ami/node-setup.sh; } |
       shell bash -s
   fi
@@ -149,6 +161,10 @@ up() {
 case "${1:-}" in
   up) up ;;
   down) [ -x "$limactl" ] && exists && "$limactl" stop "$vm" || true ;;
-  reset) [ -x "$limactl" ] && exists && "$limactl" delete --force "$vm" || true ;;
+  reset)
+    [ -x "$limactl" ] || exit 0
+    if exists; then "$limactl" delete --force "$vm"; fi
+    if data_disk_exists; then "$limactl" disk delete "$data_disk"; fi
+    ;;
   *) echo "usage: $0 up|down|reset" >&2; exit 2 ;;
 esac

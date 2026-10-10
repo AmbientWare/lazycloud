@@ -543,13 +543,13 @@ func (ps *pass) typeNamed(name string) (CatalogType, bool) {
 	return ps.s.Offers.Catalog[i], true
 }
 
-// stoppedMicros is what a host costs stopped: its root disk.
+// stoppedMicros is what a host costs stopped: its EBS volumes.
 func (ps *pass) stoppedMicros(h FleetHost) int64 {
 	t, ok := ps.typeNamed(h.InstanceType)
 	if !ok {
 		return 0
 	}
-	return rootDiskMicros(h.Region, t.RootGiB(h.ReserveMode != nil && *h.ReserveMode == ReserveHibernate), t.PricedMiBps(h.ReserveMode != nil))
+	return t.volumesMicros(h.Region, h.ReserveMode != nil && *h.ReserveMode == ReserveHibernate, h.ReserveMode != nil)
 }
 
 func (ps *pass) cooled(h FleetHost) bool {
@@ -981,7 +981,7 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	}
 	switch {
 	case catalogued && priced:
-		o.HourlyMicros = compute + rootDiskMicros(h.Region, t.RootGiB(h.HibernationConfigured), t.PricedMiBps(false)) + ratesIn(h.Region).ipv4Hour
+		o.HourlyMicros = compute + t.volumesMicros(h.Region, h.HibernationConfigured, false) + ratesIn(h.Region).ipv4Hour
 	case h.HourlyMicros != nil:
 		o.HourlyMicros = *h.HourlyMicros
 	default:

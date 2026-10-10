@@ -398,8 +398,8 @@ auth as (
     from conn
 )
 update workspaces set connection_id = (select id from conn) where id = $2`, uuid.UUID(alice), ws, networks)
-	// m7i.large computes 4,000 µ$ an hour cheaper in us-west-1, but its root
-	// costs 2,222 more there and its expected transfer 5,000 more.
+	// m7i.large computes 4,000 µ$ an hour cheaper in us-west-1, but its
+	// volumes cost 3,644 more there and its expected transfer 5,000 more.
 	run(t, o.pool, `
 insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
 values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-west-1', 'usw1-az3', 'm7i.large', 36000, now(), now())`)
@@ -409,9 +409,9 @@ values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-west-1'
 	host := scan[string](t, o.pool, `
 select h.region || ' ' || h.instance_type || ' ' || h.market || ' ' || h.hourly_micros
 from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and h.kind = 'connection'`, container)
-	// Spot compute, a 100 GiB gp3 root over a 720-hour month and one public
-	// IPv4 address.
-	want := 40_000 + (100*80_000+719)/720 + 5_000
+	// Spot compute, a 100 GiB gp3 root and a 64 GiB data volume over a
+	// 720-hour month, and one public IPv4 address.
+	want := 40_000 + (164*80_000+719)/720 + 5_000
 	if host != "us-east-2 m7i.large spot "+strconv.Itoa(want) {
 		t.Fatalf("connected host %q, want us-east-2 m7i.large spot %d", host, want)
 	}

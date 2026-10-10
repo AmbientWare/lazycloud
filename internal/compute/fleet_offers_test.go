@@ -115,7 +115,7 @@ func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 	}
 }
 
-func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
+func TestOfferCostIsComputeVolumesPublicIPv4AndTransfer(t *testing.T) {
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-west-1": oneZone("us-west-1a", "usw1-az1")}
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
@@ -124,16 +124,17 @@ func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
 	if len(serving) != 1 || len(reserve) != 1 {
 		t.Fatalf("offers %v %v", offerKeys(serving), offerKeys(reserve))
 	}
-	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1 over 720 hours, and
-	// 0.5 GB an hour for its one core at $0.02 a GB to and from us-east-1.
-	disk := (100*96_000 + 719) / 720
+	// A 100 GiB root and a 64 GiB data volume of gp3 at $0.096 a GiB-month
+	// in us-west-1 over 720 hours, and 0.5 GB an hour for its one core at
+	// $0.02 a GB to and from us-east-1.
+	disk := (164*96_000 + 719) / 720
 	transfer := int64(10_000)
 	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
 	// A hibernating reserve adds its 8 GiB of RAM as swap; stopped, it
 	// moves nothing.
-	disk = (108*96_000 + 719) / 720
+	disk = (172*96_000 + 719) / 720
 	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer {
 		t.Fatalf("reserve offer %+v", o)
 	}
@@ -328,7 +329,7 @@ func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing
 	for _, preemptible := range []bool{false, true} {
 		need.Preemptible = preemptible
 		offers := RankOffers(DefaultPolicy(), need, true, in)
-		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true), offers[0].Type.PricedMiBps(true)) {
+		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != offers[0].Type.volumesMicros("us-east-2", true, true) {
 			t.Errorf("preemptible %v: reserve offers %v, want one that hibernates", preemptible, offerKeys(offers))
 		}
 	}
@@ -343,7 +344,7 @@ func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
 		typ := mustType(t, name)
 		in.Catalog = []CatalogType{typ}
 		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
-		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want), typ.PricedMiBps(true)) {
+		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != typ.volumesMicros("us-east-2", want, true) {
 			t.Errorf("%s: reserve offers %v, want one that hibernates %v", name, offerKeys(offers), want)
 		}
 	}

@@ -11,8 +11,9 @@ and credentials live in `.lazycloud/`.
 
 Workloads run in a Lima VM that `deploy/local/host-vm.sh` builds from Amazon
 Linux 2023 with the node image recipe (`deploy/ami/node-setup.sh`), so it
-runs the same Docker, gVisor and lazycloud-snapshotter as fleet hosts. This
-machine's Docker stays as it is. The script needs KVM (the `kvm` group) and
+runs the same Docker, gVisor and lazycloud-snapshotter as fleet hosts, with
+an extra disk as the data volume fleet hosts keep disks on. This machine's
+Docker stays as it is. The script needs KVM (the `kvm` group) and
 `qemu-system-x86_64`, not root.
 
 - `up` creates or starts the VM and installs the current agent release the
