@@ -1,12 +1,15 @@
 // Package storagetest gives tests buckets of their own in the test Garage
 // from compose.test.yaml and deletes them, with every object in them and
-// every key granted on them, when the tests end.
+// every key granted on them, when the tests end. The same Garage serves
+// over HTTPS with a private CA.
 package storagetest
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +113,79 @@ func Client() *s3.Client {
 	return s3.New(s3.Options{
 		Region: region, BaseEndpoint: aws.String(endpoint()), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+	})
+}
+
+// HTTPS is the test Garage behind TLS with a private CA, as hosts reach a
+// store in production: path-style at Endpoint and virtual-hosted at
+// https://<bucket>.s3.localhost:<port>. Its buckets are the plain
+// endpoint's, under the same development key.
+type HTTPS struct {
+	Endpoint string
+	// CA is a PEM file holding the store's root certificate.
+	CA string
+	// pool holds CA's certificate.
+	pool *x509.CertPool
+}
+
+// TLS returns the HTTPS store with its CA written into t's temporary
+// directory.
+func TLS(t testing.TB) HTTPS {
+	t.Helper()
+	store, err := OpenTLS(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// OpenTLS reads the HTTPS store's root certificate from its TLS proxy and
+// writes it to dir/ca.pem. LAZYCLOUD_TEST_OBJECT_STORE_HTTPS and
+// LAZYCLOUD_TEST_OBJECT_STORE_CA_URL name another such proxy.
+func OpenTLS(ctx context.Context, dir string) (HTTPS, error) {
+	caURL := os.Getenv("LAZYCLOUD_TEST_OBJECT_STORE_CA_URL")
+	if caURL == "" {
+		caURL = "http://127.0.0.1:15919/pki/ca/local"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, caURL, nil) //nolint:gosec // The test stack's proxy, or one the developer names.
+	if err != nil {
+		return HTTPS{}, fmt.Errorf("test object store CA: %w", err)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req) //nolint:gosec // As above.
+	if err != nil {
+		return HTTPS{}, fmt.Errorf("test object store CA (docker compose -f compose.test.yaml up -d --wait): %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var authority struct {
+		Root string `json:"root_certificate"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&authority); err != nil || resp.StatusCode != http.StatusOK {
+		return HTTPS{}, fmt.Errorf("test object store CA: HTTP %d: %w", resp.StatusCode, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(authority.Root)) {
+		return HTTPS{}, errors.New("test object store CA: no certificate in its root")
+	}
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, []byte(authority.Root), 0o644); err != nil { //nolint:gosec // A public certificate hosts' mounts read.
+		return HTTPS{}, fmt.Errorf("write the test object store CA: %w", err)
+	}
+	endpoint := os.Getenv("LAZYCLOUD_TEST_OBJECT_STORE_HTTPS")
+	if endpoint == "" {
+		endpoint = "https://s3.localhost:15901"
+	}
+	return HTTPS{Endpoint: endpoint, CA: ca, pool: pool}, nil
+}
+
+// Client is an S3 client on the HTTPS store with the development key that
+// trusts only its CA, path-style or virtual-hosted.
+func (h HTTPS) Client(pathStyle bool) *s3.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // The standard library's default.
+	transport.TLSClientConfig = &tls.Config{RootCAs: h.pool, MinVersion: tls.VersionTLS12}
+	return s3.New(s3.Options{
+		Region: region, BaseEndpoint: aws.String(h.Endpoint), UsePathStyle: pathStyle,
+		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+		HTTPClient:  &http.Client{Transport: transport},
 	})
 }
 

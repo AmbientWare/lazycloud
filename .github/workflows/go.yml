@@ -79,7 +79,9 @@ jobs:
 
   # Cross-owner workflows against an agent on a runner set up as a host:
   # the platform images and the managed image convert for real and
-  # workloads start through the snapshotter. A skipped test fails the job.
+  # workloads start through the snapshotter under gVisor. Volume mounts
+  # trust only the HTTPS store's private CA, and an agent of the release
+  # this change replaces updates to it. A skipped test fails the job.
   acceptance:
     runs-on: ubuntu-26.04
     # The tests and the snapshotter trace into Jaeger; the job keeps the
@@ -87,10 +89,13 @@ jobs:
     env:
       LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:24317
       LAZYCLOUD_OTLP_INSECURE: "true"
+      LAZYCLOUD_TEST_OCI_RUNTIME: runsc
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # The release this change replaces builds from its base.
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -100,11 +105,38 @@ jobs:
           python-version: "3.12"
       - name: Install the snapshotter as hosts do
         run: deploy/local/install-snapshotter.sh
-      # Started after the snapshotter install, which restarts Docker.
+      # Node images run every workload under this runsc, with host sockets
+      # reachable both ways (deploy/ami/node-setup.sh).
+      - name: Install gVisor as hosts do
+        run: |
+          . deploy/host-pins.sh
+          curl -fsSL -o "$RUNNER_TEMP/gvisor.tar.bz2" \
+            "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_RELEASE}/x86_64/gvisor.tar.bz2"
+          echo "$GVISOR_SHA512_X86_64  $RUNNER_TEMP/gvisor.tar.bz2" | sha512sum -c -
+          sudo mkdir -p "/usr/local/lib/gvisor/$GVISOR_RELEASE"
+          sudo tar -xjf "$RUNNER_TEMP/gvisor.tar.bz2" -C "/usr/local/lib/gvisor/$GVISOR_RELEASE"
+          sudo "/usr/local/lib/gvisor/$GVISOR_RELEASE/runsc" install --runtime runsc -- --host-uds=all
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'
+      # Started after the snapshotter and gVisor installs, which restart
+      # Docker.
       - name: PostgreSQL, the object store and Jaeger
         run: |
-          docker compose -f compose.test.yaml up -d --wait postgres object-store-bootstrap
+          docker compose -f compose.test.yaml up -d --wait postgres object-store-bootstrap object-store-tls
           docker compose up -d --wait jaeger
+      # The merge base with main, or on main the commit before, is the
+      # release hosts run until this one ships.
+      - name: The agent release this change replaces
+        run: |
+          base=$(git merge-base HEAD origin/main)
+          if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
+          git worktree add --detach "$RUNNER_TEMP/previous" "$base"
+          out="$RUNNER_TEMP/previous-agent"
+          cd "$RUNNER_TEMP/previous"
+          CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=previous-$(git rev-parse --short=12 HEAD)" \
+            -o "$out/lazycloud-agent" ./cmd/agent
+          CGO_ENABLED=0 go build -trimpath -o "$out/supervisor" ./cmd/supervisor
+          echo "LAZYCLOUD_TEST_OLD_AGENT=$out" >>"$GITHUB_ENV"
       - name: GeeseFS and the managed runtime
         run: |
           deploy/local/fetch-geesefs.sh

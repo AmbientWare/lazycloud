@@ -69,6 +69,10 @@ var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in T
 // images of the template database live in its layer bucket.
 var objectStore storage.Config //nolint:gochecknoglobals // Set once in TestMain.
 
+// tlsStore is the same store over HTTPS with a private CA, whose root
+// every test's agent takes as its trust bundle.
+var tlsStore storagetest.HTTPS //nolint:gochecknoglobals // Set once in TestMain.
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
 	if err != nil {
@@ -96,6 +100,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	objectStore = store
+	if tlsStore, err = storagetest.OpenTLS(context.Background(), dir); err != nil {
+		stop()
+		_ = removeStore(context.Background())
+		panic(err)
+	}
 	code := m.Run()
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
@@ -127,6 +136,25 @@ type platform struct {
 	geesefs string
 	// newEdge makes another server's edge on the same database, for relays.
 	newEdge func(url, relay string) (*edge.Edge, error)
+	// compute and images are the server's owners; hosts is where agents
+	// dial it, and join enrolls one.
+	compute *compute.Compute
+	images  *images.Images
+	hosts   string
+	join    string
+	// ctx ends when the test does; wg holds the platform's goroutines,
+	// which cleanup waits for.
+	ctx    context.Context //nolint:containedctx // The platform's lifetime.
+	wg     *sync.WaitGroup
+	logger *slog.Logger
+	tel    *telemetry.Telemetry
+}
+
+// serverOptions shape the platform's server.
+type serverOptions struct {
+	// dist holds agent release archives, which the API serves and hosts
+	// update from.
+	dist string
 }
 
 func (p *platform) port() string {
@@ -246,9 +274,20 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
+// startPlatform starts a server and an agent in the test process.
 func startPlatform(t *testing.T) *platform {
 	t.Helper()
-	runtime := runtimeDir(t)
+	p := startServer(t, serverOptions{})
+	p.runAgent()
+	p.awaitHost()
+	return p
+}
+
+// startServer starts the server, its scheduler loops and its edge over a
+// fresh database, with no host yet.
+func startServer(t *testing.T, opts serverOptions) *platform {
+	t.Helper()
+	runtimeDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -266,7 +305,7 @@ func startPlatform(t *testing.T) *platform {
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore),
-		execution: execution.NewExecution(pool),
+		execution: execution.NewExecution(pool), ctx: ctx, wg: &wg, logger: logger, tel: tel,
 	}
 	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})
 	if _, err := ident.CreateUser(ctx, "dev@lazycloud.test", false); err != nil {
@@ -308,18 +347,24 @@ func startPlatform(t *testing.T) *platform {
 		},
 		MaxIdleConnsPerHost: 1024,
 	}}
+	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.api = "http://" + apiListener.Addr().String()
+	p.compute = compute.NewCompute(pool, p.execution, compute.Config{InstallURL: p.api})
 	masterKey, err := secrets.NewFileKey(make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := newImages(pool, p.execution, vault, p.storage)
+	p.images = newImages(pool, p.execution, vault, p.storage)
 	p.secrets = vault
 	owners := api.Owners{
-		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
+		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge,
 	}
-	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
+	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +372,7 @@ func startPlatform(t *testing.T) *platform {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
+	hosts := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
 		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
 	}, logger)
@@ -338,12 +383,8 @@ func startPlatform(t *testing.T) *platform {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.hosts = grpcListener.Addr().String()
 	edgeServer := &http.Server{Handler: tel.EdgeHandler(p.edge), ReadHeaderTimeout: 10 * time.Second}
-	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.api = "http://" + apiListener.Addr().String()
 	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
@@ -389,8 +430,7 @@ func startPlatform(t *testing.T) *platform {
 		hosts.Wait()
 	})
 
-	join, _, err := compute.NewCompute(pool, p.execution, compute.Config{}).CreateJoinToken(ctx, time.Hour)
-	if err != nil {
+	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	socketDir, err := os.MkdirTemp("", "lcs")
@@ -399,7 +439,6 @@ func startPlatform(t *testing.T) *platform {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	p.socketDir = socketDir
-	stateDir := t.TempDir()
 	// Volumes mount with the pinned GeeseFS deploy/local/fetch-geesefs.sh
 	// installs; without it they are unavailable.
 	geesefs, err := filepath.Abs("../bin/geesefs")
@@ -417,24 +456,40 @@ func startPlatform(t *testing.T) *platform {
 		wg.Wait()
 		removeContainers(t)
 	})
-	wg.Go(func() {
-		err := agent.Run(ctx, agent.Config{
-			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
-			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, TrustBundle: agent.HostTrustBundle(), ServerPlaintext: true, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger, Telemetry: tel,
-		})
-		if err != nil && ctx.Err() == nil {
-			t.Errorf("agent: %v", err)
-		}
-	})
-	p.awaitHost(im)
 	return p
 }
 
-// awaitHost waits until the host joined and the managed image pulls for
-// it, so tests' deadlines measure their own workflows.
-func (p *platform) awaitHost(im *images.Images) {
+// ociRuntime is the Docker runtime workloads run with:
+// LAZYCLOUD_TEST_OCI_RUNTIME, runsc as on hosts, or runc.
+func ociRuntime() string {
+	if runtime := os.Getenv("LAZYCLOUD_TEST_OCI_RUNTIME"); runtime != "" {
+		return runtime
+	}
+	return "runc"
+}
+
+// runAgent runs an agent in the test process until the platform stops.
+// Its volume mounts trust only the HTTPS store's CA.
+func (p *platform) runAgent() {
+	p.t.Helper()
+	stateDir := p.t.TempDir()
+	runtime := runtimeDir(p.t)
+	p.wg.Go(func() {
+		err := agent.Run(p.ctx, agent.Config{
+			Server: p.hosts, StateDir: stateDir, SocketDir: p.socketDir, JoinToken: p.join,
+			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: ociRuntime(),
+			GeeseFSPath: p.geesefs, TrustBundle: tlsStore.CA, ServerPlaintext: true, BuildNetwork: "host",
+			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: p.tel,
+		})
+		if err != nil && p.ctx.Err() == nil {
+			p.t.Errorf("agent: %v", err)
+		}
+	})
+}
+
+// awaitHost waits until a host joined and the managed image pulls for it,
+// so tests' deadlines measure their own workflows.
+func (p *platform) awaitHost() {
 	p.t.Helper()
 	ctx := p.t.Context()
 	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
@@ -445,7 +500,7 @@ func (p *platform) awaitHost(im *images.Images) {
 		if err := p.pool.QueryRow(ctx, "select id from hosts where state = 'online' limit 1").Scan(&host); err != nil {
 			continue
 		}
-		_, err := im.ManagedPull(ctx, compute.HostID(host), pythonVersion)
+		_, err := p.images.ManagedPull(ctx, compute.HostID(host), pythonVersion)
 		switch {
 		case err == nil:
 			return
