@@ -37,15 +37,15 @@ import (
 // containers that use it.
 //
 // A workspace's mount containers are generations. Each mounts at
-// mounts/<workspace>/<generation> and is labelled with the fingerprint of
+// mounts/<workspace>.<generation> and is labelled with the fingerprint of
 // what it was made with: the GeeseFS binary, the trust bundle and the
 // bucket's location. Only a mounted generation whose fingerprint is current
-// takes new users. A stale one keeps the users whose binds point into it
-// and stops when the last one goes.
+// takes new users. Any other, one without a fingerprint included, is stale:
+// it keeps the users whose binds point into it while it stays mounted and
+// stops when the last one goes.
 const (
 	labelKind        = "lazycloud.kind"
 	labelWorkspace   = "lazycloud.workspace-id"
-	labelGeneration  = "lazycloud.mount-generation"
 	labelFingerprint = "lazycloud.mount-fingerprint"
 	kindMount        = "volume-mount"
 	kindBucket       = "bucket-mount"
@@ -128,8 +128,16 @@ func (v *volumes) storageDir(workspace string) string {
 
 func (v *volumes) mountDir() string { return filepath.Join(v.a.cfg.StateDir, "mounts") }
 
+const mountPrefix = "lazycloud-mount-"
+
 func generationName(workspace, generation string) string {
-	return "lazycloud-mount-" + workspace + "-" + generation
+	return mountPrefix + workspace + "." + generation
+}
+
+// mountPath is where the mount container name mounts: its own directory
+// directly in the mount directory, so no mount lies inside another's.
+func (v *volumes) mountPath(name string) string {
+	return filepath.Join(v.mountDir(), strings.TrimPrefix(name, mountPrefix))
 }
 
 func (v *volumes) grantChannel(workspace string) chan struct{} {
@@ -373,8 +381,8 @@ func (v *volumes) join(workspace, fingerprint, container string) (*mounter, bool
 	}
 	created := g == nil
 	if created {
-		generation := uuid.NewString()
-		g = newMounter(generationName(workspace, generation), filepath.Join(v.mountDir(), workspace, generation))
+		name := generationName(workspace, uuid.NewString())
+		g = newMounter(name, v.mountPath(name))
 		g.workspace, g.fingerprint = workspace, fingerprint
 		v.generations[g.name] = g
 	}
@@ -389,7 +397,7 @@ func (v *volumes) startGeneration(ctx context.Context, g *mounter, loc bucketLoc
 	err := v.start(ctx, g, "the volume mount for workspace "+g.workspace, mountSpec{
 		creds: v.storageDir(g.workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region, pathStyle: loc.PathStyle,
 		labels: map[string]string{
-			labelKind: kindMount, labelWorkspace: g.workspace, labelGeneration: filepath.Base(g.dir), labelFingerprint: g.fingerprint,
+			labelKind: kindMount, labelWorkspace: g.workspace, labelFingerprint: g.fingerprint,
 		},
 	})
 	if err != nil {
@@ -723,32 +731,25 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 }
 
 // remove deletes m's container and then its directory, which only goes when
-// nothing is mounted on it and it is empty; a workspace's directory goes with
-// its last generation.
+// nothing is mounted on it and it is empty. No later mount uses the name, so
+// a directory left behind is only logged.
 func (v *volumes) remove(ctx context.Context, m *mounter) error {
 	if err := v.a.removeContainer(ctx, m.name); err != nil {
 		return err
 	}
-	if m.dir == "" {
-		return nil
-	}
 	if err := os.Remove(m.dir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove mount directory: %w", err)
-	}
-	if parent := filepath.Dir(m.dir); parent != v.mountDir() {
-		if err := os.Remove(parent); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
-			return fmt.Errorf("remove workspace mount directory: %w", err)
-		}
+		v.a.log.Warn("removing a mount directory failed", "mount", m.name, "error", err)
 	}
 	return nil
 }
 
 // adopt takes over the mount containers a previous agent left and the grants
-// it stored; the agent has tracked the workload containers. A mount whose
-// container stopped or never mounted, a stale generation nothing uses and a
-// cloud bucket mount whose container is gone are removed, with the keys of
-// every cloud bucket not mounted. Running workloads bound into a removed
-// mount fail.
+// it stored; the agent has tracked the workload containers. A workspace
+// mount whose fingerprint is not current is a stale generation. A mount
+// that no longer mounts, a stale generation nothing uses and a cloud bucket
+// mount whose container is gone are removed, with the keys of every cloud
+// bucket not mounted. Running workloads bound into a mount that no longer
+// mounts fail.
 func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary) error {
 	workloads := map[string]containertypes.Summary{}
 	for _, s := range summaries {
@@ -756,32 +757,29 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			workloads[s.Labels[labelContainer]] = s
 		}
 	}
-	live, ids := map[string]*mounter{}, map[string]string{}
-	var dead []*mounter
+	// Mounts by directory, with their containers' ids.
+	live, ids := map[string]*mounter{}, map[*mounter]string{}
+	var generations, buckets, dead []*mounter
 	for _, s := range summaries {
 		kind := s.Labels[labelKind]
 		if (kind != kindMount && kind != kindBucket) || len(s.Names) == 0 {
 			continue
 		}
 		name := strings.TrimPrefix(s.Names[0], "/")
-		var m *mounter
+		m := newMounter(name, v.mountPath(name))
 		if kind == kindMount {
-			workspace, generation := s.Labels[labelWorkspace], s.Labels[labelGeneration]
-			m = newMounter(name, "")
-			if isUUID(workspace) && isUUID(generation) && name == generationName(workspace, generation) {
-				m.dir = filepath.Join(v.mountDir(), workspace, generation)
-				m.workspace, m.fingerprint = workspace, s.Labels[labelFingerprint]
-			}
+			m.workspace, m.fingerprint = s.Labels[labelWorkspace], s.Labels[labelFingerprint]
+			generations = append(generations, m)
 		} else {
-			m = newMounter(name, filepath.Join(v.mountDir(), name))
+			buckets = append(buckets, m)
 			if container := s.Labels[labelContainer]; workloads[container].ID != "" {
 				m.users[container] = struct{}{}
 			}
 		}
-		if s.State == containertypes.StateRunning && m.dir != "" && mounted(m.dir) && (kind == kindMount || len(m.users) > 0) {
+		if s.State == containertypes.StateRunning && mounted(m.dir) && (kind == kindMount || len(m.users) > 0) {
 			m.up = true
 			close(m.ready)
-			live[name], ids[name] = m, s.ID
+			live[m.dir], ids[m] = m, s.ID
 		} else {
 			dead = append(dead, m)
 		}
@@ -789,11 +787,11 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	var lost []string
 	for id, s := range workloads {
 		for _, point := range s.Mounts {
-			name, ok := v.mountOf(point.Source)
+			dir, ok := v.mountOf(point.Source)
 			if !ok || point.Type != mount.TypeBind {
 				continue
 			}
-			if m := live[name]; m != nil {
+			if m := live[dir]; m != nil {
 				m.users[id] = struct{}{}
 				continue
 			}
@@ -803,8 +801,8 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	}
 	// One current generation per workspace takes new users.
 	current := map[string]bool{}
-	for name, m := range live {
-		if m.workspace == "" {
+	for _, m := range generations {
+		if live[m.dir] != m {
 			continue
 		}
 		if !current[m.workspace] && v.isCurrent(m) {
@@ -813,23 +811,26 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 		}
 		m.retired = true
 		if len(m.users) == 0 {
-			delete(live, name)
+			delete(live, m.dir)
 			dead = append(dead, m)
 		}
 	}
 	v.mu.Lock()
-	for name, m := range live {
-		if m.workspace != "" {
-			v.generations[name] = m
-			continue
+	for _, m := range generations {
+		if live[m.dir] == m {
+			v.generations[m.name] = m
 		}
+	}
+	for _, m := range buckets {
 		for container := range m.users {
-			v.buckets[container] = append(v.buckets[container], m)
+			if live[m.dir] == m {
+				v.buckets[container] = append(v.buckets[container], m)
+			}
 		}
 	}
 	v.mu.Unlock()
-	for name, m := range live {
-		id := ids[name]
+	for _, m := range live {
+		id := ids[m]
 		v.a.goOwned(func(ctx context.Context) { v.watch(ctx, m, id) })
 	}
 	for _, id := range lost {
@@ -847,7 +848,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 		return fmt.Errorf("list cloud bucket keys: %w", err)
 	}
 	for _, entry := range keys {
-		if live[entry.Name()] == nil {
+		if live[v.mountPath(entry.Name())] == nil {
 			if err := os.RemoveAll(v.bucketKeys(entry.Name())); err != nil {
 				return fmt.Errorf("remove cloud bucket keys: %w", err)
 			}
@@ -857,26 +858,23 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	return nil
 }
 
-// mountOf names the mount container behind a bind source under the mount
-// directory.
+// mountOf returns the mount directory a bind source under the mount
+// directory lies in.
 func (v *volumes) mountOf(source string) (string, bool) {
 	rel, err := filepath.Rel(v.mountDir(), source)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return "", false
 	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if !isUUID(parts[0]) {
-		return parts[0], true
-	}
-	if len(parts) < 2 {
-		return "", true
-	}
-	return generationName(parts[0], parts[1]), true
+	first, _, _ := strings.Cut(rel, string(filepath.Separator))
+	return filepath.Join(v.mountDir(), first), true
 }
 
 // isCurrent reports whether generation m matches what its workspace would
 // mount with now.
 func (v *volumes) isCurrent(m *mounter) bool {
+	if !isUUID(m.workspace) {
+		return false
+	}
 	loc, err := v.location(m.workspace)
 	if err != nil {
 		return false

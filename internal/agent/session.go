@@ -134,7 +134,9 @@ func (a *Agent) runSession(ctx context.Context) error {
 				errs <- fmt.Errorf("receive command: %w", err)
 				return
 			}
-			a.handle(command)
+			if !a.handle(command) {
+				continue
+			}
 			ack := &hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: command.GetCommandId()}}}
 			select {
 			case out.ch <- ack:
@@ -232,8 +234,10 @@ func (a *Agent) reportIfRoom(m *hostproto.HostMessage) {
 }
 
 // handle dispatches a command without waiting on containers, so commands
-// are never delayed by container work.
-func (a *Agent) handle(command *hostproto.ServerMessage) {
+// are never delayed by container work. It reports whether to acknowledge
+// the command: one the host failed to take is left for the server to send
+// again.
+func (a *Agent) handle(command *hostproto.ServerMessage) bool {
 	switch body := command.GetBody().(type) {
 	case *hostproto.ServerMessage_Start:
 		a.start(body.Start)
@@ -266,10 +270,12 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 	case *hostproto.ServerMessage_StorageGrant:
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
 			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
+			return false
 		}
 	default:
 		a.log.Warn("ignoring unknown command", "command_id", command.GetCommandId())
 	}
+	return true
 }
 
 // start is idempotent by container id: a known container restates its state.
