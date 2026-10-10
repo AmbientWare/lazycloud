@@ -8,10 +8,13 @@ select bucket, region, connection_id from workspace_buckets where bucket = @buck
 -- The connected account the workspace lives in; null is the platform's.
 select connection_id from workspaces where id = @id;
 
--- name: InsertWorkspaceBucket :exec
+-- name: InsertWorkspaceBucket :one
+-- The workspace's recorded bucket: this one, or the one another server
+-- recorded first.
 insert into workspace_buckets (workspace_id, bucket, region, connection_id)
 values (@workspace_id, @bucket, @region, sqlc.narg(connection_id))
-on conflict (workspace_id) do nothing;
+on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
+returning bucket, region;
 
 -- name: DeleteWorkspaceBucket :exec
 delete from workspace_buckets where workspace_id = @workspace_id;

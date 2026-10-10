@@ -280,10 +280,11 @@ func (q *Queries) InsertVolumeMount(ctx context.Context, arg InsertVolumeMountPa
 	return err
 }
 
-const insertWorkspaceBucket = `-- name: InsertWorkspaceBucket :exec
+const insertWorkspaceBucket = `-- name: InsertWorkspaceBucket :one
 insert into workspace_buckets (workspace_id, bucket, region, connection_id)
 values ($1, $2, $3, $4)
-on conflict (workspace_id) do nothing
+on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
+returning bucket, region
 `
 
 type InsertWorkspaceBucketParams struct {
@@ -293,14 +294,23 @@ type InsertWorkspaceBucketParams struct {
 	ConnectionID *uuid.UUID
 }
 
-func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) error {
-	_, err := q.db.Exec(ctx, insertWorkspaceBucket,
+type InsertWorkspaceBucketRow struct {
+	Bucket string
+	Region string
+}
+
+// The workspace's recorded bucket: this one, or the one another server
+// recorded first.
+func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) (InsertWorkspaceBucketRow, error) {
+	row := q.db.QueryRow(ctx, insertWorkspaceBucket,
 		arg.WorkspaceID,
 		arg.Bucket,
 		arg.Region,
 		arg.ConnectionID,
 	)
-	return err
+	var i InsertWorkspaceBucketRow
+	err := row.Scan(&i.Bucket, &i.Region)
+	return i, err
 }
 
 const knownDisks = `-- name: KnownDisks :many

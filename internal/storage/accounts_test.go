@@ -352,6 +352,21 @@ func TestWorkspaceDeletionOutlivesItsAccountsAuthorization(t *testing.T) {
 	}
 }
 
+// Servers that create a workspace's bucket at once use the bucket the
+// first one recorded.
+func TestAWorkspaceUsesTheBucketRecordedFirst(t *testing.T) {
+	c := newConnectedStorage(t)
+	ws := c.workspace(nil)
+	ctx := t.Context()
+	if _, err := c.pool.Exec(ctx, `insert into workspace_buckets (workspace_id, bucket, region) values ($1, 'recorded-first', 'elsewhere')`, uuid.UUID(ws)); err != nil {
+		t.Fatal(err)
+	}
+	bucket, region, err := CreateWorkspaceBucket(ctx, c.storage, ws)
+	if err != nil || bucket != "recorded-first" || region != "elsewhere" {
+		t.Fatalf("created bucket %s in %s (%v), want the recorded recorded-first in elsewhere", bucket, region, err)
+	}
+}
+
 // A connection without an active authorization cannot hold a workspace's
 // storage, whether its bucket exists yet or not: the refusal is a typed
 // conflict that fails the container needing it, not an error the host

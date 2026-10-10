@@ -242,12 +242,9 @@ func (s *Storage) providerOf(store workspaceStore) (bucketProvider, error) {
 	}}, nil
 }
 
-// workspaceStore returns the workspace's bucket, creating it on first use:
-// in the platform's store, or in the connected account the workspace lives
-// in, in the region of the connection's authorization. The row is written
-// after the provider created the bucket, so a recorded bucket always
-// exists. The object store's refusal is a *StoreRefusedError, and a
-// connection the platform cannot act through a *ConflictError.
+// workspaceStore returns the workspace's bucket, creating it on first use.
+// The object store's refusal is a *StoreRefusedError, and a connection the
+// platform cannot act through a *ConflictError.
 func (s *Storage) workspaceStore(ctx context.Context, workspace identity.WorkspaceID) (workspaceStore, error) {
 	row, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
 	if err == nil {
@@ -263,6 +260,15 @@ func (s *Storage) workspaceStore(ctx context.Context, workspace identity.Workspa
 	if err != nil {
 		return workspaceStore{}, fmt.Errorf("read workspace connection: %w", err)
 	}
+	return s.createWorkspaceBucket(ctx, workspace, connection)
+}
+
+// createWorkspaceBucket creates the workspace's bucket: in the platform's
+// store, or in connection's account, in the region of its authorization.
+// The row is written after the provider created the bucket, so a recorded
+// bucket always exists. When another server recorded the workspace's
+// bucket first, that one is the workspace's.
+func (s *Storage) createWorkspaceBucket(ctx context.Context, workspace identity.WorkspaceID, connection *uuid.UUID) (workspaceStore, error) {
 	account, region := s.config.Workspaces.AccountID, s.config.Region
 	if connection != nil {
 		if s.connections == nil {
@@ -303,12 +309,13 @@ func (s *Storage) workspaceStore(ctx context.Context, workspace identity.Workspa
 	if err := s.allowBrowser(ctx, store.bucketClient); err != nil {
 		return workspaceStore{}, storeError(err)
 	}
-	if err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{
+	recorded, err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{
 		WorkspaceID: uuid.UUID(workspace), Bucket: store.name, Region: region, ConnectionID: connection,
-	}); err != nil {
+	})
+	if err != nil {
 		return workspaceStore{}, fmt.Errorf("record workspace bucket: %w", err)
 	}
-	return store, nil
+	return s.storeOf(ctx, recorded.Bucket, recorded.Region, connection)
 }
 
 // storeAt is the recorded workspace bucket of a row that left-joins
