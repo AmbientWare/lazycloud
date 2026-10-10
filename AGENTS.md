@@ -62,8 +62,12 @@ constraints. Keep task plans and progress with the task, not in the tree.
 - PostgreSQL owns durable state and NOTIFY wake-ups; object stores and
   filesystems own bytes. No duplicate authorities. A cache or projection
   names its durable source and how it rebuilds.
-- Use one production implementation. No fake success, weaker test backends,
-  compatibility shims or fallback implementations. Delete superseded paths.
+- Use one production implementation everywhere, local deploy included. No
+  fake success, weaker test backends, compatibility shims or fallback
+  implementations. A change that replaces a path deletes the old one: no
+  adapters, dead helpers or mixed-version code.
+- Fix a defect where the wrong decision is made, then look for the same
+  pattern elsewhere. Do not add defaults or guards where it surfaces.
 - SDK and runner remain independent of backend implementations. Cross-language
   contracts are language-neutral; Python code serialization stays explicit.
 
@@ -95,7 +99,8 @@ constraints. Keep task plans and progress with the task, not in the tree.
   Use Pydantic at Python wire boundaries.
 - Use apply_patch for manual edits. Read consumers before changing contracts,
   statuses, defaults or ownership. Load unslop before writing prose. Comments
-  explain current constraints. Describe LazyCloud directly.
+  state current constraints, never why something changed or what a fix was
+  for; that belongs in the commit. Describe LazyCloud directly.
 
 ## Data and contracts
 
@@ -121,7 +126,9 @@ constraints. Keep task plans and progress with the task, not in the tree.
 
 - Define the user-visible outcome and cheapest authoritative evidence first.
   Verify material invariants at owner/public boundaries. Use real services,
-  containers and providers when those boundaries change.
+  containers and providers when those boundaries change, under prod's
+  conditions where they differ from the test stack: TLS stores with a private
+  CA, runsc, and agents updating across releases.
 - Retain tests only for unique proof of authorization, integrity, durability,
   concurrency, cleanup or public behavior. Do not test implementation shape,
   mock call order, wiring, snapshots or behavior already proven elsewhere.
@@ -165,6 +172,7 @@ constraints. Keep task plans and progress with the task, not in the tree.
 - When delegating, agree contracts first, then assign disjoint owners and files;
   one integrator owns shared definitions and root build files. Verify returned
   work and integrated evidence.
-- Plan work that spans owners, PRs or parallel agents with PLANNING.md.
+- Plan work that spans owners, PRs or parallel agents in a PLANNING.md kept
+  with the task, outside the tree.
 - Finish the requested scope, then stop. No commit attribution trailers.
   Report outcomes, blockers and unverified boundaries briefly.
