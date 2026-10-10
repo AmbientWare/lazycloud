@@ -47,9 +47,14 @@ class Choice(BaseModel):
     label: str
 
 
+class AspectChoice(Choice):
+    width: int
+    height: int
+
+
 class Options(BaseModel):
     styles: list[Choice]
-    aspects: list[Choice]
+    aspects: list[AspectChoice]
     max_prompt_chars: int
     max_images: int
 
@@ -111,7 +116,9 @@ def options() -> Options:
     return Options(
         styles=[Choice(id=s, label=s.replace("-", " ").capitalize()) for s in Style],
         aspects=[
-            Choice(id=a, label=f"{a.capitalize()} {ASPECT_SIZES[a][0]}x{ASPECT_SIZES[a][1]}")
+            AspectChoice(
+                id=a, label=a.capitalize(), width=ASPECT_SIZES[a][0], height=ASPECT_SIZES[a][1]
+            )
             for a in Aspect
         ],
         max_prompt_chars=MAX_PROMPT_CHARS,
