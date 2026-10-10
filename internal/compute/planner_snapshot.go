@@ -173,7 +173,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
 		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
 		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
-		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
+		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,

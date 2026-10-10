@@ -10,7 +10,8 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 
 -- name: PlannerHosts :many
 -- Every cloud host the fleet holds or is buying, with what its live
--- containers reserve, and what those that could run on Spot reserve.
+-- containers reserve, what those that could run on Spot reserve, and
+-- whether its agent must move to the target release first.
 select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
@@ -20,7 +21,8 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
-       coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since
+       coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
+       exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,

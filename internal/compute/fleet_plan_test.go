@@ -150,6 +150,30 @@ func TestPlanRetiresAStaleReserveAndBuysItsTargetAgain(t *testing.T) {
 	}
 }
 
+// A serving host due an agent update takes no work until it runs the
+// target, so pending work it would fit buys a host instead of waiting.
+func TestPendingWorkBuysPastAHostDueAnAgentUpdate(t *testing.T) {
+	buys := func(due bool) int {
+		h := planHost(1, planSmall, FleetServing)
+		h.UpdateDue = due
+		snapshot := planSnapshot(t, h)
+		snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New()}}}}
+		n := 0
+		for _, a := range PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot).Actions {
+			if a.Kind == ActionBuy {
+				n++
+			}
+		}
+		return n
+	}
+	if n := buys(false); n != 0 {
+		t.Fatalf("bought %d hosts for work a serving host fits", n)
+	}
+	if n := buys(true); n != 1 {
+		t.Fatalf("bought %d hosts for work only a host due an update fits, want 1", n)
+	}
+}
+
 // Work that fills the host holding the warm floor may end soon: the floor
 // waits FloorHold for its room before it buys a host, and buys once the
 // work outlasts the hold.

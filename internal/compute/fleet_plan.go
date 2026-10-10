@@ -40,6 +40,9 @@ type FleetHost struct {
 	Protected bool
 	// Current is set on a reserve prepared for the current agent release.
 	Current bool
+	// UpdateDue is set on a host whose agent must move to the target
+	// release; until it does, placement gives it no work.
+	UpdateDue bool
 	// ReserveMode is set on a reserve; nil on a serving host.
 	ReserveMode *ReserveMode
 	// HibernationConfigured is set when the instance launched able to
@@ -67,7 +70,13 @@ type FleetHost struct {
 
 func (h FleetHost) market() ReserveMarket { return reserveMarketOf(h.Market, h.GPU) }
 
-func (h FleetHost) free() FleetCapacity { return h.Usable.Minus(h.Load).Clamp() }
+// free is the room placement would give new work on the host.
+func (h FleetHost) free() FleetCapacity {
+	if h.UpdateDue {
+		return FleetCapacity{}
+	}
+	return h.Usable.Minus(h.Load).Clamp()
+}
 
 // resumable is a stopped reserve.
 func (h FleetHost) resumable() bool {
