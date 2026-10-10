@@ -142,7 +142,7 @@ def finished_run() -> bytes:
             failed_highlights=[],
         ),
     )
-    event = {
+    event: dict[str, object] = {
         "task_id": "4b4d3a52-1f7e-4c55-9d38-0f0f3b4c1a10",
         "root_task_id": "4b4d3a52-1f7e-4c55-9d38-0f0f3b4c1a10",
         "status": "succeeded",

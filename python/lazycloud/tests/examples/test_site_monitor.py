@@ -22,20 +22,24 @@ from site_monitor.checks import check_watch
 from site_monitor.models import Outcome, Verdict, Watch, WatchRequest
 from site_monitor.slack import SlackError, alert_message, post_alert
 
-PRICING = Watch.from_request(WatchRequest(url="https://example.com/pricing", label="Pricing"))
+PRICING = Watch.from_request(
+    WatchRequest.model_validate({"url": "https://example.com/pricing", "label": "Pricing"})
+)
 
 
 def test_watches_accept_only_web_pages() -> None:
     for url in ("file:///etc/passwd", "javascript:alert(1)", "ftp://example.com/"):
         with pytest.raises(ValidationError):
-            WatchRequest(url=url)
+            WatchRequest.model_validate({"url": url})
     with pytest.raises(ValidationError):
-        WatchRequest(url="https://example.com/", focus="x" * 501)
+        WatchRequest.model_validate({"url": "https://example.com/", "focus": "x" * 501})
 
 
 def test_a_page_and_element_keep_one_watch_id() -> None:
     def watch_id(url: str, selector: str | None = None) -> str:
-        return Watch.from_request(WatchRequest(url=url, selector=selector)).id
+        return Watch.from_request(
+            WatchRequest.model_validate({"url": url, "selector": selector})
+        ).id
 
     assert watch_id("HTTPS://Example.com") == watch_id("https://example.com/")
     assert watch_id("https://example.com/", "#plans") != watch_id("https://example.com/")
@@ -159,7 +163,7 @@ def webhook() -> Iterator[tuple[str, list[dict[str, str]], list[int]]]:
             self.send_response(status[0])
             self.end_headers()
 
-        def log_message(self, *args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
