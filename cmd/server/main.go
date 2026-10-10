@@ -198,7 +198,6 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.layerReplicas, "object-store-layer-replicas", env("LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS", ""), "JSON object of region to bucket: the layer bucket's copies hosts in those regions read (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id; empty uses the AWS default credential chain (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar((*string)(&cfg.objectStore.Workspaces.Provider), "workspace-bucket-provider", env("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER", ""), "garage or aws: creates the per-workspace buckets of volumes and disks (LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER)")
-	fs.StringVar(&cfg.objectStore.Workspaces.Prefix, "workspace-bucket-prefix", env("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX", "lazycloud-ws"), "prefix of workspace bucket names (LAZYCLOUD_WORKSPACE_BUCKET_PREFIX)")
 	fs.StringVar(&cfg.objectStore.Workspaces.GarageAdminURL, "garage-admin-url", env("LAZYCLOUD_GARAGE_ADMIN_URL", ""), "Garage admin API URL (LAZYCLOUD_GARAGE_ADMIN_URL)")
 	fs.StringVar(&cfg.objectStore.Workspaces.RoleARN, "workspace-bucket-role-arn", env("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN", ""), "role STS issues host credentials for (LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN)")
 	fs.StringVar(&cfg.buildCPU, "build-cpu", env("LAZYCLOUD_BUILD_CPU", "4"), "CPUs a build container reserves (LAZYCLOUD_BUILD_CPU)")
@@ -249,7 +248,7 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	cfg.compute.Fleet = fleet
-	cfg.objectStore.Workspaces.AccountID = fleet.AccountID
+	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
