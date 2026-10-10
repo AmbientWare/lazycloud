@@ -122,10 +122,3 @@ from releases r
 join containers c on c.release_id = r.id
 where r.workload_id = @workload_id and c.state = 'ready' and c.purpose = 'serve' and r.version is not null
 order by r.version desc, c.ready_at, c.id;
-
--- name: ReleaseFailures :many
--- Why containers of these releases cannot start: the handler failed to load
--- since one was last ready, or preparation failed too many times in a row.
-select id, coalesce(load_error, '')::text as load_error, start_failures
-from releases
-where id = any(@ids::uuid[]) and (load_error is not null or start_failures >= @start_failure_limit::int);

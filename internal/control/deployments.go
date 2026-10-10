@@ -16,6 +16,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -152,7 +153,7 @@ func (c *Control) Release(ctx context.Context, workspace identity.WorkspaceID, i
 // StopWorkload stops admission to the workload. Planning drains its
 // deployed releases and cancels their queued tasks; running tasks finish.
 func (c *Control) StopWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Workload, error) {
-	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, q *Queries, row LockWorkloadRow) error {
+	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, _ pgx.Tx, q *Queries, row LockWorkloadRow) error {
 		return applyWorkloadState(ctx, q, row, WorkloadStopped)
 	})
 }
@@ -160,7 +161,7 @@ func (c *Control) StopWorkload(ctx context.Context, workspace identity.Workspace
 // StartWorkload lets the workload admit tasks again. With a version, that
 // deployed version becomes active first, which rolls back or forward.
 func (c *Control) StartWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID, version *int) (apitypes.Workload, error) {
-	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, q *Queries, row LockWorkloadRow) error {
+	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, tx pgx.Tx, q *Queries, row LockWorkloadRow) error {
 		if version != nil {
 			if *version < 1 || *version > math.MaxInt32 {
 				return ErrVersionNotFound
@@ -177,8 +178,13 @@ func (c *Control) StartWorkload(ctx context.Context, workspace identity.Workspac
 					return fmt.Errorf("activate version %d: %w", *version, err)
 				}
 			}
+			row.ActiveReleaseID = &release
 		} else if row.ActiveReleaseID == nil {
 			return ErrNotFound
+		}
+		// A start retries the release if it stopped starting.
+		if _, err := execution.RetryStarts(ctx, tx, []uuid.UUID{*row.ActiveReleaseID}); err != nil {
+			return err
 		}
 		return applyWorkloadState(ctx, q, row, WorkloadActive)
 	})
@@ -188,7 +194,7 @@ func (c *Control) StartWorkload(ctx context.Context, workspace identity.Workspac
 // retires its releases: containers stop and queued and running tasks are
 // cancelled. The name is free for a later deploy.
 func (c *Control) DeleteWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Workload, error) {
-	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, q *Queries, row LockWorkloadRow) error {
+	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, _ pgx.Tx, q *Queries, row LockWorkloadRow) error {
 		return applyWorkloadState(ctx, q, row, WorkloadDeleted)
 	})
 }
@@ -196,7 +202,7 @@ func (c *Control) DeleteWorkload(ctx context.Context, workspace identity.Workspa
 // changeWorkload applies change to a live workload under its row lock and
 // wakes planning in the same transaction.
 func (c *Control) changeWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID,
-	change func(context.Context, *Queries, LockWorkloadRow) error,
+	change func(context.Context, pgx.Tx, *Queries, LockWorkloadRow) error,
 ) (apitypes.Workload, error) {
 	var out apitypes.Workload
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
@@ -211,7 +217,7 @@ func (c *Control) changeWorkload(ctx context.Context, workspace identity.Workspa
 		if WorkloadState(row.DesiredState) == WorkloadDeleted || AppState(row.AppState) == AppDeleted {
 			return ErrNotFound
 		}
-		if err := change(ctx, q, row); err != nil {
+		if err := change(ctx, tx, q, row); err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelExecution, row.ID.String()); err != nil {
