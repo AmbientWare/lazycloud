@@ -1,6 +1,6 @@
 ---
 title: "Examples"
-description: "Complete applications built on the LazyCloud SDK: GPU inference, model training, an ASGI service, a coding agent, and parallel data processing."
+description: "Complete applications built on LazyCloud: an image generation app, LLM fine-tuning, a video pipeline, coding agents on a devbox, and a scheduled monitor."
 ---
 
 Each workflow is a standalone uv project to download. The source and assets
@@ -13,39 +13,39 @@ Python setup step for them.
 
 <CardGroup cols={2}>
   <Card
-    title="OpenAI-compatible LLM service"
-    icon="messages"
-    href="/examples/openai-compatible-llm"
+    title="Image generation studio"
+    icon="image"
+    href="/examples/image-studio"
   >
-    Serve a language model behind an authenticated OpenAI-compatible API on a GPU.
+    A Next.js and FastAPI app that generates images on a GPU and keeps a gallery.
   </Card>
   <Card
-    title="Train a YOLO object detector"
-    icon="camera"
-    href="/examples/train-yolo-object-detector"
+    title="Fine-tune an LLM with LoRA"
+    icon="brain"
+    href="/examples/lora-fine-tune"
   >
-    Train on a GPU, keep the checkpoint in a volume, and predict from a second function.
+    Train a LoRA adapter on a GPU, compare it with the base model, and serve it behind an OpenAI-compatible API.
   </Card>
   <Card
-    title="Document processing with FastAPI"
-    icon="file-magnifying-glass"
-    href="/examples/document-processing-asgi"
+    title="Video to highlight clips"
+    icon="film"
+    href="/examples/video-highlights"
   >
-    Upload a PDF or image in your browser and download the extracted text.
+    Transcribe, pick chapters with an LLM, and cut clips in parallel, each step on the hardware it needs.
   </Card>
   <Card
-    title="Sandboxed coding agent"
+    title="Coding agents on a devbox"
     icon="terminal"
-    href="/examples/sandboxed-coding-agent"
+    href="/examples/devbox-agents"
   >
-    Keep model credentials in a function while generated code runs in a network-blocked sandbox.
+    Run Claude Code or Codex on a persistent remote machine that keeps working after you disconnect.
   </Card>
   <Card
-    title="Parallel Parquet processing on S3"
-    icon="table"
-    href="/examples/parallel-parquet-s3"
+    title="Website change monitor"
+    icon="bell"
+    href="/examples/site-monitor"
   >
-    Fan partition work out through a function and write the summary back to your bucket.
+    A scheduled job that checks pages, has an LLM summarize what changed, and sends an alert.
   </Card>
 </CardGroup>
 
@@ -56,8 +56,8 @@ Install the CLI with uv, then choose a project:
 ```bash
 uv tool install lazycloud-client
 lazycloud example list
-lazycloud example download yolo-training
-cd yolo-training
+lazycloud example download image-studio
+cd image-studio
 uv sync
 ```
 

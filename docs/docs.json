@@ -104,11 +104,11 @@
         "group": "Examples",
         "pages": [
           "examples/index",
-          "examples/openai-compatible-llm",
-          "examples/train-yolo-object-detector",
-          "examples/document-processing-asgi",
-          "examples/sandboxed-coding-agent",
-          "examples/parallel-parquet-s3"
+          "examples/image-studio",
+          "examples/lora-fine-tune",
+          "examples/video-highlights",
+          "examples/devbox-agents",
+          "examples/site-monitor"
         ]
       },
       {

@@ -5,11 +5,11 @@ Users get complete projects through the public CLI:
 ```bash
 uv tool install lazycloud-client
 lazycloud example list
-lazycloud example download yolo-training
-cd yolo-training
+lazycloud example download image-studio
+cd image-studio
 uv sync
 uv run lazycloud login --token <token>
-uv run lazycloud run app:train_yolo
+uv run lazycloud deploy image_studio.app:app
 ```
 
 No repository access is required. Each project's README covers setup, expected
@@ -29,21 +29,22 @@ To add an example, create one directory with metadata:
 ```json
 {
   "name": "my-example",
-  "description": "Describe the result users get.",
-  "python_version": "3.12",
-  "dependencies": []
+  "description": "Describe the result users get."
 }
 ```
 
-Put all source, assets, and a README under `project/`. Declare only local
-dependencies in the metadata. Remote dependencies belong in the workload's
-image. Use relative imports within a multi-file app package so it can run from
-any downloaded directory.
+Put all source, assets, a README, `pyproject.toml` and `.python-version`
+under `project/`. List `"lazycloud-client"` once, unpinned, in the `dev`
+dependency group; the CLI pins it to the installed SDK version on download,
+and `Image.from_uv` leaves the group out of remote images. Put each
+workload's remote dependencies in its own dependency group and build its
+image with `Image.from_uv(".", groups=[...])`. Do not add credentials,
+environments or lockfiles to the asset directory. Users generate and commit
+their own `uv.lock` after downloading.
 
-The CLI generates `pyproject.toml`, `.python-version`, and `.gitignore`.
-It pins `lazycloud-client` to the installed SDK version. Do not add generated
-files, credentials, environments, or lockfiles to the asset directory.
-Users generate and commit their own `uv.lock` after downloading.
+Guides quote project files in code blocks titled with the file's path, such
+as ```` ```python image_studio/app.py ````. `tests/examples/test_example_docs.py`
+fails when a quoted block differs from the shipped file.
 
 Update an example in place. Remove its catalog directory to remove it from
 future SDK releases. No CLI code change is needed. Update the corresponding
