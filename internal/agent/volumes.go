@@ -248,6 +248,10 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	if err := v.startSlice(ctx, v.a.workloadSlice(c.id), budget); err != nil {
 		return nil, err
 	}
+	image, err := v.a.platformImage(ctx, platformimages.Mount)
+	if err != nil {
+		return nil, err
+	}
 	binds := make([]mount.Mount, 0, len(specs))
 	for n, group := range mounterGroups(specs) {
 		m := v.newMounter(mounterName(c.id, n), c.id)
@@ -269,7 +273,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		if err != nil {
 			return nil, err
 		}
-		if err := v.start(ctx, m, what, ms); err != nil {
+		if err := v.start(ctx, m, image, what, ms); err != nil {
 			return nil, err
 		}
 		for i, s := range group {
@@ -417,8 +421,8 @@ func (e *mountError) Error() string {
 
 // start runs m's container and waits for its mount. One that does not mount
 // within mountWait is removed.
-func (v *volumes) start(ctx context.Context, m *mounter, what string, spec mountSpec) error {
-	id, err := v.runMount(ctx, m, spec)
+func (v *volumes) start(ctx context.Context, m *mounter, image, what string, spec mountSpec) error {
+	id, err := v.runMount(ctx, m, image, spec)
 	if err != nil {
 		return err
 	}
@@ -484,11 +488,7 @@ func HostTrustBundle() string {
 
 // runMount starts m's GeeseFS mount container in its container's slice and
 // returns its id.
-func (v *volumes) runMount(ctx context.Context, m *mounter, spec mountSpec) (string, error) {
-	image, err := v.a.platformImage(ctx, platformimages.Mount)
-	if err != nil {
-		return "", err
-	}
+func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec mountSpec) (string, error) {
 	// Only the agent (and root, which Docker runs as) may walk into the
 	// mounts; workloads reach their own volume through a bind.
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
