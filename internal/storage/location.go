@@ -19,11 +19,11 @@ type Location struct {
 	PathStyle bool
 }
 
-// locate resolves a bucket's address. Without an endpoint, such as Garage's,
-// R2's or MinIO's, the bucket is AWS S3 in region. Requests name the bucket
-// in the host name unless pathStyle, or the name holds a dot: TLS
-// certificates cover one subdomain label, so a dotted bucket's host name
-// fails verification.
+// locate resolves a bucket's address: at endpoint, such as Garage's, R2's or
+// MinIO's, or without one AWS S3 in region. Requests name the bucket in the
+// host name unless pathStyle, or the name holds a dot: TLS certificates
+// cover one subdomain label, so a dotted bucket's host name fails
+// verification.
 func locate(endpoint, region, bucket string, pathStyle bool) (Location, error) {
 	if endpoint == "" {
 		if region == "" {

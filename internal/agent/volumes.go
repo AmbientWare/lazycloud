@@ -40,7 +40,7 @@ import (
 // mounts/<workspace>.<generation> and is labelled with the fingerprint of
 // what it was made with: the GeeseFS binary, the trust bundle and the
 // bucket's location. Only a mounted generation whose fingerprint is current
-// takes new users. Any other, one without a fingerprint included, is stale:
+// takes new users. Any other, including one without a fingerprint, is stale:
 // it keeps the users whose binds point into it while it stays mounted and
 // stops when the last one goes.
 const (

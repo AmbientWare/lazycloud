@@ -159,8 +159,11 @@ func OpenTLS(ctx context.Context, dir string) (HTTPS, error) {
 	var authority struct {
 		Root string `json:"root_certificate"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&authority); err != nil || resp.StatusCode != http.StatusOK {
-		return HTTPS{}, fmt.Errorf("test object store CA: HTTP %d: %w", resp.StatusCode, err)
+	if resp.StatusCode != http.StatusOK {
+		return HTTPS{}, fmt.Errorf("test object store CA: HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&authority); err != nil {
+		return HTTPS{}, fmt.Errorf("test object store CA: %w", err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM([]byte(authority.Root)) {
