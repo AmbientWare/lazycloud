@@ -417,7 +417,7 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
 			v.slots = append(v.slots, warmSlot{shape: build.Lower(ps.p.LargestShape.Cap), kind: slotBuild})
 		}
-		d := DemandOf(arrivals, ps.s.Now, r.Stopped.Lead, r.Stopped.Memory, ps.p.Batch)
+		d := r.Stopped.demand(arrivals, ps.s.Now, ps.p.Batch)
 		v.stopped, v.keep = r.Stopped.Floor.Upper(d.Steady), r.Stopped.Floor.Upper(d.Steady.Plus(d.Burst))
 		if r.FitLargest {
 			v.largest = ps.p.LargestShape.of(m, largest)
@@ -1248,8 +1248,9 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 
 // leave returns a leaving host to the reserve when EC2 can stop it and the
 // market's reserves hold less than they keep for the burst they remember,
-// or nothing that fits the largest shape while the host does. A host launched able to hibernate
-// does where hibernates allows. Any other leaving host drains.
+// or nothing that fits the largest shape while the host does. A host
+// launched able to hibernate does where hibernates allows. Any other
+// leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
 	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.keep) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{}))

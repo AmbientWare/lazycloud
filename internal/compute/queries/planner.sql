@@ -103,18 +103,22 @@ group by 2, 3
 order by 1, 2, 3;
 
 -- name: RecentArrivals :many
--- The placed platform containers created within the window, newest first
--- up to the sample: what each market's headroom measures demand by. Build
--- containers keep their own warm slot instead. The read follows the
--- primary key, so it reads at most sample_size containers whatever the
--- history.
-select c.created_at, (c.rate_class in ('auto', 'pinned'))::bool as preemptible, c.gpu_type,
-       c.cpu_millis, c.memory_bytes, c.gpu_count
-from containers c
-where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
-  and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.image_build_id is null
-order by c.id desc
-limit @sample_size;
+-- The placed platform containers among the newest containers created
+-- within the window, up to the sample: what each market's headroom
+-- measures demand by. Build containers keep their own warm slot instead.
+-- The sample is taken before the filter, so the read follows the primary
+-- key for at most sample_size containers whatever the history or backlog.
+select created_at, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+       cpu_millis, memory_bytes, gpu_count
+from (
+    select c.created_at, c.rate_class, c.gpu_type, c.cpu_millis, c.memory_bytes, c.gpu_count, c.billing_owner,
+           c.assigned_at, c.image_build_id
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
+    order by c.id desc
+    limit @sample_size
+) recent
+where billing_owner = 'platform_fleet' and assigned_at is not null and image_build_id is null;
 
 -- name: BatchWaits :many
 -- How long, in seconds, each owner's arrival batch stays open: until quiet

@@ -116,8 +116,12 @@ type HeadroomTarget struct {
 
 // Of is the target arrivals set at now.
 func (t HeadroomTarget) Of(arrivals []Arrival, now time.Time, batch BatchWindow) FleetCapacity {
-	d := DemandOf(arrivals, now, t.Lead, t.Memory, batch)
+	d := t.demand(arrivals, now, batch)
 	return t.Floor.Upper(d.Steady.Plus(d.Burst))
+}
+
+func (t HeadroomTarget) demand(arrivals []Arrival, now time.Time, batch BatchWindow) Demand {
+	return DemandOf(arrivals, now, t.Lead, t.Memory, batch)
 }
 
 // MarketReserve is the running headroom a market keeps warm and the
@@ -205,8 +209,8 @@ type Policy struct {
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
 	// Warm room serves arrivals until a reserve resumes or a launch serves,
-	// tens of seconds; reserves serve until a purchase does, minutes. Each
-	// keeps room for the largest recent burst.
+	// tens of seconds, and remembers a burst briefly; reserves serve until a
+	// purchase does, minutes, and keep a burst's hosts for an hour.
 	warm := func(floor FleetCapacity) HeadroomTarget {
 		return HeadroomTarget{Floor: floor, Lead: 2 * time.Minute, Memory: 5 * time.Minute}
 	}
