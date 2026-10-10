@@ -8,4 +8,4 @@ BUCKET_REGION = "us-east-1"
 CALLBACK_URL: str | None = None
 
 # Any OpenAI model that supports structured outputs; each run can override it.
-OPENAI_MODEL = "gpt-5-mini"
+OPENAI_MODEL = "gpt-6.1-sol"

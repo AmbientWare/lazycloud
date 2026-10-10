@@ -4,7 +4,7 @@ from openai import OpenAI
 
 from site_monitor.models import Verdict, Watch
 
-MODEL = "gpt-5-mini"
+MODEL = "gpt-6.1-sol"
 INSTRUCTIONS = """\
 You review changes to a web page that someone monitors. In the diff, lines
 starting with - were removed and lines starting with + were added. Decide
@@ -29,7 +29,7 @@ def judge_change(watch: Watch, diff: str) -> Verdict:
             f"Diff:\n{diff}"
         ),
         text_format=Verdict,
-        reasoning={"effort": "minimal"},
+        reasoning={"effort": "low"},
     )
     if response.output_parsed is None:
         raise JudgeError(f"{MODEL} returned no verdict for {watch.url}")
