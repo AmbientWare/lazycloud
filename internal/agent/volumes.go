@@ -748,8 +748,8 @@ func (v *volumes) remove(ctx context.Context, m *mounter) error {
 // mount whose fingerprint is not current is a stale generation. A mount
 // that no longer mounts, a stale generation nothing uses and a cloud bucket
 // mount whose container is gone are removed, with the keys of every cloud
-// bucket not mounted. Running workloads bound into a mount that no longer
-// mounts fail.
+// bucket not mounted; a mount Docker fails to remove is logged and left.
+// Running workloads bound into a mount that no longer mounts fail.
 func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary) error {
 	workloads := map[string]containertypes.Summary{}
 	for _, s := range summaries {
@@ -840,7 +840,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	}
 	for _, m := range dead {
 		if err := v.stop(ctx, m); err != nil {
-			return fmt.Errorf("remove volume mount %s: %w", m.name, err)
+			v.a.log.Warn("removing a volume mount the agent did not adopt failed", "mount", m.name, "error", err)
 		}
 	}
 	keys, err := os.ReadDir(v.bucketKeys(""))
