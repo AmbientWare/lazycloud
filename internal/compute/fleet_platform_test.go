@@ -193,6 +193,9 @@ type platformOutcome struct {
 	unbilled                           map[string]*capacityUse
 	waits                              map[string][]time.Duration
 	lost, reclaims, reserves, resumes  int
+	// connected is set on a connected account's run, which pays its own
+	// hosts and bills no revenue here.
+	connected bool
 }
 
 func (o platformOutcome) profit() float64 { return o.revenue - (o.spend - o.idleSpend) }
@@ -220,6 +223,7 @@ func runPlatform(t *testing.T, sc platformScenario, seed uint64) platformOutcome
 		revenue: float64(r.revenueNanos) / 1e9, spend: float64(r.windowMicros-r.refundMicros) / 3600e6, idleSpend: float64(ir.windowMicros-ir.refundMicros) / 3600e6,
 		fleetCPU: r.fleetCPUSec / 3600, fleetGiB: r.fleetGiBSec / 3600, billedCPU: r.billedCPUSec / 3600, gib: r.billedGiBSec / 3600,
 		unbilled: r.unbilled, waits: r.fnWaits, lost: r.lost, reclaims: r.reclaims, reserves: len(r.reserveBought), resumes: r.resumes,
+		connected: busy.connected,
 	}
 	// The buckets split exactly what the running hosts held.
 	var split float64
@@ -253,8 +257,12 @@ func platformRow(name string, outs []platformOutcome) string {
 		return fmt.Sprintf("%.2f", m)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-18s profit $%s  billed CPU %s mem %s  preempted %s reclaims %s  reserves bought %s resumed %s\n", name,
-		mean(platformOutcome.profit), mean(func(o platformOutcome) float64 { return o.billedCPU / o.fleetCPU }),
+	money := "profit $" + mean(platformOutcome.profit)
+	if outs[0].connected {
+		money = "account pays $" + mean(func(o platformOutcome) float64 { return o.spend - o.idleSpend }) + " above idle"
+	}
+	fmt.Fprintf(&b, "%-18s %s  billed CPU %s mem %s  preempted %s reclaims %s  reserves bought %s resumed %s\n", name,
+		money, mean(func(o platformOutcome) float64 { return o.billedCPU / o.fleetCPU }),
 		mean(func(o platformOutcome) float64 { return o.gib / o.fleetGiB }), mean(func(o platformOutcome) float64 { return float64(o.lost) }),
 		mean(func(o platformOutcome) float64 { return float64(o.reclaims) }), mean(func(o platformOutcome) float64 { return float64(o.reserves) }),
 		mean(func(o platformOutcome) float64 { return float64(o.resumes) }))

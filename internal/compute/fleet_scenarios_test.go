@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -528,8 +529,17 @@ func (s *sim) plan() time.Duration {
 // and, since the simulation never refuses on-demand capacity, that each
 // on-demand purchase takes its type's cheapest pool.
 func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
+	// A cheaper pool may lack the quota room the hosts and the pass's
+	// earlier starts left.
+	used := QuotaUse(snapshot.Hosts, s.in.Catalog)
 	for _, a := range plan.Actions {
-		if a.Offer == nil || a.Offer.Market != MarketOnDemand {
+		if a.Offer == nil {
+			continue
+		}
+		in := snapshot.Offers
+		in.Cooldowns, in.QuotaUsed = nil, maps.Clone(used)
+		used[a.Offer.Quota] += a.Offer.Type.VCPUs()
+		if a.Offer.Market != MarketOnDemand {
 			continue
 		}
 		reserve := a.Kind == ActionBuyReserve
@@ -537,8 +547,6 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 		if reserve {
 			cost = reserveCost(s.p)
 		}
-		in := snapshot.Offers
-		in.Cooldowns = nil
 		need := Requirement{CPUMillis: a.Offer.Usable.CPUMillis, MemoryBytes: a.Offer.Usable.MemoryBytes}
 		for _, o := range RankOffers(s.p, need, reserve, in) {
 			if o.Type.Name == a.Offer.Type.Name && o.Market == MarketOnDemand && cost(o) < cost(*a.Offer) {
@@ -547,6 +555,7 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			}
 		}
 	}
+	quotaUsed := QuotaUse(snapshot.Hosts, s.in.Catalog)
 	resumed := map[HostID]bool{}
 	for _, a := range plan.Actions {
 		if a.Kind == ActionResume {
@@ -558,7 +567,11 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			continue
 		}
 		for _, h := range snapshot.Hosts {
-			if !h.resumable() || resumed[h.ID] {
+			class, _ := QuotaClassOf(h.InstanceType)
+			key := QuotaKey{Region: h.Region, Class: class, Market: h.Market}
+			limit, known := s.quotas[key]
+			full := s.knowQuota && known && quotaUsed[key]+catalogVCPUs(s.in.Catalog, h.InstanceType) > limit
+			if !h.resumable() || resumed[h.ID] || full {
 				continue
 			}
 			for _, c := range s.pending {
@@ -568,6 +581,15 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			}
 		}
 	}
+}
+
+// catalogVCPUs is the vCPUs of a catalog type.
+func catalogVCPUs(catalog []CatalogType, name string) int64 {
+	i := slices.IndexFunc(catalog, func(t CatalogType) bool { return t.Name == name })
+	if i < 0 {
+		return 0
+	}
+	return catalog[i].VCPUs()
 }
 
 func (s *sim) host(id HostID) *simHost {
