@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -82,20 +83,21 @@ type Config struct {
 type Storage struct {
 	pool    *pgxpool.Pool
 	queries *Queries
-	client  *s3.Client
-	presign *s3.PresignClient
-	bucket  string
-	layers  string
-	// replicas are the copies of the layer bucket by region, each signed
-	// for its own region.
-	replicas map[string]layerReplica
+	// platform is the platform bucket, which holds sources, artifacts and
+	// snapshots; layers holds converted image layers, and replicas are its
+	// copies by region, each signed for its own region.
+	platform bucketClient
+	layers   bucketClient
+	replicas map[string]bucketClient
 	config   Config
 	// buckets is the provider of the platform's workspace buckets.
 	buckets bucketProvider
 	// connections reaches connected AWS accounts, which hold the buckets
 	// of the workspaces that live in them.
 	connections *compute.Compute
-	accounts    *accountClients
+	// mu guards clients, storeOf's clients by account and region.
+	mu      sync.Mutex
+	clients map[string]bucketClient
 	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
 	orphanAge time.Duration
 }
@@ -123,15 +125,17 @@ func NewStorage(pool *pgxpool.Pool, cfg Config, connections *compute.Compute) *S
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 	}, options...)
-	replicas := make(map[string]layerReplica, len(cfg.LayerReplicas))
+	platform := bucketClient{name: cfg.Bucket, region: cfg.Region, client: client, presign: s3.NewPresignClient(client)}
+	layers := platform
+	layers.name = cfg.LayerBucket
+	replicas := make(map[string]bucketClient, len(cfg.LayerReplicas))
 	for region, bucket := range cfg.LayerReplicas {
 		regional := s3.New(client.Options(), func(o *s3.Options) { o.Region = region })
-		replicas[region] = layerReplica{bucket: bucket, client: regional, presign: s3.NewPresignClient(regional)}
+		replicas[region] = bucketClient{name: bucket, region: region, client: regional, presign: s3.NewPresignClient(regional)}
 	}
 	return &Storage{
-		pool: pool, queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket,
-		layers: cfg.LayerBucket, replicas: replicas, config: cfg, buckets: newBucketProvider(cfg), connections: connections,
-		accounts: &accountClients{clients: map[accountRegion]objectClient{}}, orphanAge: orphanAge,
+		pool: pool, queries: New(pool), platform: platform, layers: layers, replicas: replicas, config: cfg,
+		buckets: newBucketProvider(cfg), connections: connections, clients: map[string]bucketClient{}, orphanAge: orphanAge,
 	}
 }
 
@@ -181,12 +185,12 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 		return SourceUpload{Present: true}, nil
 	}
 
-	lifetime, err := s.signedLifetime(ctx, s.client, uploadURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.platform.client, uploadURLLifetime)
 	if err != nil {
 		return SourceUpload{}, err
 	}
-	req, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket:         aws.String(s.bucket),
+	req, err := s.platform.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:         aws.String(s.platform.name),
 		Key:            aws.String(key),
 		ContentLength:  aws.Int64(size),
 		ContentType:    aws.String("application/zip"),
@@ -209,8 +213,8 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 // storedMatches reports whether the object at key exists with size bytes and,
 // when the store kept a SHA-256 checksum, the expected digest.
 func (s *Storage) storedMatches(ctx context.Context, key string, digest Digest, size int64) (bool, error) {
-	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket:       aws.String(s.bucket),
+	head, err := s.platform.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket:       aws.String(s.platform.name),
 		Key:          aws.String(key),
 		ChecksumMode: types.ChecksumModeEnabled,
 	})
@@ -232,12 +236,12 @@ func (s *Storage) storedMatches(ctx context.Context, key string, digest Digest, 
 
 // SourceURL is a presigned GET for a workspace's source archive.
 func (s *Storage) SourceURL(ctx context.Context, workspace identity.WorkspaceID, digest Digest) (string, time.Time, error) {
-	lifetime, err := s.signedLifetime(ctx, s.client, downloadURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.platform.client, downloadURLLifetime)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
+	req, err := s.platform.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.platform.name),
 		Key:    aws.String(sourceKey(workspace, digest)),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {

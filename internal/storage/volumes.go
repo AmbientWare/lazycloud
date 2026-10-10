@@ -217,7 +217,7 @@ func (s *Storage) volumeFiles(ctx context.Context, workspace identity.WorkspaceI
 	if err != nil {
 		return bucketClient{}, "", err
 	}
-	return store.bucketClient, volumePrefix(row.ID), nil
+	return store, volumePrefix(row.ID), nil
 }
 
 // cleanPath normalizes a path relative to the volume root. The root is "".

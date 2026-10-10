@@ -79,10 +79,10 @@ type Grant struct {
 type bucketProvider interface {
 	// ensureBucket creates the store's bucket if it is missing and lets
 	// the store's client use it.
-	ensureBucket(ctx context.Context, store workspaceStore) error
-	// issue returns a credential for the store's bucket alone. revocable
-	// means the key must be deleted after it expires.
-	issue(ctx context.Context, store workspaceStore, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
+	ensureBucket(ctx context.Context, store bucketClient) error
+	// issue returns a credential for bucket alone. revocable means the key
+	// must be deleted after it expires.
+	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
@@ -97,7 +97,7 @@ func newBucketProvider(cfg Config) bucketProvider {
 	case ProviderAWS:
 		client := sts.New(sts.Options{Region: cfg.Region, Credentials: credentialProvider(cfg)})
 		role := cfg.Workspaces.RoleARN
-		return &awsBuckets{assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
+		return &awsBuckets{account: cfg.Workspaces.AccountID, assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
 			out, err := client.AssumeRole(ctx, &sts.AssumeRoleInput{
 				RoleArn: aws.String(role), RoleSessionName: aws.String(session),
 				DurationSeconds: aws.Int32(int32(lifetime.Seconds())), Policy: aws.String(policy),
@@ -230,7 +230,7 @@ func (g *garageBuckets) bucketID(ctx context.Context, bucket string) (string, er
 	return info.ID, err
 }
 
-func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) error {
+func (g *garageBuckets) ensureBucket(ctx context.Context, store bucketClient) error {
 	bucket := store.name
 	id, err := g.bucketID(ctx, bucket)
 	var missing *garageError
@@ -252,8 +252,7 @@ func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) 
 	return g.allow(ctx, id, g.platformKey, garagePerms{Read: true, Write: true, Owner: true})
 }
 
-func (g *garageBuckets) issue(ctx context.Context, store workspaceStore, name string, lifetime time.Duration) (Grant, bool, error) {
-	bucket := store.name
+func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
 	id, err := g.bucketID(ctx, bucket)
 	if err != nil {
 		return Grant{}, false, err
@@ -285,13 +284,15 @@ func (g *garageBuckets) revoke(ctx context.Context, accessKeyID string) error {
 }
 
 // awsBuckets creates S3 buckets and issues host credentials by assuming a
-// role with a session policy limited to one bucket: the platform's
-// workspace storage role, or a connected account's connection role.
+// role with a session policy limited to one bucket of account: the
+// platform's workspace storage role, or a connected account's connection
+// role.
 type awsBuckets struct {
-	assume func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error)
+	account string
+	assume  func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error)
 }
 
-func (a *awsBuckets) ensureBucket(ctx context.Context, store workspaceStore) error {
+func (a *awsBuckets) ensureBucket(ctx context.Context, store bucketClient) error {
 	input := &s3.CreateBucketInput{Bucket: aws.String(store.name)}
 	if store.region != "us-east-1" {
 		input.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
@@ -309,9 +310,8 @@ func (a *awsBuckets) ensureBucket(ctx context.Context, store workspaceStore) err
 	return nil
 }
 
-func (a *awsBuckets) issue(ctx context.Context, store workspaceStore, name string, lifetime time.Duration) (Grant, bool, error) {
-	bucket := store.name
-	policy, err := json.Marshal(hostPolicy(bucket, store.account))
+func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
+	policy, err := json.Marshal(hostPolicy(bucket, a.account))
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
 	}

@@ -20,11 +20,11 @@ func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace 
 	if err != nil {
 		return Grant{}, err
 	}
-	provider, err := s.providerOf(store)
+	provider, err := s.providerOf(ctx, store)
 	if err != nil {
 		return Grant{}, err
 	}
-	grant, revocable, err := provider.issue(ctx, store, "lazycloud-host-"+host.String(), grantLifetime)
+	grant, revocable, err := provider.issue(ctx, store.name, "lazycloud-host-"+host.String(), grantLifetime)
 	if err != nil {
 		return Grant{}, storeError(fmt.Errorf("issue storage grant: %w", err))
 	}

@@ -136,8 +136,8 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 // linkBucket is the bucket a link names: the platform bucket or a
 // workspace bucket. A workspace bucket that is gone is ErrNotFound.
 func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, error) {
-	if name == s.bucket {
-		return s.platformBucket(), nil
+	if name == s.platform.name {
+		return s.platform, nil
 	}
 	row, err := s.queries.BucketByName(ctx, name)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -146,8 +146,7 @@ func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, er
 	if err != nil {
 		return bucketClient{}, fmt.Errorf("read link bucket: %w", err)
 	}
-	store, err := s.storeOf(ctx, row.Bucket, row.Region, row.ConnectionID)
-	return store.bucketClient, err
+	return s.storeOf(ctx, row.Bucket, row.Region, row.ConnectionID)
 }
 
 // objectETag is the ETag of key in b, or "" when nothing is there.

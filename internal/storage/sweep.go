@@ -72,7 +72,7 @@ func (s *Storage) sweepArtifacts(ctx context.Context, logger *slog.Logger) (int,
 	for _, row := range rows {
 		key := artifactKey(identity.WorkspaceID(row.WorkspaceID), row.ID)
 		if row.UploadID != nil {
-			if err := s.abortMultipart(ctx, s.platformBucket(), key, *row.UploadID); err != nil {
+			if err := s.abortMultipart(ctx, s.platform, key, *row.UploadID); err != nil {
 				logger.WarnContext(ctx, "aborting an abandoned artifact upload failed", "artifact", row.ID.String(), "error", err)
 				continue
 			}
@@ -80,7 +80,7 @@ func (s *Storage) sweepArtifacts(ctx context.Context, logger *slog.Logger) (int,
 		keys = append(keys, key)
 		ids[key] = row.ID
 	}
-	failed, err := s.tryDeleteKeys(ctx, s.platformBucket(), keys)
+	failed, err := s.tryDeleteKeys(ctx, s.platform, keys)
 	if err != nil {
 		return 0, err
 	}
@@ -148,12 +148,12 @@ func diskPrefix(disk uuid.UUID) string { return "disks/" + disk.String() + "/" }
 // once it is empty, the row. A nil bucket means the workspace never had
 // one.
 func (s *Storage) emptyThenDelete(ctx context.Context, bucket, region *string, connection *uuid.UUID, prefix string, deleteRow func() error) (bool, error) {
-	store, ok, err := s.storeAt(ctx, bucket, region, connection)
-	if err != nil {
-		return false, err
-	}
-	if ok {
-		empty, err := s.deletePrefixChunk(ctx, store.bucketClient, prefix)
+	if bucket != nil && region != nil {
+		store, err := s.storeOf(ctx, *bucket, *region, connection)
+		if err != nil {
+			return false, err
+		}
+		empty, err := s.deletePrefixChunk(ctx, store, prefix)
 		if err != nil || !empty {
 			return false, err
 		}
@@ -217,7 +217,7 @@ func (s *Storage) storedBytes(ctx context.Context, bucket, region string, connec
 		return 0, err
 	}
 	var size int64
-	err = s.eachObject(ctx, store.bucketClient, prefix, func(batch []objectInfo) error {
+	err = s.eachObject(ctx, store, prefix, func(batch []objectInfo) error {
 		for _, o := range batch {
 			size += o.Size
 		}
@@ -252,7 +252,7 @@ func (s *Storage) sweepOrphans(ctx context.Context, logger *slog.Logger) (int, e
 		prefix string
 		known  func(context.Context, []uuid.UUID) ([]uuid.UUID, error)
 	}{{"volumes/", s.queries.KnownVolumes}, {"disks/", s.queries.KnownDisks}} {
-		n, err := s.removeOrphanPrefixes(ctx, store.bucketClient, kind.prefix, kind.known)
+		n, err := s.removeOrphanPrefixes(ctx, store, kind.prefix, kind.known)
 		removed += n
 		if err != nil {
 			logger.WarnContext(ctx, "removing orphaned objects failed", "bucket", claim.Bucket, "prefix", kind.prefix, "error", err)
@@ -326,7 +326,7 @@ func (s *Storage) hasRecentObject(ctx context.Context, bucket bucketClient, pref
 func (s *Storage) removeOrphanArtifacts(ctx context.Context, workspace identity.WorkspaceID) (int, error) {
 	prefix := fmt.Sprintf("workspaces/%s/artifacts/", workspace)
 	removed := 0
-	err := s.eachObject(ctx, s.platformBucket(), prefix, func(batch []objectInfo) error {
+	err := s.eachObject(ctx, s.platform, prefix, func(batch []objectInfo) error {
 		ids := make([]uuid.UUID, 0, len(batch))
 		byID := map[uuid.UUID]objectInfo{}
 		for _, o := range batch {
@@ -346,7 +346,7 @@ func (s *Storage) removeOrphanArtifacts(ctx context.Context, workspace identity.
 		for _, o := range byID {
 			keys = append(keys, o.Key)
 		}
-		if err := s.deleteKeys(ctx, s.platformBucket(), keys); err != nil {
+		if err := s.deleteKeys(ctx, s.platform, keys); err != nil {
 			return err
 		}
 		removed += len(keys)

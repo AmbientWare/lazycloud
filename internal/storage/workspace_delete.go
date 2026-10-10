@@ -25,7 +25,7 @@ import (
 // connected account the platform can no longer act in keeps the bucket,
 // which is the customer's to delete; only its row goes.
 func (s *Storage) DeleteWorkspaceStorage(ctx context.Context, logger *slog.Logger, workspace identity.WorkspaceID) (bool, error) {
-	empty, err := s.deletePrefixChunk(ctx, s.platformBucket(), fmt.Sprintf("workspaces/%s/", workspace))
+	empty, err := s.deletePrefixChunk(ctx, s.platform, fmt.Sprintf("workspaces/%s/", workspace))
 	if err != nil {
 		return false, fmt.Errorf("delete workspace objects: %w", err)
 	}
@@ -60,7 +60,7 @@ func (s *Storage) deleteWorkspaceBucket(ctx context.Context, bucket, region stri
 	if err != nil {
 		return false, err
 	}
-	if empty, err := s.deletePrefixChunk(ctx, store.bucketClient, ""); err != nil || !empty {
+	if empty, err := s.deletePrefixChunk(ctx, store, ""); err != nil || !empty {
 		if err != nil {
 			return false, fmt.Errorf("empty workspace bucket %s: %w", store.name, err)
 		}
