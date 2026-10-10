@@ -144,6 +144,9 @@ type platform struct {
 	join    string
 	// dirs holds agents' directories; see dir.
 	dirs string
+	// agents counts the agents runAgent started; only the first registers
+	// metrics, which one registry holds once.
+	agents int
 	// ctx ends when the test does; wg holds the platform's goroutines,
 	// which cleanup waits for.
 	ctx    context.Context //nolint:containedctx // The platform's lifetime.
@@ -488,12 +491,16 @@ func (p *platform) runAgent() {
 	p.t.Helper()
 	stateDir := p.dir()
 	runtime := runtimeDir(p.t)
+	tel := p.tel
+	if p.agents++; p.agents > 1 {
+		tel = nil
+	}
 	p.wg.Go(func() {
 		err := agent.Run(p.ctx, agent.Config{
 			Server: p.hosts, StateDir: stateDir, SocketDir: p.socketDir, JoinToken: p.join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: ociRuntime(),
 			GeeseFSPath: p.geesefs, TrustBundle: tlsStore.CA, ServerPlaintext: true, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: p.tel,
+			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel,
 		})
 		if err != nil && p.ctx.Err() == nil {
 			p.t.Errorf("agent: %v", err)
