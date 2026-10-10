@@ -47,11 +47,18 @@ def disk_list(
     )
 
 
+_FAILURE_LABELS = {
+    api.DiskOperation.publish: "Saving while running failed",
+    api.DiskOperation.release: "Saving after stop failed",
+}
+
+
 def disk_failure(failure: api.DiskFailure | None) -> str:
     """Why the holder's last save of a disk failed, or "" since it last succeeded."""
     if failure is None:
         return ""
-    return f"{failure.operation.value} at {timestamp(failure.failed_at)}: {failure.message}"
+    label = _FAILURE_LABELS[failure.operation]
+    return f"{label} at {timestamp(failure.failed_at)}: {failure.message}"
 
 
 @disk_app.command("delete", help="Delete a disk and everything written to it.")

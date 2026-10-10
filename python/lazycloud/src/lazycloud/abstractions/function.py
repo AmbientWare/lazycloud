@@ -965,19 +965,8 @@ def _volume_spec(volume: VolumeMount) -> dict[str, Any]:
         "mount_path": volume.mount_path,
         "read_only": volume.read_only,
     }
-    config = volume.config
-    if config is not None:
-        bucket: dict[str, Any] = {
-            "bucket": config["bucket_name"],
-            "prefix": config.get("prefix") or "",
-            "force_path_style": bool(config.get("force_path_style")),
-            "access_key_secret": config["access_key"],
-            "secret_key_secret": config["secret_key"],
-        }
-        for field_name, key in (("region", "region"), ("endpoint", "endpoint_url")):
-            if config.get(key):
-                bucket[field_name] = config[key]
-        spec["cloud_bucket"] = bucket
+    if volume.config is not None:
+        spec["cloud_bucket"] = volume.config
     return spec
 
 

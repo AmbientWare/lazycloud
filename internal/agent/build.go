@@ -841,9 +841,12 @@ func (a *Agent) removeBuildContainers(ctx context.Context) error {
 }
 
 // removeHostContainers removes every container the agent created for this
-// host, running or not.
+// host, running or not, their slices and the storage keys it holds.
 func (a *Agent) removeHostContainers(ctx context.Context) error {
 	if err := a.removeLabeled(ctx, labelHost); err != nil {
+		return err
+	}
+	if err := a.volumes.removeAll(ctx); err != nil {
 		return err
 	}
 	return a.removeBuildContainers(ctx)

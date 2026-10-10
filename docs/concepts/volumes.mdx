@@ -156,15 +156,15 @@ dot always goes in the path. The bucket must already exist.
 
 ## Memory for mounts
 
-Each bucket a container mounts reserves 512 MiB of memory on top of the
-container's `memory`, billed as memory. All of a container's volumes live in
-its workspace's bucket and count once. Each distinct cloud bucket counts once
-more, so a function with two volumes and one cloud bucket reserves 1 GiB beyond
+A container runs one mounter for all its volumes, plus one per distinct cloud
+bucket. Cloud buckets with the same bucket, keys and endpoint share one. Each
+mounter reserves 512 MiB of memory on top of the container's `memory`, billed as
+memory, so a function with two volumes and one cloud bucket reserves 1 GiB beyond
 what it asks for.
 
 ## Delete stored data
 
 `reports.remove("latest.json")` deletes one file and `reports.delete()` the whole
-volume. Deleting a volume is refused while a running container mounts it. A
-workload that still declares the volume creates it empty on its next run. The [file commands](/cli/storage#files) work from a
-terminal too.
+volume. `delete()` fails while a container that hasn't stopped mounts the volume.
+A workload that still declares the volume creates it empty on its next run. The
+[file commands](/cli/storage#files) work from a terminal too.

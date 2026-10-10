@@ -39,7 +39,7 @@ func (v *volumes) bucketSpec(name string, group []*hostproto.VolumeMount) (mount
 		return mountSpec{}, nil, err
 	}
 	return mountSpec{
-		creds: creds, source: b.GetBucket() + ":" + shared, endpoint: b.GetEndpoint(), region: b.GetRegion(),
+		what: "the mount of cloud bucket " + b.GetBucket(), creds: creds, source: b.GetBucket() + ":" + shared, endpoint: b.GetEndpoint(), region: b.GetRegion(),
 		pathStyle: b.GetForcePathStyle(), readOnly: readOnly,
 	}, dirs, nil
 }

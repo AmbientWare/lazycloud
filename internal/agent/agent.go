@@ -383,6 +383,7 @@ func Run(ctx context.Context, cfg Config) error {
 		operations:      make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
+	defer a.volumes.close()
 	snapshotter, err := layersource.Dial(layersource.Socket)
 	if err != nil {
 		return err //nolint:wrapcheck // The client names the call.

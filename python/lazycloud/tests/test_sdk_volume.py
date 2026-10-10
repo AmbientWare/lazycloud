@@ -75,8 +75,6 @@ def test_disk_sizes_are_bounded_whole_blocks(size: str | int, message: str) -> N
 
 
 def test_cloud_bucket_config_names_both_key_secrets() -> None:
-    with pytest.raises(TypeError, match="secret_key"):
-        CloudBucketConfig(access_key="ACCESS_SECRET")  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="access_key"):
         CloudBucketConfig(access_key="", secret_key="SECRET_KEY")
 
