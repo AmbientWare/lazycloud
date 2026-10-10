@@ -135,7 +135,7 @@ def finished_run() -> bytes:
             video_key="talks/keynote.mp4",
             duration_seconds=300.0,
             language="en",
-            model="gpt-5.4-mini",
+            model="gpt-5-mini",
             summary="A talk.",
             chapters=[],
             clips=[],
