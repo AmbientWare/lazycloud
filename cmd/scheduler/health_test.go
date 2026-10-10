@@ -119,6 +119,7 @@ func schedulerEnv(t *testing.T, pool *pgxpool.Pool) {
 		"LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": store.SecretAccessKey,
 		"LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER":      string(store.Workspaces.Provider),
 		"LAZYCLOUD_WORKSPACE_BUCKET_PREFIX":        store.Workspaces.Prefix,
+		"LAZYCLOUD_FLEET_ACCOUNT_ID":               store.Workspaces.AccountID,
 		"LAZYCLOUD_GARAGE_ADMIN_URL":               store.Workspaces.GarageAdminURL,
 		"LAZYCLOUD_GARAGE_ADMIN_TOKEN":             store.Workspaces.GarageAdminToken,
 		"LAZYCLOUD_RESEND_API_KEY":                 "",

@@ -157,7 +157,6 @@ dot always goes in the path. The bucket must already exist.
 ## Delete stored data
 
 `reports.remove("latest.json")` deletes one file and `reports.delete()` the whole
-volume. Deleting a volume is refused while a running container mounts it, so
-stop those workloads first. A workload that still declares the volume creates it
-empty on its next run. The [file commands](/cli/storage#files) work from a
+volume. Deleting a volume is refused while a running container mounts it. A
+workload that still declares the volume creates it empty on its next run. The [file commands](/cli/storage#files) work from a
 terminal too.

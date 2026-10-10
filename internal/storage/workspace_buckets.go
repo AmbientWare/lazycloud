@@ -31,16 +31,11 @@ const (
 
 // bucketName is <prefix>-<account>-<workspace id in base 36>. S3 bucket
 // names are global, and the account id keeps anyone else from creating a
-// workspace's name before the platform does. Garage's names are its own
-// and carry no account.
+// workspace's name before the platform does.
 func bucketName(prefix, account string, workspace identity.WorkspaceID) string {
 	id := uuid.UUID(workspace)
 	digits := new(big.Int).SetBytes(id[:]).Text(36)
-	digits = strings.Repeat("0", workspaceDigits-len(digits)) + digits
-	if account == "" {
-		return prefix + "-" + digits
-	}
-	return prefix + "-" + account + "-" + digits
+	return prefix + "-" + account + "-" + strings.Repeat("0", workspaceDigits-len(digits)) + digits
 }
 
 // objectClient is an S3 client signed for one account and region, and its
