@@ -228,7 +228,7 @@ func TestVolumeAndUsageChangesArePublished(t *testing.T) {
 	if _, event = nextEvent(t, sub); event.Changes[0].Topic != apitypes.ChangeTopicStorageDisks || event.Changes[0].Change != apitypes.ChangeKindCreated {
 		t.Fatalf("disk created %+v", event)
 	}
-	f.exec1("update disks set generation = 1, stored_bytes = 4096 where id = $1", disk)
+	f.exec1("update disks set generation = 1, index_sha256 = repeat('a', 64), stored_bytes = 4096 where id = $1", disk)
 	f.exec1("update disks set failed_operation = 'publish', failure_message = 'the store refused it', failed_at = now() where id = $1", disk)
 	if _, event = nextEvent(t, sub); event.Changes[0].Topic != apitypes.ChangeTopicStorageDisks || event.Changes[0].Change != apitypes.ChangeKindUpdated ||
 		*event.Changes[0].ResourceId != disk.String() {
