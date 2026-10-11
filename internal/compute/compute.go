@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -91,14 +92,18 @@ type Compute struct {
 	fleet      Fleet
 	// http sends identity proofs to STS.
 	http *http.Client
+	// sts assumes roles with the platform's own credentials.
+	sts *sts.Client
 }
 
 // NewCompute returns the compute owner over pool. sqlc's generated New
 // constructs the package's Queries.
 func NewCompute(pool *pgxpool.Pool, containers Containers, config Config) *Compute {
+	fleet := config.Fleet.withDefaults()
 	return &Compute{
-		pool: pool, queries: New(pool), containers: containers, config: config, fleet: config.Fleet.withDefaults(),
+		pool: pool, queries: New(pool), containers: containers, config: config, fleet: fleet,
 		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		sts:  awsClients{base: fleet.AWS, endpoints: fleet.Endpoints}.sts(awsScope{}, ""),
 	}
 }
 

@@ -391,17 +391,14 @@ func (e *Edge) checkFailure(ctx context.Context, t target) error {
 	if err := e.execution.AdmitCold(ctx, uuid.UUID(t.workload.workspace), t.release.spec); err != nil {
 		return err //nolint:wrapcheck // the typed refusal reaches fail
 	}
-	retry, err := e.execution.RetryStart(ctx, t.release.id)
-	if err != nil {
+	held, err := e.execution.RetryStart(ctx, t.release.id)
+	switch {
+	case err != nil:
 		return err
+	case held == nil:
+		return nil
+	case held.Kind == execution.FailureLoadError:
+		return &releaseFailedError{reason: "the handler failed to load: " + held.Message}
 	}
-	switch retry.Outcome {
-	case execution.StartHeld:
-		if retry.Failure.Kind == execution.FailureLoadError {
-			return &releaseFailedError{reason: "the handler failed to load: " + retry.Failure.Message}
-		}
-		return &releaseFailedError{reason: "the container failed to start: " + retry.Failure.Message}
-	case execution.StartAllowed, execution.StartRetried:
-	}
-	return nil
+	return &releaseFailedError{reason: "the container failed to start: " + held.Message}
 }

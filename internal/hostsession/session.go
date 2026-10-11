@@ -581,21 +581,27 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 	if start.Spec.Environment != nil {
 		env = *start.Spec.Environment
 	}
-	volumes, err := s.volumeMounts(ctx, start)
+	// One read resolves the release's secrets and its cloud buckets' keys;
+	// a missing one fails the start.
+	var names []string
+	if start.Spec.Secrets != nil {
+		names = *start.Spec.Secrets
+	}
+	resolved, err := s.config.Secrets.Resolve(ctx, start.Workspace, append(slices.Clone(names), bucketKeys(start.Spec)...))
+	if err != nil {
+		return nil, layerGrant{}, err
+	}
+	secretValues := make(map[string]string, len(names))
+	for _, name := range names {
+		secretValues[name] = resolved[name]
+	}
+	volumes, err := s.volumeMounts(ctx, start, resolved)
 	if err != nil {
 		return nil, layerGrant{}, err
 	}
 	var diskLimit int64
 	if start.Spec.Resources.DiskMib != nil {
 		diskLimit = int64(*start.Spec.Resources.DiskMib) << 20
-	}
-	var names []string
-	if start.Spec.Secrets != nil {
-		names = *start.Spec.Secrets
-	}
-	secretValues, err := s.config.Secrets.Resolve(ctx, start.Workspace, names)
-	if err != nil {
-		return nil, layerGrant{}, err
 	}
 	trace := s.startTrace(ctx, cache, start.Workspace, image.Reference)
 	restore, err := s.restoreOut(ctx, start.Container)

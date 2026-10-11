@@ -5,12 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
@@ -46,9 +51,10 @@ func TestBucketNamesFitS3(t *testing.T) {
 // TestHostPolicyReachesOnlyVolumeAndDiskObjects: an AWS host grant can read
 // and write objects under volumes/ and disks/ and nothing else, lists only
 // those prefixes, and lists multipart uploads, which S3 conditions on no
-// prefix, unconditionally.
+// prefix, without one. Each holds only on a bucket the expected account
+// owns, so a bucket of the name in another account is out of reach.
 func TestHostPolicyReachesOnlyVolumeAndDiskObjects(t *testing.T) {
-	encoded, err := json.Marshal(hostPolicy("lc-ws-1"))
+	encoded, err := json.Marshal(hostPolicy("lc-ws-1", "123456789012"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,23 +72,71 @@ func TestHostPolicyReachesOnlyVolumeAndDiskObjects(t *testing.T) {
 	var parsed struct {
 		Statement []struct {
 			Action    []string
-			Condition map[string]map[string][]string
+			Condition struct {
+				StringEquals map[string]string
+				StringLike   map[string][]string
+			}
 		}
 	}
 	if err := json.Unmarshal(encoded, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	conditions := map[string]map[string]map[string][]string{}
+	prefixes := map[string][]string{}
 	for _, s := range parsed.Statement {
+		if owner := s.Condition.StringEquals["s3:ResourceAccount"]; owner != "123456789012" || len(s.Condition.StringEquals) != 1 {
+			t.Errorf("%v holds on buckets owned by %q, want only 123456789012's", s.Action, owner)
+		}
 		for _, action := range s.Action {
-			conditions[action] = s.Condition
+			prefixes[action] = s.Condition.StringLike["s3:prefix"]
 		}
 	}
-	if got := conditions["s3:ListBucket"]["StringLike"]["s3:prefix"]; !slices.Equal(got, []string{"volumes/*", "disks/*"}) {
-		t.Errorf("ListBucket conditioned on %v, want the volumes/ and disks/ prefixes", conditions["s3:ListBucket"])
+	if got := prefixes["s3:ListBucket"]; !slices.Equal(got, []string{"volumes/*", "disks/*"}) {
+		t.Errorf("ListBucket conditioned on prefixes %v, want volumes/ and disks/", got)
 	}
-	if c, ok := conditions["s3:ListBucketMultipartUploads"]; !ok || c != nil {
-		t.Errorf("ListBucketMultipartUploads granted %v with condition %v, want granted without one", ok, c)
+	if got, ok := prefixes["s3:ListBucketMultipartUploads"]; !ok || got != nil {
+		t.Errorf("ListBucketMultipartUploads granted %v on prefixes %v, want granted on none", ok, got)
+	}
+}
+
+// TestRequestsNameTheBucketOwner: every request of a client that expects
+// an owner names it, presigned URLs included, except CreateBucket, which
+// S3 does not accept it on.
+func TestRequestsNameTheBucketOwner(t *testing.T) {
+	var mu sync.Mutex
+	owners := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		owners[r.Method] = r.Header.Get("X-Amz-Expected-Bucket-Owner")
+		mu.Unlock()
+	}))
+	defer server.Close()
+	client := s3.New(s3.Options{
+		Region: "us-east-2", BaseEndpoint: aws.String(server.URL), UsePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider("AKID", "secret", ""),
+	}, expectOwner("123456789012"))
+	ctx := t.Context()
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String("b")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String("b"), Key: aws.String("k")}); err != nil {
+		t.Fatal(err)
+	}
+	if owners[http.MethodPut] != "" || owners[http.MethodDelete] != "123456789012" {
+		t.Fatalf("CreateBucket named owner %q and DeleteObject %q, want none and 123456789012", owners[http.MethodPut], owners[http.MethodDelete])
+	}
+	presigned, err := s3.NewPresignClient(client).PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String("b"), Key: aws.String("k")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(presigned.URL, "x-amz-expected-bucket-owner=123456789012") {
+		t.Fatalf("presigned URL %s names no owner", presigned.URL)
+	}
+	connected := s3.New(client.Options(), expectOwner("210987654321"))
+	if _, err := connected.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String("b"), Key: aws.String("k")}); err != nil {
+		t.Fatal(err)
+	}
+	if owners[http.MethodDelete] != "210987654321" {
+		t.Fatalf("a client made from another named owner %q, want its own", owners[http.MethodDelete])
 	}
 }
 
@@ -109,10 +163,27 @@ func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
 	}
 	bucket := "my-videos"
 	noRegion := apitypes.VolumeMountSpec{Name: "videos", CloudBucket: &apitypes.CloudBucketSpec{
-		Bucket: bucket, AccessKeySecret: &bucket, SecretKeySecret: &bucket,
+		Bucket: bucket, AccessKeySecret: "KEY", SecretKeySecret: "SECRET",
 	}}
 	if err := ValidateVolumes([]apitypes.VolumeMountSpec{noRegion}); err == nil {
 		t.Fatal("deployed an AWS bucket without a region")
+	}
+}
+
+// TestCloudBucketPrefixesStayBelowTheRoot: deploy accepts a cloud bucket
+// prefix of key segments each ending in /, and refuses one that is
+// absolute, unterminated, or holds an empty, . or .. segment.
+func TestCloudBucketPrefixesStayBelowTheRoot(t *testing.T) {
+	for prefix, ok := range map[string]bool{
+		"": true, "data/": true, "data/2026/": true, "a.b/..c/": true,
+		"data": false, "/data/": false, "data//x/": false, "./": false, "data/./": false, "../": false, "data/../x/": false, "/": false,
+	} {
+		spec := apitypes.VolumeMountSpec{Name: "data", CloudBucket: &apitypes.CloudBucketSpec{
+			Bucket: "my-data", Region: aws.String("us-east-2"), Prefix: &prefix, AccessKeySecret: "KEY", SecretKeySecret: "SECRET",
+		}}
+		if err := ValidateVolumes([]apitypes.VolumeMountSpec{spec}); (err == nil) != ok {
+			t.Errorf("prefix %q: %v, want accepted %v", prefix, err, ok)
+		}
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 const cleanupAttempts = 60
 
 func (c *Compute) aws() awsClients {
-	return awsClients{base: c.fleet.AWS, endpoints: c.fleet.Endpoints}
+	return awsClients{base: c.fleet.AWS, endpoints: c.fleet.Endpoints, platform: c.sts}
 }
 
 // inTx runs fn in a transaction.

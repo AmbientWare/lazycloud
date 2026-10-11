@@ -329,7 +329,7 @@ func TestWakeRetriesAPodWhoseStartsFailed(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", 600)
-	wake := func() (StartRetry, int) {
+	wake := func() (*Failure, int) {
 		t.Helper()
 		retry, err := e.WakePod(t.Context(), f.workspace, f.workload)
 		if err != nil {
@@ -367,20 +367,20 @@ update releases set start_failures = $2 where id = $1`, f.release, failures, ago
 	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || view.Reason != "stopped after 3 failed starts: "+reason || view.Failed == nil {
 		t.Fatalf("view of a release past the start failure limit = %+v, %v", view, err)
 	}
-	if retry, n := wake(); retry.Outcome != StartRetried || n != 1 {
-		t.Fatalf("a wake of a stopped release: %+v with %d pending, want one fresh start", retry, n)
+	if held, n := wake(); held != nil || n != 1 {
+		t.Fatalf("a wake of a stopped release: held on %+v with %d pending, want one fresh start", held, n)
 	}
 	// That start fails; the next wake inside the backoff gets its error.
 	failAll(0, startFailureLimit)
-	if retry, n := wake(); retry.Outcome != StartHeld || retry.Failure.Message != reason || n != 0 {
-		t.Fatalf("a wake right after the fresh start failed: %+v with %d pending, want held", retry, n)
+	if held, n := wake(); held == nil || held.Message != reason || n != 0 {
+		t.Fatalf("a wake right after the fresh start failed: held on %+v with %d pending, want held", held, n)
 	}
 
 	// Below the limit a wake waits out the backoff like any other.
 	failAll(0, 1)
 	for range 3 {
-		if retry, n := wake(); retry.Outcome != StartAllowed || n != 0 {
-			t.Fatalf("a wake during the backoff: %+v with %d pending", retry, n)
+		if held, n := wake(); held != nil || n != 0 {
+			t.Fatalf("a wake during the backoff: held on %+v with %d pending", held, n)
 		}
 	}
 }

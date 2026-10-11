@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -79,13 +80,13 @@ type Grant struct {
 type bucketProvider interface {
 	// ensureBucket creates the store's bucket if it is missing and lets
 	// the store's client use it.
-	ensureBucket(ctx context.Context, store workspaceStore) error
+	ensureBucket(ctx context.Context, store bucketClient) error
 	// issue returns a credential for bucket alone. revocable means the key
 	// must be deleted after it expires.
-	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
+	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (creds aws.Credentials, revocable bool, err error)
 	// issueRead returns a credential that reads the objects under prefix
 	// in bucket, or where the store cannot scope it, the bucket.
-	issueRead(ctx context.Context, bucket, prefix, name string, lifetime time.Duration) (grant Grant, revocable bool, err error)
+	issueRead(ctx context.Context, bucket, prefix, name string, lifetime time.Duration) (creds aws.Credentials, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
@@ -100,19 +101,14 @@ func newBucketProvider(cfg Config) bucketProvider {
 	case ProviderAWS:
 		client := sts.New(sts.Options{Region: cfg.Region, Credentials: credentialProvider(cfg)})
 		role := cfg.Workspaces.RoleARN
-		return &awsBuckets{assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-			out, err := client.AssumeRole(ctx, &sts.AssumeRoleInput{
-				RoleArn: aws.String(role), RoleSessionName: aws.String(session),
-				DurationSeconds: aws.Int32(int32(lifetime.Seconds())), Policy: aws.String(policy),
-			})
+		return &awsBuckets{account: cfg.Workspaces.AccountID, assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
+			creds, err := stscreds.NewAssumeRoleProvider(client, role, func(o *stscreds.AssumeRoleOptions) {
+				o.RoleSessionName, o.Policy, o.Duration = session, aws.String(policy), lifetime
+			}).Retrieve(ctx)
 			if err != nil {
 				return aws.Credentials{}, fmt.Errorf("assume %s: %w", role, err)
 			}
-			c := out.Credentials
-			return aws.Credentials{
-				AccessKeyID: aws.ToString(c.AccessKeyId), SecretAccessKey: aws.ToString(c.SecretAccessKey),
-				SessionToken: aws.ToString(c.SessionToken), CanExpire: true, Expires: aws.ToTime(c.Expiration),
-			}, nil
+			return creds, nil
 		}}
 	}
 	return nil
@@ -233,7 +229,7 @@ func (g *garageBuckets) bucketID(ctx context.Context, bucket string) (string, er
 	return info.ID, err
 }
 
-func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) error {
+func (g *garageBuckets) ensureBucket(ctx context.Context, store bucketClient) error {
 	bucket := store.name
 	id, err := g.bucketID(ctx, bucket)
 	var missing *garageError
@@ -255,15 +251,15 @@ func (g *garageBuckets) ensureBucket(ctx context.Context, store workspaceStore) 
 	return g.allow(ctx, id, g.platformKey, garagePerms{Read: true, Write: true, Owner: true})
 }
 
-func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
+func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
 	return g.issueWith(ctx, bucket, name, lifetime, garagePerms{Read: true, Write: true})
 }
 
 // issueWith creates a key expiring after lifetime with perms on bucket.
-func (g *garageBuckets) issueWith(ctx context.Context, bucket, name string, lifetime time.Duration, perms garagePerms) (Grant, bool, error) {
+func (g *garageBuckets) issueWith(ctx context.Context, bucket, name string, lifetime time.Duration, perms garagePerms) (aws.Credentials, bool, error) {
 	id, err := g.bucketID(ctx, bucket)
 	if err != nil {
-		return Grant{}, false, err
+		return aws.Credentials{}, false, err
 	}
 	expires := time.Now().Add(lifetime).UTC().Truncate(time.Second)
 	var key struct {
@@ -273,13 +269,13 @@ func (g *garageBuckets) issueWith(ctx context.Context, bucket, name string, life
 	if err := g.call(ctx, http.MethodPost, "CreateKey", nil, map[string]any{
 		"name": name, "expiration": expires.Format(time.RFC3339),
 	}, &key); err != nil {
-		return Grant{}, false, err
+		return aws.Credentials{}, false, err
 	}
 	if err := g.allow(ctx, id, key.AccessKeyID, perms); err != nil {
 		// The key reaches nothing yet; delete it now rather than at expiry.
-		return Grant{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
+		return aws.Credentials{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
 	}
-	return Grant{Location: Location{Bucket: bucket}, AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, ExpiresAt: expires}, true, nil
+	return aws.Credentials{AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, CanExpire: true, Expires: expires}, true, nil
 }
 
 func (g *garageBuckets) revoke(ctx context.Context, accessKeyID string) error {
@@ -292,13 +288,15 @@ func (g *garageBuckets) revoke(ctx context.Context, accessKeyID string) error {
 }
 
 // awsBuckets creates S3 buckets and issues host credentials by assuming a
-// role with a session policy limited to one bucket: the platform's
-// workspace storage role, or a connected account's connection role.
+// role with a session policy limited to one bucket of account: the
+// platform's workspace storage role, or a connected account's connection
+// role.
 type awsBuckets struct {
-	assume func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error)
+	account string
+	assume  func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error)
 }
 
-func (a *awsBuckets) ensureBucket(ctx context.Context, store workspaceStore) error {
+func (a *awsBuckets) ensureBucket(ctx context.Context, store bucketClient) error {
 	input := &s3.CreateBucketInput{Bucket: aws.String(store.name)}
 	if store.region != "us-east-1" {
 		input.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
@@ -316,24 +314,21 @@ func (a *awsBuckets) ensureBucket(ctx context.Context, store workspaceStore) err
 	return nil
 }
 
-func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
-	policy, err := json.Marshal(hostPolicy(bucket))
+func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
+	policy, err := json.Marshal(hostPolicy(bucket, a.account))
 	if err != nil {
-		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
+		return aws.Credentials{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
 	return a.issueWith(ctx, bucket, name, string(policy), lifetime)
 }
 
 // issueWith assumes the role for bucket under the session policy.
-func (a *awsBuckets) issueWith(ctx context.Context, bucket, name, policy string, lifetime time.Duration) (Grant, bool, error) {
+func (a *awsBuckets) issueWith(ctx context.Context, bucket, name, policy string, lifetime time.Duration) (aws.Credentials, bool, error) {
 	creds, err := a.assume(ctx, name, policy, lifetime)
 	if err != nil {
-		return Grant{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
+		return aws.Credentials{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
 	}
-	return Grant{
-		Location: Location{Bucket: bucket}, AccessKeyID: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey,
-		SessionToken: creds.SessionToken, ExpiresAt: creds.Expires,
-	}, false, nil
+	return creds, false, nil
 }
 
 func (a *awsBuckets) revoke(context.Context, string) error { return nil }
@@ -341,10 +336,13 @@ func (a *awsBuckets) revoke(context.Context, string) error { return nil }
 // hostPolicy is the STS session policy of a host grant: object reads,
 // writes and multipart uploads under the bucket's volumes/ and disks/
 // prefixes, listing those prefixes, and listing the bucket's multipart
-// uploads, which S3 does not condition on a prefix. It grants nothing else
-// on the bucket itself, such as its policy, lifecycle or deletion.
-func hostPolicy(bucket string) map[string]any {
+// uploads, which S3 does not condition on a prefix. Every statement holds
+// only while account owns the bucket, so a bucket of the same name in
+// another account is out of reach. It grants nothing else on the bucket
+// itself, such as its policy, lifecycle or deletion.
+func hostPolicy(bucket, account string) map[string]any {
 	arn := "arn:aws:s3:::" + bucket
+	owned := map[string]any{"s3:ResourceAccount": account}
 	return map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []map[string]any{
@@ -354,18 +352,23 @@ func hostPolicy(bucket string) map[string]any {
 					"s3:GetObject", "s3:PutObject", "s3:DeleteObject",
 					"s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
 				},
-				"Resource": []string{arn + "/volumes/*", arn + "/disks/*"},
-			},
-			{
-				"Effect":    "Allow",
-				"Action":    []string{"s3:ListBucket"},
-				"Resource":  []string{arn},
-				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}}},
+				"Resource":  []string{arn + "/volumes/*", arn + "/disks/*"},
+				"Condition": map[string]any{"StringEquals": owned},
 			},
 			{
 				"Effect":   "Allow",
-				"Action":   []string{"s3:ListBucketMultipartUploads"},
+				"Action":   []string{"s3:ListBucket"},
 				"Resource": []string{arn},
+				"Condition": map[string]any{
+					"StringEquals": owned,
+					"StringLike":   map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}},
+				},
+			},
+			{
+				"Effect":    "Allow",
+				"Action":    []string{"s3:ListBucketMultipartUploads"},
+				"Resource":  []string{arn},
+				"Condition": map[string]any{"StringEquals": owned},
 			},
 		},
 	}

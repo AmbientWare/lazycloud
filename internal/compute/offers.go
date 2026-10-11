@@ -50,6 +50,8 @@ type Endpoints struct {
 	STS            string
 	CloudFormation string
 	ServiceQuotas  string
+	// S3 serves connected accounts' buckets, path-style.
+	S3 string
 }
 
 // Network is where instances launch in one region.

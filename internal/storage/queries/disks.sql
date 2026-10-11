@@ -42,10 +42,11 @@ where d.id = @disk_id;
 -- The disk only while container holds it with token: it has not stopped,
 -- or it stopped on a live host and has not released the disk yet, which is
 -- when its host publishes the final generation.
-select d.id, d.generation, d.workspace_id, b.bucket, b.region, b.connection_id
+select d.id, d.generation, d.workspace_id, b.bucket, b.region, w.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
+join workspaces w on w.id = d.workspace_id
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.id = @id and d.holder_container_id = @container_id and d.lease_token = @lease_token
   and d.state = 'active' and c.host_id = @host_id and h.state not in ('lost', 'retired')
@@ -117,8 +118,9 @@ where d.workspace_id = @workspace_id and d.state = 'active' and d.name = @name;
 update disks set state = 'deleting', deleted_at = now(), updated_at = now() where id = @id;
 
 -- name: DeletingDisks :many
-select d.id, b.bucket, b.region, b.connection_id
+select d.id, b.bucket, b.region, w.connection_id
 from disks d
+join workspaces w on w.id = d.workspace_id
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.state = 'deleting'
 order by d.deleted_at

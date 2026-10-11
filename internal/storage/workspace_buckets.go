@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -38,172 +41,202 @@ func bucketName(prefix, account string, workspace identity.WorkspaceID) string {
 	return prefix + "-" + account + "-" + strings.Repeat("0", workspaceDigits-len(digits)) + digits
 }
 
-// objectClient is an S3 client signed for one account and region, and its
-// presigner.
-type objectClient struct {
-	client  *s3.Client
-	presign *s3.PresignClient
-}
-
-// bucketClient is a bucket and the client that reaches it.
+// bucketClient is a bucket, the region it is in, the connected account
+// that holds it, nil for the platform's, and the client and presigner
+// signed for that account and region.
 type bucketClient struct {
-	name string
-	objectClient
-}
-
-// workspaceStore is a workspace's bucket: the client that reaches it, the
-// region it was created in and the connected account that holds it, nil
-// for the platform's.
-type workspaceStore struct {
-	bucketClient
+	name       string
 	region     string
 	connection *uuid.UUID
+	client     *s3.Client
+	presign    *s3.PresignClient
 }
 
-// accountRegion keys the clients of workspace buckets by account and
-// region.
-type accountRegion struct {
-	connected  bool
-	connection uuid.UUID
-	region     string
-}
-
-// accountClients holds the S3 clients of workspace buckets outside the
-// platform store's own account and region, made on first use. A
-// connection's client assumes the connection's active role whenever its
+// storeOf is the bucket named name in region of the platform's account, or
+// connection's. Clients outside the platform store's own account and region
+// are made on first use and kept by account and region. A connection's
+// client names the connected account as the owner of every bucket it
+// reaches, and assumes the connection's active role whenever its
 // credentials renew, so a reconnect's new role takes over within the hour.
-type accountClients struct {
-	mu      sync.Mutex
-	clients map[accountRegion]objectClient
-}
-
-// platformBucket is the platform bucket, which holds sources, artifacts and
-// snapshots.
-func (s *Storage) platformBucket() bucketClient {
-	return bucketClient{name: s.bucket, objectClient: objectClient{client: s.client, presign: s.presign}}
-}
-
-// layerBucket is the bucket of converted image layers.
-func (s *Storage) layerBucket() bucketClient {
-	return bucketClient{name: s.layers, objectClient: objectClient{client: s.client, presign: s.presign}}
-}
-
-// clientFor returns the client of the platform's account, or connection's,
-// in region.
-func (s *Storage) clientFor(connection *uuid.UUID, region string) (objectClient, error) {
-	if connection == nil && region == s.config.Region {
-		return objectClient{client: s.client, presign: s.presign}, nil
+func (s *Storage) storeOf(ctx context.Context, name, region string, connection *uuid.UUID) (bucketClient, error) {
+	if connection == nil && region == s.platform.region {
+		b := s.platform
+		b.name = name
+		return b, nil
 	}
-	if connection != nil && s.connections == nil {
-		return objectClient{}, ErrBucketsUnconfigured
-	}
-	key := accountRegion{region: region}
+	key := region
 	if connection != nil {
-		key.connected, key.connection = true, *connection
+		key += " " + connection.String()
 	}
-	s.accounts.mu.Lock()
-	defer s.accounts.mu.Unlock()
-	if c, ok := s.accounts.clients[key]; ok {
-		return c, nil
-	}
-	client := s3.New(s.client.Options(), func(o *s3.Options) {
-		o.Region = region
+	s.mu.Lock()
+	b, ok := s.clients[key]
+	s.mu.Unlock()
+	if !ok {
+		options := []func(*s3.Options){func(o *s3.Options) { o.Region = region }}
 		if connection != nil {
-			o.Credentials = s.connectionCredentials(*connection)
+			account, err := s.connectedAccount(ctx, *connection)
+			if err != nil {
+				return bucketClient{}, err
+			}
+			endpoint, credentials := s.connections.S3Endpoint(), s.connectionCredentials(*connection)
+			options = append(options, expectOwner(account.AWSAccountID), func(o *s3.Options) {
+				o.Credentials, o.BaseEndpoint, o.UsePathStyle = credentials, nil, endpoint != ""
+				if endpoint != "" {
+					o.BaseEndpoint = aws.String(endpoint)
+				}
+			})
 		}
+		client := s3.New(s.platform.client.Options(), options...)
+		b = bucketClient{region: region, connection: connection, client: client, presign: s3.NewPresignClient(client)}
+		s.mu.Lock()
+		if cached, ok := s.clients[key]; ok {
+			b = cached
+		} else {
+			s.clients[key] = b
+		}
+		s.mu.Unlock()
+	}
+	b.name = name
+	return b, nil
+}
+
+// endpointOf is the S3 endpoint of the platform's buckets, or of a
+// connected account's: AWS S3 in the bucket's region unless compute names
+// another. The platform's own store, such as Garage or R2, never holds a
+// connected account's bucket.
+func (s *Storage) endpointOf(connection *uuid.UUID) string {
+	if connection == nil {
+		return s.config.Endpoint
+	}
+	return s.connections.S3Endpoint()
+}
+
+// expectOwner makes every request but CreateBucket name account as the
+// owner of its bucket, so S3 refuses a bucket of the same name that
+// another account holds. Presigned URLs carry it as a query parameter. It
+// replaces the owner of the options it extends.
+func expectOwner(account string) func(*s3.Options) {
+	const id = "ExpectedBucketOwner"
+	owner := middleware.BuildMiddlewareFunc(id, func(ctx context.Context, in middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
+		if req, ok := in.Request.(*smithyhttp.Request); ok && awsmiddleware.GetOperationName(ctx) != "CreateBucket" {
+			req.Header.Set("X-Amz-Expected-Bucket-Owner", account)
+		}
+		return next.HandleBuild(ctx, in)
 	})
-	c := objectClient{client: client, presign: s3.NewPresignClient(client)}
-	s.accounts.clients[key] = c
-	return c, nil
+	return func(o *s3.Options) {
+		o.APIOptions = append(slices.Clone(o.APIOptions), func(stack *middleware.Stack) error {
+			if _, ok := stack.Build.Get(id); ok {
+				_, err := stack.Build.Swap(id, owner)
+				return err //nolint:wrapcheck // The SDK reports the stack's own error.
+			}
+			return stack.Build.Add(owner, middleware.After)
+		})
+	}
+}
+
+// connectedAccount is the account connection reaches and its active role.
+// Without an active authorization the platform cannot act there, which is
+// a *ConflictError: it fails what needs the account's storage rather than
+// being retried.
+func (s *Storage) connectedAccount(ctx context.Context, connection uuid.UUID) (compute.ConnectedAccount, error) {
+	account, err := s.connections.ConnectedAccount(ctx, connection)
+	var refused *compute.ConflictError
+	if errors.As(err, &refused) {
+		return compute.ConnectedAccount{}, conflict("%s", refused.Message)
+	}
+	if err != nil {
+		return compute.ConnectedAccount{}, fmt.Errorf("connection %s: %w", connection, err)
+	}
+	return account, nil
 }
 
 // connectionCredentials are the connection role's, for storage's own
-// requests on the account's buckets, renewed credentialWindow before they
-// expire.
+// requests on the account's buckets in every region, renewed
+// credentialWindow before they expire.
 func (s *Storage) connectionCredentials(connection uuid.UUID) aws.CredentialsProvider {
-	return aws.NewCredentialsCache(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-		creds, err := s.connections.AssumeConnectionRole(ctx, connection, "lazycloud-storage", "", time.Hour)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cached, ok := s.credentials[connection]; ok {
+		return cached
+	}
+	credentials := aws.NewCredentialsCache(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+		account, err := s.connectedAccount(ctx, connection)
+		if err != nil {
+			return aws.Credentials{}, err
+		}
+		creds, err := s.connections.AssumeConnectionRole(ctx, account, "lazycloud-storage", "", time.Hour)
 		if err != nil {
 			return aws.Credentials{}, fmt.Errorf("connection %s: %w", connection, err)
 		}
 		return creds, nil
 	}), renewEarly)
-}
-
-// storeOf is the workspace bucket named bucket.
-func (s *Storage) storeOf(bucket, region string, connection *uuid.UUID) (workspaceStore, error) {
-	c, err := s.clientFor(connection, region)
-	if err != nil {
-		return workspaceStore{}, err
-	}
-	return workspaceStore{bucketClient: bucketClient{name: bucket, objectClient: c}, region: region, connection: connection}, nil
+	s.credentials[connection] = credentials
+	return credentials
 }
 
 // providerOf is the provider that creates store's bucket and issues host
 // credentials for it: the platform's own, or for a connected account's
 // bucket, its connection role.
-func (s *Storage) providerOf(store workspaceStore) (bucketProvider, error) {
+func (s *Storage) providerOf(ctx context.Context, store bucketClient) (bucketProvider, error) {
 	if store.connection == nil {
 		if s.buckets == nil {
 			return nil, ErrBucketsUnconfigured
 		}
 		return s.buckets, nil
 	}
-	connection := *store.connection
-	return &awsBuckets{assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-		return s.connections.AssumeConnectionRole(ctx, connection, session, policy, lifetime)
+	account, err := s.connectedAccount(ctx, *store.connection)
+	if err != nil {
+		return nil, err
+	}
+	return &awsBuckets{account: account.AWSAccountID, assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
+		return s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)
 	}}, nil
 }
 
-// workspaceStore returns the workspace's bucket, creating it on first use:
-// in the platform's store, or in the connected account the workspace lives
-// in, in the region of the connection's authorization. The row is written
-// after the provider created the bucket, so a recorded bucket always
-// exists. The object store's refusal is a *StoreRefusedError, and a
-// connection the platform cannot act through a *ConflictError.
-func (s *Storage) workspaceStore(ctx context.Context, workspace identity.WorkspaceID) (workspaceStore, error) {
+// workspaceStore returns the workspace's bucket, creating it on first use.
+// The object store's refusal is a *StoreRefusedError, and a connection the
+// platform cannot act through a *ConflictError.
+func (s *Storage) workspaceStore(ctx context.Context, workspace identity.WorkspaceID) (bucketClient, error) {
 	row, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
-	if err == nil {
-		return s.storeOf(row.Bucket, row.Region, row.ConnectionID)
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return workspaceStore{}, fmt.Errorf("read workspace bucket: %w", err)
-	}
-	connection, err := s.queries.WorkspaceConnection(ctx, uuid.UUID(workspace))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return workspaceStore{}, ErrNotFound
+		return bucketClient{}, ErrNotFound
 	}
 	if err != nil {
-		return workspaceStore{}, fmt.Errorf("read workspace connection: %w", err)
+		return bucketClient{}, fmt.Errorf("read workspace bucket: %w", err)
 	}
+	if row.Bucket != nil && row.Region != nil {
+		return s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID)
+	}
+	return s.createWorkspaceBucket(ctx, workspace, row.ConnectionID)
+}
+
+// createWorkspaceBucket creates the workspace's bucket: in the platform's
+// store, or in connection's account, in the region of its authorization.
+// The row is written after the provider created the bucket, so a recorded
+// bucket always exists. When another server recorded the workspace's
+// bucket first, that one is the workspace's.
+func (s *Storage) createWorkspaceBucket(ctx context.Context, workspace identity.WorkspaceID, connection *uuid.UUID) (bucketClient, error) {
 	account, region := s.config.Workspaces.AccountID, s.config.Region
 	if connection != nil {
-		if s.connections == nil {
-			return workspaceStore{}, ErrBucketsUnconfigured
-		}
-		connected, err := s.connections.ConnectedAccount(ctx, *connection)
-		var refused *compute.ConflictError
-		if errors.As(err, &refused) {
-			return workspaceStore{}, conflict("%s", refused.Message)
-		}
+		connected, err := s.connectedAccount(ctx, *connection)
 		if err != nil {
-			return workspaceStore{}, fmt.Errorf("read the workspace's AWS account: %w", err)
+			return bucketClient{}, err
 		}
 		account, region = connected.AWSAccountID, connected.Region
 	}
 	if s.config.Workspaces.Prefix == "" {
-		return workspaceStore{}, ErrBucketsUnconfigured
+		return bucketClient{}, ErrBucketsUnconfigured
 	}
-	store, err := s.storeOf(bucketName(s.config.Workspaces.Prefix, account, workspace), region, connection)
+	store, err := s.storeOf(ctx, bucketName(s.config.Workspaces.Prefix, account, workspace), region, connection)
 	if err != nil {
-		return workspaceStore{}, err
+		return bucketClient{}, err
 	}
-	provider, err := s.providerOf(store)
+	provider, err := s.providerOf(ctx, store)
 	if err != nil {
-		return workspaceStore{}, err
+		return bucketClient{}, err
 	}
 	if err := provider.ensureBucket(ctx, store); err != nil {
-		return workspaceStore{}, storeError(fmt.Errorf("create workspace bucket: %w", err))
+		return bucketClient{}, storeError(fmt.Errorf("create workspace bucket: %w", err))
 	}
 	// Hosts and clients upload volume files in parts; the store discards
 	// parts of uploads nobody completed.
@@ -215,34 +248,25 @@ func (s *Storage) workspaceStore(ctx context.Context, workspace identity.Workspa
 			AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{DaysAfterInitiation: aws.Int32(1)},
 		}}},
 	}); err != nil {
-		return workspaceStore{}, storeError(fmt.Errorf("set workspace bucket lifecycle: %w", err))
+		return bucketClient{}, storeError(fmt.Errorf("set workspace bucket lifecycle: %w", err))
 	}
-	if err := s.allowBrowser(ctx, store.bucketClient); err != nil {
-		return workspaceStore{}, storeError(err)
+	if err := s.allowBrowser(ctx, store); err != nil {
+		return bucketClient{}, storeError(err)
 	}
-	if err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{
-		WorkspaceID: uuid.UUID(workspace), Bucket: store.name, Region: region, ConnectionID: connection,
-	}); err != nil {
-		return workspaceStore{}, fmt.Errorf("record workspace bucket: %w", err)
+	recorded, err := s.queries.InsertWorkspaceBucket(ctx, InsertWorkspaceBucketParams{
+		WorkspaceID: uuid.UUID(workspace), Bucket: store.name, Region: region,
+	})
+	if err != nil {
+		return bucketClient{}, fmt.Errorf("record workspace bucket: %w", err)
 	}
-	return store, nil
-}
-
-// storeAt is the recorded workspace bucket of a row that left-joins
-// workspace_buckets; false when the workspace has none.
-func (s *Storage) storeAt(bucket, region *string, connection *uuid.UUID) (workspaceStore, bool, error) {
-	if bucket == nil || region == nil {
-		return workspaceStore{}, false, nil
-	}
-	store, err := s.storeOf(*bucket, *region, connection)
-	return store, err == nil, err
+	return s.storeOf(ctx, recorded.Bucket, recorded.Region, connection)
 }
 
 // AllowBrowserAccess lets the dashboard's pages use presigned requests on
 // the platform bucket, which holds artifacts. Workspace buckets get the same
 // rule when they are created.
 func (s *Storage) AllowBrowserAccess(ctx context.Context) error {
-	return s.allowBrowser(ctx, s.platformBucket())
+	return s.allowBrowser(ctx, s.platform)
 }
 
 // allowBrowser sets the bucket's CORS rule for the dashboard origin: GET,

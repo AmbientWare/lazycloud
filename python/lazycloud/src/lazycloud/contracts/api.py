@@ -467,19 +467,19 @@ class CloudBucketSpec(APIModel):
     ] = None
     force_path_style: bool = False
     access_key_secret: Annotated[
-        str | None,
+        str,
         Field(
             description="The workspace secret holding the access key id.",
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
-    ] = None
+    ]
     secret_key_secret: Annotated[
-        str | None,
+        str,
         Field(
             description="The workspace secret holding the secret access key.",
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
-    ] = None
+    ]
 
 
 class CreateVolumeRequest(APIModel):
@@ -1179,6 +1179,7 @@ class ChangeTopic(str, Enum):
     containers = "containers"
     storage_secrets = "storage.secrets"
     storage_volumes = "storage.volumes"
+    storage_disks = "storage.disks"
     usage = "usage"
 
 
