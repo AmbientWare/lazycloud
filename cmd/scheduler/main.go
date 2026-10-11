@@ -137,17 +137,16 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 
-	objectStore, err := objectStoreFromEnv()
-	if err != nil {
-		return err
-	}
-	store := storage.NewStorage(pool, objectStore)
-	exec := execution.NewExecution(pool)
-	sched := scheduling.NewScheduling(pool, logger)
 	fleet, err := compute.LoadFleet(ctx, os.Getenv)
 	if err != nil {
 		return err
 	}
+	objectStore, err := objectStoreFromEnv(fleet)
+	if err != nil {
+		return err
+	}
+	exec := execution.NewExecution(pool)
+	sched := scheduling.NewScheduling(pool, logger)
 	// Cloud instances reach the server across a network, so they always
 	// dial with TLS.
 	// The scheduler ships with the server, so the server serves the agent
@@ -162,6 +161,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	comp := compute.NewCompute(pool, exec, computeConfig)
+	store := storage.NewStorage(pool, objectStore, comp)
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
 	if keyFile == "" {
 		return errors.New("LAZYCLOUD_SECRETS_KEY_FILE is required: callbacks are signed with workspace secrets")
@@ -192,10 +192,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	defer cancelCapacityFleetWake()
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
-	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
-	if err != nil {
-		return err
-	}
+	accounts, cancelAccounts := newAccountLoops(pool, exec, im, store, listener, logger)
 	defer cancelAccounts()
 	planWake, cancelPlanWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelPlanWake()
@@ -460,8 +457,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 }
 
 // objectStoreFromEnv reads the object store the server uses; the sweeper
-// deletes bytes there.
-func objectStoreFromEnv() (storage.Config, error) {
+// deletes bytes there. Workspace buckets are named as the fleet says.
+func objectStoreFromEnv(fleet compute.Fleet) (storage.Config, error) {
 	cfg := storage.Config{
 		Endpoint:        os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"),
 		Region:          os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
@@ -471,7 +468,8 @@ func objectStoreFromEnv() (storage.Config, error) {
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
-			Prefix:           os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"),
+			Prefix:           fleet.BucketPrefix,
+			AccountID:        fleet.AccountID,
 			GarageAdminURL:   os.Getenv("LAZYCLOUD_GARAGE_ADMIN_URL"),
 			GarageAdminToken: os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN"),
 			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),
@@ -479,9 +477,6 @@ func objectStoreFromEnv() (storage.Config, error) {
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, fmt.Errorf("object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
-	}
-	if cfg.Workspaces.Prefix == "" {
-		cfg.Workspaces.Prefix = "lazycloud-ws"
 	}
 	return cfg, nil
 }

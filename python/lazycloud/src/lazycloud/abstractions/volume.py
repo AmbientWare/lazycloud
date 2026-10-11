@@ -7,19 +7,10 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud._shared.enums import StringEnum
-from lazycloud._shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
 from lazycloud.control import ResourceControlBinding, storage_client
 
 # Declaring a volume loads no storage client or API models.
@@ -44,67 +35,31 @@ class PresignedUrlMethod(StringEnum):
 
 
 class CloudBucketConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    """An S3-compatible bucket a workload mounts with keys held in the
+    workspace secrets that `access_key` and `secret_key` name; hosts have no
+    credentials of their own for it."""
 
-    provider: str = "s3"
+    model_config = ConfigDict(extra="forbid")
+
     prefix: str = ""
     region: str | None = None
-    endpoint: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("endpoint", "endpoint_url"),
-    )
+    endpoint: str | None = None
     read_only: bool = False
     force_path_style: bool = False
-    access_key: str | None = None
-    secret_key: str | None = None
+    access_key: str = Field(min_length=1)
+    secret_key: str = Field(min_length=1)
     bucket: str | None = None
 
     @field_validator("prefix")
     @classmethod
     def prefix_must_be_mountpoint_compatible(cls, value: str) -> str:
-        return normalize_mount_prefix(value)
-
-    @model_validator(mode="after")
-    def supported_provider_and_auth(self) -> CloudBucketConfig:
-        if self.provider != "s3":
-            msg = f"unsupported cloud bucket provider: {self.provider!r}"
+        normalized = value.strip().lstrip("/")
+        if not normalized:
+            return ""
+        if ".." in normalized.split("/"):
+            msg = "mount prefix cannot contain '..' path segments"
             raise ValueError(msg)
-        infer_mount_auth_mode(self.access_key, self.secret_key)
-        return self
-
-    def __init__(
-        self,
-        *,
-        provider: str = "s3",
-        prefix: str = "",
-        region: str | None = None,
-        endpoint: str | None = None,
-        endpoint_url: str | None = None,
-        read_only: bool = False,
-        force_path_style: bool = False,
-        access_key: str | None = None,
-        secret_key: str | None = None,
-        bucket: str | None = None,
-    ) -> None:
-        super().__init__(
-            provider=provider,
-            prefix=prefix,
-            region=region,
-            endpoint=endpoint if endpoint is not None else endpoint_url,
-            read_only=read_only,
-            force_path_style=force_path_style,
-            access_key=access_key,
-            secret_key=secret_key,
-            bucket=bucket,
-        )
-
-    @property
-    def endpoint_url(self) -> str | None:
-        return self.endpoint
-
-    @property
-    def auth_mode(self) -> MountAuthMode:
-        return infer_mount_auth_mode(self.access_key, self.secret_key)
+        return normalized if normalized.endswith("/") else normalized + "/"
 
 
 @dataclass(frozen=True)
@@ -471,17 +426,18 @@ def _default_mount_path(name: str) -> str:
 
 
 def _cloud_bucket_config(name: str, config: CloudBucketConfig) -> dict[str, JsonValue]:
-    return {
-        "bucket_name": config.bucket or name,
-        "prefix": config.prefix,
-        "auth_mode": config.auth_mode,
-        "access_key": config.access_key or "",
-        "secret_key": config.secret_key or "",
-        "endpoint_url": config.endpoint_url or "",
-        "region": config.region or "",
-        "read_only": config.read_only,
-        "force_path_style": config.force_path_style,
-    }
+    from lazycloud.contracts import api
+
+    spec = api.CloudBucketSpec(
+        bucket=config.bucket or name,
+        prefix=config.prefix,
+        region=config.region,
+        endpoint=config.endpoint,
+        force_path_style=config.force_path_style,
+        access_key_secret=config.access_key,
+        secret_key_secret=config.secret_key,
+    )
+    return spec.model_dump(exclude_none=True)
 
 
 def _relative_path(value: str | Path | PurePosixPath) -> PurePosixPath:

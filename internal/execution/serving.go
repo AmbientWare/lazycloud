@@ -102,28 +102,6 @@ func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) 
 	return out, nil
 }
 
-// ReleaseFailure explains why containers of a release cannot start.
-type ReleaseFailure struct {
-	// LoadError is the handler's import error, when that is the reason.
-	LoadError string
-	// StartFailures counts consecutive failed preparations.
-	StartFailures int
-}
-
-// ReleaseFailures returns the releases among ids whose containers cannot
-// start.
-func (e *Execution) ReleaseFailures(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]ReleaseFailure, error) {
-	rows, err := e.queries.ReleaseFailures(ctx, ReleaseFailuresParams{Ids: ids, StartFailureLimit: startFailureLimit})
-	if err != nil {
-		return nil, fmt.Errorf("read release failures: %w", err)
-	}
-	out := make(map[uuid.UUID]ReleaseFailure, len(rows))
-	for _, row := range rows {
-		out[row.ID] = ReleaseFailure{LoadError: row.LoadError, StartFailures: int(row.StartFailures)}
-	}
-	return out, nil
-}
-
 // PlanServing decides how many containers each HTTP release and preview
 // needs, under the same planning lock as Plan, so max_containers holds
 // across scheduler replicas.
@@ -135,7 +113,8 @@ func (e *Execution) ReleaseFailures(ctx context.Context, ids []uuid.UUID) (map[u
 //   - A replaced release keeps its containers until the active release has a
 //     ready one, so a deploy never drops traffic, then follows its own pinned
 //     demand.
-//   - A release whose handler failed to load gets none until it is replaced.
+//   - A release whose handler failed to load or that reached the start
+//     failure limit gets none until it is replaced or RetryStarts retries it.
 func (e *Execution) PlanServing(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
 	var result PlanResult
 	after := uuid.Nil
@@ -248,7 +227,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 			ReleaseID:   row.ReleaseID,
 			Slots:       row.Slots,
 			CpuMillis:   cpu.Millis(row.CpuMillis),
-			MemoryBytes: row.MemoryBytes,
+			MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters),
 			GpuCount:    row.GpuCount,
 			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.

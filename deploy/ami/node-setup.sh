@@ -3,13 +3,13 @@
 # instance. deploy/ami/bake.sh prepends deploy/host-pins.sh and VARIANT (cpu
 # or gpu) and passes the result as user data; it images the instance once
 # the console shows LAZYCLOUD_BAKE_OK. The image carries Docker with gVisor's
-# runsc as a runtime and lazycloud-snapshotter as its storage driver, the
-# disk engine's tools and the nbd module; the agent release, which installs
-# and starts the snapshotter, arrives at boot through the launcher's user
-# data.
+# runsc as a runtime and lazycloud-snapshotter as its storage driver, FUSE,
+# the disk engine's tools, the nbd module and the unit that mounts the disk
+# data volume; the agent release, which installs and starts the snapshotter,
+# arrives at boot through the launcher's user data.
 set -Eeuo pipefail
 
-: "${VARIANT:?}" "${GVISOR_RELEASE:?}" "${QEMU_VERSION:?}" "${NBD_VERSION:?}"
+: "${VARIANT:?}" "${GVISOR_RELEASE:?}" "${QEMU_VERSION:?}" "${NBD_VERSION:?}" "${FUSE_CHECK_IMAGE:?}"
 
 # The instance has neither SSH nor an instance profile, so the console is
 # the only place its progress shows.
@@ -27,6 +27,18 @@ cd "$work"
 
 dnf install -y docker e2fsprogs amazon-ssm-agent
 systemctl enable docker amazon-ssm-agent
+
+# Volume mounters run GeeseFS in containers given /dev/fuse and
+# CAP_SYS_ADMIN (internal/agent/volumes.go). A container given the same must
+# mount FUSE here. The check runs before Docker's storage moves to the
+# snapshotter, which arrives with the agent at boot.
+printf 'fuse\n' >/etc/modules-load.d/lazycloud-fuse.conf
+modprobe fuse
+test -c /dev/fuse
+systemctl start docker
+docker run --rm --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor=unconfined "$FUSE_CHECK_IMAGE" sh -c \
+  'mkdir /m && exec 3<>/dev/fuse && mount -t fuse -o fd=3,rootmode=40000,user_id=0,group_id=0 fuse /m && grep -q " /m fuse " /proc/mounts && umount -l /m'
+docker rmi "$FUSE_CHECK_IMAGE"
 
 # qemu-storage-daemon and qemu-img serve and shape disk layers; nbd-client
 # attaches them. Built here because Amazon Linux packages neither the daemon
@@ -141,11 +153,65 @@ docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'
 docker info --format '{{.Driver}}' | grep -qx lazycloud
 systemctl show -p CPUWeight system.slice | grep -qx 'CPUWeight=1000'
 
+# The snapshotter's frame cache and disks' unpublished writes share a data
+# volume, mounted at hostproto.DataRoot before the snapshotter and the
+# agent start: the EBS volume the launcher maps at /dev/sdf
+# (internal/compute/launcher.go), or on a type with NVMe instance store, its
+# first instance store volume. Instance store is empty after every stop, so
+# a volume without a filesystem is formatted.
+cat >/usr/local/sbin/lazycloud-data-volume <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+target=/var/lib/lazycloud-data
+mountpoint -q "$target" && exit 0
+device=""
+for _ in $(seq 120); do
+  if [ -e /dev/sdf ]; then
+    device=$(readlink -f /dev/sdf)
+    break
+  fi
+  device=$(lsblk -dnpo NAME,MODEL | awk '/Amazon EC2 NVMe Instance Storage$/ { print $1; exit }')
+  [ -n "$device" ] && break
+  sleep 0.5
+done
+if [ -z "$device" ]; then
+  echo "no disk data volume: neither /dev/sdf nor an instance store volume appeared" >&2
+  exit 1
+fi
+blkid -p "$device" >/dev/null || mkfs.ext4 -q -E nodiscard -L lazycloud-data "$device"
+mkdir -p "$target"
+mount -o noatime "$device" "$target"
+chmod 0700 "$target"
+SCRIPT
+chmod 0755 /usr/local/sbin/lazycloud-data-volume
+cat >/etc/systemd/system/lazycloud-data-volume.service <<'UNIT'
+[Unit]
+Description=LazyCloud data volume
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/lazycloud-data-volume
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable lazycloud-data-volume.service
+# The bake instance has a data volume of each variant's kind.
+systemctl start lazycloud-data-volume.service
+mountpoint -q /var/lib/lazycloud-data
+umount /var/lib/lazycloud-data
+systemctl stop lazycloud-data-volume.service
+
 # The agent's unit (written by its install-service) runs workloads under
-# runsc on these hosts.
-mkdir -p /etc/systemd/system/lazycloud-agent.service.d
-printf '[Service]\nEnvironment=LAZYCLOUD_OCI_RUNTIME=runsc\n' \
+# runsc on these hosts and starts once the data volume is mounted, as does
+# the snapshotter's (written by install-snapshotter).
+mkdir -p /etc/systemd/system/lazycloud-agent.service.d /etc/systemd/system/lazycloud-snapshotter.service.d
+printf '[Unit]\nRequires=lazycloud-data-volume.service\nAfter=lazycloud-data-volume.service\n\n[Service]\nEnvironment=LAZYCLOUD_OCI_RUNTIME=runsc\n' \
   >/etc/systemd/system/lazycloud-agent.service.d/node-image.conf
+printf '[Unit]\nRequires=lazycloud-data-volume.service\nAfter=lazycloud-data-volume.service\n' \
+  >/etc/systemd/system/lazycloud-snapshotter.service.d/node-image.conf
 
 # A reserve launched able to hibernate writes its memory to a swap file on
 # the root volume. hibinit-agent creates the file at each cold boot and puts

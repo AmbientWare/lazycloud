@@ -21,6 +21,8 @@ export LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET=lazycloud-layers
 export LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID=GK1a2b3c4d5e6f708192a3b4c5
 export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
 export LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER=garage
+# Names the platform's workspace buckets, as the AWS account id does in production.
+export LAZYCLOUD_FLEET_ACCOUNT_ID=000000000000
 export LAZYCLOUD_GARAGE_ADMIN_URL=http://127.0.0.1:23903
 export LAZYCLOUD_GARAGE_ADMIN_TOKEN=local-garage-admin
 # The master key that wraps secret data keys; generated once per state dir.

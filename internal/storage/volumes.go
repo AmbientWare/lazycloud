@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"mime"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ func (s *Storage) CreateVolume(ctx context.Context, workspace identity.Workspace
 	if err := billing.AdmitStorage(ctx, s.pool, uuid.UUID(workspace)); err != nil {
 		return apitypes.Volume{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 	}
-	if err := s.queries.InsertVolume(ctx, InsertVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: name}); err != nil {
+	if err := s.queries.InsertVolumes(ctx, InsertVolumesParams{WorkspaceID: uuid.UUID(workspace), Names: []string{name}}); err != nil {
 		return apitypes.Volume{}, fmt.Errorf("insert volume: %w", err)
 	}
 	return s.GetVolume(ctx, workspace, name)
@@ -139,7 +140,6 @@ type Mount struct {
 	// Volume is set for platform volumes, which mount from the workspace
 	// bucket under Prefix.
 	Volume    *uuid.UUID
-	Bucket    string
 	Prefix    string
 	MountPath string
 	ReadOnly  bool
@@ -159,65 +159,70 @@ func MountPath(spec apitypes.VolumeMountSpec) string {
 }
 
 // MountVolumes records that container mounts the platform volumes in specs,
-// creating volumes on first use, and returns every mount. Each volume is
-// locked FOR SHARE while its mount row is written, so a concurrent delete
-// either sees the mount or finishes first, in which case a new volume of the
-// name is created. It is idempotent per container.
+// creating volumes on first use, and returns every mount. The volumes are
+// locked FOR SHARE while their mount rows are written, so a concurrent
+// delete either sees the mount or finishes first, which fails this call
+// for the start to try again with a new volume of the name. It is
+// idempotent per container.
 func (s *Storage) MountVolumes(ctx context.Context, workspace identity.WorkspaceID, container uuid.UUID, specs []apitypes.VolumeMountSpec) ([]Mount, error) {
 	mounts := make([]Mount, len(specs))
-	platform := false
+	var names []string
 	for n, spec := range specs {
 		mounts[n] = Mount{MountPath: MountPath(spec), ReadOnly: spec.ReadOnly != nil && *spec.ReadOnly, CloudBucket: spec.CloudBucket}
-		platform = platform || spec.CloudBucket == nil
+		if spec.CloudBucket == nil {
+			names = append(names, spec.Name)
+		}
 	}
-	if !platform {
+	if len(names) == 0 {
 		return mounts, nil
 	}
-	bucket, err := s.workspaceBucket(ctx, workspace)
-	if err != nil {
-		return nil, err
-	}
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	ids := make(map[string]uuid.UUID, len(names))
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
-		for n, spec := range specs {
-			if spec.CloudBucket != nil {
-				continue
-			}
-			key := ShareActiveVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: spec.Name}
-			if err := q.InsertVolume(ctx, InsertVolumeParams(key)); err != nil {
-				return fmt.Errorf("create volume %s: %w", spec.Name, err)
-			}
-			id, err := q.ShareActiveVolume(ctx, key)
-			if err != nil {
-				return fmt.Errorf("lock volume %s: %w", spec.Name, err)
-			}
-			if err := q.InsertVolumeMount(ctx, InsertVolumeMountParams{VolumeID: id, ContainerID: container}); err != nil {
-				return fmt.Errorf("record mount of %s: %w", spec.Name, err)
-			}
-			mounts[n].Volume, mounts[n].Bucket, mounts[n].Prefix = &id, bucket, volumePrefix(id)
+		if err := q.InsertVolumes(ctx, InsertVolumesParams{WorkspaceID: uuid.UUID(workspace), Names: names}); err != nil {
+			return fmt.Errorf("create volumes: %w", err)
+		}
+		rows, err := q.ShareActiveVolumes(ctx, ShareActiveVolumesParams{WorkspaceID: uuid.UUID(workspace), Names: names})
+		if err != nil {
+			return fmt.Errorf("lock volumes: %w", err)
+		}
+		if len(rows) != len(names) {
+			return errors.New("a volume was deleted while it was mounted")
+		}
+		volumes := make([]uuid.UUID, len(rows))
+		for n, row := range rows {
+			volumes[n], ids[row.Name] = row.ID, row.ID
+		}
+		if err := q.InsertVolumeMounts(ctx, InsertVolumeMountsParams{VolumeIds: volumes, ContainerID: container}); err != nil {
+			return fmt.Errorf("record mounts: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mount volumes: %w", err)
 	}
+	for n, spec := range specs {
+		if id, ok := ids[spec.Name]; ok && spec.CloudBucket == nil {
+			mounts[n].Volume, mounts[n].Prefix = &id, volumePrefix(id)
+		}
+	}
 	return mounts, nil
 }
 
 // volumeFiles resolves an active volume to its bucket and key prefix.
-func (s *Storage) volumeFiles(ctx context.Context, workspace identity.WorkspaceID, name string) (bucket, prefix string, err error) {
+func (s *Storage) volumeFiles(ctx context.Context, workspace identity.WorkspaceID, name string) (bucketClient, string, error) {
 	row, err := s.queries.ActiveVolume(ctx, ActiveVolumeParams{WorkspaceID: uuid.UUID(workspace), Name: name})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", ErrNotFound
+		return bucketClient{}, "", ErrNotFound
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("read volume: %w", err)
+		return bucketClient{}, "", fmt.Errorf("read volume: %w", err)
 	}
-	bucket, err = s.workspaceBucket(ctx, workspace)
+	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
-		return "", "", err
+		return bucketClient{}, "", err
 	}
-	return bucket, volumePrefix(row.ID), nil
+	return store, volumePrefix(row.ID), nil
 }
 
 // cleanPath normalizes a path relative to the volume root. The root is "".
@@ -271,13 +276,13 @@ func (s *Storage) ListVolumeFiles(ctx context.Context, workspace identity.Worksp
 		listed += rel + "/"
 	}
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket), Prefix: aws.String(listed), Delimiter: aws.String("/"),
+		Bucket: aws.String(bucket.name), Prefix: aws.String(listed), Delimiter: aws.String("/"),
 		MaxKeys: aws.Int32(int32(limit)), //nolint:gosec // The schema caps limit.
 	}
 	if cursor != "" {
 		input.ContinuationToken = aws.String(cursor)
 	}
-	out, err := s.client.ListObjectsV2(ctx, input)
+	out, err := bucket.client.ListObjectsV2(ctx, input)
 	if err != nil {
 		return apitypes.VolumeFilePage{}, fmt.Errorf("list volume files: %w", err)
 	}
@@ -315,15 +320,15 @@ func (s *Storage) StatVolumeFile(ctx context.Context, workspace identity.Workspa
 	return s.statKey(ctx, bucket, prefix, rel)
 }
 
-func (s *Storage) statKey(ctx context.Context, bucket, prefix, rel string) (apitypes.VolumeFile, error) {
-	o, err := head(ctx, s.client, bucket, prefix+rel)
+func (s *Storage) statKey(ctx context.Context, bucket bucketClient, prefix, rel string) (apitypes.VolumeFile, error) {
+	o, err := head(ctx, bucket, prefix+rel)
 	if err == nil {
 		return fileOut(prefix, o), nil
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return apitypes.VolumeFile{}, err
 	}
-	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix + rel + "/"), MaxKeys: aws.Int32(1)})
+	out, err := bucket.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket.name), Prefix: aws.String(prefix + rel + "/"), MaxKeys: aws.Int32(1)})
 	if err != nil {
 		return apitypes.VolumeFile{}, fmt.Errorf("stat volume directory: %w", err)
 	}
@@ -334,9 +339,9 @@ func (s *Storage) statKey(ctx context.Context, bucket, prefix, rel string) (apit
 }
 
 // objectsAt lists the object at rel and every object below it.
-func (s *Storage) objectsAt(ctx context.Context, bucket, prefix, rel string) ([]objectInfo, error) {
+func (s *Storage) objectsAt(ctx context.Context, bucket bucketClient, prefix, rel string) ([]objectInfo, error) {
 	var found []objectInfo
-	if o, err := head(ctx, s.client, bucket, prefix+rel); err == nil {
+	if o, err := head(ctx, bucket, prefix+rel); err == nil {
 		found = append(found, o)
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
@@ -436,7 +441,7 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 			return apitypes.PresignedUrl{}, err //nolint:wrapcheck // billing's typed refusal maps to 402
 		}
 		// A write URL outliving a delete would recreate files.
-		if lifetime, err = s.signedLifetime(ctx, min(lifetime, uploadLifetime)); err != nil {
+		if lifetime, err = s.signedLifetime(ctx, bucket.client, min(lifetime, uploadLifetime)); err != nil {
 			return apitypes.PresignedUrl{}, err
 		}
 	}
@@ -446,15 +451,15 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 	switch req.Method {
 	case apitypes.PresignVolumeFileRequestMethodGet, apitypes.PresignVolumeFileRequestMethodHead:
 		// Reads are links, which the API presigns as they are used.
-		l := link{Bucket: bucket, Key: prefix + rel, Expires: time.Now().Add(lifetime).Unix()}
+		l := link{Key: prefix + rel, Expires: time.Now().Add(lifetime).Unix()}
 		if req.Download != nil && *req.Download {
 			l.Disposition = mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)})
 		}
-		if url, err = s.linkURL(ctx, l); err != nil {
+		if url, err = s.linkURL(ctx, bucket, l); err != nil {
 			return apitypes.PresignedUrl{}, err
 		}
 	case apitypes.PresignVolumeFileRequestMethodPut:
-		r, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: key}, expires)
+		r, err := bucket.presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket.name), Key: key}, expires)
 		if err != nil {
 			return apitypes.PresignedUrl{}, fmt.Errorf("presign put: %w", err)
 		}
@@ -494,7 +499,7 @@ func (s *Storage) CreateVolumeUpload(ctx context.Context, workspace identity.Wor
 	if req.PartSizeBytes != nil {
 		partSize = *req.PartSizeBytes
 	}
-	lifetime, err := s.signedLifetime(ctx, uploadLifetime)
+	lifetime, err := s.signedLifetime(ctx, bucket.client, uploadLifetime)
 	if err != nil {
 		return apitypes.MultipartUpload{}, err
 	}
@@ -540,19 +545,17 @@ func (s *Storage) AbortVolumeUpload(ctx context.Context, workspace identity.Work
 var reservedMountRoots = [...]string{"/opt/lazycloud", "/run/lazycloud", "/workspace", "/proc", "/sys", "/dev"} //nolint:gochecknoglobals // A constant table.
 
 // ValidateVolumes checks a workload's volume specs: unique names and mount
-// paths, none on a path the runtime owns, and cloud buckets that name the
-// workspace secrets holding both keys. Hosts have no ambient credentials of
-// their own to mount a bucket with.
+// paths, none on a path the runtime owns, and cloud bucket prefixes made of
+// key segments, each ending in /, none empty, . or .., so a prefix stays
+// below the bucket's root.
 func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 	names := map[string]bool{}
 	paths := map[string]bool{}
 	for _, spec := range specs {
 		if b := spec.CloudBucket; b != nil {
-			if b.AccessKeySecret == nil || *b.AccessKeySecret == "" || b.SecretKeySecret == nil || *b.SecretKeySecret == "" {
-				return invalid("cloud bucket %s: name the workspace secrets holding its access key and secret key", spec.Name)
-			}
-			if b.Prefix != nil && *b.Prefix != "" && !strings.HasSuffix(*b.Prefix, "/") {
-				return invalid("cloud bucket %s: prefix %q must end with /", spec.Name, *b.Prefix)
+			if p := deref(b.Prefix); p != "" && (!strings.HasSuffix(p, "/") || slices.ContainsFunc(strings.Split(strings.TrimSuffix(p, "/"), "/"),
+				func(segment string) bool { return segment == "" || segment == "." || segment == ".." })) {
+				return invalid("cloud bucket %s: prefix %q must be key segments each ending in /, none empty, . or ..", spec.Name, p)
 			}
 			if _, err := CloudBucketLocation(*b); err != nil {
 				return invalid("cloud bucket %s: name its region, or the endpoint of an S3-compatible store", spec.Name)

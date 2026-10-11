@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,11 +230,7 @@ func (a *Agent) runNetfilter(ctx context.Context, c *container, policy *hostprot
 	if err != nil {
 		return fmt.Errorf("encode netfilter rules: %w", err)
 	}
-	labels := maps.Clone(a.cfg.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels[labelHost] = a.identity.HostID
+	labels := a.hostLabels()
 	labels[labelKind] = kindNetfilter
 	name := "lazycloud-net-" + c.id + "-" + uuid.NewString()[:8]
 	pids := int64(netfilterPids)

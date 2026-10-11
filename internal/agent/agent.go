@@ -209,6 +209,10 @@ type Agent struct {
 	// notice poll interval, after a resume.
 	reconnectNow    chan struct{}
 	interruptionNow chan struct{}
+	// reclaiming closes, once, at the first Spot notice, and the disks'
+	// publish loops then publish at once.
+	reclaiming chan struct{}
+	reclaimed  sync.Once
 	// reserveSlot runs one reserve preparation at a time.
 	reserveSlot chan struct{}
 
@@ -293,6 +297,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	offered := resolveOffer(machine, cfg.Limits)
+	diskErr := diskengine.Check()
+	offered.capacity.DiskSlots = diskSlots(diskErr)
 	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker), snapshotterCheck(ctx, docker)}, offered.checks...)
 	var metadata *imds.Client
 	if cfg.IMDSEndpoint != "" {
@@ -363,6 +369,7 @@ func Run(ctx context.Context, cfg Config) error {
 		clock:           clock,
 		reconnectNow:    make(chan struct{}, 1),
 		interruptionNow: make(chan struct{}, 1),
+		reclaiming:      make(chan struct{}),
 		reserveSlot:     make(chan struct{}, 1),
 		sleep:           attempt,
 		ctx:             ctx,
@@ -376,14 +383,15 @@ func Run(ctx context.Context, cfg Config) error {
 		operations:      make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
+	defer a.volumes.close()
 	snapshotter, err := layersource.Dial(layersource.Socket)
 	if err != nil {
 		return err //nolint:wrapcheck // The client names the call.
 	}
 	defer func() { _ = snapshotter.Close() }()
 	a.layers = newLayerSources(snapshotter)
-	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
-	if a.diskErr = a.diskEngine.Check(); a.diskErr != nil {
+	a.diskEngine = diskengine.New(layersource.DiskRoot, snapshotter.Disks, a.log.With("component", "disk"))
+	if a.diskErr = diskErr; a.diskErr != nil {
 		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
 	}
 	if a.diskQuota, err = detectDiskQuota(ctx, docker); err != nil {
@@ -543,7 +551,6 @@ func (a *Agent) pruneExited(ctx context.Context) {
 			}
 		}
 		a.mu.Unlock()
-		a.volumes.pruneIdle(ctx)
 	}
 }
 

@@ -74,11 +74,11 @@ def test_disk_sizes_are_bounded_whole_blocks(size: str | int, message: str) -> N
         Disk("work", size=size).mount()
 
 
-def test_cloud_bucket_config_rejects_partial_secret_references() -> None:
-    with pytest.raises(ValueError, match="both be set or both be omitted"):
-        CloudBucketConfig(access_key="ACCESS_SECRET")
+def test_cloud_bucket_config_names_both_key_secrets() -> None:
+    with pytest.raises(ValueError, match="access_key"):
+        CloudBucketConfig(access_key="", secret_key="SECRET_KEY")
 
 
 def test_cloud_bucket_config_rejects_parent_prefix_segments() -> None:
     with pytest.raises(ValueError, match=r"cannot contain '\.\.'"):
-        CloudBucketConfig(prefix="models/../private")
+        CloudBucketConfig(access_key="A", secret_key="S", prefix="models/../private")

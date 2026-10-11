@@ -72,7 +72,7 @@ func (s *Storage) sweepArtifacts(ctx context.Context, logger *slog.Logger) (int,
 	for _, row := range rows {
 		key := artifactKey(identity.WorkspaceID(row.WorkspaceID), row.ID)
 		if row.UploadID != nil {
-			if err := s.abortMultipart(ctx, s.bucket, key, *row.UploadID); err != nil {
+			if err := s.abortMultipart(ctx, s.platform, key, *row.UploadID); err != nil {
 				logger.WarnContext(ctx, "aborting an abandoned artifact upload failed", "artifact", row.ID.String(), "error", err)
 				continue
 			}
@@ -80,7 +80,7 @@ func (s *Storage) sweepArtifacts(ctx context.Context, logger *slog.Logger) (int,
 		keys = append(keys, key)
 		ids[key] = row.ID
 	}
-	failed, err := s.tryDeleteKeys(ctx, s.bucket, keys)
+	failed, err := s.tryDeleteKeys(ctx, s.platform, keys)
 	if err != nil {
 		return 0, err
 	}
@@ -105,20 +105,7 @@ func (s *Storage) sweepVolumes(ctx context.Context, logger *slog.Logger) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("read deleted volumes: %w", err)
 	}
-	removed := 0
-	for _, row := range rows {
-		ok, err := s.emptyThenDelete(ctx, row.Bucket, volumePrefix(row.ID), func() error {
-			return s.queries.DeleteVolumeRow(ctx, row.ID)
-		})
-		if err != nil {
-			logger.WarnContext(ctx, "removing a deleted volume failed", "volume", row.ID.String(), "error", err)
-			continue
-		}
-		if ok {
-			removed++
-		}
-	}
-	return removed, nil
+	return sweepDeleted(ctx, s, logger, "volume", rows, volumePrefix, s.queries.DeleteVolumeRow), nil
 }
 
 func (s *Storage) sweepDisks(ctx context.Context, logger *slog.Logger) (int, error) {
@@ -126,37 +113,38 @@ func (s *Storage) sweepDisks(ctx context.Context, logger *slog.Logger) (int, err
 	if err != nil {
 		return 0, fmt.Errorf("read deleted disks: %w", err)
 	}
-	removed := 0
-	for _, row := range rows {
-		ok, err := s.emptyThenDelete(ctx, row.Bucket, diskPrefix(row.ID), func() error {
-			return s.queries.DeleteDiskRow(ctx, row.ID)
-		})
-		if err != nil {
-			logger.WarnContext(ctx, "removing a deleted disk failed", "disk", row.ID.String(), "error", err)
-			continue
-		}
-		if ok {
-			removed++
-		}
-	}
-	return removed, nil
+	return sweepDeleted(ctx, s, logger, "disk", rows, diskPrefix, s.queries.DeleteDiskRow), nil
 }
 
 func diskPrefix(disk uuid.UUID) string { return "disks/" + disk.String() + "/" }
 
-// emptyThenDelete deletes a chunk of prefix and, once it is empty, the row.
-// An empty bucket name means the workspace never had a bucket.
-func (s *Storage) emptyThenDelete(ctx context.Context, bucket, prefix string, deleteRow func() error) (bool, error) {
-	if bucket != "" {
-		empty, err := s.deletePrefixChunk(ctx, bucket, prefix)
-		if err != nil || !empty {
-			return false, err
+// sweepDeleted deletes a chunk of the files of each deleted volume or disk
+// in rows, under prefix in its workspace bucket, and its row once they are
+// gone; a nil bucket means the workspace never had one. It returns how many
+// rows went. An item's failure is logged and left for the next pass.
+func sweepDeleted[R DeletingVolumesRow | DeletingDisksRow](ctx context.Context, s *Storage, logger *slog.Logger, kind string, rows []R,
+	prefix func(uuid.UUID) string, deleteRow func(context.Context, uuid.UUID) error,
+) int {
+	removed := 0
+	for _, r := range rows {
+		row := DeletingDisksRow(r)
+		empty, err := true, error(nil)
+		if row.Bucket != nil && row.Region != nil {
+			var store bucketClient
+			if store, err = s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID); err == nil {
+				empty, err = s.deletePrefixChunk(ctx, store, prefix(row.ID))
+			}
+		}
+		if err == nil && empty {
+			if err = deleteRow(ctx, row.ID); err == nil {
+				removed++
+			}
+		}
+		if err != nil {
+			logger.WarnContext(ctx, "removing a deleted "+kind+" failed", kind, row.ID.String(), "error", err)
 		}
 	}
-	if err := deleteRow(); err != nil {
-		return false, fmt.Errorf("delete row: %w", err)
-	}
-	return true, nil
+	return removed
 }
 
 // sweepGrants deletes expired provider keys.
@@ -191,13 +179,7 @@ func (s *Storage) measureVolumes(ctx context.Context, logger *slog.Logger) (int,
 	}
 	n := 0
 	for _, row := range rows {
-		var size int64
-		err := s.eachObject(ctx, row.Bucket, volumePrefix(row.ID), func(batch []objectInfo) error {
-			for _, o := range batch {
-				size += o.Size
-			}
-			return nil
-		})
+		size, err := s.storedBytes(ctx, row.Bucket, row.Region, row.ConnectionID, volumePrefix(row.ID))
 		if err != nil {
 			logger.WarnContext(ctx, "measuring a volume failed", "volume", row.ID.String(), "error", err)
 			continue
@@ -208,6 +190,23 @@ func (s *Storage) measureVolumes(ctx context.Context, logger *slog.Logger) (int,
 		n++
 	}
 	return n, nil
+}
+
+// storedBytes is the size of the objects under prefix in a workspace
+// bucket.
+func (s *Storage) storedBytes(ctx context.Context, bucket, region string, connection *uuid.UUID, prefix string) (int64, error) {
+	store, err := s.storeOf(ctx, bucket, region, connection)
+	if err != nil {
+		return 0, err
+	}
+	var size int64
+	err = s.eachObject(ctx, store, prefix, func(batch []objectInfo) error {
+		for _, o := range batch {
+			size += o.Size
+		}
+		return nil
+	})
+	return size, err
 }
 
 // orphanAge is how old an object without a row must be before it goes: an
@@ -227,12 +226,16 @@ func (s *Storage) sweepOrphans(ctx context.Context, logger *slog.Logger) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("claim an orphan check: %w", err)
 	}
+	store, err := s.storeOf(ctx, claim.Bucket, claim.Region, claim.ConnectionID)
+	if err != nil {
+		return 0, err
+	}
 	removed := 0
 	for _, kind := range []struct {
 		prefix string
 		known  func(context.Context, []uuid.UUID) ([]uuid.UUID, error)
 	}{{"volumes/", s.queries.KnownVolumes}, {"disks/", s.queries.KnownDisks}} {
-		n, err := s.removeOrphanPrefixes(ctx, claim.Bucket, kind.prefix, kind.known)
+		n, err := s.removeOrphanPrefixes(ctx, store, kind.prefix, kind.known)
 		removed += n
 		if err != nil {
 			logger.WarnContext(ctx, "removing orphaned objects failed", "bucket", claim.Bucket, "prefix", kind.prefix, "error", err)
@@ -248,8 +251,8 @@ func (s *Storage) sweepOrphans(ctx context.Context, logger *slog.Logger) (int, e
 
 // removeOrphanPrefixes deletes, a chunk each, the <prefix><id>/ prefixes
 // whose ids have no row.
-func (s *Storage) removeOrphanPrefixes(ctx context.Context, bucket, prefix string, known func(context.Context, []uuid.UUID) ([]uuid.UUID, error)) (int, error) {
-	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix), Delimiter: aws.String("/")})
+func (s *Storage) removeOrphanPrefixes(ctx context.Context, bucket bucketClient, prefix string, known func(context.Context, []uuid.UUID) ([]uuid.UUID, error)) (int, error) {
+	pages := s3.NewListObjectsV2Paginator(bucket.client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket.name), Prefix: aws.String(prefix), Delimiter: aws.String("/")})
 	removed := 0
 	for pages.HasMorePages() {
 		page, err := pages.NextPage(ctx)
@@ -288,7 +291,7 @@ func (s *Storage) removeOrphanPrefixes(ctx context.Context, bucket, prefix strin
 
 // hasRecentObject reports whether prefix holds an object newer than
 // orphanAge.
-func (s *Storage) hasRecentObject(ctx context.Context, bucket, prefix string) (bool, error) {
+func (s *Storage) hasRecentObject(ctx context.Context, bucket bucketClient, prefix string) (bool, error) {
 	recent := false
 	err := s.eachObject(ctx, bucket, prefix, func(batch []objectInfo) error {
 		for _, o := range batch {
@@ -306,7 +309,7 @@ func (s *Storage) hasRecentObject(ctx context.Context, bucket, prefix string) (b
 func (s *Storage) removeOrphanArtifacts(ctx context.Context, workspace identity.WorkspaceID) (int, error) {
 	prefix := fmt.Sprintf("workspaces/%s/artifacts/", workspace)
 	removed := 0
-	err := s.eachObject(ctx, s.bucket, prefix, func(batch []objectInfo) error {
+	err := s.eachObject(ctx, s.platform, prefix, func(batch []objectInfo) error {
 		ids := make([]uuid.UUID, 0, len(batch))
 		byID := map[uuid.UUID]objectInfo{}
 		for _, o := range batch {
@@ -326,7 +329,7 @@ func (s *Storage) removeOrphanArtifacts(ctx context.Context, workspace identity.
 		for _, o := range byID {
 			keys = append(keys, o.Key)
 		}
-		if err := s.deleteKeys(ctx, s.bucket, keys); err != nil {
+		if err := s.deleteKeys(ctx, s.platform, keys); err != nil {
 			return err
 		}
 		removed += len(keys)

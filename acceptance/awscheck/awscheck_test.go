@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,19 +37,20 @@ import (
 
 const mountImage = "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 
-// env is run.sh's: the role host grants assume, the prefix every bucket of
-// the run starts with, the run's tag and the region.
+// env is run.sh's: the platform account, the role host grants assume, the
+// prefix every bucket of the run starts with, the run's tag and the region.
 type env struct {
-	role, prefix, run, region string
+	account, role, prefix, run, region string
 }
 
 func checkEnv(t *testing.T) env {
 	t.Helper()
 	e := env{
-		role: os.Getenv("LAZYCLOUD_AWS_CHECK_ROLE_ARN"), prefix: os.Getenv("LAZYCLOUD_AWS_CHECK_PREFIX"),
+		account: os.Getenv("LAZYCLOUD_AWS_CHECK_ACCOUNT"),
+		role:    os.Getenv("LAZYCLOUD_AWS_CHECK_ROLE_ARN"), prefix: os.Getenv("LAZYCLOUD_AWS_CHECK_PREFIX"),
 		run: os.Getenv("LAZYCLOUD_AWS_CHECK_RUN"), region: os.Getenv("AWS_REGION"),
 	}
-	if e.role == "" || e.prefix == "" || e.run == "" || e.region == "" {
+	if e.account == "" || e.role == "" || e.prefix == "" || e.run == "" || e.region == "" {
 		t.Skip("acceptance/awscheck/run.sh sets up the AWS check")
 	}
 	return e
@@ -124,8 +126,8 @@ func TestHostGrantMountsAVolume(t *testing.T) {
 	pool := dbtest.New(t)
 	store := storage.NewStorage(pool, storage.Config{
 		Region:     e.region,
-		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, RoleARN: e.role},
-	})
+		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
+	}, compute.NewCompute(pool, nil, compute.Config{}))
 	var ws uuid.UUID
 	if err := pool.QueryRow(ctx, "insert into workspaces (name) values ('aws-check') returning id").Scan(&ws); err != nil {
 		t.Fatal(err)
@@ -200,6 +202,78 @@ test "$(cat /mnt/v/seed)" = seed`)
 	mount(t, creds, grant.Location, source, `
 test "$(cat /mnt/v/a.txt)" = hello
 test "$(wc -c </mnt/v/big)" -eq 20000000`)
+}
+
+// A workspace in a connected account keeps its bucket there: the storage
+// owner creates it through the connection role, which the platform's
+// credentials assume with the external ID, and names it for that account.
+// A host grant assumes the same role with the session policy, reaches the
+// workspace's volume objects and nothing else, and the platform's own
+// credentials cannot reach the bucket. Deleting the workspace's storage
+// deletes the bucket.
+func TestConnectedAccountKeepsTheWorkspaceBucket(t *testing.T) {
+	e := checkEnv(t)
+	connected, role, externalID := os.Getenv("LAZYCLOUD_AWS_CHECK_CONNECTED_ACCOUNT"),
+		os.Getenv("LAZYCLOUD_AWS_CHECK_CONNECTED_ROLE_ARN"), os.Getenv("LAZYCLOUD_AWS_CHECK_EXTERNAL_ID")
+	if connected == "" || role == "" || externalID == "" {
+		t.Skip("acceptance/awscheck/run.sh sets up the connected account")
+	}
+	ctx := t.Context()
+	pool := dbtest.New(t)
+	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(e.region))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comp := compute.NewCompute(pool, nil, compute.Config{Fleet: compute.Fleet{AWS: awsConfig}})
+	store := storage.NewStorage(pool, storage.Config{
+		Region:     e.region,
+		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
+	}, comp)
+	var ws uuid.UUID
+	if err := pool.QueryRow(ctx, `with owner as (
+		insert into users (email) values ('aws-check@example.test') returning id
+	), connection as (
+		insert into cloud_connections (account_id, aws_account_id, phase) select id, $1, 'ready' from owner returning id
+	), authorization as (
+		insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region)
+		select id, 1, 'existing_role', 'active', 'ready', $2, $3, $4 from connection
+	)
+	insert into workspaces (name, connection_id) select 'aws-check-connected', id from connection returning id`,
+		connected, role, externalID, e.region).Scan(&ws); err != nil {
+		t.Fatal(err)
+	}
+	workspace := identity.WorkspaceID(ws)
+	grant, err := store.HostGrant(ctx, compute.HostID(uuid.New()), workspace)
+	if err != nil {
+		t.Fatalf("host grant: %v", err)
+	}
+	if !strings.HasPrefix(grant.Bucket, e.prefix+"-"+connected+"-") || len(grant.Bucket) > 63 || grant.Region != e.region {
+		t.Fatalf("bucket %s in %s, want %s-%s-<workspace> in %s", grant.Bucket, grant.Region, e.prefix, connected, e.region)
+	}
+	if _, err := platformClient(t, e.region).ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(grant.Bucket)}); errorCode(err) != "AccessDenied" {
+		t.Errorf("the platform's own credentials listing the connected bucket: %v, want AccessDenied", err)
+	}
+	host := s3.New(s3.Options{
+		Region: grant.Region, BaseEndpoint: aws.String(grant.Endpoint),
+		Credentials: credentials.NewStaticCredentialsProvider(grant.AccessKeyID, grant.SecretAccessKey, grant.SessionToken),
+	})
+	key := "volumes/" + uuid.NewString() + "/seed"
+	if _, err := host.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(grant.Bucket), Key: aws.String(key), Body: strings.NewReader("seed")}); err != nil {
+		t.Fatalf("write a volume object: %v", err)
+	}
+	if _, err := host.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(grant.Bucket), Key: aws.String("other/x"), Body: strings.NewReader("x")}); errorCode(err) != "AccessDenied" {
+		t.Errorf("write outside volumes/ and disks/: %v, want AccessDenied", err)
+	}
+	for range 5 {
+		empty, err := store.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), workspace)
+		if err != nil {
+			t.Fatalf("delete workspace storage: %v", err)
+		}
+		if empty {
+			return
+		}
+	}
+	t.Fatal("the connected bucket is still not deleted")
 }
 
 // A user's bucket whose name holds a dot is addressed by path, so TLS

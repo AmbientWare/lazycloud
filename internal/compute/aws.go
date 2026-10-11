@@ -25,10 +25,12 @@ type awsScope struct {
 }
 
 // awsClients builds AWS clients for a scope and region with the fleet's
-// endpoint overrides.
+// endpoint overrides. platform is the STS client of the platform's own
+// credentials, which every role is assumed through.
 type awsClients struct {
 	base      aws.Config
 	endpoints Endpoints
+	platform  *sts.Client
 }
 
 func (a awsClients) config(scope awsScope, region string) aws.Config {
@@ -81,7 +83,7 @@ func (a awsClients) cloudFormation(scope awsScope, region string) *cloudformatio
 // platform's credentials. Credentials are cached until shortly before they
 // expire.
 func (a awsClients) assume(role, externalID, session, key string) awsScope {
-	provider := stscreds.NewAssumeRoleProvider(a.sts(awsScope{}, ""), role, func(o *stscreds.AssumeRoleOptions) {
+	provider := stscreds.NewAssumeRoleProvider(a.platform, role, func(o *stscreds.AssumeRoleOptions) {
 		o.ExternalID = aws.String(externalID)
 		o.RoleSessionName = session
 		o.Duration = time.Hour

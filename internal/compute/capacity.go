@@ -34,6 +34,12 @@ type Requirement struct {
 	GPUCount    int
 	CPUMillis   cpu.Millis
 	MemoryBytes int64
+	// Disks is how many durable disks the container attaches, each taking
+	// one of the host's disk slots.
+	Disks int
+	// Prefer is the host whose frame cache likely holds one of the disks;
+	// nil for none.
+	Prefer *HostID
 }
 
 // GPUsNeeded is how many GPUs the container reserves: a model list without a
@@ -68,6 +74,7 @@ type HostCapacity struct {
 	FreeCPUMillis   cpu.Millis
 	FreeMemoryBytes int64
 	FreeGPUs        int
+	FreeDiskSlots   int
 }
 
 // Accepts reports whether the host may run a container with r, ignoring
@@ -107,7 +114,7 @@ func (h HostCapacity) Accepts(r Requirement) bool {
 // Fits reports whether the host accepts r and has room for it now.
 func (h HostCapacity) Fits(r Requirement) bool {
 	return h.Accepts(r) && h.FreeCPUMillis >= r.CPUMillis && h.FreeMemoryBytes >= r.MemoryBytes &&
-		h.FreeGPUs >= r.GPUsNeeded()
+		h.FreeGPUs >= r.GPUsNeeded() && h.FreeDiskSlots >= r.Disks
 }
 
 // floorHost reports an on-demand platform CPU host, which keeps the
@@ -124,9 +131,10 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // that fits it, a Spot host before an on-demand one for work that can run
 // on Spot, then the tightest fit, whose free CPU and memory as fractions
 // of its size sum lowest after placement, which keeps large holes for
-// large containers. Spot-tolerant work borrows an on-demand platform CPU
-// host only while one of them still keeps floor free afterwards, so work
-// that cannot run on Spot starts at once.
+// large containers. r's preferred host wins among hosts that borrow alike.
+// Spot-tolerant work borrows an on-demand platform CPU host only while one
+// of them still keeps floor free afterwards, so work that cannot run on
+// Spot starts at once.
 func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 	holders := 0
 	if r.Preemptible && !floor.Empty() {
@@ -136,7 +144,7 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			}
 		}
 	}
-	best, bestBorrows, bestScore := -1, false, 0.0
+	best, bestBorrows, bestPreferred, bestScore := -1, false, false, 0.0
 	for i, h := range hosts {
 		if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || !h.Fits(r) {
 			continue
@@ -152,9 +160,11 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 				continue
 			}
 		}
+		preferred := r.Prefer != nil && h.Host == *r.Prefer
 		score := float64(h.FreeCPUMillis-r.CPUMillis)/float64(h.CPUMillis) + float64(h.FreeMemoryBytes-r.MemoryBytes)/float64(h.MemoryBytes)
-		if best < 0 || bestBorrows && !borrows || borrows == bestBorrows && score < bestScore {
-			best, bestBorrows, bestScore = i, borrows, score
+		if best < 0 || bestBorrows && !borrows ||
+			borrows == bestBorrows && (preferred && !bestPreferred || preferred == bestPreferred && score < bestScore) {
+			best, bestBorrows, bestPreferred, bestScore = i, borrows, preferred, score
 		}
 	}
 	return best
@@ -165,6 +175,7 @@ func (h *HostCapacity) Reserve(r Requirement) {
 	h.FreeCPUMillis -= r.CPUMillis
 	h.FreeMemoryBytes -= r.MemoryBytes
 	h.FreeGPUs -= r.GPUsNeeded()
+	h.FreeDiskSlots -= r.Disks
 }
 
 // GPUAccepted reports whether a preference takes model. An empty
@@ -238,6 +249,7 @@ func AvailableCapacity(ctx context.Context, tx pgx.Tx) ([]HostCapacity, error) {
 			FreeCPUMillis:   cpu.Millis(row.FreeCpuMillis),
 			FreeMemoryBytes: row.FreeMemoryBytes,
 			FreeGPUs:        int(row.FreeGpus),
+			FreeDiskSlots:   int(row.FreeDiskSlots),
 		})
 	}
 	return hosts, nil

@@ -4105,9 +4105,9 @@ export interface components {
             /** @default false */
             force_path_style?: boolean;
             /** @description The workspace secret holding the access key id. */
-            access_key_secret?: components["schemas"]["SecretName"];
+            access_key_secret: components["schemas"]["SecretName"];
             /** @description The workspace secret holding the secret access key. */
-            secret_key_secret?: components["schemas"]["SecretName"];
+            secret_key_secret: components["schemas"]["SecretName"];
         };
         Volume: {
             /** Format: uuid */
@@ -4230,6 +4230,18 @@ export interface components {
         };
         /** @enum {string} */
         DiskStatus: "detached" | "attached" | "saving";
+        /**
+         * @description publish saves a generation while the container runs; release saves the last one and frees the disk after the container stops.
+         * @enum {string}
+         */
+        DiskOperation: "publish" | "release";
+        /** @description Why the holder's last publish or release failed. It clears once a later one succeeds; until a release succeeds the disk stays saving. */
+        DiskFailure: {
+            operation: components["schemas"]["DiskOperation"];
+            message: string;
+            /** Format: date-time */
+            failed_at: string;
+        };
         Disk: {
             /** Format: uuid */
             id: string;
@@ -4254,6 +4266,7 @@ export interface components {
             holder_container_id?: string;
             /** @description The workload whose container holds the disk. */
             holder?: components["schemas"]["WorkloadRef"];
+            failure?: components["schemas"]["DiskFailure"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -4875,7 +4888,7 @@ export interface components {
          * @description requests: endpoint or ASGI requests were recorded. A requests change counts one deployment's requests and names no resource.
          * @enum {string}
          */
-        ChangeTopic: "apps" | "deployments" | "tasks" | "requests" | "containers" | "storage.secrets" | "storage.volumes" | "usage";
+        ChangeTopic: "apps" | "deployments" | "tasks" | "requests" | "containers" | "storage.secrets" | "storage.volumes" | "storage.disks" | "usage";
         /** @enum {string} */
         ChangeKind: "created" | "updated" | "deleted";
         /** @description The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id. */
@@ -6066,6 +6079,7 @@ export interface components {
             /** Format: int64 */
             generation: number;
             status: components["schemas"]["DiskStatus"];
+            failure?: components["schemas"]["DiskFailure"];
         };
         /** @description Names a release, or a memory snapshot whose release the instance runs. */
         CreateInstanceRequest: {
@@ -11592,6 +11606,7 @@ export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<component
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
 export const diskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskStatus"]> = ["detached", "attached", "saving"];
+export const diskOperationValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskOperation"]> = ["publish", "release"];
 export const artifactStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Artifact"]["state"]> = ["uploading", "stored"];
 export const appStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AppState"]> = ["active", "paused", "deleted"];
 export const liveAppStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LiveAppState"]> = ["active", "paused"];
@@ -11614,7 +11629,7 @@ export const domainErrorCodeValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const previewStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewState"]> = ["starting", "ready", "stopped"];
 export const previewKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewKind"]> = ["function", "endpoint", "asgi", "realtime"];
 export const containerLogEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerLogEntry"]["stream"]> = ["stdout", "stderr", "system"];
-export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "requests", "containers", "storage.secrets", "storage.volumes", "usage"];
+export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "requests", "containers", "storage.secrets", "storage.volumes", "storage.disks", "usage"];
 export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
 export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
 export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "conversion", "image", "source", "disk", "create", "runtime", "draining"];

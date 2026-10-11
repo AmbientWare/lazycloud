@@ -133,6 +133,7 @@ func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment u
 	if disk != nil {
 		out.Disk = &apitypes.DevboxDisk{
 			Name: disk.Name, SizeBytes: disk.SizeBytes, StoredBytes: disk.StoredBytes, Generation: disk.Generation, Status: disk.Status,
+			Failure: disk.Failure,
 		}
 	}
 	return out, nil
@@ -178,7 +179,8 @@ func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) 
 	if _, err := s.owners.Control.StartWorkload(ctx, ws.ID, id, nil); err != nil {
 		return nil, err
 	}
-	if err := s.owners.Execution.WakePod(ctx, ws.ID, uuid.UUID(id), execution.WakeStart); err != nil {
+	// The view shows a start execution held with its failure.
+	if _, err := s.owners.Execution.WakePod(ctx, ws.ID, uuid.UUID(id)); err != nil {
 		return nil, err
 	}
 	out, err := s.devbox(ctx, ws, uuid.UUID(id))

@@ -11,33 +11,43 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/moby/moby/api/types/mount"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// Durable disks: the agent leases each disk a container declares, restores
-// it with the disk engine, bind-mounts it and publishes a generation every
-// publishEvery. Leases are recorded in a host-wide lease directory before
-// attaching; once the container has exited, an agent-owned loop publishes
-// the last generation, detaches and releases each lease, retrying until the
-// server accepts, across agent restarts. Until the release the server
-// reports the disk as saving and no other container can take it.
+// Durable disks: the agent leases each disk a container declares, has the
+// snapshotter serve its newest generation through a read-only grant of the
+// disk's objects, attaches it with the disk engine and bind-mounts it. A
+// container's disks publish every publishEvery, as soon as one holds half
+// its dirty budget, and at once on a Spot notice. Leases are recorded in a
+// host-wide lease directory before attaching; once the container has
+// exited, an agent-owned loop publishes the last generation, detaches and
+// releases each lease, retrying until the server accepts, across agent
+// restarts. Until the release the server reports the disk as saving and no
+// other container can take it. A failed publish or release is recorded on
+// the disk until one succeeds.
 const (
 	publishEvery = 2 * time.Minute
-	// compactAfter is how many committed layers the engine folds together.
-	compactAfter = 8
+	// statusEvery is how often a container's disks are checked for lost
+	// attachments and for their dirty budget.
+	statusEvery = 5 * time.Second
 	// acquireWait bounds how long a start waits for another holder to
 	// release the disk.
 	acquireWait = 5 * time.Minute
-	// diskMinFree is the space restores leave free on the host.
-	diskMinFree = 20 << 30
+	// readGrantRenew is how long before its read grant expires a disk gets
+	// a new one.
+	readGrantRenew = 30 * time.Minute
 )
 
 // heldDisk is one lease of a container.
@@ -46,8 +56,11 @@ type heldDisk struct {
 	Name      string `json:"name"`
 	Workspace string `json:"workspace"`
 	Token     []byte `json:"token"`
-	// Layers counts generations committed since the last compaction.
-	Layers int `json:"layers"`
+	// reported is true while the server holds no failure this agent
+	// recorded for the lease.
+	reported bool
+	// read is the disk's read grant.
+	read *imagefsproto.DiskGrant
 }
 
 // diskSet is a container's leased disks.
@@ -66,7 +79,7 @@ func (a *Agent) diskMount(container, disk string) string {
 	return filepath.Join(a.cfg.StateDir, "disks", "mounts", container, disk)
 }
 
-// diskLock serializes publishing of one disk between a container's publish
+// diskLock serializes the work on one disk between a container's publish
 // loop and the release loop.
 func (a *Agent) diskLock(disk string) *sync.Mutex {
 	lock, _ := a.diskLocks.LoadOrStore(disk, &sync.Mutex{})
@@ -80,14 +93,24 @@ func (a *Agent) diskStore(workspace string) (diskengine.Store, error) {
 	}
 	return diskengine.Store{
 		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.PathStyle,
-		Credentials: func(context.Context) (diskengine.Credentials, error) {
-			c, err := a.volumes.credentials(workspace)
-			if err != nil {
-				return diskengine.Credentials{}, err
-			}
-			return diskengine.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, ExpiresAt: c.expires}, nil
-		},
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return a.volumes.credentials(workspace) }),
 	}, nil
+}
+
+// diskSlots is how many disks the data volume holds room for beside the
+// frame cache, none where disks cannot attach.
+func diskSlots(diskErr error) int32 {
+	if diskErr != nil {
+		return 0
+	}
+	if err := os.MkdirAll(layersource.DiskRoot, 0o700); err != nil {
+		return 0
+	}
+	var st unix.Statfs_t
+	if err := unix.Statfs(layersource.DiskRoot, &st); err != nil {
+		return 0
+	}
+	return int32(hostproto.DiskSlots(int64(st.Blocks) * st.Bsize)) //nolint:gosec // Bounded by the volume.
 }
 
 // attachDisks leases and attaches the container's disks and returns their
@@ -113,46 +136,64 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 			return nil, fmt.Errorf("disk %s: Docker hosts mount disks at an absolute directory, not %q", spec.GetName(), spec.GetMountPath())
 		}
 		ctx, span := telemetry.Start(ctx, "agent.disk_attach", trace.WithAttributes(attribute.String("lazycloud.disk", spec.GetName())))
-		lease, err := c.acquire(ctx, spec.GetName())
-		if err != nil {
-			telemetry.Fail(span, err)
-			return nil, err
-		}
-		held := &heldDisk{ID: lease.GetDiskId(), Name: spec.GetName(), Workspace: lease.GetWorkspaceId(), Token: lease.GetLeaseToken()}
-		c.disks.mu.Lock()
-		c.disks.disks = append(c.disks.disks, held)
-		err = c.a.saveLeases(c.id, c.disks.disks)
-		c.disks.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		if err := c.a.volumes.waitGrant(ctx, held.Workspace); err != nil {
-			return nil, err
-		}
-		store, err := c.a.diskStore(held.Workspace)
-		if err != nil {
-			return nil, err
-		}
-		chain := make([]diskengine.Generation, len(lease.GetChain()))
-		for n, g := range lease.GetChain() {
-			chain[n] = diskengine.Generation{Generation: g.GetGeneration(), ManifestKey: g.GetManifestKey(), ManifestSHA256: g.GetManifestSha256()}
-		}
-		request := diskengine.AttachRequest{
-			DiskID: held.ID, SizeBytes: lease.GetSizeBytes(), Chain: chain,
-			Mountpoint: c.a.diskMount(c.id, held.ID), Store: store, MinFreeBytes: diskMinFree,
-		}
-		_, err = c.a.diskEngine.Attach(ctx, request)
-		if errors.Is(err, diskengine.ErrInsufficientSpace) && c.a.evictDisks(ctx) {
-			_, err = c.a.diskEngine.Attach(ctx, request)
-		}
+		source, err := c.attachDisk(ctx, spec.GetName())
 		telemetry.Fail(span, err)
 		if err != nil {
 			return nil, fmt.Errorf("attach disk %s: %w", spec.GetName(), err)
 		}
-		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: request.Mountpoint, Target: target})
+		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: target})
 	}
 	c.a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.
 	return binds, nil
+}
+
+// attachDisk leases the disk name, grants the snapshotter its reads and
+// attaches it, returning its mountpoint.
+func (c *container) attachDisk(ctx context.Context, name string) (string, error) {
+	lease, err := c.acquire(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	held := &heldDisk{ID: lease.GetDiskId(), Name: name, Workspace: lease.GetWorkspaceId(), Token: lease.GetLeaseToken(), read: lease.GetRead()}
+	c.disks.mu.Lock()
+	c.disks.disks = append(c.disks.disks, held)
+	err = c.a.saveLeases(c.id, c.disks.disks)
+	c.disks.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	if err := c.a.grantRead(ctx, c.id, held, true); err != nil {
+		return "", err
+	}
+	request := diskengine.AttachRequest{DiskID: held.ID, SizeBytes: lease.GetSizeBytes(), Mountpoint: c.a.diskMount(c.id, held.ID)}
+	if g := lease.GetGeneration(); g != nil {
+		request.Base = &diskengine.Generation{Generation: g.GetGeneration(), IndexSHA256: g.GetIndexSha256()}
+	}
+	if err := c.a.diskEngine.Attach(ctx, request); err != nil {
+		return "", err //nolint:wrapcheck // The caller names the disk.
+	}
+	return request.Mountpoint, nil
+}
+
+// grantRead gives the snapshotter d's read-only grant when it renews one
+// near expiry, or with always regardless, as before each use of the disk:
+// the snapshotter keeps grants in memory and forgets them when it restarts.
+func (a *Agent) grantRead(ctx context.Context, container string, d *heldDisk, always bool) error {
+	renew := d.read == nil || time.Until(d.read.GetExpiresAt().AsTime()) < readGrantRenew
+	if renew {
+		g, err := a.host.GrantDiskRead(ctx, &hostproto.GrantDiskReadRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
+		if err != nil {
+			return fmt.Errorf("grant reads of disk %s: %w", d.Name, err)
+		}
+		d.read = g.GetGrant()
+	}
+	if !renew && !always {
+		return nil
+	}
+	if _, err := a.layers.client.Disks.GrantDisk(ctx, &imagefsproto.GrantDiskRequest{DiskId: d.ID, Grant: d.read}); err != nil {
+		return fmt.Errorf("grant reads of disk %s to the snapshotter: %w", d.Name, err)
+	}
+	return nil
 }
 
 // acquire takes a lease, waiting while another container still holds the
@@ -213,29 +254,88 @@ func (a *Agent) loadLeases(container string) ([]*heldDisk, error) {
 	return disks, nil
 }
 
+// publishLoop checks the container's disks every statusEvery and publishes
+// each one every publishEvery, once it holds half its dirty budget, and at
+// once on a Spot notice. A disk that stopped being served fails the
+// container with the cause. A disk holding its whole budget unpublished,
+// as when publishes fail, stalls its writers until a publish frees room or
+// the container stops.
 func (c *container) publishLoop(ctx context.Context) {
-	ticker := time.NewTicker(publishEvery)
+	ticker := time.NewTicker(statusEvery)
 	defer ticker.Stop()
+	reclaiming, stopping := c.a.reclaiming, c.claims.Done()
+	due := time.Now().Add(publishEvery)
 	for {
+		now := false
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-reclaiming:
+			reclaiming, now = nil, true
+		case <-stopping:
+			stopping = nil
+		}
+		if time.Now().After(due) {
+			now, due = true, time.Now().Add(publishEvery)
 		}
 		c.disks.mu.Lock()
 		disks := append([]*heldDisk(nil), c.disks.disks...)
 		c.disks.mu.Unlock()
 		for _, d := range disks {
-			if err := c.a.publish(ctx, c.id, d); err != nil && ctx.Err() == nil {
-				c.log.Warn("publishing disk failed; retrying next round", "disk", d.Name, "error", err)
+			if !c.tendDisk(ctx, d, now) {
+				return
 			}
 		}
 	}
 }
 
-// publish uploads every unpublished layer of d and records each with the
-// server before committing it locally, so a lost reply is replayed.
-func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) error {
+// tendDisk publishes d when due and stalls or resumes its writers. It
+// reports false once ctx has ended.
+func (c *container) tendDisk(ctx context.Context, d *heldDisk, now bool) bool {
+	dirty, stalled, err := c.a.diskEngine.Status(ctx, d.ID)
+	lost := errors.Is(err, diskengine.ErrAttachmentLost)
+	switch {
+	case lost:
+		c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
+	case err != nil:
+		c.log.Warn("reading a disk's status failed", "disk", d.Name, "error", err)
+		return true
+	}
+	if now || lost || dirty >= hostproto.DiskDirtyBytes/2 {
+		err = c.a.publish(ctx, c.id, d, false)
+		if ctx.Err() != nil {
+			return false
+		}
+		if err != nil {
+			c.log.Warn("publishing disk failed; retrying next round", "disk", d.Name, "error", err)
+		}
+		if errors.Is(err, diskengine.ErrAttachmentLost) {
+			c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
+		}
+		c.a.reportDisk(ctx, c.id, d, hostproto.DiskOperation_DISK_OPERATION_PUBLISH, err)
+		if dirty, stalled, err = c.a.diskEngine.Status(ctx, d.ID); err != nil {
+			return true
+		}
+	} else if err := c.a.grantRead(ctx, c.id, d, false); err != nil {
+		c.log.Warn("granting a disk's reads failed", "disk", d.Name, "error", err)
+	}
+	// A stopping container's writers must finish for it to stop.
+	if stall := dirty >= hostproto.DiskDirtyBytes && c.claims.Err() == nil; stall != stalled {
+		if err := c.a.diskEngine.Stall(ctx, d.ID, stall); err != nil {
+			c.log.Warn("stalling or resuming a disk's writes failed", "disk", d.Name, "stall", stall, "error", err)
+		}
+	}
+	return true
+}
+
+// publish seals what d's container wrote, uploads it as the next
+// generation and records it with the server before committing it locally,
+// so a lost reply is replayed, then deletes what the disk no longer reads.
+// With final it also saves the frames the host's cache holds for the disk.
+// A disk whose attachment was lost publishes what reached it and returns
+// the diskengine.ErrAttachmentLost.
+func (a *Agent) publish(ctx context.Context, container string, d *heldDisk, final bool) error {
 	lock := a.diskLock(d.ID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -243,59 +343,70 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk) erro
 	if err != nil {
 		return err
 	}
-	for {
-		published, err := a.diskEngine.Publish(ctx, d.ID, store)
-		if err != nil {
-			return fmt.Errorf("publish: %w", err)
-		}
-		if published == nil {
-			return nil
-		}
-		if _, err := a.host.RecordDiskGeneration(ctx, &hostproto.RecordDiskGenerationRequest{
-			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token,
-			Generation: published.Generation, ParentGeneration: published.ParentGeneration,
-			ManifestKey: published.ManifestKey, ManifestSha256: published.ManifestSHA256,
-			AddedBytes: published.AddedBytes, Flat: published.Flat,
-		}); err != nil {
-			return fmt.Errorf("record generation %d: %w", published.Generation, err)
-		}
-		if err := a.diskEngine.CommitPublished(d.ID, published.Generation); err != nil { //nolint:contextcheck // A local state write.
-			return fmt.Errorf("commit generation %d: %w", published.Generation, err)
-		}
-		d.Layers++
-		if published.Flat {
-			chain := []diskengine.Generation{{Generation: published.Generation, ManifestKey: published.ManifestKey, ManifestSHA256: published.ManifestSHA256}}
-			removed, err := a.diskEngine.Collect(ctx, d.ID, store, chain)
-			if err != nil {
-				return fmt.Errorf("collect: %w", err)
-			}
-			if _, err := a.host.RecordDiskCollection(ctx, &hostproto.RecordDiskCollectionRequest{
-				ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, RemovedBytes: removed, BaseGeneration: published.Generation,
-			}); err != nil {
-				return fmt.Errorf("record collection: %w", err)
-			}
-		}
-		if d.Layers >= compactAfter {
-			if err := a.diskEngine.Compact(ctx, d.ID); err != nil {
-				return fmt.Errorf("compact: %w", err)
-			}
-			d.Layers = 0
-		}
-	}
-}
-
-// release publishes d's last generation, detaches it and ends its lease. A
-// disk this host never restored has nothing to publish. A lease the server
-// already ended, as after host loss, counts as released.
-func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
-	local, err := a.hasLocalDisk(ctx, d.ID)
-	if err != nil {
+	// The snapshotter reads the frames a publish rewrites part of.
+	if err := a.grantRead(ctx, container, d, true); err != nil {
 		return err
 	}
-	if local {
-		err := a.publish(ctx, container, d)
-		if errors.Is(err, diskengine.ErrNoLocalState) || status.Code(err) == codes.FailedPrecondition {
-			err = nil
+	sealErr := a.diskEngine.Seal(ctx, d.ID)
+	if sealErr != nil && !errors.Is(sealErr, diskengine.ErrAttachmentLost) {
+		return fmt.Errorf("seal: %w", sealErr)
+	}
+	published, err := a.diskEngine.Publish(ctx, d.ID, store, final)
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	if published != nil {
+		recorded, err := a.host.RecordDiskGeneration(ctx, &hostproto.RecordDiskGenerationRequest{
+			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, AddedBytes: published.AddedBytes,
+			Generation: &hostproto.DiskGeneration{Generation: published.Generation, IndexSha256: published.IndexSHA256},
+		})
+		if err != nil {
+			return fmt.Errorf("record generation %d: %w", published.Generation, err)
+		}
+		orphans := make([]diskengine.Generation, len(recorded.GetOrphans()))
+		for i, o := range recorded.GetOrphans() {
+			orphans[i] = diskengine.Generation{Generation: o.GetGeneration(), IndexSHA256: o.GetIndexSha256()}
+		}
+		if err := a.diskEngine.CommitPublished(ctx, d.ID, published.Generation, orphans); err != nil {
+			return fmt.Errorf("commit generation %d: %w", published.Generation, err)
+		}
+	}
+	err = a.diskEngine.Collect(ctx, d.ID, store, func(ctx context.Context, generation int64, keys []string, bytes int64) error {
+		_, err := a.host.CollectDisk(ctx, &hostproto.CollectDiskRequest{
+			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, Generation: generation, Keys: keys, RemovedBytes: bytes,
+		})
+		return err //nolint:wrapcheck // Collect wraps it.
+	})
+	if err != nil {
+		return fmt.Errorf("collect: %w", err)
+	}
+	return sealErr
+}
+
+// fenced reports whether the server refused a disk call because the lease
+// is no longer this container's.
+func fenced(err error) bool { return status.Code(err) == codes.FailedPrecondition }
+
+// release publishes d's last generation, with the frames the host's cache
+// holds for it, detaches it, ends its lease and deletes its local copy,
+// which then holds nothing unpublished. A disk this host never attached has
+// nothing to publish, but is detached so the snapshotter drops its grant. A
+// lease the server already ended, as after host loss, counts as released,
+// and the local copy, which may hold writes the disk's next holder never
+// saw, is deleted too.
+func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
+	// A host that cannot attach disks never attached this one.
+	local := false
+	if a.diskErr == nil {
+		var err error
+		if local, err = a.hasLocalDisk(ctx, d.ID); err != nil {
+			return err
+		}
+		if local {
+			err = a.publish(ctx, container, d, true)
+			if fenced(err) || errors.Is(err, diskengine.ErrNoLocalState) || errors.Is(err, diskengine.ErrAttachmentLost) {
+				err = nil
+			}
 		}
 		if err == nil {
 			err = a.diskEngine.Detach(ctx, d.ID)
@@ -304,14 +415,34 @@ func (a *Agent) release(ctx context.Context, container string, d *heldDisk) erro
 			return err
 		}
 	}
-	_, err = a.host.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
-	if status.Code(err) == codes.FailedPrecondition {
-		return nil
-	}
-	if err != nil {
+	_, err := a.host.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
+	if err != nil && !fenced(err) {
 		return fmt.Errorf("release: %w", err)
 	}
+	if local {
+		if err := a.diskEngine.Evict(d.ID); err != nil { //nolint:contextcheck // A local file removal.
+			return fmt.Errorf("delete the local copy: %w", err)
+		}
+	}
 	return nil
+}
+
+// reportDisk records a failed publish or release on the disk, or clears the
+// failure once one succeeds. A lease the server already ended takes no
+// report.
+func (a *Agent) reportDisk(ctx context.Context, container string, d *heldDisk, operation hostproto.DiskOperation, failure error) {
+	if (failure == nil && d.reported) || fenced(failure) || ctx.Err() != nil {
+		return
+	}
+	req := &hostproto.RecordDiskFailureRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token}
+	if failure != nil {
+		req.Failure = &hostproto.DiskFailure{Operation: operation, Message: failure.Error()}
+	}
+	if _, err := a.host.RecordDiskFailure(ctx, req); err != nil && !fenced(err) {
+		a.log.Warn("recording a disk failure failed", "disk_id", d.ID, "error", err)
+		return
+	}
+	d.reported = failure == nil
 }
 
 // hasLocalDisk reports whether the engine keeps any state of disk here; a
@@ -357,6 +488,7 @@ func (a *Agent) releaseLeases(ctx context.Context) {
 		for _, d := range disks {
 			if err := a.release(ctx, container, d); err != nil {
 				a.log.Warn("releasing a disk failed; retrying", "container_id", container, "disk", d.Name, "error", err)
+				a.reportDisk(ctx, container, d, hostproto.DiskOperation_DISK_OPERATION_RELEASE, err)
 				kept = append(kept, d)
 			}
 		}
@@ -390,28 +522,6 @@ func (a *Agent) requestRelease() {
 	}
 }
 
-// evictDisks drops detached disks whose writes are all published, oldest
-// first, and reports whether it freed any.
-func (a *Agent) evictDisks(ctx context.Context) bool {
-	disks, err := a.diskEngine.List(ctx)
-	if err != nil {
-		a.log.Warn("listing cached disks failed", "error", err)
-		return false
-	}
-	freed := false
-	for _, d := range disks {
-		if d.Attached || d.Unpublished {
-			continue
-		}
-		if err := a.diskEngine.Evict(d.DiskID); err != nil { //nolint:contextcheck // A local file removal.
-			a.log.Warn("evicting a cached disk failed", "disk_id", d.DiskID, "error", err)
-			continue
-		}
-		freed = true
-	}
-	return freed
-}
-
 // recoverDisks seals disks a dead agent left attached whose containers no
 // longer run, so their writes publish before release.
 func (a *Agent) recoverDisks(ctx context.Context) {
@@ -420,7 +530,7 @@ func (a *Agent) recoverDisks(ctx context.Context) {
 	}
 	disks, err := a.diskEngine.List(ctx)
 	if err != nil {
-		a.log.Warn("listing cached disks failed", "error", err)
+		a.log.Warn("listing local disks failed", "error", err)
 		return
 	}
 	running := map[string]bool{}

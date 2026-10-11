@@ -90,8 +90,6 @@ is object storage, which sets a few rules:
   its own path, such as `/reports/{task_id}.json`.
 - There are no locks. A [queue or map](/concepts/queues-maps) coordinates turns.
 - Appending to a large file rewrites it, so logs fit better as many small files.
-- Large reads are cached on the machine, which makes volumes good for model
-  weights.
 
 Weights downloaded once serve every container:
 
@@ -156,8 +154,17 @@ name the bucket in the host name, as AWS expects; stores such as MinIO that
 take the bucket in the path need `force_path_style=True`. A bucket name with a
 dot always goes in the path. The bucket must already exist.
 
+## Memory for mounts
+
+A container runs one mounter for all its volumes, plus one per distinct cloud
+bucket. Cloud buckets that differ only in `prefix` share one. Each mounter
+reserves 512 MiB of memory on top of the container's `memory`, billed as memory,
+so a function with two volumes and one cloud bucket reserves 1 GiB beyond what
+it asks for.
+
 ## Delete stored data
 
 `reports.remove("latest.json")` deletes one file and `reports.delete()` the whole
-volume. A workload that still mounts it recreates it empty on its next run. The
+volume. `delete()` fails while a container that hasn't stopped mounts the volume.
+A workload that still declares the volume creates it empty on its next run. The
 [file commands](/cli/storage#files) work from a terminal too.

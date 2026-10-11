@@ -49,7 +49,7 @@ func TestTracesRecordFirstReadsInOrder(t *testing.T) {
 	sources := layerSources{cache: c.cache}
 	read := func(l *layer, frame int) {
 		t.Helper()
-		if err := c.cache.read(l, frame, make([]byte, 8), 0); err != nil {
+		if err := l.read(frame, make([]byte, 8), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -231,7 +231,7 @@ func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
 		t.Fatalf("a prefetch of three frames made %d requests", n)
 	}
 	for _, r := range [][2]int{{1, 1}, {0, 3}, {0, 0}} {
-		if err := c.cache.read(c.layers[r[0]], r[1], make([]byte, 8), 0); err != nil {
+		if err := c.layers[r[0]].read(r[1], make([]byte, 8), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -253,14 +253,14 @@ func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
 	l = c.cache.mount(l.index)
 	reads := make([]frameKey, 10)
 	for i := range reads {
-		reads[i] = frameKey{layer: l.digest, frame: i}
+		reads[i] = l.key(i)
 	}
 	if err := c.cache.prefetch("container", reads, oteltrace.SpanContext{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return held.waiting.Load() == 2 })
 	held.pass.Store(true)
-	if err := c.cache.read(l, 11, make([]byte, 8), 0); err != nil {
+	if err := l.read(11, make([]byte, 8), 0); err != nil {
 		t.Fatalf("a read while prefetches hold their slots: %v", err)
 	}
 	if n := held.waiting.Load(); n != 2 {

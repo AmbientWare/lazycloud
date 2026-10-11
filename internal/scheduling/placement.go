@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,10 @@ import (
 // placementBatch bounds the pending containers one placement transaction
 // considers.
 const placementBatch = 500
+
+// diskWarm is how long after a disk's release its last host's frame cache
+// is taken to still hold the disk.
+const diskWarm = time.Hour
 
 // Scheduling is the placement owner.
 type Scheduling struct {
@@ -107,6 +112,7 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 		}
 		pending, err := q.PendingContainers(ctx, PendingContainersParams{
 			MaxFreeCpuMillis: maxCPU, MaxFreeMemoryBytes: maxMemory, Targets: targets(hosts), BatchSize: placementBatch,
+			DiskWarmSeconds: diskWarm.Seconds(),
 		})
 		if err != nil {
 			return fmt.Errorf("list pending containers: %w", err)
@@ -169,14 +175,15 @@ func requirement(c PendingContainersRow) compute.Requirement {
 	return compute.Requirement{
 		Workspace: c.WorkspaceID, Connection: c.ConnectionID, Machine: c.Machine, Region: c.Region, Zone: c.Zone,
 		Preemptible: c.Preemptible, GPUs: c.Gpus, GPUCount: int(c.GpuCount),
-		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes,
+		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes, Disks: int(c.Disks), Prefer: (*compute.HostID)(c.DiskHost),
 	}
 }
 
 // pack assigns containers, those that cannot run on Spot first so they
 // take on-demand room before Spot-tolerant work borrows it, each to the
 // host compute.ChooseHost picks, keeping the platform's on-demand warm
-// floor free for them. It returns parallel container and host id slices.
+// floor free for them and preferring the host whose cache still holds a
+// container's disk. It returns parallel container and host id slices.
 func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, hostIDs []uuid.UUID) {
 	free := slices.Clone(hosts)
 	order := slices.Clone(pending)

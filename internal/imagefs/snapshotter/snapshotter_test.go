@@ -153,7 +153,7 @@ func (f *failedReads) Handle(_ context.Context, r slog.Record) error {
 // testConfig is a snapshotter's configuration for a test under dir.
 func testConfig(dir string, transport http.RoundTripper, logger *slog.Logger) Config {
 	return Config{
-		Root: dir, CacheBytes: 256 << 20, Fetches: 4,
+		Root: dir, CacheDir: filepath.Join(dir, "cache"), CacheBytes: 256 << 20, Fetches: 4,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: noop.NewTracerProvider().Tracer(""),
 	}
 }
@@ -266,7 +266,7 @@ func layerMounts(t *testing.T, root string) []string {
 	}
 	var found []string
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if fields := strings.Fields(line); len(fields) > 4 && strings.HasPrefix(fields[4], root) && strings.Contains(line, " fuse."+layersource.Snapshotter+" ") {
+		if fields := strings.Fields(line); len(fields) > 4 && strings.HasPrefix(fields[4], filepath.Join(root, "snapshots")) && strings.Contains(line, " fuse."+layersource.Snapshotter+" ") {
 			found = append(found, fields[4])
 		}
 	}
@@ -635,7 +635,7 @@ func TestReadsOutliveClose(t *testing.T) {
 	l := ts.file(t, "a", random(4*imagefs.FrameSize)).grantTo(c)
 	reads := make(chan error, len(l.index.Frames))
 	for frame := range l.index.Frames {
-		go func() { reads <- c.read(l, frame, make([]byte, 8), 0) }()
+		go func() { reads <- l.read(frame, make([]byte, 8), 0) }()
 	}
 	waitFor(t, func() bool { return held.waiting.Load() == int64(len(l.index.Frames)) })
 	stop()
@@ -650,7 +650,9 @@ func TestReadsOutliveClose(t *testing.T) {
 
 // grantTo grants the stored layer to c and returns an unmounted layer of it.
 func (l storedLayer) grantTo(c *frameCache) *layer {
-	c.grants.put([]grant{{layer: l.index.Layer, indexURL: l.grant.GetIndexUrl(), dataURL: l.grant.GetDataUrl(), expires: l.grant.GetExpiresAt().AsTime()}})
+	c.grants.put(l.index.Layer, l.grant.GetExpiresAt().AsTime(), func() layerURLs {
+		return layerURLs{index: l.grant.GetIndexUrl(), data: l.grant.GetDataUrl()}
+	})
 	return c.newLayer(l.index)
 }
 
@@ -666,7 +668,7 @@ func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 	go func() { c.fillLayer(fillCtx, l); close(filled) }()
 	waitFor(t, func() bool { return held.waiting.Load() > 0 })
 	read := make(chan error, 1)
-	go func() { read <- c.read(l, 0, make([]byte, 16), 0) }()
+	go func() { read <- l.read(0, make([]byte, 16), 0) }()
 	time.Sleep(100 * time.Millisecond)
 	stopFill()
 	time.Sleep(100 * time.Millisecond)
@@ -682,7 +684,7 @@ func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 // tries the frame again.
 func TestFailedEvictionsKeepTheirFramesCounted(t *testing.T) {
 	c := newTestCache(t, http.DefaultTransport, 8)
-	key := func(frame int) frameKey { return frameKey{layer: digestOf('e'), frame: frame} }
+	key := func(frame int) frameKey { return frameKey{object: string(digestOf('e')), frame: frame} }
 	store := func(frame int, step string) {
 		t.Helper()
 		if err := c.store(key(frame), []byte("12345")); err != nil {
@@ -728,7 +730,7 @@ func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
 	for range 32 {
 		wg.Go(func() {
 			p := make([]byte, 4096)
-			errs <- c.read(l, 1, p, 100)
+			errs <- l.read(1, p, 100)
 		})
 	}
 	wg.Wait()
@@ -782,7 +784,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 	other := layerOf(24 * imagefs.FrameSize)
 	readAll := func(l *layer) {
 		for i := range l.index.Frames {
-			if err := c.read(l, i, make([]byte, 1), 0); err != nil {
+			if err := l.read(i, make([]byte, 1), 0); err != nil {
 				t.Fatal(err)
 			}
 			if onDisk := diskBytes(t, c.dir); onDisk > bound {
@@ -795,7 +797,7 @@ func TestFrameCacheStaysUnderItsBound(t *testing.T) {
 		readAll(other)
 	}
 	for i := range mounted.index.Frames {
-		if c.touch(frameKey{layer: mounted.digest, frame: i}) == nil {
+		if c.touch(mounted.key(i)) == nil {
 			t.Fatalf("frame %d of the mounted layer was evicted before the unmounted layer's", i)
 		}
 	}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 const (
@@ -22,9 +24,6 @@ const (
 	qmpTimeout = 60 * time.Second
 	// daemonStopTimeout bounds waiting for a daemon to exit after quit.
 	daemonStopTimeout = 30 * time.Second
-	// filesystemBlockBytes is the ext4 block size formatExt4 pins. Block 0
-	// holds the superblock and nothing else a workload writes.
-	filesystemBlockBytes = 4096
 )
 
 // qmpClient speaks to one daemon's monitor. The monitor serves one client at
@@ -136,51 +135,54 @@ func (c *qmpClient) roundTrip(ctx context.Context, name string, payload []byte, 
 	}
 }
 
-func fileChild(path string) map[string]any {
-	return map[string]any{"driver": "file", "filename": path}
+// baseBlockdev is the read-only node of the served generation's file.
+func baseBlockdev(generation int64, path string) map[string]any {
+	return map[string]any{
+		"driver": "raw", "node-name": baseNode(generation), "read-only": true,
+		"file": map[string]any{"driver": "file", "filename": path, "node-name": baseNode(generation) + "-file", "read-only": true},
+	}
 }
 
-// layerNodes describes the chain as one blockdev per layer, each naming the
-// layer below by node name, so seal and compact can address layers directly.
-func layerNodes(p diskPaths, state *diskState) []map[string]any {
-	head := len(state.Layers) - 1
-	// Compaction commits zeroes a discard left in the head into the base;
-	// detecting them there frees its space instead of writing them.
-	compacts := head > 0
-	nodes := make([]map[string]any, 0, len(state.Layers))
+// layerBlockdev is layer l of the stack over the node below, or none, as
+// blockdev-add takes it.
+func layerBlockdev(p diskPaths, l layer, below any, head bool) map[string]any {
+	node := map[string]any{
+		"driver":    "qcow2",
+		"node-name": l.node(),
+		"file":      map[string]any{"driver": "file", "filename": p.layerPath(l), "node-name": l.fileNode()},
+		"backing":   below,
+	}
+	if head {
+		node["discard"] = "unmap"
+	} else {
+		node["read-only"] = true
+	}
+	return node
+}
+
+// stackBlockdevs describes the stack as one blockdev per node, base first,
+// each naming the node below by name, so seal and rebase address layers
+// directly.
+func stackBlockdevs(p diskPaths, state *diskState, basePath string) []map[string]any {
+	var nodes []map[string]any
+	var below any // JSON null: the bottom layer of a disk never published
+	if state.Base != nil {
+		nodes = append(nodes, baseBlockdev(state.Base.Generation, basePath))
+		below = baseNode(state.Base.Generation)
+	}
 	for i, l := range state.Layers {
-		node := map[string]any{
-			"driver":    string(l.format()),
-			"node-name": l.node(),
-			"file":      fileChild(p.layerPath(l)),
-		}
-		if i < head {
-			// Sealed; a commit into it reopens it for writing.
-			node["read-only"] = true
-			node["auto-read-only"] = true
-		}
-		switch {
-		case i > 0:
-			node["backing"] = state.Layers[i-1].node()
-		case !l.Raw:
-			// A raw base takes no backing option at all.
-			node["backing"] = nil
-		}
-		if i == head || (compacts && i == 0) {
-			node["discard"] = "unmap"
-		}
-		if compacts && i == 0 {
-			node["detect-zeroes"] = "unmap"
-		}
-		nodes = append(nodes, node)
+		nodes = append(nodes, layerBlockdev(p, l, below, i == len(state.Layers)-1))
+		below = l.node()
 	}
 	return nodes
 }
 
-// startDaemon starts the disk's qemu-storage-daemon, which detaches and
-// keeps serving after this call returns, and exports the head over NBD on
-// the disk's unix socket.
-func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error) {
+// startDaemon starts the disk's qemu-storage-daemon in a transient systemd
+// scope, outside the caller's cgroup, so stopping or restarting the caller's
+// service leaves the disk served. The daemon detaches once its sockets
+// listen and exports the head over NBD on the disk's unix socket. A caller
+// other than root gets a scope of its user manager.
+func startDaemon(ctx context.Context, p diskPaths, state *diskState, basePath string) (int, error) {
 	if err := p.checkSocketPaths(); err != nil {
 		return 0, err
 	}
@@ -192,13 +194,19 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 			return 0, err
 		}
 	}
-	args := []string{
+	// Scope names are unique per start: systemd forgets a scope only some
+	// time after its last process exits.
+	args := []string{"--scope", "--collect", "--quiet", fmt.Sprintf("--unit=lazycloud-disk-%s-%d", p.id, time.Now().UnixNano())}
+	if os.Geteuid() != 0 {
+		args = append([]string{"--user"}, args...)
+	}
+	args = append(args, "--", toolDaemon,
 		"--daemonize",
 		"--pidfile", p.pidFile(),
-		"--chardev", "socket,id=monitor,path=" + p.qmpSocket() + ",server=on,wait=off",
+		"--chardev", "socket,id=monitor,path="+p.qmpSocket()+",server=on,wait=off",
 		"--monitor", "chardev=monitor",
-	}
-	for _, node := range layerNodes(p, state) {
+	)
+	for _, node := range stackBlockdevs(p, state, basePath) {
 		spec, err := json.Marshal(node)
 		if err != nil {
 			return 0, fmt.Errorf("encode blockdev: %w", err)
@@ -209,16 +217,37 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 		"--nbd-server", "addr.type=unix,addr.path="+p.nbdSocket(),
 		"--export", "type=nbd,id="+exportID+",node-name="+state.head().node()+",name="+exportName+",writable=on",
 	)
-	if _, err := runTool(ctx, toolDaemon, args...); err != nil {
+	if _, err := runTool(ctx, toolRunUnit, args...); err != nil {
 		return 0, err
 	}
-	raw, err := os.ReadFile(p.pidFile())
+	pid, err := readPID(p.pidFile())
 	if err != nil {
 		return 0, fmt.Errorf("qemu-storage-daemon started without a pid file: %w", err)
 	}
+	return pid, nil
+}
+
+// stopUnrecordedDaemon stops a daemon of this disk that an attach
+// interrupted between starting it and recording it.
+func stopUnrecordedDaemon(ctx context.Context, p diskPaths) error {
+	pid, err := readPID(p.pidFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return stopDaemon(ctx, p, pid)
+}
+
+func readPID(path string) (int, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // A pid file under the root.
+	if err != nil {
+		return 0, fmt.Errorf("read %s: %w", path, err)
+	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", p.pidFile(), err)
+		return 0, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return pid, nil
 }
@@ -279,7 +308,8 @@ func headWritten(ctx context.Context, client *qmpClient, node string) (bool, err
 	}
 	for _, entry := range stats {
 		if entry.NodeName == node {
-			return entry.Stats.WrHighestOffset > filesystemBlockBytes, nil
+			// Block 0 holds the superblock and nothing else a workload writes.
+			return entry.Stats.WrHighestOffset > hostproto.DiskBlockBytes, nil
 		}
 	}
 	return false, fmt.Errorf("qemu-storage-daemon has no node %s", node)
@@ -324,16 +354,80 @@ func reconcileHead(ctx context.Context, p diskPaths, state *diskState, client *q
 	return removeIfExists(p.layerPath(head))
 }
 
-func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (bool, error) {
+func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (written bool, err error) {
+	err = withMonitor(ctx, p, state, func(client *qmpClient) error {
+		written, err = headWritten(ctx, client, state.head().node())
+		return err
+	})
+	return written, err
+}
+
+// withMonitor runs fn on a connection to the disk's daemon monitor once the
+// recorded head is the one the daemon exports.
+func withMonitor(ctx context.Context, p diskPaths, state *diskState, fn func(*qmpClient) error) error {
 	client, err := dialQMP(ctx, p.qmpSocket())
 	if err != nil {
-		return false, err
+		return err
 	}
-	written, err := func() (bool, error) {
-		if err := reconcileHead(ctx, p, state, client); err != nil {
-			return false, err
+	if err = reconcileHead(ctx, p, state, client); err == nil {
+		err = fn(client)
+	}
+	return errors.Join(err, client.close())
+}
+
+// namedNodes lists the nodes the daemon holds by name.
+func namedNodes(ctx context.Context, client *qmpClient) (map[string]bool, error) {
+	var nodes []struct {
+		NodeName string `json:"node-name"`
+	}
+	if err := client.execute(ctx, "query-named-block-nodes", map[string]any{"flat": true}, &nodes); err != nil {
+		return nil, err
+	}
+	names := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		names[n.NodeName] = true
+	}
+	return names, nil
+}
+
+// rebase moves the running stack onto the pending generation's file at
+// path: the lowest layer the generation does not hold takes its node as
+// backing, and the nodes of the layers it holds and of the old base go,
+// newest first. blockdev-reopen drains that one layer, so writes pause for
+// the switch alone. A rebase interrupted part way finishes when run again.
+func rebase(ctx context.Context, p diskPaths, state *diskState, path string) error {
+	pending := state.Pending
+	return withMonitor(ctx, p, state, func(client *qmpClient) error {
+		names, err := namedNodes(ctx, client)
+		if err != nil {
+			return err
 		}
-		return headWritten(ctx, client, state.head().node())
-	}()
-	return written, errors.Join(err, client.close())
+		next := baseNode(pending.Generation)
+		if !names[next] {
+			if err := client.execute(ctx, "blockdev-add", baseBlockdev(pending.Generation, path), nil); err != nil {
+				return err
+			}
+		}
+		kept := slices.IndexFunc(state.Layers, func(l layer) bool { return l.Seq > pending.Through })
+		above := layerBlockdev(p, state.Layers[kept], next, kept == len(state.Layers)-1)
+		above["file"] = state.Layers[kept].fileNode()
+		if err := client.execute(ctx, "blockdev-reopen", map[string]any{"options": []any{above}}, nil); err != nil {
+			return fmt.Errorf("move disk %s onto generation %d: %w", p.id, pending.Generation, err)
+		}
+		gone := make([]string, 0, kept+1)
+		for _, l := range slices.Backward(state.Layers[:kept]) {
+			gone = append(gone, l.node())
+		}
+		if state.Base != nil {
+			gone = append(gone, baseNode(state.Base.Generation))
+		}
+		for _, name := range gone {
+			if names[name] {
+				if err := client.execute(ctx, "blockdev-del", map[string]any{"node-name": name}, nil); err != nil {
+					return fmt.Errorf("release node %s: %w", name, err)
+				}
+			}
+		}
+		return nil
+	})
 }

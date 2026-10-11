@@ -2,7 +2,9 @@ package snapshotter
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
+	"iter"
 	"maps"
 	"path"
 	"slices"
@@ -34,6 +36,53 @@ type layer struct {
 	// Guarded by cache.mu.
 	mounts   int
 	stopFill context.CancelFunc
+}
+
+func (l *layer) key(frame int) frameKey { return frameKey{object: string(l.digest), frame: frame} }
+
+func (l *layer) frameLen(frame int) int { return l.index.FrameLen(frame) }
+
+// keys yields the key of each of the layer's frames.
+func (l *layer) keys() iter.Seq[frameKey] {
+	return func(yield func(frameKey) bool) {
+		for i := range l.index.Frames {
+			if !yield(l.key(i)) {
+				return
+			}
+		}
+	}
+}
+
+// fetch reads frame through the layer's current grant.
+func (l *layer) fetch(ctx context.Context, frame int) ([]byte, error) {
+	var data []byte
+	err := retry(ctx, func() (err error) {
+		if _, ok := l.cache.grants.lookup(l.digest); !ok {
+			return errNoGrant
+		}
+		data, err = l.cache.reader.Read(ctx, l.index, l.data, frame)
+		return err //nolint:wrapcheck // wrapped below
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read frame %d of layer %s: %w", frame, l.digest, err)
+	}
+	return data, nil
+}
+
+// read fills p with frame's bytes from off, counting the read in the
+// layer's traces.
+func (l *layer) read(frame int, p []byte, off int64) error {
+	l.cache.traces.record(l, frame)
+	hit, waited, err := l.cache.read(l, frame, p, off)
+	if err != nil {
+		return err
+	}
+	n := 0
+	if !hit {
+		n = l.index.FrameLen(frame)
+	}
+	l.cache.starts.read(l.digest, hit, waited, n)
+	return nil
 }
 
 // node is one inode of a mounted layer. Hard links share one node.
@@ -185,7 +234,7 @@ func (n *node) Read(ctx context.Context, _ gofs.FileHandle, dest []byte, off int
 		pos := e.Offset + off + int64(done)
 		within := pos % imagefs.FrameSize
 		part := dest[done:min(len(dest), done+int(imagefs.FrameSize-within))]
-		if err := l.cache.read(l, int(pos/imagefs.FrameSize), part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
+		if err := l.read(int(pos/imagefs.FrameSize), part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
 			l.cache.log.ErrorContext(ctx, "layer read failed", "layer", l.digest, "path", e.Path, "offset", off, "error", err)
 			return nil, syscall.EIO
 		}

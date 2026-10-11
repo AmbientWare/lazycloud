@@ -347,7 +347,7 @@ func hostIn(t *testing.T, pool *pgxpool.Pool, region string) compute.HostID {
 func TestLayerReadURLs(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	store := storage.NewStorage(pool, storagetest.Config(t))
+	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
 
 	reference := "registry.test/lazycloud/images/abc@sha256:" + hex64("1")

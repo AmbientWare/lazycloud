@@ -67,3 +67,32 @@ message Entry {
   int64 offset = 14;
   int64 size = 15;
 }
+
+// DiskIndex is one published generation of a durable disk: its size and
+// the table of its frames, each the stored copy of 4 MiB of the disk.
+//
+// A stored disk index is the 4 bytes "LCDX", the format version as a 4-byte
+// big-endian unsigned integer, then this message encoded and compressed as
+// one zstd frame, versioned as Index is.
+//
+// Frame i holds the disk's bytes [i*4 MiB, (i+1)*4 MiB); only the last frame
+// is shorter. A frame of zeros is stored nowhere. Every other frame is one
+// zstd frame of its bytes stored once per disk at
+// disks/<disk id>/frames/<hex sha256 of its uncompressed bytes>, which every
+// generation naming it shares. A generation is complete: reading it needs no
+// other generation.
+message DiskIndex {
+  // Bytes of the disk, a multiple of 4096.
+  int64 size = 1;
+  // The sha256 of each frame's uncompressed bytes, 32 bytes, or empty for a
+  // frame of zeros.
+  repeated bytes frame_digests = 2;
+  // Compressed bytes of each stored frame, 0 for a frame of zeros.
+  repeated int64 frame_sizes = 3;
+  // Frames the disk read in its first minute after it was last attached, in
+  // order of first read. A host prefetches them first.
+  repeated uint32 start_frames = 4;
+  // Frames the host's cache held for the disk when it last stopped, most
+  // recently read first. A host prefetches them after start_frames.
+  repeated uint32 recent_frames = 5;
+}

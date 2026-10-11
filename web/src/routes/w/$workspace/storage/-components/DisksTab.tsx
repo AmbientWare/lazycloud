@@ -4,6 +4,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { Loader2, Trash2 } from "lucide-react";
 
 import { ContentTransition } from "@/components/shared/ContentTransition";
+import { DiskFailure } from "@/components/shared/DiskFailure";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
@@ -129,6 +130,7 @@ function DiskRow({ workspace, disk }: { workspace: string; disk: Schemas["Disk"]
           </Button>
         </div>
       ) : null}
+      {disk.failure ? <DiskFailure failure={disk.failure} /> : null}
       {remove.isError ? (
         <p className="mt-2 text-xs text-destructive">{remove.error.message}</p>
       ) : null}

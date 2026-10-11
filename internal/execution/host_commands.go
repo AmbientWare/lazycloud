@@ -13,6 +13,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -32,6 +33,9 @@ type StartCommand struct {
 	Slots         int
 	CPUMillis     cpu.Millis
 	MemoryBytes   int64
+	// MountReserveBytes is the part of MemoryBytes the container's volume
+	// mounters take.
+	MountReserveBytes int64
 	// CPULimitMillis and MemoryLimitBytes are the ceilings above the
 	// reservations.
 	CPULimitMillis   cpu.Millis
@@ -96,7 +100,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		out.Start = append(out.Start, StartCommand{
 			Container: ContainerID(row.ID), Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName,
 			Source: source, Spec: spec, Slots: int(row.Slots),
-			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
+			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, MountReserveBytes: mountReserve(row.Mounters),
 			CPULimitMillis:   cpuLimitMillis(spec.Resources),
 			MemoryLimitBytes: memoryLimitMiB(spec.Resources) << 20,
 			Purpose:          ContainerPurpose(row.Purpose), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.WorkloadKind),
@@ -138,6 +142,12 @@ const (
 	memoryBurstFloorMi = 1024
 	memoryBurstCapMi   = 8192
 )
+
+// mountReserve is the memory a container reserves on top of its spec's for
+// its volume mounters.
+func mountReserve(mounters int32) int64 {
+	return int64(mounters) * hostproto.MounterMemoryBytes
+}
 
 func cpuLimitMillis(r apitypes.Resources) cpu.Millis {
 	if r.CpuLimitMillis != nil {

@@ -3,9 +3,11 @@ package storage
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,15 +15,12 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// Disk size bounds. Sizes are whole 4 KiB blocks.
-const (
-	MinDiskBytes   = 1 << 30
-	MaxDiskBytes   = 1 << 40
-	diskBlockBytes = 4096
-)
+// MinDiskBytes is the smallest disk; hostproto bounds the rest.
+const MinDiskBytes = 1 << 30
 
 // ErrStaleLease means a disk call came from a container that no longer
 // holds the disk, or whose container has stopped.
@@ -64,24 +63,25 @@ func lockedHolder(d LockActiveDiskRow) holder {
 	return holder{d.HolderContainerID, d.HolderState, d.HolderStopReason, d.HolderHostState, d.ReleasedAt != nil}
 }
 
-// DiskGeneration is one published generation of a disk chain.
+// DiskGeneration is one published generation of a disk: its number and
+// the sha256 of its stored index, which the disk engine keeps at
+// manifests/<generation as 12 digits>-<sha256> under the disk's prefix.
 type DiskGeneration struct {
-	Generation     int64
-	ManifestKey    string
-	ManifestSHA256 string
+	Generation  int64
+	IndexSHA256 string
 }
 
-// DiskLease is a container's hold on a disk. Token fences every publish.
+// DiskLease is a container's hold on a disk. Token fences every publish,
+// and Read reads the disk's objects.
 type DiskLease struct {
-	Disk       uuid.UUID
-	Workspace  identity.WorkspaceID
-	SizeBytes  int64
-	Generation int64
-	Token      []byte
-	// Chain runs from the newest parentless generation to the newest, base
-	// first.
-	Chain  []DiskGeneration
-	Bucket string
+	Disk      uuid.UUID
+	Workspace identity.WorkspaceID
+	SizeBytes int64
+	Token     []byte
+	// Newest is the newest published generation; nil for a disk never
+	// published.
+	Newest *DiskGeneration
+	Read   Grant
 }
 
 // DiskGrowth is what declaring disks would do to a workspace's disks.
@@ -109,10 +109,11 @@ func DeclaredDiskGrowth(ctx context.Context, db DBTX, workspace uuid.UUID, decla
 	return DiskGrowth(row), nil
 }
 
-// AcquireDisk gives container the disk its release declares by name,
-// creating the disk on first use and growing it to the declared size. The
-// same container acquiring again gets its lease back. Another holder that
-// still keeps the disk is a conflict; the host retries.
+// AcquireDisk gives container the disk its release declares by name, with
+// a read grant of its objects as GrantDiskRead issues, creating the disk on
+// first use and growing it to the declared size. The same container
+// acquiring again gets its lease back. Another holder that still keeps the
+// disk is a conflict; the host retries.
 func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, container uuid.UUID, name string) (DiskLease, error) {
 	declared, err := s.queries.DeclaredDisk(ctx, DeclaredDiskParams{ContainerID: container, HostID: hostRef(host), Name: name})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -121,15 +122,16 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 	if err != nil {
 		return DiskLease{}, fmt.Errorf("read declared disk: %w", err)
 	}
-	if declared.SizeBytes < MinDiskBytes || declared.SizeBytes > MaxDiskBytes || declared.SizeBytes%diskBlockBytes != 0 {
+	if declared.SizeBytes < MinDiskBytes || declared.SizeBytes > hostproto.MaxDiskBytes || declared.SizeBytes%hostproto.DiskBlockBytes != 0 {
 		return DiskLease{}, invalid("disk %s size %d is not a multiple of 4096 between 1Gi and 1Ti", name, declared.SizeBytes)
 	}
 	workspace := identity.WorkspaceID(declared.WorkspaceID)
-	bucket, err := s.workspaceBucket(ctx, workspace)
+	// The disk's objects go to the workspace's bucket, made on first use.
+	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
 		return DiskLease{}, err
 	}
-	lease := DiskLease{Workspace: workspace, Bucket: bucket}
+	lease := DiskLease{Workspace: workspace}
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
 		// Creating or growing a disk is held to the plan's disk allowance.
@@ -168,29 +170,43 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 				return fmt.Errorf("grow disk: %w", err)
 			}
 		}
-		chain, err := q.DiskChain(ctx, disk.ID)
-		if err != nil {
-			return fmt.Errorf("read disk chain: %w", err)
-		}
-		lease.Disk, lease.SizeBytes, lease.Generation, lease.Token = disk.ID, size, disk.Generation, token
-		lease.Chain = make([]DiskGeneration, len(chain))
-		for n, g := range chain {
-			lease.Chain[n] = DiskGeneration{Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSHA256: g.ManifestSha256}
+		lease.Disk, lease.SizeBytes, lease.Token = disk.ID, size, token
+		if disk.IndexSha256 != nil {
+			lease.Newest = &DiskGeneration{Generation: disk.Generation, IndexSHA256: *disk.IndexSha256}
 		}
 		return nil
 	})
 	if err != nil {
 		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
 	}
+	if lease.Read, err = s.grant(ctx, host, store, declared.WorkspaceID, diskPrefix(lease.Disk)); err != nil {
+		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
+	}
 	return lease, nil
 }
 
-// PublishedGeneration is a generation a host uploaded.
-type PublishedGeneration struct {
-	Generation, ParentGeneration int64
-	ManifestKey, ManifestSHA256  string
-	AddedBytes                   int64
-	Flat                         bool
+// GrantDiskRead issues the host holding disk under the lease a credential
+// that reads the disk's objects, its generations' indexes and frames, and
+// nothing else. The host's snapshotter serves the disk's generations with
+// it. Garage keys cannot be scoped to a prefix, so there it reads the
+// workspace bucket. The object store's refusal is a *StoreRefusedError.
+func (s *Storage) GrantDiskRead(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte) (Grant, error) {
+	var row LockLeasedDiskRow
+	err := s.withDiskLease(ctx, host, container, disk, token, func(_ *Queries, locked LockLeasedDiskRow) error {
+		row = locked
+		return nil
+	})
+	if err != nil {
+		return Grant{}, fmt.Errorf("grant disk reads: %w", err)
+	}
+	if row.Bucket == nil || row.Region == nil {
+		return Grant{}, invalid("disk %s has no workspace bucket", disk)
+	}
+	store, err := s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID)
+	if err != nil {
+		return Grant{}, err
+	}
+	return s.grant(ctx, host, store, row.WorkspaceID, diskPrefix(disk))
 }
 
 // diskLease holds a fenced lease for the length of fn.
@@ -208,62 +224,145 @@ func (s *Storage) withDiskLease(ctx context.Context, host compute.HostID, contai
 	})
 }
 
-// RecordDiskGeneration accepts the next generation from the lease holder.
-// A replay of the recorded generation with the same manifest succeeds, so
-// the host can retry after a lost reply.
-func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g PublishedGeneration) error {
+// RecordDiskGeneration accepts the next generation from the lease holder,
+// whose new frames hold addedBytes, and returns the generations former
+// holders uploaded after losing the disk, which the holder collects. A
+// replay of the recorded generation with the same index succeeds, so the
+// host can retry after a lost reply. A container that lost the disk has its
+// upload recorded for the holder to collect, and returned until its index
+// is collected.
+func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g DiskGeneration, addedBytes int64) ([]DiskGeneration, error) {
+	if !sha256Hex.MatchString(g.IndexSHA256) {
+		return nil, invalid("index sha256 %q is not 64 lowercase hex digits", g.IndexSHA256)
+	}
+	var orphans []DiskGeneration
 	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
-		if g.Generation <= row.Generation {
-			recorded, err := q.DiskGeneration(ctx, DiskGenerationParams{DiskID: disk, Generation: g.Generation})
-			if err == nil && subtle.ConstantTimeCompare([]byte(recorded), []byte(g.ManifestSHA256)) == 1 {
-				return nil
+		for _, name := range row.OrphanedIndexes {
+			number, sha, _ := strings.Cut(name, "-")
+			if n, err := strconv.ParseInt(number, 10, 64); err == nil {
+				orphans = append(orphans, DiskGeneration{Generation: n, IndexSHA256: sha})
 			}
-			return conflict("generation %d is already recorded", g.Generation)
 		}
-		if g.Generation != row.Generation+1 || (g.ParentGeneration != 0 && g.ParentGeneration != row.Generation) {
-			return conflict("generation %d with parent %d does not follow %d", g.Generation, g.ParentGeneration, row.Generation)
+		if g.Generation == row.Generation && row.IndexSha256 != nil && *row.IndexSha256 == g.IndexSHA256 {
+			return nil
 		}
-		// The key carries the manifest digest, so no upload can replace a
-		// recorded manifest.
-		want := fmt.Sprintf("disks/%s/manifests/%012d-%s.json", disk, g.Generation, g.ManifestSHA256)
-		if g.ManifestKey != want {
-			return invalid("manifest key %q, want %q", g.ManifestKey, want)
+		if g.Generation != row.Generation+1 {
+			return conflict("generation %d does not follow the recorded %d", g.Generation, row.Generation)
 		}
-		if err := q.InsertDiskGeneration(ctx, InsertDiskGenerationParams{
-			DiskID: disk, Generation: g.Generation, ParentGeneration: g.ParentGeneration,
-			ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256, Flat: g.Flat,
-		}); err != nil {
-			return fmt.Errorf("record generation: %w", err)
+		return q.AdvanceDisk(ctx, AdvanceDiskParams{ID: disk, Generation: g.Generation, IndexSha256: &g.IndexSHA256, AddedBytes: max(addedBytes, 0)})
+	})
+	if errors.Is(err, ErrStaleLease) {
+		if recordErr := s.queries.RecordOrphanedIndex(ctx, RecordOrphanedIndexParams{
+			ID: disk, ContainerID: container, HostID: hostRef(host), Name: indexName(g),
+		}); recordErr != nil {
+			err = errors.Join(err, fmt.Errorf("record the orphaned index: %w", recordErr))
 		}
-		return q.AdvanceDisk(ctx, AdvanceDiskParams{ID: disk, Generation: g.Generation, AddedBytes: max(g.AddedBytes, 0)})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("record disk generation: %w", err)
+	}
+	return orphans, nil
+}
+
+// indexName is where g's index is under its disk's prefix's manifests/.
+func indexName(g DiskGeneration) string { return fmt.Sprintf("%012d-%s", g.Generation, g.IndexSHA256) }
+
+// maxCollectKeys bounds the keys one CollectDisk call deletes.
+const maxCollectKeys = 1000
+
+// CollectDisk deletes keys, objects of the disk that generation, a recorded
+// one, no longer reads. The keys are deleted while the lease's row lock is
+// held: no other container can take the disk or record a generation until
+// they are gone, and a holder that lost the lease deletes nothing. Keys
+// other than the disk's frames and its indexes but the recorded one are
+// refused. An orphaned index is collected once its key is deleted.
+func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, base int64, keys []string, removedBytes int64) error {
+	if len(keys) > maxCollectKeys {
+		return invalid("collect at most %d keys at once, got %d", maxCollectKeys, len(keys))
+	}
+	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
+		if base > row.Generation {
+			return invalid("generation %d is past the recorded generation %d", base, row.Generation)
+		}
+		for _, key := range keys {
+			if !collectable(disk, row, key) {
+				return invalid("key %q is not a frame or a former index of disk %s", key, disk)
+			}
+		}
+		if len(keys) > 0 {
+			if row.Bucket == nil || row.Region == nil {
+				return invalid("disk %s has no workspace bucket", disk)
+			}
+			store, err := s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID)
+			if err != nil {
+				return err
+			}
+			if err := s.deleteKeys(ctx, store, keys); err != nil {
+				return fmt.Errorf("delete collected objects: %w", err)
+			}
+		}
+		return q.RecordDiskCollected(ctx, RecordDiskCollectedParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0), Keys: keys})
 	})
 	if err != nil {
-		return fmt.Errorf("record disk generation: %w", err)
+		return fmt.Errorf("collect disk: %w", err)
 	}
 	return nil
 }
 
-// RecordDiskCollection records bytes a collection removed and forgets
-// generations older than the newest parentless one, which no restore needs.
-func (s *Storage) RecordDiskCollection(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, removedBytes, base int64) error {
-	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, _ LockLeasedDiskRow) error {
-		if err := q.ShrinkDiskStored(ctx, ShrinkDiskStoredParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0)}); err != nil {
-			return fmt.Errorf("record collection: %w", err)
-		}
-		return q.DeleteDiskGenerationsBefore(ctx, DeleteDiskGenerationsBeforeParams{DiskID: disk, Generation: base})
-	})
-	if err != nil {
-		return fmt.Errorf("record disk collection: %w", err)
+var (
+	sha256Hex    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	collectIndex = regexp.MustCompile(`^\d{12}-[0-9a-f]{64}$`)
+	collectFrame = regexp.MustCompile(`^frames/[0-9a-f]{64}$`)
+)
+
+// collectable reports whether key names one of the disk's frames or an
+// index other than its recorded one, as the disk engine stores them.
+func collectable(disk uuid.UUID, row LockLeasedDiskRow, key string) bool {
+	rest, ok := strings.CutPrefix(key, diskPrefix(disk))
+	if !ok {
+		return false
 	}
-	return nil
+	if name, ok := strings.CutPrefix(rest, "manifests/"); ok && collectIndex.MatchString(name) {
+		return row.IndexSha256 == nil || name != indexName(DiskGeneration{Generation: row.Generation, IndexSHA256: *row.IndexSha256})
+	}
+	return collectFrame.MatchString(rest)
 }
 
-// ReleaseDisk ends a lease after the holder's final publish. It may follow
-// the container's stop, so it checks only the token.
+// ReleaseDisk ends a lease after the holder's final publish, clearing any
+// failure it recorded. It may follow the container's stop, so it checks only
+// the token.
 func (s *Storage) ReleaseDisk(ctx context.Context, container, disk uuid.UUID, token []byte) error {
 	n, err := s.queries.ReleaseDisk(ctx, ReleaseDiskParams{ID: disk, ContainerID: &container, LeaseToken: token})
 	if err != nil {
 		return fmt.Errorf("release disk: %w", err)
+	}
+	if n == 0 {
+		return ErrStaleLease
+	}
+	return nil
+}
+
+// maxFailureMessage bounds a recorded failure's message, in bytes.
+const maxFailureMessage = 4096
+
+// DiskFailure is why a holder's publish or release failed.
+type DiskFailure struct {
+	Operation apitypes.DiskOperation
+	Message   string
+}
+
+// RecordDiskFailure records the holder's latest failure, or clears it when
+// failure is nil, until the lease is released. A longer message keeps its
+// first maxFailureMessage bytes.
+func (s *Storage) RecordDiskFailure(ctx context.Context, container, disk uuid.UUID, token []byte, failure *DiskFailure) error {
+	params := SetDiskFailureParams{ID: disk, ContainerID: &container, LeaseToken: token}
+	if failure != nil {
+		message := strings.ToValidUTF8(failure.Message[:min(len(failure.Message), maxFailureMessage)], "")
+		params.Operation, params.Message = (*string)(&failure.Operation), &message
+	}
+	n, err := s.queries.SetDiskFailure(ctx, params)
+	if err != nil {
+		return fmt.Errorf("record disk failure: %w", err)
 	}
 	if n == 0 {
 		return ErrStaleLease
@@ -276,6 +375,9 @@ func diskOut(row ListDisksRow) apitypes.Disk {
 	out := apitypes.Disk{
 		Id: row.ID, Name: row.Name, SizeBytes: row.SizeBytes, StoredBytes: row.StoredBytes, Generation: row.Generation,
 		Status: status, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}
+	if row.FailedOperation != nil && row.FailureMessage != nil && row.FailedAt != nil {
+		out.Failure = &apitypes.DiskFailure{Operation: apitypes.DiskOperation(*row.FailedOperation), Message: *row.FailureMessage, FailedAt: *row.FailedAt}
 	}
 	if status != apitypes.Detached {
 		out.HolderContainerId = row.HolderContainerID

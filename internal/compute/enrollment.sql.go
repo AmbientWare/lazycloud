@@ -227,17 +227,18 @@ set session_epoch = session_epoch + 1,
     memory_bytes = $2,
     gpu_type = $3,
     gpu_count = $4,
-    boot_id = $5,
-    agent_version = $6,
-    agent_updatable = $7,
-    agent_rejected_version = $8,
+    disk_slots = $5,
+    boot_id = $6,
+    agent_version = $7,
+    agent_updatable = $8,
+    agent_rejected_version = $9,
     updating_until = null,
     phase = case when phase = 'joining' then 'ready' else phase end,
     phase_message = case when phase = 'joining' then 'Ready for workloads' else phase_message end,
     phase_at = case when phase = 'joining' then now() else phase_at end,
     last_seen_at = now(),
     updated_at = now()
-where id = $9 and state <> 'retired'
+where id = $10 and state <> 'retired'
 returning session_epoch
 `
 
@@ -246,6 +247,7 @@ type OpenHostSessionParams struct {
 	MemoryBytes          int64
 	GpuType              string
 	GpuCount             int32
+	DiskSlots            int32
 	BootID               string
 	AgentVersion         string
 	AgentUpdatable       bool
@@ -261,6 +263,7 @@ func (q *Queries) OpenHostSession(ctx context.Context, arg OpenHostSessionParams
 		arg.MemoryBytes,
 		arg.GpuType,
 		arg.GpuCount,
+		arg.DiskSlots,
 		arg.BootID,
 		arg.AgentVersion,
 		arg.AgentUpdatable,

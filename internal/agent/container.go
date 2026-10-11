@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -265,7 +266,10 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 			reason = hostproto.ExitReason_EXIT_REASON_STOPPED
 		}
 		c.log.Warn("container did not start", "error", err, "reason", reason)
-		c.exited(&hostproto.ContainerExit{Reason: reason, Message: err.Error()})
+		c.mu.Lock()
+		message := cmp.Or(c.volumeLost, err.Error())
+		c.mu.Unlock()
+		c.exited(&hostproto.ContainerExit{Reason: reason, Message: message})
 		return
 	}
 	c.mu.Lock()
@@ -401,10 +405,11 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
+	var slice string
 	var binds []mount.Mount
 	err = telemetry.Step(ctx, "agent.volumes", func(ctx context.Context) error {
 		var err error
-		binds, err = c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+		slice, binds, err = c.a.volumes.mount(ctx, c, spec)
 		return err
 	}, attribute.Int("lazycloud.volumes", len(spec.GetVolumes())))
 	if err != nil {
@@ -437,7 +442,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 		}
 	}
 	err = telemetry.Step(ctx, "agent.create", func(ctx context.Context) error {
-		return c.a.createAndStart(ctx, c, spec, runtime, binds, gpus, restore)
+		return c.a.createAndStart(ctx, c, spec, runtime, slice, binds, gpus, restore)
 	}, attribute.Bool("lazycloud.restore", restore != nil))
 	if err != nil {
 		return err
@@ -618,11 +623,10 @@ func (c *container) cleanup(ctx context.Context) {
 	}
 	c.control.CloseIdleConnections()
 	c.ports.CloseIdleConnections()
-	c.a.volumes.release(c.id)
-	c.a.volumes.releaseBuckets(ctx, c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}
+	c.a.volumes.release(ctx, c.id)
 	if c.checkpointable {
 		if err := c.a.removeContainer(ctx, c.holderName()); err != nil {
 			c.log.Warn("removing the network holder failed", "error", err)
@@ -655,8 +659,8 @@ func (c *container) detach() {
 	}
 }
 
-// failVolume stops a container whose volume mount died; its exit reports
-// why.
+// failVolume stops a container whose volume mount died, or its start while
+// it prepares; its exit reports why.
 func (c *container) failVolume(ctx context.Context, reason string) {
 	c.mu.Lock()
 	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
@@ -664,7 +668,11 @@ func (c *container) failVolume(ctx context.Context, reason string) {
 		return
 	}
 	c.volumeLost = reason
+	started := c.started
 	c.mu.Unlock()
+	if !started {
+		c.cancelWork()
+	}
 	if err := c.a.stopDocker(ctx, c.dockerName(), 0); err != nil {
 		c.log.Warn("stopping a container whose volume mount died failed", "error", err)
 	}

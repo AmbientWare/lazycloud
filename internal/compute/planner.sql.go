@@ -358,6 +358,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(b.image_build_id), '[]'::jsonb)::jsonb as gpus,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
+       jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -366,7 +367,7 @@ from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
 left join releases r on r.id = b.release_id
-group by 1, 2, 3, 4, 5, 6, 7, 8, 9
+group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 order by 4, 5, 6, 2 desc, 3 desc
 `
 
@@ -380,6 +381,7 @@ type PendingDemandRow struct {
 	Preemptible  bool
 	Gpus         []byte
 	GpuCount     int32
+	Disks        int32
 	Ids          []uuid.UUID
 	Bought       []uuid.UUID
 	Traceparents []string
@@ -409,6 +411,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 			&i.Preemptible,
 			&i.Gpus,
 			&i.GpuCount,
+			&i.Disks,
 			&i.Ids,
 			&i.Bought,
 			&i.Traceparents,
@@ -476,6 +479,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.rightsize_refused_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
+       coalesce(used.disks, 0)::int as used_disks,
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
        coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
@@ -485,6 +489,7 @@ left join lateral (
            sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_cpu,
            sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_memory,
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
            count(*) as containers, max(c.assigned_at) as busy_since
     from containers c
     left join releases r on r.id = c.release_id
@@ -529,6 +534,7 @@ type PlannerHostsRow struct {
 	UsedMemory            int64
 	UsedGpus              int32
 	Containers            int32
+	UsedDisks             int32
 	TolerantCpu           int64
 	TolerantMemory        int64
 	BusySince             time.Time
@@ -582,6 +588,7 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.UsedMemory,
 			&i.UsedGpus,
 			&i.Containers,
+			&i.UsedDisks,
 			&i.TolerantCpu,
 			&i.TolerantMemory,
 			&i.BusySince,

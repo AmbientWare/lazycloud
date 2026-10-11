@@ -137,7 +137,7 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 		}
 		created, err := q.CreatePendingPodContainers(ctx, CreatePendingPodContainersParams{
 			WorkspaceID: row.WorkspaceID, ReleaseID: row.ReleaseID,
-			CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes, GpuCount: row.GpuCount,
+			CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters), GpuCount: row.GpuCount,
 			RateClass:       string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			KeepWarmSeconds: keepWarm, BlockNetwork: row.BlockNetwork, AllowList: row.AllowList,
 			Count:       int32(count), //nolint:gosec // Bounded by the pod's count.
@@ -268,21 +268,11 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 	return nil
 }
 
-// WakeCause is what asks a pod for a container.
-type WakeCause string
-
-const (
-	// WakeConnection is a connection arriving at the pod.
-	WakeConnection WakeCause = "connection"
-	// WakeStart is someone starting the pod, which retries a release that
-	// stopped after failed starts or failed to load: the cause may have
-	// been fixed outside a redeploy.
-	WakeStart WakeCause = "start"
-)
-
 // WakePod asks for a container of an active pod now, as a connection or a
-// devbox start does.
-func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, cause WakeCause) error {
+// devbox start does, and retries its release if it stopped starting. It
+// returns the Failure RetryStarts holds the release on, or nil.
+func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) (*Failure, error) {
+	var held *Failure
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		row, _, err := e.lockPod(ctx, q, workspace, workload)
@@ -298,19 +288,18 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 		if row.ActiveReleaseID == nil {
 			return nil
 		}
-		switch cause {
-		case WakeStart:
-			if err := q.RetryFailedRelease(ctx, RetryFailedReleaseParams{ID: *row.ActiveReleaseID, StartFailureLimit: startFailureLimit}); err != nil {
-				return fmt.Errorf("reset start failures: %w", err)
-			}
-		case WakeConnection:
+		release := *row.ActiveReleaseID
+		retries, err := RetryStarts(ctx, tx, []uuid.UUID{release})
+		if err != nil {
+			return err
 		}
-		return database.Notify(ctx, tx, database.ChannelExecution, row.ActiveReleaseID.String())
+		held = retries[release]
+		return database.Notify(ctx, tx, database.ChannelExecution, release.String())
 	})
 	if err != nil {
-		return fmt.Errorf("wake pod: %w", err)
+		return nil, fmt.Errorf("wake pod: %w", err)
 	}
-	return nil
+	return held, nil
 }
 
 // ParkPod stops a pod's serve containers, starting ones included, and keeps

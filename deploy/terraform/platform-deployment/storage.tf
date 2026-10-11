@@ -1,7 +1,7 @@
 # objects holds sources, artifacts and build contexts; deploy holds the
 # chart values; the layer buckets below hold converted images. Workspace
-# buckets (<prefix>-<workspace id>) hold volumes and disks; the server
-# creates them, so they stay outside Terraform.
+# buckets (<prefix>-<account id>-<workspace id>) hold volumes and disks;
+# the server creates and deletes them, so they stay outside Terraform.
 locals {
   workspace_bucket_prefix = "${var.deployment}-workspace"
   workspace_bucket_arn    = "${local.arn_prefix}:s3:::${local.workspace_bucket_prefix}-*"
@@ -51,11 +51,17 @@ resource "aws_iam_role_policy" "workspace_storage" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = ["s3:ListBucket", "s3:ListBucketMultipartUploads"], Resource = local.workspace_bucket_arn },
       {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
-        Resource = "${local.workspace_bucket_arn}/*"
+        Effect    = "Allow"
+        Action    = ["s3:ListBucket", "s3:ListBucketMultipartUploads"]
+        Resource  = local.workspace_bucket_arn
+        Condition = { StringEquals = { "s3:ResourceAccount" = local.account_id } }
+      },
+      {
+        Effect    = "Allow"
+        Action    = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+        Resource  = "${local.workspace_bucket_arn}/*"
+        Condition = { StringEquals = { "s3:ResourceAccount" = local.account_id } }
       },
     ]
   })

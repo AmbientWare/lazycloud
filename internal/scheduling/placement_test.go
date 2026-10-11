@@ -126,6 +126,43 @@ func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
 	}
 }
 
+// A container whose disk was just released goes back to the host that held
+// it, whose frame cache still holds the disk, and each disk takes one of a
+// host's disk slots.
+func TestDisksReturnToTheirWarmHostWithinItsSlots(t *testing.T) {
+	pool := dbtest.New(t)
+	s := newScheduling(pool)
+	tight := newHost(t, pool, 2000, 2*gib, 0)
+	warm := newHost(t, pool, 8000, 8*gib, 0)
+	exec(t, pool, "update hosts set disk_slots = 1")
+	r := newRelease(t, pool)
+	exec(t, pool, `update releases set spec = '{"disks":[{"name":"root","size_bytes":1073741824,"mount_path":"/"}]}' where id = $1`, r.id)
+	var holder uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, host_id, stop_reason, stopped_at)
+values ($1, $2, 'stopped', 1, 1000, $3, $4, 'stopped', now()) returning id`, r.workspace, r.id, gib, warm).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, pool, `insert into disks (workspace_id, name, size_bytes, holder_container_id, lease_token, released_at)
+values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.workspace, holder)
+	first := pendingContainer(t, pool, r, 1000, gib, 2*time.Minute)
+	second := pendingContainer(t, pool, r, 1000, gib, time.Minute)
+	third := pendingContainer(t, pool, r, 1000, gib, 0)
+
+	if result := place(t, s); result.Assigned != 2 {
+		t.Fatalf("assigned %d, want one per host's disk slot", result.Assigned)
+	}
+	for id, want := range map[uuid.UUID]*uuid.UUID{first: &warm, second: &tight, third: nil} {
+		var host *uuid.UUID
+		if err := pool.QueryRow(t.Context(), "select host_id from containers where id = $1", id).Scan(&host); err != nil {
+			t.Fatal(err)
+		}
+		if (host == nil) != (want == nil) || host != nil && *host != *want {
+			t.Errorf("container %s went to %v, want %v", id, host, want)
+		}
+	}
+}
+
 func TestPackChoosesTheTightestFit(t *testing.T) {
 	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
 	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}
@@ -143,7 +180,8 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 // Spot-tolerant work takes a Spot host before a tighter on-demand one and
 // borrows on-demand room only while an on-demand host still keeps the
 // warm floor free; work that cannot run on Spot is placed first, so
-// borrowed room never crowds it out.
+// borrowed room never crowds it out. The host holding a container's disk
+// wins only among hosts it may take.
 func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 	host := func(market compute.Market, freeCPU cpu.Millis) compute.HostCapacity {
 		return compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, Market: market,
@@ -151,6 +189,12 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 	}
 	work := func(cpus cpu.Millis, tolerant bool) PendingContainersRow {
 		return PendingContainersRow{ID: uuid.New(), CpuMillis: cpus, MemoryBytes: gib, Preemptible: tolerant}
+	}
+	onDemand, spot := host(compute.MarketOnDemand, 1000), host(compute.MarketSpot, 4000)
+	diskOn := func(h compute.HostCapacity) PendingContainersRow {
+		w := work(1000, true)
+		w.DiskHost = (*uuid.UUID)(&h.Host)
+		return w
 	}
 	for _, c := range []struct {
 		name    string
@@ -166,6 +210,10 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 			[]PendingContainersRow{work(1000, true), work(1000, true)}, []int{0, -1}},
 		{"work that cannot run on Spot first", []compute.HostCapacity{host(compute.MarketOnDemand, 2000)},
 			[]PendingContainersRow{work(1000, true), work(2000, false)}, []int{-1, 0}},
+		{"a disk's host before a tighter one", []compute.HostCapacity{host(compute.MarketSpot, 2000), spot},
+			[]PendingContainersRow{diskOn(spot)}, []int{1}},
+		{"no borrowing the last free floor for a disk's host", []compute.HostCapacity{onDemand, spot},
+			[]PendingContainersRow{diskOn(onDemand)}, []int{1}},
 	} {
 		ids, hosts := pack(c.hosts, c.pending)
 		placed := map[uuid.UUID]uuid.UUID{}

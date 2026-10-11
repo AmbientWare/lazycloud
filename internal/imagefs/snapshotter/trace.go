@@ -76,7 +76,7 @@ func (t *tracer) record(l *layer, frame int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.expireLocked(time.Now())
-	k := frameKey{layer: l.digest, frame: frame}
+	k := l.key(frame)
 	for _, tr := range t.traces {
 		position, ok := tr.layers[l.digest]
 		if _, read := tr.seen[k]; !ok || read || len(tr.result.Reads) >= imagefs.MaxTraceReads {
@@ -178,9 +178,9 @@ func (c *frameCache) prefetch(name string, reads []frameKey, parent oteltrace.Sp
 		defer stopWaiting()
 		// seen holds the layers found mounted; one gone since is skipped.
 		seen := make(map[imagefs.Digest]bool)
-		fetched := c.loadEach(ctx, func(yield func(*layer, int) bool) {
+		fetched := c.loadEach(ctx, func(yield func(frameSource, int) bool) {
 			for _, r := range reads {
-				l := c.awaitMount(mounting, r.layer, seen)
+				l := c.awaitMount(mounting, imagefs.Digest(r.object), seen)
 				if ctx.Err() != nil || (l != nil && r.frame < len(l.index.Frames) && !yield(l, r.frame)) {
 					return
 				}

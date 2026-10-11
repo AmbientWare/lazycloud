@@ -5133,7 +5133,7 @@ components:
 
     CloudBucketSpec:
       type: object
-      required: [bucket]
+      required: [bucket, access_key_secret, secret_key_secret]
       properties:
         bucket:
           type: string
@@ -5369,6 +5369,24 @@ components:
       type: string
       enum: [detached, attached, saving]
 
+    DiskOperation:
+      description: >-
+        publish saves a generation while the container runs; release saves the
+        last one and frees the disk after the container stops.
+      type: string
+      enum: [publish, release]
+
+    DiskFailure:
+      description: >-
+        Why the holder's last publish or release failed. It clears once a later
+        one succeeds; until a release succeeds the disk stays saving.
+      type: object
+      required: [operation, message, failed_at]
+      properties:
+        operation: { $ref: "#/components/schemas/DiskOperation" }
+        message: { type: string }
+        failed_at: { type: string, format: date-time }
+
     Disk:
       type: object
       required: [id, name, size_bytes, stored_bytes, generation, status, created_at, updated_at]
@@ -5394,6 +5412,7 @@ components:
         holder:
           description: The workload whose container holds the disk.
           allOf: [{ $ref: "#/components/schemas/WorkloadRef" }]
+        failure: { $ref: "#/components/schemas/DiskFailure" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -6372,7 +6391,7 @@ components:
       description: >-
         requests: endpoint or ASGI requests were recorded. A requests change
         counts one deployment's requests and names no resource.
-      enum: [apps, deployments, tasks, requests, containers, storage.secrets, storage.volumes, usage]
+      enum: [apps, deployments, tasks, requests, containers, storage.secrets, storage.volumes, storage.disks, usage]
 
     ChangeKind:
       type: string
@@ -8051,6 +8070,7 @@ components:
         stored_bytes: { type: integer, format: int64 }
         generation: { type: integer, format: int64 }
         status: { $ref: "#/components/schemas/DiskStatus" }
+        failure: { $ref: "#/components/schemas/DiskFailure" }
 
     CreateInstanceRequest:
       description: Names a release, or a memory snapshot whose release the instance runs.

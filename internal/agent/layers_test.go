@@ -28,7 +28,7 @@ func serveSnapshotter(t *testing.T, socket string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ready, done := make(chan struct{}), make(chan error, 1)
 	cfg := snapshotter.Config{
-		Root: filepath.Join(filepath.Dir(socket), "root"), CacheBytes: 64 << 20, Fetches: 4,
+		Root: filepath.Join(filepath.Dir(socket), "root"), CacheDir: filepath.Join(filepath.Dir(socket), "cache"), CacheBytes: 64 << 20, Fetches: 4,
 		HTTP: http.DefaultClient, Logger: slog.New(slog.DiscardHandler),
 	}
 	go func() { done <- snapshotter.Serve(ctx, cfg, socket, func() { close(ready) }) }()

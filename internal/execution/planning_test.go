@@ -12,7 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -210,6 +212,41 @@ func TestPlanScalesWithDemandWithinLimits(t *testing.T) {
 	}
 	if stopped != 3 {
 		t.Fatalf("%d pending containers stopped after demand ended, want 3", stopped)
+	}
+}
+
+// TestContainersReserveMemoryForTheirMounters: a container's memory, which
+// placement and billing read, is its spec's plus one mounter's share for its
+// platform volumes and one per distinct cloud bucket; its start tells the
+// host that share.
+func TestContainersReserveMemoryForTheirMounters(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	bucket := func(name, bucket, prefix string) string {
+		return `{"name": "` + name + `", "cloud_bucket": {"bucket": "` + bucket + `", "prefix": "` + prefix +
+			`", "access_key_secret": "K", "secret_key_secret": "S"}}`
+	}
+	f := newRelease(t, pool, `{"volumes": [{"name": "a"}, {"name": "b"}, `+
+		bucket("m1", "models", "x/")+`, `+bucket("m2", "models", "y/")+`, `+bucket("o", "other", "")+`]}`)
+	queueTasks(t, pool, f, 1, 0)
+	plan(t, e)
+	host := newHost(t, pool)
+	var memory int64
+	if err := pool.QueryRow(t.Context(), `
+update containers set state = 'starting', host_id = $2, assigned_at = now() where release_id = $1
+returning memory_bytes`, f.release, host).Scan(&memory); err != nil {
+		t.Fatal(err)
+	}
+	reserve := int64(3 * hostproto.MounterMemoryBytes)
+	if memory != 512<<20+reserve {
+		t.Fatalf("container memory %d MiB, want the spec's 512 MiB and three mounters'", memory>>20)
+	}
+	commands, err := e.HostCommands(t.Context(), compute.HostID(host))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands.Start) != 1 || commands.Start[0].MountReserveBytes != reserve || commands.Start[0].MemoryBytes != memory {
+		t.Fatalf("start commands %+v, want one reserving %d of its %d bytes for mounters", commands.Start, reserve, memory)
 	}
 }
 

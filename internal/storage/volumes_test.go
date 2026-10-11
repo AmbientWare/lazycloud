@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -118,7 +119,7 @@ func TestBrowserUploadsFromTheDashboard(t *testing.T) {
 	var s *Storage
 	cfg := withLinks(t, func() *Storage { return s })
 	cfg.BrowserOrigin = "https://dashboard.test/"
-	s = NewStorage(f.pool, cfg)
+	s = NewStorage(f.pool, cfg, compute.NewCompute(f.pool, nil, compute.Config{}))
 	if _, err := s.CreateVolume(ctx, f.ws, "data"); err != nil {
 		t.Fatal(err)
 	}

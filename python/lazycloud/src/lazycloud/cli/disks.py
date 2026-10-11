@@ -11,6 +11,7 @@ from lazycloud.abstractions.disk import Disk
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import workspace_storage
+from lazycloud.contracts import api
 from lazycloud.terminal import humanize_bytes
 
 disk_app = typer.Typer(help="Manage durable disks.")
@@ -33,12 +34,31 @@ def disk_list(
             humanize_bytes(item.stored_bytes),
             str(item.generation),
             timestamp(item.updated_at),
+            disk_failure(item.failure),
         ]
         for item in disks
     ]
     console.print(
-        table("Disks", ["name", "status", "size", "stored", "generation", "updated"], rows)
+        table(
+            "Disks",
+            ["name", "status", "size", "stored", "generation", "updated", "last failure"],
+            rows,
+        )
     )
+
+
+_FAILURE_LABELS = {
+    api.DiskOperation.publish: "Saving while running failed",
+    api.DiskOperation.release: "Saving after stop failed",
+}
+
+
+def disk_failure(failure: api.DiskFailure | None) -> str:
+    """Why the holder's last save of a disk failed, or "" since it last succeeded."""
+    if failure is None:
+        return ""
+    label = _FAILURE_LABELS[failure.operation]
+    return f"{label} at {timestamp(failure.failed_at)}: {failure.message}"
 
 
 @disk_app.command("delete", help="Delete a disk and everything written to it.")
