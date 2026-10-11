@@ -287,11 +287,11 @@ func TestSnapshotterDeathLosesTheAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.engine.Detach(context.Background(), diskID) })
-	if _, err := h.engine.Status(diskID); err != nil {
+	if _, _, err := h.engine.Status(diskID); err != nil {
 		t.Fatalf("a served disk's status: %v", err)
 	}
 	h.stop()
-	_, err := h.engine.Status(diskID)
+	_, _, err := h.engine.Status(diskID)
 	if !errors.Is(err, ErrAttachmentLost) || !bytes.Contains([]byte(err.Error()), []byte("snapshotter")) {
 		t.Fatalf("status after the snapshotter stopped: %v, want ErrAttachmentLost naming the snapshotter", err)
 	}
@@ -413,6 +413,45 @@ func TestDetachDropsTheGrantOfADiskNeverServed(t *testing.T) {
 	}
 	if _, _, err := h.bases.DiskReads(t.Context(), diskID); status.Code(err) != codes.NotFound {
 		t.Fatalf("after the detach the snapshotter answers %v, want NotFound", err)
+	}
+}
+
+// A stalled disk's writers wait until it resumes, and it still seals. It
+// needs root and the nbd module.
+func TestStalledDiskWritesWaitUntilResumed(t *testing.T) {
+	if err := Check(); err != nil {
+		t.Skip(err)
+	}
+	ctx := t.Context()
+	diskID := uuid.NewString()
+	h := newHost(t, 64*frame)
+	mountpoint := filepath.Join(t.TempDir(), "mnt")
+	h.grant(t, testStore(t), diskID)
+	t.Cleanup(func() { _ = h.engine.Detach(context.Background(), diskID) })
+	if _, err := h.engine.Attach(ctx, AttachRequest{DiskID: diskID, SizeBytes: 1 << 30, Mountpoint: mountpoint}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.Stall(ctx, diskID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, stalled, err := h.engine.Status(diskID); err != nil || !stalled {
+		t.Fatalf("a stalled disk's status: stalled %v, %v", stalled, err)
+	}
+	wrote := make(chan error, 1)
+	go func() { wrote <- os.WriteFile(filepath.Join(mountpoint, "data"), []byte("waited"), 0o600) }()
+	select {
+	case err := <-wrote:
+		t.Fatalf("a write to a stalled disk finished: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := h.engine.Seal(ctx, diskID); err != nil {
+		t.Fatalf("sealing a stalled disk: %v", err)
+	}
+	if err := h.engine.Stall(ctx, diskID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
 	}
 }
 

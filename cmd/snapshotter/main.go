@@ -15,6 +15,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
@@ -69,11 +71,21 @@ func run(args []string) int {
 	// Every fetch slot keeps its connection to the store between frames.
 	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
 	transport.MaxIdleConnsPerHost = fetches
+	// Each disk's writes stall at its dirty budget, so the cache keeps
+	// every disk slot's budget free for them.
+	var volume unix.Statfs_t
+	if err := os.MkdirAll(layersource.CacheDir, 0o700); err != nil {
+		logger.Error("creating the frame cache directory failed", "error", err)
+		return 1
+	}
+	if err := unix.Statfs(layersource.CacheDir, &volume); err != nil {
+		logger.Error("reading the data volume's size failed", "error", err)
+		return 1
+	}
+	reserve := hostproto.DiskSlots(int64(volume.Blocks)*volume.Bsize) * hostproto.DiskDirtyBytes //nolint:gosec // Block counts fit an int64.
 	cfg := snapshotter.Config{
 		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: hostproto.FrameCacheBytes,
-		// A disk's writes past its half budget wait for a publish; the
-		// cache keeps one budget free for them.
-		ReserveBytes: hostproto.DiskDirtyBytes, Fetches: fetches, FillBytes: fillBytes,
+		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {

@@ -116,9 +116,7 @@ func diskSlots(diskErr error) int32 {
 	if err := unix.Statfs(layersource.DiskRoot, &st); err != nil {
 		return 0
 	}
-	total := int64(st.Blocks) * st.Bsize //nolint:gosec // Block counts fit an int64.
-	// Rounded, since the filesystem keeps a little of the volume for itself.
-	return int32(max(0, (total-hostproto.FrameCacheBytes+hostproto.DiskDirtyBytes/2)/hostproto.DiskDirtyBytes)) //nolint:gosec // Bounded by the volume.
+	return int32(hostproto.DiskSlots(int64(st.Blocks) * st.Bsize)) //nolint:gosec // Bounded by the volume.
 }
 
 // attachDisks leases and attaches the container's disks and returns their
@@ -261,11 +259,13 @@ func (a *Agent) loadLeases(container string) ([]*heldDisk, error) {
 // publishLoop checks the container's disks every statusEvery and publishes
 // each one every publishEvery, once it holds half its dirty budget, and at
 // once on a Spot notice. A disk that stopped being served fails the
-// container with the cause.
+// container with the cause. A disk holding its whole budget unpublished,
+// as when publishes fail, stalls its writers until a publish frees room or
+// the container stops.
 func (c *container) publishLoop(ctx context.Context) {
 	ticker := time.NewTicker(statusEvery)
 	defer ticker.Stop()
-	reclaiming := c.a.reclaiming
+	reclaiming, stopping := c.a.reclaiming, c.claims.Done()
 	due := time.Now().Add(publishEvery)
 	for {
 		now := false
@@ -275,6 +275,8 @@ func (c *container) publishLoop(ctx context.Context) {
 		case <-ticker.C:
 		case <-reclaiming:
 			reclaiming, now = nil, true
+		case <-stopping:
+			stopping = nil
 		}
 		if time.Now().After(due) {
 			now, due = true, time.Now().Add(publishEvery)
@@ -283,34 +285,50 @@ func (c *container) publishLoop(ctx context.Context) {
 		disks := append([]*heldDisk(nil), c.disks.disks...)
 		c.disks.mu.Unlock()
 		for _, d := range disks {
-			dirty, err := c.a.diskEngine.Status(d.ID)
-			lost := errors.Is(err, diskengine.ErrAttachmentLost)
-			switch {
-			case lost:
-				c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
-			case err != nil:
-				c.log.Warn("reading a disk's status failed", "disk", d.Name, "error", err)
-				continue
-			}
-			if !now && !lost && dirty < hostproto.DiskDirtyBytes/2 {
-				if err := c.a.grantRead(ctx, c.id, d); err != nil {
-					c.log.Warn("granting a disk's reads failed", "disk", d.Name, "error", err)
-				}
-				continue
-			}
-			err = c.a.publish(ctx, c.id, d, false)
-			if ctx.Err() != nil {
+			if !c.tendDisk(ctx, d, now) {
 				return
 			}
-			if err != nil {
-				c.log.Warn("publishing disk failed; retrying next round", "disk", d.Name, "error", err)
-			}
-			if errors.Is(err, diskengine.ErrAttachmentLost) {
-				c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
-			}
-			c.a.reportDisk(ctx, c.id, d, hostproto.DiskOperation_DISK_OPERATION_PUBLISH, err)
 		}
 	}
+}
+
+// tendDisk publishes d when due and stalls or resumes its writers. It
+// reports false once ctx has ended.
+func (c *container) tendDisk(ctx context.Context, d *heldDisk, now bool) bool {
+	dirty, stalled, err := c.a.diskEngine.Status(d.ID)
+	lost := errors.Is(err, diskengine.ErrAttachmentLost)
+	switch {
+	case lost:
+		c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
+	case err != nil:
+		c.log.Warn("reading a disk's status failed", "disk", d.Name, "error", err)
+		return true
+	}
+	if now || lost || dirty >= hostproto.DiskDirtyBytes/2 {
+		err = c.a.publish(ctx, c.id, d, false)
+		if ctx.Err() != nil {
+			return false
+		}
+		if err != nil {
+			c.log.Warn("publishing disk failed; retrying next round", "disk", d.Name, "error", err)
+		}
+		if errors.Is(err, diskengine.ErrAttachmentLost) {
+			c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
+		}
+		c.a.reportDisk(ctx, c.id, d, hostproto.DiskOperation_DISK_OPERATION_PUBLISH, err)
+		if dirty, stalled, err = c.a.diskEngine.Status(d.ID); err != nil {
+			return true
+		}
+	} else if err := c.a.grantRead(ctx, c.id, d); err != nil {
+		c.log.Warn("granting a disk's reads failed", "disk", d.Name, "error", err)
+	}
+	// A stopping container's writers must finish for it to stop.
+	if stall := dirty >= hostproto.DiskDirtyBytes && c.claims.Err() == nil; stall != stalled {
+		if err := c.a.diskEngine.Stall(ctx, d.ID, stall); err != nil {
+			c.log.Warn("stalling or resuming a disk's writes failed", "disk", d.Name, "stall", stall, "error", err)
+		}
+	}
+	return true
 }
 
 // publish seals what d's container wrote, uploads it as the next

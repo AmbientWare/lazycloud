@@ -129,11 +129,13 @@ type diskState struct {
 	Unformatted bool `json:"unformatted,omitempty"`
 	// GrowFilesystem is true while the disk has grown and its ext4 has not
 	// yet been resized to fill it.
-	GrowFilesystem bool            `json:"grow_filesystem,omitempty"`
-	Pending        *pendingPublish `json:"pending_publish,omitempty"`
-	Collect        *collection     `json:"collect,omitempty"`
-	Attachment     *attachment     `json:"attachment,omitempty"`
-	LastUsedAt     time.Time       `json:"last_used_at"`
+	GrowFilesystem bool `json:"grow_filesystem,omitempty"`
+	// Stalled is true while Stall keeps the attached filesystem frozen.
+	Stalled    bool            `json:"stalled,omitempty"`
+	Pending    *pendingPublish `json:"pending_publish,omitempty"`
+	Collect    *collection     `json:"collect,omitempty"`
+	Attachment *attachment     `json:"attachment,omitempty"`
+	LastUsedAt time.Time       `json:"last_used_at"`
 }
 
 func (s *diskState) head() layer { return s.Layers[len(s.Layers)-1] }

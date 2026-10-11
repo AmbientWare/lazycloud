@@ -354,7 +354,7 @@ func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 	} else {
 		state.HeadFresh = false
 	}
-	state.Attachment = nil
+	state.Attachment, state.Stalled = nil, false
 	state.LastUsedAt = time.Now().UTC()
 	return saveState(p, state)
 }

@@ -69,38 +69,69 @@ func attachmentLost(p diskPaths, state *diskState) error {
 }
 
 // Status reports the bytes the disk's layers hold that no committed
-// generation does, which the disk's dirty budget bounds, and an
-// ErrAttachmentLost saying what went when an attachment stopped working.
-// It takes no lock and changes nothing.
-func (e *Engine) Status(diskID string) (int64, error) {
+// generation does, which the disk's dirty budget bounds, whether Stall
+// stalls its writes, and an ErrAttachmentLost saying what went when an
+// attachment stopped working. It takes no lock and changes nothing.
+func (e *Engine) Status(diskID string) (dirty int64, stalled bool, err error) {
 	p, err := e.paths(diskID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	state, err := requireState(p)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if state.Attachment != nil && state.Attachment.Mounted {
 		if err := attachmentLost(p, state); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
-	var dirty int64
 	for _, l := range state.Layers {
 		n, err := allocatedBytes(p.layerPath(l))
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		dirty += n
 	}
-	return dirty, nil
+	return dirty, state.Stalled, nil
+}
+
+// Stall freezes, or with stall false thaws, the filesystem of an attached
+// disk, so its writers wait while it holds all the unpublished writes its
+// budget allows. Seal and Publish work on a stalled disk; Detach thaws it.
+func (e *Engine) Stall(ctx context.Context, diskID string, stall bool) error {
+	p, err := e.paths(diskID)
+	if err != nil {
+		return err
+	}
+	lock, err := lockDisk(ctx, p)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	state, err := requireState(p)
+	if err != nil {
+		return err
+	}
+	if state.Stalled == stall || state.Attachment == nil || !state.Attachment.Mounted {
+		return nil
+	}
+	// Recorded first: a thaw of a filesystem not frozen succeeds.
+	state.Stalled = stall
+	if err := saveState(p, state); err != nil {
+		return err
+	}
+	if stall {
+		return freezeFilesystem(state.Attachment.Mountpoint)
+	}
+	return thawIfFrozen(state.Attachment.Mountpoint)
 }
 
 // seal flushes the mounted filesystem and, when the head took writes, freezes
 // it, so everything it wrote reaches the head and nothing more arrives,
 // switches the daemon to a new head and thaws. Writes still in the page cache
-// reach the device in the flush, so an idle disk is never frozen.
+// reach the device in the flush, so an idle disk is never frozen. A stalled
+// disk is frozen already and stays so.
 func seal(ctx context.Context, p diskPaths, state *diskState) error {
 	client, err := dialQMP(ctx, p.qmpSocket())
 	if err != nil {
@@ -108,6 +139,10 @@ func seal(ctx context.Context, p diskPaths, state *diskState) error {
 	}
 	err = func() error {
 		if err := reconcileHead(ctx, p, state, client); err != nil {
+			return err
+		}
+		if state.Stalled {
+			_, err := sealFrozen(ctx, p, state, client)
 			return err
 		}
 		mountpoint := state.Attachment.Mountpoint

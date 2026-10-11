@@ -15,3 +15,10 @@ const (
 	// baseline writes, so a disk stays within it.
 	DiskDirtyBytes = 4 << 30
 )
+
+// DiskSlots is how many disks a data volume of volumeBytes holds room for
+// beside the frame cache, rounded, since the filesystem keeps a little of
+// the volume for itself.
+func DiskSlots(volumeBytes int64) int64 {
+	return max(0, (volumeBytes-FrameCacheBytes+DiskDirtyBytes/2)/DiskDirtyBytes)
+}
