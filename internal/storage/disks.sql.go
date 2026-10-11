@@ -80,7 +80,7 @@ func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveD
 
 const advanceDisk = `-- name: AdvanceDisk :exec
 update disks
-set generation = $1, index_sha256 = $2, stored_bytes = stored_bytes + $3, orphaned_indexes = '{}',
+set generation = $1, index_sha256 = $2, stored_bytes = stored_bytes + $3,
     failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = $4
 `
@@ -438,6 +438,35 @@ func (q *Queries) MarkDiskDeleting(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const recordDiskCollected = `-- name: RecordDiskCollected :exec
+update disks
+set stored_bytes = greatest(stored_bytes - $1, 0),
+    orphaned_indexes = array(select n from unnest(orphaned_indexes) n where 'disks/' || id || '/manifests/' || n <> all($2::text[])),
+    updated_at = now()
+where id = $3 and holder_container_id = $4 and lease_token = $5
+`
+
+type RecordDiskCollectedParams struct {
+	RemovedBytes int64
+	Keys         []string
+	ID           uuid.UUID
+	ContainerID  *uuid.UUID
+	LeaseToken   []byte
+}
+
+// The holder deleted keys holding removed_bytes of the disk's frames; an
+// orphaned index whose key went is collected.
+func (q *Queries) RecordDiskCollected(ctx context.Context, arg RecordDiskCollectedParams) error {
+	_, err := q.db.Exec(ctx, recordDiskCollected,
+		arg.RemovedBytes,
+		arg.Keys,
+		arg.ID,
+		arg.ContainerID,
+		arg.LeaseToken,
+	)
+	return err
+}
+
 const recordOrphanedIndex = `-- name: RecordOrphanedIndex :exec
 update disks d set orphaned_indexes = array_append(d.orphaned_indexes, $1::text)
 from containers c
@@ -514,28 +543,6 @@ func (q *Queries) SetDiskFailure(ctx context.Context, arg SetDiskFailureParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const shrinkDiskStored = `-- name: ShrinkDiskStored :exec
-update disks set stored_bytes = greatest(stored_bytes - $1, 0), updated_at = now()
-where id = $2 and holder_container_id = $3 and lease_token = $4
-`
-
-type ShrinkDiskStoredParams struct {
-	RemovedBytes int64
-	ID           uuid.UUID
-	ContainerID  *uuid.UUID
-	LeaseToken   []byte
-}
-
-func (q *Queries) ShrinkDiskStored(ctx context.Context, arg ShrinkDiskStoredParams) error {
-	_, err := q.db.Exec(ctx, shrinkDiskStored,
-		arg.RemovedBytes,
-		arg.ID,
-		arg.ContainerID,
-		arg.LeaseToken,
-	)
-	return err
 }
 
 const takeDiskLease = `-- name: TakeDiskLease :exec

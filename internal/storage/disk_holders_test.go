@@ -103,8 +103,9 @@ func TestDeletingTheHolderContainerEndsTheLease(t *testing.T) {
 }
 
 // TestSupersededUploadsGoToTheHolder: a generation a container uploads after
-// losing the disk is handed to the holder that records the next one, which
-// may collect its index; the recorded index stays uncollectable.
+// losing the disk is handed to the holder that records the next one, also
+// on a replay, until it collects its index; the recorded index stays
+// uncollectable.
 func TestSupersededUploadsGoToTheHolder(t *testing.T) {
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
@@ -127,9 +128,12 @@ func TestSupersededUploadsGoToTheHolder(t *testing.T) {
 	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, lost, 100); !errors.Is(err, ErrStaleLease) {
 		t.Fatalf("an upload after losing the disk: %v", err)
 	}
-	orphans, err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(2), 100)
-	if err != nil || !slices.Equal(orphans, []DiskGeneration{lost}) {
-		t.Fatalf("the holder's next generation returned orphans %v, %v; want the lost upload", orphans, err)
+	// A replay, as after a lost reply, returns them again.
+	for range 2 {
+		orphans, err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(2), 100)
+		if err != nil || !slices.Equal(orphans, []DiskGeneration{lost}) {
+			t.Fatalf("the holder's next generation returned orphans %v, %v; want the lost upload", orphans, err)
+		}
 	}
 	key := func(g DiskGeneration) string {
 		return fmt.Sprintf("disks/%s/manifests/%012d-%s", next.Disk, g.Generation, g.IndexSHA256)

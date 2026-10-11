@@ -49,7 +49,7 @@ for update of d;
 
 -- name: AdvanceDisk :exec
 update disks
-set generation = @generation, index_sha256 = @index_sha256, stored_bytes = stored_bytes + @added_bytes, orphaned_indexes = '{}',
+set generation = @generation, index_sha256 = @index_sha256, stored_bytes = stored_bytes + @added_bytes,
     failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id;
 
@@ -75,8 +75,13 @@ set failed_operation = sqlc.narg(operation)::text, failure_message = sqlc.narg(m
     failed_at = case when sqlc.narg(operation)::text is null then null else now() end, updated_at = now()
 where id = @id and holder_container_id = @container_id and lease_token = @lease_token and released_at is null;
 
--- name: ShrinkDiskStored :exec
-update disks set stored_bytes = greatest(stored_bytes - @removed_bytes, 0), updated_at = now()
+-- name: RecordDiskCollected :exec
+-- The holder deleted keys holding removed_bytes of the disk's frames; an
+-- orphaned index whose key went is collected.
+update disks
+set stored_bytes = greatest(stored_bytes - @removed_bytes, 0),
+    orphaned_indexes = array(select n from unnest(orphaned_indexes) n where 'disks/' || id || '/manifests/' || n <> all(@keys::text[])),
+    updated_at = now()
 where id = @id and holder_container_id = @container_id and lease_token = @lease_token;
 
 -- name: ListDisks :many

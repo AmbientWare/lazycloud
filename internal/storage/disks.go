@@ -229,24 +229,25 @@ func (s *Storage) withDiskLease(ctx context.Context, host compute.HostID, contai
 // holders uploaded after losing the disk, which the holder collects. A
 // replay of the recorded generation with the same index succeeds, so the
 // host can retry after a lost reply. A container that lost the disk has its
-// upload recorded for the holder to collect.
+// upload recorded for the holder to collect, and returned until its index
+// is collected.
 func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g DiskGeneration, addedBytes int64) ([]DiskGeneration, error) {
 	if !sha256Hex.MatchString(g.IndexSHA256) {
 		return nil, invalid("index sha256 %q is not 64 lowercase hex digits", g.IndexSHA256)
 	}
 	var orphans []DiskGeneration
 	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
-		if g.Generation == row.Generation && row.IndexSha256 != nil && *row.IndexSha256 == g.IndexSHA256 {
-			return nil
-		}
-		if g.Generation != row.Generation+1 {
-			return conflict("generation %d does not follow the recorded %d", g.Generation, row.Generation)
-		}
 		for _, name := range row.OrphanedIndexes {
 			number, sha, _ := strings.Cut(name, "-")
 			if n, err := strconv.ParseInt(number, 10, 64); err == nil {
 				orphans = append(orphans, DiskGeneration{Generation: n, IndexSHA256: sha})
 			}
+		}
+		if g.Generation == row.Generation && row.IndexSha256 != nil && *row.IndexSha256 == g.IndexSHA256 {
+			return nil
+		}
+		if g.Generation != row.Generation+1 {
+			return conflict("generation %d does not follow the recorded %d", g.Generation, row.Generation)
 		}
 		return q.AdvanceDisk(ctx, AdvanceDiskParams{ID: disk, Generation: g.Generation, IndexSha256: &g.IndexSHA256, AddedBytes: max(addedBytes, 0)})
 	})
@@ -274,7 +275,7 @@ const maxCollectKeys = 1000
 // held: no other container can take the disk or record a generation until
 // they are gone, and a holder that lost the lease deletes nothing. Keys
 // other than the disk's frames and its indexes but the recorded one are
-// refused.
+// refused. An orphaned index is collected once its key is deleted.
 func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, base int64, keys []string, removedBytes int64) error {
 	if len(keys) > maxCollectKeys {
 		return invalid("collect at most %d keys at once, got %d", maxCollectKeys, len(keys))
@@ -300,7 +301,7 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 				return fmt.Errorf("delete collected objects: %w", err)
 			}
 		}
-		return q.ShrinkDiskStored(ctx, ShrinkDiskStoredParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0)})
+		return q.RecordDiskCollected(ctx, RecordDiskCollectedParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0), Keys: keys})
 	})
 	if err != nil {
 		return fmt.Errorf("collect disk: %w", err)
