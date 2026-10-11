@@ -1,9 +1,12 @@
 package compute
 
 import (
+	"maps"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
 // storageReplay (testdata/fleetrun/gpu_volume.json) is a GPU function's two
@@ -77,10 +80,12 @@ func replayStorage(t *testing.T, run storageReplay, told, untriedRefuse bool) (s
 	return r, transfer
 }
 
-// The replayed starts cost no more, compute and transfer together, when the
-// planner weighs what they read, with the pools no launch tried refusing
-// and filling. They start no later but for the launches EC2 refuses in the
-// pools tried first, each a pass of the launcher.
+// Weighing what the replayed starts read costs less, compute and transfer
+// together, where the pools no launch tried fill: the market keeps its
+// reserve in the bucket's region. Where they refuse, it costs what not
+// weighing does, but for the hosts the refused launches' delay keeps
+// running, and the starts wait no longer than those launches take, each a
+// pass of the launcher.
 func TestFleetWeighsVolumeReadsInTheReplayedGPUStarts(t *testing.T) {
 	t.Parallel()
 	var run storageReplay
@@ -104,8 +109,9 @@ func TestFleetWeighsVolumeReadsInTheReplayedGPUStarts(t *testing.T) {
 				capacity, name, float64(compute)/1e6, float64(transfer)/1e6, float64(compute+transfer)/1e6,
 				r.launches, r.refusals, r.waits, r.placedIn)
 		}
-		if totals[true] > totals[false] {
-			t.Errorf("%s: weighing reads costs $%.3f, not weighing them $%.3f", capacity, float64(totals[true])/1e6, float64(totals[false])/1e6)
+		const delayMicros = 1000
+		if untriedRefuse && totals[true] > totals[false]+delayMicros || !untriedRefuse && totals[true] >= totals[false] {
+			t.Errorf("%s: weighing reads costs %d µ$, not weighing them %d µ$", capacity, totals[true], totals[false])
 		}
 		var late time.Duration
 		for i, w := range results[true].waits {
@@ -150,5 +156,36 @@ func TestReadsRankOffersInTheBucketsRegionFirst(t *testing.T) {
 	o, ok := fallbackPool(DefaultPolicy(), h, []HostWaitersRow{waiter}, in, func(string, bool) bool { return true })
 	if !ok || o.Region != "us-east-1" {
 		t.Errorf("the fallback from refused us-east-2 pools is %s, want a us-east-1 pool", o.Key())
+	}
+}
+
+// The planner reads each market's largest recent read: the bucket region
+// and volume bytes of the placed container that mounted the most, by the
+// work's tolerance and GPU model.
+func TestRecentReadsKeepEachMarketsLargestRead(t *testing.T) {
+	pool := dbtest.New(t)
+	_, err := pool.Exec(t.Context(), `
+with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::text), 1, 8)) returning id),
+     b as (insert into workspace_buckets (workspace_id, bucket, region) select id, 'b-' || id, 'us-east-1' from ws),
+     v as (insert into volumes (workspace_id, name, size_bytes) select id, n, s from ws, (values ('models', 16000000000), ('gallery', 1000000)) x(n, s)),
+     app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id),
+     wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
+     rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select id, v, jsonb_build_object('volumes', m), sha256(v::text::bytea), sha256('src') from wl,
+             (values (1, '[{"name":"gallery","mount_path":"/g"}]'::jsonb), (2, '[{"name":"models","mount_path":"/m"},{"name":"gallery","mount_path":"/g"}]'::jsonb)) x(v, m)
+             returning id, version)
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, assigned_at, gpu_count, gpu_type)
+select ws.id, rel.id, 'stopped', 1, 1000, 1, now(), 1, 'L4' from ws, rel`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbtest.OwnWorkspaces(t, pool)
+	rows, err := New(pool).RecentReads(t.Context(), RecentReadsParams{WindowSeconds: 3600, SampleSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[ReserveMarket]StorageRead{{Preemptible: true, GPU: "L4"}: {Region: "us-east-1", Bytes: 16001000000}}
+	if got := readsByMarket(rows); !maps.Equal(got, want) {
+		t.Fatalf("reads %v, want %v", got, want)
 	}
 }

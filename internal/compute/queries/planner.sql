@@ -170,6 +170,31 @@ from (
 having count(*) > 0
 order by 1, 2, 3;
 
+-- name: RecentReads :many
+-- By purchase market and GPU model, the largest read from a workspace
+-- bucket among the newest platform containers placed within the window, up
+-- to the sample: the bucket's region and the measured bytes of the platform
+-- volumes the container mounted. Placement sets the GPU model of GPU work.
+-- It reads at most sample_size containers whatever the history.
+select distinct on (1, 2) (c.rate_class in ('auto', 'pinned'))::bool as preemptible, c.gpu_type, b.region, v.bytes::bigint as bytes
+from (
+    select c.workspace_id, c.release_id, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
+    from containers c
+    where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
+    order by c.id desc
+    limit @sample_size
+) c
+join releases r on r.id = c.release_id
+join workspace_buckets b on b.workspace_id = c.workspace_id
+cross join lateral (
+    select sum(v.size_bytes) as bytes
+    from volumes v
+    where v.workspace_id = c.workspace_id and v.state = 'active'
+      and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
+) v
+where c.billing_owner = 'platform_fleet' and c.assigned_at is not null and v.bytes is not null
+order by 1, 2, v.bytes desc;
+
 -- name: BatchWaits :many
 -- How long, in seconds, each owner's arrival batch stays open: until quiet
 -- passes after its newest container, and at most max_seconds after its

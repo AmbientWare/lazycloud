@@ -381,6 +381,13 @@ func (s *sim) place() {
 		}
 		s.r.fnWaits[c.fn] = append(s.r.fnWaits[c.fn], wait)
 		s.r.placedIn = append(s.r.placedIn, best.Region)
+		// RecentReads keys a read by the work's tolerance and its host's GPU.
+		if m := (ReserveMarket{Preemptible: c.need.Preemptible, GPU: best.offer.Type.GPU}); c.need.Storage != nil && c.need.Storage.Bytes >= s.in.Reads[m].Bytes {
+			if s.in.Reads == nil {
+				s.in.Reads = map[ReserveMarket]StorageRead{}
+			}
+			s.in.Reads[m] = *c.need.Storage
+		}
 		return true
 	})
 }

@@ -245,6 +245,11 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 			return nil, err
 		}
 		in.Quotas, in.QuotaUsed = vcpuQuotas(rooms), QuotaUse(platform, in.Catalog)
+		reads, err := c.queries.RecentReads(ctx, RecentReadsParams{WindowSeconds: c.policy().LargestShape.Window.Seconds(), SampleSize: demandBatch})
+		if err != nil {
+			return nil, fmt.Errorf("read recent volume reads: %w", err)
+		}
+		in.Reads = readsByMarket(reads)
 	} else {
 		row, err := c.queries.ConnectionScope(ctx, *h.ConnectionID)
 		if err != nil {
@@ -296,8 +301,8 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 // image, that still holds what h was bought for: what the planner bought it
 // to hold, or without that its capacity, its GPU model in its market, its
 // reserve's sleep mode and disk slots, and the placement and disk slots
-// the containers waiting for it ask for. Their volume reads weigh in its
-// cost.
+// the containers waiting for it ask for. Their volume reads, or a
+// reserve's market's, weigh in its cost.
 // Pools are priced as the planner buys: a reserve by what it costs to keep
 // stopped, any other host by what it costs to serve. A rightsize moves only
 // to a pool that costs less than the host it replaces.
@@ -315,6 +320,11 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	}
 	if t, ok := CatalogTypeNamed(h.InstanceType); ok && h.ReserveMode != nil {
 		need.Disks = t.DiskSlots()
+	}
+	// A reserve serves its market's next start, which reads what its recent
+	// work read.
+	if r, ok := in.Reads[reserveMarketOf(market, h.GpuType)]; ok && h.ReserveMode != nil {
+		need.Storage = &r
 	}
 	for _, w := range waiters {
 		need.Disks += int(w.Disks)

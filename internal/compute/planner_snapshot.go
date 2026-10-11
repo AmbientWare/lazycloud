@@ -21,6 +21,7 @@ type fleetRead struct {
 	hosts     []PlannerHostsRow
 	pending   []PendingDemandRow
 	recent    []RecentShapesRow
+	reads     []RecentReadsRow
 	cooldowns []PlannerCooldownsRow
 	markets   map[string]FleetMarketsRow
 	// release is the target agent release; nil when none is published.
@@ -52,6 +53,9 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
 	}); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
+	}
+	if r.reads, err = q.RecentReads(ctx, RecentReadsParams{WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch}); err != nil {
+		return r, fmt.Errorf("read recent volume reads: %w", err)
 	}
 	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
 		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
@@ -263,6 +267,16 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+// readsByMarket are the recent reads by market, as shapesByMarket keys
+// them.
+func readsByMarket(rows []RecentReadsRow) map[ReserveMarket]StorageRead {
+	reads := make(map[ReserveMarket]StorageRead, len(rows))
+	for _, r := range rows {
+		reads[ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}] = StorageRead{Region: r.Region, Bytes: r.Bytes}
+	}
+	return reads
 }
 
 // shapeKind is what a RecentShapes row measures.

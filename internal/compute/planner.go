@@ -305,7 +305,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		}
 	}
 	in := ps.offerInputs(ps.c.fleet.Networks, ownerPlatform, hosts)
-	in.Rates, in.Quotas = ps.rates, vcpuQuotas(ps.r.quotas)
+	in.Rates, in.Quotas, in.Reads = ps.rates, vcpuQuotas(ps.r.quotas), readsByMarket(ps.r.reads)
 	// The offer of a host that could not prove a stop cools, so this pass
 	// does not buy its replacement from it.
 	var unproven []OfferCooldown
