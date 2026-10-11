@@ -71,16 +71,6 @@ func served(path string) (string, uint64, error) {
 	return path, st.Dev, nil
 }
 
-// allocatedBytes is the disk space the file at path occupies, holes
-// excluded, or 0 when it is missing.
-func allocatedBytes(path string) (int64, error) {
-	var stat unix.Stat_t
-	if err := unix.Stat(path, &stat); err != nil && !errors.Is(err, unix.ENOENT) {
-		return 0, fmt.Errorf("stat %s: %w", path, err)
-	}
-	return stat.Blocks * 512, nil
-}
-
 // processArgs is pid's command line, nil when no such process runs.
 func processArgs(pid int) []string {
 	if pid <= 0 {

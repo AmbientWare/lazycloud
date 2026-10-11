@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -147,6 +148,23 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 		t.Fatalf("reading one frame fetched %d objects", fetched)
 	}
 	requireSameDisk(t, readExport(t, q), want)
+}
+
+// A disk's dirty bytes count each frame its writes touch whole, as
+// publish stores it, so scattered small writes reach the publish trigger.
+func TestScatteredWritesCountWholeFrames(t *testing.T) {
+	requireTools(t, toolDaemon, toolImage, toolRunUnit, "qemu-io")
+	h := newHost(t, 64*frame)
+	diskID := uuid.NewString()
+	p, _ := attachUnmounted(t, h, testStore(t), AttachRequest{DiskID: diskID, SizeBytes: hostproto.DiskDirtyBytes / 2, Mountpoint: "/unused"})
+	args := []string{"-f", "raw"}
+	for i := range int64(hostproto.DiskDirtyBytes / 2 / frame) {
+		args = append(args, "-c", fmt.Sprintf("write -P 0x5a %d 4096", i*frame))
+	}
+	run(t, "qemu-io", append(args, nbdURI(p))...)
+	if dirty, _, err := h.engine.Status(t.Context(), diskID); err != nil || dirty != hostproto.DiskDirtyBytes/2 {
+		t.Fatalf("dirty %d after 4 KiB in each frame, want %d: %v", dirty, hostproto.DiskDirtyBytes/2, err)
+	}
 }
 
 // The frame cache yields to the disk's own writes: reading more of the base
@@ -281,11 +299,11 @@ func TestSnapshotterDeathLosesTheAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.engine.Detach(context.Background(), diskID) })
-	if _, _, err := h.engine.Status(diskID); err != nil {
+	if _, _, err := h.engine.Status(t.Context(), diskID); err != nil {
 		t.Fatalf("a served disk's status: %v", err)
 	}
 	h.stop()
-	_, _, err := h.engine.Status(diskID)
+	_, _, err := h.engine.Status(t.Context(), diskID)
 	if !errors.Is(err, ErrAttachmentLost) || !bytes.Contains([]byte(err.Error()), []byte("snapshotter")) {
 		t.Fatalf("status after the snapshotter stopped: %v, want ErrAttachmentLost naming the snapshotter", err)
 	}
@@ -431,7 +449,7 @@ func TestStalledDiskWritesWaitUntilResumed(t *testing.T) {
 	if err := h.engine.Stall(ctx, diskID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, stalled, err := h.engine.Status(diskID); err != nil || !stalled {
+	if _, stalled, err := h.engine.Status(t.Context(), diskID); err != nil || !stalled {
 		t.Fatalf("a stalled disk's status: stalled %v, %v", stalled, err)
 	}
 	wrote := make(chan error, 1)

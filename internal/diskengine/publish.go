@@ -228,13 +228,13 @@ func mapLayers(ctx context.Context, p diskPaths, layers []layer) ([]mappedExtent
 	return slices.DeleteFunc(extents, func(x mappedExtent) bool { return !x.Present }), nil
 }
 
-// dirtyFrames lists the ranges the sealed layers hold and the frames they
-// write any of, ascending.
-func dirtyFrames(ctx context.Context, p diskPaths, sealed []layer) ([]mappedExtent, []uint32, error) {
-	if len(sealed) == 0 {
+// dirtyFrames lists the ranges layers hold and the frames they write any
+// of, ascending.
+func dirtyFrames(ctx context.Context, p diskPaths, layers []layer) ([]mappedExtent, []uint32, error) {
+	if len(layers) == 0 {
 		return nil, nil, nil
 	}
-	extents, err := mapLayers(ctx, p, sealed)
+	extents, err := mapLayers(ctx, p, layers)
 	if err != nil {
 		return nil, nil, err
 	}

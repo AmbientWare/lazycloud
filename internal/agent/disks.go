@@ -293,7 +293,7 @@ func (c *container) publishLoop(ctx context.Context) {
 // tendDisk publishes d when due and stalls or resumes its writers. It
 // reports false once ctx has ended.
 func (c *container) tendDisk(ctx context.Context, d *heldDisk, now bool) bool {
-	dirty, stalled, err := c.a.diskEngine.Status(d.ID)
+	dirty, stalled, err := c.a.diskEngine.Status(ctx, d.ID)
 	lost := errors.Is(err, diskengine.ErrAttachmentLost)
 	switch {
 	case lost:
@@ -314,7 +314,7 @@ func (c *container) tendDisk(ctx context.Context, d *heldDisk, now bool) bool {
 			c.failVolume(ctx, "disk "+d.Name+" stopped being served ("+err.Error()+"); what reached it is saved")
 		}
 		c.a.reportDisk(ctx, c.id, d, hostproto.DiskOperation_DISK_OPERATION_PUBLISH, err)
-		if dirty, stalled, err = c.a.diskEngine.Status(d.ID); err != nil {
+		if dirty, stalled, err = c.a.diskEngine.Status(ctx, d.ID); err != nil {
 			return true
 		}
 	} else if err := c.a.grantRead(ctx, c.id, d, false); err != nil {

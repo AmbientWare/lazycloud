@@ -59,11 +59,12 @@ func attachmentLost(p diskPaths, state *diskState) error {
 	return fmt.Errorf("%w: its NBD device %s or mount at %s went", ErrAttachmentLost, a.Device, a.Mountpoint)
 }
 
-// Status reports the bytes the disk's layers hold that no committed
-// generation does, which the disk's dirty budget bounds, whether Stall
-// stalls its writes, and an ErrAttachmentLost saying what went when an
-// attachment stopped working. It takes no lock and changes nothing.
-func (e *Engine) Status(diskID string) (dirty int64, stalled bool, err error) {
+// Status reports the bytes of the frames the disk's layers write that no
+// committed generation holds, as publish stores them whole, which the
+// disk's dirty budget bounds, whether Stall stalls its writes, and an
+// ErrAttachmentLost saying what went when an attachment stopped working. It
+// takes no lock and changes nothing.
+func (e *Engine) Status(ctx context.Context, diskID string) (dirty int64, stalled bool, err error) {
 	p, err := e.paths(diskID)
 	if err != nil {
 		return 0, false, err
@@ -77,14 +78,11 @@ func (e *Engine) Status(diskID string) (dirty int64, stalled bool, err error) {
 			return 0, false, err
 		}
 	}
-	for _, l := range state.Layers {
-		n, err := allocatedBytes(p.layerPath(l))
-		if err != nil {
-			return 0, false, err
-		}
-		dirty += n
+	_, frames, err := dirtyFrames(ctx, p, state.Layers)
+	if err != nil {
+		return 0, false, err
 	}
-	return dirty, state.Stalled, nil
+	return int64(len(frames)) * imagefs.FrameSize, state.Stalled, nil
 }
 
 // Stall freezes, or with stall false thaws, the filesystem of an attached
