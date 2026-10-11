@@ -75,18 +75,14 @@ func (e *Execution) drainHost(ctx context.Context, tx pgx.Tx, host compute.HostI
 	return nil
 }
 
-// HandBackHosts wakes planning for the releases with Spot-tolerant
-// containers on hosts that started or stopped handing that work back, so
-// it replaces those that leave, or keeps them.
-func (e *Execution) HandBackHosts(ctx context.Context, tx pgx.Tx, hosts []compute.HostID) error {
+// WakeReleasesOnHosts wakes planning for the releases whose containers on
+// hosts could move to Spot, as when a host starts or stops handing
+// Spot-tolerant work back.
+func (e *Execution) WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error {
 	if len(hosts) == 0 {
 		return nil
 	}
-	ids := make([]uuid.UUID, len(hosts))
-	for n, h := range hosts {
-		ids[n] = uuid.UUID(h)
-	}
-	releases, err := e.queries.WithTx(tx).SpotTolerantReleasesOnHosts(ctx, ids)
+	releases, err := e.queries.WithTx(tx).MovableReleasesOnHosts(ctx, hosts)
 	if err != nil {
 		return fmt.Errorf("read releases on hosts: %w", err)
 	}

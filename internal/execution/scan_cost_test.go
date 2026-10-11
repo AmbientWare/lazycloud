@@ -259,7 +259,7 @@ func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
 		{"serving releases", servingReleases, []any{int32(startFailureLimit), uuid.Nil, int32(planningBatch)}},
 		{"pod releases", podReleases, []any{int32(startFailureLimit), uuid.Nil, int32(planningBatch)}},
 		{"live work", hasLiveWork, nil},
-		{"idle containers", lockIdleContainers, []any{f.release, []uuid.UUID{}, 0.0, 5}},
+		{"idle containers", lockIdleContainers, []any{f.release, 0.0, 5}},
 		{"idle instances", drainIdleInstances, []any{int32(100)}},
 		{"unserved instances", drainUnservedInstances, nil},
 		{"unserved pending instances", stopUnservedPendingInstances, nil},

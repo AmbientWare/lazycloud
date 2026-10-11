@@ -69,10 +69,11 @@ type FleetHost struct {
 	// a reserve, or one resumed from it.
 	Slept bool
 	// HandsBack is set on an on-demand host that hands Spot-tolerant work
-	// back to Spot; Movable is what its Spot-tolerant containers that could
-	// be replaced on another host reserve.
+	// back to Spot. Moves are what each of its containers that could move
+	// to a Spot host needs; Stays is set while one of them could not.
 	HandsBack bool
-	Movable   FleetCapacity
+	Moves     []Requirement
+	Stays     bool
 }
 
 func (h FleetHost) market() ReserveMarket { return reserveMarketOf(h.Market, h.GPU) }
@@ -824,22 +825,22 @@ func (ps *pass) spotOffered(need Requirement) bool {
 }
 
 // handBack decides which serving on-demand hosts lend room to
-// Spot-tolerant work. A host whose work could all move to another host
-// hands it back while a Spot offer in its region can host what moves, and
-// lends again once none can. A host that runs work that cannot move stays
-// up for it, so its spare room costs nothing and it keeps lending.
+// Spot-tolerant work. A host whose work could all move starts handing it
+// back once a Spot offer can host each of its containers and no Spot pool
+// of its region and kind cools after a refusal; it lends again only once
+// Spot cannot host one of them. A host that runs work that cannot move
+// stays up for it, so its spare room costs nothing and it keeps lending.
 func (ps *pass) handBack() {
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
 		if h.Market != MarketOnDemand || h.State != FleetServing {
 			continue
 		}
-		moves := h.Movable.Lower(ps.p.LargestShape.Cap)
-		need := Requirement{Region: ProductRegion(h.Region), Preemptible: true, CPUMillis: moves.CPUMillis, MemoryBytes: moves.MemoryBytes}
-		if h.GPU != "" {
-			need.GPUs, need.GPUCount = []string{h.GPU}, max(moves.GPUs, 1)
+		offered := !slices.ContainsFunc(h.Moves, func(need Requirement) bool { return !ps.spotOffered(need) })
+		back := offered
+		if !h.HandsBack {
+			back = offered && len(h.Moves) > 0 && !h.Stays && !ps.spotCooling(*h)
 		}
-		back := h.Load.Minus(h.Movable).Clamp().Empty() && ps.spotOffered(need)
 		if back == h.HandsBack {
 			continue
 		}
@@ -850,6 +851,15 @@ func (ps *pass) handBack() {
 		}
 		ps.act(FleetAction{Kind: kind, Market: h.market(), Host: ptr(h.ID)})
 	}
+}
+
+// spotCooling reports whether a Spot pool of host h's region and GPU model,
+// or of CPU, cools after a refusal.
+func (ps *pass) spotCooling(h FleetHost) bool {
+	return slices.ContainsFunc(ps.s.Offers.Cooldowns, func(c OfferCooldown) bool {
+		t, ok := ps.typeNamed(c.InstanceType)
+		return c.Market == MarketSpot && c.Region == h.Region && c.Until.After(ps.s.Now) && ok && t.GPU == h.GPU
+	})
 }
 
 // classKey is what offers depend on in a requirement.

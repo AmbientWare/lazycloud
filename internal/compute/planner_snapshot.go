@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -168,10 +169,17 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 	market := marketOf(h.Market)
 	// Spot-tolerant work on an on-demand host is lent to the Spot market of
 	// the host's GPU model, or of CPU.
-	var lent, movable FleetCapacity
+	var lent FleetCapacity
 	if market == MarketOnDemand {
 		lent = FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}
-		movable = FleetCapacity{CPUMillis: cpu.Millis(h.MovableCpu), MemoryBytes: h.MovableMemory, GPUs: int(h.MovableGpus)}
+	}
+	moves := make([]Requirement, len(h.MoveCpu))
+	for n := range moves {
+		moves[n] = Requirement{Region: h.MoveRegion[n], Preemptible: true, GPUCount: int(h.MoveGpuCount[n]),
+			CPUMillis: cpu.Millis(h.MoveCpu[n]), MemoryBytes: h.MoveMemory[n]}
+		if h.MoveGpus[n] != "" {
+			moves[n].GPUs = strings.Split(h.MoveGpus[n], ",")
+		}
 	}
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
@@ -185,7 +193,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
 		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
-		HandsBack: h.HandsBackAt != nil, Movable: movable,
+		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays,
 	}
 }
 

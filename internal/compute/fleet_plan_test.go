@@ -262,21 +262,25 @@ func TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget(t *testing.T) {
 	}
 }
 
-// An on-demand host whose work could all move to Spot hands it back while
-// a Spot offer can host that work, and lends again once none can. A host
-// that runs work that cannot move keeps lending its room.
+// An on-demand host whose work could all move starts handing it back once
+// a Spot offer can host it and no Spot pool of its region cools after a
+// refusal, and lends again only once no Spot offer can. A host that runs
+// work that cannot move keeps lending its room, and an empty one never
+// starts handing back.
 func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
 	quoted := func(s FleetSnapshot) FleetSnapshot {
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: planSmall.Name, HourlyMicros: 30_000, ObservedAt: offerNow})
 		return s
 	}
+	moves := []Requirement{{Preemptible: true, CPUMillis: 2000, MemoryBytes: 2 * gib}}
 	moving := planHost(1, planSmall, FleetServing)
-	moving.Load, moving.Lent, moving.Movable, moving.Containers = cpuGiB(2000, 2), cpuGiB(2000, 2), cpuGiB(2000, 2), 1
+	moving.Load, moving.Lent, moving.Moves, moving.Containers = cpuGiB(2000, 2), cpuGiB(2000, 2), moves, 1
 	kept := planHost(2, planSmall, FleetServing)
-	kept.Load, kept.Lent, kept.Movable, kept.Containers = cpuGiB(4000, 4), cpuGiB(2000, 2), cpuGiB(2000, 2), 2
+	kept.Load, kept.Lent, kept.Moves, kept.Stays, kept.Containers = cpuGiB(4000, 4), cpuGiB(2000, 2), moves, true, 2
+	empty := planHost(3, planSmall, FleetServing)
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 
-	s := quoted(planSnapshot(t, moving, kept))
+	s := quoted(planSnapshot(t, moving, kept, empty))
 	need, waiting := pendingOne(Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: gib}, nil)
 	s.Pending = []DemandGroup{need}
 	plan := PlanFleet(p, s)
@@ -287,7 +291,16 @@ func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
 		t.Fatalf("Spot-tolerant work waits %+v, want the room the kept host lends", w)
 	}
 
+	cooling := quoted(planSnapshot(t, moving))
+	cooling.Offers.Cooldowns = []OfferCooldown{{Region: "us-east-2", ZoneID: "use2-az2", InstanceType: planLarge.Name, Market: MarketSpot, Until: offerNow.Add(time.Minute)}}
+	if plan := PlanFleet(p, cooling); len(actionsOf(plan, ActionHandBack)) > 0 {
+		t.Fatalf("while a Spot pool of the region cools: %+v", plan.Actions)
+	}
+
 	moving.HandsBack = true
+	if plan := PlanFleet(p, cooling); len(plan.Actions) > 0 {
+		t.Fatalf("handing back while Spot still hosts the work: %+v", plan.Actions)
+	}
 	if plan := PlanFleet(p, planSnapshot(t, moving, kept)); !slices.Equal(hostsOf(actionsOf(plan, ActionLend)), []HostID{moving.ID}) {
 		t.Fatalf("once no Spot offer is left: %+v", plan.Actions)
 	}

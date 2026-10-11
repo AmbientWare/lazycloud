@@ -99,10 +99,6 @@ type simContainer struct {
 	// fn names the work; started is when it was placed.
 	fn      string
 	started time.Time
-	// exec is set on a container a function reuses for its tasks; on is
-	// the host it was placed on.
-	exec *execContainer
-	on   *simHost
 }
 
 type simArrival struct {
@@ -194,8 +190,6 @@ type sim struct {
 	builds    []simBuild
 	placedLog []*simContainer
 	next      int
-	// fns, when set, are functions whose tasks run in reused containers.
-	fns *simFunctions
 }
 
 type simBuild struct {
@@ -253,9 +247,6 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				}
 			}
 		}
-		if s.fns != nil {
-			s.fns.step(s)
-		}
 		s.place()
 		// A pass that held purchases for arrivals runs again once they
 		// settle, as the planner loop does.
@@ -310,7 +301,7 @@ func (s *sim) advance() {
 			if c.build {
 				s.builds = append(s.builds, simBuild{at: s.now, market: ReserveMarket{Preemptible: c.need.Preemptible}, shape: reservedShape(c.need)})
 			}
-			s.bill(c, c.ends.Sub(c.started))
+			s.bill(c, c.runs)
 			return true
 		})
 	}
@@ -373,7 +364,7 @@ func (s *sim) place() {
 			s.r.starts = map[startKind]int{}
 		}
 		s.r.starts[kind]++
-		best.containers, best.served, c.on = append(best.containers, c), true, best
+		best.containers, best.served = append(best.containers, c), true
 		s.placedLog = append(s.placedLog, c)
 		wait := s.now.Sub(c.arrived)
 		s.r.waits = append(s.r.waits, wait)
@@ -396,7 +387,7 @@ func (s *sim) load(h *simHost) HostCapacity {
 func (s *sim) fleetHost(h *simHost) FleetHost {
 	fh := h.FleetHost
 	fh.Load, fh.Lent, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, len(h.containers), nil, 0
-	var tolerant, movable FleetCapacity
+	var tolerant FleetCapacity
 	for _, c := range h.containers {
 		if fh.BusySince == nil || c.started.After(*fh.BusySince) {
 			fh.BusySince = ptr(c.started)
@@ -405,12 +396,9 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 		if c.need.Preemptible {
 			tolerant = tolerant.Plus(reservedShape(c.need))
 		}
-		if c.need.Preemptible && c.exec != nil && c.need.Disks == 0 {
-			movable = movable.Plus(reservedShape(c.need))
-		}
 	}
 	if h.Market == MarketOnDemand {
-		fh.Lent, fh.Movable = tolerant, movable
+		fh.Lent = tolerant
 	}
 	return fh
 }
@@ -834,11 +822,6 @@ func (s *sim) bill(c *simContainer, d time.Duration) {
 	}
 	rate := s.in.Rates[i]
 	perHour := int64(c.need.CPUMillis)*rate.CPUHour/1000 + c.need.MemoryBytes*rate.MemoryGiBHour/gib + int64(c.need.GPUsNeeded())*rate.GPUCardHour
-	// A container a replacement took over from bills until the
-	// replacement was ready.
-	if c.exec != nil && !c.exec.replacedAt.IsZero() {
-		d = min(d, max(c.exec.replacedAt.Sub(c.started), 0))
-	}
 	s.r.revenueNanos += perHour * d.Milliseconds() / int64(time.Hour/time.Millisecond)
 }
 

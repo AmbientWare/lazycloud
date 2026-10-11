@@ -10,9 +10,9 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 
 -- name: PlannerHosts :many
 -- Every cloud host the fleet holds or is buying, with what its live
--- containers reserve, what those that could run on Spot reserve, what
--- those of them that could move to another host reserve, and whether its
--- agent must move to the target release first.
+-- containers reserve, what those that could run on Spot reserve, what each
+-- of those that could move to a Spot host needs, whether one of them could
+-- not, and whether its agent must move to the target release first.
 select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
@@ -24,8 +24,10 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        coalesce(used.disks, 0)::int as used_disks,
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
        coalesce(used.tolerant_gpus, 0)::int as tolerant_gpus,
-       coalesce(used.movable_cpu, 0)::bigint as movable_cpu, coalesce(used.movable_memory, 0)::bigint as movable_memory,
-       coalesce(used.movable_gpus, 0)::int as movable_gpus,
+       coalesce(used.stays, false)::bool as stays,
+       coalesce(used.move_cpu, '{}')::bigint[] as move_cpu, coalesce(used.move_memory, '{}')::bigint[] as move_memory,
+       coalesce(used.move_gpu_count, '{}')::int[] as move_gpu_count, coalesce(used.move_gpus, '{}')::text[] as move_gpus,
+       coalesce(used.move_region, '{}')::text[] as move_region,
        coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
@@ -33,17 +35,23 @@ left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
            sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_cpu,
            sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_memory,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end)
-               filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
-           sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned') and c.purpose = 'serve' and release_moves(r.spec)) as movable_cpu,
-           sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned') and c.purpose = 'serve' and release_moves(r.spec)) as movable_memory,
-           sum(coalesce(release_gpus(r.spec), 0))
-               filter (where c.rate_class in ('auto', 'pinned') and c.purpose = 'serve' and release_moves(r.spec)) as movable_gpus,
+           sum(m.gpus) as gpus, sum(m.gpus) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
+           bool_or(not m.moves) as stays,
+           array_agg(c.cpu_millis) filter (where m.moves) as move_cpu,
+           array_agg(c.memory_bytes) filter (where m.moves) as move_memory,
+           array_agg(m.gpus) filter (where m.moves) as move_gpu_count,
+           -- The GPU models each accepts, comma-separated.
+           array_agg(array_to_string(array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb))), ','))
+               filter (where m.moves) as move_gpus,
+           array_agg(coalesce(r.spec -> 'placement' ->> 'region', '')) filter (where m.moves) as move_region,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
            count(*) as containers, max(c.assigned_at) as busy_since
     from containers c
     left join releases r on r.id = c.release_id
+    cross join lateral (
+        select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
+               case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
+    ) m
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.provider = 'aws' and h.phase not in ('deleted', 'failed')
@@ -269,11 +277,11 @@ where h.id = any(@ids::uuid[]) and h.phase in ('ready', 'preparing')
 returning h.id;
 
 -- name: SetHandsBack :many
--- Serving on-demand hosts start or stop handing Spot-tolerant work back;
--- one that started keeps its time.
+-- Serving on-demand hosts start handing Spot-tolerant work back, those of
+-- @back_ids, or lend to it again; one that started keeps its time.
 update hosts
-set hands_back_at = case when @hands_back::bool then coalesce(hands_back_at, now()) end, updated_at = now()
-where id = any(@ids::uuid[]) and phase = 'ready' and market = 'on_demand'
+set hands_back_at = case when id = any(@back_ids::uuid[]) then coalesce(hands_back_at, now()) end, updated_at = now()
+where id = any(@back_ids::uuid[] || @lend_ids::uuid[]) and phase = 'ready' and market = 'on_demand'
 returning id;
 
 -- name: RetireReserves :many

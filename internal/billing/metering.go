@@ -312,8 +312,8 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // past it. One a replacement took over from ends once the replacement was
 // ready, so the two never bill the same instant. Entries price measured
 // use, so a period is written only once its use is complete at measured,
-// observability's watermark; until then it is accrued. A build reserves at most buildBilledMemoryBytes as billing
-// sees it.
+// observability's watermark; until then it is accrued. A build reserves at
+// most buildBilledMemoryBytes as billing sees it.
 func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (sourcePlan, error) {
 	shape, category := c.shape, ""
 	if c.build {

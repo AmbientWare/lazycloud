@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -494,78 +494,140 @@ from tasks where release_id = $1`, f.release).Scan(&queued, &cancelled); err != 
 	}
 }
 
-func queryRow(t *testing.T, pool *pgxpool.Pool, sql string, args []any, dest ...any) {
+// handingBack inserts a host that hands Spot-tolerant work back and one
+// that does not.
+func handingBack(t *testing.T, pool *pgxpool.Pool) (onDemand, spot uuid.UUID) {
 	t.Helper()
-	if err := pool.QueryRow(t.Context(), sql, args...).Scan(dest...); err != nil {
-		t.Fatalf("%s: %v", sql, err)
+	onDemand, spot = newHost(t, pool), newHost(t, pool)
+	exec(t, pool, "update hosts set market = 'on_demand', hands_back_at = now() where id = $1", onDemand)
+	return onDemand, spot
+}
+
+// replacements are the live containers that replace old.
+func replacements(t *testing.T, pool *pgxpool.Pool, old uuid.UUID) []uuid.UUID {
+	t.Helper()
+	var ids []uuid.UUID
+	if err := pool.QueryRow(t.Context(), "select coalesce(array_agg(id), '{}') from containers where replaces = $1 and state <> 'stopped'", old).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+// A ready container whose host hands Spot-tolerant work back serves until
+// its replacement is ready, past max_containers of one, then drains, even
+// once its host lends again: a function's and an HTTP workload's alike.
+func TestALeavingContainerServesUntilItsReplacementIsReady(t *testing.T) {
+	for _, c := range []struct {
+		kind string
+		spec string
+	}{
+		{"function", `{"kind": "function", "autoscaler": {"min_containers": 1}}`},
+		{"endpoint", `{"kind": "endpoint", "http": {}, "autoscaler": {"min_containers": 1}}`},
+	} {
+		t.Run(c.kind, func(t *testing.T) {
+			pool := dbtest.New(t)
+			e := NewExecution(pool)
+			f := newRelease(t, pool, c.spec)
+			exec(t, pool, "update workloads set kind = $2 where id = $1", f.workload, c.kind)
+			plan := func() {
+				t.Helper()
+				if _, err := e.Plan(t.Context(), discardLogger()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := e.PlanServing(t.Context(), discardLogger()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			onDemand, spot := handingBack(t, pool)
+			old := readyContainer(t, pool, f, onDemand, time.Minute)
+
+			plan()
+			next := replacements(t, pool, old)
+			if state := containerState(t, pool, old); state != ContainerReady || len(next) != 1 {
+				t.Fatalf("leaving container is %s with replacements %v; want ready with one", state, next)
+			}
+			exec(t, pool, "update hosts set hands_back_at = null where id = $1", onDemand)
+			exec(t, pool, "update containers set state = 'ready', host_id = $2, assigned_at = now(), ready_at = now() where id = $1", next[0], spot)
+			plan()
+			if state := containerState(t, pool, old); state != ContainerDraining {
+				t.Fatalf("container with a ready replacement is %s, want draining", state)
+			}
+		})
 	}
 }
 
-// A container whose host hands Spot-tolerant work back is replaced before
-// it stops claiming: a busy one drains at once and its attempt keeps
-// running there, an idle one claims until its replacement is ready, then
-// drains, even once its host lends again.
-func TestLeavingContainersDrainOnceReplacedAndKeepTheirAttempts(t *testing.T) {
+// A busy container whose host hands work back drains at once, its attempt
+// still running there, and nothing replaces it while no other work asks.
+func TestABusyLeavingContainerDrainsAndKeepsItsAttempt(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
-	f := newRelease(t, pool, `{"kind": "function", "keep_warm_seconds": 60, "autoscaler": {"max_containers": 5}}`)
-	onDemand, spot := newHost(t, pool), newHost(t, pool)
-	exec(t, pool, "update hosts set market = 'on_demand', hands_back_at = now() where id = $1", onDemand)
-	idle := readyContainer(t, pool, f, onDemand, time.Minute)
+	f := newRelease(t, pool, `{"kind": "function", "autoscaler": {"max_containers": 5}}`)
+	onDemand, _ := handingBack(t, pool)
 	busy := readyContainer(t, pool, f, onDemand, time.Minute)
 	attempt := attemptOn(t, pool, f, busy, 0)
-	queueTasks(t, pool, f, 1, 0)
 
 	plan(t, e)
-	if state := containerState(t, pool, busy); state != ContainerDraining {
-		t.Fatalf("busy leaving container is %s, want draining", state)
-	}
-	var attemptState string
-	queryRow(t, pool, "select state from attempts where id = $1", []any{attempt}, &attemptState)
-	if attemptState != string(AttemptRunning) {
-		t.Fatalf("its attempt is %s; it finishes on the draining container", attemptState)
-	}
-	if state := containerState(t, pool, idle); state != ContainerReady {
-		t.Fatalf("idle leaving container is %s before its replacement is ready, want ready", state)
-	}
-	var replaced []uuid.UUID
-	queryRow(t, pool, "select coalesce(array_agg(replaces order by replaces), '{}') from containers where release_id = $1 and state = 'pending'",
-		[]any{f.release}, &replaced)
-	if len(replaced) != 2 || replaced[0] == replaced[1] || !slices.Contains(replaced, idle) || !slices.Contains(replaced, busy) {
-		t.Fatalf("pending replacements replace %v, want one each for %s and %s", replaced, idle, busy)
-	}
-
-	exec(t, pool, "update hosts set hands_back_at = null where id = $1", onDemand)
-	exec(t, pool, "update containers set state = 'ready', host_id = $2, assigned_at = now(), ready_at = now() where replaces = $1", idle, spot)
 	plan(t, e)
-	if state := containerState(t, pool, idle); state != ContainerDraining {
-		t.Fatalf("container with a ready replacement is %s, want draining", state)
+	var state string
+	if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", attempt).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if got := containerState(t, pool, busy); got != ContainerDraining || state != string(AttemptRunning) {
+		t.Fatalf("busy leaving container is %s with its attempt %s; want draining with it running", got, state)
+	}
+	if states := containerStates(t, pool, f.release); states[ContainerPending] != 0 {
+		t.Fatalf("containers %v; want no replacement", states)
+	}
+}
+
+// At the account's container limit a leaving container drains, so its
+// replacement starts once it stops.
+func TestALeavingContainerTheAccountHasNoRoomToReplaceDrains(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{"kind": "function", "autoscaler": {"min_containers": 1}}`)
+	unwaive(t, pool, f, billing.NanosPerUSD)
+	onDemand, _ := handingBack(t, pool)
+	old := readyContainer(t, pool, f, onDemand, time.Minute)
+	// Nine more containers of the account fill its limit of ten.
+	other := newVersion(t, pool, f, `{"kind": "function"}`)
+	exec(t, pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
+select $1, $2, 'pending', 1, 1000, 1 << 29 from generate_series(1, 9)`, f.workspace, other.release)
+
+	plan(t, e)
+	if state := containerState(t, pool, old); state != ContainerDraining || len(replacements(t, pool, old)) != 0 {
+		t.Fatalf("leaving container at the account's limit is %s; want draining, unreplaced", state)
+	}
+	exec(t, pool, "update containers set state = 'stopped', stopped_at = now() where id = $1", old)
+	plan(t, e)
+	if states := containerStates(t, pool, f.release); states[ContainerPending] != 1 {
+		t.Fatalf("containers %v once it stopped; want its replacement pending", states)
 	}
 }
 
 // Work that cannot move keeps its container where it runs: a function with
-// a disk and one that cannot run on Spot get no replacement.
+// a disk, one pinned to a zone and one that cannot run on Spot get no
+// replacement.
 func TestContainersThatCannotMoveStayOnAHostHandingWorkBack(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
-	host := newHost(t, pool)
-	exec(t, pool, "update hosts set market = 'on_demand', hands_back_at = now() where id = $1", host)
-	disk := newRelease(t, pool, `{"kind": "function", "disks": [{"name": "data", "mount_path": "/data", "size_gib": 1}]}`)
-	onDemand := newRelease(t, pool, `{"kind": "function", "placement": {"preemptible": false}}`)
-	stay := []uuid.UUID{readyContainer(t, pool, disk, host, time.Minute), readyContainer(t, pool, onDemand, host, time.Minute)}
-	exec(t, pool, "update containers set rate_class = 'non_preemptible' where id = $1", stay[1])
-	attemptOn(t, pool, disk, stay[0], 0)
-	attemptOn(t, pool, onDemand, stay[1], 0)
-
-	plan(t, e)
-	for _, c := range stay {
-		if state := containerState(t, pool, c); state != ContainerReady {
-			t.Errorf("container %s is %s, want ready", c, state)
-		}
+	host, _ := handingBack(t, pool)
+	var stay []uuid.UUID
+	for _, c := range []struct{ spec, class string }{
+		{`{"kind": "function", "disks": [{"name": "data", "mount_path": "/data", "size_gib": 1}]}`, "auto"},
+		{`{"kind": "function", "placement": {"availability_zone": "us-east-2a"}}`, "pinned"},
+		{`{"kind": "function", "placement": {"preemptible": false}}`, "non_preemptible"},
+	} {
+		f := newRelease(t, pool, c.spec)
+		id := readyContainer(t, pool, f, host, time.Minute)
+		exec(t, pool, "update containers set rate_class = $2 where id = $1", id, c.class)
+		attemptOn(t, pool, f, id, 0)
+		stay = append(stay, id)
 	}
-	var pending int
-	queryRow(t, pool, "select count(*)::int from containers where state = 'pending' and release_id = any($1)", []any{[]uuid.UUID{disk.release, onDemand.release}}, &pending)
-	if pending != 0 {
-		t.Errorf("%d replacements, want none", pending)
+	plan(t, e)
+	for _, id := range stay {
+		if state := containerState(t, pool, id); state != ContainerReady || len(replacements(t, pool, id)) != 0 {
+			t.Errorf("container %s is %s, want ready and unreplaced", id, state)
+		}
 	}
 }

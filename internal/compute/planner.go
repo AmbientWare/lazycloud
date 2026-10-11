@@ -703,29 +703,16 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		ps.result.Drained += len(drained)
 		moved = moved || len(drained) > 0
 	}
-	var lending []HostID
-	for _, l := range []struct {
-		ids  []uuid.UUID
-		back bool
-		note string
-	}{{ps.w.handBacks, true, "host handing Spot-tolerant work back"}, {ps.w.lends, false, "host lending to Spot-tolerant work"}} {
-		if len(l.ids) == 0 {
-			continue
-		}
-		changed, err := q.SetHandsBack(ctx, SetHandsBackParams{Ids: l.ids, HandsBack: l.back})
+	if len(ps.w.handBacks)+len(ps.w.lends) > 0 {
+		changed, err := q.SetHandsBack(ctx, SetHandsBackParams{BackIds: ps.w.handBacks, LendIds: ps.w.lends})
 		if err != nil {
 			return fmt.Errorf("set hosts handing work back: %w", err)
 		}
-		for _, id := range changed {
-			ps.note(l.note, "host_id", id)
-			lending = append(lending, HostID(id))
-		}
-	}
-	if len(lending) > 0 {
-		if err := ps.c.containers.HandBackHosts(ctx, tx, lending); err != nil {
+		ps.note("hosts change handing Spot-tolerant work back", "handing", ps.w.handBacks, "lending", ps.w.lends)
+		if err := ps.c.containers.WakeReleasesOnHosts(ctx, tx, changed); err != nil {
 			return err
 		}
-		moved = true
+		moved = moved || len(changed) > 0
 	}
 	if len(ps.w.retires) > 0 {
 		retired, err := q.RetireReserves(ctx, ps.w.retires)
