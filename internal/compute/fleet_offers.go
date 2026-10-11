@@ -99,12 +99,12 @@ type OfferInputs struct {
 
 // marketRead is what a start of market m reads, nil when its starts read
 // nothing.
-func (in OfferInputs) marketRead(m ReserveMarket) *StorageRead {
+func (in OfferInputs) marketRead(m ReserveMarket) *VolumeRead {
 	bytes, ok := in.ReadBytes[m]
 	if !ok {
 		return nil
 	}
-	return &StorageRead{Region: in.StorageRegion, Bytes: bytes}
+	return &VolumeRead{Region: in.StorageRegion, Bytes: bytes}
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
@@ -348,7 +348,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
-						TransferMicros: transferMicros(in.StorageRegion, region, t), ReadMicros: readMicros(p, need.Storage, region),
+						TransferMicros: transferMicros(in.StorageRegion, region, t), ReadMicros: readMicros(p, need.Read, region),
 						PlacementPenalty: penalty, Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need); rejected && !in.OwnerPays {

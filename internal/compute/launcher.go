@@ -324,13 +324,13 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	// A reserve serves its market's next start, which reads what its recent
 	// work read.
 	if h.ReserveMode != nil {
-		need.Storage = in.marketRead(reserveMarketOf(market, h.GpuType))
+		need.Read = in.marketRead(reserveMarketOf(market, h.GpuType))
 	}
 	for _, w := range waiters {
 		need.Disks += int(w.Disks)
 		need.Preemptible = need.Preemptible || w.Preemptible
 		need.Region, need.Zone = cmp.Or(need.Region, w.Region), cmp.Or(need.Zone, w.Zone)
-		need.Storage = cmp.Or(need.Storage, StorageReadOf(w.StorageRegion, w.StorageBytes))
+		need.Read = cmp.Or(need.Read, VolumeReadOf(w.ReadRegion, w.ReadBytes))
 	}
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
 	offers := slices.DeleteFunc(RankOffers(p, need, h.ReserveMode != nil, in), func(o FleetOffer) bool {

@@ -78,7 +78,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(b.image_build_id), '[]'::jsonb)::jsonb as gpus,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
-       sb.region as storage_region, coalesce(vb.bytes, 0)::bigint as storage_bytes,
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -96,13 +96,12 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- By purchase market and GPU model: the largest CPU, memory and GPUs placed
 -- platform containers reserved, the most disks one attached, and the bytes
 -- of platform volumes they read with how many started, among the newest
--- containers created within the window, up to the sample (recent);
--- the same among the build
--- containers that stopped within the build window (build), since a running
--- build's host holds its slot once it ends; and what the placed
--- Spot-tolerant platform CPU containers of the sample created within the
--- arrival window reserve, less their largest batch (arrived): a steady rate
--- of work, which a single burst is not. A batch is arrivals less than
+-- containers created within the window, up to the sample (recent); the
+-- same among the build containers that stopped within the build window
+-- (build), since a running build's host holds its slot once it ends; and
+-- what the placed Spot-tolerant platform CPU containers of the sample
+-- created within the arrival window reserve, less their largest batch
+-- (arrived): a steady rate of work, which a single burst is not. A batch is arrivals less than
 -- batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
 -- builds read are those created within build_scan, the window and the
 -- longest a build runs. Both reads follow primary keys, so they read at

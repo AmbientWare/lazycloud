@@ -556,17 +556,17 @@ func TestALeavingContainerServesUntilItsReplacementIsReady(t *testing.T) {
 	}
 }
 
-// A busy container whose host hands work back drains at once, its attempt
+// A busy container whose host hands work back drains at once, its attempts
 // still running there, and nothing replaces it while no other work asks.
-func TestABusyLeavingContainerDrainsAndKeepsItsAttempt(t *testing.T) {
+func TestABusyLeavingContainerDrainsAndKeepsItsAttempts(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
-	f := newRelease(t, pool, `{"kind": "function", "autoscaler": {"max_containers": 5}}`)
+	f := newRelease(t, pool, `{"kind": "function", "autoscaler": {"max_containers": 5, "tasks_per_container": 2}}`)
 	onDemand, _ := handingBack(t, pool)
 	busy := readyContainer(t, pool, f, onDemand, time.Minute)
 	attempt := attemptOn(t, pool, f, busy, 0)
+	attemptOn(t, pool, f, busy, 0)
 
-	plan(t, e)
 	plan(t, e)
 	var state string
 	if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", attempt).Scan(&state); err != nil {

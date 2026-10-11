@@ -83,7 +83,7 @@ func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersPara
 const pendingContainers = `-- name: PendingContainers :many
 select q.id, q.workspace_id, q.release_id, q.cpu_millis, q.memory_bytes, q.connection_id,
        q.machine, q.region, q.zone, q.preemptible, q.gpus, q.gpu_count, q.disks, q.disk_host,
-       sb.region as storage_region, coalesce(vb.bytes, 0)::bigint as storage_bytes
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes
 from (
     select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
            p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host,
@@ -141,22 +141,22 @@ type PendingContainersParams struct {
 }
 
 type PendingContainersRow struct {
-	ID            uuid.UUID
-	WorkspaceID   uuid.UUID
-	ReleaseID     *uuid.UUID
-	CpuMillis     cpu.Millis
-	MemoryBytes   int64
-	ConnectionID  *uuid.UUID
-	Machine       string
-	Region        string
-	Zone          string
-	Preemptible   bool
-	Gpus          []string
-	GpuCount      int32
-	Disks         int32
-	DiskHost      *uuid.UUID
-	StorageRegion *string
-	StorageBytes  int64
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	ReleaseID    *uuid.UUID
+	CpuMillis    cpu.Millis
+	MemoryBytes  int64
+	ConnectionID *uuid.UUID
+	Machine      string
+	Region       string
+	Zone         string
+	Preemptible  bool
+	Gpus         []string
+	GpuCount     int32
+	Disks        int32
+	DiskHost     *uuid.UUID
+	ReadRegion   *string
+	ReadBytes    int64
 }
 
 // Pending containers that fit the largest free host in each resource and
@@ -197,8 +197,8 @@ func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersPa
 			&i.GpuCount,
 			&i.Disks,
 			&i.DiskHost,
-			&i.StorageRegion,
-			&i.StorageBytes,
+			&i.ReadRegion,
+			&i.ReadBytes,
 		); err != nil {
 			return nil, err
 		}

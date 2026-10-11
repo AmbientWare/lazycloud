@@ -264,9 +264,9 @@ func TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget(t *testing.T) {
 
 // An on-demand host whose work could all move starts handing it back once
 // a Spot offer can host it and no Spot pool of its region cools after a
-// refusal, and lends again only once no Spot offer can. A host that runs
-// work that cannot move keeps lending its room, and an empty one never
-// starts handing back.
+// refusal, and lends again once no Spot offer can. A host that runs work
+// that cannot move lends its room, even once it hands back, and an empty
+// one never starts handing back.
 func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
 	quoted := func(s FleetSnapshot) FleetSnapshot {
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: planSmall.Name, HourlyMicros: 30_000, ObservedAt: offerNow})
@@ -303,6 +303,10 @@ func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
 	}
 	if plan := PlanFleet(p, planSnapshot(t, moving, kept)); !slices.Equal(hostsOf(actionsOf(plan, ActionLend)), []HostID{moving.ID}) {
 		t.Fatalf("once no Spot offer is left: %+v", plan.Actions)
+	}
+	kept.HandsBack = true
+	if plan := PlanFleet(p, quoted(planSnapshot(t, kept))); !slices.Equal(hostsOf(actionsOf(plan, ActionLend)), []HostID{kept.ID}) {
+		t.Fatalf("a host handing back that runs work that cannot move: %+v", plan.Actions)
 	}
 }
 
@@ -709,30 +713,20 @@ func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 	}
 }
 
-// Spot-tolerant work borrowing an on-demand host is the load of its Spot
-// market, of CPU or of the host's GPU model: its headroom is bought as
-// Spot, and the on-demand market keeps only the load of work that cannot
-// run on Spot.
+// Spot-tolerant work borrowing an on-demand host is the Spot market's load:
+// its headroom is bought as Spot, and the on-demand market keeps only the
+// load of work that cannot run on Spot.
 func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
 	p := DefaultPolicy()
+	p.GPU = nil
 	h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
 	h.Load, h.Lent, h.Containers = cpuGiB(6000, 12), cpuGiB(4000, 8), 3
-	card := FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib, GPUs: 1}
-	l4 := planHost(2, mustType(t, "g6.4xlarge"), FleetServing)
-	l4.GPU, l4.Load, l4.Lent, l4.Containers = "L4", card.Times(2), card, 2
-	s := planSnapshot(t, h, l4)
-	s.Offers.Catalog = FleetCatalog()
-	plan := PlanFleet(p, s)
-	for _, c := range []struct {
-		market ReserveMarket
-		want   FleetCapacity
-	}{
-		{ReserveMarket{Preemptible: true}, cpuGiB(4000, 8)}, {onDemand, cpuGiB(2000, 4)},
-		{ReserveMarket{Preemptible: true, GPU: "L4"}, card}, {ReserveMarket{GPU: "L4"}, card},
-	} {
-		if load := marketPlan(t, plan, c.market).Load; load != c.want {
-			t.Errorf("%s load %+v, want %+v", c.market, load, c.want)
-		}
+	plan := PlanFleet(p, planSnapshot(t, h))
+	if spot := marketPlan(t, plan, ReserveMarket{Preemptible: true}).Load; spot != cpuGiB(4000, 8) {
+		t.Errorf("Spot load %+v, want the borrowed 4 CPU", spot)
+	}
+	if od := marketPlan(t, plan, onDemand).Load; od != cpuGiB(2000, 4) {
+		t.Errorf("on-demand load %+v, want the 2 CPU that cannot run on Spot", od)
 	}
 }
 

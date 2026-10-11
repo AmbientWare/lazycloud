@@ -231,31 +231,29 @@ func (q *Queries) HasLiveWork(ctx context.Context) (bool, error) {
 
 const leavingContainers = `-- name: LeavingContainers :many
 select c.id,
-       exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')::bool as busy,
+       (select count(*) from attempts a where a.container_id = c.id and a.state = 'running')::int as running,
        coalesce(rc.replaced, false)::bool as replaced, coalesce(rc.ready, false)::bool as replacement_ready
 from containers c
 join releases r on r.id = c.release_id
-left join hosts h on h.id = c.host_id
 left join lateral (
     select bool_or(x.state in ('pending', 'starting')) as replaced, bool_or(x.ready_at is not null) as ready
     from containers x where x.replaces = c.id
 ) rc on true
 where c.release_id = $1::uuid and c.state in ('starting', 'ready') and c.purpose = 'serve'
-  and (rc.ready or h.hands_back_at is not null and release_moves(r.spec))
+  and container_leaves(c.id, c.host_id, r.spec)
 order by c.created_at, c.id
 `
 
 type LeavingContainersRow struct {
 	ID               uuid.UUID
-	Busy             bool
+	Running          int32
 	Replaced         bool
 	ReplacementReady bool
 }
 
 // The release's starting and ready serve containers that leave their host,
-// oldest first: one whose host hands Spot-tolerant work back and that can
-// move, or one whose replacement is ready. busy is set while one runs an
-// attempt, and replaced while a replacement of it that is not ready lives.
+// oldest first, with the attempts each runs, and whether a replacement of
+// it starts or is ready.
 func (q *Queries) LeavingContainers(ctx context.Context, releaseID uuid.UUID) ([]LeavingContainersRow, error) {
 	rows, err := q.db.Query(ctx, leavingContainers, releaseID)
 	if err != nil {
@@ -267,7 +265,7 @@ func (q *Queries) LeavingContainers(ctx context.Context, releaseID uuid.UUID) ([
 		var i LeavingContainersRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Busy,
+			&i.Running,
 			&i.Replaced,
 			&i.ReplacementReady,
 		); err != nil {
@@ -399,7 +397,7 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       coalesce(c.hands_off, false)::bool as hands_off,
+       coalesce(c.leaving, false)::bool as leaving,
        (r.load_error is not null)::bool as load_failed,
        r.start_failures,
        last_stop.stopped_at as last_stopped_at
@@ -428,8 +426,7 @@ cross join lateral (
       and not exists (
           select 1 from attempts a
           join containers ac on ac.id = a.container_id
-          join hosts ah on ah.id = ac.host_id
-          where a.id = t.current_attempt_id and ac.state = 'draining' and ah.hands_back_at is not null
+          where a.id = t.current_attempt_id and ac.state = 'draining' and container_leaves(ac.id, ac.host_id, r.spec)
       )
 ) run
 cross join lateral (
@@ -437,11 +434,7 @@ cross join lateral (
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
            count(*) filter (where c.state = 'draining') as draining,
-           -- Whether one may leave its host: the host hands Spot-tolerant
-           -- work back, or a replacement of it is ready.
-           bool_or(c.state in ('starting', 'ready') and (
-               exists (select 1 from hosts lh where lh.id = c.host_id and lh.hands_back_at is not null)
-               or exists (select 1 from containers rc where rc.replaces = c.id and rc.ready_at is not null))) as hands_off
+           bool_or(c.state in ('starting', 'ready') and container_leaves(c.id, c.host_id, r.spec)) as leaving
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id
@@ -477,7 +470,7 @@ type PlanningReleasesRow struct {
 	Starting          int32
 	Ready             int32
 	Draining          int32
-	HandsOff          bool
+	Leaving           bool
 	LoadFailed        bool
 	StartFailures     int32
 	LastStoppedAt     *time.Time
@@ -491,8 +484,8 @@ type PlanningReleasesRow struct {
 // The newest serve container's stop paces the next start after failed ones.
 // Demand past max_containers * tasks_per_container changes no decision, so
 // the count stops there and a deep backlog reads a bounded prefix.
-// A task running on a container that drains off a host handing Spot work
-// back finishes there; it asks for no other container.
+// A task running on a container that drains as it leaves its host
+// finishes there; it asks for no other container.
 func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesParams) ([]PlanningReleasesRow, error) {
 	rows, err := q.db.Query(ctx, planningReleases, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -527,7 +520,7 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			&i.Starting,
 			&i.Ready,
 			&i.Draining,
-			&i.HandsOff,
+			&i.Leaving,
 			&i.LoadFailed,
 			&i.StartFailures,
 			&i.LastStoppedAt,

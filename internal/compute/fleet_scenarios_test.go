@@ -36,12 +36,11 @@ const (
 	simBoot      = 15 * time.Second
 	simPrepare   = 147 * time.Second
 	simStop      = time.Minute
-	// GPU hosts: a Spot L4 launch served its first container 158 s after
-	// placement on 2026-10-10. In the EC2 check of 2026-10-11 a stopped
-	// g4dn.xlarge Spot reserve ran 62 s after the start was asked and
-	// mounted its reformatted instance store 5 s into boot, and a stop took
-	// 6 m 46 s, which EC2 bills as stopped; simGPUBoot adds the CPU hosts'
-	// join time to the start.
+	// GPU hosts, from prod and the real EC2 check: a Spot L4 launch serves
+	// its first container about 158 s after placement, a stopped g4dn.xlarge
+	// Spot reserve runs 62 s after its start and mounts its reformatted
+	// instance store 5 s into boot, and a stop takes 6 m 46 s, which EC2
+	// bills as stopped. simGPUBoot adds the CPU hosts' join time to the start.
 	simGPUProvision = 150 * time.Second
 	simGPUBoot      = 70 * time.Second
 	simGPUStop      = 406 * time.Second

@@ -40,7 +40,7 @@ select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
        coalesce(jsonb_array_length(r.spec -> 'disks'), 0)::int as disks,
-       sb.region as storage_region, coalesce(vb.bytes, 0)::bigint as storage_bytes
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes
 from containers c
 left join releases r on r.id = c.release_id
 cross join lateral (select volume_read_bytes(c.workspace_id, r.spec -> 'volumes') as bytes) vb

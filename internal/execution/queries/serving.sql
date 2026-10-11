@@ -62,7 +62,7 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       coalesce(c.hands_off, false)::bool as hands_off,
+       coalesce(c.leaving, false)::bool as leaving,
        r.start_failures,
        last_stop.stopped_at as last_stopped_at
 from batch
@@ -86,11 +86,7 @@ cross join lateral (
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
            count(*) filter (where c.state = 'draining') as draining,
-           -- Whether one may leave its host: the host hands Spot-tolerant
-           -- work back, or a replacement of it is ready.
-           bool_or(c.state in ('starting', 'ready') and (
-               exists (select 1 from hosts lh where lh.id = c.host_id and lh.hands_back_at is not null)
-               or exists (select 1 from containers rc where rc.replaces = c.id and rc.ready_at is not null))) as hands_off
+           bool_or(c.state in ('starting', 'ready') and container_leaves(c.id, c.host_id, r.spec)) as leaving
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id;

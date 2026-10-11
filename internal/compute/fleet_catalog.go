@@ -145,8 +145,7 @@ func ratesIn(region string) regionRates {
 
 // transferMicrosPerGB is what AWS charges, in USD micros, for a GB moved
 // from one region to another: nothing within a region, $0.01 between
-// us-east-1 and us-east-2 and $0.02 between any other two US regions, as
-// the AWS price list had them on 2026-10-11.
+// us-east-1 and us-east-2 and $0.02 between any other two US regions.
 func transferMicrosPerGB(from, to string) int64 {
 	switch {
 	case from == to:
@@ -175,7 +174,7 @@ func transferMicros(storageRegion, region string, t CatalogType) int64 {
 
 // readMicros is what a start's read costs a host in region, spread over the
 // cost horizon as an hourly cost; nothing without one.
-func readMicros(p Policy, read *StorageRead, region string) int64 {
+func readMicros(p Policy, read *VolumeRead, region string) int64 {
 	if read == nil {
 		return 0
 	}

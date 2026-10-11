@@ -12,7 +12,7 @@ import (
 // readRegions are two regions, us-east-1 with two zones and us-west-2 with
 // one, with Spot g6.2xlarge quotes cheapest in us-west-2, the work's 16 GB read
 // from a us-east-1 bucket and the offer inputs over them.
-func readRegions(t *testing.T) (OfferInputs, *StorageRead) {
+func readRegions(t *testing.T) (OfferInputs, *VolumeRead) {
 	in := offerInputs(t)
 	in.Networks = map[string]Network{
 		"us-east-1": {Subnets: []Subnet{{ID: "a", Zone: "us-east-1a", ZoneID: "use1-az6"}, {ID: "b", Zone: "us-east-1b", ZoneID: "use1-az1"}}},
@@ -26,7 +26,7 @@ func readRegions(t *testing.T) (OfferInputs, *StorageRead) {
 		q.InstanceType, q.ObservedAt = "g6.2xlarge", offerNow
 		in.Spot = append(in.Spot, q)
 	}
-	return in, &StorageRead{Region: "us-east-1", Bytes: 16_000_000_000}
+	return in, &VolumeRead{Region: "us-east-1", Bytes: 16_000_000_000}
 }
 
 // A read from us-east-1 ranks a us-east-1 L4 offer first, where without
@@ -39,13 +39,13 @@ func TestReadsRankOffersInTheBucketsRegionFirst(t *testing.T) {
 	if offers := RankOffers(DefaultPolicy(), need, false, in); len(offers) == 0 || offers[0].Region != "us-west-2" {
 		t.Fatalf("without the read, %v rank first", offerKeys(offers))
 	}
-	need.Storage = read
+	need.Read = read
 	if offers := RankOffers(DefaultPolicy(), need, false, in); len(offers) == 0 || offers[0].ZoneID != "use1-az6" {
 		t.Fatalf("with the read, %v rank first", offerKeys(offers))
 	}
 	in.Cooldowns = []OfferCooldown{{Region: "us-east-1", ZoneID: "use1-az6", InstanceType: "g6.2xlarge", Market: MarketSpot, Until: offerNow.Add(time.Hour)}}
 	h := ClaimLaunchesRow{Market: ptr(string(MarketSpot)), GpuType: "L4", GpuCount: 1, CpuMillis: 2000, MemoryBytes: 12 * gib}
-	waiter := HostWaitersRow{Preemptible: true, StorageRegion: &read.Region, StorageBytes: read.Bytes}
+	waiter := HostWaitersRow{Preemptible: true, ReadRegion: &read.Region, ReadBytes: read.Bytes}
 	if o, ok := fallbackPool(DefaultPolicy(), h, []HostWaitersRow{waiter}, in, func(string, bool) bool { return true }); !ok || o.ZoneID != "use1-az1" {
 		t.Errorf("the fallback from use1-az6 is %s, want use1-az1", o.Key())
 	}

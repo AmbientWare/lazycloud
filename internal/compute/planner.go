@@ -708,7 +708,13 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		if err != nil {
 			return fmt.Errorf("set hosts handing work back: %w", err)
 		}
-		ps.note("hosts change handing Spot-tolerant work back", "handing", ps.w.handBacks, "lending", ps.w.lends)
+		for _, id := range changed {
+			msg := "host lending to Spot-tolerant work"
+			if slices.Contains(ps.w.handBacks, id) {
+				msg = "host handing Spot-tolerant work back"
+			}
+			ps.note(msg, "host_id", id)
+		}
 		if err := ps.c.containers.WakeReleasesOnHosts(ctx, tx, changed); err != nil {
 			return err
 		}

@@ -247,7 +247,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		g := pendingGroup{connection: r.ConnectionID, group: DemandGroup{Need: Requirement{
 			Region: r.Region, Zone: r.Zone, Preemptible: r.Preemptible, GPUs: gpus, GPUCount: int(r.GpuCount),
 			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, Disks: int(r.Disks),
-			Storage: StorageReadOf(r.StorageRegion, r.StorageBytes),
+			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes),
 		}}}
 		for n, id := range r.Ids {
 			c := PendingContainer{ID: id}

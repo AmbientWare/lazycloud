@@ -191,22 +191,22 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		return errors.New("release spec has no resources")
 	}
 	q := e.queries.WithTx(tx)
-	hand, err := e.handOff(ctx, tx, plan, row.HandsOff)
+	leave, err := e.leaving(ctx, tx, plan, row.Leaving)
 	if err != nil {
 		return err
 	}
-	active, live := hand.counts(row.Pending, row.Starting, row.Ready, row.Draining)
+	active, live := leave.counts(row.Pending, row.Starting, row.Ready, row.Draining)
 	desired := servingDesired(row, active)
 	room := int(row.MaxContainers) - live
 	if row.Preview {
 		room = 1 - live
 	}
-	pairs, grow := hand.starts(active, desired, room)
+	pairs, grow := leave.starts(active, desired, room)
 	if pairs+grow > 0 {
 		if plan.holdStart(row.StartFailures, row.LastStoppedAt) {
 			return nil
 		}
-		return e.start(ctx, tx, plan, hand.unpaired[:pairs], pairs+grow, live == 0 && row.Demand == 0 && row.Peak == 0,
+		return e.start(ctx, tx, plan, leave.unpaired[:pairs], pairs+grow, live == 0 && row.Demand == 0 && row.Peak == 0,
 			billing.Request{
 				Workspace: row.WorkspaceID, GPUs: int(row.GpuCount),
 				GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,

@@ -40,26 +40,26 @@ type Requirement struct {
 	// Prefer is the host whose frame cache likely holds one of the disks;
 	// nil for none.
 	Prefer *HostID
-	// Storage is what the container reads from its workspace's bucket as it
+	// Read is what the container reads from its workspace's bucket as it
 	// starts; nil when it mounts no platform volume.
-	Storage *StorageRead
+	Read *VolumeRead
 }
 
-// StorageRead is a start's read from its workspace's bucket: the bucket's
-// region and the measured size of the platform volumes it mounts, taken as
-// read whole.
-type StorageRead struct {
+// VolumeRead is a start's read of its platform volumes from its
+// workspace's bucket: the bucket's region and the volumes' measured size,
+// taken as read whole.
+type VolumeRead struct {
 	Region string
 	Bytes  int64
 }
 
-// StorageReadOf is the read of a container that mounts platform volumes
+// VolumeReadOf is the read of a container that mounts platform volumes
 // from a bucket in region, nil without one.
-func StorageReadOf(region *string, bytes int64) *StorageRead {
+func VolumeReadOf(region *string, bytes int64) *VolumeRead {
 	if region == nil {
 		return nil
 	}
-	return &StorageRead{Region: *region, Bytes: bytes}
+	return &VolumeRead{Region: *region, Bytes: bytes}
 }
 
 // GPUsNeeded is how many GPUs the container reserves: a model list without a
@@ -155,8 +155,8 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // on Spot, then the tightest fit, whose free CPU and memory as fractions
 // of its size sum lowest after placement, which keeps large holes for
 // large containers. r's preferred host wins among hosts that borrow alike,
-// then a host in the region of r's storage, which it reads without
-// transfer.
+// then a host in the region r's volumes are read from, which it reads
+// without transfer.
 // Spot-tolerant work borrows an on-demand platform CPU host only while one
 // of them still keeps floor free afterwards, so work that cannot run on
 // Spot starts at once.
@@ -186,7 +186,7 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			}
 		}
 		preferred := r.Prefer != nil && h.Host == *r.Prefer
-		local := r.Storage != nil && h.Region == r.Storage.Region
+		local := r.Read != nil && h.Region == r.Read.Region
 		score := float64(h.FreeCPUMillis-r.CPUMillis)/float64(h.CPUMillis) + float64(h.FreeMemoryBytes-r.MemoryBytes)/float64(h.MemoryBytes)
 		if best < 0 || bestBorrows && !borrows ||
 			borrows == bestBorrows && (preferred && !bestPreferred ||

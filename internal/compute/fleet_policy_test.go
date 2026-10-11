@@ -1,7 +1,6 @@
 package compute
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
@@ -33,14 +32,6 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 		if warm, stopped := r.Warm.Of(c.load), r.Stopped.Of(c.load); warm != c.warm || stopped != c.stopped {
 			t.Errorf("%s: warm %+v stopped %+v, want %+v %+v", c.name, warm, stopped, c.warm, c.stopped)
 		}
-	}
-}
-
-func TestFleetMarketsAreSpotOnDemandAndTheReservedCards(t *testing.T) {
-	want := []ReserveMarket{{Preemptible: true}, {}, {Preemptible: true, GPU: "A10G"}, {GPU: "A10G"}, {Preemptible: true, GPU: "L4"}, {GPU: "L4"},
-		{Preemptible: true, GPU: "T4"}, {GPU: "T4"}}
-	if got := DefaultPolicy().Markets(); !slices.Equal(got, want) {
-		t.Fatalf("markets %v", got)
 	}
 }
 

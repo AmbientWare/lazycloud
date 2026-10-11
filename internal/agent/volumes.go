@@ -47,14 +47,14 @@ const (
 	mountWait = 30 * time.Second
 	// mountPoll is how often a start looks for its new mount.
 	mountPoll = 100 * time.Millisecond
-	// A sequential reader keeps about twice geesefsReadAheadKiB in flight, in
-	// parallel parts of geesefsReadPartKiB. The cache, geesefsMemoryMiB,
-	// holds three readers' read-ahead; a smaller one evicts read-ahead before
-	// it is read. The runtime collects garbage before geesefsGoMemoryMiB.
-	// Three or four large files read at once peak near 390 and 440 MiB,
-	// inside hostproto.MounterMemoryBytes. Without --use-enomem, which fails
-	// a read whose read-ahead the cache cannot hold, memory grows with the
-	// readers.
+	// GeeseFS keeps about twice geesefsReadAheadKiB in flight per sequential
+	// reader, in parallel parts of geesefsReadPartKiB. Its cache,
+	// geesefsMemoryMiB, holds three readers' read-ahead; a smaller one
+	// evicts read-ahead before it is read. Its runtime collects garbage
+	// before geesefsGoMemoryMiB. --use-enomem stays off, since it fails a
+	// read whose read-ahead the cache cannot hold, so memory grows with the
+	// readers: three or four large files read at once peak near 390 and
+	// 440 MiB, inside hostproto.MounterMemoryBytes.
 	geesefsMemoryMiB    = 192
 	geesefsGoMemoryMiB  = 320
 	geesefsReadAheadKiB = 32 << 10
