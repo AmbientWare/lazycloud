@@ -144,7 +144,6 @@ jobs:
       # GeeseFS, the managed runtime and the agent release this change
       # replaces.
       - run: deploy/local/acceptance.sh prepare
-      - run: deploy/local/acceptance.sh run -skip TestDevboxDiskMovesBetweenHosts
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |
           sudo apt-get update -q
@@ -153,8 +152,7 @@ jobs:
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
             sudo modprobe nbd nbds_max=16
           }
-      # Agents attach disks as root, as on hosts.
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE,LAZYCLOUD_OTLP_ENDPOINT,LAZYCLOUD_OTLP_INSECURE deploy/local/acceptance.sh run -run TestDevboxDiskMovesBetweenHosts
+      - run: deploy/local/acceptance.sh run
       - name: Export the slowest container start's trace
         if: always()
         run: |
