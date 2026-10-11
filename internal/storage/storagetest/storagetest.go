@@ -166,17 +166,6 @@ type HTTPS struct {
 	pool *x509.CertPool
 }
 
-// TLS returns the HTTPS store with its CA written into t's temporary
-// directory.
-func TLS(t testing.TB) HTTPS {
-	t.Helper()
-	store, err := OpenTLS(t.Context(), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store
-}
-
 // OpenTLS reads the HTTPS store's root certificate from its TLS proxy and
 // writes it to dir/ca.pem. LAZYCLOUD_TEST_OBJECT_STORE_HTTPS and
 // LAZYCLOUD_TEST_OBJECT_STORE_CA_URL name another such proxy.
