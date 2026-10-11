@@ -37,6 +37,9 @@ type Requirement struct {
 	// Disks is how many durable disks the container attaches, each taking
 	// one of the host's disk slots.
 	Disks int
+	// Prefer is the host whose frame cache likely holds one of the disks;
+	// nil for none.
+	Prefer *HostID
 }
 
 // GPUsNeeded is how many GPUs the container reserves: a model list without a
@@ -128,7 +131,8 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // that fits it, a Spot host before an on-demand one for work that can run
 // on Spot, then the tightest fit, whose free CPU and memory as fractions
 // of its size sum lowest after placement, which keeps large holes for
-// large containers. Spot-tolerant work borrows an on-demand platform CPU
+// large containers. r's preferred host wins among hosts that borrow alike.
+// Spot-tolerant work borrows an on-demand platform CPU
 // host only while one of them still keeps floor free afterwards, so work
 // that cannot run on Spot starts at once.
 func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
@@ -140,7 +144,7 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			}
 		}
 	}
-	best, bestBorrows, bestScore := -1, false, 0.0
+	best, bestBorrows, bestPreferred, bestScore := -1, false, false, 0.0
 	for i, h := range hosts {
 		if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || !h.Fits(r) {
 			continue
@@ -156,9 +160,11 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 				continue
 			}
 		}
+		preferred := r.Prefer != nil && h.Host == *r.Prefer
 		score := float64(h.FreeCPUMillis-r.CPUMillis)/float64(h.CPUMillis) + float64(h.FreeMemoryBytes-r.MemoryBytes)/float64(h.MemoryBytes)
-		if best < 0 || bestBorrows && !borrows || borrows == bestBorrows && score < bestScore {
-			best, bestBorrows, bestScore = i, borrows, score
+		if best < 0 || bestBorrows && !borrows ||
+			borrows == bestBorrows && (preferred && !bestPreferred || preferred == bestPreferred && score < bestScore) {
+			best, bestBorrows, bestPreferred, bestScore = i, borrows, preferred, score
 		}
 	}
 	return best

@@ -175,16 +175,15 @@ func requirement(c PendingContainersRow) compute.Requirement {
 	return compute.Requirement{
 		Workspace: c.WorkspaceID, Connection: c.ConnectionID, Machine: c.Machine, Region: c.Region, Zone: c.Zone,
 		Preemptible: c.Preemptible, GPUs: c.Gpus, GPUCount: int(c.GpuCount),
-		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes, Disks: int(c.Disks),
+		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes, Disks: int(c.Disks), Prefer: (*compute.HostID)(c.DiskHost),
 	}
 }
 
 // pack assigns containers, those that cannot run on Spot first so they
 // take on-demand room before Spot-tolerant work borrows it, each to the
 // host compute.ChooseHost picks, keeping the platform's on-demand warm
-// floor free for them. A container whose disk's last host still has it
-// cached goes there when it fits. It returns parallel container and host
-// id slices.
+// floor free for them and preferring the host whose cache still holds a
+// container's disk. It returns parallel container and host id slices.
 func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, hostIDs []uuid.UUID) {
 	free := slices.Clone(hosts)
 	order := slices.Clone(pending)
@@ -194,12 +193,7 @@ func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, ho
 	floor := compute.DefaultPolicy().OnDemand.Warm.Floor
 	for _, c := range order {
 		need := requirement(c)
-		best := slices.IndexFunc(free, func(h compute.HostCapacity) bool {
-			return c.DiskHost != nil && uuid.UUID(h.Host) == *c.DiskHost && h.Fits(need)
-		})
-		if best < 0 {
-			best = compute.ChooseHost(free, need, floor)
-		}
+		best := compute.ChooseHost(free, need, floor)
 		if best < 0 {
 			continue
 		}

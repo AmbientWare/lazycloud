@@ -180,7 +180,8 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 // Spot-tolerant work takes a Spot host before a tighter on-demand one and
 // borrows on-demand room only while an on-demand host still keeps the
 // warm floor free; work that cannot run on Spot is placed first, so
-// borrowed room never crowds it out.
+// borrowed room never crowds it out. The host holding a container's disk
+// wins only among hosts it may take.
 func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 	host := func(market compute.Market, freeCPU cpu.Millis) compute.HostCapacity {
 		return compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, Market: market,
@@ -188,6 +189,12 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 	}
 	work := func(cpus cpu.Millis, tolerant bool) PendingContainersRow {
 		return PendingContainersRow{ID: uuid.New(), CpuMillis: cpus, MemoryBytes: gib, Preemptible: tolerant}
+	}
+	onDemand, spot := host(compute.MarketOnDemand, 1000), host(compute.MarketSpot, 4000)
+	diskOn := func(h compute.HostCapacity) PendingContainersRow {
+		w := work(1000, true)
+		w.DiskHost = (*uuid.UUID)(&h.Host)
+		return w
 	}
 	for _, c := range []struct {
 		name    string
@@ -203,6 +210,10 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 			[]PendingContainersRow{work(1000, true), work(1000, true)}, []int{0, -1}},
 		{"work that cannot run on Spot first", []compute.HostCapacity{host(compute.MarketOnDemand, 2000)},
 			[]PendingContainersRow{work(1000, true), work(2000, false)}, []int{-1, 0}},
+		{"a disk's host before a tighter one", []compute.HostCapacity{host(compute.MarketSpot, 2000), spot},
+			[]PendingContainersRow{diskOn(spot)}, []int{1}},
+		{"no borrowing the last free floor for a disk's host", []compute.HostCapacity{onDemand, spot},
+			[]PendingContainersRow{diskOn(onDemand)}, []int{1}},
 	} {
 		ids, hosts := pack(c.hosts, c.pending)
 		placed := map[uuid.UUID]uuid.UUID{}
