@@ -173,7 +173,9 @@ constraints.
   accounts to bypass a failure or copy credentials into workloads. CI uses
   OIDC.
 - Use a task branch and one PR per coherent change. Review and pass relevant
-  checks before merge or deployment.
+  checks before merge or deployment. Follow-up fixes and delegated work
+  merge into that branch locally and push to its PR; open no PR per small
+  change.
 - When delegating, agree contracts first, then assign disjoint owners and files;
   one integrator owns shared definitions and root build files. Verify returned
   work and integrated evidence.
