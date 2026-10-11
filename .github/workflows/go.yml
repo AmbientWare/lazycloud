@@ -20,6 +20,7 @@ on:
       - "deploy/local/garage.toml"
       - "deploy/local/garage-bootstrap.sh"
       - "deploy/local/install-snapshotter.sh"
+      - "deploy/local/acceptance.sh"
   push:
     branches: [main]
 
@@ -89,7 +90,6 @@ jobs:
     env:
       LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:24317
       LAZYCLOUD_OTLP_INSECURE: "true"
-      LAZYCLOUD_TEST_OCI_RUNTIME: runsc
     steps:
       - uses: actions/checkout@v7
         with:
@@ -124,31 +124,10 @@ jobs:
         run: |
           docker compose -f compose.test.yaml up -d --wait postgres object-store-bootstrap object-store-tls
           docker compose up -d --wait jaeger
-      # The merge base with main, or on main the commit before, is the
-      # release hosts run until this one ships.
-      - name: The agent release this change replaces
-        run: |
-          base=$(git merge-base HEAD origin/main)
-          if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
-          git worktree add --detach "$RUNNER_TEMP/previous" "$base"
-          out="$RUNNER_TEMP/previous-agent"
-          cd "$RUNNER_TEMP/previous"
-          CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=previous-$(git rev-parse --short=12 HEAD)" \
-            -o "$out/lazycloud-agent" ./cmd/agent
-          CGO_ENABLED=0 go build -trimpath -o "$out/supervisor" ./cmd/supervisor
-          echo "LAZYCLOUD_TEST_OLD_AGENT=$out" >>"$GITHUB_ENV"
-      - name: GeeseFS and the managed runtime
-        run: |
-          deploy/local/fetch-geesefs.sh
-          deploy/local/build-runtime.sh .lazycloud/runtime 3.12
-      - name: Acceptance
-        run: |
-          set -o pipefail
-          go test -race -timeout 60m -v ./acceptance 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
-          if grep -- '--- SKIP' "$RUNNER_TEMP/acceptance.log"; then
-            echo "acceptance tests skipped" >&2
-            exit 1
-          fi
+      # GeeseFS, the managed runtime and the agent release this change
+      # replaces.
+      - run: deploy/local/acceptance.sh prepare
+      - run: deploy/local/acceptance.sh run
       - name: Export the slowest container start's trace
         if: always()
         run: |
