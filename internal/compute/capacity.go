@@ -75,6 +75,9 @@ type HostCapacity struct {
 	FreeMemoryBytes int64
 	FreeGPUs        int
 	FreeDiskSlots   int
+	// HandsBack is set on an on-demand host that hands Spot-tolerant work
+	// back to Spot, which lends that work no room.
+	HandsBack bool
 }
 
 // Accepts reports whether the host may run a container with r, ignoring
@@ -100,7 +103,7 @@ func (h HostCapacity) Accepts(r Requirement) bool {
 	if r.Zone != "" && h.Zone != r.Zone && h.ZoneID != r.Zone {
 		return false
 	}
-	if !r.Preemptible && h.Market == MarketSpot {
+	if !r.Preemptible && h.Market == MarketSpot || r.Preemptible && h.HandsBack {
 		return false
 	}
 	if n := r.GPUsNeeded(); n > 0 {
@@ -250,6 +253,7 @@ func AvailableCapacity(ctx context.Context, tx pgx.Tx) ([]HostCapacity, error) {
 			FreeMemoryBytes: row.FreeMemoryBytes,
 			FreeGPUs:        int(row.FreeGpus),
 			FreeDiskSlots:   int(row.FreeDiskSlots),
+			HandsBack:       row.HandsBack,
 		})
 	}
 	return hosts, nil

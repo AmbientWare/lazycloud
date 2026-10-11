@@ -18,13 +18,19 @@ select now()::timestamptz as now,
 -- name: LiveMeteredContainers :many
 -- Ready and draining containers: the live set, read through its partial
 -- indexes rather than the container history. A mirror build's container
--- is the platform's and bills no one.
+-- is the platform's and bills no one. replaced_at is when the first of its
+-- replacements was ready.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
-       coalesce(u.complete, false)::bool as complete
+       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at
 from containers c
+left join lateral (
+    select rc.ready_at from containers rc
+    where rc.replaces = c.id and rc.ready_at is not null
+    order by rc.ready_at limit 1
+) replaced on true
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id
@@ -35,13 +41,19 @@ where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at i
 
 -- name: StoppedMeteredContainers :many
 -- Containers that stopped since the look-back began and still owe their
--- last entries. Mirror builds' containers bill no one.
+-- last entries, with when the first of their replacements was ready.
+-- Mirror builds' containers bill no one.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
-       coalesce(u.complete, false)::bool as complete
+       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at
 from containers c
+left join lateral (
+    select rc.ready_at from containers rc
+    where rc.replaces = c.id and rc.ready_at is not null
+    order by rc.ready_at limit 1
+) replaced on true
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join releases r on r.id = c.release_id

@@ -191,8 +191,12 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		return errors.New("release spec has no resources")
 	}
 	q := e.queries.WithTx(tx)
-	active := int(row.Pending + row.Starting + row.Ready)
-	live := active + int(row.Draining)
+	hand, err := e.handOff(ctx, tx, plan, row.Leaving)
+	if err != nil {
+		return err
+	}
+	live := int(row.Pending + row.Starting + row.Ready + row.Draining)
+	active := int(row.Pending+row.Starting+row.Ready) - len(hand.leaving)
 	desired := servingDesired(row, active)
 	switch {
 	case active < desired:
@@ -200,7 +204,10 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if row.Preview {
 			count = min(desired-active, 1-live)
 		}
-		if count <= 0 || plan.holdStart(row.StartFailures, row.LastStoppedAt) {
+		if count <= 0 {
+			return hand.makeRoom(ctx, e, tx, plan, desired-active)
+		}
+		if plan.holdStart(row.StartFailures, row.LastStoppedAt) {
 			return nil
 		}
 		grant, err := billing.Admit(ctx, tx, billing.Request{
@@ -232,12 +239,18 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
 			Traceparent: traceparent(ctx),
+			Replaces:    hand.unpaired[:min(count, len(hand.unpaired))],
 		})
 		if err != nil {
 			return fmt.Errorf("create containers: %w", err)
 		}
 		plan.created = created
-	case active > desired:
+		return nil
+	}
+	if err := hand.drainUnneeded(ctx, e, tx, plan); err != nil {
+		return err
+	}
+	if active > desired {
 		excess := active - desired
 		if pending := min(excess, int(row.Pending)); pending > 0 {
 			stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
@@ -252,16 +265,18 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if excess <= 0 {
 			return nil
 		}
-		drained, err := q.DrainNewestContainers(ctx, DrainNewestContainersParams{
-			ReleaseID: row.ReleaseID, Count: int32(excess), //nolint:gosec // Bounded by live containers.
+		rows, err := q.DrainNewestContainers(ctx, DrainNewestContainersParams{
+			ReleaseID: row.ReleaseID, Leaving: hand.leaving, Count: int32(excess), //nolint:gosec // Bounded by live containers.
 		})
 		if err != nil {
 			return fmt.Errorf("drain containers: %w", err)
 		}
-		for _, d := range drained {
-			plan.drained = append(plan.drained, drainedContainer{id: d.ID, host: d.HostID})
+		drained := make([]drainedContainer, 0, len(rows))
+		for _, d := range rows {
+			drained = append(drained, drainedContainer{id: d.ID, host: d.HostID})
 		}
-		return notifyHosts(ctx, tx, plan.drained)
+		plan.drained = append(plan.drained, drained...)
+		return notifyHosts(ctx, tx, drained)
 	}
 	return nil
 }

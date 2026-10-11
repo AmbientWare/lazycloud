@@ -168,9 +168,10 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 	market := marketOf(h.Market)
 	// Spot-tolerant work on an on-demand host is lent to the Spot market of
 	// the host's GPU model, or of CPU.
-	var lent FleetCapacity
+	var lent, movable FleetCapacity
 	if market == MarketOnDemand {
 		lent = FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}
+		movable = FleetCapacity{CPUMillis: cpu.Millis(h.MovableCpu), MemoryBytes: h.MovableMemory, GPUs: int(h.MovableGpus)}
 	}
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
@@ -184,6 +185,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
 		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
+		HandsBack: h.HandsBackAt != nil, Movable: movable,
 	}
 }
 

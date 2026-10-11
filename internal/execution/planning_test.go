@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -490,5 +491,81 @@ from tasks where release_id = $1`, f.release).Scan(&queued, &cancelled); err != 
 		if attemptState != string(AttemptRunning) {
 			t.Fatalf("%s: running attempt became %s; it finishes on the draining container", stop, attemptState)
 		}
+	}
+}
+
+func queryRow(t *testing.T, pool *pgxpool.Pool, sql string, args []any, dest ...any) {
+	t.Helper()
+	if err := pool.QueryRow(t.Context(), sql, args...).Scan(dest...); err != nil {
+		t.Fatalf("%s: %v", sql, err)
+	}
+}
+
+// A container whose host hands Spot-tolerant work back is replaced before
+// it stops claiming: a busy one drains at once and its attempt keeps
+// running there, an idle one claims until its replacement is ready, then
+// drains, even once its host lends again.
+func TestLeavingContainersDrainOnceReplacedAndKeepTheirAttempts(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{"kind": "function", "keep_warm_seconds": 60, "autoscaler": {"max_containers": 5}}`)
+	onDemand, spot := newHost(t, pool), newHost(t, pool)
+	exec(t, pool, "update hosts set market = 'on_demand', hands_back_at = now() where id = $1", onDemand)
+	idle := readyContainer(t, pool, f, onDemand, time.Minute)
+	busy := readyContainer(t, pool, f, onDemand, time.Minute)
+	attempt := attemptOn(t, pool, f, busy, 0)
+	queueTasks(t, pool, f, 1, 0)
+
+	plan(t, e)
+	if state := containerState(t, pool, busy); state != ContainerDraining {
+		t.Fatalf("busy leaving container is %s, want draining", state)
+	}
+	var attemptState string
+	queryRow(t, pool, "select state from attempts where id = $1", []any{attempt}, &attemptState)
+	if attemptState != string(AttemptRunning) {
+		t.Fatalf("its attempt is %s; it finishes on the draining container", attemptState)
+	}
+	if state := containerState(t, pool, idle); state != ContainerReady {
+		t.Fatalf("idle leaving container is %s before its replacement is ready, want ready", state)
+	}
+	var replaced []uuid.UUID
+	queryRow(t, pool, "select coalesce(array_agg(replaces order by replaces), '{}') from containers where release_id = $1 and state = 'pending'",
+		[]any{f.release}, &replaced)
+	if len(replaced) != 2 || replaced[0] == replaced[1] || !slices.Contains(replaced, idle) || !slices.Contains(replaced, busy) {
+		t.Fatalf("pending replacements replace %v, want one each for %s and %s", replaced, idle, busy)
+	}
+
+	exec(t, pool, "update hosts set hands_back_at = null where id = $1", onDemand)
+	exec(t, pool, "update containers set state = 'ready', host_id = $2, assigned_at = now(), ready_at = now() where replaces = $1", idle, spot)
+	plan(t, e)
+	if state := containerState(t, pool, idle); state != ContainerDraining {
+		t.Fatalf("container with a ready replacement is %s, want draining", state)
+	}
+}
+
+// Work that cannot move keeps its container where it runs: a function with
+// a disk and one that cannot run on Spot get no replacement.
+func TestContainersThatCannotMoveStayOnAHostHandingWorkBack(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	host := newHost(t, pool)
+	exec(t, pool, "update hosts set market = 'on_demand', hands_back_at = now() where id = $1", host)
+	disk := newRelease(t, pool, `{"kind": "function", "disks": [{"name": "data", "mount_path": "/data", "size_gib": 1}]}`)
+	onDemand := newRelease(t, pool, `{"kind": "function", "placement": {"preemptible": false}}`)
+	stay := []uuid.UUID{readyContainer(t, pool, disk, host, time.Minute), readyContainer(t, pool, onDemand, host, time.Minute)}
+	exec(t, pool, "update containers set rate_class = 'non_preemptible' where id = $1", stay[1])
+	attemptOn(t, pool, disk, stay[0], 0)
+	attemptOn(t, pool, onDemand, stay[1], 0)
+
+	plan(t, e)
+	for _, c := range stay {
+		if state := containerState(t, pool, c); state != ContainerReady {
+			t.Errorf("container %s is %s, want ready", c, state)
+		}
+	}
+	var pending int
+	queryRow(t, pool, "select count(*)::int from containers where state = 'pending' and release_id = any($1)", []any{[]uuid.UUID{disk.release, onDemand.release}}, &pending)
+	if pending != 0 {
+		t.Errorf("%d replacements, want none", pending)
 	}
 }

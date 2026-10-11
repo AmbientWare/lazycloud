@@ -61,6 +61,9 @@ type Containers interface {
 	DrainHostContainers(ctx context.Context, tx pgx.Tx, host HostID) error
 	// DrainHostWorkspaces drains the host's containers of workspaces.
 	DrainHostWorkspaces(ctx context.Context, tx pgx.Tx, host HostID, workspaces []uuid.UUID) error
+	// HandBackHosts wakes planning for the releases with Spot-tolerant
+	// containers on hosts that started or stopped handing that work back.
+	HandBackHosts(ctx context.Context, tx pgx.Tx, hosts []HostID) error
 }
 
 // Config is what compute needs to tell hosts how to reach the platform.

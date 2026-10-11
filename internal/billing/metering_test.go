@@ -3,6 +3,8 @@ package billing
 import (
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestMeteringBillsReadyToStoppedOnTheGrid(t *testing.T) {
@@ -156,6 +158,60 @@ func TestMeteringBillsABuildTwoGiBWhileItReservesEight(t *testing.T) {
 	billed := Shape{Owner: OwnerPlatformFleet, Class: ClassAuto, CPUMillis: 4000, MemoryBytes: 2 << 30}
 	if want := f.expected(ready, billed, stopped.Sub(ready)); total == 0 || abs(total-want) > 3 {
 		t.Fatalf("build billed %d, want %d, the cost of 4 CPUs and 2 GiB", total, want)
+	}
+}
+
+// A container a replacement took over from bills until the first of its
+// replacements was ready, or its own stop if that came first, and the
+// replacement from then on, so the two never bill the same instant.
+func TestMeteringEndsAReplacedContainerWhenItsReplacementIsReady(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	ready, takeover, stop := base.Add(5*time.Minute), base.Add(40*time.Minute), base.Add(50*time.Minute)
+	for _, c := range []struct {
+		name string
+		// replacements are when each became ready, nil for never; stopped
+		// is when the replaced container stopped, nil while it drains.
+		replacements []*time.Time
+		stopped      *time.Time
+		end          time.Time
+	}{
+		{"replacement ready while the old one drains", []*time.Time{&takeover}, nil, takeover},
+		{"replacement never ready", []*time.Time{nil}, &stop, stop},
+		{"first replacement never ready, second ready", []*time.Time{nil, &takeover}, &stop, takeover},
+		{"old one stops before its replacement is ready", []*time.Time{new(stop.Add(5 * time.Minute))}, &stop, stop},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			ws := f.workspace(f.user())
+			rel := f.release(ws)
+			host := f.host(time.Now())
+			old := f.container(containerSpec{workspace: ws, host: host, release: &rel.id, ready: ready, stopped: c.stopped, cpuMillis: 1000, memoryBytes: 1 << 30})
+			var billed []uuid.UUID
+			for _, at := range c.replacements {
+				var id uuid.UUID
+				err := f.pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, replaces)
+values ($1, $2, case when $4::timestamptz is null then 'stopped' else 'ready' end, $3, 1, 1000, 1 << 30, $4, $4, $5) returning id`,
+					ws, rel.id, host, at, old).Scan(&id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if at != nil {
+					billed = append(billed, id)
+				}
+			}
+			f.meter()
+			entries := f.ledger(old)
+			if len(entries) == 0 || !entries[0].start.Equal(ready) || !entries[len(entries)-1].end.Equal(c.end) {
+				t.Fatalf("replaced container billed %+v, want [%s, %s)", entries, ready, c.end)
+			}
+			for _, id := range billed {
+				next := f.ledger(id)
+				if len(next) == 0 || next[0].start.Before(entries[len(entries)-1].end) {
+					t.Fatalf("replacement billed from %+v while the replaced container billed to %s", next, entries[len(entries)-1].end)
+				}
+			}
+		})
 	}
 }
 

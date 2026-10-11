@@ -120,7 +120,7 @@ func (q *Queries) CoolOffers(ctx context.Context, arg CoolOffersParams) error {
 const drainHosts = `-- name: DrainHosts :many
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,
-    idle_since = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any($2::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id
@@ -476,12 +476,14 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
        h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
-       h.rightsize_refused_at,
+       h.rightsize_refused_at, h.hands_back_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
        coalesce(used.tolerant_gpus, 0)::int as tolerant_gpus,
+       coalesce(used.movable_cpu, 0)::bigint as movable_cpu, coalesce(used.movable_memory, 0)::bigint as movable_memory,
+       coalesce(used.movable_gpus, 0)::int as movable_gpus,
        coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
@@ -492,6 +494,10 @@ left join lateral (
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end)
                filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
+           sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned') and c.purpose = 'serve' and release_moves(r.spec)) as movable_cpu,
+           sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned') and c.purpose = 'serve' and release_moves(r.spec)) as movable_memory,
+           sum(coalesce(release_gpus(r.spec), 0))
+               filter (where c.rate_class in ('auto', 'pinned') and c.purpose = 'serve' and release_moves(r.spec)) as movable_gpus,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
            count(*) as containers, max(c.assigned_at) as busy_since
     from containers c
@@ -533,6 +539,7 @@ type PlannerHostsRow struct {
 	IdleSince             *time.Time
 	Replaces              *uuid.UUID
 	RightsizeRefusedAt    *time.Time
+	HandsBackAt           *time.Time
 	UsedCpu               int64
 	UsedMemory            int64
 	UsedGpus              int32
@@ -541,13 +548,17 @@ type PlannerHostsRow struct {
 	TolerantCpu           int64
 	TolerantMemory        int64
 	TolerantGpus          int32
+	MovableCpu            int64
+	MovableMemory         int64
+	MovableGpus           int32
 	BusySince             time.Time
 	UpdateDue             bool
 }
 
 // Every cloud host the fleet holds or is buying, with what its live
-// containers reserve, what those that could run on Spot reserve, and
-// whether its agent must move to the target release first.
+// containers reserve, what those that could run on Spot reserve, what
+// those of them that could move to another host reserve, and whether its
+// agent must move to the target release first.
 func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	rows, err := q.db.Query(ctx, plannerHosts)
 	if err != nil {
@@ -588,6 +599,7 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.IdleSince,
 			&i.Replaces,
 			&i.RightsizeRefusedAt,
+			&i.HandsBackAt,
 			&i.UsedCpu,
 			&i.UsedMemory,
 			&i.UsedGpus,
@@ -596,6 +608,9 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.TolerantCpu,
 			&i.TolerantMemory,
 			&i.TolerantGpus,
+			&i.MovableCpu,
+			&i.MovableMemory,
+			&i.MovableGpus,
 			&i.BusySince,
 			&i.UpdateDue,
 		); err != nil {
@@ -804,7 +819,7 @@ const returnToReserve = `-- name: ReturnToReserve :many
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
-    idle_since = null, updated_at = now()
+    idle_since = null, hands_back_at = null, updated_at = now()
 where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id
@@ -861,6 +876,40 @@ func (q *Queries) SetCapacityWaits(ctx context.Context, arg SetCapacityWaitsPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setHandsBack = `-- name: SetHandsBack :many
+update hosts
+set hands_back_at = case when $1::bool then coalesce(hands_back_at, now()) end, updated_at = now()
+where id = any($2::uuid[]) and phase = 'ready' and market = 'on_demand'
+returning id
+`
+
+type SetHandsBackParams struct {
+	HandsBack bool
+	Ids       []uuid.UUID
+}
+
+// Serving on-demand hosts start or stop handing Spot-tolerant work back;
+// one that started keeps its time.
+func (q *Queries) SetHandsBack(ctx context.Context, arg SetHandsBackParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, setHandsBack, arg.HandsBack, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setIdleSince = `-- name: SetIdleSince :exec

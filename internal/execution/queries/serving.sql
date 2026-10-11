@@ -62,6 +62,7 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
+       c.leaving::int as leaving,
        r.start_failures,
        last_stop.stopped_at as last_stopped_at
 from batch
@@ -84,7 +85,8 @@ cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
-           count(*) filter (where c.state = 'draining') as draining
+           count(*) filter (where c.state = 'draining') as draining,
+           count(*) filter (where c.state <> 'pending' and container_leaves(c.id, c.host_id, c.rate_class, r.spec)) as leaving
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id;
@@ -92,12 +94,14 @@ order by r.id;
 -- name: DrainNewestContainers :many
 -- Ready and starting containers of the release, newest first: the oldest
 -- are the warmest. Their supervisors finish requests in flight before they
--- exit, and the edge stops routing to them when it sees the drain.
+-- exit, and the edge stops routing to them when it sees the drain. Those
+-- leaving their host are the hand-off's to drain.
 update containers
 set state = 'draining', drain_started_at = now()
 where id in (
     select d.id from containers d
     where d.release_id = @release_id::uuid and d.state in ('starting', 'ready') and d.purpose = 'serve'
+      and d.id <> all(coalesce(@leaving::uuid[], '{}'))
     order by d.created_at desc, d.id desc
     limit @count
     for update skip locked

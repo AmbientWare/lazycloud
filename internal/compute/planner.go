@@ -179,6 +179,7 @@ type pendingTrace struct {
 // fleetWrites are a pass's intents, each written by one statement.
 type fleetWrites struct {
 	stuck, drains, retirePreparing, retires, returns, hibernate []uuid.UUID
+	handBacks, lends                                            []uuid.UUID
 	buys                                                        []requestedHost
 	resumes                                                     []uuid.UUID
 	idle                                                        []idleRow
@@ -464,6 +465,10 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 			}
 		case ActionDrain:
 			ps.w.drains = append(ps.w.drains, uuid.UUID(*a.Host))
+		case ActionHandBack:
+			ps.w.handBacks = append(ps.w.handBacks, uuid.UUID(*a.Host))
+		case ActionLend:
+			ps.w.lends = append(ps.w.lends, uuid.UUID(*a.Host))
 		case ActionRetireReserve:
 			switch Phase(ps.rows[*a.Host].Phase) {
 			case PhaseStopped, PhaseRequested:
@@ -498,7 +503,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 		h.ReserveMode = a.Mode
 	case ActionRightsize:
 		h.Replaces = ptr(uuid.UUID(*a.Host))
-	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve:
+	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionHandBack, ActionLend:
 	}
 	return h
 }
@@ -697,6 +702,30 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		ps.result.Drained += len(drained)
 		moved = moved || len(drained) > 0
+	}
+	var lending []HostID
+	for _, l := range []struct {
+		ids  []uuid.UUID
+		back bool
+		note string
+	}{{ps.w.handBacks, true, "host handing Spot-tolerant work back"}, {ps.w.lends, false, "host lending to Spot-tolerant work"}} {
+		if len(l.ids) == 0 {
+			continue
+		}
+		changed, err := q.SetHandsBack(ctx, SetHandsBackParams{Ids: l.ids, HandsBack: l.back})
+		if err != nil {
+			return fmt.Errorf("set hosts handing work back: %w", err)
+		}
+		for _, id := range changed {
+			ps.note(l.note, "host_id", id)
+			lending = append(lending, HostID(id))
+		}
+	}
+	if len(lending) > 0 {
+		if err := ps.c.containers.HandBackHosts(ctx, tx, lending); err != nil {
+			return err
+		}
+		moved = true
 	}
 	if len(ps.w.retires) > 0 {
 		retired, err := q.RetireReserves(ctx, ps.w.retires)

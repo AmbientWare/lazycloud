@@ -68,6 +68,11 @@ type FleetHost struct {
 	// Slept is set on a host that has proved it can stop into the reserve:
 	// a reserve, or one resumed from it.
 	Slept bool
+	// HandsBack is set on an on-demand host that hands Spot-tolerant work
+	// back to Spot; Movable is what its Spot-tolerant containers that could
+	// be replaced on another host reserve.
+	HandsBack bool
+	Movable   FleetCapacity
 }
 
 func (h FleetHost) market() ReserveMarket { return reserveMarketOf(h.Market, h.GPU) }
@@ -98,7 +103,7 @@ func (h FleetHost) capacity() HostCapacity {
 		Host: h.ID, Kind: KindPlatform, Provider: ProviderAWS, Region: h.Region, Zone: h.Zone, ZoneID: h.ZoneID,
 		Market: h.Market, GPUType: h.GPU, GPUCount: h.Usable.GPUs,
 		CPUMillis: h.Usable.CPUMillis, MemoryBytes: h.Usable.MemoryBytes,
-		FreeCPUMillis: free.CPUMillis, FreeMemoryBytes: free.MemoryBytes, FreeGPUs: free.GPUs,
+		FreeCPUMillis: free.CPUMillis, FreeMemoryBytes: free.MemoryBytes, FreeGPUs: free.GPUs, HandsBack: h.HandsBack,
 	}
 	if t, ok := CatalogTypeNamed(h.InstanceType); ok && !h.UpdateDue {
 		room.FreeDiskSlots = max(0, t.DiskSlots()-h.UsedDisks)
@@ -166,6 +171,10 @@ const (
 	// ActionRightsize buys Offer to replace an idle Host; the host stays
 	// until the replacement serves.
 	ActionRightsize FleetActionKind = "rightsize"
+	// ActionHandBack has an on-demand Host hand Spot-tolerant work back to
+	// Spot; ActionLend has it lend that work room again.
+	ActionHandBack FleetActionKind = "hand_back"
+	ActionLend     FleetActionKind = "lend"
 )
 
 // FleetAction is one decision, naming a host or an offer.
@@ -278,7 +287,8 @@ type FleetPlan struct {
 	BatchWait time.Duration
 }
 
-// PlanFleet decides one pass over a snapshot. One cover packs pending
+// PlanFleet decides one pass over a snapshot. On-demand hosts first decide
+// whether they lend to Spot-tolerant work. One cover then packs pending
 // containers and every market's warm slots: onto ready room, then starting
 // hosts, then reserves resumed for them, then purchases, which wait while
 // containers keep arriving. Idle hosts that hold no slot leave, into the
@@ -294,6 +304,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), spot: freshSpot(p, s.Offers.Spot, s.Now),
 	}
 	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
+	ps.handBack()
 	items := ps.pendingItems()
 	views := ps.views(items)
 	ps.cover(slices.Concat(items, slotItems(views)))
@@ -613,7 +624,7 @@ func (ps *pass) act(a FleetAction) int {
 	switch a.Kind {
 	case ActionResume, ActionBuy, ActionBuyReserve, ActionRightsize:
 		ps.used[a.Market]++
-	case ActionReturnToReserve, ActionDrain, ActionRetireReserve:
+	case ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionHandBack, ActionLend:
 	}
 	ps.plan.Actions = append(ps.plan.Actions, a)
 	return len(ps.plan.Actions) - 1
@@ -807,8 +818,38 @@ func (ps *pass) spotOffered(need Requirement) bool {
 	shape, offers := reservedShape(need), ps.classOffers(need)
 	models := ps.gpuModels(need, offers)
 	return slices.ContainsFunc(offers, func(o FleetOffer) bool {
-		return o.Market == MarketSpot && slices.Contains(models, o.Type.GPU) && o.Usable.Covers(shape) && o.Type.DiskSlots() >= need.Disks
+		return o.Market == MarketSpot && (need.GPUsNeeded() == 0 || slices.Contains(models, o.Type.GPU)) && o.Usable.Covers(shape) &&
+			o.Type.DiskSlots() >= need.Disks
 	})
+}
+
+// handBack decides which serving on-demand hosts lend room to
+// Spot-tolerant work. A host whose work could all move to another host
+// hands it back while a Spot offer in its region can host what moves, and
+// lends again once none can. A host that runs work that cannot move stays
+// up for it, so its spare room costs nothing and it keeps lending.
+func (ps *pass) handBack() {
+	for i := range ps.hosts {
+		h := &ps.hosts[i]
+		if h.Market != MarketOnDemand || h.State != FleetServing {
+			continue
+		}
+		moves := h.Movable.Lower(ps.p.LargestShape.Cap)
+		need := Requirement{Region: ProductRegion(h.Region), Preemptible: true, CPUMillis: moves.CPUMillis, MemoryBytes: moves.MemoryBytes}
+		if h.GPU != "" {
+			need.GPUs, need.GPUCount = []string{h.GPU}, max(moves.GPUs, 1)
+		}
+		back := h.Load.Minus(h.Movable).Clamp().Empty() && ps.spotOffered(need)
+		if back == h.HandsBack {
+			continue
+		}
+		h.HandsBack = back
+		kind := ActionLend
+		if back {
+			kind = ActionHandBack
+		}
+		ps.act(FleetAction{Kind: kind, Market: h.market(), Host: ptr(h.ID)})
+	}
 }
 
 // classKey is what offers depend on in a requirement.
@@ -911,12 +952,12 @@ func (ps *pass) resumeEach(items []coverItem, work bool) []coverItem {
 // containers, then one that takes every pending container and every slot
 // of its market, so one resume does; then the smallest, the cheapest, and
 // the one that takes the most slots.
-// Spot work takes an on-demand CPU reserve only while it is lendable, and
-// an on-demand GPU reserve only while no Spot offer can host it. Without
-// work, only slots of markets where no work waits, or slots that come with
-// the work, take a reserve, and only one whose absence leaves a reserve
-// that fits the largest shape and that costs no more to serve than buying
-// for the slots it takes.
+// Spot work takes an on-demand reserve only while no Spot offer can host
+// it, and a CPU one only while it is lendable. Without work, only slots of
+// markets where no work waits, or slots that come with the work, take a
+// reserve, and only one whose absence leaves a reserve that fits the
+// largest shape and that costs no more to serve than buying for the slots
+// it takes.
 func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 	var best *FleetHost
 	var bestTaken []int
@@ -937,7 +978,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 		}
 		onDemand := h.Market == MarketOnDemand
 		lendsCPU := spotWork && onDemand && h.GPU == "" && ps.lendable(*h)
-		lends := func(need Requirement) bool { return !onDemand || lendsCPU || h.GPU != "" && !ps.spotOffered(need) }
+		lends := func(need Requirement) bool { return !onDemand || (lendsCPU || h.GPU != "") && !ps.spotOffered(need) }
 		b := bin{host: h, room: h.capacity()}
 		var taken []int
 		var count [2]int

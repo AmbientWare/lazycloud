@@ -262,6 +262,37 @@ func TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget(t *testing.T) {
 	}
 }
 
+// An on-demand host whose work could all move to Spot hands it back while
+// a Spot offer can host that work, and lends again once none can. A host
+// that runs work that cannot move keeps lending its room.
+func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
+	quoted := func(s FleetSnapshot) FleetSnapshot {
+		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: planSmall.Name, HourlyMicros: 30_000, ObservedAt: offerNow})
+		return s
+	}
+	moving := planHost(1, planSmall, FleetServing)
+	moving.Load, moving.Lent, moving.Movable, moving.Containers = cpuGiB(2000, 2), cpuGiB(2000, 2), cpuGiB(2000, 2), 1
+	kept := planHost(2, planSmall, FleetServing)
+	kept.Load, kept.Lent, kept.Movable, kept.Containers = cpuGiB(4000, 4), cpuGiB(2000, 2), cpuGiB(2000, 2), 2
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+
+	s := quoted(planSnapshot(t, moving, kept))
+	need, waiting := pendingOne(Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: gib}, nil)
+	s.Pending = []DemandGroup{need}
+	plan := PlanFleet(p, s)
+	if back := actionsOf(plan, ActionHandBack); !slices.Equal(hostsOf(back), []HostID{moving.ID}) || len(actionsOf(plan, ActionLend)) > 0 {
+		t.Fatalf("with Spot quoted: %+v", plan.Actions)
+	}
+	if w := waitOf(t, plan, waiting); w.Wait != nil {
+		t.Fatalf("Spot-tolerant work waits %+v, want the room the kept host lends", w)
+	}
+
+	moving.HandsBack = true
+	if plan := PlanFleet(p, planSnapshot(t, moving, kept)); !slices.Equal(hostsOf(actionsOf(plan, ActionLend)), []HostID{moving.ID}) {
+		t.Fatalf("once no Spot offer is left: %+v", plan.Actions)
+	}
+}
+
 func pendingOne(need Requirement, host *HostID) (DemandGroup, uuid.UUID) {
 	id := uuid.New()
 	return DemandGroup{Need: need, Containers: []PendingContainer{{ID: id, Host: host}}}, id

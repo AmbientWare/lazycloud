@@ -99,6 +99,10 @@ type simContainer struct {
 	// fn names the work; started is when it was placed.
 	fn      string
 	started time.Time
+	// exec is set on a container a function reuses for its tasks; on is
+	// the host it was placed on.
+	exec *execContainer
+	on   *simHost
 }
 
 type simArrival struct {
@@ -190,6 +194,8 @@ type sim struct {
 	builds    []simBuild
 	placedLog []*simContainer
 	next      int
+	// fns, when set, are functions whose tasks run in reused containers.
+	fns *simFunctions
 }
 
 type simBuild struct {
@@ -247,6 +253,9 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				}
 			}
 		}
+		if s.fns != nil {
+			s.fns.step(s)
+		}
 		s.place()
 		// A pass that held purchases for arrivals runs again once they
 		// settle, as the planner loop does.
@@ -301,7 +310,7 @@ func (s *sim) advance() {
 			if c.build {
 				s.builds = append(s.builds, simBuild{at: s.now, market: ReserveMarket{Preemptible: c.need.Preemptible}, shape: reservedShape(c.need)})
 			}
-			s.bill(c, c.runs)
+			s.bill(c, c.ends.Sub(c.started))
 			return true
 		})
 	}
@@ -364,7 +373,7 @@ func (s *sim) place() {
 			s.r.starts = map[startKind]int{}
 		}
 		s.r.starts[kind]++
-		best.containers, best.served = append(best.containers, c), true
+		best.containers, best.served, c.on = append(best.containers, c), true, best
 		s.placedLog = append(s.placedLog, c)
 		wait := s.now.Sub(c.arrived)
 		s.r.waits = append(s.r.waits, wait)
@@ -387,7 +396,7 @@ func (s *sim) load(h *simHost) HostCapacity {
 func (s *sim) fleetHost(h *simHost) FleetHost {
 	fh := h.FleetHost
 	fh.Load, fh.Lent, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, len(h.containers), nil, 0
-	var tolerant FleetCapacity
+	var tolerant, movable FleetCapacity
 	for _, c := range h.containers {
 		if fh.BusySince == nil || c.started.After(*fh.BusySince) {
 			fh.BusySince = ptr(c.started)
@@ -396,9 +405,12 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 		if c.need.Preemptible {
 			tolerant = tolerant.Plus(reservedShape(c.need))
 		}
+		if c.need.Preemptible && c.exec != nil && c.need.Disks == 0 {
+			movable = movable.Plus(reservedShape(c.need))
+		}
 	}
 	if h.Market == MarketOnDemand {
-		fh.Lent = tolerant
+		fh.Lent, fh.Movable = tolerant, movable
 	}
 	return fh
 }
@@ -739,12 +751,15 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionReturnToReserve:
 			h := s.host(*a.Host)
 			h.State, h.ReserveMode, h.Current, h.Slept, h.until = FleetPreparing, a.Mode, false, true, s.now.Add(simStop)
+			h.HandsBack = false
 			if h.GPU != "" {
 				h.unbilledFrom, h.until = h.until, h.until.Add(simGPUStop)
 			}
 			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB, baselineMiBps)
 		case ActionDrain:
-			s.host(*a.Host).State = FleetDraining
+			s.host(*a.Host).State, s.host(*a.Host).HandsBack = FleetDraining, false
+		case ActionHandBack, ActionLend:
+			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
 		case ActionRetireReserve:
 			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
 			s.r.retired = append(s.r.retired, s.now)
@@ -819,6 +834,11 @@ func (s *sim) bill(c *simContainer, d time.Duration) {
 	}
 	rate := s.in.Rates[i]
 	perHour := int64(c.need.CPUMillis)*rate.CPUHour/1000 + c.need.MemoryBytes*rate.MemoryGiBHour/gib + int64(c.need.GPUsNeeded())*rate.GPUCardHour
+	// A container a replacement took over from bills until the
+	// replacement was ready.
+	if c.exec != nil && !c.exec.replacedAt.IsZero() {
+		d = min(d, max(c.exec.replacedAt.Sub(c.started), 0))
+	}
 	s.r.revenueNanos += perHour * d.Milliseconds() / int64(time.Hour/time.Millisecond)
 }
 
@@ -915,7 +935,7 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 			want += a.Offer.HourlyMicros
 		case ActionBuyReserve:
 			want += a.Offer.StoppedMicros
-		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize:
+		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
 			t.Fatalf("an empty fleet's first pass %s", a.Kind)
 		}
 	}

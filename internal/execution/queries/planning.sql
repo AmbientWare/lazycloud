@@ -78,6 +78,7 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
+       c.leaving::int as leaving,
        (r.load_error is not null)::bool as load_failed,
        r.start_failures,
        last_stop.stopped_at as last_stopped_at
@@ -110,17 +111,47 @@ cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
-           count(*) filter (where c.state = 'draining') as draining
+           count(*) filter (where c.state = 'draining') as draining,
+           count(*) filter (where c.state <> 'pending' and container_leaves(c.id, c.host_id, c.rate_class, r.spec)) as leaving
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id;
 
 -- name: CreatePendingContainers :many
--- Placement records the GPU model and whose machine a container got.
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent)
-select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class, sqlc.narg('traceparent')::text
-from generate_series(1, @count::int)
+-- Placement records the GPU model and whose machine a container got. The
+-- first containers replace those @replaces names, one each.
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
+select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class, sqlc.narg('traceparent')::text,
+       (@replaces::uuid[])[n]
+from generate_series(1, @count::int) n
 returning id;
+
+-- name: LeavingContainers :many
+-- The release's live serve containers that leave their host, oldest first:
+-- busy while one runs an attempt, replaced while a replacement of it that is
+-- not ready yet lives, replacement_ready once one is ready.
+select c.id, c.state,
+       exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')::bool as busy,
+       exists (select 1 from containers rc where rc.replaces = c.id and rc.state in ('pending', 'starting'))::bool as replaced,
+       exists (select 1 from containers rc where rc.replaces = c.id and rc.ready_at is not null)::bool as replacement_ready
+from containers c
+join releases r on r.id = c.release_id
+where c.release_id = @release_id::uuid and c.state in ('starting', 'ready', 'draining') and c.purpose = 'serve'
+  and container_leaves(c.id, c.host_id, c.rate_class, r.spec)
+order by c.created_at, c.id;
+
+-- name: DrainLeavingContainers :many
+-- Leaving containers stop claiming; attempts running on them finish there.
+-- SKIP LOCKED passes over one a claim holds; the next pass drains it.
+update containers
+set state = 'draining', drain_started_at = now()
+where id in (
+    select d.id from containers d
+    where d.id = any(@ids::uuid[]) and d.state in ('starting', 'ready')
+    for update skip locked
+)
+  and state in ('starting', 'ready')
+returning id, host_id;
 
 -- name: ScaleUpTrace :one
 -- The trace a scale-up of the release joins: the queued task that has
@@ -153,7 +184,8 @@ where id in (
 returning id;
 
 -- name: LockIdleContainers :many
--- Ready containers idle for longer than keep_warm_seconds, most idle first.
+-- Ready containers idle for longer than keep_warm_seconds, most idle first,
+-- but those leaving their host, which the hand-off drains.
 -- SKIP LOCKED passes over containers a claim holds FOR SHARE: they are about
 -- to run a task. DrainIdleContainers rechecks idleness after these locks.
 select c.id
@@ -161,6 +193,7 @@ from containers c
 where c.release_id = @release_id::uuid
   and c.state = 'ready'
   and c.purpose = 'serve'
+  and c.id <> all(coalesce(@leaving::uuid[], '{}'))
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
   and coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at)
       < now() - make_interval(secs => @keep_warm_seconds::float8)

@@ -52,6 +52,34 @@ func (q *Queries) DrainContainersOnHost(ctx context.Context, arg DrainContainers
 	return items, nil
 }
 
+const spotTolerantReleasesOnHosts = `-- name: SpotTolerantReleasesOnHosts :many
+select distinct c.release_id::uuid as release_id
+from containers c
+where c.host_id = any($1::uuid[]) and c.state <> 'stopped' and c.purpose = 'serve'
+  and c.release_id is not null and c.rate_class in ('auto', 'pinned')
+`
+
+// The releases with live Spot-tolerant serve containers on the hosts.
+func (q *Queries) SpotTolerantReleasesOnHosts(ctx context.Context, hostIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, spotTolerantReleasesOnHosts, hostIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var release_id uuid.UUID
+		if err := rows.Scan(&release_id); err != nil {
+			return nil, err
+		}
+		items = append(items, release_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const stoppedContainersAmong = `-- name: StoppedContainersAmong :many
 select id from containers where id = any($1::uuid[]) and state = 'stopped'
 `

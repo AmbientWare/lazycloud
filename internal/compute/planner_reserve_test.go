@@ -183,14 +183,16 @@ func TestPendingWorkResumesAReadyReserveBeforeBuying(t *testing.T) {
 	}
 }
 
-// Spot work resumes an on-demand reserve only while the on-demand reserves
-// left behind still meet the stopped target this pass computes, the floor
-// and the 8 CPU largest shape; otherwise it waits for a host bought for it.
-func TestSpotWorkResumesAnOnDemandReserveOnlyAboveTheTargetThisPassComputes(t *testing.T) {
+// Spot work resumes an on-demand reserve only while no Spot offer can host
+// it and the on-demand reserves left behind still meet the stopped target
+// this pass computes, the floor and the 8 CPU largest shape; otherwise it
+// waits for Spot.
+func TestSpotWorkResumesAnOnDemandReserveOnlyWhileSpotCannotHostItAboveTheTarget(t *testing.T) {
 	for _, c := range []struct {
 		reserves int
+		spot     bool
 		borrows  bool
-	}{{2, false}, {3, true}} {
+	}{{2, false, false}, {3, false, true}, {3, true, false}} {
 		o := newOwners(t, fleetConfig(compute.Fleet{}))
 		publish(t, o.compute)
 		alice := newUser(t, o.pool, "alice@example.com")
@@ -200,10 +202,13 @@ func TestSpotWorkResumesAnOnDemandReserveOnlyAboveTheTargetThisPassComputes(t *t
 			reserves = append(reserves, uuid.UUID(stoppedReserve(t, o, "c6a.4xlarge", "i-000000000000f1"+string(rune('0'+n))+"0")))
 		}
 		container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 1000, gib)
-		planCapacity(t, o)
-		host := scan[uuid.UUID](t, o.pool, "select capacity_host_id from containers where id = $1", container)
-		if borrowed := slices.Contains(reserves, host); borrowed != c.borrows {
-			t.Errorf("with %d on-demand reserves: the Spot container waits for %s, borrowed %v", c.reserves, host, borrowed)
+		if c.spot {
+			spotPrices(t, o)
+		}
+		plan(t, o)
+		host := scan[*uuid.UUID](t, o.pool, "select capacity_host_id from containers where id = $1", container)
+		if borrowed := host != nil && slices.Contains(reserves, *host); borrowed != c.borrows {
+			t.Errorf("with %d on-demand reserves and Spot quoted %v: the Spot container waits for %v, borrowed %v", c.reserves, c.spot, host, borrowed)
 		}
 	}
 }
