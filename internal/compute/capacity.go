@@ -53,8 +53,6 @@ type StorageRead struct {
 	Bytes  int64
 }
 
-func sameRead(a, b *StorageRead) bool { return a == b || a != nil && b != nil && *a == *b }
-
 // StorageReadOf is the read of a container that mounts platform volumes
 // from a bucket in region, nil without one.
 func StorageReadOf(region *string, bytes int64) *StorageRead {

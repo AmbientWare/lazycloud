@@ -245,11 +245,11 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 			return nil, err
 		}
 		in.Quotas, in.QuotaUsed = vcpuQuotas(rooms), QuotaUse(platform, in.Catalog)
-		reads, err := c.queries.RecentReads(ctx, RecentReadsParams{WindowSeconds: c.policy().LargestShape.Window.Seconds(), SampleSize: demandBatch})
+		shapes, err := c.queries.RecentShapes(ctx, recentShapesParams(c.policy()))
 		if err != nil {
-			return nil, fmt.Errorf("read recent volume reads: %w", err)
+			return nil, fmt.Errorf("read recent container shapes: %w", err)
 		}
-		in.Reads = readsByMarket(reads)
+		in.ReadBytes = readsByMarket(shapes)
 	} else {
 		row, err := c.queries.ConnectionScope(ctx, *h.ConnectionID)
 		if err != nil {
@@ -323,8 +323,8 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	}
 	// A reserve serves its market's next start, which reads what its recent
 	// work read.
-	if r, ok := in.Reads[reserveMarketOf(market, h.GpuType)]; ok && h.ReserveMode != nil {
-		need.Storage = &r
+	if h.ReserveMode != nil {
+		need.Storage = in.marketRead(reserveMarketOf(market, h.GpuType))
 	}
 	for _, w := range waiters {
 		need.Disks += int(w.Disks)

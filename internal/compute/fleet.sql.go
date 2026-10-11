@@ -350,12 +350,7 @@ select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        sb.region as storage_region, coalesce(vb.bytes, 0)::bigint as storage_bytes
 from containers c
 left join releases r on r.id = c.release_id
-left join lateral (
-    select sum(v.size_bytes) as bytes
-    from volumes v
-    where v.workspace_id = c.workspace_id and v.state = 'active'
-      and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
-) vb on true
+cross join lateral (select volume_read_bytes(c.workspace_id, r.spec -> 'volumes') as bytes) vb
 left join workspace_buckets sb on sb.workspace_id = c.workspace_id and vb.bytes is not null
 where c.state = 'pending' and c.capacity_host_id = $1
 `

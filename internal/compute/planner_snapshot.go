@@ -21,7 +21,6 @@ type fleetRead struct {
 	hosts     []PlannerHostsRow
 	pending   []PendingDemandRow
 	recent    []RecentShapesRow
-	reads     []RecentReadsRow
 	cooldowns []PlannerCooldownsRow
 	markets   map[string]FleetMarketsRow
 	// release is the target agent release; nil when none is published.
@@ -47,15 +46,8 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
 	}
-	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
-		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
-	}); err != nil {
+	if r.recent, err = q.RecentShapes(ctx, recentShapesParams(p)); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
-	}
-	if r.reads, err = q.RecentReads(ctx, RecentReadsParams{WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch}); err != nil {
-		return r, fmt.Errorf("read recent volume reads: %w", err)
 	}
 	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
 		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
@@ -269,12 +261,36 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 	return out, nil
 }
 
-// readsByMarket are the recent reads by market, as shapesByMarket keys
-// them.
-func readsByMarket(rows []RecentReadsRow) map[ReserveMarket]StorageRead {
-	reads := make(map[ReserveMarket]StorageRead, len(rows))
+func recentShapesParams(p Policy) RecentShapesParams {
+	return RecentShapesParams{
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
+	}
+}
+
+// market is the market a RecentShapes row measures: GPU work belongs to
+// its model's market of its tolerance, as its demand does, and GPU work
+// without a model to none.
+func (r RecentShapesRow) market() (ReserveMarket, bool) {
+	switch {
+	case r.GpuType != "":
+		return ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}, true
+	case r.Gpus > 0:
+		return ReserveMarket{}, false
+	}
+	return ReserveMarket{Preemptible: r.Preemptible}, true
+}
+
+// readsByMarket is what a start of each market read from its workspace's
+// bucket on average over its recent starts, for the markets whose starts
+// read any.
+func readsByMarket(rows []RecentShapesRow) map[ReserveMarket]int64 {
+	reads := map[ReserveMarket]int64{}
 	for _, r := range rows {
-		reads[ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}] = StorageRead{Region: r.Region, Bytes: r.Bytes}
+		if m, ok := r.market(); ok && shapeKind(r.Kind) == shapeRecent && r.ReadBytes > 0 && r.Starts > 0 {
+			reads[m] = r.ReadBytes / int64(r.Starts)
+		}
 	}
 	return reads
 }
@@ -290,21 +306,14 @@ const (
 
 // shapesByMarket are, by market, the largest shape placed platform
 // containers reserved and the most disks one attached, the largest its
-// finished builds reserved, and what arrived within the arrival window. GPU work belongs to its model's
-// market of its tolerance, as its demand does; GPU work without a model
-// belongs to none.
+// finished builds reserved, and what arrived within the arrival window.
 func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
 	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
-		var m ReserveMarket
-		switch {
-		case r.GpuType != "":
-			m = ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}
-		case r.Gpus > 0:
+		m, ok := r.market()
+		if !ok {
 			continue
-		default:
-			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
 		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
 		switch shapeKind(r.Kind) {

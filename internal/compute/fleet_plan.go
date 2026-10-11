@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -306,6 +305,13 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), spot: freshSpot(p, s.Offers.Spot, s.Now),
 	}
 	ps.s.Offers.QuotaUsed = maps.Clone(ps.quotaUsed)
+	ps.classReads = map[string]int64{}
+	for _, g := range s.Pending {
+		if g.Need.Storage != nil {
+			_, key := ps.classKey(g.Need)
+			ps.classReads[key] = max(ps.classReads[key], g.Need.Storage.Bytes)
+		}
+	}
 	ps.handBack()
 	items := ps.pendingItems()
 	views := ps.views(items)
@@ -335,7 +341,10 @@ type pass struct {
 	waiting, limited, batched map[ReserveMarket]bool
 	hostRoom, reserveRoom     int
 	offers                    map[string][]FleetOffer
-	byMarket                  map[ReserveMarket]*marketView
+	// classReads is the largest read pending work of each demand class
+	// makes, by class key.
+	classReads map[string]int64
+	byMarket   map[ReserveMarket]*marketView
 	// claimed are serving hosts pending work fits; holding are the warm
 	// slots each serving host keeps room for.
 	claimed map[HostID]bool
@@ -552,7 +561,7 @@ func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
 		return offers
 	}
 	need := marketNeed(m)
-	need.Storage = ps.marketRead(m)
+	need.Storage = ps.s.Offers.marketRead(m)
 	offers := slices.DeleteFunc(RankOffers(ps.p, need, reserve, ps.s.Offers), func(o FleetOffer) bool {
 		return o.Market != m.buyMarket() || o.Type.GPU != m.GPU
 	})
@@ -560,25 +569,17 @@ func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
 	return offers
 }
 
-// marketRead is the largest read market m's recent work made, nil for
-// none.
-func (ps *pass) marketRead(m ReserveMarket) *StorageRead {
-	if r, ok := ps.s.Offers.Reads[m]; ok {
-		return &r
-	}
-	return nil
-}
-
-// misplaced reports a reserve of market v outside the region its recent
-// work reads from, while a reserve offer there would save more on one start's
-// read than it costs to prepare. It holds none of the stopped target, so the
-// market buys a reserve there and retires this one once that is ready.
-func (ps *pass) misplaced(v *marketView, h FleetHost) bool {
-	r := ps.marketRead(v.m)
-	if r == nil || h.Region == r.Region {
+// misplaced reports a region outside the one market v's starts read from,
+// while a reserve offer there would save more on a start's expected read
+// than it costs to prepare. A reserve there holds none of the stopped
+// target, so the market buys one in the read region and retires it once
+// that is ready; a host there does not return to the reserve.
+func (ps *pass) misplaced(v *marketView, region string) bool {
+	r := ps.s.Offers.marketRead(v.m)
+	if r == nil || region == r.Region {
 		return false
 	}
-	saved := readMicros(ps.p, r, h.Region) * int64(ps.p.CostHorizon/time.Second)
+	saved := readMicros(ps.p, r, region) * int64(ps.p.CostHorizon/time.Second)
 	return slices.ContainsFunc(ps.marketOffers(v.m, true), func(o FleetOffer) bool {
 		return o.Region == r.Region && o.HourlyMicros*int64(ps.p.Provision/time.Second) < saved
 	})
@@ -586,7 +587,7 @@ func (ps *pass) misplaced(v *marketView, h FleetHost) bool {
 
 // placed is a reserve of market v that holds its stopped target.
 func (ps *pass) placed(v *marketView) func(FleetHost) bool {
-	return func(h FleetHost) bool { return h.reserve() && !ps.misplaced(v, h) }
+	return func(h FleetHost) bool { return h.reserve() && !ps.misplaced(v, h.Region) }
 }
 
 func boolKey(b bool) string {
@@ -895,19 +896,24 @@ func (ps *pass) spotCooling(h FleetHost) bool {
 	})
 }
 
-// classKey is what offers depend on in a requirement.
-func classKey(need Requirement) Requirement {
-	return Requirement{Region: need.Region, Zone: need.Zone, Preemptible: need.Preemptible, GPUs: need.GPUs, Storage: need.Storage}
+// classKey is what offers depend on in a requirement, and its key. Work
+// that reads from a region's buckets is priced with the largest read its
+// class makes there, so it shares purchases and warm slots with the rest of
+// the class.
+func (ps *pass) classKey(need Requirement) (Requirement, string) {
+	c := Requirement{Region: need.Region, Zone: need.Zone, Preemptible: need.Preemptible, GPUs: need.GPUs}
+	key := "demand/" + c.Region + "/" + c.Zone + "/" + boolKey(c.Preemptible) + "/" + strings.Join(c.GPUs, ",")
+	if need.Storage != nil {
+		key += "/" + need.Storage.Region
+		c.Storage = &StorageRead{Region: need.Storage.Region, Bytes: ps.classReads[key]}
+	}
+	return c, key
 }
 
-// classOffers ranks the offers for work of need's placement and GPUs, once
-// per pass.
+// classOffers ranks the offers for work of need's placement, GPUs and read
+// region, once per pass.
 func (ps *pass) classOffers(need Requirement) []FleetOffer {
-	c := classKey(need)
-	key := "demand/" + c.Region + "/" + c.Zone + "/" + boolKey(c.Preemptible) + "/" + strings.Join(c.GPUs, ",")
-	if c.Storage != nil {
-		key += "/" + c.Storage.Region + "/" + strconv.FormatInt(c.Storage.Bytes, 10)
-	}
+	c, key := ps.classKey(need)
 	if offers, ok := ps.offers[key]; ok {
 		return offers
 	}
@@ -996,9 +1002,9 @@ func (ps *pass) resumeEach(items []coverItem, work bool) []coverItem {
 // index, it takes first fit, pending containers before slots: one of its
 // first item's market first, then the one that takes the most pending
 // containers, then the one whose region they read least across, then one
-// that takes every pending container and every slot
-// of its market, so one resume does; then the smallest, the cheapest, and
-// the one that takes the most slots.
+// that takes every pending container and every slot of its market, so one
+// resume does; then the smallest, the cheapest, and the one that takes the
+// most slots.
 // Spot work takes an on-demand reserve only while no Spot offer can host
 // it, and a CPU one only while it is lendable. Without work, only slots of
 // markets where no work waits, or slots that come with the work, take a
@@ -1110,7 +1116,7 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	if catalogued {
 		o.TransferMicros = transferMicros(ps.s.Offers.StorageRegion, h.Region, t)
 	}
-	o.ReadMicros = readMicros(ps.p, ps.marketRead(h.market()), h.Region)
+	o.ReadMicros = readMicros(ps.p, ps.s.Offers.marketRead(h.market()), h.Region)
 	compute, priced := t.OnDemandMicros(h.Region)
 	if h.Market == MarketSpot {
 		q, quoted := ps.spot[spotPool{h.Region, h.ZoneID, h.InstanceType}]
@@ -1166,6 +1172,7 @@ func (ps *pass) lendable(h FleetHost) bool {
 // demandClass is cover items that can share offers, by shape and kind.
 type demandClass struct {
 	need   Requirement
+	key    string
 	market ReserveMarket
 	groups []itemGroup
 }
@@ -1217,13 +1224,10 @@ func (ps *pass) displaced(it coverItem) bool {
 func (ps *pass) buyFor(items []coverItem) {
 	var classes []*demandClass
 	for _, it := range items {
-		key := classKey(it.need)
-		n := slices.IndexFunc(classes, func(c *demandClass) bool {
-			return c.need.Region == key.Region && c.need.Zone == key.Zone && c.need.Preemptible == key.Preemptible && slices.Equal(c.need.GPUs, key.GPUs) &&
-				sameRead(c.need.Storage, key.Storage)
-		})
+		need, key := ps.classKey(it.need)
+		n := slices.IndexFunc(classes, func(c *demandClass) bool { return c.key == key })
 		if n < 0 {
-			classes = append(classes, &demandClass{need: key, market: it.market})
+			classes = append(classes, &demandClass{need: need, key: key, market: it.market})
 			n = len(classes) - 1
 		}
 		c := classes[n]
@@ -1429,18 +1433,17 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 	return out
 }
 
-// leave returns a leaving host to the reserve when EC2 can stop it and the
-// market's reserve falls short, or the host is in the region its market
-// reads from and the reserves there fall short, holds nothing that fits the largest shape
-// while the host does, or the host slept there before and the reserve
-// holds less than its share of the peak, so a reserve woken for a burst
-// waits stopped for the next. A host launched able to hibernate does where
-// hibernates allows. Any other leaving host drains.
+// leave returns a leaving host to the reserve when EC2 can stop it, it is
+// not misplaced, and the market's placed reserves fall short, hold nothing
+// that fits the largest shape while the host does, or the host slept there
+// before and they hold less than its share of the peak, so a reserve woken
+// for a burst waits stopped for the next. A host launched able to
+// hibernate does where hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
-	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) ||
-		!ps.misplaced(v, *h) && !ps.floor(v, HostID{}, ps.placed(v)).Covers(v.stopped) || (ps.fitsLargest(v, *h) && !ps.holdsLargest(v, HostID{})) ||
-		h.Slept && !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.peakShare)
+	placed := ps.placed(v)
+	short := !ps.misplaced(v, h.Region) && (!ps.floor(v, HostID{}, placed).Covers(v.stopped) ||
+		ps.fitsLargest(v, *h) && !ps.holdsLargest(v, HostID{}) || h.Slept && !ps.floor(v, HostID{}, placed).Covers(v.peakShare))
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
 		if h.HibernationConfigured && hibernates(t) {
@@ -1464,19 +1467,20 @@ func (ps *pass) floor(v *marketView, skip HostID, keep func(FleetHost) bool) Fle
 	}), func(h *FleetHost) FleetCapacity { return h.Usable })
 }
 
-// holdsLargest reports whether a reserve of the market other than skip, or
-// one this pass buys, fits the market's largest shape and its disks.
+// holdsLargest reports whether a placed reserve of the market other than
+// skip, or one this pass buys, fits the market's largest shape and its
+// disks.
 func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 	if v.largest.Empty() {
 		return true
 	}
-	for _, h := range ps.inMarket(v.m, FleetHost.reserve) {
+	for _, h := range ps.inMarket(v.m, ps.placed(v)) {
 		if h.ID != skip && !h.Protected && !v.retired[h.ID] && ps.fitsLargest(v, *h) {
 			return true
 		}
 	}
 	return slices.ContainsFunc(ps.planned, func(n plannedHost) bool {
-		return n.market == v.m && n.reserve && v.fits(n.offer.Usable, n.offer.Type)
+		return n.market == v.m && n.reserve && v.fits(n.offer.Usable, n.offer.Type) && !ps.misplaced(v, n.offer.Region)
 	})
 }
 
@@ -1485,16 +1489,17 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 // lacksLargest, a host that fits the largest shape: while any host could
 // return and the reserve has lacked it for less than the return wait or
 // the market awaits returns, or while hosts due back soon cover it. A host
-// could return when EC2 can stop it and it serves or starts. It is due
-// back soon when it starts, became ready within the return wait, as a
-// reserve resumed for a burst does, or idles holding no warm slot, slots a
-// cheaper type will take over, or only a build's slot with room for the
-// largest shape, which it holds warm until the slot lapses.
+// could return when EC2 can stop it, it serves or starts, and it is not
+// misplaced. It is due back soon when it starts, became ready within the
+// return wait, as a reserve resumed for a burst does, or idles holding no
+// warm slot, slots a cheaper type will take over, or only a build's slot
+// with room for the largest shape, which it holds warm until the slot
+// lapses.
 func (ps *pass) returning(v *marketView, short FleetCapacity, lacksLargest bool) bool {
 	leaving := ps.leavers(v)
 	could := ps.inMarket(v.m, func(h FleetHost) bool {
 		_, catalogued := ps.typeNamed(h.InstanceType)
-		return (serving(h) || starting(h)) && h.Stoppable && !h.Protected && catalogued
+		return (serving(h) || starting(h)) && h.Stoppable && !h.Protected && catalogued && !ps.misplaced(v, h.Region)
 	})
 	if len(could) > 0 && (ps.p.Reserve(v.m).AwaitReturn || ps.s.Now.Sub(*v.floorShortSince) < ps.p.ReturnWait) {
 		return true

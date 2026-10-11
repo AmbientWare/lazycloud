@@ -159,13 +159,12 @@ func transferMicrosPerGB(from, to string) int64 {
 
 // transferMilliGBPerCoreHour is the policy estimate of what a running host
 // moves to and from the platform's storage region, in thousandths of a GB
-// per core-hour: registry pulls and pushes, layer reads, and volume and
-// disk restores. A
-// cold start reads about 2 GB of layers for a torch image and 0.1 GB for a
-// python one, a build pushes and converts about what it pulled, and volume
-// and disk restores are rarer than starts. Host caches absorb repeated
-// images, so a host averages about one torch-sized cold read per four
-// core-hours.
+// per core-hour: registry pulls and pushes, layer reads and disk restores.
+// A cold start reads about 2 GB of layers for a torch image and 0.1 GB for
+// a python one, a build pushes and converts about what it pulled, and disk
+// restores are rarer than starts. Host caches absorb repeated images, so a
+// host averages about one torch-sized cold read per four core-hours.
+// Volume reads are priced per start (readMicros).
 const transferMilliGBPerCoreHour = 500
 
 // transferMicros is the expected hourly transfer cost of a running host of

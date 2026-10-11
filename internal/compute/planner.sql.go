@@ -368,12 +368,7 @@ from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
 left join releases r on r.id = b.release_id
-left join lateral (
-    select sum(v.size_bytes) as bytes
-    from volumes v
-    where v.workspace_id = b.workspace_id and v.state = 'active'
-      and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
-) vb on true
+cross join lateral (select volume_read_bytes(b.workspace_id, r.spec -> 'volumes') as bytes) vb
 left join workspace_buckets sb on sb.workspace_id = b.workspace_id and vb.bytes is not null
 group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
 order by 4, 5, 6, 2 desc, 3 desc
@@ -402,8 +397,6 @@ type PendingDemandRow struct {
 // batch follows the pending index alone: ordering ties by id would sort a
 // whole backlog created in one statement. A mirror build runs on the
 // platform, as placement puts it, whatever its workspace's connection.
-// The measured bytes of the platform volumes the release mounts, which a
-// start reads from the workspace's bucket in its region; null for none.
 func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]PendingDemandRow, error) {
 	rows, err := q.db.Query(ctx, pendingDemand, batchSize)
 	if err != nil {
@@ -652,76 +645,14 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	return items, nil
 }
 
-const recentReads = `-- name: RecentReads :many
-select distinct on (1, 2) (c.rate_class in ('auto', 'pinned'))::bool as preemptible, c.gpu_type, b.region, v.bytes::bigint as bytes
-from (
-    select c.workspace_id, c.release_id, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
-    from containers c
-    where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
-    order by c.id desc
-    limit $2
-) c
-join releases r on r.id = c.release_id
-join workspace_buckets b on b.workspace_id = c.workspace_id
-cross join lateral (
-    select sum(v.size_bytes) as bytes
-    from volumes v
-    where v.workspace_id = c.workspace_id and v.state = 'active'
-      and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
-) v
-where c.billing_owner = 'platform_fleet' and c.assigned_at is not null and v.bytes is not null
-order by 1, 2, v.bytes desc
-`
-
-type RecentReadsParams struct {
-	WindowSeconds float64
-	SampleSize    int32
-}
-
-type RecentReadsRow struct {
-	Preemptible bool
-	GpuType     string
-	Region      string
-	Bytes       int64
-}
-
-// By purchase market and GPU model, the largest read from a workspace
-// bucket among the newest platform containers placed within the window, up
-// to the sample: the bucket's region and the measured bytes of the platform
-// volumes the container mounted. Placement sets the GPU model of GPU work.
-// It reads at most sample_size containers whatever the history.
-func (q *Queries) RecentReads(ctx context.Context, arg RecentReadsParams) ([]RecentReadsRow, error) {
-	rows, err := q.db.Query(ctx, recentReads, arg.WindowSeconds, arg.SampleSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []RecentReadsRow
-	for rows.Next() {
-		var i RecentReadsRow
-		if err := rows.Scan(
-			&i.Preemptible,
-			&i.GpuType,
-			&i.Region,
-			&i.Bytes,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const recentShapes = `-- name: RecentShapes :many
 with recent as (
     select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
-           coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks
+           coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks,
+           coalesce(volume_read_bytes(c.workspace_id, r.spec -> 'volumes'), 0) as read_bytes
     from (
         select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
-               c.release_id
+               c.release_id, c.workspace_id
         from containers c
         where c.id > (select uuidv7(- make_interval(secs => $1::float8)))
         order by c.id desc
@@ -738,17 +669,17 @@ with recent as (
 )
 select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
-       max(disks)::int as disks
+       max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
 select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
-       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
 from builds
 group by 2, 3
 union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0
+select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
     select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
@@ -791,11 +722,14 @@ type RecentShapesRow struct {
 	MemoryBytes int64
 	Gpus        int32
 	Disks       int32
+	ReadBytes   int64
+	Starts      int32
 }
 
 // By purchase market and GPU model: the largest CPU, memory and GPUs placed
-// platform containers reserved, and the most disks one attached, among the
-// newest containers created within the window, up to the sample (recent);
+// platform containers reserved, the most disks one attached, and the bytes
+// of platform volumes they read with how many started, among the newest
+// containers created within the window, up to the sample (recent);
 // the same among the build
 // containers that stopped within the build window (build), since a running
 // build's host holds its slot once it ends; and what the placed
@@ -832,6 +766,8 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 			&i.MemoryBytes,
 			&i.Gpus,
 			&i.Disks,
+			&i.ReadBytes,
+			&i.Starts,
 		); err != nil {
 			return nil, err
 		}

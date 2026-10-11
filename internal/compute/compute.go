@@ -118,7 +118,8 @@ func isUniqueViolation(err error) bool {
 // CheckFleet refuses a configuration that would launch instances unable to
 // reach the platform: with fleet networks or connections enabled, instances
 // download the agent from InstallURL over HTTPS and dial ServerAddress with
-// TLS, so neither may be empty or on loopback.
+// TLS, so neither may be empty or on loopback. With fleet networks it needs
+// the storage region, which prices the fleet's transfer.
 func (c Config) CheckFleet() error {
 	if len(c.Fleet.Networks) == 0 && c.Fleet.PrincipalARN == "" {
 		return nil

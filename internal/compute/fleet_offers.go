@@ -89,11 +89,22 @@ type OfferInputs struct {
 	// OwnerPays is set for a connected account's offers: the account pays
 	// its own hosts, so no purchase margin applies.
 	OwnerPays bool
-	// StorageRegion holds the platform's registry and object store, and
-	// Reads is the largest read from a workspace bucket of each market's
-	// platform containers placed within the LargestShape window.
+	// StorageRegion holds the platform's registry, object store and
+	// workspace buckets, and ReadBytes is what a start of each market reads
+	// from its workspace's bucket, on average over the market's starts
+	// within the LargestShape window.
 	StorageRegion string
-	Reads         map[ReserveMarket]StorageRead
+	ReadBytes     map[ReserveMarket]int64
+}
+
+// marketRead is what a start of market m reads, nil when its starts read
+// nothing.
+func (in OfferInputs) marketRead(m ReserveMarket) *StorageRead {
+	bytes, ok := in.ReadBytes[m]
+	if !ok {
+		return nil
+	}
+	return &StorageRead{Region: in.StorageRegion, Bytes: bytes}
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
