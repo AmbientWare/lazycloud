@@ -282,7 +282,7 @@ func (s *Server) AcquireDisk(ctx context.Context, req *hostproto.AcquireDiskRequ
 		DiskId: lease.Disk.String(), WorkspaceId: lease.Workspace.String(), SizeBytes: lease.SizeBytes, LeaseToken: lease.Token,
 	}
 	if g := lease.Newest; g != nil {
-		out.Generation = &hostproto.DiskGeneration{Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256}
+		out.Generation = &hostproto.DiskGeneration{Generation: g.Generation, IndexSha256: g.IndexSHA256}
 	}
 	return out, nil
 }
@@ -293,9 +293,8 @@ func (s *Server) RecordDiskGeneration(ctx context.Context, req *hostproto.Record
 	if err != nil {
 		return nil, err
 	}
-	if err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), storage.PublishedGeneration{
-		Generation: req.GetGeneration(), ManifestKey: req.GetManifestKey(), ManifestSHA256: req.GetManifestSha256(), AddedBytes: req.GetAddedBytes(),
-	}); err != nil {
+	g := storage.DiskGeneration{Generation: req.GetGeneration().GetGeneration(), IndexSHA256: req.GetGeneration().GetIndexSha256()}
+	if err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), g, req.GetAddedBytes()); err != nil {
 		return nil, s.diskError(ctx, err)
 	}
 	return &hostproto.RecordDiskGenerationResponse{}, nil

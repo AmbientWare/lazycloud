@@ -281,13 +281,12 @@ func TestDiskLeaseOverTheHostConnection(t *testing.T) {
 	}
 	record := &hostproto.RecordDiskGenerationRequest{
 		ContainerId: container.String(), DiskId: lease.GetDiskId(), LeaseToken: lease.GetLeaseToken(),
-		Generation: 1, ManifestKey: "disks/" + lease.GetDiskId() + "/manifests/000000000001-" + strings.Repeat("a", 64),
-		ManifestSha256: strings.Repeat("a", 64),
+		Generation: &hostproto.DiskGeneration{Generation: 1, IndexSha256: strings.Repeat("a", 64)},
 	}
 	if _, err := h.client.RecordDiskGeneration(ctx, record); err != nil {
 		t.Fatal(err)
 	}
-	record.Generation = 3
+	record.Generation.Generation = 3
 	if _, err := h.client.RecordDiskGeneration(ctx, record); status.Code(err) != codes.Aborted {
 		t.Fatalf("out-of-order generation: %v", err)
 	}

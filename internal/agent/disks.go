@@ -173,7 +173,7 @@ func (c *container) attachDisk(ctx context.Context, name string) (string, error)
 	}
 	request := diskengine.AttachRequest{DiskID: held.ID, SizeBytes: lease.GetSizeBytes(), Mountpoint: c.a.diskMount(c.id, held.ID)}
 	if g := lease.GetGeneration(); g != nil {
-		request.Base = &diskengine.Generation{Generation: g.GetGeneration(), ManifestKey: g.GetManifestKey(), ManifestSHA256: g.GetManifestSha256()}
+		request.Base = &diskengine.Generation{Generation: g.GetGeneration(), IndexSHA256: g.GetIndexSha256()}
 	}
 	if _, err := c.a.diskEngine.Attach(ctx, request); err != nil {
 		return "", err //nolint:wrapcheck // The caller names the disk.
@@ -359,8 +359,8 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk, fina
 	}
 	if published != nil {
 		if _, err := a.host.RecordDiskGeneration(ctx, &hostproto.RecordDiskGenerationRequest{
-			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, Generation: published.Generation,
-			ManifestKey: published.ManifestKey, ManifestSha256: published.ManifestSHA256, AddedBytes: published.AddedBytes,
+			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, AddedBytes: published.AddedBytes,
+			Generation: &hostproto.DiskGeneration{Generation: published.Generation, IndexSha256: published.IndexSHA256},
 		}); err != nil {
 			return fmt.Errorf("record generation %d: %w", published.Generation, err)
 		}

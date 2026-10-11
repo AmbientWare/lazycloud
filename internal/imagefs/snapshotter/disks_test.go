@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -20,13 +22,19 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// storedDisk is a disk generation in the test store: frame i holds
+// storedDisk is generation 1 of a disk in the test store: frame i holds
 // frames[i], or zeros where it is nil.
 type storedDisk struct {
 	id    string
 	index imagefs.DiskIndex
-	key   string
 	sum   string
+}
+
+// serveRequest serves the disk's generation, its index kept at a path of
+// the test's.
+func (sd storedDisk) serveRequest(t *testing.T, prefetch bool) *imagefsproto.ServeDiskRequest {
+	t.Helper()
+	return &imagefsproto.ServeDiskRequest{DiskId: sd.id, Generation: 1, IndexSha256: sd.sum, IndexPath: filepath.Join(t.TempDir(), "index"), Prefetch: prefetch}
 }
 
 func (ts *testStore) disk(t *testing.T, id string, frames [][]byte, start []uint32) storedDisk {
@@ -43,7 +51,7 @@ func (ts *testStore) disk(t *testing.T, id string, frames [][]byte, start []uint
 		f, packed := enc.Encode(data)
 		ix.Frames = append(ix.Frames, f)
 		if packed != nil {
-			ts.put(t, "disks/"+id+"/"+f.Name(), packed)
+			ts.putRoot(t, imagefs.DiskPrefix(id)+f.Name(), packed)
 		}
 	}
 	raw, err := ix.Marshal()
@@ -51,9 +59,17 @@ func (ts *testStore) disk(t *testing.T, id string, frames [][]byte, start []uint
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw)
-	name := "disks/" + id + "/manifests/1-" + hex.EncodeToString(sum[:])
-	ts.put(t, name, raw)
-	return storedDisk{id: id, index: ix, key: ts.prefix + name, sum: hex.EncodeToString(sum[:])}
+	ts.putRoot(t, imagefs.DiskIndexKey(id, 1, hex.EncodeToString(sum[:])), raw)
+	return storedDisk{id: id, index: ix, sum: hex.EncodeToString(sum[:])}
+}
+
+// putRoot stores body at key outside the store's prefix, where disks are:
+// the test's bucket is its own.
+func (ts *testStore) putRoot(t *testing.T, key string, body []byte) {
+	t.Helper()
+	if _, err := ts.client.PutObject(t.Context(), &s3.PutObjectInput{Bucket: aws.String(ts.bucket), Key: aws.String(key), Body: bytes.NewReader(body)}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // serveDisks mounts a disk directory over a cache of bound bytes.
@@ -76,7 +92,7 @@ func (d *disks) grantTest(t *testing.T, ts *testStore, id string) {
 	t.Helper()
 	cfg := storagetest.Config(t)
 	if err := d.grant(id, &imagefsproto.DiskGrant{
-		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: ts.bucket, Prefix: ts.prefix, ForcePathStyle: true,
+		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: ts.bucket, ForcePathStyle: true,
 		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	}); err != nil {
 		t.Fatal(err)
@@ -108,7 +124,7 @@ func TestDiskReadsFetchOnlyTheTouchedFrames(t *testing.T) {
 	counting := &countingTransport{}
 	d := serveDisks(t, counting, 64*imagefs.FrameSize)
 	d.grantTest(t, ts, stored.id)
-	g, err := d.serve(t.Context(), &imagefsproto.ServeDiskRequest{DiskId: stored.id, Generation: 1, IndexKey: stored.key, IndexSha256: stored.sum})
+	g, err := d.serve(t.Context(), stored.serveRequest(t, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +172,7 @@ func TestDiskServePrefetchesAndTraces(t *testing.T) {
 	counting := &countingTransport{}
 	d := serveDisks(t, counting, 64*imagefs.FrameSize)
 	d.grantTest(t, ts, stored.id)
-	g, err := d.serve(t.Context(), &imagefsproto.ServeDiskRequest{DiskId: stored.id, Generation: 1, IndexKey: stored.key, IndexSha256: stored.sum, Prefetch: true})
+	g, err := d.serve(t.Context(), stored.serveRequest(t, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,16 +215,16 @@ func TestDiskServePrefetchesAndTraces(t *testing.T) {
 	}
 }
 
-// Only reads of stored frames through the disk's own opens count: a frame of
-// zeros, or a read through a file opened with O_NOATIME, as a publish opens
-// it, is neither in the start trace nor recent.
+// Only reads of stored frames through the disk's own opens make its start
+// trace: not a frame of zeros, nor a read through a file opened with
+// O_NOATIME, as a publish opens it.
 func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
 	ts := newTestStore(t)
 	frames := [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize), nil, bytes.Repeat([]byte{2}, imagefs.FrameSize)}
 	stored := ts.disk(t, "d4", frames, nil)
 	d := serveDisks(t, &countingTransport{}, 64*imagefs.FrameSize)
 	d.grantTest(t, ts, stored.id)
-	g, err := d.serve(t.Context(), &imagefsproto.ServeDiskRequest{DiskId: stored.id, Generation: 1, IndexKey: stored.key, IndexSha256: stored.sum, Prefetch: true})
+	g, err := d.serve(t.Context(), stored.serveRequest(t, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,8 +243,8 @@ func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
 	k.traceStart = k.traceStart.Add(-diskTraceWindow)
 	k.mu.Unlock()
 	reads, err := d.reads(stored.id)
-	if err != nil || !slices.Equal(reads.GetStartFrames(), []uint32{0}) || !slices.Equal(reads.GetRecentFrames(), []uint32{0}) {
-		t.Fatalf("the disk reports %+v, %v; want frame 0 alone", reads, err)
+	if err != nil || !slices.Equal(reads.GetStartFrames(), []uint32{0}) {
+		t.Fatalf("the disk reports %+v, %v; want a start trace of frame 0", reads, err)
 	}
 }
 
@@ -256,7 +272,7 @@ func TestDiskReleaseStopsItsPrefetch(t *testing.T) {
 	d := serveDisks(t, slow, 64*imagefs.FrameSize)
 	d.grantTest(t, ts, stored.id)
 	for range 2 {
-		if _, err := d.serve(t.Context(), &imagefsproto.ServeDiskRequest{DiskId: stored.id, Generation: 1, IndexKey: stored.key, IndexSha256: stored.sum, Prefetch: true}); err != nil {
+		if _, err := d.serve(t.Context(), stored.serveRequest(t, true)); err != nil {
 			t.Fatal(err)
 		}
 	}

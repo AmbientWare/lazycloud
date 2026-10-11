@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"regexp"
@@ -67,12 +66,12 @@ func lockedHolder(d LockActiveDiskRow) holder {
 	return holder{d.HolderContainerID, d.HolderState, d.HolderStopReason, d.HolderHostState, d.ReleasedAt != nil}
 }
 
-// DiskGeneration is one published generation of a disk: its stored index
-// and the index's sha256.
+// DiskGeneration is one published generation of a disk: its number and
+// the sha256 of its stored index, which the disk engine keeps at
+// manifests/<generation as 12 digits>-<sha256> under the disk's prefix.
 type DiskGeneration struct {
-	Generation     int64
-	ManifestKey    string
-	ManifestSHA256 string
+	Generation  int64
+	IndexSHA256 string
 }
 
 // DiskLease is a container's hold on a disk. Token fences every publish.
@@ -172,27 +171,15 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 			}
 		}
 		lease.Disk, lease.SizeBytes, lease.Token = disk.ID, size, token
-		if disk.Generation == 0 {
-			return nil
+		if disk.IndexSha256 != nil {
+			lease.Newest = &DiskGeneration{Generation: disk.Generation, IndexSHA256: *disk.IndexSha256}
 		}
-		newest, err := q.NewestDiskGeneration(ctx, disk.ID)
-		if err != nil {
-			return fmt.Errorf("read newest disk generation: %w", err)
-		}
-		lease.Newest = &DiskGeneration{Generation: newest.Generation, ManifestKey: newest.ManifestKey, ManifestSHA256: newest.ManifestSha256}
 		return nil
 	})
 	if err != nil {
 		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
 	}
 	return lease, nil
-}
-
-// PublishedGeneration is a generation a host uploaded.
-type PublishedGeneration struct {
-	Generation                  int64
-	ManifestKey, ManifestSHA256 string
-	AddedBytes                  int64
 }
 
 // diskLease holds a fenced lease for the length of fn.
@@ -210,33 +197,21 @@ func (s *Storage) withDiskLease(ctx context.Context, host compute.HostID, contai
 	})
 }
 
-// RecordDiskGeneration accepts the next generation from the lease holder.
-// A replay of the recorded generation with the same manifest succeeds, so
-// the host can retry after a lost reply.
-func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g PublishedGeneration) error {
+// RecordDiskGeneration accepts the next generation from the lease holder,
+// whose new frames hold addedBytes. A replay of the recorded generation
+// with the same index succeeds, so the host can retry after a lost reply.
+func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g DiskGeneration, addedBytes int64) error {
+	if !sha256Hex.MatchString(g.IndexSHA256) {
+		return invalid("index sha256 %q is not 64 lowercase hex digits", g.IndexSHA256)
+	}
 	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
-		if g.Generation <= row.Generation {
-			recorded, err := q.DiskGeneration(ctx, DiskGenerationParams{DiskID: disk, Generation: g.Generation})
-			if err == nil && subtle.ConstantTimeCompare([]byte(recorded), []byte(g.ManifestSHA256)) == 1 {
-				return nil
-			}
-			return conflict("generation %d is already recorded", g.Generation)
+		if g.Generation == row.Generation && row.IndexSha256 != nil && *row.IndexSha256 == g.IndexSHA256 {
+			return nil
 		}
 		if g.Generation != row.Generation+1 {
-			return conflict("generation %d does not follow %d", g.Generation, row.Generation)
+			return conflict("generation %d does not follow the recorded %d", g.Generation, row.Generation)
 		}
-		// The key carries the index digest, so no upload can replace a
-		// recorded index.
-		want := fmt.Sprintf("%smanifests/%012d-%s", diskPrefix(disk), g.Generation, g.ManifestSHA256)
-		if g.ManifestKey != want {
-			return invalid("manifest key %q, want %q", g.ManifestKey, want)
-		}
-		if err := q.InsertDiskGeneration(ctx, InsertDiskGenerationParams{
-			DiskID: disk, Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256,
-		}); err != nil {
-			return fmt.Errorf("record generation: %w", err)
-		}
-		return q.AdvanceDisk(ctx, AdvanceDiskParams{ID: disk, Generation: g.Generation, AddedBytes: max(g.AddedBytes, 0)})
+		return q.AdvanceDisk(ctx, AdvanceDiskParams{ID: disk, Generation: g.Generation, IndexSha256: &g.IndexSHA256, AddedBytes: max(addedBytes, 0)})
 	})
 	if err != nil {
 		return fmt.Errorf("record disk generation: %w", err)
@@ -248,7 +223,7 @@ func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID,
 const maxCollectKeys = 1000
 
 // CollectDisk deletes keys, objects of the disk that generation, a recorded
-// one, no longer reads, and forgets older generations. The keys are deleted
+// one, no longer reads. The keys are deleted
 // while the lease's row lock is held: no other container can take the disk
 // or record a generation until they are gone, and a holder that lost the
 // lease deletes nothing. Keys outside the disk's indexes below generation
@@ -278,10 +253,7 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 				return fmt.Errorf("delete collected objects: %w", err)
 			}
 		}
-		if err := q.ShrinkDiskStored(ctx, ShrinkDiskStoredParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0)}); err != nil {
-			return fmt.Errorf("record collection: %w", err)
-		}
-		return q.DeleteDiskGenerationsBefore(ctx, DeleteDiskGenerationsBeforeParams{DiskID: disk, Generation: base})
+		return q.ShrinkDiskStored(ctx, ShrinkDiskStoredParams{ID: disk, ContainerID: &container, LeaseToken: token, RemovedBytes: max(removedBytes, 0)})
 	})
 	if err != nil {
 		return fmt.Errorf("collect disk: %w", err)
@@ -290,6 +262,7 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 }
 
 var (
+	sha256Hex    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	collectIndex = regexp.MustCompile(`^manifests/(\d{12})-[0-9a-f]{64}$`)
 	collectFrame = regexp.MustCompile(`^frames/[0-9a-f]{64}$`)
 )

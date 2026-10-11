@@ -95,10 +95,9 @@ type collection struct {
 // pendingPublish is an upload whose generation the control plane has not
 // yet confirmed. A retried publish returns it unchanged.
 type pendingPublish struct {
-	Generation     int64  `json:"generation"`
-	ManifestKey    string `json:"manifest_key"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	AddedBytes     int64  `json:"added_bytes"`
+	Generation  int64  `json:"generation"`
+	IndexSHA256 string `json:"index_sha256"`
+	AddedBytes  int64  `json:"added_bytes"`
 	// Through is the newest layer the generation holds.
 	Through int `json:"through"`
 	// Dirty are the frames the generation replaced, cached before the live
@@ -109,7 +108,11 @@ type pendingPublish struct {
 }
 
 func (p *pendingPublish) published() *Published {
-	return &Published{Generation: p.Generation, ManifestKey: p.ManifestKey, ManifestSHA256: p.ManifestSHA256, AddedBytes: p.AddedBytes}
+	return &Published{Generation: p.Generation, IndexSHA256: p.IndexSHA256, AddedBytes: p.AddedBytes}
+}
+
+func (p *pendingPublish) generation() Generation {
+	return Generation{Generation: p.Generation, IndexSHA256: p.IndexSHA256}
 }
 
 type diskState struct {
@@ -164,7 +167,8 @@ func (s *diskState) commitPending(p diskPaths) ([]layer, error) {
 		}
 	}
 	s.Layers = kept
-	s.Base = &Generation{Generation: pending.Generation, ManifestKey: pending.ManifestKey, ManifestSHA256: pending.ManifestSHA256}
+	base := pending.generation()
+	s.Base = &base
 	var keys []collectKey
 	if s.Collect != nil {
 		keys = s.Collect.Keys

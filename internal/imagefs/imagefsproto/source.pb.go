@@ -609,19 +609,17 @@ func (x *EndTraceResponse) GetComplete() bool {
 	return false
 }
 
-// DiskGrant reads the objects under <prefix>disks/<disk id>/ of one bucket.
+// DiskGrant reads the objects under disks/<disk id>/ of one bucket.
 type DiskGrant struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Endpoint string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	Region   string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
-	Bucket   string                 `protobuf:"bytes,3,opt,name=bucket,proto3" json:"bucket,omitempty"`
-	// Ends with "/" when set.
-	Prefix          string                 `protobuf:"bytes,4,opt,name=prefix,proto3" json:"prefix,omitempty"`
-	ForcePathStyle  bool                   `protobuf:"varint,5,opt,name=force_path_style,json=forcePathStyle,proto3" json:"force_path_style,omitempty"`
-	AccessKeyId     string                 `protobuf:"bytes,6,opt,name=access_key_id,json=accessKeyId,proto3" json:"access_key_id,omitempty"`
-	SecretAccessKey string                 `protobuf:"bytes,7,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
-	SessionToken    string                 `protobuf:"bytes,8,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
-	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Endpoint        string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	Region          string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
+	Bucket          string                 `protobuf:"bytes,3,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	ForcePathStyle  bool                   `protobuf:"varint,4,opt,name=force_path_style,json=forcePathStyle,proto3" json:"force_path_style,omitempty"`
+	AccessKeyId     string                 `protobuf:"bytes,5,opt,name=access_key_id,json=accessKeyId,proto3" json:"access_key_id,omitempty"`
+	SecretAccessKey string                 `protobuf:"bytes,6,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
+	SessionToken    string                 `protobuf:"bytes,7,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -673,13 +671,6 @@ func (x *DiskGrant) GetRegion() string {
 func (x *DiskGrant) GetBucket() string {
 	if x != nil {
 		return x.Bucket
-	}
-	return ""
-}
-
-func (x *DiskGrant) GetPrefix() string {
-	if x != nil {
-		return x.Prefix
 	}
 	return ""
 }
@@ -811,9 +802,12 @@ type ServeDiskRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	DiskId     string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
 	Generation int64                  `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
-	// The generation's stored DiskIndex and the sha256 of its bytes.
-	IndexKey    string `protobuf:"bytes,3,opt,name=index_key,json=indexKey,proto3" json:"index_key,omitempty"`
-	IndexSha256 string `protobuf:"bytes,4,opt,name=index_sha256,json=indexSha256,proto3" json:"index_sha256,omitempty"`
+	// The sha256 of the generation's stored DiskIndex.
+	IndexSha256 string `protobuf:"bytes,3,opt,name=index_sha256,json=indexSha256,proto3" json:"index_sha256,omitempty"`
+	// The disk engine's copy of the index. A generation not yet served reads
+	// it there, or when it is missing reads the stored index through the
+	// disk's grant and writes it there.
+	IndexPath string `protobuf:"bytes,4,opt,name=index_path,json=indexPath,proto3" json:"index_path,omitempty"`
 	// Starts the disk's start trace and fetches the index's start_frames,
 	// then its recent_frames, in the background, bounded by the cache's size
 	// and a time limit. An attach sets it.
@@ -868,16 +862,16 @@ func (x *ServeDiskRequest) GetGeneration() int64 {
 	return 0
 }
 
-func (x *ServeDiskRequest) GetIndexKey() string {
+func (x *ServeDiskRequest) GetIndexSha256() string {
 	if x != nil {
-		return x.IndexKey
+		return x.IndexSha256
 	}
 	return ""
 }
 
-func (x *ServeDiskRequest) GetIndexSha256() string {
+func (x *ServeDiskRequest) GetIndexPath() string {
 	if x != nil {
-		return x.IndexSha256
+		return x.IndexPath
 	}
 	return ""
 }
@@ -1078,8 +1072,8 @@ type DiskReadsResponse struct {
 	// The frames read in the first minute after the latest serve that
 	// prefetched, in order of first read; empty until that minute has passed.
 	StartFrames []uint32 `protobuf:"varint,1,rep,packed,name=start_frames,json=startFrames,proto3" json:"start_frames,omitempty"`
-	// The disk's frames the cache holds, most recently read first, at most as
-	// many as a prefetch fetches.
+	// The newest served generation's frames the cache holds, most recently
+	// used first, at most as many as a prefetch fetches.
 	RecentFrames  []uint32 `protobuf:"varint,2,rep,packed,name=recent_frames,json=recentFrames,proto3" json:"recent_frames,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1164,29 +1158,29 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"e\n" +
 	"\x10EndTraceResponse\x125\n" +
 	"\x05reads\x18\x01 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x1a\n" +
-	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xc9\x02\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xb1\x02\n" +
 	"\tDiskGrant\x12\x1a\n" +
 	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x16\n" +
-	"\x06bucket\x18\x03 \x01(\tR\x06bucket\x12\x16\n" +
-	"\x06prefix\x18\x04 \x01(\tR\x06prefix\x12(\n" +
-	"\x10force_path_style\x18\x05 \x01(\bR\x0eforcePathStyle\x12\"\n" +
-	"\raccess_key_id\x18\x06 \x01(\tR\vaccessKeyId\x12*\n" +
-	"\x11secret_access_key\x18\a \x01(\tR\x0fsecretAccessKey\x12#\n" +
-	"\rsession_token\x18\b \x01(\tR\fsessionToken\x129\n" +
+	"\x06bucket\x18\x03 \x01(\tR\x06bucket\x12(\n" +
+	"\x10force_path_style\x18\x04 \x01(\bR\x0eforcePathStyle\x12\"\n" +
+	"\raccess_key_id\x18\x05 \x01(\tR\vaccessKeyId\x12*\n" +
+	"\x11secret_access_key\x18\x06 \x01(\tR\x0fsecretAccessKey\x12#\n" +
+	"\rsession_token\x18\a \x01(\tR\fsessionToken\x129\n" +
 	"\n" +
-	"expires_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"b\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"b\n" +
 	"\x10GrantDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x125\n" +
 	"\x05grant\x18\x02 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x05grant\"\x13\n" +
-	"\x11GrantDiskResponse\"\xbb\x01\n" +
+	"\x11GrantDiskResponse\"\xbd\x01\n" +
 	"\x10ServeDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\x03R\n" +
-	"generation\x12\x1b\n" +
-	"\tindex_key\x18\x03 \x01(\tR\bindexKey\x12!\n" +
-	"\findex_sha256\x18\x04 \x01(\tR\vindexSha256\x12\x1a\n" +
+	"generation\x12!\n" +
+	"\findex_sha256\x18\x03 \x01(\tR\vindexSha256\x12\x1d\n" +
+	"\n" +
+	"index_path\x18\x04 \x01(\tR\tindexPath\x12\x1a\n" +
 	"\bprefetch\x18\x05 \x01(\bR\bprefetch\x12\x12\n" +
 	"\x04warm\x18\x06 \x03(\rR\x04warm\"'\n" +
 	"\x11ServeDiskResponse\x12\x12\n" +

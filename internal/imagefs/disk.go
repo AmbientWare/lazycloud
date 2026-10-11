@@ -45,6 +45,17 @@ func (f DiskFrame) Zero() bool { return f.Size == 0 }
 // Name is where the frame is stored under its disk's prefix.
 func (f DiskFrame) Name() string { return "frames/" + hex.EncodeToString(f.Digest[:]) }
 
+// DiskPrefix holds every object of disk id in its workspace bucket.
+func DiskPrefix(id string) string { return "disks/" + id + "/" }
+
+// DiskIndexKey is where generation's index of disk id is stored, named by
+// the sha256 of its bytes, so an upload never replaces a different index of
+// the same generation, such as one a stale holder wrote after the disk
+// changed hands.
+func DiskIndexKey(id string, generation int64, sha256 string) string {
+	return fmt.Sprintf("%smanifests/%012d-%s", DiskPrefix(id), generation, sha256)
+}
+
 // DiskFrames is how many frames a disk of size bytes has.
 func DiskFrames(size int64) int { return int(ceilDiv(size, FrameSize)) }
 

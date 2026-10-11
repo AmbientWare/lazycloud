@@ -1,13 +1,13 @@
 package snapshotter
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"log/slog"
 	"net/http"
@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -70,15 +69,12 @@ type disk struct {
 	traceStart time.Time
 	trace      []uint32
 	traced     map[uint32]bool
-	// lastRead is when each frame was last read.
-	lastRead map[uint32]time.Time
 }
 
 // diskGrant reads one disk's objects until expires.
 type diskGrant struct {
 	client  *s3.Client
 	bucket  string
-	prefix  string
 	expires time.Time
 }
 
@@ -162,7 +158,7 @@ func (d *disks) grant(id string, g *imagefsproto.DiskGrant) error {
 		return status.Error(codes.InvalidArgument, "a disk grant needs an endpoint, a region, a bucket, a key and an expiry")
 	}
 	next := &diskGrant{
-		bucket: g.GetBucket(), prefix: g.GetPrefix() + "disks/" + id + "/", expires: g.GetExpiresAt().AsTime(),
+		bucket: g.GetBucket(), expires: g.GetExpiresAt().AsTime(),
 		client: s3.New(s3.Options{
 			Region: g.GetRegion(), BaseEndpoint: aws.String(g.GetEndpoint()), UsePathStyle: g.GetForcePathStyle(),
 			Credentials:                aws.NewCredentialsCache(aws.CredentialsProviderFunc(staticCredentials(g))),
@@ -175,7 +171,7 @@ func (d *disks) grant(id string, g *imagefsproto.DiskGrant) error {
 	d.mu.Lock()
 	k := d.byID[id]
 	if k == nil {
-		k = &disk{id: id, generations: map[int64]*diskGeneration{}, traced: map[uint32]bool{}, lastRead: map[uint32]time.Time{}}
+		k = &disk{id: id, generations: map[int64]*diskGeneration{}, traced: map[uint32]bool{}}
 		d.byID[id] = k
 	}
 	d.mu.Unlock()
@@ -226,7 +222,7 @@ func (g *diskGrant) get(ctx context.Context, key string, limit int64) ([]byte, e
 	return data, nil
 }
 
-// serve serves a generation and returns its file, fetching its index the
+// serve serves a generation and returns its file, reading its index the
 // first time. With prefetch it begins the disk's start trace and fetches
 // the index's start and recent frames in the background.
 func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (*diskGeneration, error) {
@@ -269,31 +265,14 @@ func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (
 	return g, nil
 }
 
-// open fetches a generation's index and adds its file.
+// open reads a generation's index and adds its file.
 func (d *disks) open(ctx context.Context, k *disk, req *imagefsproto.ServeDiskRequest) (*diskGeneration, error) {
 	if err := d.mount(); err != nil {
 		return nil, err
 	}
-	var raw []byte
-	err := retry(ctx, func() error {
-		grant, err := k.liveGrant()
-		if err != nil {
-			return err
-		}
-		if !strings.HasPrefix(req.GetIndexKey(), grant.prefix) {
-			return status.Errorf(codes.InvalidArgument, "index %s is not disk %s's", req.GetIndexKey(), k.id)
-		}
-		raw, err = grant.get(ctx, req.GetIndexKey(), imagefs.MaxIndexSize)
-		return err
-	})
-	if errors.Is(err, errNoGrant) {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
-	}
+	raw, err := d.index(ctx, k, req)
 	if err != nil {
-		return nil, fmt.Errorf("index of disk %s generation %d: %w", k.id, req.GetGeneration(), err)
-	}
-	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != req.GetIndexSha256() {
-		return nil, status.Errorf(codes.InvalidArgument, "the index of disk %s generation %d does not match its sha256", k.id, req.GetGeneration())
+		return nil, err
 	}
 	ix, err := imagefs.UnmarshalDisk(raw)
 	if err != nil {
@@ -311,6 +290,45 @@ func (d *disks) open(ctx context.Context, k *disk, req *imagefsproto.ServeDiskRe
 	file := d.root.NewPersistentInode(ctx, &diskFile{gen: g}, gofs.StableAttr{Mode: syscall.S_IFREG, Ino: d.inodes.Add(1) + 1})
 	d.root.AddChild(g.name, file, true)
 	return g, nil
+}
+
+// index returns the generation's stored index from the engine's copy at
+// req's index path, or when that is missing from the store, writing it
+// there.
+func (d *disks) index(ctx context.Context, k *disk, req *imagefsproto.ServeDiskRequest) ([]byte, error) {
+	path := req.GetIndexPath()
+	raw, err := os.ReadFile(path) //nolint:gosec // The disk engine's file; only root reaches the socket.
+	fetched := errors.Is(err, fs.ErrNotExist)
+	if fetched {
+		key := imagefs.DiskIndexKey(k.id, req.GetGeneration(), req.GetIndexSha256())
+		err = retry(ctx, func() error {
+			grant, err := k.liveGrant()
+			if err != nil {
+				return err
+			}
+			raw, err = grant.get(ctx, key, imagefs.MaxIndexSize)
+			return err
+		})
+	}
+	if errors.Is(err, errNoGrant) {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("index of disk %s generation %d: %w", k.id, req.GetGeneration(), err)
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != req.GetIndexSha256() {
+		return nil, status.Errorf(codes.InvalidArgument, "the index of disk %s generation %d does not match its sha256", k.id, req.GetGeneration())
+	}
+	if fetched {
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+			return nil, fmt.Errorf("keep the index of disk %s: %w", k.id, err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			return nil, fmt.Errorf("keep the index of disk %s: %w", k.id, err)
+		}
+	}
+	return raw, nil
 }
 
 // release stops serving every generation of the disk but keep, and forgets
@@ -371,7 +389,7 @@ func (d *disks) prefetch(ctx context.Context, g *diskGeneration) {
 func (c *frameCache) prefetchFrames() int { return int(c.limit / imagefs.FrameSize / 4) }
 
 // reads returns the disk's start trace, once its window has passed, and
-// the frames of its newest generation the cache holds, most recently read
+// the frames of its newest generation the cache holds, most recently used
 // first.
 func (d *disks) reads(id string) (*imagefsproto.DiskReadsResponse, error) {
 	k := d.lookup(id)
@@ -389,36 +407,26 @@ func (d *disks) reads(id string) (*imagefsproto.DiskReadsResponse, error) {
 			newest = g
 		}
 	}
-	type read struct {
-		frame uint32
-		at    time.Time
-	}
-	recent := make([]read, 0, len(k.lastRead))
-	for frame, at := range k.lastRead {
-		recent = append(recent, read{frame, at})
-	}
 	k.mu.Unlock()
 	if newest == nil {
 		return out, nil
 	}
-	slices.SortFunc(recent, func(a, b read) int { return cmp.Or(b.at.Compare(a.at), cmp.Compare(a.frame, b.frame)) })
-	for _, r := range recent {
-		if len(out.RecentFrames) >= d.cache.prefetchFrames() {
-			break
-		}
-		if i := int(r.frame); i < len(newest.index.Frames) && !newest.index.Frames[i].Zero() && d.cache.cached(newest.key(i)) {
-			out.RecentFrames = append(out.RecentFrames, r.frame)
+	// Frames of equal bytes share one cached frame, named by the first.
+	frames := map[frameKey]uint32{}
+	for i, f := range slices.Backward(newest.index.Frames) {
+		if !f.Zero() {
+			frames[newest.key(i)] = uint32(i) //nolint:gosec // frames are below maxDiskFrames
 		}
 	}
+	out.RecentFrames = d.cache.recentlyHeld(frames, d.cache.prefetchFrames())
 	return out, nil
 }
 
-// record counts a read of frame in the disk's start trace and recency.
+// record counts a read of frame in the disk's start trace.
 func (k *disk) record(frame uint32) {
 	now := time.Now()
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.lastRead[frame] = now
 	if !k.traceStart.IsZero() && now.Sub(k.traceStart) < diskTraceWindow && !k.traced[frame] && len(k.trace) < imagefs.MaxTraceReads {
 		k.traced[frame] = true
 		k.trace = append(k.trace, frame)
@@ -463,7 +471,7 @@ func (g *diskGeneration) fetch(ctx context.Context, frame int) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		packed, err := grant.get(ctx, grant.prefix+f.Name(), f.Size)
+		packed, err := grant.get(ctx, imagefs.DiskPrefix(g.disk.id)+f.Name(), f.Size)
 		if err != nil {
 			return err
 		}
@@ -578,8 +586,8 @@ func (s diskSources) GrantDisk(_ context.Context, req *imagefsproto.GrantDiskReq
 }
 
 func (s diskSources) ServeDisk(ctx context.Context, req *imagefsproto.ServeDiskRequest) (*imagefsproto.ServeDiskResponse, error) {
-	if req.GetGeneration() <= 0 || req.GetIndexKey() == "" {
-		return nil, status.Error(codes.InvalidArgument, "a served generation needs a number and an index key")
+	if !diskIDPattern(req.GetDiskId()) || req.GetGeneration() <= 0 || !filepath.IsAbs(req.GetIndexPath()) {
+		return nil, status.Error(codes.InvalidArgument, "a served generation needs a disk id, a number and an absolute index path")
 	}
 	g, err := s.disks.serve(ctx, req)
 	if err != nil {

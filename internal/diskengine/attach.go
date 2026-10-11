@@ -35,8 +35,8 @@ func (e *Engine) Attach(ctx context.Context, req AttachRequest) (AttachResult, e
 	if !filepath.IsAbs(req.Mountpoint) {
 		return AttachResult{}, fmt.Errorf("%w: mountpoint must be absolute, got %q", ErrInvalid, req.Mountpoint)
 	}
-	if b := req.Base; b != nil && (b.Generation <= 0 || b.ManifestKey == "" || !sha256Pattern(b.ManifestSHA256)) {
-		return AttachResult{}, fmt.Errorf("%w: generation %d needs a positive number, an index key and a sha256 index digest", ErrInvalid, b.Generation)
+	if b := req.Base; b != nil && (b.Generation <= 0 || !sha256Pattern(b.IndexSHA256)) {
+		return AttachResult{}, fmt.Errorf("%w: generation %d needs a positive number and a sha256 index digest", ErrInvalid, b.Generation)
 	}
 	if err := p.checkSocketPaths(); err != nil {
 		return AttachResult{}, err
@@ -91,14 +91,44 @@ func (e *Engine) Attach(ctx context.Context, req AttachRequest) (AttachResult, e
 	return result, nil
 }
 
-// start has the snapshotter serve req.Base, prefetching, prepares the local
-// stack on it and starts the daemon serving both.
+// start makes the local stack sit on req.Base, has the snapshotter serve
+// req.Base, prefetching, and starts the daemon serving both. A stack
+// already on req.Base is kept; any other is replaced by an empty head.
 func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req AttachRequest, target string) (*diskState, AttachResult, error) {
+	if state != nil && state.Pending != nil && req.Base != nil && state.Pending.generation() == *req.Base {
+		// The control plane recorded the upload; the confirmation never arrived.
+		held, err := state.commitPending(p)
+		if err != nil {
+			return nil, AttachResult{}, err
+		}
+		if err := saveState(p, state); err != nil {
+			return nil, AttachResult{}, err
+		}
+		for _, l := range held {
+			if err := removeIfExists(p.layerPath(l)); err != nil {
+				return nil, AttachResult{}, err
+			}
+		}
+	}
+	reuse, err := reusable(p, state, req.Base)
+	if err != nil {
+		return nil, AttachResult{}, err
+	}
+	if !reuse {
+		// Writes a stale local copy holds were fenced off: the disk moved on
+		// without them.
+		if err := os.RemoveAll(p.dir()); err != nil {
+			return nil, AttachResult{}, fmt.Errorf("remove stale local copy: %w", err)
+		}
+		if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
+			return nil, AttachResult{}, fmt.Errorf("create layer directory: %w", err)
+		}
+	}
 	basePath, baseSize := "", int64(0)
 	if req.Base != nil {
 		err := telemetry.Step(ctx, "diskengine.serve_base", func(ctx context.Context) error {
 			path, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
-				DiskId: p.id, Generation: req.Base.Generation, IndexKey: req.Base.ManifestKey, IndexSha256: req.Base.ManifestSHA256, Prefetch: true,
+				DiskId: p.id, Generation: req.Base.Generation, IndexSha256: req.Base.IndexSHA256, IndexPath: p.baseIndex(), Prefetch: true,
 			})
 			if err != nil {
 				return fmt.Errorf("serve the base generation: %w", err)
@@ -114,7 +144,7 @@ func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req A
 			return nil, AttachResult{}, err
 		}
 	}
-	state, result, err := prepare(ctx, p, state, req, baseSize)
+	state, result, err := prepare(ctx, p, state, reuse, req, baseSize)
 	if err != nil {
 		return nil, AttachResult{}, err
 	}
@@ -122,36 +152,15 @@ func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req A
 	return state, result, err
 }
 
-// prepare makes the local stack sit on req.Base, keeping it when it already
-// does, and otherwise replacing it with an empty head. A base of baseSize
-// bytes under a larger disk leaves the filesystem to grow once mounted.
-func prepare(ctx context.Context, p diskPaths, state *diskState, req AttachRequest, baseSize int64) (*diskState, AttachResult, error) {
-	if state != nil && state.Pending != nil && req.Base != nil && state.Pending.Generation == req.Base.Generation &&
-		state.Pending.ManifestSHA256 == req.Base.ManifestSHA256 {
-		// The control plane recorded the upload; the confirmation never arrived.
-		held, err := state.commitPending(p)
-		if err != nil {
-			return nil, AttachResult{}, err
-		}
-		if err := saveState(p, state); err != nil {
-			return nil, AttachResult{}, err
-		}
-		for _, l := range held {
-			if err := removeIfExists(p.layerPath(l)); err != nil {
-				return nil, AttachResult{}, err
-			}
-		}
-	}
-	result := AttachResult{Generation: generationOf(req.Base)}
-	reuse, err := reusable(p, state, req.Base)
-	if err != nil {
-		return nil, AttachResult{}, err
-	}
+// prepare grows a kept stack to req's size, or records a new one with an
+// empty head. A base of baseSize bytes under a larger disk leaves the
+// filesystem to grow once mounted.
+func prepare(ctx context.Context, p diskPaths, state *diskState, reuse bool, req AttachRequest, baseSize int64) (*diskState, AttachResult, error) {
+	result := AttachResult{Generation: generationOf(req.Base), Reused: reuse}
 	if reuse {
 		if state.SizeBytes > req.SizeBytes {
 			return nil, AttachResult{}, fmt.Errorf("%w: disk %s is %d bytes and cannot shrink to %d", ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
 		}
-		result.Reused = true
 		if state.SizeBytes < req.SizeBytes {
 			if err := growHead(ctx, p, state, req.SizeBytes); err != nil {
 				return nil, AttachResult{}, err
@@ -161,14 +170,6 @@ func prepare(ctx context.Context, p diskPaths, state *diskState, req AttachReque
 	}
 	if baseSize > req.SizeBytes {
 		return nil, AttachResult{}, fmt.Errorf("%w: generation %d of disk %s is %d bytes and cannot shrink to %d", ErrInvalid, result.Generation, p.id, baseSize, req.SizeBytes)
-	}
-	// Writes a stale local copy holds were fenced off: the disk moved on
-	// without them.
-	if err := os.RemoveAll(p.dir()); err != nil {
-		return nil, AttachResult{}, fmt.Errorf("remove stale local copy: %w", err)
-	}
-	if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
-		return nil, AttachResult{}, fmt.Errorf("create layer directory: %w", err)
 	}
 	state = &diskState{DiskID: p.id, SizeBytes: req.SizeBytes, Base: req.Base, HeadFresh: true,
 		Unformatted: req.Base == nil, GrowFilesystem: req.Base != nil && baseSize < req.SizeBytes}
@@ -194,8 +195,7 @@ func generationOf(g *Generation) int64 {
 // reusable reports whether the local stack sits on base, so attaching keeps
 // it. Anything it holds beyond base was written by the last holder here.
 func reusable(p diskPaths, state *diskState, base *Generation) (bool, error) {
-	if state == nil || (state.Base == nil) != (base == nil) ||
-		state.Base != nil && (state.Base.Generation != base.Generation || state.Base.ManifestSHA256 != base.ManifestSHA256) {
+	if state == nil || (state.Base == nil) != (base == nil) || state.Base != nil && *state.Base != *base {
 		return false, nil
 	}
 	for _, l := range state.Layers {

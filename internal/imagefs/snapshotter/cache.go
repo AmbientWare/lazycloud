@@ -223,6 +223,20 @@ func (c *frameCache) list(held bool) *list.List {
 	return &c.idle
 }
 
+// recentlyHeld returns the values of keys whose frames are held and stored,
+// most recently used first, at most limit.
+func (c *frameCache) recentlyHeld(keys map[frameKey]uint32, limit int) []uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []uint32
+	for e := c.held.Front(); e != nil && len(out) < limit; e = e.Next() {
+		if v, ok := keys[e.Value.(*cachedFrame).key]; ok { //nolint:forcetypeassert // the lists hold *cachedFrame
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // cached reports whether k is stored.
 func (c *frameCache) cached(k frameKey) bool {
 	c.mu.Lock()

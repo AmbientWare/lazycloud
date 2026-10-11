@@ -14,7 +14,7 @@ on conflict (workspace_id, name) where state = 'active' do nothing;
 -- name: LockActiveDisk :one
 -- The disk with its holder's state: the holder keeps the disk until it is
 -- released or its container stopped with its host lost.
-select d.id, d.size_bytes, d.generation, d.holder_container_id, d.lease_token,
+select d.id, d.size_bytes, d.generation, d.index_sha256, d.holder_container_id, d.lease_token,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at
 from disks d
 left join containers c on c.id = d.holder_container_id
@@ -32,17 +32,11 @@ set holder_container_id = @container_id, lease_token = @lease_token, released_at
     failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id;
 
--- name: NewestDiskGeneration :one
-select g.generation, g.manifest_key, g.manifest_sha256
-from disks d
-join disk_generations g on g.disk_id = d.id and g.generation = d.generation
-where d.id = @disk_id;
-
 -- name: LockLeasedDisk :one
 -- The disk only while container holds it with token: it has not stopped,
 -- or it stopped on a live host and has not released the disk yet, which is
 -- when its host publishes the final generation.
-select d.id, d.generation, d.workspace_id, b.bucket, b.region, w.connection_id
+select d.id, d.generation, d.index_sha256, d.workspace_id, b.bucket, b.region, w.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
@@ -53,16 +47,9 @@ where d.id = @id and d.holder_container_id = @container_id and d.lease_token = @
   and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
 for update of d;
 
--- name: DiskGeneration :one
-select manifest_sha256 from disk_generations where disk_id = @disk_id and generation = @generation;
-
--- name: InsertDiskGeneration :exec
-insert into disk_generations (disk_id, generation, manifest_key, manifest_sha256)
-values (@disk_id, @generation, @manifest_key, @manifest_sha256);
-
 -- name: AdvanceDisk :exec
 update disks
-set generation = @generation, stored_bytes = stored_bytes + @added_bytes,
+set generation = @generation, index_sha256 = @index_sha256, stored_bytes = stored_bytes + @added_bytes,
     failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id;
 
@@ -82,9 +69,6 @@ where id = @id and holder_container_id = @container_id and lease_token = @lease_
 -- name: ShrinkDiskStored :exec
 update disks set stored_bytes = greatest(stored_bytes - @removed_bytes, 0), updated_at = now()
 where id = @id and holder_container_id = @container_id and lease_token = @lease_token;
-
--- name: DeleteDiskGenerationsBefore :exec
-delete from disk_generations where disk_id = @disk_id and generation < @generation;
 
 -- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,

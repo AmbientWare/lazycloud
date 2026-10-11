@@ -5581,15 +5581,15 @@ func (x *AcquireDiskResponse) GetGeneration() *DiskGeneration {
 	return nil
 }
 
-// DiskGeneration is one published generation: its stored DiskIndex
-// (contracts/imagefs/v1/index.proto) and the sha256 of its bytes.
+// DiskGeneration is one published generation: the sha256 of its stored
+// DiskIndex (contracts/imagefs/v1/index.proto), which is at
+// disks/<disk id>/manifests/<generation as 12 digits>-<index_sha256>.
 type DiskGeneration struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Generation     int64                  `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
-	ManifestKey    string                 `protobuf:"bytes,2,opt,name=manifest_key,json=manifestKey,proto3" json:"manifest_key,omitempty"`
-	ManifestSha256 string                 `protobuf:"bytes,3,opt,name=manifest_sha256,json=manifestSha256,proto3" json:"manifest_sha256,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Generation    int64                  `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	IndexSha256   string                 `protobuf:"bytes,2,opt,name=index_sha256,json=indexSha256,proto3" json:"index_sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DiskGeneration) Reset() {
@@ -5629,30 +5629,21 @@ func (x *DiskGeneration) GetGeneration() int64 {
 	return 0
 }
 
-func (x *DiskGeneration) GetManifestKey() string {
+func (x *DiskGeneration) GetIndexSha256() string {
 	if x != nil {
-		return x.ManifestKey
-	}
-	return ""
-}
-
-func (x *DiskGeneration) GetManifestSha256() string {
-	if x != nil {
-		return x.ManifestSha256
+		return x.IndexSha256
 	}
 	return ""
 }
 
 type RecordDiskGenerationRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ContainerId    string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
-	DiskId         string                 `protobuf:"bytes,2,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
-	LeaseToken     []byte                 `protobuf:"bytes,3,opt,name=lease_token,json=leaseToken,proto3" json:"lease_token,omitempty"`
-	Generation     int64                  `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
-	ManifestKey    string                 `protobuf:"bytes,5,opt,name=manifest_key,json=manifestKey,proto3" json:"manifest_key,omitempty"`
-	ManifestSha256 string                 `protobuf:"bytes,6,opt,name=manifest_sha256,json=manifestSha256,proto3" json:"manifest_sha256,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ContainerId string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	DiskId      string                 `protobuf:"bytes,2,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	LeaseToken  []byte                 `protobuf:"bytes,3,opt,name=lease_token,json=leaseToken,proto3" json:"lease_token,omitempty"`
+	Generation  *DiskGeneration        `protobuf:"bytes,4,opt,name=generation,proto3" json:"generation,omitempty"`
 	// Compressed bytes of the frames this generation stored.
-	AddedBytes    int64 `protobuf:"varint,7,opt,name=added_bytes,json=addedBytes,proto3" json:"added_bytes,omitempty"`
+	AddedBytes    int64 `protobuf:"varint,5,opt,name=added_bytes,json=addedBytes,proto3" json:"added_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5708,25 +5699,11 @@ func (x *RecordDiskGenerationRequest) GetLeaseToken() []byte {
 	return nil
 }
 
-func (x *RecordDiskGenerationRequest) GetGeneration() int64 {
+func (x *RecordDiskGenerationRequest) GetGeneration() *DiskGeneration {
 	if x != nil {
 		return x.Generation
 	}
-	return 0
-}
-
-func (x *RecordDiskGenerationRequest) GetManifestKey() string {
-	if x != nil {
-		return x.ManifestKey
-	}
-	return ""
-}
-
-func (x *RecordDiskGenerationRequest) GetManifestSha256() string {
-	if x != nil {
-		return x.ManifestSha256
-	}
-	return ""
+	return nil
 }
 
 func (x *RecordDiskGenerationRequest) GetAddedBytes() int64 {
@@ -7759,24 +7736,21 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"leaseToken\x12A\n" +
 	"\n" +
 	"generation\x18\x05 \x01(\v2!.lazycloud.host.v1.DiskGenerationR\n" +
-	"generation\"|\n" +
+	"generation\"S\n" +
 	"\x0eDiskGeneration\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x03R\n" +
 	"generation\x12!\n" +
-	"\fmanifest_key\x18\x02 \x01(\tR\vmanifestKey\x12'\n" +
-	"\x0fmanifest_sha256\x18\x03 \x01(\tR\x0emanifestSha256\"\x87\x02\n" +
+	"\findex_sha256\x18\x02 \x01(\tR\vindexSha256\"\xde\x01\n" +
 	"\x1bRecordDiskGenerationRequest\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x17\n" +
 	"\adisk_id\x18\x02 \x01(\tR\x06diskId\x12\x1f\n" +
 	"\vlease_token\x18\x03 \x01(\fR\n" +
-	"leaseToken\x12\x1e\n" +
+	"leaseToken\x12A\n" +
 	"\n" +
-	"generation\x18\x04 \x01(\x03R\n" +
-	"generation\x12!\n" +
-	"\fmanifest_key\x18\x05 \x01(\tR\vmanifestKey\x12'\n" +
-	"\x0fmanifest_sha256\x18\x06 \x01(\tR\x0emanifestSha256\x12\x1f\n" +
-	"\vadded_bytes\x18\a \x01(\x03R\n" +
+	"generation\x18\x04 \x01(\v2!.lazycloud.host.v1.DiskGenerationR\n" +
+	"generation\x12\x1f\n" +
+	"\vadded_bytes\x18\x05 \x01(\x03R\n" +
 	"addedBytes\"\x1e\n" +
 	"\x1cRecordDiskGenerationResponse\"\xca\x01\n" +
 	"\x12CollectDiskRequest\x12!\n" +
@@ -8183,56 +8157,57 @@ var file_host_v1_host_proto_depIdxs = []int32{
 	8,   // 88: lazycloud.host.v1.LogLine.stream:type_name -> lazycloud.host.v1.LogStream
 	108, // 89: lazycloud.host.v1.LogLine.time:type_name -> google.protobuf.Timestamp
 	73,  // 90: lazycloud.host.v1.AcquireDiskResponse.generation:type_name -> lazycloud.host.v1.DiskGeneration
-	108, // 91: lazycloud.host.v1.GrantDiskReadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	9,   // 92: lazycloud.host.v1.DiskFailure.operation:type_name -> lazycloud.host.v1.DiskOperation
-	82,  // 93: lazycloud.host.v1.RecordDiskFailureRequest.failure:type_name -> lazycloud.host.v1.DiskFailure
-	86,  // 94: lazycloud.host.v1.APIRequest.head:type_name -> lazycloud.host.v1.APIRequestHead
-	87,  // 95: lazycloud.host.v1.APIRequestHead.headers:type_name -> lazycloud.host.v1.APIHeader
-	89,  // 96: lazycloud.host.v1.APIResponse.head:type_name -> lazycloud.host.v1.APIResponseHead
-	87,  // 97: lazycloud.host.v1.APIResponseHead.headers:type_name -> lazycloud.host.v1.APIHeader
-	93,  // 98: lazycloud.host.v1.CompleteImageBuildRequest.converted_layers:type_name -> lazycloud.host.v1.ConvertedLayer
-	94,  // 99: lazycloud.host.v1.CompleteImageBuildRequest.uploaded_layers:type_name -> lazycloud.host.v1.UploadedLayer
-	92,  // 100: lazycloud.host.v1.CompleteImageBuildResponse.layer_uploads:type_name -> lazycloud.host.v1.LayerUpload
-	96,  // 101: lazycloud.host.v1.AppendImageBuildLogsRequest.lines:type_name -> lazycloud.host.v1.BuildLogLine
-	108, // 102: lazycloud.host.v1.BuildLogLine.time:type_name -> google.protobuf.Timestamp
-	52,  // 103: lazycloud.host.v1.ImageBuild.RegistryAuthEntry.value:type_name -> lazycloud.host.v1.RegistryAuth
-	10,  // 104: lazycloud.host.v1.HostService.Enroll:input_type -> lazycloud.host.v1.EnrollRequest
-	15,  // 105: lazycloud.host.v1.HostService.Session:input_type -> lazycloud.host.v1.HostMessage
-	60,  // 106: lazycloud.host.v1.HostService.ClaimTasks:input_type -> lazycloud.host.v1.ClaimTasksRequest
-	64,  // 107: lazycloud.host.v1.HostService.CompleteTask:input_type -> lazycloud.host.v1.CompleteTaskRequest
-	68,  // 108: lazycloud.host.v1.HostService.AppendLogs:input_type -> lazycloud.host.v1.AppendLogsRequest
-	71,  // 109: lazycloud.host.v1.HostService.AcquireDisk:input_type -> lazycloud.host.v1.AcquireDiskRequest
-	74,  // 110: lazycloud.host.v1.HostService.RecordDiskGeneration:input_type -> lazycloud.host.v1.RecordDiskGenerationRequest
-	76,  // 111: lazycloud.host.v1.HostService.CollectDisk:input_type -> lazycloud.host.v1.CollectDiskRequest
-	78,  // 112: lazycloud.host.v1.HostService.GrantDiskRead:input_type -> lazycloud.host.v1.GrantDiskReadRequest
-	80,  // 113: lazycloud.host.v1.HostService.ReleaseDisk:input_type -> lazycloud.host.v1.ReleaseDiskRequest
-	83,  // 114: lazycloud.host.v1.HostService.RecordDiskFailure:input_type -> lazycloud.host.v1.RecordDiskFailureRequest
-	85,  // 115: lazycloud.host.v1.HostService.ContainerAPI:input_type -> lazycloud.host.v1.APIRequest
-	90,  // 116: lazycloud.host.v1.HostService.CompleteImageBuild:input_type -> lazycloud.host.v1.CompleteImageBuildRequest
-	95,  // 117: lazycloud.host.v1.HostService.AppendImageBuildLogs:input_type -> lazycloud.host.v1.AppendImageBuildLogsRequest
-	98,  // 118: lazycloud.host.v1.HostService.CompleteSnapshot:input_type -> lazycloud.host.v1.CompleteSnapshotRequest
-	100, // 119: lazycloud.host.v1.HostService.CompleteFilesystemImage:input_type -> lazycloud.host.v1.CompleteFilesystemImageRequest
-	13,  // 120: lazycloud.host.v1.HostService.Enroll:output_type -> lazycloud.host.v1.EnrollResponse
-	29,  // 121: lazycloud.host.v1.HostService.Session:output_type -> lazycloud.host.v1.ServerMessage
-	61,  // 122: lazycloud.host.v1.HostService.ClaimTasks:output_type -> lazycloud.host.v1.ClaimTasksResponse
-	67,  // 123: lazycloud.host.v1.HostService.CompleteTask:output_type -> lazycloud.host.v1.CompleteTaskResponse
-	70,  // 124: lazycloud.host.v1.HostService.AppendLogs:output_type -> lazycloud.host.v1.AppendLogsResponse
-	72,  // 125: lazycloud.host.v1.HostService.AcquireDisk:output_type -> lazycloud.host.v1.AcquireDiskResponse
-	75,  // 126: lazycloud.host.v1.HostService.RecordDiskGeneration:output_type -> lazycloud.host.v1.RecordDiskGenerationResponse
-	77,  // 127: lazycloud.host.v1.HostService.CollectDisk:output_type -> lazycloud.host.v1.CollectDiskResponse
-	79,  // 128: lazycloud.host.v1.HostService.GrantDiskRead:output_type -> lazycloud.host.v1.GrantDiskReadResponse
-	81,  // 129: lazycloud.host.v1.HostService.ReleaseDisk:output_type -> lazycloud.host.v1.ReleaseDiskResponse
-	84,  // 130: lazycloud.host.v1.HostService.RecordDiskFailure:output_type -> lazycloud.host.v1.RecordDiskFailureResponse
-	88,  // 131: lazycloud.host.v1.HostService.ContainerAPI:output_type -> lazycloud.host.v1.APIResponse
-	91,  // 132: lazycloud.host.v1.HostService.CompleteImageBuild:output_type -> lazycloud.host.v1.CompleteImageBuildResponse
-	97,  // 133: lazycloud.host.v1.HostService.AppendImageBuildLogs:output_type -> lazycloud.host.v1.AppendImageBuildLogsResponse
-	99,  // 134: lazycloud.host.v1.HostService.CompleteSnapshot:output_type -> lazycloud.host.v1.CompleteSnapshotResponse
-	101, // 135: lazycloud.host.v1.HostService.CompleteFilesystemImage:output_type -> lazycloud.host.v1.CompleteFilesystemImageResponse
-	120, // [120:136] is the sub-list for method output_type
-	104, // [104:120] is the sub-list for method input_type
-	104, // [104:104] is the sub-list for extension type_name
-	104, // [104:104] is the sub-list for extension extendee
-	0,   // [0:104] is the sub-list for field type_name
+	73,  // 91: lazycloud.host.v1.RecordDiskGenerationRequest.generation:type_name -> lazycloud.host.v1.DiskGeneration
+	108, // 92: lazycloud.host.v1.GrantDiskReadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	9,   // 93: lazycloud.host.v1.DiskFailure.operation:type_name -> lazycloud.host.v1.DiskOperation
+	82,  // 94: lazycloud.host.v1.RecordDiskFailureRequest.failure:type_name -> lazycloud.host.v1.DiskFailure
+	86,  // 95: lazycloud.host.v1.APIRequest.head:type_name -> lazycloud.host.v1.APIRequestHead
+	87,  // 96: lazycloud.host.v1.APIRequestHead.headers:type_name -> lazycloud.host.v1.APIHeader
+	89,  // 97: lazycloud.host.v1.APIResponse.head:type_name -> lazycloud.host.v1.APIResponseHead
+	87,  // 98: lazycloud.host.v1.APIResponseHead.headers:type_name -> lazycloud.host.v1.APIHeader
+	93,  // 99: lazycloud.host.v1.CompleteImageBuildRequest.converted_layers:type_name -> lazycloud.host.v1.ConvertedLayer
+	94,  // 100: lazycloud.host.v1.CompleteImageBuildRequest.uploaded_layers:type_name -> lazycloud.host.v1.UploadedLayer
+	92,  // 101: lazycloud.host.v1.CompleteImageBuildResponse.layer_uploads:type_name -> lazycloud.host.v1.LayerUpload
+	96,  // 102: lazycloud.host.v1.AppendImageBuildLogsRequest.lines:type_name -> lazycloud.host.v1.BuildLogLine
+	108, // 103: lazycloud.host.v1.BuildLogLine.time:type_name -> google.protobuf.Timestamp
+	52,  // 104: lazycloud.host.v1.ImageBuild.RegistryAuthEntry.value:type_name -> lazycloud.host.v1.RegistryAuth
+	10,  // 105: lazycloud.host.v1.HostService.Enroll:input_type -> lazycloud.host.v1.EnrollRequest
+	15,  // 106: lazycloud.host.v1.HostService.Session:input_type -> lazycloud.host.v1.HostMessage
+	60,  // 107: lazycloud.host.v1.HostService.ClaimTasks:input_type -> lazycloud.host.v1.ClaimTasksRequest
+	64,  // 108: lazycloud.host.v1.HostService.CompleteTask:input_type -> lazycloud.host.v1.CompleteTaskRequest
+	68,  // 109: lazycloud.host.v1.HostService.AppendLogs:input_type -> lazycloud.host.v1.AppendLogsRequest
+	71,  // 110: lazycloud.host.v1.HostService.AcquireDisk:input_type -> lazycloud.host.v1.AcquireDiskRequest
+	74,  // 111: lazycloud.host.v1.HostService.RecordDiskGeneration:input_type -> lazycloud.host.v1.RecordDiskGenerationRequest
+	76,  // 112: lazycloud.host.v1.HostService.CollectDisk:input_type -> lazycloud.host.v1.CollectDiskRequest
+	78,  // 113: lazycloud.host.v1.HostService.GrantDiskRead:input_type -> lazycloud.host.v1.GrantDiskReadRequest
+	80,  // 114: lazycloud.host.v1.HostService.ReleaseDisk:input_type -> lazycloud.host.v1.ReleaseDiskRequest
+	83,  // 115: lazycloud.host.v1.HostService.RecordDiskFailure:input_type -> lazycloud.host.v1.RecordDiskFailureRequest
+	85,  // 116: lazycloud.host.v1.HostService.ContainerAPI:input_type -> lazycloud.host.v1.APIRequest
+	90,  // 117: lazycloud.host.v1.HostService.CompleteImageBuild:input_type -> lazycloud.host.v1.CompleteImageBuildRequest
+	95,  // 118: lazycloud.host.v1.HostService.AppendImageBuildLogs:input_type -> lazycloud.host.v1.AppendImageBuildLogsRequest
+	98,  // 119: lazycloud.host.v1.HostService.CompleteSnapshot:input_type -> lazycloud.host.v1.CompleteSnapshotRequest
+	100, // 120: lazycloud.host.v1.HostService.CompleteFilesystemImage:input_type -> lazycloud.host.v1.CompleteFilesystemImageRequest
+	13,  // 121: lazycloud.host.v1.HostService.Enroll:output_type -> lazycloud.host.v1.EnrollResponse
+	29,  // 122: lazycloud.host.v1.HostService.Session:output_type -> lazycloud.host.v1.ServerMessage
+	61,  // 123: lazycloud.host.v1.HostService.ClaimTasks:output_type -> lazycloud.host.v1.ClaimTasksResponse
+	67,  // 124: lazycloud.host.v1.HostService.CompleteTask:output_type -> lazycloud.host.v1.CompleteTaskResponse
+	70,  // 125: lazycloud.host.v1.HostService.AppendLogs:output_type -> lazycloud.host.v1.AppendLogsResponse
+	72,  // 126: lazycloud.host.v1.HostService.AcquireDisk:output_type -> lazycloud.host.v1.AcquireDiskResponse
+	75,  // 127: lazycloud.host.v1.HostService.RecordDiskGeneration:output_type -> lazycloud.host.v1.RecordDiskGenerationResponse
+	77,  // 128: lazycloud.host.v1.HostService.CollectDisk:output_type -> lazycloud.host.v1.CollectDiskResponse
+	79,  // 129: lazycloud.host.v1.HostService.GrantDiskRead:output_type -> lazycloud.host.v1.GrantDiskReadResponse
+	81,  // 130: lazycloud.host.v1.HostService.ReleaseDisk:output_type -> lazycloud.host.v1.ReleaseDiskResponse
+	84,  // 131: lazycloud.host.v1.HostService.RecordDiskFailure:output_type -> lazycloud.host.v1.RecordDiskFailureResponse
+	88,  // 132: lazycloud.host.v1.HostService.ContainerAPI:output_type -> lazycloud.host.v1.APIResponse
+	91,  // 133: lazycloud.host.v1.HostService.CompleteImageBuild:output_type -> lazycloud.host.v1.CompleteImageBuildResponse
+	97,  // 134: lazycloud.host.v1.HostService.AppendImageBuildLogs:output_type -> lazycloud.host.v1.AppendImageBuildLogsResponse
+	99,  // 135: lazycloud.host.v1.HostService.CompleteSnapshot:output_type -> lazycloud.host.v1.CompleteSnapshotResponse
+	101, // 136: lazycloud.host.v1.HostService.CompleteFilesystemImage:output_type -> lazycloud.host.v1.CompleteFilesystemImageResponse
+	121, // [121:137] is the sub-list for method output_type
+	105, // [105:121] is the sub-list for method input_type
+	105, // [105:105] is the sub-list for extension type_name
+	105, // [105:105] is the sub-list for extension extendee
+	0,   // [0:105] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_host_proto_init() }

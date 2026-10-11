@@ -361,7 +361,7 @@ func TestAttachRefusesMalformedRequests(t *testing.T) {
 		"relative mount":    func(r *AttachRequest) { r.Mountpoint = "mnt/d" },
 		"disk id with dots": func(r *AttachRequest) { r.DiskID = "../etc" },
 		"base without a digest": func(r *AttachRequest) {
-			r.Base = &Generation{Generation: 1, ManifestKey: "disks/x/manifests/1"}
+			r.Base = &Generation{Generation: 1}
 		},
 	} {
 		req := valid

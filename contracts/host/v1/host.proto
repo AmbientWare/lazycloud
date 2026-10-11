@@ -844,23 +844,21 @@ message AcquireDiskResponse {
   DiskGeneration generation = 5;
 }
 
-// DiskGeneration is one published generation: its stored DiskIndex
-// (contracts/imagefs/v1/index.proto) and the sha256 of its bytes.
+// DiskGeneration is one published generation: the sha256 of its stored
+// DiskIndex (contracts/imagefs/v1/index.proto), which is at
+// disks/<disk id>/manifests/<generation as 12 digits>-<index_sha256>.
 message DiskGeneration {
   int64 generation = 1;
-  string manifest_key = 2;
-  string manifest_sha256 = 3;
+  string index_sha256 = 2;
 }
 
 message RecordDiskGenerationRequest {
   string container_id = 1;
   string disk_id = 2;
   bytes lease_token = 3;
-  int64 generation = 4;
-  string manifest_key = 5;
-  string manifest_sha256 = 6;
+  DiskGeneration generation = 4;
   // Compressed bytes of the frames this generation stored.
-  int64 added_bytes = 7;
+  int64 added_bytes = 5;
 }
 
 message RecordDiskGenerationResponse {}

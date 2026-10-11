@@ -333,10 +333,9 @@ type DiskSourcesClient interface {
 	// GrantDisk records the credential the disk's frames are read with,
 	// replacing the disk's current one unless that expires later.
 	GrantDisk(ctx context.Context, in *GrantDiskRequest, opts ...grpc.CallOption) (*GrantDiskResponse, error)
-	// ServeDisk serves a generation and returns its file, reading its stored
-	// index through the disk's grant. Serving a served generation again
-	// returns the same file. It returns once the frames in warm are cached or
-	// the call's deadline passes.
+	// ServeDisk serves a generation and returns its file. Serving a served
+	// generation again returns the same file. It returns once the frames in
+	// warm are cached or the call's deadline passes.
 	ServeDisk(ctx context.Context, in *ServeDiskRequest, opts ...grpc.CallOption) (*ServeDiskResponse, error)
 	// ReleaseDisk stops serving every generation of the disk but keep, 0 for
 	// none. A file still open keeps reading.
@@ -406,10 +405,9 @@ type DiskSourcesServer interface {
 	// GrantDisk records the credential the disk's frames are read with,
 	// replacing the disk's current one unless that expires later.
 	GrantDisk(context.Context, *GrantDiskRequest) (*GrantDiskResponse, error)
-	// ServeDisk serves a generation and returns its file, reading its stored
-	// index through the disk's grant. Serving a served generation again
-	// returns the same file. It returns once the frames in warm are cached or
-	// the call's deadline passes.
+	// ServeDisk serves a generation and returns its file. Serving a served
+	// generation again returns the same file. It returns once the frames in
+	// warm are cached or the call's deadline passes.
 	ServeDisk(context.Context, *ServeDiskRequest) (*ServeDiskResponse, error)
 	// ReleaseDisk stops serving every generation of the disk but keep, 0 for
 	// none. A file still open keeps reading.

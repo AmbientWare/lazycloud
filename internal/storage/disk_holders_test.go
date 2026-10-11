@@ -2,7 +2,6 @@ package storage_test
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 
@@ -28,9 +27,9 @@ func (f *fixture) containerOn(host compute.HostID) uuid.UUID {
 	return id
 }
 
-// TestStaleHolderCannotReplaceARecordedManifest: manifest keys carry their
-// digest, so a key naming a generation without it is refused.
-func TestStaleHolderCannotReplaceARecordedManifest(t *testing.T) {
+// TestGenerationsNameTheirIndexBySHA256: a generation's index key is built
+// from its sha256, so one that is not a sha256 is refused.
+func TestGenerationsNameTheirIndexBySHA256(t *testing.T) {
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	container := f.container()
@@ -38,11 +37,10 @@ func TestStaleHolderCannotReplaceARecordedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := generation(lease.Disk, 1)
-	g.ManifestKey = fmt.Sprintf("disks/%s/manifests/%012d", lease.Disk, 1)
 	var bad *InvalidError
-	if err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g); !errors.As(err, &bad) {
-		t.Fatalf("manifest key without its digest: %v", err)
+	g := DiskGeneration{Generation: 1, IndexSHA256: "../../volumes/x"}
+	if err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g, 1); !errors.As(err, &bad) {
+		t.Fatalf("an index named by a path: %v", err)
 	}
 }
 

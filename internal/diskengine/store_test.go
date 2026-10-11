@@ -28,7 +28,7 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 	}
 	head := func() {
 		t.Helper()
-		if err := objects.put(t.Context(), store.Prefix+"present", []byte("x")); err != nil {
+		if err := objects.put(t.Context(), "present", []byte("x")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -52,7 +52,7 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := expired.put(t.Context(), store.Prefix+"present", []byte("x")); !errors.Is(err, ErrCredentialsExpired) {
+	if err := expired.put(t.Context(), "present", []byte("x")); !errors.Is(err, ErrCredentialsExpired) {
 		t.Fatalf("expired credentials returned %v", err)
 	}
 }

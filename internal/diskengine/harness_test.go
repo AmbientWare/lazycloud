@@ -15,25 +15,24 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// testStore is a prefix in a bucket of the test object store, deleted with
-// everything in it when the test ends.
+// testStore is a bucket of the test object store, deleted with everything
+// in it when the test ends.
 func testStore(t *testing.T) Store {
 	t.Helper()
 	cfg := storagetest.Config(t)
 	return Store{
 		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
-		Prefix: "test-diskengine/" + uuid.NewString() + "/",
 		Credentials: func(context.Context) (Credentials, error) {
 			return Credentials{AccessKeyID: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey}, nil
 		},
@@ -43,7 +42,7 @@ func testStore(t *testing.T) Store {
 // frameCount counts the disk's stored frames.
 func frameCount(t *testing.T, store Store, diskID string) int {
 	t.Helper()
-	prefix := store.Prefix + "disks/" + diskID + "/frames/"
+	prefix := imagefs.DiskPrefix(diskID) + "frames/"
 	out, err := storagetest.Client().ListObjectsV2(t.Context(), &s3.ListObjectsV2Input{Bucket: aws.String(store.Bucket), Prefix: aws.String(prefix)})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +161,7 @@ func (h *host) grant(t *testing.T, store Store, diskID string) {
 		t.Fatal(err)
 	}
 	if err := h.bases.GrantDisk(t.Context(), diskID, &imagefsproto.DiskGrant{
-		Endpoint: store.Endpoint, Region: store.Region, Bucket: store.Bucket, Prefix: store.Prefix, ForcePathStyle: store.ForcePathStyle,
+		Endpoint: store.Endpoint, Region: store.Region, Bucket: store.Bucket, ForcePathStyle: store.ForcePathStyle,
 		AccessKeyId: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	}); err != nil {
 		t.Fatal(err)
@@ -276,5 +275,5 @@ func reload(t *testing.T, p diskPaths) *diskState {
 }
 
 func baseOf(p *Published) *Generation {
-	return &Generation{Generation: p.Generation, ManifestKey: p.ManifestKey, ManifestSHA256: p.ManifestSHA256}
+	return &Generation{Generation: p.Generation, IndexSHA256: p.IndexSHA256}
 }

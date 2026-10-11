@@ -54,11 +54,15 @@ alter table workspace_buckets
     drop constraint workspace_buckets_workspace_id_fkey,
     add foreign key (workspace_id) references workspaces (id);
 
--- Each disk generation's index names every frame of the disk, so no
--- generation builds on another.
-alter table disk_generations
-    drop column parent_generation,
-    drop column flat;
+-- Each disk generation's index names every frame of the disk, so a disk is
+-- its newest generation: the index stored under the generation and the
+-- sha256 of its bytes (imagefs.DiskIndexKey). A disk never published has
+-- none. Generations in the former format cannot be read.
+drop table disk_generations;
+delete from disks where generation > 0;
+alter table disks
+    add column index_sha256 text check (index_sha256 ~ '^[0-9a-f]{64}$'),
+    add check ((generation = 0) = (index_sha256 is null));
 
 -- The disks a host holds at once, as its agent offers them: its data
 -- volume keeps room for each one's unpublished writes.

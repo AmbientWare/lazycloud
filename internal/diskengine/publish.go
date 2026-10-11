@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -72,7 +71,7 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store, final 
 }
 
 func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, objects *objectStore, final bool) (*pendingPublish, error) {
-	base, err := e.loadBase(ctx, p, state, objects)
+	base, err := loadBase(p, state)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +108,7 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	}
 	basePath := ""
 	if state.Base != nil {
-		if basePath, err = e.serveBase(ctx, p.id, *state.Base, nil); err != nil {
+		if basePath, err = e.serveBase(ctx, p.id, *state.Base, p.baseIndex(), nil); err != nil {
 			return nil, err
 		}
 	}
@@ -124,8 +123,7 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	}
 	sum := sha256.Sum256(raw)
 	digest := hex.EncodeToString(sum[:])
-	key := objects.manifestKey(p.id, generation, digest)
-	if err := objects.put(ctx, key, raw); err != nil {
+	if err := objects.put(ctx, imagefs.DiskIndexKey(p.id, generation, digest), raw); err != nil {
 		return nil, err
 	}
 	if err := writeFileAtomic(p.pendingIndex(), raw); err != nil {
@@ -140,23 +138,23 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	for _, f := range base.Frames {
 		if !f.Zero() && !held[f.Digest] && !freed[f.Digest] {
 			freed[f.Digest] = true
-			collect = append(collect, collectKey{Key: objects.diskKey(p.id, f.Name()), Bytes: f.Size})
+			collect = append(collect, collectKey{Key: imagefs.DiskPrefix(p.id) + f.Name(), Bytes: f.Size})
 		}
 	}
-	if state.Base != nil {
-		collect = append(collect, collectKey{Key: state.Base.ManifestKey})
+	if b := state.Base; b != nil {
+		collect = append(collect, collectKey{Key: imagefs.DiskIndexKey(p.id, b.Generation, b.IndexSHA256)})
 	}
 	// A frame an earlier collection would delete may be one this
 	// generation names again.
 	if state.Collect != nil {
 		state.Collect.Keys = slices.DeleteFunc(state.Collect.Keys, func(k collectKey) bool {
-			name, isFrame := strings.CutPrefix(k.Key, objects.diskKey(p.id, "frames/"))
+			name, isFrame := strings.CutPrefix(k.Key, imagefs.DiskPrefix(p.id)+"frames/")
 			sum, err := hex.DecodeString(name)
 			return isFrame && err == nil && len(sum) == sha256.Size && held[[sha256.Size]byte(sum)]
 		})
 	}
 	state.Pending = &pendingPublish{
-		Generation: generation, ManifestKey: key, ManifestSHA256: digest, AddedBytes: added,
+		Generation: generation, IndexSHA256: digest, AddedBytes: added,
 		Through: sealedThrough(state), Dirty: dirty, Collect: collect,
 	}
 	if err := saveState(p, state); err != nil {
@@ -173,34 +171,25 @@ func sealedThrough(state *diskState) int {
 	return 0
 }
 
-// loadBase returns the index of the generation the stack is on, kept
-// beside the stack once read from the bucket; a disk never published has an
-// empty one.
-func (e *Engine) loadBase(ctx context.Context, p diskPaths, state *diskState, objects *objectStore) (imagefs.DiskIndex, error) {
+// loadBase returns the index of the generation the stack is on, which the
+// snapshotter keeps beside the stack when it first serves it; a disk never
+// published has an empty one.
+func loadBase(p diskPaths, state *diskState) (imagefs.DiskIndex, error) {
 	if state.Base == nil {
 		return imagefs.DiskIndex{}, nil
 	}
 	raw, err := os.ReadFile(p.baseIndex())
-	if errors.Is(err, os.ErrNotExist) {
-		if raw, err = objects.get(ctx, state.Base.ManifestKey, imagefs.MaxIndexSize); err != nil {
-			return imagefs.DiskIndex{}, err
-		}
-		if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != state.Base.ManifestSHA256 {
-			return imagefs.DiskIndex{}, fmt.Errorf("the index of generation %d of disk %s does not match its sha256", state.Base.Generation, p.id)
-		}
-		err = writeFileAtomic(p.baseIndex(), raw)
-	}
 	if err != nil {
 		return imagefs.DiskIndex{}, fmt.Errorf("read the base index: %w", err)
 	}
 	return imagefs.UnmarshalDisk(raw) //nolint:wrapcheck // The format names itself.
 }
 
-// serveBase has the snapshotter serve generation g and returns its file,
-// caching warm first.
-func (e *Engine) serveBase(ctx context.Context, diskID string, g Generation, warm []uint32) (string, error) {
+// serveBase has the snapshotter serve generation g, whose index the engine
+// keeps at index, and returns its file, caching warm first.
+func (e *Engine) serveBase(ctx context.Context, diskID string, g Generation, index string, warm []uint32) (string, error) {
 	path, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
-		DiskId: diskID, Generation: g.Generation, IndexKey: g.ManifestKey, IndexSha256: g.ManifestSHA256, Warm: warm,
+		DiskId: diskID, Generation: g.Generation, IndexSha256: g.IndexSHA256, IndexPath: index, Warm: warm,
 	})
 	if err != nil {
 		return "", fmt.Errorf("serve the base generation: %w", err)
@@ -346,7 +335,7 @@ func storeFrames(ctx context.Context, p diskPaths, objects *objectStore, sealed 
 			}
 			mu.Unlock()
 			u.once.Do(func() {
-				if u.err = objects.put(groupCtx, objects.diskKey(p.id, f.Name()), packed); u.err == nil {
+				if u.err = objects.put(groupCtx, imagefs.DiskPrefix(p.id)+f.Name(), packed); u.err == nil {
 					added.Add(f.Size)
 				}
 			})
@@ -414,10 +403,9 @@ func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation 
 }
 
 func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState) error {
-	pending := state.Pending
-	next := Generation{Generation: pending.Generation, ManifestKey: pending.ManifestKey, ManifestSHA256: pending.ManifestSHA256}
+	next := state.Pending.generation()
 	if a := state.Attachment; a != nil && daemonAlive(p, a.DaemonPID) {
-		path, err := e.serveBase(ctx, p.id, next, pending.Dirty)
+		path, err := e.serveBase(ctx, p.id, next, p.pendingIndex(), state.Pending.Dirty)
 		if err != nil {
 			return err
 		}

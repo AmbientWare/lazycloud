@@ -51,12 +51,11 @@ var (
 	ErrAttachmentLost = errors.New("disk attachment lost")
 )
 
-// Generation is a published generation of a disk: its stored index and the
-// sha256 of the index's bytes.
+// Generation is a published generation of a disk: its number and the sha256
+// of its stored index, which imagefs.DiskIndexKey names.
 type Generation struct {
-	Generation     int64
-	ManifestKey    string
-	ManifestSHA256 string
+	Generation  int64  `json:"generation"`
+	IndexSHA256 string `json:"index_sha256"`
 }
 
 // AttachRequest attaches a disk at Mountpoint.
@@ -82,9 +81,8 @@ type AttachResult struct {
 
 // Published is an uploaded generation awaiting CommitPublished.
 type Published struct {
-	Generation     int64
-	ManifestKey    string
-	ManifestSHA256 string
+	Generation  int64
+	IndexSHA256 string
 	// AddedBytes counts the stored bytes of the frames this generation
 	// added to the bucket.
 	AddedBytes int64

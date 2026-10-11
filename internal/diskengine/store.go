@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -21,13 +20,12 @@ type Credentials struct {
 	ExpiresAt       time.Time
 }
 
-// Store locates a workspace bucket. Object keys are Prefix +
-// "disks/<disk id>/...", so a non-empty Prefix ends with "/".
+// Store locates a workspace bucket, which holds each disk's objects under
+// imagefs.DiskPrefix.
 type Store struct {
 	Endpoint       string
 	Region         string
 	Bucket         string
-	Prefix         string
 	ForcePathStyle bool
 	// Credentials returns current credentials. The engine asks again once the
 	// ones it holds come within credentialMargin of expiring, so one long
@@ -46,7 +44,6 @@ const deleteBatchSize = 1000
 type objectStore struct {
 	client *s3.Client
 	bucket string
-	prefix string
 }
 
 func openStore(store Store) (*objectStore, error) {
@@ -90,19 +87,7 @@ func openStore(store Store) (*objectStore, error) {
 		RetryMaxAttempts:           5,
 		BaseEndpoint:               aws.String(store.Endpoint),
 	}
-	return &objectStore{client: s3.New(options), bucket: store.Bucket, prefix: store.Prefix}, nil
-}
-
-// diskKey is the key of the disk's object name, such as a frame's.
-func (s *objectStore) diskKey(diskID, name string) string {
-	return s.prefix + "disks/" + diskID + "/" + name
-}
-
-// manifestKey names a generation's index by its number and digest, so an
-// upload never replaces a different index of the same generation, such as
-// one a stale holder wrote after the disk changed hands.
-func (s *objectStore) manifestKey(diskID string, generation int64, digest string) string {
-	return s.diskKey(diskID, fmt.Sprintf("manifests/%012d-%s", generation, digest))
+	return &objectStore{client: s3.New(options), bucket: store.Bucket}, nil
 }
 
 func (s *objectStore) put(ctx context.Context, key string, body []byte) error {
@@ -117,24 +102,4 @@ func (s *objectStore) put(ctx context.Context, key string, body []byte) error {
 		return fmt.Errorf("put s3://%s/%s: %w", s.bucket, key, err)
 	}
 	return nil
-}
-
-// get reads an object of at most limit bytes.
-func (s *objectStore) get(ctx context.Context, key string, limit int64) ([]byte, error) {
-	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
-	if err != nil {
-		return nil, fmt.Errorf("get s3://%s/%s: %w", s.bucket, key, err)
-	}
-	data, err := io.ReadAll(io.LimitReader(output.Body, limit+1))
-	closeErr := output.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("read s3://%s/%s: %w", s.bucket, key, err)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("read s3://%s/%s: %w", s.bucket, key, closeErr)
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("s3://%s/%s is larger than %d bytes", s.bucket, key, limit)
-	}
-	return data, nil
 }
