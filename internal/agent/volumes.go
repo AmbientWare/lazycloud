@@ -47,14 +47,19 @@ const (
 	mountWait = 30 * time.Second
 	// mountPoll is how often a start looks for its new mount.
 	mountPoll = 100 * time.Millisecond
-	// GeeseFS reserves its buffers before reading and stays under
-	// geesefsMemoryMiB (--use-enomem), and its runtime collects garbage
-	// before geesefsGoMemoryMiB. Without the reservation, readahead in
-	// flight grows with the readers: 256 parallel 32 MiB reads took 2.4 GiB.
-	// With it they peak near 410 MiB, inside hostproto.MounterMemoryBytes.
-	geesefsMemoryMiB   = 192
-	geesefsGoMemoryMiB = 320
-	mounterPidsLimit   = 1024
+	// A sequential reader keeps about twice geesefsReadAheadKiB in flight, in
+	// parallel parts of geesefsReadPartKiB. The cache, geesefsMemoryMiB,
+	// holds three readers' read-ahead; a smaller one evicts read-ahead before
+	// it is read. The runtime collects garbage before geesefsGoMemoryMiB.
+	// Three or four large files read at once peak near 390 and 440 MiB,
+	// inside hostproto.MounterMemoryBytes. Without --use-enomem, which fails
+	// a read whose read-ahead the cache cannot hold, memory grows with the
+	// readers.
+	geesefsMemoryMiB    = 192
+	geesefsGoMemoryMiB  = 320
+	geesefsReadAheadKiB = 32 << 10
+	geesefsReadPartKiB  = 4 << 10
+	mounterPidsLimit    = 1024
 	// mounterConcurrency bounds the mounters of one container that start
 	// or stop at once.
 	mounterConcurrency = 4
@@ -554,7 +559,8 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 	args := []string{
 		"-f", "-o", "allow_other", "--uid", "0", "--gid", "0", "--dir-mode", "0777", "--file-mode", "0666",
 		"--fsync-on-close", "--stat-cache-ttl", "1s", "--no-preload-dir",
-		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--use-enomem",
+		"--memory-limit", strconv.Itoa(geesefsMemoryMiB),
+		"--read-ahead-large", strconv.Itoa(geesefsReadAheadKiB), "--read-ahead-parallel", strconv.Itoa(geesefsReadPartKiB),
 	}
 	args = append(args, "--endpoint", spec.endpoint)
 	if spec.region != "" {

@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -288,6 +291,60 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 		if r := inspect.Container.HostConfig.Resources; r.Memory != 256<<20 || r.MemoryReservation != 256<<20 {
 			t.Fatalf("the workload's memory limit %d and reservation %d, want the 256 MiB it asked for", r.Memory, r.MemoryReservation)
 		}
+	}
+}
+
+// TestLargeVolumeFilesReadWhole: model weights read whole through a volume
+// mount, one file alone and three at once, and the mounter stays inside its
+// memory.
+func TestLargeVolumeFilesReadWhole(t *testing.T) {
+	e, s, store := volumeEnv(t)
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	names := []string{"alone", "first", "second", "third"}
+	sums := map[string][sha256.Size]byte{}
+	data := make([]byte, 256<<20)
+	for n, name := range names {
+		_, _ = rand.NewChaCha8([32]byte{byte(n)}).Read(data)
+		sums[name] = sha256.Sum256(data)
+		if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+			Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/" + name), Body: bytes.NewReader(data),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.send(t, store.grant(workspace))
+	id := e.startVolume(s, serveSource(t, "testdata/volumes"), workspace, volume)
+	dir := filepath.Join(e.stateDir, "mounts", mounterName(id, 0), volume)
+
+	read := func(names ...string) {
+		var wg sync.WaitGroup
+		for _, name := range names {
+			wg.Go(func() {
+				f, err := os.Open(filepath.Join(dir, name)) //nolint:gosec // The test's mount.
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer func() { _ = f.Close() }()
+				sum := sha256.New()
+				if _, err := io.Copy(sum, f); err != nil {
+					t.Errorf("read %s: %v", name, err)
+				} else if [sha256.Size]byte(sum.Sum(nil)) != sums[name] {
+					t.Errorf("%s reads other bytes than were stored", name)
+				}
+			})
+		}
+		wg.Wait()
+	}
+	read(names[0])
+	read(names[1:]...)
+
+	inspect, err := e.docker.ContainerInspect(t.Context(), e.mounter(id).ID, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := inspect.Container.State; !state.Running || state.OOMKilled {
+		t.Fatalf("the mounter is running %v, killed for memory %v", state.Running, state.OOMKilled)
 	}
 }
 
