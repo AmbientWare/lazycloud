@@ -15,8 +15,7 @@ import (
 // The slice carries the container's memory limit plus its mounters' reserve,
 // and its CPU weight, so a mount that outgrows it breaks only that
 // container. Docker's systemd cgroup driver places containers in a slice the
-// agent makes through systemd, which takes root or a polkit grant of
-// org.freedesktop.systemd1.manage-units.
+// agent makes through systemd.
 
 // workloadSlice is the slice of container on this host.
 func (a *Agent) workloadSlice(container string) string {

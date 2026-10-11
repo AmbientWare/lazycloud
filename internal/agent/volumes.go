@@ -550,13 +550,9 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 	if err := os.Chmod(v.mountDir(), 0o700); err != nil { //nolint:gosec // A directory needs its search bit.
 		return fmt.Errorf("restrict mount directory: %w", err)
 	}
-	uid, gid := "0", "0"
-	if os.Geteuid() != 0 {
-		uid, gid = strconv.Itoa(os.Geteuid()), strconv.Itoa(os.Getegid())
-	}
 	target := "/mnt/" + filepath.Base(m.dir)
 	args := []string{
-		"-f", "-o", "allow_other", "--uid", uid, "--gid", gid, "--dir-mode", "0777", "--file-mode", "0666",
+		"-f", "-o", "allow_other", "--uid", "0", "--gid", "0", "--dir-mode", "0777", "--file-mode", "0666",
 		"--fsync-on-close", "--stat-cache-ttl", "1s", "--no-preload-dir",
 		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--use-enomem",
 	}

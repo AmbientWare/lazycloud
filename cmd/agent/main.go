@@ -30,9 +30,9 @@ import (
 
 // Exit statuses the service unit acts on.
 const (
-	// exitStopped (EX_CONFIG) means restarting cannot help: the credential
-	// was revoked, the join was refused or preflight failed. The unit does
-	// not restart it.
+	// exitStopped (EX_CONFIG) means restarting cannot help: the agent is
+	// not root, the credential was revoked, the join was refused or
+	// preflight failed. The unit does not restart it.
 	exitStopped = 78
 	// exitRestart (EX_TEMPFAIL) follows an installed update; the unit
 	// restarts into the new release.
@@ -74,6 +74,18 @@ func run(args []string, logger *slog.Logger) int {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return 0
+	case "join", "install-snapshotter", "install-service":
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n%s", args[0], usage)
+		return exitUsage
+	}
+	// The agent binds volumes and mounts disks, which take CAP_SYS_ADMIN,
+	// and installs and manages the snapshotter and systemd units.
+	if os.Geteuid() != 0 {
+		fmt.Fprintf(os.Stderr, "error: lazycloud-agent %s requires root; rerun with sudo\n", args[0])
+		return exitStopped
+	}
+	switch args[0] {
 	case "join":
 		cfg, err := parseJoin(args[1:])
 		if errors.Is(err, flag.ErrHelp) {
@@ -99,10 +111,8 @@ func run(args []string, logger *slog.Logger) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		return 0
 	}
-	fmt.Fprintf(os.Stderr, "unknown command %q\n%s", args[0], usage)
-	return exitUsage
+	return 0
 }
 
 func join(cfg agent.Config) int {
@@ -111,7 +121,7 @@ func join(cfg agent.Config) int {
 		cfg.Logger.Error("invalid configuration", "error", err)
 		return exitUsage
 	}
-	if telemetryConfig.OTLPEndpoint == "" && cfg.TraceSocket != "" {
+	if telemetryConfig.OTLPEndpoint == "" {
 		// The agent's spans reach the server's collector through the
 		// session, and only in traces the server sampled.
 		telemetryConfig.OTLPEndpoint, telemetryConfig.OTLPInsecure, telemetryConfig.SampleRatio = "unix://"+cfg.TraceSocket, true, 0
@@ -166,14 +176,14 @@ func newJoinFlags(name string) *joinFlags {
 	j := &joinFlags{set: flag.NewFlagSet(name, flag.ContinueOnError)}
 	j.cfg = agent.Config{
 		Labels: map[string]string{}, Version: agentVersion(), Executable: executable, AgentRoot: os.Getenv("LAZYCLOUD_AGENT_ROOT"),
-		TraceSocket: defaultTraceSocket(),
+		TraceSocket: telemetry.HostTraceSocket,
 	}
 	f, cfg := j.set, &j.cfg
 	f.StringVar(&cfg.Server, "server", os.Getenv("LAZYCLOUD_SERVER"), "control plane gRPC address, host:port")
 	f.StringVar(&cfg.ServerCA, "server-ca", os.Getenv("LAZYCLOUD_SERVER_CA"), "PEM bundle trusted for the server's certificate besides the system roots")
 	f.BoolVar(&cfg.ServerPlaintext, "server-plaintext", os.Getenv("LAZYCLOUD_SERVER_PLAINTEXT") == "true", "dial a loopback server without TLS")
 	f.StringVar(&cfg.StateDir, "state-dir", envOr("LAZYCLOUD_AGENT_STATE_DIR", "/var/lib/lazycloud/agent"), "host identity, source cache and container state")
-	f.StringVar(&cfg.SocketDir, "socket-dir", envOr("LAZYCLOUD_AGENT_SOCKET_DIR", defaultSocketDir()), "short directory for per-container link sockets")
+	f.StringVar(&cfg.SocketDir, "socket-dir", envOr("LAZYCLOUD_AGENT_SOCKET_DIR", "/run/lazycloud-agent"), "short directory for per-container link sockets")
 	// -help prints defaults, so parse reads the token's from the environment.
 	f.StringVar(&cfg.JoinToken, "join-token", "", "single-use token that enrolls the host on first start (LAZYCLOUD_JOIN_TOKEN)")
 	f.StringVar(&cfg.JoinTokenFile, "join-token-file", os.Getenv("LAZYCLOUD_JOIN_TOKEN_FILE"), "file holding the join token; deleted once the host is enrolled")
@@ -293,25 +303,4 @@ func agentVersion() string {
 		}
 	}
 	return info.Main.Version
-}
-
-// defaultTraceSocket is telemetry.HostTraceSocket for root, where the
-// snapshotter sends its spans, and none otherwise.
-func defaultTraceSocket() string {
-	if os.Geteuid() == 0 {
-		return telemetry.HostTraceSocket
-	}
-	return ""
-}
-
-// defaultSocketDir is /run/lazycloud-agent for root and the user's runtime
-// directory otherwise, both short enough for Unix socket paths.
-func defaultSocketDir() string {
-	if os.Geteuid() == 0 {
-		return "/run/lazycloud-agent"
-	}
-	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return filepath.Join(dir, "lazycloud-agent")
-	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("lazycloud-agent-%d", os.Getuid()))
 }

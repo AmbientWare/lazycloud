@@ -197,9 +197,6 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState, basePath st
 	// Scope names are unique per start: systemd forgets a scope only some
 	// time after its last process exits.
 	args := []string{"--scope", "--collect", "--quiet", fmt.Sprintf("--unit=lazycloud-disk-%s-%d", p.id, time.Now().UnixNano())}
-	if os.Geteuid() != 0 {
-		args = append([]string{"--user"}, args...)
-	}
 	args = append(args, "--", toolDaemon,
 		"--daemonize",
 		"--pidfile", p.pidFile(),

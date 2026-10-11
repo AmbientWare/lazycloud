@@ -108,7 +108,7 @@ const (
 )
 
 // Check reports what this host lacks to attach disks: a required tool, the
-// nbd kernel module, systemd or root privileges.
+// nbd kernel module or systemd.
 func Check() error {
 	var missing []error
 	for _, tool := range []string{toolDaemon, toolImage, toolNBDClient, toolMkfs, toolResizeFS, toolRunUnit} {
@@ -121,9 +121,6 @@ func Check() error {
 	}
 	if _, err := os.Stat(systemdRunning); err != nil {
 		missing = append(missing, fmt.Errorf("systemd is not running (%s is missing); each disk's daemon runs in a systemd scope", systemdRunning))
-	}
-	if uid := os.Geteuid(); uid != 0 {
-		missing = append(missing, fmt.Errorf("the disk engine needs root to connect NBD devices and mount, running as uid %d", uid))
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("host cannot attach disks: %w", errors.Join(missing...))

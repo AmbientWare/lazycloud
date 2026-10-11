@@ -282,10 +282,6 @@ func (a *Agent) takeSnapshot(ctx context.Context, request *hostproto.SnapshotCon
 	uploadCtx, upload := telemetry.Start(ctx, "agent.snapshot_upload")
 	size, sum, err := a.uploadDir(uploadCtx, filepath.Join(dir, id), request.GetUploadUrl())
 	telemetry.Fail(upload, err)
-	if errors.Is(err, fs.ErrPermission) && os.Geteuid() != 0 {
-		// Docker writes the checkpoint as root.
-		return 0, "", fmt.Errorf("%w: reading a checkpoint takes an agent running as root: %v", errCannotCheckpoint, err) //nolint:errorlint // see above
-	}
 	return size, sum, err
 }
 

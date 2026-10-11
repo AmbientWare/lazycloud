@@ -44,9 +44,6 @@ func installService(args []string) error {
 	if !serviceName.MatchString(*name) {
 		return fmt.Errorf("service name %q is not a unit name", *name)
 	}
-	if os.Geteuid() != 0 {
-		return errors.New("install-service requires root")
-	}
 	if info, err := os.Stat("/run/systemd/system"); err != nil || !info.IsDir() {
 		return errors.New("install-service requires systemd")
 	}

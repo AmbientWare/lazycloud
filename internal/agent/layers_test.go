@@ -22,7 +22,7 @@ import (
 )
 
 // serveSnapshotter runs the host's snapshotter on socket until the test
-// ends. Without root it mounts no layer, so its traces record no reads.
+// ends.
 func serveSnapshotter(t *testing.T, socket string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

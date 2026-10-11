@@ -471,7 +471,7 @@ func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.Prefligh
 		}
 		if time.Now().After(deadline) || !sleep(ctx, time.Second) {
 			return check("docker", false, "Docker is not reachable: "+err.Error(),
-				"start Docker and check that docker info works for the agent's user")
+				"start Docker and check that docker info works")
 		}
 	}
 }
