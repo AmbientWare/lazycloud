@@ -591,7 +591,8 @@ func TestABucketPrefixStaysInsideItsMount(t *testing.T) {
 // TestAdoptKeepsLiveMountsAndRemovesOrphans: a restarted agent keeps a
 // running container's mount, fails a container whose mount died while it
 // was away, and removes the mount, keys and slice of a container that went,
-// a slice that names no container and a mount directory without a mounter.
+// a slice that names no container and a mount directory without a mounter,
+// the mounts after the start.
 func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	e, s, store := volumeEnv(t)
 	first := e.running
@@ -633,17 +634,19 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	if exit := s.adoptedExit(t, lost); !strings.Contains(exit.GetMessage(), "volume mount") {
 		t.Fatalf("exit of a container whose mount died while the agent was away: %v", exit)
 	}
-	if left := e.mounters(true, gone); len(left) != 0 {
-		t.Fatalf("the orphaned mount was left: %v", left[0].Names)
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Fatalf("%s was left: %v", stray, err)
 	}
-	if _, err := os.Stat(keys); !os.IsNotExist(err) {
-		t.Fatalf("the orphaned bucket's keys were left: %v", err)
-	}
-	for _, left := range []string{e.sliceDir(gone), filepath.Join(e.stateDir, "binds", mounterName(gone, 0)), planted, stray} {
-		if _, err := os.Stat(left); !os.IsNotExist(err) {
-			t.Fatalf("%s was left: %v", left, err)
+	// Mounts the agent did not adopt stop after the start, once they have
+	// stored what they hold, and their slices after them.
+	e.eventually("the orphaned mount, its keys, binds and slice and the planted slice go", func() bool {
+		for _, left := range []string{keys, e.sliceDir(gone), filepath.Join(e.stateDir, "binds", mounterName(gone, 0)), planted} {
+			if _, err := os.Stat(left); !os.IsNotExist(err) {
+				return false
+			}
 		}
-	}
+		return len(e.mounters(true, gone)) == 0
+	})
 	e.eventually("the dead mount goes with its container", func() bool { return len(e.mounters(true, lost)) == 0 })
 }
 
