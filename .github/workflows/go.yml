@@ -72,10 +72,10 @@ jobs:
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race ./internal/agent/... ./internal/imagefs ./internal/imagefs/layersource
-      # The snapshotter mounts FUSE and overlay filesystems as root, as on
-      # hosts, and a join installs as root.
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/imagefs/snapshotter
+      - run: go test -race ./internal/imagefs ./internal/imagefs/layersource
+      # The agent binds volumes and the snapshotter mounts FUSE and overlay
+      # filesystems as root, as on hosts, and a join installs as root.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/agent/... ./internal/imagefs/snapshotter
       - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |

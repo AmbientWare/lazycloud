@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
@@ -464,7 +465,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	t.Cleanup(func() {
 		cancel()
 		wg.Wait()
-		removeContainers(t)
+		removeContainers(t, p.dirs)
 	})
 	return p
 }
@@ -536,8 +537,9 @@ func (p *platform) awaitHost() {
 	}
 }
 
-// removeContainers deletes the Docker containers the test's agent left.
-func removeContainers(t *testing.T) {
+// removeContainers deletes the Docker containers the test's agent left and
+// the volume binds it left in dirs.
+func removeContainers(t *testing.T, dirs string) {
 	docker, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Logf("docker client: %v", err)
@@ -562,6 +564,15 @@ func removeContainers(t *testing.T) {
 	}
 	for _, c := range list.Items {
 		_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+	}
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		t.Logf("list mounts: %v", err)
+	}
+	for line := range strings.Lines(string(mounts)) {
+		if point := strings.Fields(line)[4]; strings.HasPrefix(point, dirs+"/") {
+			_ = unix.Unmount(point, unix.MNT_DETACH)
+		}
 	}
 }
 

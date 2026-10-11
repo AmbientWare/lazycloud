@@ -563,16 +563,28 @@ func (s *serverSession) settle(t *testing.T, container string) *hostproto.Contai
 
 // TestABucketPrefixStaysInsideItsMount: a container's mounts of one bucket
 // share a mounter, and each binds its own directory of the mount. A prefix
-// that climbs out of the mount fails the start instead of binding the
-// agent's state.
+// that climbs out of the mount, or runs through an object GeeseFS shows as
+// a link to the host's root, fails the start instead of binding the host.
 func TestABucketPrefixStaysInsideItsMount(t *testing.T) {
 	e, s, store := volumeEnv(t)
-	start := cloudBucketStart(e, store.bucketMount("/inside", "a/"), store.bucketMount("/outside", "a/../../"))
-	s.send(t, start)
-	r := s.settle(t, start.GetStart().GetContainerId())
-	if r.GetPhase() != exited || r.GetExit().GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED ||
-		!strings.Contains(r.GetExit().GetMessage(), "outside its bucket's mount") {
-		t.Fatalf("a start with a prefix outside its mount: %v", r)
+	prefix := "test-buckets/" + uuid.NewString() + "/"
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String(prefix + "link"), Body: strings.NewReader(""),
+		Metadata: map[string]string{"--symlink-target": "/"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, escape := range []struct{ inside, outside, failure string }{
+		{"a/", "a/../../", `open ".." beneath the mount`},
+		{prefix + "inside/", prefix + "link/", `open "link" beneath the mount: too many levels of symbolic links`},
+	} {
+		start := cloudBucketStart(e, store.bucketMount("/inside", escape.inside), store.bucketMount("/outside", escape.outside))
+		s.send(t, start)
+		r := s.settle(t, start.GetStart().GetContainerId())
+		if r.GetPhase() != exited || r.GetExit().GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED ||
+			!strings.Contains(r.GetExit().GetMessage(), escape.failure) {
+			t.Fatalf("a start with prefix %s: %v", escape.outside, r)
+		}
 	}
 }
 
@@ -627,7 +639,7 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 	if _, err := os.Stat(keys); !os.IsNotExist(err) {
 		t.Fatalf("the orphaned bucket's keys were left: %v", err)
 	}
-	for _, left := range []string{e.sliceDir(gone), planted, stray} {
+	for _, left := range []string{e.sliceDir(gone), filepath.Join(e.stateDir, "binds", mounterName(gone, 0)), planted, stray} {
 		if _, err := os.Stat(left); !os.IsNotExist(err) {
 			t.Fatalf("%s was left: %v", left, err)
 		}
@@ -636,15 +648,20 @@ func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
 }
 
 // TestCloudBucketMountsWithItsKeys mounts two prefixes of a user's bucket
-// through one mounter with keys from the start, one of them empty, and
-// removes the mount and its keys when the container goes.
+// through one mounter with keys from the start, one of them empty, where a
+// link resolves in the container, and removes the mount, its binds and its
+// keys when the container goes.
 func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 	e, s, store := volumeEnv(t)
 	prefix := "test-buckets/" + uuid.NewString() + "/"
-	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
-		Bucket: aws.String(store.bucket), Key: aws.String(prefix + "weights.txt"), Body: strings.NewReader("from the bucket"),
-	}); err != nil {
-		t.Fatal(err)
+	for key, link := range map[string]string{"weights.txt": "", "latest": "weights.txt"} {
+		input := &s3.PutObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(prefix + key), Body: strings.NewReader("from the bucket")}
+		if link != "" {
+			input.Body, input.Metadata = strings.NewReader(""), map[string]string{"--symlink-target": link}
+		}
+		if _, err := storagetest.Client().PutObject(t.Context(), input); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	start := cloudBucketStart(e, store.bucketMount("/models", prefix), store.bucketMount("/empty", prefix+"nothing/"))
@@ -652,8 +669,11 @@ func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 	s.send(t, start)
 	s.phase(t, id, ready)
 	e.mounter(id)
-	if got := e.read(id, "/models/weights.txt"); got != `"from the bucket"` {
-		t.Fatalf("read: %s", got)
+	// A link inside a volume resolves in the container, as caches' links do.
+	for _, path := range []string{"/models/weights.txt", "/models/latest"} {
+		if got := e.read(id, path); got != `"from the bucket"` {
+			t.Fatalf("read %s: %s", path, got)
+		}
 	}
 	if got := e.list(id, "/empty"); len(got) != 0 {
 		t.Fatalf("the empty prefix holds %v", got)
@@ -661,10 +681,11 @@ func TestCloudBucketMountsWithItsKeys(t *testing.T) {
 
 	s.send(t, stopCommand(id, 1))
 	s.phase(t, id, exited)
-	keys := filepath.Join(e.stateDir, "storage", "buckets", mounterName(id, 0))
-	e.eventually("the bucket's mount and keys go with its container", func() bool {
+	keys, binds := filepath.Join(e.stateDir, "storage", "buckets", mounterName(id, 0)), filepath.Join(e.stateDir, "binds", mounterName(id, 0))
+	e.eventually("the bucket's mount, binds and keys go with its container", func() bool {
 		_, err := os.Stat(keys)
-		return os.IsNotExist(err) && len(e.mounters(true, id)) == 0
+		_, bindsErr := os.Stat(binds)
+		return os.IsNotExist(err) && os.IsNotExist(bindsErr) && len(e.mounters(true, id)) == 0
 	})
 }
 
@@ -688,10 +709,16 @@ func TestAStorageGrantTheHostCannotStoreIsNotAcknowledged(t *testing.T) {
 	})
 }
 
-// stopMounts stops this test's mount containers so GeeseFS unmounts before
-// the state directory is removed, then its slices.
+// stopMounts removes this test's binds and stops its mount containers so
+// GeeseFS unmounts before the state directory is removed, then its slices.
 func (e *env) stopMounts() {
 	ctx := context.Background()
+	binds, _ := os.ReadDir(filepath.Join(e.stateDir, "binds"))
+	for _, entry := range binds {
+		if err := unbind(filepath.Join(e.stateDir, "binds", entry.Name())); err != nil {
+			e.t.Errorf("remove binds: %v", err)
+		}
+	}
 	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
 		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind)})
 	if err != nil {

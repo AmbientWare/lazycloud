@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
@@ -30,10 +31,10 @@ import (
 // volumes/ prefix of its workspace bucket; each cloud bucket it names gets
 // one more. GeeseFS holds the credentials there, and the workload binds each
 // volume's own directory of the mount, never the credentials or other
-// volumes.
+// volumes, through a bind the agent makes of it, which needs root.
 // A mount container shares its mount with the host through a
-// shared-propagation bind of the mount directory, so it works for root and
-// unprivileged agents alike and outlives agent restarts, like its workload.
+// shared-propagation bind of the mount directory, so it outlives agent
+// restarts, like its workload.
 // Mounts start before their container, stop after it and run in its slice
 // (slices.go), inside the memory the server reserved for them.
 const (
@@ -297,26 +298,87 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	binds := make([]mount.Mount, 0, len(specs))
 	for n, group := range groups {
 		for i, s := range group {
-			// A cloud bucket's prefixes come from the user; a directory
-			// below them must stay inside the mount.
-			if dirs[n][i] != "" && !filepath.IsLocal(dirs[n][i]) {
-				return "", nil, fmt.Errorf("the volume at %s names a prefix outside its bucket's mount", s.GetMountPath())
-			}
-			source := filepath.Join(mounters[n].dir, dirs[n][i])
-			err := os.MkdirAll(source, 0o755) //nolint:gosec // GeeseFS gives every directory --dir-mode.
-			if errors.Is(err, syscall.EROFS) {
-				// A read-only mount cannot make the directory of a prefix
-				// that holds nothing, so the volume shows an empty one.
-				source = filepath.Join(v.a.cfg.StateDir, "empty")
-				err = os.MkdirAll(source, 0o555) //nolint:gosec // Workloads of any user list it.
-			}
+			source, err := v.bind(mounters[n], i, dirs[n][i])
 			if err != nil {
-				return "", nil, fmt.Errorf("create the directory of the volume at %s: %w", s.GetMountPath(), err)
+				return "", nil, fmt.Errorf("bind the volume at %s: %w", s.GetMountPath(), err)
 			}
 			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
 		}
 	}
 	return slice, binds, nil
+}
+
+func (v *volumes) bindsDir() string { return filepath.Join(v.a.cfg.StateDir, "binds") }
+
+// bind binds dir, a directory of m's mount, at binds/<m>/<n> and returns
+// that path, which the workload binds. GeeseFS shows an object with a link
+// target as a link, and Docker follows links in a bind's source, so dir is
+// opened beneath the mount following none, each missing directory made in
+// the one opened before it. A read-only mount cannot make the directory of
+// a prefix that holds nothing, so that volume shows an empty one.
+func (v *volumes) bind(m *mounter, n int, dir string) (string, error) {
+	fd, err := unix.Open(m.dir, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", fmt.Errorf("open the mount: %w", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	how := &unix.OpenHow{
+		Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	}
+	for name := range strings.SplitSeq(dir, "/") {
+		if name == "" {
+			continue
+		}
+		next, err := unix.Openat2(fd, name, how)
+		if errors.Is(err, unix.ENOENT) {
+			err = unix.Mkdirat(fd, name, 0o755)
+			if errors.Is(err, unix.EROFS) {
+				empty := filepath.Join(v.a.cfg.StateDir, "empty")
+				return empty, os.MkdirAll(empty, 0o555) //nolint:gosec,wrapcheck // Workloads of any user list it.
+			}
+			if err == nil || errors.Is(err, unix.EEXIST) {
+				next, err = unix.Openat2(fd, name, how)
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("open %q beneath the mount: %w", name, err)
+		}
+		_ = unix.Close(fd)
+		fd = next
+	}
+	tree, err := unix.OpenTree(fd, "", unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC|unix.AT_EMPTY_PATH)
+	if err != nil {
+		return "", fmt.Errorf("clone the directory: %w", err)
+	}
+	defer func() { _ = unix.Close(tree) }()
+	path := filepath.Join(v.bindsDir(), m.name, strconv.Itoa(n))
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return "", fmt.Errorf("create the bind directory: %w", err)
+	}
+	if err := unix.MoveMount(tree, "", unix.AT_FDCWD, path, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
+		return "", fmt.Errorf("bind the directory: %w", err)
+	}
+	return path, nil
+}
+
+// unbind detaches the binds of a mounter, which dir holds, and removes
+// them, each only once nothing is mounted on it.
+func unbind(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if err := unix.Unmount(path, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {
+			return fmt.Errorf("unmount %s: %w", path, err)
+		}
+		if err := os.Remove(path); err != nil {
+			return err //nolint:wrapcheck // It names the path.
+		}
+	}
+	return errors.Join(err, os.Remove(dir))
 }
 
 // mounterGroups splits a container's mounts among its mounters: one for all
@@ -621,14 +683,17 @@ func (v *volumes) markExited(m *mounter) bool {
 	return m.up && !m.stopping
 }
 
-// stop stops m's container, whose script unmounts on SIGTERM, then removes
-// it and its directory, which only goes when nothing is mounted on it and it
-// is empty. No later mount uses the name, so a directory left behind is only
-// logged.
+// stop removes m's binds, stops m's container, whose script unmounts on
+// SIGTERM, then removes it and its directory, which only goes when nothing
+// is mounted on it and it is empty. No later mount uses the name, so binds
+// or a directory left behind are only logged.
 func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	v.mu.Lock()
 	m.stopping = true
 	v.mu.Unlock()
+	if err := unbind(filepath.Join(v.bindsDir(), m.name)); err != nil {
+		v.a.log.Warn("removing a mount's binds failed", "mount", m.name, "error", err)
+	}
 	if err := v.a.stopDocker(ctx, m.name, stopKillSeconds); err != nil {
 		return err
 	}
@@ -669,14 +734,18 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 		if s.Labels[labelKind] != "" || s.State != containertypes.StateRunning || v.a.lookup(id) == nil {
 			continue
 		}
+		// Workloads an earlier release started bind the mount directory.
+	points:
 		for _, point := range s.Mounts {
-			rel, err := filepath.Rel(v.mountDir(), point.Source)
-			if point.Type != mount.TypeBind || err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-				continue
-			}
-			if name, _, _ := strings.Cut(rel, string(filepath.Separator)); live[name] == nil {
-				lost = append(lost, id)
-				break
+			for _, dir := range []string{v.bindsDir(), v.mountDir()} {
+				rel, err := filepath.Rel(dir, point.Source)
+				if point.Type != mount.TypeBind || err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+					continue
+				}
+				if name, _, _ := strings.Cut(rel, string(filepath.Separator)); live[name] == nil {
+					lost = append(lost, id)
+					break points
+				}
 			}
 		}
 	}
@@ -714,9 +783,10 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	if err := v.stopSlices(ctx, orphans...); err != nil {
 		return err
 	}
-	// Starts and stops cut short leave keys and directories no mounter has.
-	// A directory goes only when nothing is mounted on it and it is empty.
-	for dir, remove := range map[string]func(string) error{v.bucketKeys(""): os.RemoveAll, v.mountDir(): os.Remove} {
+	// Starts and stops cut short leave keys, binds and directories no
+	// mounter has. A directory goes only when nothing is mounted on it and
+	// it is empty.
+	for dir, remove := range map[string]func(string) error{v.bucketKeys(""): os.RemoveAll, v.bindsDir(): unbind, v.mountDir(): os.Remove} {
 		entries, err := os.ReadDir(dir)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("list %s: %w", dir, err)
