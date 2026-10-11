@@ -72,7 +72,7 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 		}
 		for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
 			var released bool
-			if err := p.pool.QueryRow(ctx, "select released_at is not null from disks where name = 'box'").Scan(&released); err != nil {
+			if err := p.pool.QueryRow(t.Context(), "select released_at is not null from disks where name = 'box'").Scan(&released); err != nil {
 				t.Fatal(err)
 			}
 			if released {
