@@ -70,11 +70,11 @@ mount_checkout() {
 setup() {
   mount_checkout
   node_image
-  # The node recipe removes the compiler, which -race needs;
-  # install-snapshotter.sh writes a polkit rule; the disk engine's tests
-  # write through qemu-io, which the node recipe does not build.
-  shell sh -c "command -v gcc >/dev/null && command -v qemu-io >/dev/null && test -d /etc/polkit-1/rules.d ||
-    dnf install -y -q gcc polkit qemu-img"
+  # The node recipe removes the compiler, which -race needs, and the disk
+  # engine's tests write through qemu-io, which the node recipe does not
+  # build.
+  shell sh -c "command -v gcc >/dev/null && command -v qemu-io >/dev/null ||
+    dnf install -y -q gcc qemu-img"
   go=$(sed -n 's/^toolchain //p' go.mod)
   if [ "$(shell sh -c 'head -1 /usr/local/go/VERSION 2>/dev/null' || true)" != "$go" ]; then
     archive=$go.linux-amd64.tar.gz
