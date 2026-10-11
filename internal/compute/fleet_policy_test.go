@@ -26,7 +26,7 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 		{"GPU markets keep a share without a floor", ReserveMarket{GPU: "T4"}, FleetCapacity{}, FleetCapacity{}, FleetCapacity{}},
 		{"loaded GPU market", ReserveMarket{GPU: "L4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{CPUMillis: 1000, GPUs: 1}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 		{"other cards keep none", ReserveMarket{GPU: "H100"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
-		{"Spot GPU work keeps none", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
+		{"Spot GPU work keeps a stopped share and nothing warm", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 	}
 	for _, c := range cases {
 		r := p.Reserve(c.market)
@@ -37,7 +37,8 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 }
 
 func TestFleetMarketsAreSpotOnDemandAndTheReservedCards(t *testing.T) {
-	want := []ReserveMarket{{Preemptible: true}, {}, {GPU: "A10G"}, {GPU: "L4"}, {GPU: "T4"}}
+	want := []ReserveMarket{{Preemptible: true}, {}, {Preemptible: true, GPU: "A10G"}, {GPU: "A10G"}, {Preemptible: true, GPU: "L4"}, {GPU: "L4"},
+		{Preemptible: true, GPU: "T4"}, {GPU: "T4"}}
 	if got := DefaultPolicy().Markets(); !slices.Equal(got, want) {
 		t.Fatalf("markets %v", got)
 	}

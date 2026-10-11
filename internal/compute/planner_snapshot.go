@@ -171,7 +171,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
-		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
+		Lent:       lent(market, FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}),
 		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
 		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
@@ -190,10 +190,11 @@ func busySince(h PlannerHostsRow) *time.Time {
 	return &h.BusySince
 }
 
-// lent is what Spot-tolerant work holds on a host: on an on-demand CPU host
-// it is lent to the Spot market, and elsewhere nothing.
-func lent(market Market, gpus int, tolerant FleetCapacity) FleetCapacity {
-	if market != MarketOnDemand || gpus > 0 {
+// lent is what Spot-tolerant work holds on a host: on an on-demand host it
+// is lent to the Spot market of the host's GPU model, or of CPU, and on a
+// Spot host nothing.
+func lent(market Market, tolerant FleetCapacity) FleetCapacity {
+	if market != MarketOnDemand {
 		return FleetCapacity{}
 	}
 	return tolerant
@@ -268,8 +269,8 @@ const (
 
 // shapesByMarket are, by market, the largest shape placed platform
 // containers reserved and the largest its finished builds did, and what
-// arrived within the arrival window. GPU work belongs to the on-demand
-// market of its model, as its demand does; GPU work without a model
+// arrived within the arrival window. GPU work belongs to its model's
+// market of its tolerance, as its demand does; GPU work without a model
 // belongs to none.
 func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
 	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
@@ -277,7 +278,7 @@ func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[Reserve
 		var m ReserveMarket
 		switch {
 		case r.GpuType != "":
-			m = ReserveMarket{GPU: r.GpuType}
+			m = ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}
 		case r.Gpus > 0:
 			continue
 		default:

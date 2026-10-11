@@ -70,6 +70,12 @@ func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
 		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
 values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uuid.UUID(host), c.cpu, c.class)
 	}
+	// Spot-tolerant L4 work on an on-demand L4 host is the L4 Spot market's.
+	gpuHost := fleetHost(t, o, compute.PhaseReady, "g6.xlarge", "i-0000000000000a002")
+	run(t, o.pool, "update hosts set gpu_type = 'L4', gpu_count = 1 where id = $1", uuid.UUID(gpuHost))
+	gpuRelease := newRelease(t, o.pool, ws, `{"resources": {"gpu": ["L4"], "gpu_count": 1}}`)
+	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
 	if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
@@ -78,13 +84,20 @@ values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uu
 		t.Fatal(err)
 	}
 	load := map[bool]cpu.Millis{}
+	cards := map[bool]int{}
 	for _, m := range markets {
-		if m.GPUType == "" {
+		switch m.GPUType {
+		case "":
 			load[m.Preemptible] = m.Load.CPUMillis
+		case "L4":
+			cards[m.Preemptible] = m.Load.GPUs
 		}
 	}
 	if load[true] != 1500 || load[false] != 2000 {
 		t.Fatalf("Spot load %v and on-demand %v, want 1500 and 2000", load[true], load[false])
+	}
+	if cards[true] != 1 || cards[false] != 0 {
+		t.Fatalf("L4 Spot load %d cards and on-demand %d, want the borrowed card in Spot", cards[true], cards[false])
 	}
 }
 
@@ -398,14 +411,14 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 		return scan[time.Time](t, o.pool, "select max(generated_at) from fleet_markets")
 	}
 	first := pass()
-	if n := strings.Count(logs.String(), "fleet market plan"); n != 5 {
+	if n := strings.Count(logs.String(), "fleet market plan"); n != 8 {
 		t.Fatalf("%d decision lines, want one per market:\n%s", n, logs.String())
 	}
 	markets, err := o.compute.PublishedPlan(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(markets) != 5 {
+	if len(markets) != 8 {
 		t.Fatalf("%d published markets, want Spot and on-demand CPU and three cards", len(markets))
 	}
 	for _, m := range markets {
@@ -557,21 +570,31 @@ func TestPlannedCapacityUsesTheMemoryHostsOfTheTypeReported(t *testing.T) {
 	}
 }
 
-// A pass in an empty fleet buys the warm floors to serve and the stopped
-// floors as reserves that hibernate.
+// A pass in an empty fleet buys the CPU warm floors to serve and the CPU
+// stopped floors as reserves that hibernate, and one Spot reserve of each
+// GPU model, which stops, as no GPU type hibernates. On-demand GPU work
+// keeps no reserve until it runs.
 func TestAnEmptyFleetBuysTheFloorsAsServingHostsAndReserves(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	if r := plan(t, o); r.Requested == 0 {
 		t.Fatalf("plan %+v, want floors bought", r)
 	}
+	count := func(market, where string) int {
+		return scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and "+where, market)
+	}
 	for _, market := range []string{"spot", "on_demand"} {
-		serving := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode is null", market)
-		reserves := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode = 'hibernate'", market)
-		others := scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and market = $1 and reserve_mode <> 'hibernate'", market)
+		serving := count(market, "gpu_count = 0 and reserve_mode is null")
+		reserves := count(market, "gpu_count = 0 and reserve_mode = 'hibernate'")
+		others := count(market, "gpu_count = 0 and reserve_mode <> 'hibernate'")
 		if serving == 0 || reserves == 0 || others > 0 {
-			t.Errorf("%s market bought %d serving hosts, %d reserves that hibernate and %d others", market, serving, reserves, others)
+			t.Errorf("%s CPU market bought %d serving hosts, %d reserves that hibernate and %d others", market, serving, reserves, others)
 		}
+	}
+	models := scan[[]string](t, o.pool, `select coalesce(array_agg(gpu_type order by gpu_type), '{}') from hosts
+where phase = 'requested' and gpu_count > 0 and market = 'spot' and reserve_mode = 'stop'`)
+	if !slices.Equal(models, []string{"A10G", "L4", "T4"}) || count("on_demand", "gpu_count > 0") > 0 || count("spot", "gpu_count > 0") != 3 {
+		t.Errorf("GPU reserves %v, want one stopping Spot reserve per model and nothing else", models)
 	}
 }
 
@@ -660,7 +683,7 @@ func TestAtZeroLoadEachCPUMarketHoldsAFloorReserveAndALargeShapeReserve(t *testi
 	settledFleet(t, o)
 	for _, market := range []compute.Market{compute.MarketSpot, compute.MarketOnDemand} {
 		cpus := scan[[]int64](t, o.pool, `select coalesce(array_agg(cpu_millis order by cpu_millis), '{}') from hosts
-where reserve_mode is not null and market = $1`, string(market))
+where reserve_mode is not null and market = $1 and gpu_count = 0`, string(market))
 		if len(cpus) != 2 || cpus[0] < 3000 || cpus[0] >= 8000 || cpus[1] < 8000 {
 			t.Errorf("%s reserves of %v millicpus, want one for the 3 CPU floor and one of 8 CPU", market, cpus)
 		}

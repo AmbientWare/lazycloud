@@ -271,7 +271,7 @@ func placementPenalty(ranges map[string]scoreRange, shape string, score int) int
 // RankOffers lists the offers that can host need, best first. A reserve
 // offer prices the root disk a hibernating reserve needs. It keeps offers
 // sold in the region, in a market the need allows, not cooling, with a
-// complete cost, whose usable capacity covers the need, whose GPUs the need
+// complete cost, whose usable capacity and disk slots cover the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and, unless the owner pays, whose
 // GPU model the platform fleet offers and that keep the purchase margin. A
 // reserve offer hibernates where hibernates allows.
@@ -307,7 +307,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					continue
 				}
 				usable := t.Usable(in.ReportedMemory[t.Name])
-				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) {
+				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) || t.DiskSlots() < need.Disks {
 					continue
 				}
 				for _, market := range markets {

@@ -107,3 +107,15 @@ func TestCoverPacksTwoThreeCPURequestsOntoOneLargerHost(t *testing.T) {
 		}
 	}
 }
+
+// Items take a node's disk slots as well as its room: three containers of
+// two disks each need two nodes of four slots, however much room one has.
+func TestCoverPlacesNoMoreDisksOnANodeThanItHasSlots(t *testing.T) {
+	slots := coverOffer("slots", cpuGiB(32_000, 64), 300_000)
+	slots.Type.Topology = twoPerCore(8)
+	need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(1000, 2), Disks: 2, Count: 3}}}
+	r := Cover([]FleetOffer{slots}, need, hourlyCost, CoverLimits{Nodes: 16})
+	if len(r.Nodes) != 2 || !r.Complete(need) {
+		t.Fatalf("cover %+v, want two nodes", r)
+	}
+}

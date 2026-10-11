@@ -22,6 +22,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
+       coalesce(used.tolerant_gpus, 0)::int as tolerant_gpus,
        coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
@@ -30,6 +31,8 @@ left join lateral (
            sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_cpu,
            sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_memory,
            sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end)
+               filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
            count(*) as containers, max(c.assigned_at) as busy_since
     from containers c

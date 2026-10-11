@@ -665,20 +665,30 @@ func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 	}
 }
 
-// Spot-tolerant work borrowing an on-demand host is the Spot market's load:
-// its headroom is bought as Spot, and the on-demand market keeps only the
-// load of work that cannot run on Spot.
+// Spot-tolerant work borrowing an on-demand host is the load of its Spot
+// market, of CPU or of the host's GPU model: its headroom is bought as
+// Spot, and the on-demand market keeps only the load of work that cannot
+// run on Spot.
 func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
 	p := DefaultPolicy()
-	p.GPU = nil
 	h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
 	h.Load, h.Lent, h.Containers = cpuGiB(6000, 12), cpuGiB(4000, 8), 3
-	plan := PlanFleet(p, planSnapshot(t, h))
-	if spot := marketPlan(t, plan, ReserveMarket{Preemptible: true}).Load; spot != cpuGiB(4000, 8) {
-		t.Errorf("Spot load %+v, want the borrowed 4 CPU", spot)
-	}
-	if od := marketPlan(t, plan, onDemand).Load; od != cpuGiB(2000, 4) {
-		t.Errorf("on-demand load %+v, want the 2 CPU that cannot run on Spot", od)
+	card := FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib, GPUs: 1}
+	l4 := planHost(2, mustType(t, "g6.4xlarge"), FleetServing)
+	l4.GPU, l4.Load, l4.Lent, l4.Containers = "L4", card.Times(2), card, 2
+	s := planSnapshot(t, h, l4)
+	s.Offers.Catalog = FleetCatalog()
+	plan := PlanFleet(p, s)
+	for _, c := range []struct {
+		market ReserveMarket
+		want   FleetCapacity
+	}{
+		{ReserveMarket{Preemptible: true}, cpuGiB(4000, 8)}, {onDemand, cpuGiB(2000, 4)},
+		{ReserveMarket{Preemptible: true, GPU: "L4"}, card}, {ReserveMarket{GPU: "L4"}, card},
+	} {
+		if load := marketPlan(t, plan, c.market).Load; load != c.want {
+			t.Errorf("%s load %+v, want %+v", c.market, load, c.want)
+		}
 	}
 }
 
@@ -859,5 +869,137 @@ func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
 	s, id = batching(planHost(1, planSmall, FleetStarting))
 	if plan := PlanFleet(p, s); len(plan.Actions) > 0 || plan.BatchWait != 0 || *waitOf(t, plan, id).Host != (HostID{1}) {
 		t.Fatalf("a starting host: actions %+v, batch %s, wait %+v", plan.Actions, plan.BatchWait, waitOf(t, plan, id))
+	}
+}
+
+// gpuPlanSnapshot is the plan tests' zone with the fleet catalog, L4 and
+// A10G Spot quotes and the hosts.
+func gpuPlanSnapshot(t *testing.T, hosts ...FleetHost) FleetSnapshot {
+	s := planSnapshot(t, hosts...)
+	s.Offers.Catalog = FleetCatalog()
+	for typ, micros := range map[string]int64{"g6.xlarge": 300_000, "g6.4xlarge": 500_000, "g5.2xlarge": 500_000} {
+		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ, HourlyMicros: micros, ObservedAt: offerNow})
+	}
+	return s
+}
+
+// gpuReserve is a stopped g6.xlarge L4 reserve in market.
+func gpuReserve(t *testing.T, id byte, market Market) FleetHost {
+	h := planHost(id, mustType(t, "g6.xlarge"), FleetStopped)
+	h.Market, h.GPU = market, "L4"
+	return h
+}
+
+// spotCooled cools every Spot pool of model's types in the plan zone.
+func spotCooled(model string) []OfferCooldown {
+	var out []OfferCooldown
+	for _, typ := range FleetCatalog() {
+		if typ.GPU == model {
+			out = append(out, OfferCooldown{Region: "us-east-2", InstanceType: typ.Name, Market: MarketSpot, Until: offerNow.Add(time.Hour)})
+		}
+	}
+	return out
+}
+
+func gpuPolicy() Policy {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.GPU = DefaultPolicy().GPU
+	return p
+}
+
+// GPU work resumes a reserve of its own market: Spot-tolerant work the
+// Spot reserve, work that cannot run on Spot the on-demand one.
+func TestGPUWorkResumesAReserveOfItsMarket(t *testing.T) {
+	for _, c := range []struct {
+		preemptible bool
+		want        HostID
+	}{{true, HostID{1}}, {false, HostID{2}}} {
+		s := gpuPlanSnapshot(t, gpuReserve(t, 1, MarketSpot), gpuReserve(t, 2, MarketOnDemand))
+		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: c.preemptible, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib},
+			Containers: []PendingContainer{{ID: uuid.New()}}}}
+		plan := PlanFleet(gpuPolicy(), s)
+		if got := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(got, []HostID{c.want}) || len(boughtForWork(plan)) > 0 {
+			t.Errorf("preemptible %t: resumed %v, bought %v", c.preemptible, got, boughtForWork(plan))
+		}
+	}
+}
+
+// Spot-tolerant GPU work borrows the on-demand reserve only while every
+// Spot pool of its model refuses it; otherwise it buys Spot and the
+// reserve stays stopped.
+func TestSpotGPUWorkBorrowsTheOnDemandReserveOnlyWhileSpotRefuses(t *testing.T) {
+	for _, refusing := range []bool{false, true} {
+		s := gpuPlanSnapshot(t, gpuReserve(t, 2, MarketOnDemand))
+		if refusing {
+			s.Offers.Cooldowns = spotCooled("L4")
+		}
+		g, _ := pendingOne(Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}, nil)
+		s.Pending = []DemandGroup{g}
+		plan := PlanFleet(gpuPolicy(), s)
+		resumed := hostsOf(actionsOf(plan, ActionResume))
+		var bought []Market
+		for _, a := range actionsOf(plan, ActionBuy) {
+			bought = append(bought, a.Offer.Market)
+		}
+		if refusing && (!slices.Equal(resumed, []HostID{{2}}) || len(bought) > 0) ||
+			!refusing && (len(resumed) > 0 || !slices.Equal(bought, []Market{MarketSpot})) {
+			t.Errorf("Spot refusing %t: resumed %v, bought %v", refusing, resumed, bought)
+		}
+	}
+}
+
+// Spot-tolerant GPU work buys Spot of each model it accepts before
+// on-demand of any: with its first model's Spot pools refusing it buys
+// its next model on Spot, and only with every model's refusing on-demand.
+func TestSpotGPUWorkBuysOnDemandOnlyWhenNoModelsSpotCanHostIt(t *testing.T) {
+	for _, c := range []struct {
+		cooled []string
+		want   string
+	}{{[]string{"L4"}, "g5.2xlarge/spot"}, {[]string{"L4", "A10G"}, "g6.xlarge/on_demand"}} {
+		s := gpuPlanSnapshot(t)
+		s.Offers.OwnerPays = true
+		for _, model := range c.cooled {
+			s.Offers.Cooldowns = append(s.Offers.Cooldowns, spotCooled(model)...)
+		}
+		g, _ := pendingOne(Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}, nil)
+		s.Pending = []DemandGroup{g}
+		var got []string
+		for _, a := range actionsOf(PlanFleet(gpuPolicy(), s), ActionBuy) {
+			if len(a.Containers) > 0 {
+				got = append(got, a.Offer.Type.Name+"/"+string(a.Offer.Market))
+			}
+		}
+		if !slices.Equal(got, []string{c.want}) {
+			t.Errorf("Spot of %v cooling: bought %v, want %s", c.cooled, got, c.want)
+		}
+	}
+}
+
+// A Spot GPU market whose reserve serves waits for it to return rather than
+// buy another, however long it has been short; the CPU Spot market buys
+// once the return wait passes.
+func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
+	for _, gpu := range []bool{true, false} {
+		h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
+		m := ReserveMarket{Preemptible: true}
+		if gpu {
+			h = planHost(1, mustType(t, "g6.4xlarge"), FleetServing)
+			h.GPU, m.GPU = "L4", "L4"
+		}
+		h.Market, h.Load, h.Containers, h.PhaseAt = MarketSpot, FleetCapacity{CPUMillis: 1000, MemoryBytes: gib, GPUs: h.Usable.GPUs}, 1, offerNow.Add(-time.Hour)
+		s := gpuPlanSnapshot(t, h)
+		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "c6a.4xlarge", HourlyMicros: 200_000, ObservedAt: offerNow})
+		s.FloorShortSince = map[ReserveMarket]time.Time{m: offerNow.Add(-time.Hour)}
+		p := gpuPolicy()
+		p.Spot = DefaultPolicy().Spot
+		var bought []FleetAction
+		for _, a := range actionsOf(PlanFleet(p, s), ActionBuyReserve) {
+			if a.Market == m {
+				bought = append(bought, a)
+			}
+		}
+		if (len(bought) == 0) != gpu {
+			t.Errorf("%s bought reserves %+v while its host serves", m, bought)
+		}
 	}
 }

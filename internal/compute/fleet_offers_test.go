@@ -366,3 +366,17 @@ func TestOffersSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
 		t.Fatalf("offers %v, want %v", got, want)
 	}
 }
+
+// A container's disks take a disk slot each, so only types with a slot
+// for every disk host it.
+func TestOffersHoldEveryDiskTheWorkAttaches(t *testing.T) {
+	offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 500, MemoryBytes: gib, Disks: 5}, false, offerInputs(t))
+	if len(offers) == 0 {
+		t.Fatal("no offer holds five disks")
+	}
+	for _, o := range offers {
+		if o.Type.DiskSlots() < 5 {
+			t.Errorf("%s offered with %d disk slots", o.Key(), o.Type.DiskSlots())
+		}
+	}
+}

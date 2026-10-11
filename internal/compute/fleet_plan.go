@@ -31,9 +31,9 @@ type FleetHost struct {
 	GPU          string
 	Usable       FleetCapacity
 	State        FleetState
-	// Load is what its live containers reserve; Lent, on an on-demand CPU
+	// Load is what its live containers reserve; Lent, on an on-demand
 	// host, what those that could run on Spot reserve, which counts as the
-	// Spot market's load.
+	// load of the Spot market of its GPU model, or of CPU.
 	Load, Lent FleetCapacity
 	Containers int
 	// UsedDisks counts the disks its live containers attach.
@@ -477,15 +477,16 @@ func (ps *pass) views(items []coverItem) []*marketView {
 }
 
 // marketLoad is what market m's work holds on running hosts: its hosts'
-// containers, less what Spot-tolerant work borrows on them, and for the
-// CPU Spot market what it borrows on on-demand hosts.
+// containers, less what Spot-tolerant work borrows on them, and for a Spot
+// market what its work borrows on on-demand hosts of its GPU model, or of
+// CPU.
 func (ps *pass) marketLoad(m ReserveMarket) FleetCapacity {
 	var load FleetCapacity
 	for _, h := range ps.hosts {
 		switch {
 		case h.market() == m:
 			load = load.Plus(h.Load.Minus(h.Lent))
-		case m.spotCPU():
+		case m == reserveMarketOf(MarketSpot, h.GPU):
 			load = load.Plus(h.Lent)
 		}
 	}
@@ -779,22 +780,30 @@ func (ps *pass) provisioning(it coverItem, host *HostID, action *int) {
 	w.Wait, w.Host, w.Action = ptr(WaitProvisioning), host, action
 }
 
-// demandMarket is the market a container's demand belongs to: its purchase
-// market for CPU work, and for GPU work the on-demand market of the model
-// it would buy.
+// demandMarket is the market a container's demand belongs to: Spot or
+// on-demand as it tolerates, of CPU or of the GPU model it would buy.
 func (ps *pass) demandMarket(need Requirement) ReserveMarket {
+	m := ReserveMarket{Preemptible: need.Preemptible}
 	if need.GPUsNeeded() == 0 {
-		return ReserveMarket{Preemptible: need.Preemptible}
+		return m
 	}
+	m.GPU = GPUAny
 	if models := ps.gpuModels(need, ps.classOffers(need)); len(models) > 0 {
-		return ReserveMarket{GPU: models[0]}
+		m.GPU = models[0]
+	} else if i := slices.IndexFunc(need.GPUs, func(model string) bool { return model != GPUAny }); i >= 0 {
+		m.GPU = need.GPUs[i]
 	}
-	for _, model := range need.GPUs {
-		if model != GPUAny {
-			return ReserveMarket{GPU: model}
-		}
-	}
-	return ReserveMarket{GPU: GPUAny}
+	return m
+}
+
+// spotOffered reports whether a Spot offer of a GPU model need accepts can
+// host it now: none while every such pool cools after refusals or its
+// quota is full.
+func (ps *pass) spotOffered(need Requirement) bool {
+	shape := reservedShape(need)
+	return slices.ContainsFunc(ps.classOffers(need), func(o FleetOffer) bool {
+		return o.Market == MarketSpot && o.Usable.Covers(shape) && o.Type.DiskSlots() >= need.Disks
+	})
 }
 
 // classKey is what offers depend on in a requirement.
@@ -897,7 +906,8 @@ func (ps *pass) resumeEach(items []coverItem, work bool) []coverItem {
 // containers, then one that takes every pending container and every slot
 // of its market, so one resume does; then the smallest, the cheapest, and
 // the one that takes the most slots.
-// Spot work takes an on-demand reserve only while it is lendable. Without
+// Spot work takes an on-demand CPU reserve only while it is lendable, and
+// an on-demand GPU reserve only while no Spot offer can host it. Without
 // work, only slots of markets where no work waits, or slots that come with
 // the work, take a reserve, and only one whose absence leaves a reserve
 // that fits the largest shape and that costs no more to serve than buying
@@ -919,7 +929,9 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 		if !ps.ready(*h) {
 			continue
 		}
-		lends := h.Market != MarketOnDemand || ps.lendable(*h)
+		onDemand := h.Market == MarketOnDemand
+		lendsCPU := onDemand && h.GPU == "" && ps.lendable(*h)
+		lends := func(need Requirement) bool { return !onDemand || lendsCPU || h.GPU != "" && !ps.spotOffered(need) }
 		b := bin{host: h, room: h.capacity()}
 		var taken []int
 		var count [2]int
@@ -929,7 +941,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 				switch {
 				case !eligible:
 					continue
-				case !slot && (!work || it.need.Preemptible && !lends):
+				case !slot && (!work || it.need.Preemptible && !lends(it.need)):
 					continue
 				case slot && !work && (ps.waiting[it.market] && !it.buysWithWork() || ps.displaced(it)):
 					continue
@@ -1010,12 +1022,12 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 func (ps *pass) resumePays(h *FleetHost, items []coverItem, taken []int) bool {
 	var need CoverNeed
 	for _, n := range taken {
-		shape := reservedShape(items[n].need)
-		if i := slices.IndexFunc(need.Items, func(c CoverItem) bool { return c.Shape == shape }); i >= 0 {
+		shape, disks := reservedShape(items[n].need), items[n].need.Disks
+		if i := slices.IndexFunc(need.Items, func(c CoverItem) bool { return c.Shape == shape && c.Disks == disks }); i >= 0 {
 			need.Items[i].Count++
 			continue
 		}
-		need.Items = append(need.Items, CoverItem{Shape: shape, Count: 1})
+		need.Items = append(need.Items, CoverItem{Shape: shape, Disks: disks, Count: 1})
 	}
 	m := h.market()
 	result := Cover(ps.marketOffers(m, false), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
@@ -1030,9 +1042,9 @@ func (ps *pass) resumePays(h *FleetHost, items []coverItem, taken []int) bool {
 	return known && cost-ps.stoppedMicros(*h)*int64(ps.p.CostHorizon/time.Second) <= purchase
 }
 
-// lendable reports whether Spot work may resume on-demand reserve h: the
-// ready on-demand reserves left without it still meet their stopped target
-// and hold one that fits the largest shape.
+// lendable reports whether Spot work may resume on-demand CPU reserve h:
+// the ready on-demand reserves left without it still meet their stopped
+// target and hold one that fits the largest shape.
 func (ps *pass) lendable(h FleetHost) bool {
 	v := ps.byMarket[h.market()]
 	return ps.floor(v, h.ID, FleetHost.resumable).Covers(v.stopped) && ps.leavesLarge(h)
@@ -1045,26 +1057,27 @@ type demandClass struct {
 	groups []itemGroup
 }
 
-// itemGroup is a class's items of one shape and kind.
+// itemGroup is a class's items of one shape, disk count and kind.
 type itemGroup struct {
 	shape FleetCapacity
+	disks int
 	slot  bool
 	kind  slotKind
 	items []coverItem
 }
 
-// coverNeed is what is left of the class's items, and the index of each
-// need item's group. A warm slot of a market where work waits rides,
-// taking only room left on hosts bought for that work, unless it comes
-// with the work.
-func (ps *pass) coverNeed(c *demandClass) (CoverNeed, []int) {
+// coverNeed is what is left of the class's groups only keeps, and the
+// index of each need item's group. A warm slot of a market where work
+// waits rides, taking only room left on hosts bought for that work, unless
+// it comes with the work.
+func (ps *pass) coverNeed(c *demandClass, only func(itemGroup) bool) (CoverNeed, []int) {
 	var need CoverNeed
 	var at []int
 	for i, g := range c.groups {
-		if len(g.items) == 0 {
+		if len(g.items) == 0 || !only(g) {
 			continue
 		}
-		item := CoverItem{Shape: g.shape, Count: len(g.items)}
+		item := CoverItem{Shape: g.shape, Disks: g.disks, Count: len(g.items)}
 		if g.slot {
 			it := g.items[0]
 			item.Market, item.Rides = ptr(it.market.buyMarket()), ps.waiting[it.market] && !it.buysWithWork() || ps.displaced(it)
@@ -1101,9 +1114,11 @@ func (ps *pass) buyFor(items []coverItem) {
 		}
 		c := classes[n]
 		shape := reservedShape(it.need)
-		i := slices.IndexFunc(c.groups, func(g itemGroup) bool { return g.shape == shape && g.slot == it.slot && g.kind == it.kind })
+		i := slices.IndexFunc(c.groups, func(g itemGroup) bool {
+			return g.shape == shape && g.disks == it.need.Disks && g.slot == it.slot && g.kind == it.kind
+		})
 		if i < 0 {
-			c.groups = append(c.groups, itemGroup{shape: shape, slot: it.slot, kind: it.kind})
+			c.groups = append(c.groups, itemGroup{shape: shape, disks: it.need.Disks, slot: it.slot, kind: it.kind})
 			i = len(c.groups) - 1
 		}
 		c.groups[i].items = append(c.groups[i].items, it)
@@ -1111,17 +1126,7 @@ func (ps *pass) buyFor(items []coverItem) {
 	for _, c := range classes {
 		held := ps.hostRoom > 0 && ps.batching()
 		if ps.hostRoom > 0 && !held {
-			offers := ps.classOffers(c.need)
-			markets := []ReserveMarket{c.market}
-			if c.market.GPU != "" {
-				markets = nil
-				for _, model := range ps.gpuModels(c.need, offers) {
-					markets = append(markets, ReserveMarket{GPU: model})
-				}
-			}
-			for _, m := range markets {
-				ps.buyClass(c, m, offers)
-			}
+			ps.buyClass(c, ps.classOffers(c.need))
 		}
 		for _, g := range c.groups {
 			for _, it := range g.items {
@@ -1149,32 +1154,47 @@ func (ps *pass) buyFor(items []coverItem) {
 	}
 }
 
-// buyClass covers what is left of class c with the offers of market m:
-// pending containers and warm slots on the same new hosts. The CPU Spot
-// market buys Spot hosts that each hold at least its warm target, up to
-// the largest shape's cap: Spot costs less per core on larger hosts, so a
-// growing market buys hosts that grow with it, and the room they leave is
-// headroom. What those cannot take, under a quota or a cooldown, any offer
-// covers. On-demand prices scale with size, so on-demand hosts hold what
-// the cover needs.
-func (ps *pass) buyClass(c *demandClass, m ReserveMarket, offers []FleetOffer) {
+// buyClass covers what is left of class c from offers: pending containers
+// and warm slots on the same new hosts. The CPU Spot market buys Spot hosts
+// that each hold at least its warm target, up to the largest shape's cap:
+// Spot costs less per core on larger hosts, so a growing market buys hosts
+// that grow with it, and the room they leave is headroom. What those
+// cannot take, under a quota or a cooldown, any offer covers. On-demand
+// prices scale with size, so on-demand hosts hold what the cover needs.
+// GPU work buys its models in its preference order: Spot-tolerant work on
+// Spot, and on-demand only what no Spot offer of any model can host.
+func (ps *pass) buyClass(c *demandClass, offers []FleetOffer) {
+	m, all := c.market, func(itemGroup) bool { return true }
 	if m.GPU != "" {
-		ps.coverClass(c, m, slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return o.Type.GPU != m.GPU }))
+		models := ps.gpuModels(c.need, offers)
+		buy := func(market Market, only func(itemGroup) bool) {
+			for _, model := range models {
+				ps.coverClass(c, ReserveMarket{Preemptible: m.Preemptible, GPU: model}, slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool {
+					return o.Type.GPU != model || o.Market != market
+				}), only)
+			}
+		}
+		if !m.Preemptible {
+			buy(MarketOnDemand, all)
+			return
+		}
+		buy(MarketSpot, all)
+		buy(MarketOnDemand, func(g itemGroup) bool { return !ps.spotOffered(g.items[0].need) })
 		return
 	}
 	if v := ps.byMarket[m]; v != nil && m.spotCPU() {
 		least := v.warm.Lower(ps.p.LargestShape.Cap)
 		ps.coverClass(c, m, slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool {
 			return o.Market != MarketSpot || !o.Usable.Covers(least)
-		}))
+		}), all)
 	}
-	ps.coverClass(c, m, offers)
+	ps.coverClass(c, m, offers, all)
 }
 
-// coverClass buys the cheapest cover of what is left of class c from
-// offers.
-func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer) {
-	need, at := ps.coverNeed(c)
+// coverClass buys the cheapest cover of what is left of class c's groups
+// only keeps from offers.
+func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer, only func(itemGroup) bool) {
+	need, at := ps.coverNeed(c, only)
 	if len(at) == 0 {
 		return
 	}
@@ -1346,9 +1366,10 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 
 // returning reports whether market v waits for hosts to return to the
 // reserve before it buys what the reserve lacks, short in total and a host
-// that fits item: while the reserve has lacked it for less than the return
-// wait and any host could return, or while hosts due back soon cover it. A
-// host could return when EC2 can stop it and it serves or starts. It is due
+// that fits item: while any host could return and the reserve has lacked
+// it for less than the return wait or the market awaits returns, or while
+// hosts due back soon cover it. A host could return when EC2 can stop it
+// and it serves or starts. It is due
 // back soon when it starts, became ready within the return wait,
 // as a reserve resumed for a burst does, or idles holding no warm slot,
 // slots a cheaper type will take over, or only a build's slot with room for
@@ -1359,7 +1380,7 @@ func (ps *pass) returning(v *marketView, short, item FleetCapacity) bool {
 		_, catalogued := ps.typeNamed(h.InstanceType)
 		return (serving(h) || starting(h)) && h.Stoppable && !h.Protected && catalogued
 	})
-	if len(could) > 0 && ps.s.Now.Sub(*v.floorShortSince) < ps.p.ReturnWait {
+	if len(could) > 0 && (ps.p.Reserve(v.m).AwaitReturn || ps.s.Now.Sub(*v.floorShortSince) < ps.p.ReturnWait) {
 		return true
 	}
 	soon := slices.DeleteFunc(could, func(h *FleetHost) bool {
