@@ -78,17 +78,20 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	next := imagefs.DiskIndex{Size: state.SizeBytes, Frames: make([]imagefs.DiskFrame, imagefs.DiskFrames(state.SizeBytes)),
 		Start: base.Start, Recent: base.Recent}
 	copy(next.Frames, base.Frames)
-	// A disk the snapshotter does not serve, as after a detach, has no
-	// reads to report.
+	// A disk the snapshotter does not serve, as after a detach or its
+	// restart, has no reads to report and keeps those recorded.
 	start, recent, err := e.bases.DiskReads(ctx, p.id)
-	if err != nil && status.Code(err) != codes.NotFound {
+	switch {
+	case status.Code(err) == codes.NotFound:
+	case err != nil:
 		return nil, err
-	}
-	if len(start) > 0 {
-		next.Start = start
-	}
-	if final {
-		next.Recent = recent
+	default:
+		if len(start) > 0 {
+			next.Start = start
+		}
+		if final {
+			next.Recent = recent
+		}
 	}
 	sealed := state.sealed()
 	extents, dirty, err := dirtyFrames(ctx, p, sealed)

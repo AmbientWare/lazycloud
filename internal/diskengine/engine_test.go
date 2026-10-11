@@ -369,3 +369,44 @@ func TestAttachRefusesMalformedRequests(t *testing.T) {
 		}
 	}
 }
+
+// A final publish after the snapshotter forgot the disk, as after it
+// restarted, keeps the recent frames the last generation recorded and
+// publishes nothing when nothing else changed.
+func TestFinalPublishKeepsRecentFramesTheSnapshotterForgot(t *testing.T) {
+	requireTools(t, toolDaemon, toolImage, toolRunUnit, "qemu-io")
+	ctx := t.Context()
+	store := testStore(t)
+	diskID := uuid.NewString()
+	h := newHost(t, 64*frame)
+	p, state, _ := attachUnmounted(t, h, store, AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"})
+	writeExport(t, p, 0, frame, 0x11)
+	writeExport(t, p, 3*frame, frame, 0x22)
+	sealUnmounted(t, p, state)
+	publishAndCommit(t, h.engine, diskID, store, false)
+	readExport(t, p)
+	publishAndCommit(t, h.engine, diskID, store, true)
+	if recent := readIndex(t, p).Recent; len(recent) != 2 {
+		t.Fatalf("the final publish recorded recent frames %v, want the two read", recent)
+	}
+	if err := h.bases.ReleaseDisk(ctx, diskID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := h.engine.Publish(ctx, diskID, store, true); err != nil || again != nil {
+		t.Fatalf("a final publish with nothing new returned %+v, %v", again, err)
+	}
+}
+
+// readIndex is the index of the generation the disk's stack is on.
+func readIndex(t *testing.T, p diskPaths) imagefs.DiskIndex {
+	t.Helper()
+	raw, err := os.ReadFile(p.baseIndex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix, err := imagefs.UnmarshalDisk(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ix
+}
