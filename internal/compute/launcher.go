@@ -219,7 +219,7 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 		return in, nil
 	}
 	now := time.Now()
-	in := &OfferInputs{Now: now, Catalog: FleetCatalog(), ReportedMemory: map[string]int64{}}
+	in := &OfferInputs{Now: now, Catalog: FleetCatalog(), ReportedMemory: map[string]int64{}, StorageRegion: c.fleet.StorageRegion}
 	rows, err := c.queries.PlannerHosts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read fleet hosts: %w", err)
@@ -296,7 +296,8 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 // image, that still holds what h was bought for: what the planner bought it
 // to hold, or without that its capacity, its GPU model in its market, its
 // reserve's sleep mode and disk slots, and the placement and disk slots
-// the containers waiting for it ask for.
+// the containers waiting for it ask for. Their volume reads weigh in its
+// cost.
 // Pools are priced as the planner buys: a reserve by what it costs to keep
 // stopped, any other host by what it costs to serve. A rightsize moves only
 // to a pool that costs less than the host it replaces.
@@ -319,6 +320,7 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 		need.Disks += int(w.Disks)
 		need.Preemptible = need.Preemptible || w.Preemptible
 		need.Region, need.Zone = cmp.Or(need.Region, w.Region), cmp.Or(need.Zone, w.Zone)
+		need.Storage = cmp.Or(need.Storage, StorageReadOf(w.StorageRegion, w.StorageBytes))
 	}
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
 	offers := slices.DeleteFunc(RankOffers(p, need, h.ReserveMode != nil, in), func(o FleetOffer) bool {

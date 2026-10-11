@@ -89,6 +89,8 @@ type OfferInputs struct {
 	// OwnerPays is set for a connected account's offers: the account pays
 	// its own hosts, so no purchase margin applies.
 	OwnerPays bool
+	// StorageRegion holds the platform's registry and object store.
+	StorageRegion string
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
@@ -106,9 +108,10 @@ type FleetOffer struct {
 	// disk alone, what a stopped reserve costs.
 	HourlyMicros  int64
 	StoppedMicros int64
-	// TransferMicros is the expected hourly transfer to and from
-	// storageRegion of a host serving from the offer. It is an estimate, so
-	// only ranking weighs it.
+	// TransferMicros is the expected hourly transfer of a host serving from
+	// the offer: to and from the platform's storage region, and the need's
+	// start read from its bucket. It is an estimate, so only ranking weighs
+	// it.
 	TransferMicros int64
 	// PlacementPenalty is the percent a Spot offer ranks above its cost for
 	// its pool's placement score, placementPenaltyPercent for each point
@@ -330,7 +333,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
-						TransferMicros: transferMicros(region, t), PlacementPenalty: penalty, Quota: quota,
+						TransferMicros: transferMicros(in.StorageRegion, region, t) + readMicros(p, need.Storage, region), PlacementPenalty: penalty, Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need); rejected && !in.OwnerPays {
 						continue

@@ -131,8 +131,10 @@ type simResult struct {
 	mostWarm    FleetCapacity
 	finalHourly int64
 	violations  []string
-	// fnWaits are each function's start waits, retries apart.
-	fnWaits map[string][]time.Duration
+	// fnWaits are each function's start waits, retries apart; placedIn
+	// the region of each placement, in order.
+	fnWaits  map[string][]time.Duration
+	placedIn []string
 	// revenueNanos is what finished containers bill.
 	revenueNanos int64
 	// windowMicros is spend within the measure window, in µ$·s, and
@@ -230,7 +232,10 @@ func newSim(t *testing.T, p Policy) *sim {
 	}}}
 	return &sim{
 		t: t, p: p, now: offerNow, start: offerNow, maxHosts: 40, tick: simTick, provision: simProvision,
-		in: OfferInputs{Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks)},
+		in: OfferInputs{
+			Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks),
+			StorageRegion: "us-east-1",
+		},
 	}
 }
 
@@ -375,6 +380,7 @@ func (s *sim) place() {
 			s.r.fnWaits = map[string][]time.Duration{}
 		}
 		s.r.fnWaits[c.fn] = append(s.r.fnWaits[c.fn], wait)
+		s.r.placedIn = append(s.r.placedIn, best.Region)
 		return true
 	})
 }
@@ -504,6 +510,9 @@ func (s *sim) plan() time.Duration {
 	var order []string
 	for _, c := range s.pending {
 		key := fmt.Sprint(c.need)
+		if c.need.Storage != nil {
+			key += fmt.Sprint(*c.need.Storage)
+		}
 		if groups[key] == nil {
 			groups[key] = &DemandGroup{Need: c.need}
 			order = append(order, key)
@@ -707,7 +716,11 @@ func (s *sim) apply(plan FleetPlan) {
 			for _, w := range plan.Waits {
 				if w.Action != nil && *w.Action == i {
 					c := s.pending[slices.IndexFunc(s.pending, func(c *simContainer) bool { return c.id == w.Container })]
-					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible, Disks: int32(c.need.Disks)})
+					row := HostWaitersRow{Preemptible: c.need.Preemptible, Disks: int32(c.need.Disks)}
+					if c.need.Storage != nil {
+						row.StorageRegion, row.StorageBytes = &c.need.Storage.Region, c.need.Storage.Bytes
+					}
+					waiters = append(waiters, row)
 				}
 			}
 			if id, ok := s.launch(a, a.Kind == ActionBuyReserve, waiters); ok {

@@ -176,6 +176,7 @@ func requirement(c PendingContainersRow) compute.Requirement {
 		Workspace: c.WorkspaceID, Connection: c.ConnectionID, Machine: c.Machine, Region: c.Region, Zone: c.Zone,
 		Preemptible: c.Preemptible, GPUs: c.Gpus, GPUCount: int(c.GpuCount),
 		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes, Disks: int(c.Disks), Prefer: (*compute.HostID)(c.DiskHost),
+		Storage: compute.StorageReadOf(c.StorageRegion, c.StorageBytes),
 	}
 }
 
@@ -183,7 +184,8 @@ func requirement(c PendingContainersRow) compute.Requirement {
 // take on-demand room before Spot-tolerant work borrows it, each to the
 // host compute.ChooseHost picks, keeping the platform's on-demand warm
 // floor free for them and preferring the host whose cache still holds a
-// container's disk. It returns parallel container and host id slices.
+// container's disk, then one in the region of its storage. It returns
+// parallel container and host id slices.
 func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, hostIDs []uuid.UUID) {
 	free := slices.Clone(hosts)
 	order := slices.Clone(pending)

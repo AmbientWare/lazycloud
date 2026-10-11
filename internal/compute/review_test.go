@@ -223,10 +223,12 @@ func openAgent(t *testing.T, o owners, host compute.HostID, version, rejected st
 }
 
 // A fleet that launches instances needs a public install origin and server
-// address they can reach with TLS.
+// address they can reach with TLS, and the region of the storage it prices
+// transfer from.
 func TestFleetConfigurationNeedsReachableEndpoints(t *testing.T) {
-	fleet := compute.Fleet{Networks: fleetNetworks()}
+	fleet := compute.Fleet{Networks: fleetNetworks(), StorageRegion: "us-east-1"}
 	for name, c := range map[string]compute.Config{
+		"no storage region":    {InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: compute.Fleet{Networks: fleetNetworks()}},
 		"no install URL":       {ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
 		"plain HTTP install":   {InstallURL: "http://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
 		"loopback install":     {InstallURL: "https://127.0.0.1", ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},

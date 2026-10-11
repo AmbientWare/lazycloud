@@ -78,6 +78,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(b.image_build_id), '[]'::jsonb)::jsonb as gpus,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
+       sb.region as storage_region, coalesce(vb.bytes, 0)::bigint as storage_bytes,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -86,7 +87,16 @@ from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
 left join releases r on r.id = b.release_id
-group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+-- The measured bytes of the platform volumes the release mounts, which a
+-- start reads from the workspace's bucket in its region; null for none.
+left join lateral (
+    select sum(v.size_bytes) as bytes
+    from volumes v
+    where v.workspace_id = b.workspace_id and v.state = 'active'
+      and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
+) vb on true
+left join workspace_buckets sb on sb.workspace_id = b.workspace_id and vb.bytes is not null
+group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
 order by 4, 5, 6, 2 desc, 3 desc;
 
 -- name: RecentShapes :many

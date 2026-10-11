@@ -130,5 +130,8 @@ func (c Config) CheckFleet() error {
 	if c.ServerAddress == "" || PlaintextAgents(c.ServerAddress, false) || c.ServerPlaintext {
 		return errors.New("LAZYCLOUD_AGENT_SERVER_ADDR must be the public host:port cloud instances dial with TLS")
 	}
+	if len(c.Fleet.Networks) > 0 && c.Fleet.StorageRegion == "" {
+		return errors.New("LAZYCLOUD_OBJECT_STORE_REGION must name the region of the object store, which prices the fleet's transfer")
+	}
 	return nil
 }

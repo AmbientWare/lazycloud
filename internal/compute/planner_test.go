@@ -35,6 +35,9 @@ func fleetConfig(f compute.Fleet) compute.Config {
 	if f.Name == "" {
 		f.Name = "lazycloud-test"
 	}
+	if f.StorageRegion == "" {
+		f.StorageRegion = "us-east-1"
+	}
 	f.AccountID = "111122223333"
 	f.NodeRoleARN = "arn:aws:iam::111122223333:role/lazycloud-node"
 	f.InstanceProfile = "lazycloud-node"

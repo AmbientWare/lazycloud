@@ -82,7 +82,8 @@ func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersPara
 
 const pendingContainers = `-- name: PendingContainers :many
 select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
-       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host
+       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host,
+       sb.region as storage_region, coalesce(p.volume_bytes, 0)::bigint as storage_bytes
 from (
     select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
            cw.connection_id,
@@ -104,6 +105,13 @@ from (
            coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
            array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)))::text[] as gpus,
            coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
+           -- The measured bytes of the platform volumes the release mounts,
+           -- which its start reads from the workspace's bucket; null for none.
+           (select sum(v.size_bytes)
+            from volumes v
+            where v.workspace_id = c.workspace_id and v.state = 'active'
+              and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
+           ) as volume_bytes,
            row_number() over (partition by c.workspace_id order by c.created_at, c.id) as turn
     from containers c
     left join releases r on r.id = c.release_id
@@ -113,6 +121,7 @@ from (
       and c.cpu_millis <= $2
       and c.memory_bytes <= $3
 ) p
+left join workspace_buckets sb on sb.workspace_id = p.workspace_id and p.volume_bytes is not null
 where (case
            when p.machine <> '' then 'machine:' || p.workspace_id::text || ':' || p.machine
            when p.connection_id is not null then 'connection:' || p.connection_id::text
@@ -131,20 +140,22 @@ type PendingContainersParams struct {
 }
 
 type PendingContainersRow struct {
-	ID           uuid.UUID
-	WorkspaceID  uuid.UUID
-	ReleaseID    *uuid.UUID
-	CpuMillis    cpu.Millis
-	MemoryBytes  int64
-	ConnectionID *uuid.UUID
-	Machine      string
-	Region       string
-	Zone         string
-	Preemptible  bool
-	Gpus         []string
-	GpuCount     int32
-	Disks        int32
-	DiskHost     *uuid.UUID
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	ReleaseID     *uuid.UUID
+	CpuMillis     cpu.Millis
+	MemoryBytes   int64
+	ConnectionID  *uuid.UUID
+	Machine       string
+	Region        string
+	Zone          string
+	Preemptible   bool
+	Gpus          []string
+	GpuCount      int32
+	Disks         int32
+	DiskHost      *uuid.UUID
+	StorageRegion *string
+	StorageBytes  int64
 }
 
 // Pending containers that fit the largest free host in each resource and
@@ -183,6 +194,8 @@ func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersPa
 			&i.GpuCount,
 			&i.Disks,
 			&i.DiskHost,
+			&i.StorageRegion,
+			&i.StorageBytes,
 		); err != nil {
 			return nil, err
 		}

@@ -346,22 +346,33 @@ const hostWaiters = `-- name: HostWaiters :many
 select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
        coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       coalesce(jsonb_array_length(r.spec -> 'disks'), 0)::int as disks
+       coalesce(jsonb_array_length(r.spec -> 'disks'), 0)::int as disks,
+       sb.region as storage_region, coalesce(vb.bytes, 0)::bigint as storage_bytes
 from containers c
 left join releases r on r.id = c.release_id
+left join lateral (
+    select sum(v.size_bytes) as bytes
+    from volumes v
+    where v.workspace_id = c.workspace_id and v.state = 'active'
+      and v.name in (select m ->> 'name' from jsonb_array_elements(r.spec -> 'volumes') m where m -> 'cloud_bucket' is null)
+) vb on true
+left join workspace_buckets sb on sb.workspace_id = c.workspace_id and vb.bytes is not null
 where c.state = 'pending' and c.capacity_host_id = $1
 `
 
 type HostWaitersRow struct {
-	Region      string
-	Zone        string
-	Preemptible bool
-	Disks       int32
+	Region        string
+	Zone          string
+	Preemptible   bool
+	Disks         int32
+	StorageRegion *string
+	StorageBytes  int64
 }
 
-// The placement each pending container waiting for a host asks for, and
-// the disks it attaches. A build has no release and takes any region on
-// Spot.
+// The placement each pending container waiting for a host asks for, the
+// disks it attaches, and the bucket region and measured bytes of the
+// platform volumes its start reads. A build has no release and takes any
+// region on Spot.
 func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWaitersRow, error) {
 	rows, err := q.db.Query(ctx, hostWaiters, hostID)
 	if err != nil {
@@ -376,6 +387,8 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 			&i.Zone,
 			&i.Preemptible,
 			&i.Disks,
+			&i.StorageRegion,
+			&i.StorageBytes,
 		); err != nil {
 			return nil, err
 		}

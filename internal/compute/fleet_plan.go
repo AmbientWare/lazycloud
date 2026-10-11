@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -864,7 +865,7 @@ func (ps *pass) spotCooling(h FleetHost) bool {
 
 // classKey is what offers depend on in a requirement.
 func classKey(need Requirement) Requirement {
-	return Requirement{Region: need.Region, Zone: need.Zone, Preemptible: need.Preemptible, GPUs: need.GPUs}
+	return Requirement{Region: need.Region, Zone: need.Zone, Preemptible: need.Preemptible, GPUs: need.GPUs, Storage: need.Storage}
 }
 
 // classOffers ranks the offers for work of need's placement and GPUs, once
@@ -872,6 +873,9 @@ func classKey(need Requirement) Requirement {
 func (ps *pass) classOffers(need Requirement) []FleetOffer {
 	c := classKey(need)
 	key := "demand/" + c.Region + "/" + c.Zone + "/" + boolKey(c.Preemptible) + "/" + strings.Join(c.GPUs, ",")
+	if c.Storage != nil {
+		key += "/" + c.Storage.Region + "/" + strconv.FormatInt(c.Storage.Bytes, 10)
+	}
 	if offers, ok := ps.offers[key]; ok {
 		return offers
 	}
@@ -1066,7 +1070,7 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
 	var o FleetOffer
 	if catalogued {
-		o.TransferMicros = transferMicros(h.Region, t)
+		o.TransferMicros = transferMicros(ps.s.Offers.StorageRegion, h.Region, t)
 	}
 	compute, priced := t.OnDemandMicros(h.Region)
 	if h.Market == MarketSpot {
@@ -1176,7 +1180,8 @@ func (ps *pass) buyFor(items []coverItem) {
 	for _, it := range items {
 		key := classKey(it.need)
 		n := slices.IndexFunc(classes, func(c *demandClass) bool {
-			return c.need.Region == key.Region && c.need.Zone == key.Zone && c.need.Preemptible == key.Preemptible && slices.Equal(c.need.GPUs, key.GPUs)
+			return c.need.Region == key.Region && c.need.Zone == key.Zone && c.need.Preemptible == key.Preemptible && slices.Equal(c.need.GPUs, key.GPUs) &&
+				sameRead(c.need.Storage, key.Storage)
 		})
 		if n < 0 {
 			classes = append(classes, &demandClass{need: key, market: it.market})

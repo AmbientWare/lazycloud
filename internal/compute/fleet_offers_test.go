@@ -26,7 +26,7 @@ func fleetRates(t *testing.T) []billing.ComputeRate {
 
 func offerInputs(t *testing.T) OfferInputs {
 	return OfferInputs{
-		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t),
+		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t), StorageRegion: "us-east-1",
 		Networks: map[string]Network{"us-east-2": oneZone("us-east-2a", "use2-az1")},
 	}
 }
