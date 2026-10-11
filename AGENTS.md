@@ -145,6 +145,9 @@ constraints.
   releases or changes that span those owners.
 - Owner and acceptance tests that need the managed runtime run locally
   through `deploy/local/test-vm.sh` before pushing; CI confirms.
+- Implement a whole change before testing it, then run its checks together
+  once. Do not rerun suites after each small edit; rerun only what a fix
+  touched.
 - Measure admission/placement separately from capacity wait and user execution.
   Record affected latency, queries, bytes, round trips and contention with idle,
   active and growing-backlog workloads.
