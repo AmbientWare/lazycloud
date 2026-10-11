@@ -143,6 +143,8 @@ constraints.
   targeted `go test -race`; use pytest -x for Python. Owner tests need
   `docker compose -f compose.test.yaml up -d --wait`. Broad gates support
   releases or changes that span those owners.
+- Owner and acceptance tests that need the managed runtime run locally
+  through `deploy/local/test-vm.sh` before pushing; CI confirms.
 - Measure admission/placement separately from capacity wait and user execution.
   Record affected latency, queries, bytes, round trips and contention with idle,
   active and growing-backlog workloads.
