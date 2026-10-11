@@ -248,7 +248,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if n := len(serve()); n != 0 {
 		t.Fatalf("an unconnected pod has %d containers", n)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
+	if _, err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
 		t.Fatal(err)
 	}
 	plan()
@@ -309,7 +309,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	if err != nil || view.Phase != apitypes.DevboxPhaseStopped {
 		t.Fatalf("parked view = %+v, %v", view, err)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
+	if _, err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
 		t.Fatal(err)
 	}
 	if view, err = e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil }); err != nil || view.Phase != apitypes.DevboxPhaseQueued {
@@ -321,16 +321,18 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 	}
 }
 
-// TestStartRetriesAPodWhoseStartsFailed: a release that reached the start
-// failure limit says so with its last failure, stays down for connections,
-// and starting the pod retries it.
-func TestStartRetriesAPodWhoseStartsFailed(t *testing.T) {
+// TestWakeRetriesAPodWhoseStartsFailed: a release that reached the start
+// failure limit says so with its last failure; a wake gives it one fresh
+// start, and one within the backoff after that start failed is held with
+// its error.
+func TestWakeRetriesAPodWhoseStartsFailed(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", 600)
-	pending := func(cause WakeCause) int {
+	wake := func() (*Failure, int) {
 		t.Helper()
-		if err := e.WakePod(t.Context(), f.workspace, f.workload, cause); err != nil {
+		retry, err := e.WakePod(t.Context(), f.workspace, f.workload)
+		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.PlanPods(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
@@ -340,44 +342,45 @@ func TestStartRetriesAPodWhoseStartsFailed(t *testing.T) {
 		if err := pool.QueryRow(t.Context(), "select count(*) from containers where release_id = $1 and state = 'pending'", f.release).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		return n
+		return retry, n
 	}
-	if n := pending(WakeConnection); n != 1 {
+	failAll := func(ago time.Duration, failures int) {
+		t.Helper()
+		if _, err := pool.Exec(t.Context(), `
+with failed as (
+    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() - make_interval(secs => $3),
+           exit_message = 'the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB'
+    where release_id = $1 and state <> 'stopped'
+)
+update releases set start_failures = $2 where id = $1`, f.release, failures, ago.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, n := wake(); n != 1 {
 		t.Fatalf("a woken pod has %d pending containers", n)
 	}
 	// The last start the limit allows failed an hour ago.
-	if _, err := pool.Exec(t.Context(), `
-with failed as (
-    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() - interval '1 hour',
-           exit_message = 'the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB'
-    where release_id = $1
-), counted as (update releases set start_failures = $2 where id = $1)
-update pod_states set woken_at = now() - interval '1 hour'`, f.release, startFailureLimit); err != nil {
-		t.Fatal(err)
-	}
+	failAll(time.Hour, startFailureLimit)
+	exec(t, pool, "update pod_states set woken_at = now() - interval '1 hour'")
 	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })
-	want := "stopped after 3 failed starts: the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB"
-	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || view.Reason != want || view.Failed == nil {
+	reason := "the root disk of 10 GiB is too small for its image of 11 GiB; set disk to at least 13 GiB"
+	if err != nil || view.Phase != apitypes.DevboxPhaseFailed || view.Reason != "stopped after 3 failed starts: "+reason || view.Failed == nil {
 		t.Fatalf("view of a release past the start failure limit = %+v, %v", view, err)
 	}
-	if n := pending(WakeConnection); n != 0 {
-		t.Fatalf("a connection started %d containers of a failed release", n)
+	if held, n := wake(); held != nil || n != 1 {
+		t.Fatalf("a wake of a stopped release: held on %+v with %d pending, want one fresh start", held, n)
 	}
-	if n := pending(WakeStart); n != 1 {
-		t.Fatalf("a start left %d containers of a failed release", n)
+	// That start fails; the next wake inside the backoff gets its error.
+	failAll(0, startFailureLimit)
+	if held, n := wake(); held == nil || held.Message != reason || n != 0 {
+		t.Fatalf("a wake right after the fresh start failed: held on %+v with %d pending, want held", held, n)
 	}
 
-	// Below the limit a start waits out the backoff like any other.
-	if _, err := pool.Exec(t.Context(), `
-with failed as (
-    update containers set state = 'stopped', stop_reason = 'start_failed', stopped_at = now() where release_id = $1
-)
-update releases set start_failures = 1 where id = $1`, f.release); err != nil {
-		t.Fatal(err)
-	}
+	// Below the limit a wake waits out the backoff like any other.
+	failAll(0, 1)
 	for range 3 {
-		if n := pending(WakeStart); n != 0 {
-			t.Fatalf("a start during the backoff started %d containers", n)
+		if held, n := wake(); held != nil || n != 0 {
+			t.Fatalf("a wake during the backoff: held on %+v with %d pending", held, n)
 		}
 	}
 }
@@ -390,7 +393,7 @@ func TestAWokenDevboxBillingRefusesSaysWhy(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), "update billing_accounts set status = 'past_due', complimentary_since = null"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeStart); err != nil {
+	if _, err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
 		t.Fatal(err)
 	}
 	view, err := e.PodView(t.Context(), f.workspace, f.workload, func(apitypes.WorkloadSpec) (bool, error) { return false, nil })

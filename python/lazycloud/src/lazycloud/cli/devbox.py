@@ -20,6 +20,7 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.cli.components.progress import CONNECTING_POLL_SECONDS
 from lazycloud.cli.control import workloads
+from lazycloud.cli.disks import disk_failure
 from lazycloud.cli.ssh import AppOption, WorkspaceOption, cancel_devbox_start, ssh_connection
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.contracts.api import Devbox, DevboxPhase, DevboxState, PodRole, Resources, SshHost
@@ -162,6 +163,11 @@ def status(
                     else None
                 ),
                 "connections": box.open_connections,
+                **(
+                    {"disk failure": disk_failure(box.disk.failure)}
+                    if box.disk and box.disk.failure
+                    else {}
+                ),
             },
             title=f"{client.workspace}/{host.app}/{name}",
             message=box.phase_reason or "",

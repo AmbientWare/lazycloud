@@ -172,7 +172,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
 		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
-		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
+		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
 		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
@@ -243,7 +243,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		}
 		g := pendingGroup{connection: r.ConnectionID, group: DemandGroup{Need: Requirement{
 			Region: r.Region, Zone: r.Zone, Preemptible: r.Preemptible, GPUs: gpus, GPUCount: int(r.GpuCount),
-			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes,
+			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, Disks: int(r.Disks),
 		}}}
 		for n, id := range r.Ids {
 			c := PendingContainer{ID: id}

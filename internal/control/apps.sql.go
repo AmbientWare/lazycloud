@@ -12,6 +12,33 @@ import (
 	"github.com/google/uuid"
 )
 
+const activeReleasesOfApp = `-- name: ActiveReleasesOfApp :many
+select w.active_release_id::uuid
+from workloads w
+where w.app_id = $1 and w.desired_state <> 'deleted' and w.active_release_id is not null
+order by w.active_release_id
+`
+
+func (q *Queries) ActiveReleasesOfApp(ctx context.Context, appID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, activeReleasesOfApp, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var w_active_release_id uuid.UUID
+		if err := rows.Scan(&w_active_release_id); err != nil {
+			return nil, err
+		}
+		items = append(items, w_active_release_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const appByName = `-- name: AppByName :one
 select id from apps where workspace_id = $1 and name = $2 and state <> 'deleted'
 `

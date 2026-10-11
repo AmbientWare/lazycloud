@@ -1,6 +1,8 @@
 // Package layersource is the agent's side of the host's snapshotter: the
 // client of its LayerSources service, which hands it the presigned read URLs
-// of the layers the host may mount, and the names a lazy pull uses.
+// of the layers the host may mount, and of its DiskSources service, which
+// serves disks' published generations; the names a lazy pull uses; and
+// where on the data volume the cache and disks are.
 package layersource
 
 import (
@@ -11,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -20,9 +23,14 @@ const (
 	// Socket is where the snapshotter serves containerd's snapshotter API
 	// and LayerSources on a host.
 	Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
-	// Root holds the snapshotter's metadata, snapshots and frame cache on a
-	// host. containerd mounts the snapshots below it.
+	// Root holds the snapshotter's metadata and snapshots on a host, and
+	// the directory it serves disk generations in. containerd mounts the
+	// snapshots below it.
 	Root = "/var/lib/lazycloud-snapshotter"
+	// CacheDir holds the frame cache and DiskRoot the disk engine's disks,
+	// both on the host's data volume.
+	CacheDir = hostproto.DataRoot + "/cache"
+	DiskRoot = hostproto.DataRoot + "/disks"
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"
@@ -37,6 +45,8 @@ const (
 type Client struct {
 	conn    *grpc.ClientConn
 	sources imagefsproto.LayerSourcesClient
+	// Disks serves disks' published generations.
+	Disks imagefsproto.DiskSourcesClient
 }
 
 // Dial returns a client of the snapshotter at socket. It connects on first
@@ -46,7 +56,7 @@ func Dial(socket string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshotter client: %w", err)
 	}
-	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn)}, nil
+	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn), Disks: imagefsproto.NewDiskSourcesClient(conn)}, nil
 }
 
 // Grant gives the snapshotter grants. Each replaces its layer's current

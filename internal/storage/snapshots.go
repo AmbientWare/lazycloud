@@ -25,12 +25,12 @@ func snapshotKey(workspace identity.WorkspaceID, id uuid.UUID) string {
 
 // SnapshotUploadURL is where a host PUTs a snapshot's archive.
 func (s *Storage) SnapshotUploadURL(ctx context.Context, workspace identity.WorkspaceID, id uuid.UUID) (string, error) {
-	lifetime, err := s.signedLifetime(ctx, snapshotURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.platform.client, snapshotURLLifetime)
 	if err != nil {
 		return "", err
 	}
-	req, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket), Key: aws.String(snapshotKey(workspace, id)),
+	req, err := s.platform.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.platform.name), Key: aws.String(snapshotKey(workspace, id)),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", fmt.Errorf("presign snapshot upload: %w", err)
@@ -41,12 +41,12 @@ func (s *Storage) SnapshotUploadURL(ctx context.Context, workspace identity.Work
 // SnapshotDownloadURL is where a host GETs a snapshot's archive to restore
 // it.
 func (s *Storage) SnapshotDownloadURL(ctx context.Context, workspace identity.WorkspaceID, id uuid.UUID) (string, error) {
-	lifetime, err := s.signedLifetime(ctx, snapshotURLLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.platform.client, snapshotURLLifetime)
 	if err != nil {
 		return "", err
 	}
-	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket), Key: aws.String(snapshotKey(workspace, id)),
+	req, err := s.platform.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.platform.name), Key: aws.String(snapshotKey(workspace, id)),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", fmt.Errorf("presign snapshot download: %w", err)

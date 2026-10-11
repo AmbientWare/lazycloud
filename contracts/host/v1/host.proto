@@ -32,12 +32,24 @@ service HostService {
   // ABORTED means another container still holds it; the host retries.
   rpc AcquireDisk(AcquireDiskRequest) returns (AcquireDiskResponse);
   // RecordDiskGeneration records an uploaded generation under the lease. A
-  // stale lease returns FAILED_PRECONDITION.
+  // stale lease returns FAILED_PRECONDITION, and the upload is left for the
+  // disk's holder to collect.
   rpc RecordDiskGeneration(RecordDiskGenerationRequest) returns (RecordDiskGenerationResponse);
-  // RecordDiskCollection records the bytes a collection removed.
-  rpc RecordDiskCollection(RecordDiskCollectionRequest) returns (RecordDiskCollectionResponse);
+  // CollectDisk deletes objects of the disk the generation it names no
+  // longer reads. The server deletes them while it holds the lease, so a
+  // host that lost the disk deletes nothing a newer holder stored. A stale
+  // lease returns FAILED_PRECONDITION.
+  rpc CollectDisk(CollectDiskRequest) returns (CollectDiskResponse);
+  // GrantDiskRead issues a credential that reads the disk's objects and
+  // nothing else, with which the host's snapshotter serves its generations.
+  // A stale lease returns FAILED_PRECONDITION.
+  rpc GrantDiskRead(GrantDiskReadRequest) returns (GrantDiskReadResponse);
   // ReleaseDisk ends the lease after the final publish.
   rpc ReleaseDisk(ReleaseDiskRequest) returns (ReleaseDiskResponse);
+  // RecordDiskFailure records why the holder's last publish or release
+  // failed, which the disk shows until a later one succeeds. A stale lease
+  // returns FAILED_PRECONDITION.
+  rpc RecordDiskFailure(RecordDiskFailureRequest) returns (RecordDiskFailureResponse);
   // ContainerAPI carries one public API request a container made through its
   // supervisor. The first APIRequest holds the head, later ones the body;
   // the host half-closes after the body. The server answers with the head,
@@ -106,6 +118,9 @@ message Capacity {
   // The GPUs the host offers, all of one model.
   string gpu_type = 70;
   int32 gpu_count = 71;
+  // The disks the host holds at once: its data volume keeps room for each
+  // one's unpublished writes beside the frame cache.
+  int32 disk_slots = 72;
 }
 
 message HostMessage {
@@ -663,7 +678,11 @@ message Source {
 // its own size.
 message Resources {
   int64 cpu_millis = 1;
+  // Includes mount_reserve_bytes.
   int64 memory_bytes = 2;
+  // The memory of memory_bytes the container's volume mounters take: one
+  // for its platform volumes and one per cloud bucket.
+  int64 mount_reserve_bytes = 5;
   int64 cpu_limit_millis = 3;
   int64 memory_limit_bytes = 4;
   // The writable layer limit; zero is the host default.
@@ -822,41 +841,61 @@ message AcquireDiskResponse {
   string workspace_id = 2;
   int64 size_bytes = 3;
   bytes lease_token = 4;
-  repeated DiskGeneration chain = 5;
+  // The newest published generation; absent for a disk never published.
+  DiskGeneration generation = 5;
+  // Reads the disk's objects, as GrantDiskRead renews it.
+  lazycloud.imagefs.v1.DiskGrant read = 6;
 }
 
-// DiskGeneration is one published generation; a chain lists them base
-// first.
+// DiskGeneration is one published generation: the sha256 of its stored
+// DiskIndex (contracts/imagefs/v1/index.proto), which is at
+// disks/<disk id>/manifests/<generation as 12 digits>-<index_sha256>.
 message DiskGeneration {
   int64 generation = 1;
-  string manifest_key = 2;
-  string manifest_sha256 = 3;
+  string index_sha256 = 2;
 }
 
 message RecordDiskGenerationRequest {
   string container_id = 1;
   string disk_id = 2;
   bytes lease_token = 3;
-  int64 generation = 4;
-  int64 parent_generation = 5;
-  string manifest_key = 6;
-  string manifest_sha256 = 7;
-  int64 added_bytes = 8;
-  bool flat = 9;
+  DiskGeneration generation = 4;
+  // Compressed bytes of the frames this generation stored.
+  int64 added_bytes = 5;
 }
 
-message RecordDiskGenerationResponse {}
+message RecordDiskGenerationResponse {
+  // Generations former holders uploaded after losing the disk. The holder
+  // deletes, with CollectDisk, their indexes and the frames they alone name.
+  repeated DiskGeneration orphans = 1;
+}
 
-message RecordDiskCollectionRequest {
+message CollectDiskRequest {
   string container_id = 1;
   string disk_id = 2;
   bytes lease_token = 3;
-  int64 removed_bytes = 4;
-  // The base generation of the chain the collection kept.
-  int64 base_generation = 5;
+  // The disk's newest recorded generation. Generations below it are
+  // forgotten.
+  int64 generation = 4;
+  // At most 1000 keys under disks/<disk id>/: indexes other than
+  // generation's, and frames generation does not name.
+  repeated string keys = 5;
+  // The bytes of the frames among keys.
+  int64 removed_bytes = 6;
 }
 
-message RecordDiskCollectionResponse {}
+message CollectDiskResponse {}
+
+message GrantDiskReadRequest {
+  string container_id = 1;
+  string disk_id = 2;
+  bytes lease_token = 3;
+}
+
+message GrantDiskReadResponse {
+  // Reads the disk's objects in the workspace bucket.
+  lazycloud.imagefs.v1.DiskGrant grant = 1;
+}
 
 message ReleaseDiskRequest {
   string container_id = 1;
@@ -865,6 +904,31 @@ message ReleaseDiskRequest {
 }
 
 message ReleaseDiskResponse {}
+
+// DiskOperation is what a disk's holder does with it after attaching.
+enum DiskOperation {
+  DISK_OPERATION_UNSPECIFIED = 0;
+  // Publishing a generation while the container runs.
+  DISK_OPERATION_PUBLISH = 1;
+  // The final publish, detach and release once the container has stopped.
+  DISK_OPERATION_RELEASE = 2;
+}
+
+message DiskFailure {
+  DiskOperation operation = 1;
+  string message = 2;
+}
+
+message RecordDiskFailureRequest {
+  string container_id = 1;
+  string disk_id = 2;
+  bytes lease_token = 3;
+  // Absent clears the recorded failure: the holder's latest attempt
+  // succeeded.
+  DiskFailure failure = 4;
+}
+
+message RecordDiskFailureResponse {}
 
 // APIRequest is one message of a container API call. Only the first carries
 // head; body chunks follow in order.

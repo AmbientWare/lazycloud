@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,11 +18,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
-// releases records ReleaseDisk calls and fails the first failures of them.
+// releases records ReleaseDisk calls and fails the first failures of them,
+// and records the failures the agent reports.
 type releases struct {
 	mu       sync.Mutex
 	failures int
 	released []*hostproto.ReleaseDiskRequest
+	reported []*hostproto.DiskFailure
 }
 
 func (r *releases) release(req *hostproto.ReleaseDiskRequest) error {
@@ -43,8 +46,8 @@ func (r *releases) count() int {
 
 // TestDiskLeasesReleaseUntilAccepted covers a lease left by a container that
 // never attached its disk: the release loop releases it without publishing,
-// keeps the record when the server fails, and retries after an agent
-// restart until the server accepts.
+// keeps the record when the server fails and records the failure on the
+// disk, and retries after an agent restart until the server accepts.
 func TestDiskLeasesReleaseUntilAccepted(t *testing.T) {
 	e := newEnv(t)
 	e.server.releases = &releases{failures: 1}
@@ -67,9 +70,17 @@ func TestDiskLeasesReleaseUntilAccepted(t *testing.T) {
 	for e.server.releases.failuresLeft() > 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
+	for len(e.server.releases.failuresReported()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
 	first.stop()
 	if _, err := os.Stat(file); err != nil {
 		t.Fatalf("a refused release dropped its lease record: %v", err)
+	}
+	reported := e.server.releases.failuresReported()
+	if len(reported) != 1 || reported[0].GetOperation() != hostproto.DiskOperation_DISK_OPERATION_RELEASE ||
+		!strings.Contains(reported[0].GetMessage(), "release refused for the test") {
+		t.Fatalf("reported failures %v, want the refused release", reported)
 	}
 
 	e.startAgent()
@@ -90,6 +101,21 @@ func TestDiskLeasesReleaseUntilAccepted(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("the lease record outlived its release")
+}
+
+func (r *releases) failuresReported() []*hostproto.DiskFailure {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]*hostproto.DiskFailure(nil), r.reported...)
+}
+
+func (s *hostServer) RecordDiskFailure(_ context.Context, req *hostproto.RecordDiskFailureRequest) (*hostproto.RecordDiskFailureResponse, error) {
+	s.releases.mu.Lock()
+	defer s.releases.mu.Unlock()
+	if req.GetFailure() != nil {
+		s.releases.reported = append(s.releases.reported, req.GetFailure())
+	}
+	return &hostproto.RecordDiskFailureResponse{}, nil
 }
 
 func (r *releases) failuresLeft() int {

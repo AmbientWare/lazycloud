@@ -436,6 +436,7 @@ const (
 	ChangeTopicContainers     ChangeTopic = "containers"
 	ChangeTopicDeployments    ChangeTopic = "deployments"
 	ChangeTopicRequests       ChangeTopic = "requests"
+	ChangeTopicStorageDisks   ChangeTopic = "storage.disks"
 	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
 	ChangeTopicStorageVolumes ChangeTopic = "storage.volumes"
 	ChangeTopicTasks          ChangeTopic = "tasks"
@@ -452,6 +453,8 @@ func (e ChangeTopic) Valid() bool {
 	case ChangeTopicDeployments:
 		return true
 	case ChangeTopicRequests:
+		return true
+	case ChangeTopicStorageDisks:
 		return true
 	case ChangeTopicStorageSecrets:
 		return true
@@ -826,6 +829,24 @@ func (e DeviceTokenStatus) Valid() bool {
 	case DeviceTokenStatusPending:
 		return true
 	case DeviceTokenStatusSlowDown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DiskOperation.
+const (
+	DiskOperationPublish DiskOperation = "publish"
+	DiskOperationRelease DiskOperation = "release"
+)
+
+// Valid indicates whether the value is a known member of the DiskOperation enum.
+func (e DiskOperation) Valid() bool {
+	switch e {
+	case DiskOperationPublish:
+		return true
+	case DiskOperationRelease:
 		return true
 	default:
 		return false
@@ -2758,8 +2779,8 @@ type CheckpointSpec struct {
 // CloudBucketSpec defines model for CloudBucketSpec.
 type CloudBucketSpec struct {
 	// AccessKeySecret The workspace secret holding the access key id.
-	AccessKeySecret *SecretName `json:"access_key_secret,omitempty"`
-	Bucket          string      `json:"bucket"`
+	AccessKeySecret SecretName `json:"access_key_secret"`
+	Bucket          string     `json:"bucket"`
 
 	// Endpoint An S3-compatible endpoint URL; AWS S3 when absent.
 	Endpoint       *string `json:"endpoint,omitempty"`
@@ -2770,7 +2791,7 @@ type CloudBucketSpec struct {
 	Region *string `json:"region,omitempty"`
 
 	// SecretKeySecret The workspace secret holding the secret access key.
-	SecretKeySecret *SecretName `json:"secret_key_secret,omitempty"`
+	SecretKeySecret SecretName `json:"secret_key_secret"`
 }
 
 // CollectionName A queue or map name; any characters except control characters.
@@ -3313,11 +3334,13 @@ type Devbox struct {
 
 // DevboxDisk defines model for DevboxDisk.
 type DevboxDisk struct {
-	Generation  int64      `json:"generation"`
-	Name        DiskName   `json:"name"`
-	SizeBytes   int64      `json:"size_bytes"`
-	Status      DiskStatus `json:"status"`
-	StoredBytes int64      `json:"stored_bytes"`
+	// Failure Why the holder's last publish or release failed. It clears once a later one succeeds; until a release succeeds the disk stays saving.
+	Failure     *DiskFailure `json:"failure,omitempty"`
+	Generation  int64        `json:"generation"`
+	Name        DiskName     `json:"name"`
+	SizeBytes   int64        `json:"size_bytes"`
+	Status      DiskStatus   `json:"status"`
+	StoredBytes int64        `json:"stored_bytes"`
 }
 
 // DevboxPhase defines model for DevboxPhase.
@@ -3381,6 +3404,9 @@ type DeviceTokenStatus string
 type Disk struct {
 	CreatedAt time.Time `json:"created_at"`
 
+	// Failure Why the holder's last publish or release failed. It clears once a later one succeeds; until a release succeeds the disk stays saving.
+	Failure *DiskFailure `json:"failure,omitempty"`
+
 	// Generation The newest published generation; 0 before the first.
 	Generation int64 `json:"generation"`
 
@@ -3399,6 +3425,15 @@ type Disk struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// DiskFailure Why the holder's last publish or release failed. It clears once a later one succeeds; until a release succeeds the disk stays saving.
+type DiskFailure struct {
+	FailedAt time.Time `json:"failed_at"`
+	Message  string    `json:"message"`
+
+	// Operation publish saves a generation while the container runs; release saves the last one and frees the disk after the container stops.
+	Operation DiskOperation `json:"operation"`
+}
+
 // DiskMountSpec defines model for DiskMountSpec.
 type DiskMountSpec struct {
 	// MountPath An absolute path; a devbox's root disk mounts at /.
@@ -3411,6 +3446,9 @@ type DiskMountSpec struct {
 
 // DiskName defines model for DiskName.
 type DiskName = string
+
+// DiskOperation publish saves a generation while the container runs; release saves the last one and frees the disk after the container stops.
+type DiskOperation string
 
 // DiskPage defines model for DiskPage.
 type DiskPage struct {

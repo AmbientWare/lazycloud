@@ -82,10 +82,22 @@ func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersPara
 
 const pendingContainers = `-- name: PendingContainers :many
 select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
-       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count
+       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host
 from (
     select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
            cw.connection_id,
+           jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
+           -- The host that last held one of the container's disks, while its
+           -- frame cache likely holds the disk: the disk is still saving
+           -- there or was released within disk_warm_seconds.
+           (select hc.host_id
+            from disks d
+            join containers hc on hc.id = d.holder_container_id
+            where d.workspace_id = c.workspace_id and d.state = 'active'
+              and d.name in (select jsonb_array_elements(r.spec -> 'disks') ->> 'name')
+              and (d.released_at is null or d.released_at > now() - make_interval(secs => $1::float8))
+            order by d.released_at desc nulls first
+            limit 1) as disk_host,
            coalesce(r.spec -> 'placement' ->> 'machine', '')::text as machine,
            coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
            coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
@@ -98,19 +110,20 @@ from (
     left join image_builds b on b.id = c.image_build_id
     left join workspaces cw on cw.id = c.workspace_id and b.mirror is not true
     where c.state = 'pending'
-      and c.cpu_millis <= $1
-      and c.memory_bytes <= $2
+      and c.cpu_millis <= $2
+      and c.memory_bytes <= $3
 ) p
 where (case
            when p.machine <> '' then 'machine:' || p.workspace_id::text || ':' || p.machine
            when p.connection_id is not null then 'connection:' || p.connection_id::text
            else 'platform'
-       end) = any($3::text[])
+       end) = any($4::text[])
 order by p.turn, p.created_at, p.id
-limit $4
+limit $5
 `
 
 type PendingContainersParams struct {
+	DiskWarmSeconds    float64
 	MaxFreeCpuMillis   cpu.Millis
 	MaxFreeMemoryBytes int64
 	Targets            []string
@@ -130,6 +143,8 @@ type PendingContainersRow struct {
 	Preemptible  bool
 	Gpus         []string
 	GpuCount     int32
+	Disks        int32
+	DiskHost     *uuid.UUID
 }
 
 // Pending containers that fit the largest free host in each resource and
@@ -140,6 +155,7 @@ type PendingContainersRow struct {
 // containers_pending partial index.
 func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersParams) ([]PendingContainersRow, error) {
 	rows, err := q.db.Query(ctx, pendingContainers,
+		arg.DiskWarmSeconds,
 		arg.MaxFreeCpuMillis,
 		arg.MaxFreeMemoryBytes,
 		arg.Targets,
@@ -165,6 +181,8 @@ func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersPa
 			&i.Preemptible,
 			&i.Gpus,
 			&i.GpuCount,
+			&i.Disks,
+			&i.DiskHost,
 		); err != nil {
 			return nil, err
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -126,6 +127,16 @@ func (c *Control) setAppState(ctx context.Context, workspace identity.WorkspaceI
 				return fmt.Errorf("set app state: %w", err)
 			}
 			if err := database.Notify(ctx, tx, database.ChannelExecution, id.String()); err != nil {
+				return err
+			}
+		}
+		if state == AppActive {
+			// A resume retries releases that stopped starting.
+			releases, err := q.ActiveReleasesOfApp(ctx, id)
+			if err != nil {
+				return fmt.Errorf("list active releases: %w", err)
+			}
+			if _, err := execution.RetryStarts(ctx, tx, releases); err != nil {
 				return err
 			}
 		}

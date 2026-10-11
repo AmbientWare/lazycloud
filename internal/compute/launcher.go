@@ -414,14 +414,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 			HttpTokens: ec2types.HttpTokensStateRequired, HttpPutResponseHopLimit: aws.Int32(1),
 			HttpEndpoint: ec2types.InstanceMetadataEndpointStateEnabled,
 		},
-		BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
-			DeviceName: aws.String("/dev/xvda"),
-			Ebs: &ec2types.EbsBlockDevice{
-				VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
-				Throughput: aws.Int32(opts.rootMiBps),
-				Encrypted:  aws.Bool(true), DeleteOnTermination: aws.Bool(true),
-			},
-		}},
+		BlockDeviceMappings: blockDevices(opts),
 		TagSpecifications: []ec2types.TagSpecification{
 			{ResourceType: ec2types.ResourceTypeInstance, Tags: tags},
 			{ResourceType: ec2types.ResourceTypeVolume, Tags: tags[:2]},
@@ -521,9 +514,12 @@ func (r poolRefusalFinal) IsErrorRetryable(err error) bool {
 	return !capacityRefusal(awsCode(err)) && r.Retryer.IsErrorRetryable(err)
 }
 
-// launchOptions are the parts of a launch a reserve changes.
+// launchOptions are the parts of a launch its type and a reserve change.
 type launchOptions struct {
 	rootGiB, rootMiBps int32
+	// dataGiB is the EBS data volume holding disk copies; 0 on a type whose
+	// instance store holds them.
+	dataGiB int32
 	// hibernate launches the instance able to hibernate.
 	hibernate bool
 	// persistent buys Spot on a persistent request that stops instead of
@@ -538,7 +534,10 @@ type launchOptions struct {
 // hosts launch with the plain root.
 func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
 	t, _ := CatalogTypeNamed(h.InstanceType)
-	opts := launchOptions{rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps())} //nolint:gosec // At most buildMiBps.
+	opts := launchOptions{
+		rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps()), //nolint:gosec // At most buildMiBps.
+		dataGiB: int32(t.DataVolumeGiB()), //nolint:gosec // At most a few TiB.
+	}
 	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
 		return opts
 	}
@@ -546,6 +545,33 @@ func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
 	opts.hibernate = ReserveMode(*h.ReserveMode) == ReserveHibernate && t.Hibernates
 	opts.rootGiB = int32(t.RootGiB(opts.hibernate)) //nolint:gosec // At most 250: only types under 150 GiB of RAM hibernate.
 	return opts
+}
+
+// dataVolumeDevice is the data volume's device name; the node image mounts
+// the volume Amazon Linux links there at the disk engine's directory.
+const dataVolumeDevice = "/dev/sdf"
+
+// blockDevices are the encrypted root and, on a type without instance
+// store, the data volume.
+func blockDevices(opts launchOptions) []ec2types.BlockDeviceMapping {
+	devices := []ec2types.BlockDeviceMapping{{
+		DeviceName: aws.String("/dev/xvda"),
+		Ebs: &ec2types.EbsBlockDevice{
+			VolumeSize: aws.Int32(opts.rootGiB), VolumeType: ec2types.VolumeTypeGp3,
+			Throughput: aws.Int32(opts.rootMiBps),
+			Encrypted:  aws.Bool(true), DeleteOnTermination: aws.Bool(true),
+		},
+	}}
+	if opts.dataGiB > 0 {
+		devices = append(devices, ec2types.BlockDeviceMapping{
+			DeviceName: aws.String(dataVolumeDevice),
+			Ebs: &ec2types.EbsBlockDevice{
+				VolumeSize: aws.Int32(opts.dataGiB), VolumeType: ec2types.VolumeTypeGp3,
+				Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true),
+			},
+		})
+	}
+	return devices
 }
 
 // persistentRequest is the Spot request a host must cancel before it

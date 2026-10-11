@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
@@ -49,7 +50,7 @@ func put(t *testing.T, target *UploadTarget, body []byte) int {
 func TestSourceRegistration(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	s := NewStorage(pool, storagetest.Config(t))
+	s := NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	ws := workspace(t, pool)
 
 	archive := make([]byte, 4096)

@@ -36,6 +36,8 @@ type FleetHost struct {
 	// Spot market's load.
 	Load, Lent FleetCapacity
 	Containers int
+	// UsedDisks counts the disks its live containers attach.
+	UsedDisks int
 	// Protected is an interruption's source or replacement.
 	Protected bool
 	// Current is set on a reserve prepared for the current agent release.
@@ -88,15 +90,20 @@ func (h FleetHost) reserve() bool {
 	return h.resumable() || h.State == FleetPreparing || h.State == FleetStopping
 }
 
-// capacity is the host as placement sees it.
+// capacity is the host as placement sees it, its disk slots those its
+// type's data volume holds.
 func (h FleetHost) capacity() HostCapacity {
 	free := h.free()
-	return HostCapacity{
+	room := HostCapacity{
 		Host: h.ID, Kind: KindPlatform, Provider: ProviderAWS, Region: h.Region, Zone: h.Zone, ZoneID: h.ZoneID,
 		Market: h.Market, GPUType: h.GPU, GPUCount: h.Usable.GPUs,
 		CPUMillis: h.Usable.CPUMillis, MemoryBytes: h.Usable.MemoryBytes,
 		FreeCPUMillis: free.CPUMillis, FreeMemoryBytes: free.MemoryBytes, FreeGPUs: free.GPUs,
 	}
+	if t, ok := CatalogTypeNamed(h.InstanceType); ok && !h.UpdateDue {
+		room.FreeDiskSlots = max(0, t.DiskSlots()-h.UsedDisks)
+	}
+	return room
 }
 
 // DemandGroup is pending platform containers with one requirement.
@@ -548,13 +555,13 @@ func (ps *pass) typeNamed(name string) (CatalogType, bool) {
 	return ps.s.Offers.Catalog[i], true
 }
 
-// stoppedMicros is what a host costs stopped: its root disk.
+// stoppedMicros is what a host costs stopped: its EBS volumes.
 func (ps *pass) stoppedMicros(h FleetHost) int64 {
 	t, ok := ps.typeNamed(h.InstanceType)
 	if !ok {
 		return 0
 	}
-	return rootDiskMicros(h.Region, t.RootGiB(h.ReserveMode != nil && *h.ReserveMode == ReserveHibernate), t.PricedMiBps(h.ReserveMode != nil))
+	return t.volumesMicros(h.Region, h.ReserveMode != nil && *h.ReserveMode == ReserveHibernate, h.ReserveMode != nil)
 }
 
 func (ps *pass) cooled(h FleetHost) bool {
@@ -986,7 +993,7 @@ func (ps *pass) hostCost(h FleetHost) (int64, bool) {
 	}
 	switch {
 	case catalogued && priced:
-		o.HourlyMicros = compute + rootDiskMicros(h.Region, t.RootGiB(h.HibernationConfigured), t.PricedMiBps(false)) + ratesIn(h.Region).ipv4Hour
+		o.HourlyMicros = compute + t.volumesMicros(h.Region, h.HibernationConfigured, false) + ratesIn(h.Region).ipv4Hour
 	case h.HourlyMicros != nil:
 		o.HourlyMicros = *h.HourlyMicros
 	default:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -11,34 +12,46 @@ import (
 )
 
 // HostGrant issues host a credential for the workspace bucket, creating the
-// bucket on first use. A key that outlives its expiry reaches nothing;
-// recording it lets the sweep delete it from the provider. The object
-// store's refusal is a *StoreRefusedError.
+// bucket on first use. The object store's refusal is a *StoreRefusedError.
 func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) (Grant, error) {
-	if s.buckets == nil {
-		return Grant{}, ErrBucketsUnconfigured
-	}
-	bucket, err := s.workspaceBucket(ctx, workspace)
+	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
 		return Grant{}, err
 	}
-	grant, revocable, err := s.buckets.issue(ctx, bucket, "lazycloud-host-"+host.String(), grantLifetime)
+	return s.grant(ctx, host, store, uuid.UUID(workspace), "")
+}
+
+// grant issues host a credential for store, the bucket of workspace, that
+// reads and writes its volumes and disks, or with readPrefix reads the
+// objects under it. A connected account's bucket is granted through its
+// connection role. A key that outlives its expiry reaches nothing;
+// recording it lets the sweep delete it from the provider.
+func (s *Storage) grant(ctx context.Context, host compute.HostID, store bucketClient, workspace uuid.UUID, readPrefix string) (Grant, error) {
+	provider, err := s.providerOf(ctx, store)
+	if err != nil {
+		return Grant{}, err
+	}
+	creds, revocable, err := provider.issue(ctx, store.name, readPrefix, "lazycloud-host-"+host.String(), grantLifetime)
 	if err != nil {
 		return Grant{}, storeError(fmt.Errorf("issue storage grant: %w", err))
 	}
 	if revocable {
 		if err := s.queries.InsertStorageGrant(ctx, InsertStorageGrantParams{
-			AccessKeyID: grant.AccessKeyID, WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), ExpiresAt: grant.ExpiresAt,
+			AccessKeyID: creds.AccessKeyID, WorkspaceID: workspace, HostID: uuid.UUID(host), ExpiresAt: creds.Expires,
 		}); err != nil {
 			return Grant{}, fmt.Errorf("record storage grant: %w", err)
 		}
 	}
 	// Hosts address the bucket as the server's own client does.
-	grant.Location, err = locate(s.config.Endpoint, s.config.Region, grant.Bucket, s.config.Endpoint != "")
+	o := store.client.Options()
+	location, err := locate(aws.ToString(o.BaseEndpoint), store.region, store.name, o.UsePathStyle)
 	if err != nil {
 		return Grant{}, fmt.Errorf("locate workspace bucket: %w", err)
 	}
-	return grant, nil
+	return Grant{
+		Location: location, AccessKeyID: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey,
+		SessionToken: creds.SessionToken, ExpiresAt: creds.Expires,
+	}, nil
 }
 
 // HostMountWorkspaces lists the workspaces whose volumes or disks the host's

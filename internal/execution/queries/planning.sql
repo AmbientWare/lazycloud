@@ -60,6 +60,7 @@ select r.id as release_id,
        coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
        (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
+       release_mounters(r.spec) as mounters,
        -- What billing prices and admits: the cards each container holds (a
        -- GPU list without a count holds one), and whether placement is
        -- preemptible and pinned to a region, zone or machine.

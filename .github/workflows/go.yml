@@ -20,6 +20,7 @@ on:
       - "deploy/local/garage.toml"
       - "deploy/local/garage-bootstrap.sh"
       - "deploy/local/install-snapshotter.sh"
+      - "deploy/local/acceptance.sh"
   push:
     branches: [main]
 
@@ -51,7 +52,7 @@ jobs:
       - run: go tool golangci-lint run ./...
       # The host runtime and acceptance tests run in their own jobs, on
       # runners set up as hosts.
-      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs -e /acceptance$ | xargs go test -race
+      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs -e /internal/diskengine$ -e /acceptance$ | xargs go test -race
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up
@@ -71,11 +72,28 @@ jobs:
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race ./internal/agent/... ./internal/imagefs ./internal/imagefs/layersource
-      # The snapshotter mounts FUSE and overlay filesystems as root, as on
-      # hosts, and a join installs as root.
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/imagefs/snapshotter
+      - run: go test -race ./internal/imagefs ./internal/imagefs/layersource
+      # The agent binds volumes and the snapshotter mounts FUSE and overlay
+      # filesystems as root, as on hosts, and a join installs as root.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/agent/... ./internal/imagefs/snapshotter
       - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
+      - name: The disk engine's tools and the nbd module, as on hosts
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-utils qemu-system-common nbd-client
+          sudo modprobe nbd nbds_max=16 || {
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe nbd nbds_max=16
+          }
+      # The disk engine connects NBD devices and mounts ext4 as root, as on
+      # hosts. A skipped test fails the job.
+      - run: |
+          set -o pipefail
+          sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -v ./internal/diskengine 2>&1 | tee "$RUNNER_TEMP/diskengine.log"
+          if grep -- '--- SKIP' "$RUNNER_TEMP/diskengine.log"; then
+            echo "disk engine tests skipped" >&2
+            exit 1
+          fi
 
   # Cross-owner workflows against an agent on a runner set up as a host:
   # the platform images and the managed image convert for real and
@@ -89,7 +107,6 @@ jobs:
     env:
       LAZYCLOUD_OTLP_ENDPOINT: 127.0.0.1:24317
       LAZYCLOUD_OTLP_INSECURE: "true"
-      LAZYCLOUD_TEST_OCI_RUNTIME: runsc
     steps:
       - uses: actions/checkout@v7
         with:
@@ -124,31 +141,18 @@ jobs:
         run: |
           docker compose -f compose.test.yaml up -d --wait postgres object-store-bootstrap object-store-tls
           docker compose up -d --wait jaeger
-      # The merge base with main, or on main the commit before, is the
-      # release hosts run until this one ships.
-      - name: The agent release this change replaces
+      # GeeseFS, the managed runtime and the agent release this change
+      # replaces.
+      - run: deploy/local/acceptance.sh prepare
+      - name: The disk engine's tools and the nbd module, as on hosts
         run: |
-          base=$(git merge-base HEAD origin/main)
-          if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
-          git worktree add --detach "$RUNNER_TEMP/previous" "$base"
-          out="$RUNNER_TEMP/previous-agent"
-          cd "$RUNNER_TEMP/previous"
-          CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=previous-$(git rev-parse --short=12 HEAD)" \
-            -o "$out/lazycloud-agent" ./cmd/agent
-          CGO_ENABLED=0 go build -trimpath -o "$out/supervisor" ./cmd/supervisor
-          echo "LAZYCLOUD_TEST_OLD_AGENT=$out" >>"$GITHUB_ENV"
-      - name: GeeseFS and the managed runtime
-        run: |
-          deploy/local/fetch-geesefs.sh
-          deploy/local/build-runtime.sh .lazycloud/runtime 3.12
-      - name: Acceptance
-        run: |
-          set -o pipefail
-          go test -race -timeout 60m -v ./acceptance 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
-          if grep -- '--- SKIP' "$RUNNER_TEMP/acceptance.log"; then
-            echo "acceptance tests skipped" >&2
-            exit 1
-          fi
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-utils qemu-system-common nbd-client
+          sudo modprobe nbd nbds_max=16 || {
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe nbd nbds_max=16
+          }
+      - run: deploy/local/acceptance.sh run
       - name: Export the slowest container start's trace
         if: always()
         run: |

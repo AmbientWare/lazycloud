@@ -1,12 +1,13 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "LazyCloud: lets LazyCloud launch and stop compute instances in this account.",
+  "Description": "LazyCloud: lets LazyCloud launch and stop compute instances in this account and keep its workspaces' volumes and disks in buckets here.",
   "Parameters": {
     "TargetAccountId": {"Type": "String", "AllowedPattern": "^[0-9]{12}$"},
     "PlatformPrincipalArn": {"Type": "String"},
     "ExternalId": {"Type": "String", "MinLength": 32, "NoEcho": true},
     "ConnectionRoleName": {"Type": "String"},
     "StackPrefix": {"Type": "String"},
+    "BucketPrefix": {"Type": "String", "AllowedPattern": "^[a-z0-9][a-z0-9-]{0,23}$"},
     "FleetName": {"Type": "String"},
     "NodeRoleName": {"Type": "String"},
     "NodeInstanceProfileName": {"Type": "String"},
@@ -122,6 +123,23 @@
                 "Action": "iam:CreateServiceLinkedRole",
                 "Resource": "*",
                 "Condition": {"StringEquals": {"iam:AWSServiceName": "spot.amazonaws.com"}}
+              },
+              {
+                "Sid": "WorkspaceBuckets",
+                "Effect": "Allow",
+                "Action": [
+                  "s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucketCORS", "s3:PutLifecycleConfiguration",
+                  "s3:ListBucket", "s3:ListBucketMultipartUploads"
+                ],
+                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*"},
+                "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "AWS::AccountId"}}}
+              },
+              {
+                "Sid": "WorkspaceObjects",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*/*"},
+                "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "AWS::AccountId"}}}
               },
               {
                 "Sid": "OwnStacks",

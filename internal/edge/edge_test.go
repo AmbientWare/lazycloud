@@ -681,7 +681,9 @@ func TestALoadErrorBetweenChecksFailsTheWaitingRequest(t *testing.T) {
 		l := e.loads[rel]
 		return l != nil && !l.checkedAt.IsZero()
 	})
-	if _, err := pool.Exec(ctx, "update releases set load_error = 'no database configured' where id = $1", rel); err != nil {
+	if _, err := pool.Exec(ctx, `
+with stopped as (update containers set stop_reason = 'load_error', stopped_at = now() where release_id = $1)
+update releases set load_error = 'no database configured' where id = $1`, rel); err != nil {
 		t.Fatal(err)
 	}
 	// The failed container's stop wakes the request.
@@ -696,5 +698,75 @@ func TestALoadErrorBetweenChecksFailsTheWaitingRequest(t *testing.T) {
 		}
 	case <-time.After(3 * failureCheckInterval):
 		t.Fatal("the load error was not checked once the next check was due")
+	}
+}
+
+// A request to a release that stopped at the start failure limit gives it
+// one fresh start and fails with that start's error when it fails. A request
+// within the backoff after it fails at once with the same error and starts
+// nothing.
+func TestARequestRetriesAReleaseThatStoppedStarting(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	dbtest.OwnWorkspaces(t, pool)
+	failStart := func(ago time.Duration, message string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `
+with stopped as (
+    insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, stop_reason, exit_message, stopped_at)
+    values ($1, $2, 'stopped', 1, 1000, 1 << 28, 'start_failed', $4, now() - make_interval(secs => $3))
+)
+update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failures := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, "select start_failures from releases where id = $1", rel).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	failStart(time.Hour, "pull image: not found")
+	r, err := e.release(ctx, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := target{workload: &workload{id: wl, workspace: identity.WorkspaceID(ws)}, release: r}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.acquire(ctx, target, time.Now().Add(10*time.Second))
+		done <- err
+	}()
+	// The request leaves the release one start short of the limit.
+	waitFor(t, func() bool { return failures() == 2 })
+
+	const cause = "exit code 1: secret DATABASE_URL is not set"
+	failStart(0, cause)
+	// The failed container's stop wakes the request.
+	e.mu.Lock()
+	e.workloads[wl].wake()
+	e.mu.Unlock()
+	want := "the container failed to start: " + cause
+	select {
+	case err := <-done:
+		var failed *releaseFailedError
+		if !errors.As(err, &failed) || failed.reason != want {
+			t.Fatalf("the request whose fresh start failed ended with %v", err)
+		}
+	case <-time.After(3 * failureCheckInterval):
+		t.Fatal("the request did not fail once its fresh start failed")
+	}
+
+	_, err = e.acquire(ctx, target, time.Now().Add(10*time.Second))
+	var failed *releaseFailedError
+	if !errors.As(err, &failed) || failed.reason != want {
+		t.Fatalf("a request within the backoff ended with %v", err)
+	}
+	if n := failures(); n != 3 {
+		t.Fatalf("a request within the backoff left %d start failures; want the release held at 3", n)
 	}
 }

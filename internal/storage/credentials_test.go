@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/compute"
 )
 
 // isolate keeps the default chain from reading this machine's AWS files or
@@ -85,9 +87,9 @@ func TestDefaultChainWithoutSourceFails(t *testing.T) {
 func TestConfigValidation(t *testing.T) {
 	ok := []Config{
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l"},
-		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, RoleARN: "arn:aws:iam::1:role/hosts"}},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, Prefix: "lazycloud-prod-workspace", AccountID: "123456789012", RoleARN: "arn:aws:iam::1:role/hosts"}},
 		{Endpoint: "http://garage", Region: "garage", Bucket: "b", LayerBucket: "l", AccessKeyID: "k", SecretAccessKey: "s",
-			Workspaces: WorkspaceBuckets{Provider: ProviderGarage}},
+			Workspaces: WorkspaceBuckets{Provider: ProviderGarage, Prefix: "lazycloud-ws", AccountID: "000000000000"}},
 	}
 	for _, c := range ok {
 		if err := c.Validate(); err != nil {
@@ -100,6 +102,8 @@ func TestConfigValidation(t *testing.T) {
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", AccessKeyID: "k"},
 		{Region: "garage", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderGarage}},
 		{Region: "us-east-2", Bucket: "b", Workspaces: WorkspaceBuckets{Provider: ProviderAWS}},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, RoleARN: "arn:aws:iam::1:role/hosts"}},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Prefix: "lazycloud-production-workspace"}},
 	}
 	for _, c := range bad {
 		if err := c.Validate(); err == nil {
@@ -132,16 +136,16 @@ func TestSignedURLsOutlastCredentialRotation(t *testing.T) {
 	}))
 	t.Cleanup(endpoint.Close)
 	t.Setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", endpoint.URL+"/v1/credentials")
-	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"})
+	s := NewStorage(nil, Config{Region: "us-east-2", Bucket: "b"}, compute.NewCompute(nil, nil, compute.Config{}))
 	for range 2 {
-		lifetime, err := s.signedLifetime(t.Context(), time.Hour)
+		lifetime, err := s.signedLifetime(t.Context(), s.platform.client, time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if lifetime < credentialWindow-2*time.Minute {
 			t.Fatalf("a URL signed during rotation lasts %s", lifetime)
 		}
-		current, err := s.client.Options().Credentials.Retrieve(t.Context())
+		current, err := s.platform.client.Options().Credentials.Retrieve(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}

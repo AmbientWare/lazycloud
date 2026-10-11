@@ -30,9 +30,11 @@ require (
 	github.com/containerd/containerd/v2 v2.4.1
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/platforms v1.0.0-rc.5
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
 	github.com/getkin/kin-openapi v0.142.0
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0

@@ -111,7 +111,7 @@ func TestFailedStartsBackOff(t *testing.T) {
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "pod", 600)
 	host := newHost(t, pool)
-	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
+	if _, err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +176,7 @@ where id = (select id from containers where state = 'pending' order by id limit 
 	if created := planPods(t, e).Created; created != 0 {
 		t.Fatalf("a stopped pod started %d containers", created)
 	}
-	if err := e.WakePod(t.Context(), f.workspace, f.workload, WakeConnection); err != nil {
+	if _, err := e.WakePod(t.Context(), f.workspace, f.workload); err != nil {
 		t.Fatal(err)
 	}
 	if created := planPods(t, e).Created; created != 1 {
@@ -193,4 +193,46 @@ values ($1, $2, 'starting', $3, 1, 500, 1 << 28, now()) returning id`, uuid.UUID
 		t.Fatal(err)
 	}
 	return ContainerID(id)
+}
+
+// A task submitted to a release that stopped at the start failure limit
+// gives it one fresh start at once. When that start fails the task fails
+// with its error, and a task submitted within the backoff after it fails
+// with that error without another start.
+func TestATaskRetriesAReleaseThatStoppedStarting(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedFunction(t, pool, `{"resources": {"cpu_millis": 500, "memory_mib": 256}, "max_pending_tasks": 10}`)
+	host := newHost(t, pool)
+	_, failed := placedContainer(t, pool, f, ContainerStopped, 1)
+	exec(t, pool, `update containers set stop_reason = 'start_failed', exit_message = 'pull image: not found',
+stopped_at = now() - interval '1 hour' where id = $1`, uuid.UUID(failed))
+	exec(t, pool, "update releases set start_failures = $2 where id = $1", f.release, startFailureLimit)
+
+	first := submit(t, e, f, 1)[0]
+	if first.Status != TaskQueued {
+		t.Fatalf("a task for a release past its backoff is %s, want queued", first.Status)
+	}
+	if created := plan(t, e).Created; created != 1 {
+		t.Fatalf("the retried release started %d containers, want 1 at once", created)
+	}
+	exec(t, pool, "update containers set state = 'starting', host_id = $2, assigned_at = now() where release_id = $1 and state = 'pending'", f.release, host)
+	var fresh uuid.UUID
+	if err := pool.QueryRow(t.Context(), "select id from containers where release_id = $1 and state = 'starting'", f.release).Scan(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	const cause = "exit code 1: secret DATABASE_URL is not set"
+	exited(t, e, host, ContainerID(fresh), ContainerExit{Reason: StopCrashed, Message: cause})
+	task, err := e.readTask(t.Context(), f.workspace, first.ID)
+	if err != nil || task.Status != TaskFailed || task.Failure == nil || task.Failure.Kind != FailureStartFailed || task.Failure.Message != cause {
+		t.Fatalf("the task whose fresh start failed: %+v, %v", task.Failure, err)
+	}
+
+	second := submit(t, e, f, 1)[0]
+	if second.Status != TaskFailed || second.Failure == nil || second.Failure.Message != cause {
+		t.Fatalf("a task within the backoff: %s %+v, want failed with %q", second.Status, second.Failure, cause)
+	}
+	if created := plan(t, e).Created; created != 0 {
+		t.Fatalf("a task within the backoff started %d containers", created)
+	}
 }

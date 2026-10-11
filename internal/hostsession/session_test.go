@@ -131,7 +131,7 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp, database.ChannelImageBuild)
 	e := execution.NewExecution(pool)
 	c := compute.NewCompute(pool, e, compute.Config{})
-	store := storage.NewStorage(pool, cfg)
+	store := storage.NewStorage(pool, cfg, c)
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)

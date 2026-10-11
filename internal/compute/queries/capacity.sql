@@ -19,11 +19,13 @@ select h.id,
        (h.cpu_millis - coalesce(used.cpu, 0))::bigint as free_cpu_millis,
        (h.memory_bytes - coalesce(used.memory, 0))::bigint as free_memory_bytes,
        (h.gpu_count - coalesce(used.gpus, 0))::int as free_gpus,
+       (h.disk_slots - coalesce(used.disks, 0))::int as free_disk_slots,
        array(select hw.workspace_id from host_workspaces hw where hw.host_id = h.id order by hw.workspace_id)::uuid[] as workspaces
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus
+           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks
     from containers c
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'

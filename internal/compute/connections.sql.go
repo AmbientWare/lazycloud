@@ -140,6 +140,33 @@ func (q *Queries) AuthorizationValidated(ctx context.Context, arg AuthorizationV
 	return err
 }
 
+const connectionAccess = `-- name: ConnectionAccess :one
+select cc.aws_account_id, a.region, a.role_arn, a.external_id
+from cloud_connections cc
+join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
+where cc.id = $1
+`
+
+type ConnectionAccessRow struct {
+	AwsAccountID string
+	Region       string
+	RoleArn      string
+	ExternalID   string
+}
+
+// The connected account and the role its active authorization grants.
+func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (ConnectionAccessRow, error) {
+	row := q.db.QueryRow(ctx, connectionAccess, id)
+	var i ConnectionAccessRow
+	err := row.Scan(
+		&i.AwsAccountID,
+		&i.Region,
+		&i.RoleArn,
+		&i.ExternalID,
+	)
+	return i, err
+}
+
 const connectionAuthorizations = `-- name: ConnectionAuthorizations :many
 select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at from cloud_authorizations where connection_id = $1 and slot is not null order by generation
 `

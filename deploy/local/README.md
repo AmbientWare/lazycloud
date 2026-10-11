@@ -11,9 +11,10 @@ and credentials live in `.lazycloud/`.
 
 Workloads run in a Lima VM that `deploy/local/host-vm.sh` builds from Amazon
 Linux 2023 with the node image recipe (`deploy/ami/node-setup.sh`), so it
-runs the same Docker, gVisor and lazycloud-snapshotter as fleet hosts. This
-machine's Docker stays as it is. The script needs KVM (the `kvm` group) and
-`qemu-system-x86_64`, not root.
+runs the same Docker, gVisor and lazycloud-snapshotter as fleet hosts, with
+an extra disk as the data volume fleet hosts keep their frame cache and disks
+on. This machine's Docker stays as it is. The script needs KVM (the `kvm`
+group) and `qemu-system-x86_64`, not root.
 
 - `up` creates or starts the VM and installs the current agent release the
   way hosts join. The first one downloads Lima and the image into
@@ -37,6 +38,26 @@ and switches that machine's Docker to the snapshotter, restarting it
 The end-to-end Python checks run with `LAZYCLOUD_TEST_ENDPOINT`,
 `LAZYCLOUD_TEST_TOKEN` and `LAZYCLOUD_TEST_WORKSPACE` set to the exported
 values: `uv run --group dev pytest -x -s python/tests/acceptance`.
+
+## Test VM
+
+`deploy/local/test-vm.sh` runs the tests CI runs on runners set up as
+hosts: the agent owner tests, the disk engine's root tests and acceptance.
+Its VM, `lazycloud-test`, is built like the host VM, adds the Go toolchain
+go.mod pins and installs the snapshotter with CI's script. It mounts the
+main checkout, worktrees included, at the same path, so edits need no copy,
+and reaches the compose test stack on this machine, which must be up.
+
+- `up` creates or starts the VM and installs this tree's snapshotter while
+  no container runs there. The first takes about three minutes after a
+  one-time 1.8 GB image download; later ones take seconds.
+- `test ARGS` runs `go test ARGS` as root in this tree, for example
+  `test -race -run TestVolumes ./internal/agent`. That package converts
+  its test images first, which takes two minutes under -race and 20
+  seconds without.
+- `acceptance ARGS` runs `deploy/local/acceptance.sh`, as CI's acceptance
+  job does, with ARGS added to its `go test`.
+- `down` stops the VM; `reset` deletes it.
 
 ## Services
 

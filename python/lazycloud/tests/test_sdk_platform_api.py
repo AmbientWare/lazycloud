@@ -27,7 +27,6 @@ from lazycloud.exceptions import (
     FunctionNotDeployedError,
     RemoteTaskError,
     TaskNotFoundError,
-    UnsupportedFeatureError,
 )
 from lazycloud.session.deployment import DeploymentOperationError
 from lazycloud.terminal import Terminal, output
@@ -513,34 +512,6 @@ def test_invalid_placement_options_fail_where_declared(
 
     with pytest.raises(ValueError, match=re.escape(message)):
         _project(tmp_path, monkeypatch, source)
-
-    assert fake_api.requests == []
-
-
-@pytest.mark.parametrize(
-    ("decorator", "option"),
-    [
-        (
-            "@app.function(volumes=[lazycloud.CloudBucket("
-            '"models", "/models", lazycloud.CloudBucketConfig())])',
-            "cloud bucket without key secrets",
-        ),
-    ],
-)
-def test_unsupported_options_fail_before_any_request(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    fake_api: FakeApi,
-    decorator: str,
-    option: str,
-) -> None:
-    source = f'import lazycloud\napp = lazycloud.App("reports")\n{decorator}\ndef job(): pass\n'
-    reports = _project(tmp_path, monkeypatch, source)
-
-    with pytest.raises(UnsupportedFeatureError, match=option):
-        reports.app.deploy()
-    with pytest.raises(UnsupportedFeatureError, match=option):
-        reports.job.remote()
 
     assert fake_api.requests == []
 

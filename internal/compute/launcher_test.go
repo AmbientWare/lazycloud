@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -106,6 +107,12 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 		}
 		if call.AccessKey != platformAccessKey {
 			t.Errorf("platform launch signed by %q", call.AccessKey)
+		}
+		// Disk copies live on an encrypted data volume of their own.
+		typ, _ := compute.CatalogTypeNamed(form.Get("InstanceType"))
+		if form.Get("BlockDeviceMapping.2.DeviceName") != "/dev/sdf" || form.Get("BlockDeviceMapping.2.Ebs.Encrypted") != "true" ||
+			form.Get("BlockDeviceMapping.2.Ebs.VolumeSize") != strconv.FormatInt(typ.DataVolumeGiB(), 10) || typ.DataVolumeGiB() == 0 {
+			t.Errorf("%s launched with block devices %v, want a %d GiB encrypted data volume", typ.Name, form, typ.DataVolumeGiB())
 		}
 	}
 	if m := calls[spot.String()].Form.Get("InstanceMarketOptions.MarketType"); m != "spot" {

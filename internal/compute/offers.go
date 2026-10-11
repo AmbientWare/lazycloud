@@ -20,6 +20,9 @@ type Fleet struct {
 	AccountID string
 	// PrincipalARN is the platform principal connection roles trust.
 	PrincipalARN string
+	// BucketPrefix starts the names of workspace buckets, which a connected
+	// account holds as <prefix>-<account id>-*.
+	BucketPrefix string
 	// NodeRoleARN and InstanceProfile are what platform instances run as.
 	NodeRoleARN     string
 	InstanceProfile string
@@ -47,6 +50,8 @@ type Endpoints struct {
 	STS            string
 	CloudFormation string
 	ServiceQuotas  string
+	// S3 serves connected accounts' buckets, path-style.
+	S3 string
 }
 
 // Network is where instances launch in one region.

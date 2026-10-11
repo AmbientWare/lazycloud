@@ -22,13 +22,13 @@ import (
 )
 
 // serveSnapshotter runs the host's snapshotter on socket until the test
-// ends. Without root it mounts no layer, so its traces record no reads.
+// ends.
 func serveSnapshotter(t *testing.T, socket string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	ready, done := make(chan struct{}), make(chan error, 1)
 	cfg := snapshotter.Config{
-		Root: filepath.Join(filepath.Dir(socket), "root"), CacheBytes: 64 << 20, Fetches: 4,
+		Root: filepath.Join(filepath.Dir(socket), "root"), CacheDir: filepath.Join(filepath.Dir(socket), "cache"), CacheBytes: 64 << 20, Fetches: 4,
 		HTTP: http.DefaultClient, Logger: slog.New(slog.DiscardHandler),
 	}
 	go func() { done <- snapshotter.Serve(ctx, cfg, socket, func() { close(ready) }) }()

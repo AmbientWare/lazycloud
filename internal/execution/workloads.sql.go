@@ -451,6 +451,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 
 const instanceRelease = `-- name: InstanceRelease :one
 select r.id, r.workload_id, w.kind, w.name, a.name as app_name, a.workspace_id, r.version, r.spec,
+       release_mounters(r.spec) as mounters,
        (w.desired_state <> 'deleted' and a.state = 'active' and ws.state = 'active')::bool as live
 from releases r
 join workloads w on w.id = r.workload_id
@@ -473,6 +474,7 @@ type InstanceReleaseRow struct {
 	WorkspaceID uuid.UUID
 	Version     *int32
 	Spec        []byte
+	Mounters    int32
 	Live        bool
 }
 
@@ -489,6 +491,7 @@ func (q *Queries) InstanceRelease(ctx context.Context, arg InstanceReleaseParams
 		&i.WorkspaceID,
 		&i.Version,
 		&i.Spec,
+		&i.Mounters,
 		&i.Live,
 	)
 	return i, err
@@ -801,6 +804,7 @@ select r.id as release_id,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
+       release_mounters(r.spec) as mounters,
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
@@ -873,6 +877,7 @@ type PodReleasesRow struct {
 	MaxContainers   int32
 	CpuMillis       int64
 	MemoryBytes     int64
+	Mounters        int32
 	GpuCount        int32
 	GpuModels       []string
 	Preemptible     bool
@@ -919,6 +924,7 @@ func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]Pod
 			&i.MaxContainers,
 			&i.CpuMillis,
 			&i.MemoryBytes,
+			&i.Mounters,
 			&i.GpuCount,
 			&i.GpuModels,
 			&i.Preemptible,
@@ -1028,24 +1034,6 @@ func (q *Queries) RecordNetworkApplied(ctx context.Context, arg RecordNetworkApp
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
-}
-
-const retryFailedRelease = `-- name: RetryFailedRelease :exec
-update releases set start_failures = 0, load_error = null
-where id = $1 and (start_failures >= $2::int or load_error is not null)
-`
-
-type RetryFailedReleaseParams struct {
-	ID                uuid.UUID
-	StartFailureLimit int32
-}
-
-// A start retries a release that stopped starting or failed to load. One
-// still backing off between failed starts keeps its count, so repeated
-// starts wait out the backoff.
-func (q *Queries) RetryFailedRelease(ctx context.Context, arg RetryFailedReleaseParams) error {
-	_, err := q.db.Exec(ctx, retryFailedRelease, arg.ID, arg.StartFailureLimit)
-	return err
 }
 
 const sandboxCreatedDays = `-- name: SandboxCreatedDays :many

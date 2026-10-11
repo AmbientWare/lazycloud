@@ -49,7 +49,6 @@ from lazycloud.abstractions.http_calls import (
     http_workload_spec,
     resolve_url,
     send_request,
-    unsupported_http_options,
 )
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
@@ -69,7 +68,6 @@ from lazycloud.client_contracts import (
     schema_from_contract_return,
 )
 from lazycloud.env import is_local
-from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.references import dotted_reference
 
 if TYPE_CHECKING:
@@ -314,15 +312,6 @@ class Endpoint(Generic[P, R]):
     def effective_timeout_seconds(self) -> int | None:
         return _effective_timeout_seconds(self.task_policy, self.timeout_seconds)
 
-    def unsupported_options(self) -> list[str]:
-        """Declared options the platform cannot run yet, by name."""
-        return unsupported_http_options(self)
-
-    def require_supported(self) -> None:
-        unsupported = self.unsupported_options()
-        if unsupported:
-            raise UnsupportedFeatureError(f"endpoint {self.resource_name}", unsupported)
-
     def handler_reference(self) -> str:
         """The `module:qualname` the runner imports."""
         return self._handler_reference()
@@ -331,7 +320,6 @@ class Endpoint(Generic[P, R]):
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
     ) -> WorkloadSpec:
         """The API definition of this endpoint for an uploaded source and a ready image."""
-        self.require_supported()
         policy = retry_policy_config(
             self.retry_policy, retries=self.retries, retry_delay_seconds=self.retry_delay_seconds
         )
@@ -747,15 +735,6 @@ class ASGI:
     def effective_timeout_seconds(self) -> int | None:
         return _effective_timeout_seconds(self.task_policy, self.timeout_seconds)
 
-    def unsupported_options(self) -> list[str]:
-        """Declared options the platform cannot run yet, by name."""
-        return unsupported_http_options(self)
-
-    def require_supported(self) -> None:
-        unsupported = self.unsupported_options()
-        if unsupported:
-            raise UnsupportedFeatureError(f"{self._http_kind} {self.name}", unsupported)
-
     def handler_reference(self) -> str:
         """The `module:qualname` the runner imports."""
         return self._handler_reference()
@@ -764,7 +743,6 @@ class ASGI:
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
     ) -> WorkloadSpec:
         """The API definition of this app for an uploaded source and a ready image."""
-        self.require_supported()
         return http_workload_spec(
             self,
             kind=self._http_kind,

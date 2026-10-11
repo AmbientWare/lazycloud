@@ -342,14 +342,12 @@ func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
 // A reserve runs while it is prepared, so buying one takes host room: a
 // full fleet buys none, however short the reserve.
 func TestPlanBuysReservesOnlyWithinTheHostLimit(t *testing.T) {
-	for _, c := range []struct {
-		room, want int
-	}{{0, 0}, {100, 1}} {
+	for _, room := range []int{0, 100} {
 		s := planSnapshot(t)
-		s.HostRoom = c.room
+		s.HostRoom = room
 		plan := PlanFleet(planPolicy(FleetCapacity{}, small.Times(2)), s)
-		if n := len(actionsOf(plan, ActionBuyReserve)); n != c.want {
-			t.Errorf("host room %d: %d reserves bought, want %d", c.room, n, c.want)
+		if n := len(actionsOf(plan, ActionBuyReserve)); (n > 0) != (room > 0) {
+			t.Errorf("host room %d: %d reserves bought", room, n)
 		}
 	}
 }

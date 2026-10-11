@@ -312,7 +312,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 				}
 				for _, market := range markets {
 					hibernate := reserve && hibernates(t)
-					disk := rootDiskMicros(region, t.RootGiB(hibernate), t.PricedMiBps(reserve))
+					disk := t.volumesMicros(region, hibernate, reserve)
 					compute, penalty := onDemand, int64(0)
 					if market == MarketSpot {
 						q, quoted := spot[spotPool{region, subnet.ZoneID, t.Name}]

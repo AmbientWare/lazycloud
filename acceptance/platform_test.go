@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
@@ -144,6 +145,9 @@ type platform struct {
 	join    string
 	// dirs holds agents' directories; see dir.
 	dirs string
+	// agents counts the agents runAgent started; only the first registers
+	// metrics, which one registry holds once.
+	agents int
 	// ctx ends when the test does; wg holds the platform's goroutines,
 	// which cleanup waits for.
 	ctx    context.Context //nolint:containedctx // The platform's lifetime.
@@ -245,7 +249,7 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	exec := execution.NewExecution(pool)
-	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore))
+	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore, compute.NewCompute(pool, nil, compute.Config{})))
 	source, err := im.ManagedSource(ctx, pythonVersion)
 	if err != nil {
 		return err
@@ -306,7 +310,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
-		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore),
+		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore, compute.NewCompute(pool, nil, compute.Config{})),
 		execution: execution.NewExecution(pool), ctx: ctx, wg: &wg, logger: logger, tel: tel,
 	}
 	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})
@@ -362,9 +366,10 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	vault := secrets.NewSecrets(pool, masterKey)
 	p.images = newImages(pool, p.execution, vault, p.storage)
 	p.secrets = vault
+	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
 	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
 	if err != nil {
@@ -376,7 +381,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	}
 	hosts := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
-		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
+		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
 	}, logger)
 	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
@@ -408,6 +413,9 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 			}
 			if _, err := p.execution.PlanServing(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan serving: %v", err)
+			}
+			if _, err := p.execution.PlanPods(passCtx, logger); err != nil && ctx.Err() == nil {
+				t.Logf("plan pods: %v", err)
 			}
 			if _, err := sched.Place(passCtx); err != nil && ctx.Err() == nil {
 				t.Logf("place: %v", err)
@@ -457,7 +465,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	t.Cleanup(func() {
 		cancel()
 		wg.Wait()
-		removeContainers(t)
+		removeContainers(t, p.dirs)
 	})
 	return p
 }
@@ -488,12 +496,16 @@ func (p *platform) runAgent() {
 	p.t.Helper()
 	stateDir := p.dir()
 	runtime := runtimeDir(p.t)
+	tel := p.tel
+	if p.agents++; p.agents > 1 {
+		tel = nil
+	}
 	p.wg.Go(func() {
 		err := agent.Run(p.ctx, agent.Config{
 			Server: p.hosts, StateDir: stateDir, SocketDir: p.socketDir, JoinToken: p.join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: ociRuntime(),
 			GeeseFSPath: p.geesefs, TrustBundle: tlsStore.CA, ServerPlaintext: true, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: p.tel,
+			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel,
 		})
 		if err != nil && p.ctx.Err() == nil {
 			p.t.Errorf("agent: %v", err)
@@ -525,8 +537,9 @@ func (p *platform) awaitHost() {
 	}
 }
 
-// removeContainers deletes the Docker containers the test's agent left.
-func removeContainers(t *testing.T) {
+// removeContainers deletes the Docker containers the test's agent left and
+// the volume binds it left in dirs.
+func removeContainers(t *testing.T, dirs string) {
 	docker, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Logf("docker client: %v", err)
@@ -551,6 +564,15 @@ func removeContainers(t *testing.T) {
 	}
 	for _, c := range list.Items {
 		_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+	}
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		t.Logf("list mounts: %v", err)
+	}
+	for line := range strings.Lines(string(mounts)) {
+		if point := strings.Fields(line)[4]; strings.HasPrefix(point, dirs+"/") {
+			_ = unix.Unmount(point, unix.MNT_DETACH)
+		}
 	}
 }
 

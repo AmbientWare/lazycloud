@@ -18,7 +18,7 @@ import (
 func capacityIn(c *hostproto.Capacity) compute.Capacity {
 	return compute.Capacity{
 		CPUMillis: cpu.Millis(c.GetCpuMillis()), MemoryBytes: c.GetMemoryBytes(),
-		GPUType: c.GetGpuType(), GPUCount: int(c.GetGpuCount()),
+		GPUType: c.GetGpuType(), GPUCount: int(c.GetGpuCount()), DiskSlots: int(c.GetDiskSlots()),
 	}
 }
 

@@ -39,9 +39,9 @@ func ceilDiv(n, d int64) int64 { return (n + d - 1) / d }
 
 // presignPart returns a presigned PUT of one multipart part. A part signed
 // with a size fails its signature at any other Content-Length.
-func (s *Storage) presignPart(ctx context.Context, bucket, key, uploadID string, number int32, size *int64, lifetime time.Duration) (string, error) {
-	req, err := s.presign.PresignUploadPart(ctx, &s3.UploadPartInput{
-		Bucket: aws.String(bucket), Key: aws.String(key), UploadId: aws.String(uploadID), PartNumber: aws.Int32(number), ContentLength: size,
+func (s *Storage) presignPart(ctx context.Context, b bucketClient, key, uploadID string, number int32, size *int64, lifetime time.Duration) (string, error) {
+	req, err := b.presign.PresignUploadPart(ctx, &s3.UploadPartInput{
+		Bucket: aws.String(b.name), Key: aws.String(key), UploadId: aws.String(uploadID), PartNumber: aws.Int32(number), ContentLength: size,
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", fmt.Errorf("presign part %d: %w", number, err)
@@ -51,16 +51,16 @@ func (s *Storage) presignPart(ctx context.Context, bucket, key, uploadID string,
 
 // startMultipart creates a multipart upload of size bytes and presigns every
 // part. size 0 still gets one (empty) part.
-func (s *Storage) startMultipart(ctx context.Context, bucket, key, contentType string, size, partSize int64, lifetime time.Duration) (string, []apitypes.UploadPart, error) {
+func (s *Storage) startMultipart(ctx context.Context, b bucketClient, key, contentType string, size, partSize int64, lifetime time.Duration) (string, []apitypes.UploadPart, error) {
 	count := max(ceilDiv(size, partSize), 1)
 	if count > maxParts {
 		return "", nil, invalid("%d bytes in parts of %d bytes needs more than %d parts", size, partSize, maxParts)
 	}
-	input := &s3.CreateMultipartUploadInput{Bucket: aws.String(bucket), Key: aws.String(key)}
+	input := &s3.CreateMultipartUploadInput{Bucket: aws.String(b.name), Key: aws.String(key)}
 	if contentType != "" {
 		input.ContentType = aws.String(contentType)
 	}
-	created, err := s.client.CreateMultipartUpload(ctx, input)
+	created, err := b.client.CreateMultipartUpload(ctx, input)
 	if err != nil {
 		return "", nil, fmt.Errorf("create multipart upload: %w", err)
 	}
@@ -68,7 +68,7 @@ func (s *Storage) startMultipart(ctx context.Context, bucket, key, contentType s
 	parts := make([]apitypes.UploadPart, 0, count)
 	for n := range count {
 		offset := n * partSize
-		url, err := s.presignPart(ctx, bucket, key, uploadID, int32(n+1), nil, lifetime) //nolint:gosec // At most maxParts.
+		url, err := s.presignPart(ctx, b, key, uploadID, int32(n+1), nil, lifetime) //nolint:gosec // At most maxParts.
 		if err != nil {
 			return "", nil, err
 		}
@@ -79,13 +79,13 @@ func (s *Storage) startMultipart(ctx context.Context, bucket, key, contentType s
 	return uploadID, parts, nil
 }
 
-func (s *Storage) completeMultipart(ctx context.Context, bucket, key, uploadID string, parts []apitypes.CompletedPart) error {
+func (s *Storage) completeMultipart(ctx context.Context, b bucketClient, key, uploadID string, parts []apitypes.CompletedPart) error {
 	completed := make([]s3types.CompletedPart, len(parts))
 	for n, p := range parts {
 		completed[n] = s3types.CompletedPart{PartNumber: aws.Int32(int32(p.Number)), ETag: aws.String(p.Etag)} //nolint:gosec // The schema caps part numbers.
 	}
-	_, err := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-		Bucket: aws.String(bucket), Key: aws.String(key), UploadId: aws.String(uploadID),
+	_, err := b.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket: aws.String(b.name), Key: aws.String(key), UploadId: aws.String(uploadID),
 		MultipartUpload: &s3types.CompletedMultipartUpload{Parts: completed},
 	})
 	var apiErr smithy.APIError
@@ -103,9 +103,9 @@ func (s *Storage) completeMultipart(ctx context.Context, bucket, key, uploadID s
 	return nil
 }
 
-func (s *Storage) abortMultipart(ctx context.Context, bucket, key, uploadID string) error {
-	_, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-		Bucket: aws.String(bucket), Key: aws.String(key), UploadId: aws.String(uploadID),
+func (s *Storage) abortMultipart(ctx context.Context, b bucketClient, key, uploadID string) error {
+	_, err := b.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket: aws.String(b.name), Key: aws.String(key), UploadId: aws.String(uploadID),
 	})
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchUpload" {
@@ -117,29 +117,38 @@ func (s *Storage) abortMultipart(ctx context.Context, bucket, key, uploadID stri
 	return nil
 }
 
-// objectInfo is a stored object.
+// objectInfo is a stored object. Listings leave ETag and SHA256, the
+// base64 SHA-256 checksum the store kept, if any, empty.
 type objectInfo struct {
 	Key      string
 	Size     int64
 	Modified time.Time
+	ETag     string
+	SHA256   string
 }
 
-// head returns the object at key, or ErrNotFound.
-func head(ctx context.Context, client *s3.Client, bucket, key string) (objectInfo, error) {
-	out, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+// head returns the object at key in b, or ErrNotFound. HEAD has no body,
+// so a missing bucket is ErrNotFound too.
+func head(ctx context.Context, b bucketClient, key string) (objectInfo, error) {
+	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(b.name), Key: aws.String(key), ChecksumMode: s3types.ChecksumModeEnabled,
+	})
 	if isNotFound(err) {
 		return objectInfo{}, ErrNotFound
 	}
 	if err != nil {
-		return objectInfo{}, fmt.Errorf("head object: %w", err)
+		return objectInfo{}, fmt.Errorf("head %s: %w", key, err)
 	}
-	return objectInfo{Key: key, Size: aws.ToInt64(out.ContentLength), Modified: aws.ToTime(out.LastModified)}, nil
+	return objectInfo{
+		Key: key, Size: aws.ToInt64(out.ContentLength), Modified: aws.ToTime(out.LastModified),
+		ETag: aws.ToString(out.ETag), SHA256: aws.ToString(out.ChecksumSHA256),
+	}, nil
 }
 
 // eachObject calls fn for every object under prefix, one listing page at a
 // time.
-func (s *Storage) eachObject(ctx context.Context, bucket, prefix string, fn func([]objectInfo) error) error {
-	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)})
+func (s *Storage) eachObject(ctx context.Context, b bucketClient, prefix string, fn func([]objectInfo) error) error {
+	pages := s3.NewListObjectsV2Paginator(b.client, &s3.ListObjectsV2Input{Bucket: aws.String(b.name), Prefix: aws.String(prefix)})
 	for pages.HasMorePages() {
 		page, err := pages.NextPage(ctx)
 		if err != nil {
@@ -158,8 +167,8 @@ func (s *Storage) eachObject(ctx context.Context, bucket, prefix string, fn func
 
 // deleteKeys removes keys in batches. A key that is already gone counts as
 // deleted.
-func (s *Storage) deleteKeys(ctx context.Context, bucket string, keys []string) error {
-	failed, err := s.tryDeleteKeys(ctx, bucket, keys)
+func (s *Storage) deleteKeys(ctx context.Context, b bucketClient, keys []string) error {
+	failed, err := s.tryDeleteKeys(ctx, b, keys)
 	if err != nil {
 		return err
 	}
@@ -171,7 +180,7 @@ func (s *Storage) deleteKeys(ctx context.Context, bucket string, keys []string) 
 
 // tryDeleteKeys removes keys and returns those the store refused, with its
 // reason, so callers keep what succeeded.
-func (s *Storage) tryDeleteKeys(ctx context.Context, bucket string, keys []string) (map[string]string, error) {
+func (s *Storage) tryDeleteKeys(ctx context.Context, b bucketClient, keys []string) (map[string]string, error) {
 	failed := map[string]string{}
 	for start := 0; start < len(keys); start += deleteBatch {
 		batch := keys[start:min(start+deleteBatch, len(keys))]
@@ -179,14 +188,17 @@ func (s *Storage) tryDeleteKeys(ctx context.Context, bucket string, keys []strin
 		for n, key := range batch {
 			objects[n] = s3types.ObjectIdentifier{Key: aws.String(key)}
 		}
-		out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(bucket), Delete: &s3types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		out, err := b.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(b.name), Delete: &s3types.Delete{Objects: objects, Quiet: aws.Bool(true)},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("delete objects: %w", err)
 		}
+		// Garage reports a key already gone, which S3 counts as deleted.
 		for _, e := range out.Errors {
-			failed[aws.ToString(e.Key)] = aws.ToString(e.Message)
+			if aws.ToString(e.Code) != "NoSuchKey" {
+				failed[aws.ToString(e.Key)] = aws.ToString(e.Message)
+			}
 		}
 	}
 	return failed, nil
@@ -197,20 +209,20 @@ const prefixChunk = 1000
 
 // deletePrefixChunk aborts the prefix's multipart uploads and deletes up to
 // prefixChunk of its objects. It reports whether the prefix is now empty.
-func (s *Storage) deletePrefixChunk(ctx context.Context, bucket, prefix string) (bool, error) {
-	uploads, err := s.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
-		Bucket: aws.String(bucket), Prefix: aws.String(prefix), MaxUploads: aws.Int32(prefixChunk),
+func (s *Storage) deletePrefixChunk(ctx context.Context, b bucketClient, prefix string) (bool, error) {
+	uploads, err := b.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket: aws.String(b.name), Prefix: aws.String(prefix), MaxUploads: aws.Int32(prefixChunk),
 	})
 	if err != nil {
 		return false, fmt.Errorf("list multipart uploads: %w", err)
 	}
 	for _, u := range uploads.Uploads {
-		if err := s.abortMultipart(ctx, bucket, aws.ToString(u.Key), aws.ToString(u.UploadId)); err != nil {
+		if err := s.abortMultipart(ctx, b, aws.ToString(u.Key), aws.ToString(u.UploadId)); err != nil {
 			return false, err
 		}
 	}
-	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket), Prefix: aws.String(prefix), MaxKeys: aws.Int32(prefixChunk),
+	out, err := b.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(b.name), Prefix: aws.String(prefix), MaxKeys: aws.Int32(prefixChunk),
 	})
 	if err != nil {
 		return false, fmt.Errorf("list objects: %w", err)
@@ -219,30 +231,31 @@ func (s *Storage) deletePrefixChunk(ctx context.Context, bucket, prefix string) 
 	for n, o := range out.Contents {
 		keys[n] = aws.ToString(o.Key)
 	}
-	if err := s.deleteKeys(ctx, bucket, keys); err != nil {
+	if err := s.deleteKeys(ctx, b, keys); err != nil {
 		return false, err
 	}
 	return !aws.ToBool(out.IsTruncated) && !aws.ToBool(uploads.IsTruncated), nil
 }
 
-// copyObject copies one object within bucket, in parts above maxCopyBytes.
-func (s *Storage) copyObject(ctx context.Context, bucket string, from objectInfo, to string) error {
+// copyObject copies one object within the bucket, in parts above
+// maxCopyBytes.
+func (s *Storage) copyObject(ctx context.Context, b bucketClient, from objectInfo, to string) error {
 	// CopySource is a URL path: each key segment is escaped, or a key
 	// holding "%20" would copy another object.
 	segments := strings.Split(from.Key, "/")
 	for n, segment := range segments {
 		segments[n] = url.PathEscape(segment)
 	}
-	source := bucket + "/" + strings.Join(segments, "/")
+	source := b.name + "/" + strings.Join(segments, "/")
 	if from.Size <= maxCopyBytes {
-		if _, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
-			Bucket: aws.String(bucket), Key: aws.String(to), CopySource: aws.String(source),
+		if _, err := b.client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket: aws.String(b.name), Key: aws.String(to), CopySource: aws.String(source),
 		}); err != nil {
 			return fmt.Errorf("copy %s: %w", from.Key, err)
 		}
 		return nil
 	}
-	created, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: aws.String(bucket), Key: aws.String(to)})
+	created, err := b.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: aws.String(b.name), Key: aws.String(to)})
 	if err != nil {
 		return fmt.Errorf("start copy of %s: %w", from.Key, err)
 	}
@@ -250,17 +263,17 @@ func (s *Storage) copyObject(ctx context.Context, bucket string, from objectInfo
 	var parts []apitypes.CompletedPart
 	for offset, n := int64(0), 1; offset < from.Size; offset, n = offset+copyPartBytes, n+1 {
 		end := min(offset+copyPartBytes, from.Size) - 1
-		out, err := s.client.UploadPartCopy(ctx, &s3.UploadPartCopyInput{
-			Bucket: aws.String(bucket), Key: aws.String(to), UploadId: aws.String(uploadID),
+		out, err := b.client.UploadPartCopy(ctx, &s3.UploadPartCopyInput{
+			Bucket: aws.String(b.name), Key: aws.String(to), UploadId: aws.String(uploadID),
 			PartNumber: aws.Int32(int32(n)), CopySource: aws.String(source), //nolint:gosec // 5 TiB / 1 GiB parts.
 			CopySourceRange: aws.String(fmt.Sprintf("bytes=%d-%d", offset, end)),
 		})
 		if err != nil {
-			return errors.Join(fmt.Errorf("copy part %d of %s: %w", n, from.Key, err), s.abortMultipart(context.WithoutCancel(ctx), bucket, to, uploadID))
+			return errors.Join(fmt.Errorf("copy part %d of %s: %w", n, from.Key, err), s.abortMultipart(context.WithoutCancel(ctx), b, to, uploadID))
 		}
 		parts = append(parts, apitypes.CompletedPart{Number: n, Etag: aws.ToString(out.CopyPartResult.ETag)})
 	}
-	return s.completeMultipart(ctx, bucket, to, uploadID, parts)
+	return s.completeMultipart(ctx, b, to, uploadID, parts)
 }
 
 // presignLifetime clamps a requested lifetime to what SigV4 allows.

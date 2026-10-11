@@ -35,7 +35,7 @@ func newFixture(t testing.TB, spec string) *fixture {
 	pool := dbtest.New(t)
 	f := &fixture{t: t, pool: pool}
 	cfg := withLinks(t, func() *Storage { return f.storage })
-	f.storage, f.bucket = NewStorage(pool, cfg), cfg.Bucket
+	f.storage, f.bucket = NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{})), cfg.Bucket
 	f.ws = f.workspace("ws-" + uuid.NewString()[:8])
 	var app, workload uuid.UUID
 	f.exec(`insert into apps (workspace_id, name, state) values ($1, 'app', 'active') returning id`, &app, uuid.UUID(f.ws))

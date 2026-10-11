@@ -833,10 +833,9 @@ func lastCount(log string) int {
 }
 
 // Under gVisor a running pod checkpoints once its supervisor closed its
-// host sockets and keeps serving afterwards. A root agent, which reads and
-// places Docker's checkpoints, uploads it and restores it, twice on the same
-// host, into new pods whose count resumes past the snapshot's, behind the
-// restored pod's own block policy.
+// host sockets and keeps serving afterwards. The agent uploads it and
+// restores it, twice on the same host, into new pods whose count resumes
+// past the snapshot's, behind the restored pod's own block policy.
 func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 	if testRuntime() != "runsc" {
 		t.Skip("needs LAZYCLOUD_TEST_OCI_RUNTIME=runsc")
@@ -877,23 +876,15 @@ func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 		t.Fatal("no snapshot outcome")
 	}
 	atSnapshot := lastCount(e.server.containerLog(id))
-	root := os.Geteuid() == 0
-	if !root {
-		// The checkpoint was taken; only root reads what Docker wrote.
-		if !r.GetUnsupported() || !strings.Contains(r.GetFailure(), "agent running as root") {
-			t.Fatalf("snapshot outcome without root %v", r)
-		}
-	} else {
-		body := stored.Load()
-		if r.GetFailure() != "" || body == nil || int64(len(*body)) != r.GetSizeBytes() {
-			t.Fatalf("snapshot outcome %v", r)
-		}
-		sum := sha256.Sum256(*body)
-		if hex.EncodeToString(sum[:]) != r.GetSha256() {
-			t.Fatal("the uploaded snapshot does not match its digest")
-		}
-		t.Logf("checkpoint of %d bytes uploaded in %s", r.GetSizeBytes(), time.Since(began))
+	body := stored.Load()
+	if r.GetFailure() != "" || body == nil || int64(len(*body)) != r.GetSizeBytes() {
+		t.Fatalf("snapshot outcome %v", r)
 	}
+	sum := sha256.Sum256(*body)
+	if hex.EncodeToString(sum[:]) != r.GetSha256() {
+		t.Fatal("the uploaded snapshot does not match its digest")
+	}
+	t.Logf("checkpoint of %d bytes uploaded in %s", r.GetSizeBytes(), time.Since(began))
 
 	// The supervisor reopens its sockets once the link is back.
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(200 * time.Millisecond) {
@@ -907,9 +898,6 @@ func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 		}
 	}
 	t.Logf("serving again %s after the snapshot began", time.Since(began))
-	if !root {
-		return
-	}
 
 	// Restoring the same snapshot twice on the host that took it reaches
 	// Docker with a checkpoint whose content containerd may already hold.

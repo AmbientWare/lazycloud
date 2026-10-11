@@ -202,9 +202,6 @@ func writeIfChanged(path string, data []byte, perm os.FileMode) (bool, error) {
 // installSnapshotterCommand installs the snapshotter found beside the
 // running executable.
 func installSnapshotterCommand() error {
-	if os.Geteuid() != 0 {
-		return errors.New("install-snapshotter requires root")
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find the agent executable: %w", err)

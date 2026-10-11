@@ -11,10 +11,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -28,7 +30,7 @@ const (
 )
 
 // storageRefusal is storage a start needs that the storage owner refused:
-// its volume mounts or the workspace's storage grant. The container fails
+// a cloud bucket or the workspace's storage grant. The container fails
 // with reason; the host's other containers and its session are unaffected.
 type storageRefusal struct {
 	reason string
@@ -39,8 +41,8 @@ func (e *storageRefusal) Error() string { return e.err.Error() }
 
 func (e *storageRefusal) Unwrap() error { return e.err }
 
-// refusal returns err as a *storageRefusal of what, such as "volumes" or
-// "cloud bucket at /data", when it is one of the storage owner's typed
+// refusal returns err as a *storageRefusal of what, such as "storage grant"
+// or "cloud bucket at /data", when it is one of the storage owner's typed
 // refusals, with the cause its owner is shown. Any other error, such as the
 // database's or the object store's failure, is returned as it is, so the
 // start is tried again.
@@ -68,15 +70,29 @@ func refusal(what string, err error) error {
 	return &storageRefusal{reason: what + " unavailable: " + cause, err: fmt.Errorf("%s: %w", what, err)}
 }
 
+// bucketKeys names the workspace secrets holding the keys of the spec's
+// cloud buckets.
+func bucketKeys(spec apitypes.WorkloadSpec) []string {
+	var names []string
+	if spec.Volumes != nil {
+		for _, v := range *spec.Volumes {
+			if b := v.CloudBucket; b != nil {
+				names = append(names, b.AccessKeySecret, b.SecretKeySecret)
+			}
+		}
+	}
+	return names
+}
+
 // volumeMounts records the container's volume mounts and returns them as the
-// host sees them.
-func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand) ([]*hostproto.VolumeMount, error) {
+// host sees them, each cloud bucket with its keys from secrets.
+func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand, secrets map[string]string) ([]*hostproto.VolumeMount, error) {
 	if start.Spec.Volumes == nil || len(*start.Spec.Volumes) == 0 {
 		return nil, nil
 	}
 	mounts, err := s.storage.MountVolumes(ctx, start.Workspace, uuid.UUID(start.Container), *start.Spec.Volumes)
 	if err != nil {
-		return nil, refusal("volumes", err)
+		return nil, err
 	}
 	out := make([]*hostproto.VolumeMount, len(mounts))
 	for n, m := range mounts {
@@ -86,21 +102,14 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 				VolumeId: m.Volume.String(), WorkspaceId: start.Workspace.String(), Prefix: m.Prefix,
 			}}
 		} else {
-			// The keys come from the workspace secrets the bucket names; a
-			// missing one fails the start like a missing release secret.
 			b := m.CloudBucket
-			access, secret := deref(b.AccessKeySecret), deref(b.SecretKeySecret)
-			keys, err := s.config.Secrets.Resolve(ctx, start.Workspace, []string{access, secret})
-			if err != nil {
-				return nil, err
-			}
 			loc, err := storage.CloudBucketLocation(*b)
 			if err != nil {
 				return nil, refusal("cloud bucket at "+m.MountPath, err)
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
 				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
-				ForcePathStyle: loc.PathStyle, AccessKeyId: keys[access], SecretAccessKey: keys[secret],
+				ForcePathStyle: loc.PathStyle, AccessKeyId: secrets[b.AccessKeySecret], SecretAccessKey: secrets[b.SecretKeySecret],
 			}}
 		}
 		out[n] = mount
@@ -272,9 +281,10 @@ func (s *Server) AcquireDisk(ctx context.Context, req *hostproto.AcquireDiskRequ
 	}
 	out := &hostproto.AcquireDiskResponse{
 		DiskId: lease.Disk.String(), WorkspaceId: lease.Workspace.String(), SizeBytes: lease.SizeBytes, LeaseToken: lease.Token,
+		Read: diskGrant(lease.Read),
 	}
-	for _, g := range lease.Chain {
-		out.Chain = append(out.Chain, &hostproto.DiskGeneration{Generation: g.Generation, ManifestKey: g.ManifestKey, ManifestSha256: g.ManifestSHA256})
+	if g := lease.Newest; g != nil {
+		out.Generation = &hostproto.DiskGeneration{Generation: g.Generation, IndexSha256: g.IndexSHA256}
 	}
 	return out, nil
 }
@@ -285,25 +295,50 @@ func (s *Server) RecordDiskGeneration(ctx context.Context, req *hostproto.Record
 	if err != nil {
 		return nil, err
 	}
-	if err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), storage.PublishedGeneration{
-		Generation: req.GetGeneration(), ParentGeneration: req.GetParentGeneration(),
-		ManifestKey: req.GetManifestKey(), ManifestSHA256: req.GetManifestSha256(), AddedBytes: req.GetAddedBytes(), Flat: req.GetFlat(),
-	}); err != nil {
+	g := storage.DiskGeneration{Generation: req.GetGeneration().GetGeneration(), IndexSHA256: req.GetGeneration().GetIndexSha256()}
+	orphans, err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), g, req.GetAddedBytes())
+	if err != nil {
 		return nil, s.diskError(ctx, err)
 	}
-	return &hostproto.RecordDiskGenerationResponse{}, nil
+	out := &hostproto.RecordDiskGenerationResponse{}
+	for _, o := range orphans {
+		out.Orphans = append(out.Orphans, &hostproto.DiskGeneration{Generation: o.Generation, IndexSha256: o.IndexSHA256})
+	}
+	return out, nil
 }
 
-// RecordDiskCollection records the bytes a collection removed.
-func (s *Server) RecordDiskCollection(ctx context.Context, req *hostproto.RecordDiskCollectionRequest) (*hostproto.RecordDiskCollectionResponse, error) {
+// CollectDisk deletes a disk's unreachable objects under the lease.
+func (s *Server) CollectDisk(ctx context.Context, req *hostproto.CollectDiskRequest) (*hostproto.CollectDiskResponse, error) {
 	container, disk, err := parseDiskCall(req.GetContainerId(), req.GetDiskId())
 	if err != nil {
 		return nil, err
 	}
-	if err := s.storage.RecordDiskCollection(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), req.GetRemovedBytes(), req.GetBaseGeneration()); err != nil {
+	if err := s.storage.CollectDisk(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), req.GetGeneration(), req.GetKeys(), req.GetRemovedBytes()); err != nil {
 		return nil, s.diskError(ctx, err)
 	}
-	return &hostproto.RecordDiskCollectionResponse{}, nil
+	return &hostproto.CollectDiskResponse{}, nil
+}
+
+// GrantDiskRead issues the lease holder's snapshotter a read-only
+// credential for the disk's objects.
+func (s *Server) GrantDiskRead(ctx context.Context, req *hostproto.GrantDiskReadRequest) (*hostproto.GrantDiskReadResponse, error) {
+	container, disk, err := parseDiskCall(req.GetContainerId(), req.GetDiskId())
+	if err != nil {
+		return nil, err
+	}
+	grant, err := s.storage.GrantDiskRead(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken())
+	if err != nil {
+		return nil, s.diskError(ctx, err)
+	}
+	return &hostproto.GrantDiskReadResponse{Grant: diskGrant(grant)}, nil
+}
+
+func diskGrant(g storage.Grant) *imagefsproto.DiskGrant {
+	return &imagefsproto.DiskGrant{
+		Endpoint: g.Endpoint, Region: g.Region, Bucket: g.Bucket, ForcePathStyle: g.PathStyle,
+		AccessKeyId: g.AccessKeyID, SecretAccessKey: g.SecretAccessKey, SessionToken: g.SessionToken,
+		ExpiresAt: timestamppb.New(g.ExpiresAt),
+	}
 }
 
 // ReleaseDisk ends a lease.
@@ -316,4 +351,30 @@ func (s *Server) ReleaseDisk(ctx context.Context, req *hostproto.ReleaseDiskRequ
 		return nil, s.diskError(ctx, err)
 	}
 	return &hostproto.ReleaseDiskResponse{}, nil
+}
+
+// diskOperations maps the host's disk operations to the API's.
+var diskOperations = map[hostproto.DiskOperation]apitypes.DiskOperation{ //nolint:gochecknoglobals // constant table
+	hostproto.DiskOperation_DISK_OPERATION_PUBLISH: apitypes.DiskOperationPublish,
+	hostproto.DiskOperation_DISK_OPERATION_RELEASE: apitypes.DiskOperationRelease,
+}
+
+// RecordDiskFailure records or clears the holder's last disk failure.
+func (s *Server) RecordDiskFailure(ctx context.Context, req *hostproto.RecordDiskFailureRequest) (*hostproto.RecordDiskFailureResponse, error) {
+	container, disk, err := parseDiskCall(req.GetContainerId(), req.GetDiskId())
+	if err != nil {
+		return nil, err
+	}
+	var failure *storage.DiskFailure
+	if f := req.GetFailure(); f != nil {
+		operation, ok := diskOperations[f.GetOperation()]
+		if !ok {
+			return nil, status.Errorf(codes.InvalidArgument, "unknown disk operation %s", f.GetOperation())
+		}
+		failure = &storage.DiskFailure{Operation: operation, Message: f.GetMessage()}
+	}
+	if err := s.storage.RecordDiskFailure(ctx, container, disk, req.GetLeaseToken(), failure); err != nil {
+		return nil, s.diskError(ctx, err)
+	}
+	return &hostproto.RecordDiskFailureResponse{}, nil
 }

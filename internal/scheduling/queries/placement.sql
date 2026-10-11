@@ -11,10 +11,22 @@ select pg_try_advisory_xact_lock(hashtextextended('placement', 0))::bool;
 -- else the platform; a mirror build always runs on the platform. Reads the
 -- containers_pending partial index.
 select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
-       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count
+       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host
 from (
     select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
            cw.connection_id,
+           jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
+           -- The host that last held one of the container's disks, while its
+           -- frame cache likely holds the disk: the disk is still saving
+           -- there or was released within disk_warm_seconds.
+           (select hc.host_id
+            from disks d
+            join containers hc on hc.id = d.holder_container_id
+            where d.workspace_id = c.workspace_id and d.state = 'active'
+              and d.name in (select jsonb_array_elements(r.spec -> 'disks') ->> 'name')
+              and (d.released_at is null or d.released_at > now() - make_interval(secs => @disk_warm_seconds::float8))
+            order by d.released_at desc nulls first
+            limit 1) as disk_host,
            coalesce(r.spec -> 'placement' ->> 'machine', '')::text as machine,
            coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
            coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,

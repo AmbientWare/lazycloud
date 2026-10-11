@@ -39,17 +39,19 @@ without declaring one; it needs at least `10Gi` and room for the image.
 
 ## How it persists
 
-While the pod runs, LazyCloud copies what changed to your workspace's storage
-every two minutes, and once more when the container stops. The next start
-restores that copy on whichever machine it lands on, so a disk is never tied to
-one machine. A machine failure can lose up to the last two minutes of writes.
+While the pod runs, LazyCloud copies the parts that changed to your
+workspace's storage every two minutes, sooner after a burst of writes, at once
+when a Spot machine is about to be reclaimed, and once more when the container
+stops. The next start can land on any machine, so a disk is never tied to one.
+A machine failure can lose up to the last two minutes of writes.
 
-A start does not wait for the disk to download, however large it is. Data
-arrives the first time something reads it, starting with what the last
-session used, and the rest follows in the background. The first read of a file
-nobody has touched in a while can take a moment longer. A restart within 30
-minutes in the same zone reads nothing from storage. If part of a disk cannot
-be fetched, the container stops and says so.
+A start does not wait for the disk to download, however large it is. Each part
+arrives the first time something reads it. While the container boots, the
+parts the disk read in its last start and the ones its last session read most
+recently arrive ahead of time. The first read of a part nobody has touched in
+a while waits for storage. A start soon after a stop goes back to the same
+machine when it has room, and reads what it already has there. If the machine
+stops serving the disk, the container stops and says why.
 
 One container writes a disk at a time. A pod with a disk runs one container,
 and a redeploy's new container waits for the old one to hand the disk over.

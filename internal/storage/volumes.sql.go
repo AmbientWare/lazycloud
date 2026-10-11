@@ -44,22 +44,45 @@ func (q *Queries) ActiveVolume(ctx context.Context, arg ActiveVolumeParams) (Act
 	return i, err
 }
 
+const bucketByName = `-- name: BucketByName :one
+select b.bucket, b.region, w.connection_id
+from workspace_buckets b
+join workspaces w on w.id = b.workspace_id
+where b.bucket = $1
+`
+
+type BucketByNameRow struct {
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
+}
+
+func (q *Queries) BucketByName(ctx context.Context, bucket string) (BucketByNameRow, error) {
+	row := q.db.QueryRow(ctx, bucketByName, bucket)
+	var i BucketByNameRow
+	err := row.Scan(&i.Bucket, &i.Region, &i.ConnectionID)
+	return i, err
+}
+
 const claimOrphanCheck = `-- name: ClaimOrphanCheck :one
-update workspace_buckets
+update workspace_buckets b
 set orphans_checked_at = now()
-where workspace_id = (
-    select b.workspace_id from workspace_buckets b
-    where b.orphans_checked_at is null or b.orphans_checked_at < now() - interval '1 hour'
-    order by b.orphans_checked_at nulls first
+from workspaces w
+where w.id = b.workspace_id and b.workspace_id = (
+    select o.workspace_id from workspace_buckets o
+    where o.orphans_checked_at is null or o.orphans_checked_at < now() - interval '1 hour'
+    order by o.orphans_checked_at nulls first
     limit 1
     for update skip locked
 )
-returning workspace_id, bucket
+returning b.workspace_id, b.bucket, b.region, w.connection_id
 `
 
 type ClaimOrphanCheckRow struct {
-	WorkspaceID uuid.UUID
-	Bucket      string
+	WorkspaceID  uuid.UUID
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
 }
 
 // A workspace bucket whose orphaned prefixes were not checked for an hour;
@@ -67,7 +90,12 @@ type ClaimOrphanCheckRow struct {
 func (q *Queries) ClaimOrphanCheck(ctx context.Context) (ClaimOrphanCheckRow, error) {
 	row := q.db.QueryRow(ctx, claimOrphanCheck)
 	var i ClaimOrphanCheckRow
-	err := row.Scan(&i.WorkspaceID, &i.Bucket)
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Bucket,
+		&i.Region,
+		&i.ConnectionID,
+	)
 	return i, err
 }
 
@@ -89,9 +117,19 @@ func (q *Queries) DeleteVolumeRow(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const deleteWorkspaceBucket = `-- name: DeleteWorkspaceBucket :exec
+delete from workspace_buckets where workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceBucket, workspaceID)
+	return err
+}
+
 const deletingVolumes = `-- name: DeletingVolumes :many
-select v.id, v.workspace_id, coalesce(b.bucket, '')::text as bucket
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
 order by v.deleted_at
@@ -99,9 +137,10 @@ limit $1
 `
 
 type DeletingVolumesRow struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	Bucket      string
+	ID           uuid.UUID
+	Bucket       *string
+	Region       *string
+	ConnectionID *uuid.UUID
 }
 
 func (q *Queries) DeletingVolumes(ctx context.Context, maxRows int32) ([]DeletingVolumesRow, error) {
@@ -113,7 +152,12 @@ func (q *Queries) DeletingVolumes(ctx context.Context, maxRows int32) ([]Deletin
 	var items []DeletingVolumesRow
 	for rows.Next() {
 		var i DeletingVolumesRow
-		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.Bucket); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Bucket,
+			&i.Region,
+			&i.ConnectionID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -209,49 +253,61 @@ func (q *Queries) InsertStorageGrant(ctx context.Context, arg InsertStorageGrant
 	return err
 }
 
-const insertVolume = `-- name: InsertVolume :exec
-insert into volumes (workspace_id, name) values ($1, $2)
-on conflict (workspace_id, name) where state = 'active' do nothing
-`
-
-type InsertVolumeParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-}
-
-func (q *Queries) InsertVolume(ctx context.Context, arg InsertVolumeParams) error {
-	_, err := q.db.Exec(ctx, insertVolume, arg.WorkspaceID, arg.Name)
-	return err
-}
-
-const insertVolumeMount = `-- name: InsertVolumeMount :exec
-insert into volume_mounts (volume_id, container_id) values ($1, $2)
+const insertVolumeMounts = `-- name: InsertVolumeMounts :exec
+insert into volume_mounts (volume_id, container_id) select unnest($1::uuid[]), $2
 on conflict do nothing
 `
 
-type InsertVolumeMountParams struct {
-	VolumeID    uuid.UUID
+type InsertVolumeMountsParams struct {
+	VolumeIds   []uuid.UUID
 	ContainerID uuid.UUID
 }
 
-func (q *Queries) InsertVolumeMount(ctx context.Context, arg InsertVolumeMountParams) error {
-	_, err := q.db.Exec(ctx, insertVolumeMount, arg.VolumeID, arg.ContainerID)
+func (q *Queries) InsertVolumeMounts(ctx context.Context, arg InsertVolumeMountsParams) error {
+	_, err := q.db.Exec(ctx, insertVolumeMounts, arg.VolumeIds, arg.ContainerID)
 	return err
 }
 
-const insertWorkspaceBucket = `-- name: InsertWorkspaceBucket :exec
-insert into workspace_buckets (workspace_id, bucket) values ($1, $2)
-on conflict (workspace_id) do nothing
+const insertVolumes = `-- name: InsertVolumes :exec
+insert into volumes (workspace_id, name) select $1, unnest($2::text[])
+on conflict (workspace_id, name) where state = 'active' do nothing
+`
+
+type InsertVolumesParams struct {
+	WorkspaceID uuid.UUID
+	Names       []string
+}
+
+func (q *Queries) InsertVolumes(ctx context.Context, arg InsertVolumesParams) error {
+	_, err := q.db.Exec(ctx, insertVolumes, arg.WorkspaceID, arg.Names)
+	return err
+}
+
+const insertWorkspaceBucket = `-- name: InsertWorkspaceBucket :one
+insert into workspace_buckets (workspace_id, bucket, region)
+values ($1, $2, $3)
+on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
+returning bucket, region
 `
 
 type InsertWorkspaceBucketParams struct {
 	WorkspaceID uuid.UUID
 	Bucket      string
+	Region      string
 }
 
-func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) error {
-	_, err := q.db.Exec(ctx, insertWorkspaceBucket, arg.WorkspaceID, arg.Bucket)
-	return err
+type InsertWorkspaceBucketRow struct {
+	Bucket string
+	Region string
+}
+
+// The workspace's recorded bucket: this one, or the one another server
+// recorded first.
+func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) (InsertWorkspaceBucketRow, error) {
+	row := q.db.QueryRow(ctx, insertWorkspaceBucket, arg.WorkspaceID, arg.Bucket, arg.Region)
+	var i InsertWorkspaceBucketRow
+	err := row.Scan(&i.Bucket, &i.Region)
+	return i, err
 }
 
 const knownDisks = `-- name: KnownDisks :many
@@ -407,22 +463,41 @@ func (q *Queries) RecordVolumeSize(ctx context.Context, arg RecordVolumeSizePara
 	return err
 }
 
-const shareActiveVolume = `-- name: ShareActiveVolume :one
-select id from volumes
-where workspace_id = $1 and name = $2 and state = 'active'
+const shareActiveVolumes = `-- name: ShareActiveVolumes :many
+select id, name from volumes
+where workspace_id = $1 and name = any($2::text[]) and state = 'active'
+order by id
 for share
 `
 
-type ShareActiveVolumeParams struct {
+type ShareActiveVolumesParams struct {
 	WorkspaceID uuid.UUID
-	Name        string
+	Names       []string
 }
 
-func (q *Queries) ShareActiveVolume(ctx context.Context, arg ShareActiveVolumeParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, shareActiveVolume, arg.WorkspaceID, arg.Name)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+type ShareActiveVolumesRow struct {
+	ID   uuid.UUID
+	Name string
+}
+
+func (q *Queries) ShareActiveVolumes(ctx context.Context, arg ShareActiveVolumesParams) ([]ShareActiveVolumesRow, error) {
+	rows, err := q.db.Query(ctx, shareActiveVolumes, arg.WorkspaceID, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ShareActiveVolumesRow
+	for rows.Next() {
+		var i ShareActiveVolumesRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const volumeUsers = `-- name: VolumeUsers :many
@@ -476,8 +551,9 @@ func (q *Queries) VolumeUsers(ctx context.Context, arg VolumeUsersParams) ([]Vol
 }
 
 const volumesToMeasure = `-- name: VolumesToMeasure :many
-select v.id, b.bucket
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
   and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => $1::float8))
@@ -491,8 +567,10 @@ type VolumesToMeasureParams struct {
 }
 
 type VolumesToMeasureRow struct {
-	ID     uuid.UUID
-	Bucket string
+	ID           uuid.UUID
+	Bucket       string
+	Region       string
+	ConnectionID *uuid.UUID
 }
 
 func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasureParams) ([]VolumesToMeasureRow, error) {
@@ -504,7 +582,12 @@ func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasurePara
 	var items []VolumesToMeasureRow
 	for rows.Next() {
 		var i VolumesToMeasureRow
-		if err := rows.Scan(&i.ID, &i.Bucket); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Bucket,
+			&i.Region,
+			&i.ConnectionID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -516,12 +599,23 @@ func (q *Queries) VolumesToMeasure(ctx context.Context, arg VolumesToMeasurePara
 }
 
 const workspaceBucket = `-- name: WorkspaceBucket :one
-select bucket from workspace_buckets where workspace_id = $1
+select w.connection_id, b.bucket, b.region
+from workspaces w
+left join workspace_buckets b on b.workspace_id = w.id
+where w.id = $1
 `
 
-func (q *Queries) WorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+type WorkspaceBucketRow struct {
+	ConnectionID *uuid.UUID
+	Bucket       *string
+	Region       *string
+}
+
+// The connected account the workspace lives in, null for the platform's,
+// and its bucket once it has one.
+func (q *Queries) WorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) (WorkspaceBucketRow, error) {
 	row := q.db.QueryRow(ctx, workspaceBucket, workspaceID)
-	var bucket string
-	err := row.Scan(&bucket)
-	return bucket, err
+	var i WorkspaceBucketRow
+	err := row.Scan(&i.ConnectionID, &i.Bucket, &i.Region)
+	return i, err
 }

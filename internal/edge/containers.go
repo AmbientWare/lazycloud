@@ -383,24 +383,22 @@ func (l *lease) refused(reload bool) {
 }
 
 // checkFailure returns a releaseFailedError when the release's containers
-// cannot start.
+// cannot start. A request is a user action: it retries a release that
+// stopped starting, and fails with the start's error once execution holds it.
 func (e *Edge) checkFailure(ctx context.Context, t target) error {
 	// Billing refusing the account means planning starts nothing; the
 	// request is answered now.
 	if err := e.execution.AdmitCold(ctx, uuid.UUID(t.workload.workspace), t.release.spec); err != nil {
 		return err //nolint:wrapcheck // the typed refusal reaches fail
 	}
-	release := t.release.id
-	failures, err := e.execution.ReleaseFailures(ctx, []uuid.UUID{release})
-	if err != nil {
+	held, err := e.execution.RetryStart(ctx, t.release.id)
+	switch {
+	case err != nil:
 		return err
-	}
-	f, failed := failures[release]
-	if !failed {
+	case held == nil:
 		return nil
+	case held.Kind == execution.FailureLoadError:
+		return &releaseFailedError{reason: "the handler failed to load: " + held.Message}
 	}
-	if f.LoadError != "" {
-		return &releaseFailedError{reason: "the handler failed to load: " + f.LoadError}
-	}
-	return &releaseFailedError{reason: fmt.Sprintf("the container failed to start %d times", f.StartFailures)}
+	return &releaseFailedError{reason: "the container failed to start: " + held.Message}
 }

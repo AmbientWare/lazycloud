@@ -101,3 +101,85 @@ message EndTraceResponse {
   // none of its bytes and every read reached the trace.
   bool complete = 2;
 }
+
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+service DiskSources {
+  // GrantDisk records the credential the disk's frames are read with,
+  // replacing the disk's current one unless that expires later.
+  rpc GrantDisk(GrantDiskRequest) returns (GrantDiskResponse);
+  // ServeDisk serves a generation and returns its file. Serving a served
+  // generation again returns the same file.
+  rpc ServeDisk(ServeDiskRequest) returns (ServeDiskResponse);
+  // ReleaseDisk stops serving every generation of the disk but keep, 0 for
+  // none. A file still open keeps reading.
+  rpc ReleaseDisk(ReleaseDiskRequest) returns (ReleaseDiskResponse);
+  // DiskReads returns the frames the disk read: its start trace and those
+  // the cache holds now.
+  rpc DiskReads(DiskReadsRequest) returns (DiskReadsResponse);
+}
+
+// DiskGrant reads the objects under disks/<disk id>/ of one bucket.
+message DiskGrant {
+  string endpoint = 1;
+  string region = 2;
+  string bucket = 3;
+  bool force_path_style = 4;
+  string access_key_id = 5;
+  string secret_access_key = 6;
+  string session_token = 7;
+  google.protobuf.Timestamp expires_at = 8;
+}
+
+message GrantDiskRequest {
+  string disk_id = 1;
+  DiskGrant grant = 2;
+}
+
+message GrantDiskResponse {}
+
+message ServeDiskRequest {
+  string disk_id = 1;
+  int64 generation = 2;
+  // The sha256 of the generation's stored DiskIndex.
+  string index_sha256 = 3;
+  // The disk engine's copy of the index. A generation not yet served reads
+  // it there, or when it is missing reads the stored index through the
+  // disk's grant and writes it there.
+  string index_path = 4;
+  // Starts the disk's start trace and fetches the index's start_frames,
+  // then its recent_frames, in the background, bounded by the cache's size
+  // and a time limit. An attach sets it.
+  bool prefetch = 5;
+  // A directory of frames, each named by the hex sha256 of its bytes, on
+  // the cache's volume, which the snapshotter moves into its cache before
+  // the call returns, as a publish leaves the frames it stored.
+  string frames_dir = 6;
+}
+
+message ServeDiskResponse {
+  // The read-only file holding the generation's bytes.
+  string path = 1;
+}
+
+message ReleaseDiskRequest {
+  string disk_id = 1;
+  int64 keep = 2;
+}
+
+message ReleaseDiskResponse {}
+
+message DiskReadsRequest {
+  string disk_id = 1;
+}
+
+message DiskReadsResponse {
+  // The frames read in the first minute after the latest serve that
+  // prefetched, in order of first read; empty until that minute has passed.
+  repeated uint32 start_frames = 1;
+  // The newest served generation's frames the cache holds, most recently
+  // used first, at most as many as a prefetch fetches.
+  repeated uint32 recent_frames = 2;
+}

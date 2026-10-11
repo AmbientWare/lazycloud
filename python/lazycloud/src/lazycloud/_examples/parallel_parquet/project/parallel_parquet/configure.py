@@ -13,10 +13,6 @@ from .app import CONFIG
 
 
 def configure() -> None:
-    if not CONFIG.access_key_secret or not CONFIG.secret_key_secret:
-        raise ValueError(
-            "Set both LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET and LAZYCLOUD_PARQUET_SECRET_KEY_SECRET"
-        )
     values = {
         CONFIG.access_key_secret: os.environ["PARQUET_S3_ACCESS_KEY_ID"],
         CONFIG.secret_key_secret: os.environ["PARQUET_S3_SECRET_ACCESS_KEY"],

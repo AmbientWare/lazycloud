@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -35,8 +36,20 @@ func (c Config) Validate() error {
 	if c.Workspaces.Provider == ProviderAWS && c.Workspaces.RoleARN == "" {
 		return errors.New("AWS workspace buckets need the role host credentials are issued for")
 	}
+	if c.Workspaces.Provider != "" && !accountPattern.MatchString(c.Workspaces.AccountID) {
+		return errors.New("workspace buckets need the platform's 12-digit account id, which names them")
+	}
+	if c.Workspaces.Prefix != "" && !prefixPattern.MatchString(c.Workspaces.Prefix) {
+		return fmt.Errorf("the workspace bucket prefix %q must be up to %d lowercase letters, digits and hyphens, starting with a letter or digit", c.Workspaces.Prefix, maxPrefix)
+	}
 	return nil
 }
+
+var (
+	accountPattern = regexp.MustCompile(`^[0-9]{12}$`)
+	// prefixPattern is the connection template's BucketPrefix pattern.
+	prefixPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,23}$`)
+)
 
 // credentialProvider is the static key pair when cfg has one, and
 // otherwise the AWS default credential chain: environment, shared config,

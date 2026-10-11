@@ -21,6 +21,8 @@ type Capacity struct {
 	MemoryBytes int64
 	GPUType     string
 	GPUCount    int
+	// DiskSlots is how many disks the host holds at once.
+	DiskSlots int
 }
 
 // HostReport is what a host states about itself when it enrolls.
@@ -179,6 +181,7 @@ func (c *Compute) OpenSession(ctx context.Context, host HostID, open SessionOpen
 			AgentUpdatable: open.AgentUpdatable, AgentRejectedVersion: open.AgentRejected,
 			CpuMillis: open.Capacity.CPUMillis, MemoryBytes: open.Capacity.MemoryBytes,
 			GpuType: open.Capacity.GPUType, GpuCount: int32(open.Capacity.GPUCount), //nolint:gosec // GPU counts are small.
+			DiskSlots: int32(open.Capacity.DiskSlots), //nolint:gosec // Bounded by the data volume.
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnknownHost

@@ -34,6 +34,8 @@ DEFAULT_BUCKET = "lazycloud-examples"
 DEFAULT_REGION = "us-east-1"
 DEFAULT_INPUT_PREFIX = "examples/parallel-parquet/input"
 DEFAULT_OUTPUT_KEY = "examples/parallel-parquet/output/summary.json"
+DEFAULT_ACCESS_KEY_SECRET = "PARQUET_S3_ACCESS_KEY_ID"
+DEFAULT_SECRET_KEY_SECRET = "PARQUET_S3_SECRET_ACCESS_KEY"
 
 BUCKET_ENV = "LAZYCLOUD_PARQUET_BUCKET"
 REGION_ENV = "LAZYCLOUD_PARQUET_REGION"
@@ -104,9 +106,9 @@ class ParquetExampleConfig:
     region: str
     input_prefix: str
     output_key: str
-    endpoint: str = ""
-    access_key_secret: str = ""
-    secret_key_secret: str = ""
+    endpoint: str
+    access_key_secret: str
+    secret_key_secret: str
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> ParquetExampleConfig:
@@ -127,17 +129,13 @@ class ParquetExampleConfig:
 
         endpoint = validate_endpoint(values.get(ENDPOINT_ENV, ""))
         access_key_secret = validate_secret_name(
-            values.get(ACCESS_KEY_SECRET_ENV, ""),
+            values.get(ACCESS_KEY_SECRET_ENV, DEFAULT_ACCESS_KEY_SECRET),
             field="access-key secret",
         )
         secret_key_secret = validate_secret_name(
-            values.get(SECRET_KEY_SECRET_ENV, ""),
+            values.get(SECRET_KEY_SECRET_ENV, DEFAULT_SECRET_KEY_SECRET),
             field="secret-key secret",
         )
-        if bool(access_key_secret) != bool(secret_key_secret):
-            raise ValueError(
-                "access-key and secret-key secret names must both be set or both be omitted"
-            )
         return cls(
             bucket=bucket,
             region=region,
@@ -154,12 +152,11 @@ class ParquetExampleConfig:
             REGION_ENV: self.region,
             INPUT_PREFIX_ENV: self.input_prefix,
             OUTPUT_KEY_ENV: self.output_key,
+            ACCESS_KEY_SECRET_ENV: self.access_key_secret,
+            SECRET_KEY_SECRET_ENV: self.secret_key_secret,
         }
         if self.endpoint:
             values[ENDPOINT_ENV] = self.endpoint
-        if self.access_key_secret:
-            values[ACCESS_KEY_SECRET_ENV] = self.access_key_secret
-            values[SECRET_KEY_SECRET_ENV] = self.secret_key_secret
         return values
 
 
@@ -207,8 +204,6 @@ def validate_endpoint(value: str) -> str:
 
 
 def validate_secret_name(value: str, *, field: str) -> str:
-    if not value:
-        return ""
     if value != value.strip() or _SECRET_NAME_PATTERN.fullmatch(value) is None:
         raise ValueError(f"{field} must be an uppercase environment-style name")
     return value
@@ -247,8 +242,8 @@ data_bucket = CloudBucket(
         region=CONFIG.region,
         endpoint=CONFIG.endpoint or None,
         force_path_style=bool(CONFIG.endpoint),
-        access_key=CONFIG.access_key_secret or None,
-        secret_key=CONFIG.secret_key_secret or None,
+        access_key=CONFIG.access_key_secret,
+        secret_key=CONFIG.secret_key_secret,
     ),
 )
 parquet_image = Image(

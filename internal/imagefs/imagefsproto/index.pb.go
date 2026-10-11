@@ -337,6 +337,103 @@ func (x *Entry) GetSize() int64 {
 	return 0
 }
 
+// DiskIndex is one published generation of a durable disk: its size and
+// the table of its frames, each the stored copy of 4 MiB of the disk.
+//
+// A stored disk index is the 4 bytes "LCDX", the format version as a 4-byte
+// big-endian unsigned integer, then this message encoded and compressed as
+// one zstd frame, versioned as Index is.
+//
+// Frame i holds the disk's bytes [i*4 MiB, (i+1)*4 MiB); only the last frame
+// is shorter. A frame of zeros is stored nowhere. Every other frame is one
+// zstd frame of its bytes stored once per disk at
+// disks/<disk id>/frames/<hex sha256 of its uncompressed bytes>, which every
+// generation naming it shares. A generation is complete: reading it needs no
+// other generation.
+type DiskIndex struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Bytes of the disk, a multiple of 4096.
+	Size int64 `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	// The sha256 of each frame's uncompressed bytes, 32 bytes, or empty for a
+	// frame of zeros.
+	FrameDigests [][]byte `protobuf:"bytes,2,rep,name=frame_digests,json=frameDigests,proto3" json:"frame_digests,omitempty"`
+	// Compressed bytes of each stored frame, 0 for a frame of zeros.
+	FrameSizes []int64 `protobuf:"varint,3,rep,packed,name=frame_sizes,json=frameSizes,proto3" json:"frame_sizes,omitempty"`
+	// Frames the disk read in its first minute after it was last attached, in
+	// order of first read. A host prefetches them first.
+	StartFrames []uint32 `protobuf:"varint,4,rep,packed,name=start_frames,json=startFrames,proto3" json:"start_frames,omitempty"`
+	// Frames the host's cache held for the disk when it last stopped, most
+	// recently read first. A host prefetches them after start_frames.
+	RecentFrames  []uint32 `protobuf:"varint,5,rep,packed,name=recent_frames,json=recentFrames,proto3" json:"recent_frames,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiskIndex) Reset() {
+	*x = DiskIndex{}
+	mi := &file_imagefs_v1_index_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiskIndex) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiskIndex) ProtoMessage() {}
+
+func (x *DiskIndex) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_index_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiskIndex.ProtoReflect.Descriptor instead.
+func (*DiskIndex) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_index_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *DiskIndex) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *DiskIndex) GetFrameDigests() [][]byte {
+	if x != nil {
+		return x.FrameDigests
+	}
+	return nil
+}
+
+func (x *DiskIndex) GetFrameSizes() []int64 {
+	if x != nil {
+		return x.FrameSizes
+	}
+	return nil
+}
+
+func (x *DiskIndex) GetStartFrames() []uint32 {
+	if x != nil {
+		return x.StartFrames
+	}
+	return nil
+}
+
+func (x *DiskIndex) GetRecentFrames() []uint32 {
+	if x != nil {
+		return x.RecentFrames
+	}
+	return nil
+}
+
 var File_imagefs_v1_index_proto protoreflect.FileDescriptor
 
 const file_imagefs_v1_index_proto_rawDesc = "" +
@@ -369,7 +466,14 @@ const file_imagefs_v1_index_proto_rawDesc = "" +
 	"\x04size\x18\x0f \x01(\x03R\x04size\x1a9\n" +
 	"\vXattrsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01*\xd9\x01\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xad\x01\n" +
+	"\tDiskIndex\x12\x12\n" +
+	"\x04size\x18\x01 \x01(\x03R\x04size\x12#\n" +
+	"\rframe_digests\x18\x02 \x03(\fR\fframeDigests\x12\x1f\n" +
+	"\vframe_sizes\x18\x03 \x03(\x03R\n" +
+	"frameSizes\x12!\n" +
+	"\fstart_frames\x18\x04 \x03(\rR\vstartFrames\x12#\n" +
+	"\rrecent_frames\x18\x05 \x03(\rR\frecentFrames*\xd9\x01\n" +
 	"\tEntryType\x12\x1a\n" +
 	"\x16ENTRY_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ENTRY_TYPE_REGULAR\x10\x01\x12\x18\n" +
@@ -393,17 +497,18 @@ func file_imagefs_v1_index_proto_rawDescGZIP() []byte {
 }
 
 var file_imagefs_v1_index_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_imagefs_v1_index_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_imagefs_v1_index_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_imagefs_v1_index_proto_goTypes = []any{
-	(EntryType)(0), // 0: lazycloud.imagefs.v1.EntryType
-	(*Index)(nil),  // 1: lazycloud.imagefs.v1.Index
-	(*Entry)(nil),  // 2: lazycloud.imagefs.v1.Entry
-	nil,            // 3: lazycloud.imagefs.v1.Entry.XattrsEntry
+	(EntryType)(0),    // 0: lazycloud.imagefs.v1.EntryType
+	(*Index)(nil),     // 1: lazycloud.imagefs.v1.Index
+	(*Entry)(nil),     // 2: lazycloud.imagefs.v1.Entry
+	(*DiskIndex)(nil), // 3: lazycloud.imagefs.v1.DiskIndex
+	nil,               // 4: lazycloud.imagefs.v1.Entry.XattrsEntry
 }
 var file_imagefs_v1_index_proto_depIdxs = []int32{
 	2, // 0: lazycloud.imagefs.v1.Index.entries:type_name -> lazycloud.imagefs.v1.Entry
 	0, // 1: lazycloud.imagefs.v1.Entry.type:type_name -> lazycloud.imagefs.v1.EntryType
-	3, // 2: lazycloud.imagefs.v1.Entry.xattrs:type_name -> lazycloud.imagefs.v1.Entry.XattrsEntry
+	4, // 2: lazycloud.imagefs.v1.Entry.xattrs:type_name -> lazycloud.imagefs.v1.Entry.XattrsEntry
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
@@ -422,7 +527,7 @@ func file_imagefs_v1_index_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_imagefs_v1_index_proto_rawDesc), len(file_imagefs_v1_index_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

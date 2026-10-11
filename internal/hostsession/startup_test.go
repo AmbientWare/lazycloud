@@ -52,7 +52,7 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := storage.NewStorage(pool, storagetest.Config(t))
+	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	im := images.NewImages(pool, e, secrets.NewSecrets(pool, key), store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/library/python:{version}-slim",
 	})

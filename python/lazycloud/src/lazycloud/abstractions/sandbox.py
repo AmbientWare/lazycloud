@@ -58,7 +58,7 @@ from lazycloud.contracts.api import (
 from lazycloud.contracts.api import Sandbox as SandboxRow
 from lazycloud.contracts.api import SandboxStats as SandboxStatsResponse
 from lazycloud.control import ControlClientConfigMixin, workloads_client
-from lazycloud.exceptions import SdkError, UnsupportedFeatureError
+from lazycloud.exceptions import SdkError
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.session.task import retry_transient
 from lazycloud.terminal import Terminal
@@ -1603,17 +1603,6 @@ class Sandbox(ControlClientConfigMixin):
         """A sandbox runs its command, not a handler."""
         return None
 
-    def unsupported_options(self) -> builtins.list[str]:
-        """Declared options the platform cannot run yet, by name."""
-        from lazycloud.abstractions.pod import container_unsupported_options
-
-        return container_unsupported_options(self.volumes)
-
-    def require_supported(self) -> None:
-        unsupported = self.unsupported_options()
-        if unsupported:
-            raise UnsupportedFeatureError(f"sandbox {self.name}", unsupported)
-
     def workload_spec(
         self, *, handler: object = None, source_sha256: str, image: ImageBuildResult
     ) -> WorkloadSpec:
@@ -1621,7 +1610,6 @@ class Sandbox(ControlClientConfigMixin):
         from lazycloud.abstractions.pod import container_workload_spec
 
         del handler
-        self.require_supported()
         pod = PodSpec(kind=PodKind.sandbox, command=[CommandItem(item) for item in self.command])
         if self.ports:
             pod.ports = _sandbox_port_mapping(self.ports)

@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 // hibernationMemoryLimit is the RAM EC2 hibernates instances under.
@@ -23,6 +24,9 @@ type CatalogType struct {
 	// Hibernates is EC2's HibernationSupported for the type in every
 	// region it is sold in; RAM is under 150 GiB.
 	Hibernates bool
+	// InstanceStore is true for a type with NVMe instance store, which holds
+	// the host's disk copies in place of an EBS data volume.
+	InstanceStore bool
 	// prices are reviewed on-demand hourly USD micros in priceRegions;
 	// zero means EC2 does not sell the type in that region.
 	prices [4]int64
@@ -67,6 +71,37 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 		return rootVolumeGiB + (t.MemoryBytes+gib-1)/gib
 	}
 	return rootVolumeGiB
+}
+
+// Data volumes. A host keeps its frame cache and its disks' unpublished
+// writes on a volume of its own (deploy/ami/node-setup.sh mounts it at
+// hostproto.DataRoot): its type's instance store, or a gp3 volume at
+// baseline throughput holding the cache and a dirty budget per disk slot.
+// A type holds a disk per diskSlotCores cores, at least minDiskSlots.
+const (
+	diskSlotCores = 1
+	minDiskSlots  = 2
+)
+
+// DiskSlots is how many disks a host of t holds at once.
+func (t CatalogType) DiskSlots() int {
+	return max(minDiskSlots, t.Topology.Cores/diskSlotCores)
+}
+
+// DataVolumeGiB is the EBS data volume a host of t launches with; none for
+// a type whose instance store serves as it.
+func (t CatalogType) DataVolumeGiB() int64 {
+	if t.InstanceStore {
+		return 0
+	}
+	return (hostproto.FrameCacheBytes + int64(t.DiskSlots())*hostproto.DiskDirtyBytes) / gib
+}
+
+// volumesMicros is an hour of a host of t's EBS volumes: the root at the
+// throughput priced for it, with room for a hibernation image when asked,
+// and the data volume at baseline.
+func (t CatalogType) volumesMicros(region string, hibernate, reserve bool) int64 {
+	return rootDiskMicros(region, t.RootGiB(hibernate)+t.DataVolumeGiB(), t.PricedMiBps(reserve))
 }
 
 // twoPerCore is the topology of vcpus hardware threads, two on each core.
@@ -179,7 +214,11 @@ func FleetCatalog() []CatalogType {
 		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
 	}
 	gpu := func(name string, vcpus int, memGiB int64, model string, cards int, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
+		// Every GPU type sold here has NVMe instance store.
+		return CatalogType{
+			Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards,
+			InstanceStore: true, prices: prices,
+		}
 	}
 	return []CatalogType{
 		cpuType("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),

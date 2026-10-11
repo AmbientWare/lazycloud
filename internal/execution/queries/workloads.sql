@@ -1,6 +1,7 @@
 -- name: InstanceRelease :one
 -- The release an instance runs, with its workload, in the workspace.
 select r.id, r.workload_id, w.kind, w.name, a.name as app_name, a.workspace_id, r.version, r.spec,
+       release_mounters(r.spec) as mounters,
        (w.desired_state <> 'deleted' and a.state = 'active' and ws.state = 'active')::bool as live
 from releases r
 join workloads w on w.id = r.workload_id
@@ -133,6 +134,7 @@ select r.id as release_id,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
+       release_mounters(r.spec) as mounters,
        greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
                 case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
            as gpu_count,
@@ -231,13 +233,6 @@ on conflict (workload_id) do update set replicas = excluded.replicas;
 -- A connection or Start asks for a container now.
 insert into pod_states (workload_id, woken_at, parked) values (@workload_id, now(), false)
 on conflict (workload_id) do update set woken_at = now(), parked = false;
-
--- name: RetryFailedRelease :exec
--- A start retries a release that stopped starting or failed to load. One
--- still backing off between failed starts keeps its count, so repeated
--- starts wait out the backoff.
-update releases set start_failures = 0, load_error = null
-where id = @id and (start_failures >= @start_failure_limit::int or load_error is not null);
 
 -- name: ParkPod :exec
 -- A stop overrides an earlier scale.

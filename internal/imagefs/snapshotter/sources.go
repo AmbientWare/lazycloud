@@ -17,49 +17,59 @@ import (
 // hundred.
 const maxGrantsPerCall = 4096
 
-// grant is where one layer's index and data objects are read until expires.
-type grant struct {
-	layer    imagefs.Digest
-	indexURL string
-	dataURL  string
-	expires  time.Time
+// layerURLs is where one layer's index and data objects are read.
+type layerURLs struct{ index, data string }
+
+// grants holds the newest grant of each layer or disk the agent granted
+// until it expires. It is memory only: after a restart reads fail until the
+// agent grants again, which it does before it starts a container or serves
+// a disk and before grants expire.
+type grants[K comparable, V any] struct {
+	mu    sync.Mutex
+	byKey map[K]expiring[V]
 }
 
-// grants holds the newest grant of each layer the agent granted. It is
-// memory only: after a restart reads fail until the agent grants again,
-// which it does before it starts a container and before grants expire.
-type grants struct {
-	mu      sync.Mutex
-	byLayer map[imagefs.Digest]grant
+type expiring[V any] struct {
+	value   V
+	expires time.Time
 }
 
-// lookup returns layer's grant if it has not expired.
-func (g *grants) lookup(layer imagefs.Digest) (grant, bool) {
+// lookup returns k's grant if it has not expired.
+func (g *grants[K, V]) lookup(k K) (V, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	current, ok := g.byLayer[layer]
+	current, ok := g.byKey[k]
 	if !ok || !time.Now().Before(current.expires) {
-		return grant{}, false
+		var none V
+		return none, false
 	}
-	return current, true
+	return current.value, true
 }
 
-// put records each grant unless its layer's grant expires later, and drops
-// expired grants.
-func (g *grants) put(next []grant) {
+// put records the grant value makes for k until expires, unless k's grant
+// expires later, and drops expired grants.
+func (g *grants[K, V]) put(k K, expires time.Time, value func() V) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
-	for layer, current := range g.byLayer {
+	for key, current := range g.byKey {
 		if !now.Before(current.expires) {
-			delete(g.byLayer, layer)
+			delete(g.byKey, key)
 		}
 	}
-	for _, n := range next {
-		if current, ok := g.byLayer[n.layer]; !ok || !current.expires.After(n.expires) {
-			g.byLayer[n.layer] = n
+	if current, ok := g.byKey[k]; !ok || !current.expires.After(expires) {
+		if g.byKey == nil {
+			g.byKey = map[K]expiring[V]{}
 		}
+		g.byKey[k] = expiring[V]{value: value(), expires: expires}
 	}
+}
+
+// drop forgets k's grant.
+func (g *grants[K, V]) drop(k K) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.byKey, k)
 }
 
 // layerSources serves LayerSources on the snapshotter's socket.
@@ -79,14 +89,14 @@ func (s layerSources) Grant(ctx context.Context, request *imagefsproto.GrantRequ
 	if err != nil {
 		return nil, err
 	}
-	next := make([]grant, len(layers))
 	for i, l := range request.GetLayers() {
-		next[i] = grant{layer: layers[i], indexURL: l.GetIndexUrl(), dataURL: l.GetDataUrl(), expires: l.GetExpiresAt().AsTime()}
-		if !httpURL(next[i].indexURL) || !httpURL(next[i].dataURL) || l.GetExpiresAt() == nil {
+		if !httpURL(l.GetIndexUrl()) || !httpURL(l.GetDataUrl()) || l.GetExpiresAt() == nil {
 			return nil, status.Errorf(codes.InvalidArgument, "layer %s needs absolute HTTP index and data URLs and an expiry", layers[i])
 		}
 	}
-	s.cache.grants.put(next)
+	for i, l := range request.GetLayers() {
+		s.cache.grants.put(layers[i], l.GetExpiresAt().AsTime(), func() layerURLs { return layerURLs{index: l.GetIndexUrl(), data: l.GetDataUrl()} })
+	}
 	// A refresh names no start and brings no new reader: every start grants
 	// its layers under its name first, and a layer already mounted when a
 	// trace begins leaves that trace incomplete.
@@ -115,7 +125,7 @@ func (s layerSources) Prefetch(ctx context.Context, request *imagefsproto.Prefet
 		if int(r.GetLayer()) >= len(layers) {
 			return nil, status.Errorf(codes.InvalidArgument, "read %d names layer %d of %d", i, r.GetLayer(), len(layers))
 		}
-		reads[i] = frameKey{layer: layers[r.GetLayer()], frame: int(r.GetFrame())}
+		reads[i] = frameKey{object: string(layers[r.GetLayer()]), frame: int(r.GetFrame())}
 	}
 	s.cache.traces.claim(request.GetName(), layers)
 	//nolint:contextcheck // a prefetch lives with the cache, not the call
