@@ -497,28 +497,41 @@ func (f *diskFile) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrO
 	return 0
 }
 
+// untraced is the handle of a file opened with O_NOATIME, as the disk
+// engine's publish opens it: its reads are not the disk's use.
+type untraced struct{}
+
 // Open serves reads directly: the disk engine's daemon caches what it
 // needs, and the frame cache holds the rest.
 func (f *diskFile) Open(_ context.Context, flags uint32) (gofs.FileHandle, uint32, syscall.Errno) {
 	if flags&(syscall.O_WRONLY|syscall.O_RDWR|syscall.O_TRUNC|syscall.O_APPEND) != 0 {
 		return nil, 0, syscall.EROFS
 	}
+	if flags&syscall.O_NOATIME != 0 {
+		return untraced{}, fuse.FOPEN_DIRECT_IO, 0
+	}
 	return nil, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // Read fills dest from off, frame by frame; a frame of zeros reads as
 // zeros. A read the store cannot serve fails whole with EIO, logged.
-func (f *diskFile) Read(ctx context.Context, _ gofs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (f *diskFile) Read(ctx context.Context, fh gofs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	g := f.gen
+	_, quiet := fh.(untraced)
 	dest = dest[:max(0, min(int64(len(dest)), g.index.Size-off))]
 	for done := 0; done < len(dest); {
 		pos := off + int64(done)
 		frame, within := int(pos/imagefs.FrameSize), pos%imagefs.FrameSize
 		part := dest[done:min(len(dest), done+int(imagefs.FrameSize-within))]
-		g.disk.record(uint32(frame)) //nolint:gosec // frames are below maxDiskFrames
 		if g.index.Frames[frame].Zero() {
 			clear(part)
-		} else if _, _, err := g.cache.read(g, frame, part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
+			done += len(part)
+			continue
+		}
+		if !quiet {
+			g.disk.record(uint32(frame)) //nolint:gosec // frames are below maxDiskFrames
+		}
+		if _, _, err := g.cache.read(g, frame, part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
 			g.cache.log.ErrorContext(ctx, "disk read failed", "disk_id", g.disk.id, "generation", g.generation, "offset", pos, "error", err)
 			return nil, syscall.EIO
 		}

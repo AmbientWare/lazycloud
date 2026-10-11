@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -294,7 +295,9 @@ func storeFrames(ctx context.Context, p diskPaths, objects *objectStore, sealed 
 	}
 	var baseFile *os.File
 	if basePath != "" {
-		if baseFile, err = os.Open(basePath); err != nil { //nolint:gosec // The snapshotter's file.
+		// O_NOATIME keeps these reads out of the disk's start trace and
+		// recent frames.
+		if baseFile, err = os.OpenFile(basePath, os.O_RDONLY|syscall.O_NOATIME, 0); err != nil { //nolint:gosec // The snapshotter's file.
 			return 0, fmt.Errorf("open the base generation: %w", err)
 		}
 		defer func() { _ = baseFile.Close() }() // Read only.

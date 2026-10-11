@@ -199,6 +199,39 @@ func TestDiskServePrefetchesAndTraces(t *testing.T) {
 	}
 }
 
+// Only reads of stored frames through the disk's own opens count: a frame of
+// zeros, or a read through a file opened with O_NOATIME, as a publish opens
+// it, is neither in the start trace nor recent.
+func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
+	ts := newTestStore(t)
+	frames := [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize), nil, bytes.Repeat([]byte{2}, imagefs.FrameSize)}
+	stored := ts.disk(t, "d4", frames, nil)
+	d := serveDisks(t, &countingTransport{}, 64*imagefs.FrameSize)
+	d.grantTest(t, ts, stored.id)
+	g, err := d.serve(t.Context(), &imagefsproto.ServeDiskRequest{DiskId: stored.id, Generation: 1, IndexKey: stored.key, IndexSha256: stored.sum, Prefetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readFile(t, d.path(g), imagefs.FrameSize, 10)
+	quiet, err := os.OpenFile(d.path(g), os.O_RDONLY|unix.O_NOATIME, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := quiet.ReadAt(make([]byte, 10), 2*imagefs.FrameSize); err != nil {
+		t.Fatal(err)
+	}
+	_ = quiet.Close()
+	readFile(t, d.path(g), 0, 10)
+	k := d.lookup(stored.id)
+	k.mu.Lock()
+	k.traceStart = k.traceStart.Add(-diskTraceWindow)
+	k.mu.Unlock()
+	reads, err := d.reads(stored.id)
+	if err != nil || !slices.Equal(reads.GetStartFrames(), []uint32{0}) || !slices.Equal(reads.GetRecentFrames(), []uint32{0}) {
+		t.Fatalf("the disk reports %+v, %v; want frame 0 alone", reads, err)
+	}
+}
+
 // delayedTransport counts requests and holds each for delay first.
 type delayedTransport struct {
 	countingTransport
