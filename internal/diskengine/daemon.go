@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 const (
@@ -22,9 +24,6 @@ const (
 	qmpTimeout = 60 * time.Second
 	// daemonStopTimeout bounds waiting for a daemon to exit after quit.
 	daemonStopTimeout = 30 * time.Second
-	// filesystemBlockBytes is the ext4 block size formatExt4 pins. Block 0
-	// holds the superblock and nothing else a workload writes.
-	filesystemBlockBytes = 4096
 )
 
 // qmpClient speaks to one daemon's monitor. The monitor serves one client at
@@ -309,7 +308,8 @@ func headWritten(ctx context.Context, client *qmpClient, node string) (bool, err
 	}
 	for _, entry := range stats {
 		if entry.NodeName == node {
-			return entry.Stats.WrHighestOffset > filesystemBlockBytes, nil
+			// Block 0 holds the superblock and nothing else a workload writes.
+			return entry.Stats.WrHighestOffset > hostproto.DiskBlockBytes, nil
 		}
 	}
 	return false, fmt.Errorf("qemu-storage-daemon has no node %s", node)

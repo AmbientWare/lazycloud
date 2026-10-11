@@ -2,7 +2,7 @@ package diskengine
 
 import (
 	"context"
-	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,7 +52,7 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := expired.put(t.Context(), "present", []byte("x")); !errors.Is(err, ErrCredentialsExpired) {
+	if err := expired.put(t.Context(), "present", []byte("x")); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired credentials returned %v", err)
 	}
 }

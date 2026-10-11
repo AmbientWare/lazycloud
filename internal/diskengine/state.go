@@ -141,7 +141,6 @@ type diskState struct {
 	Pending    *pendingPublish `json:"pending_publish,omitempty"`
 	Collect    *collection     `json:"collect,omitempty"`
 	Attachment *attachment     `json:"attachment,omitempty"`
-	LastUsedAt time.Time       `json:"last_used_at"`
 }
 
 func (s *diskState) head() layer { return s.Layers[len(s.Layers)-1] }

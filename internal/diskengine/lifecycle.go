@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -352,10 +353,10 @@ func (e *Engine) List(ctx context.Context) ([]LocalDisk, error) {
 	}
 	disks := []LocalDisk{}
 	for _, entry := range entries {
-		if !entry.IsDir() || !diskIDPattern.MatchString(entry.Name()) {
+		if !entry.IsDir() || !imagefs.DiskID(entry.Name()) {
 			continue
 		}
-		disk, err := describeDisk(ctx, diskPaths{root: e.root, id: entry.Name()})
+		disk, err := describeDisk(diskPaths{root: e.root, id: entry.Name()})
 		if err != nil {
 			return nil, fmt.Errorf("describe disk %s: %w", entry.Name(), err)
 		}
@@ -364,62 +365,10 @@ func (e *Engine) List(ctx context.Context) ([]LocalDisk, error) {
 	return disks, nil
 }
 
-func describeDisk(ctx context.Context, p diskPaths) (LocalDisk, error) {
-	disk := LocalDisk{DiskID: p.id}
-	local, err := allocatedBytes(p.dir())
-	if err != nil {
-		return disk, err
-	}
-	disk.LocalBytes = local
+func describeDisk(p diskPaths) (LocalDisk, error) {
 	state, err := loadState(p)
 	if err != nil {
-		return disk, err
+		return LocalDisk{}, err
 	}
-	if state == nil {
-		info, err := os.Stat(p.dir())
-		if err != nil {
-			return disk, fmt.Errorf("stat %s: %w", p.dir(), err)
-		}
-		disk.LastUsedAt = info.ModTime().UTC()
-		return disk, nil
-	}
-	disk.Attached = state.Attachment != nil
-	disk.LastUsedAt = state.LastUsedAt
-	dirty, err := headDirty(ctx, p, state)
-	if err != nil {
-		return disk, err
-	}
-	disk.Unpublished = len(state.sealed()) > 0 || state.Pending != nil || dirty
-	return disk, nil
-}
-
-// headDirty reports whether the head may hold writes no seal has taken. A
-// head the engine did not create empty might; a fresh one has writes only if
-// its running daemon saw them. The daemon's monitor serves one client at a
-// time, so a disk another call is working on is reported dirty rather than
-// waited for.
-func headDirty(ctx context.Context, p diskPaths, state *diskState) (bool, error) {
-	if !state.HeadFresh {
-		return true, nil
-	}
-	if state.Attachment == nil {
-		return false, nil
-	}
-	lock, err := tryLockFile(p.lockPath())
-	if err != nil || lock == nil {
-		return true, err
-	}
-	defer lock.release()
-	// Reload under the lock, because reading the daemon may correct the state.
-	current, err := requireState(p)
-	if err != nil {
-		return false, err
-	}
-	if current.Attachment == nil || !current.HeadFresh {
-		return !current.HeadFresh, nil
-	}
-	if !daemonAlive(p, current.Attachment.DaemonPID) {
-		return true, nil
-	}
-	return daemonHeadWritten(ctx, p, current)
+	return LocalDisk{DiskID: p.id, Attached: state != nil && state.Attachment != nil}, nil
 }

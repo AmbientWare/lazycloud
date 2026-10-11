@@ -206,7 +206,7 @@ func requireSameDisk(t *testing.T, got, want []byte) {
 // attachUnmounted attaches as Attach does but connects no NBD device; the
 // test reads and writes the daemon's export. The daemon is stopped when the
 // test ends.
-func attachUnmounted(t *testing.T, h *host, store Store, req AttachRequest) (diskPaths, *diskState, AttachResult) {
+func attachUnmounted(t *testing.T, h *host, store Store, req AttachRequest) (diskPaths, *diskState) {
 	t.Helper()
 	h.grant(t, store, req.DiskID)
 	p, err := h.engine.paths(req.DiskID)
@@ -217,7 +217,7 @@ func attachUnmounted(t *testing.T, h *host, store Store, req AttachRequest) (dis
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, result, err := h.engine.start(t.Context(), p, state, req, "/unused")
+	state, err = h.engine.start(t.Context(), p, state, req, "/unused")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func attachUnmounted(t *testing.T, h *host, store Store, req AttachRequest) (dis
 			t.Error(err)
 		}
 	})
-	return p, state, result
+	return p, state
 }
 
 // sealUnmounted seals as Seal does, with nothing mounted to freeze.

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
@@ -23,105 +23,102 @@ import (
 // same base, with any writes the last holder here left in it, and is
 // otherwise replaced by an empty head. Attaching a disk already healthy at
 // the same mountpoint and size succeeds without change. A disk grows to
-// SizeBytes but never shrinks.
-func (e *Engine) Attach(ctx context.Context, req AttachRequest) (AttachResult, error) {
+// SizeBytes but never shrinks. The host must pass Check.
+func (e *Engine) Attach(ctx context.Context, req AttachRequest) error {
 	p, err := e.paths(req.DiskID)
 	if err != nil {
-		return AttachResult{}, err
+		return err
 	}
-	if req.SizeBytes <= 0 || req.SizeBytes%filesystemBlockBytes != 0 {
-		return AttachResult{}, fmt.Errorf("%w: size must be a positive multiple of %d, got %d", ErrInvalid, filesystemBlockBytes, req.SizeBytes)
+	if req.SizeBytes <= 0 || req.SizeBytes%hostproto.DiskBlockBytes != 0 {
+		return fmt.Errorf("%w: size must be a positive multiple of %d, got %d", ErrInvalid, hostproto.DiskBlockBytes, req.SizeBytes)
 	}
 	if !filepath.IsAbs(req.Mountpoint) {
-		return AttachResult{}, fmt.Errorf("%w: mountpoint must be absolute, got %q", ErrInvalid, req.Mountpoint)
+		return fmt.Errorf("%w: mountpoint must be absolute, got %q", ErrInvalid, req.Mountpoint)
 	}
 	if b := req.Base; b != nil && (b.Generation <= 0 || !sha256Pattern(b.IndexSHA256)) {
-		return AttachResult{}, fmt.Errorf("%w: generation %d needs a positive number and a sha256 index digest", ErrInvalid, b.Generation)
+		return fmt.Errorf("%w: generation %d needs a positive number and a sha256 index digest", ErrInvalid, b.Generation)
 	}
 	if err := p.checkSocketPaths(); err != nil {
-		return AttachResult{}, err
-	}
-	if err := Check(); err != nil {
-		return AttachResult{}, err
+		return err
 	}
 	target := filepath.Clean(req.Mountpoint)
 
 	lock, err := lockDisk(ctx, p)
 	if err != nil {
-		return AttachResult{}, err
+		return err
 	}
 	defer lock.release()
 
 	state, err := loadState(p)
 	if err != nil {
-		return AttachResult{}, err
+		return err
 	}
 	if state != nil && state.Attachment != nil {
 		if attachmentLost(p, state) == nil {
 			if state.Attachment.Mountpoint != target {
-				return AttachResult{}, fmt.Errorf("%w: disk %s is already attached at %s", ErrInvalid, p.id, state.Attachment.Mountpoint)
+				return fmt.Errorf("%w: disk %s is already attached at %s", ErrInvalid, p.id, state.Attachment.Mountpoint)
 			}
 			if state.SizeBytes != req.SizeBytes {
-				return AttachResult{}, fmt.Errorf("%w: disk %s is attached at %d bytes; detach it before attaching at %d",
+				return fmt.Errorf("%w: disk %s is attached at %d bytes; detach it before attaching at %d",
 					ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
 			}
-			return AttachResult{Generation: generationOf(state.Base), Reused: true}, nil
+			return nil
 		}
 		// An agent that died left this attachment; its daemon or device is gone.
 		if err := teardown(ctx, p, state); err != nil {
-			return AttachResult{}, fmt.Errorf("release the previous attachment: %w", err)
+			return fmt.Errorf("release the previous attachment: %w", err)
 		}
 	}
 	if err := stopUnrecordedDaemon(ctx, p); err != nil {
-		return AttachResult{}, err
+		return err
 	}
 
-	state, result, err := e.start(ctx, p, state, req, target)
+	state, err = e.start(ctx, p, state, req, target)
 	if err != nil {
-		return AttachResult{}, err
+		return err
 	}
-	result.Formatted = state.Unformatted
+	formats := state.Unformatted
 	err = telemetry.Step(ctx, "diskengine.connect_and_mount", func(ctx context.Context) error { return connectAndMount(ctx, p, state) },
-		attribute.Bool("lazycloud.format", state.Unformatted))
+		attribute.Bool("lazycloud.format", formats))
 	if err != nil {
-		return AttachResult{}, errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
+		return errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
 	}
-	e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", result.Generation,
-		"reused", result.Reused, "formatted", result.Formatted, "device", state.Attachment.Device)
-	return result, nil
+	e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", generationOf(state.Base),
+		"formatted", formats, "device", state.Attachment.Device)
+	return nil
 }
 
 // start makes the local stack sit on req.Base, has the snapshotter serve
 // req.Base, prefetching, and starts the daemon serving both. A stack
 // already on req.Base is kept; any other is replaced by an empty head.
-func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req AttachRequest, target string) (*diskState, AttachResult, error) {
+func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req AttachRequest, target string) (*diskState, error) {
 	if state != nil && state.Pending != nil && req.Base != nil && state.Pending.generation() == *req.Base {
 		// The control plane recorded the upload; the confirmation never arrived.
 		held, err := state.commitPending(p)
 		if err != nil {
-			return nil, AttachResult{}, err
+			return nil, err
 		}
 		if err := saveState(p, state); err != nil {
-			return nil, AttachResult{}, err
+			return nil, err
 		}
 		for _, l := range held {
 			if err := removeIfExists(p.layerPath(l)); err != nil {
-				return nil, AttachResult{}, err
+				return nil, err
 			}
 		}
 	}
 	reuse, err := reusable(p, state, req.Base)
 	if err != nil {
-		return nil, AttachResult{}, err
+		return nil, err
 	}
 	if !reuse {
 		// Writes a stale local copy holds were fenced off: the disk moved on
 		// without them.
 		if err := os.RemoveAll(p.dir()); err != nil {
-			return nil, AttachResult{}, fmt.Errorf("remove stale local copy: %w", err)
+			return nil, fmt.Errorf("remove stale local copy: %w", err)
 		}
 		if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
-			return nil, AttachResult{}, fmt.Errorf("create layer directory: %w", err)
+			return nil, fmt.Errorf("create layer directory: %w", err)
 		}
 	}
 	basePath, baseSize := "", int64(0)
@@ -141,47 +138,46 @@ func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req A
 			return nil
 		}, attribute.Int64("lazycloud.generation", req.Base.Generation))
 		if err != nil {
-			return nil, AttachResult{}, err
+			return nil, err
 		}
 	}
-	state, result, err := prepare(ctx, p, state, reuse, req, baseSize)
-	if err != nil {
-		return nil, AttachResult{}, err
+	if reuse {
+		err = growKept(ctx, p, state, req.SizeBytes)
+	} else {
+		state, err = newStack(ctx, p, req, baseSize)
 	}
-	err = telemetry.Step(ctx, "diskengine.start_daemon", func(ctx context.Context) error { return startAttachment(ctx, p, state, target, basePath) })
-	return state, result, err
+	if err != nil {
+		return nil, err
+	}
+	return state, telemetry.Step(ctx, "diskengine.start_daemon", func(ctx context.Context) error { return startAttachment(ctx, p, state, target, basePath) })
 }
 
-// prepare grows a kept stack to req's size, or records a new one with an
-// empty head. A base of baseSize bytes under a larger disk leaves the
-// filesystem to grow once mounted.
-func prepare(ctx context.Context, p diskPaths, state *diskState, reuse bool, req AttachRequest, baseSize int64) (*diskState, AttachResult, error) {
-	result := AttachResult{Generation: generationOf(req.Base), Reused: reuse}
-	if reuse {
-		if state.SizeBytes > req.SizeBytes {
-			return nil, AttachResult{}, fmt.Errorf("%w: disk %s is %d bytes and cannot shrink to %d", ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
-		}
-		if state.SizeBytes < req.SizeBytes {
-			if err := growHead(ctx, p, state, req.SizeBytes); err != nil {
-				return nil, AttachResult{}, err
-			}
-		}
-		return state, result, nil
+// growKept grows a kept stack to size bytes.
+func growKept(ctx context.Context, p diskPaths, state *diskState, size int64) error {
+	if state.SizeBytes > size {
+		return fmt.Errorf("%w: disk %s is %d bytes and cannot shrink to %d", ErrInvalid, p.id, state.SizeBytes, size)
 	}
+	if state.SizeBytes < size {
+		return growHead(ctx, p, state, size)
+	}
+	return nil
+}
+
+// newStack records a stack of one empty head on req.Base. A base of
+// baseSize bytes under a larger disk leaves the filesystem to grow once
+// mounted.
+func newStack(ctx context.Context, p diskPaths, req AttachRequest, baseSize int64) (*diskState, error) {
 	if baseSize > req.SizeBytes {
-		return nil, AttachResult{}, fmt.Errorf("%w: generation %d of disk %s is %d bytes and cannot shrink to %d", ErrInvalid, result.Generation, p.id, baseSize, req.SizeBytes)
+		return nil, fmt.Errorf("%w: generation %d of disk %s is %d bytes and cannot shrink to %d", ErrInvalid, generationOf(req.Base), p.id, baseSize, req.SizeBytes)
 	}
-	state = &diskState{DiskID: p.id, SizeBytes: req.SizeBytes, Base: req.Base, HeadFresh: true,
+	state := &diskState{DiskID: p.id, SizeBytes: req.SizeBytes, Base: req.Base, HeadFresh: true,
 		Unformatted: req.Base == nil, GrowFilesystem: req.Base != nil && baseSize < req.SizeBytes}
 	head := state.newLayer()
 	if err := createLayer(ctx, p.layerPath(head), req.SizeBytes); err != nil {
-		return nil, AttachResult{}, err
+		return nil, err
 	}
 	state.Layers = []layer{head}
-	if err := saveState(p, state); err != nil {
-		return nil, AttachResult{}, err
-	}
-	return state, result, nil
+	return state, saveState(p, state)
 }
 
 // generationOf is g's number, or 0 for no generation.
@@ -223,7 +219,6 @@ func startAttachment(ctx context.Context, p diskPaths, state *diskState, mountpo
 	}
 	a.DaemonPID = pid
 	state.Attachment = a
-	state.LastUsedAt = time.Now().UTC()
 	if err := saveState(p, state); err != nil {
 		return errors.Join(err, stopDaemon(context.WithoutCancel(ctx), p, pid))
 	}
@@ -355,6 +350,5 @@ func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 		state.HeadFresh = false
 	}
 	state.Attachment, state.Stalled = nil, false
-	state.LastUsedAt = time.Now().UTC()
 	return saveState(p, state)
 }

@@ -175,7 +175,7 @@ func (c *container) attachDisk(ctx context.Context, name string) (string, error)
 	if g := lease.GetGeneration(); g != nil {
 		request.Base = &diskengine.Generation{Generation: g.GetGeneration(), IndexSHA256: g.GetIndexSha256()}
 	}
-	if _, err := c.a.diskEngine.Attach(ctx, request); err != nil {
+	if err := c.a.diskEngine.Attach(ctx, request); err != nil {
 		return "", err //nolint:wrapcheck // The caller names the disk.
 	}
 	return request.Mountpoint, nil

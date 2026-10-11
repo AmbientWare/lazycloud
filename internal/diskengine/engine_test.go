@@ -41,9 +41,9 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 	first := newHost(t, 64*frame)
 	req := AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"}
 
-	p, state, attached := attachUnmounted(t, first, store, req)
-	if attached.Reused || !state.Unformatted {
-		t.Fatalf("a new disk attached as %+v", attached)
+	p, state := attachUnmounted(t, first, store, req)
+	if state.Base != nil || !state.Unformatted {
+		t.Fatalf("a new disk attached as %+v", state)
 	}
 	if sealUnmounted(t, p, state) {
 		t.Fatal("sealed a head nothing wrote")
@@ -136,9 +136,9 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 	second := newHost(t, 64*frame)
 	other := req
 	other.Base = baseOf(three)
-	q, _, restored := attachUnmounted(t, second, store, other)
-	if restored.Reused || restored.Generation != 3 {
-		t.Fatalf("attach on another host returned %+v", restored)
+	q, restored := attachUnmounted(t, second, store, other)
+	if restored.Base.Generation != 3 || restored.Unformatted {
+		t.Fatalf("attach on another host made %+v", restored)
 	}
 	// The prefetch had no start trace or recent frames to fetch.
 	before := second.store.requests.Load()
@@ -157,7 +157,7 @@ func TestEvictionNeverTouchesUnpublishedWrites(t *testing.T) {
 	diskID := uuid.NewString()
 	writer := newHost(t, 64*frame)
 	req := AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"}
-	p, state, _ := attachUnmounted(t, writer, store, req)
+	p, state := attachUnmounted(t, writer, store, req)
 	for i := range int64(16) {
 		writeExport(t, p, i*frame, frame, byte(0x10+i))
 	}
@@ -168,7 +168,7 @@ func TestEvictionNeverTouchesUnpublishedWrites(t *testing.T) {
 	// Two frames of cache for sixteen of base.
 	small := newHost(t, 2*frame)
 	req.Base = baseOf(base)
-	q, qstate, _ := attachUnmounted(t, small, store, req)
+	q, qstate := attachUnmounted(t, small, store, req)
 	writeExport(t, q, 3*frame, 4096, 0xee)
 	want := readExport(t, q)
 	for range 2 {
@@ -200,15 +200,11 @@ func TestAttachMountsAndRestores(t *testing.T) {
 	h.grant(t, store, diskID)
 	t.Cleanup(func() { _ = h.engine.Detach(context.Background(), diskID) })
 
-	attached, err := h.engine.Attach(ctx, req)
-	if err != nil {
+	if err := h.engine.Attach(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	if !attached.Formatted || attached.Reused {
-		t.Fatalf("a new disk attached as %+v", attached)
-	}
-	if again, err := h.engine.Attach(ctx, req); err != nil || !again.Reused {
-		t.Fatalf("attaching an attached disk again returned %+v, %v", again, err)
+	if err := h.engine.Attach(ctx, req); err != nil {
+		t.Fatalf("attaching an attached disk again: %v", err)
 	}
 	content := bytes.Repeat([]byte("lazycloud"), 1_000_000)
 	if err := os.WriteFile(filepath.Join(mountpoint, "data"), content, 0o600); err != nil {
@@ -232,12 +228,8 @@ func TestAttachMountsAndRestores(t *testing.T) {
 	other.grant(t, store, diskID)
 	t.Cleanup(func() { _ = other.engine.Detach(context.Background(), diskID) })
 	req.Base, req.SizeBytes = baseOf(published), 2<<30
-	restored, err := other.engine.Attach(ctx, req)
-	if err != nil {
+	if err := other.engine.Attach(ctx, req); err != nil {
 		t.Fatal(err)
-	}
-	if restored.Reused || restored.Formatted || restored.Generation != published.Generation {
-		t.Fatalf("restore returned %+v", restored)
 	}
 	got, err := os.ReadFile(filepath.Join(mountpoint, "data"))
 	if err != nil {
@@ -269,7 +261,7 @@ func TestSnapshotterDeathLosesTheAttachment(t *testing.T) {
 	mountpoint := filepath.Join(t.TempDir(), "mnt")
 	req := AttachRequest{DiskID: diskID, SizeBytes: 1 << 30, Mountpoint: mountpoint}
 	h.grant(t, store, diskID)
-	if _, err := h.engine.Attach(ctx, req); err != nil {
+	if err := h.engine.Attach(ctx, req); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(mountpoint, "data"), []byte("before"), 0o600); err != nil {
@@ -285,7 +277,7 @@ func TestSnapshotterDeathLosesTheAttachment(t *testing.T) {
 
 	req.Base = baseOf(published)
 	h.grant(t, store, diskID)
-	if _, err := h.engine.Attach(ctx, req); err != nil {
+	if err := h.engine.Attach(ctx, req); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.engine.Detach(context.Background(), diskID) })
@@ -304,7 +296,7 @@ func TestSnapshotterDeathLosesTheAttachment(t *testing.T) {
 func TestDaemonRunsOutsideTheCallersCgroup(t *testing.T) {
 	requireTools(t, toolDaemon, toolImage, toolRunUnit)
 	h := newHost(t, 64*frame)
-	_, state, _ := attachUnmounted(t, h, testStore(t), AttachRequest{DiskID: uuid.NewString(), SizeBytes: testDiskBytes, Mountpoint: "/unused"})
+	_, state := attachUnmounted(t, h, testStore(t), AttachRequest{DiskID: uuid.NewString(), SizeBytes: testDiskBytes, Mountpoint: "/unused"})
 	ours, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +319,7 @@ func TestSealRecoversALostDaemon(t *testing.T) {
 	diskID := uuid.NewString()
 	h := newHost(t, 64*frame)
 	req := AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"}
-	p, state, _ := attachUnmounted(t, h, store, req)
+	p, state := attachUnmounted(t, h, store, req)
 	writeExport(t, p, 2*frame, 3*frame, 0x5a)
 	want := readExport(t, p)
 	if err := syscall.Kill(state.Attachment.DaemonPID, syscall.SIGKILL); err != nil {
@@ -349,7 +341,7 @@ func TestSealRecoversALostDaemon(t *testing.T) {
 	published := publishAndCommit(t, h.engine, diskID, store, false)
 	restoredReq := req
 	restoredReq.Base = baseOf(published)
-	q, _, _ := attachUnmounted(t, newHost(t, 64*frame), store, restoredReq)
+	q, _ := attachUnmounted(t, newHost(t, 64*frame), store, restoredReq)
 	requireSameDisk(t, readExport(t, q), want)
 }
 
@@ -368,7 +360,7 @@ func TestAttachRefusesMalformedRequests(t *testing.T) {
 	} {
 		req := valid
 		mutate(&req)
-		if _, err := e.Attach(t.Context(), req); !errors.Is(err, ErrInvalid) {
+		if err := e.Attach(t.Context(), req); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: got %v, want ErrInvalid", name, err)
 		}
 	}
@@ -383,7 +375,7 @@ func TestFinalPublishKeepsRecentFramesTheSnapshotterForgot(t *testing.T) {
 	store := testStore(t)
 	diskID := uuid.NewString()
 	h := newHost(t, 64*frame)
-	p, state, _ := attachUnmounted(t, h, store, AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"})
+	p, state := attachUnmounted(t, h, store, AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"})
 	writeExport(t, p, 0, frame, 0x11)
 	writeExport(t, p, 3*frame, frame, 0x22)
 	sealUnmounted(t, p, state)
@@ -430,7 +422,7 @@ func TestStalledDiskWritesWaitUntilResumed(t *testing.T) {
 	mountpoint := filepath.Join(t.TempDir(), "mnt")
 	h.grant(t, testStore(t), diskID)
 	t.Cleanup(func() { _ = h.engine.Detach(context.Background(), diskID) })
-	if _, err := h.engine.Attach(ctx, AttachRequest{DiskID: diskID, SizeBytes: 1 << 30, Mountpoint: mountpoint}); err != nil {
+	if err := h.engine.Attach(ctx, AttachRequest{DiskID: diskID, SizeBytes: 1 << 30, Mountpoint: mountpoint}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.engine.Stall(ctx, diskID, true); err != nil {
@@ -467,7 +459,7 @@ func TestHolderCollectsASupersededUpload(t *testing.T) {
 	diskID := uuid.NewString()
 	req := AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"}
 	first := newHost(t, 64*frame)
-	p, state, _ := attachUnmounted(t, first, store, req)
+	p, state := attachUnmounted(t, first, store, req)
 	writeExport(t, p, 0, frame, 0x11)
 	sealUnmounted(t, p, state)
 	base := publishAndCommit(t, first.engine, diskID, store, false)
@@ -481,7 +473,7 @@ func TestHolderCollectsASupersededUpload(t *testing.T) {
 
 	second := newHost(t, 64*frame)
 	req.Base = baseOf(base)
-	q, qstate, _ := attachUnmounted(t, second, store, req)
+	q, qstate := attachUnmounted(t, second, store, req)
 	writeExport(t, q, 2*frame, frame, 0x33)
 	sealUnmounted(t, q, qstate)
 	own, err := second.engine.Publish(ctx, diskID, store, false)

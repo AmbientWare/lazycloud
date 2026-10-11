@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,31 +73,14 @@ func served(path string) (string, uint64, error) {
 	return path, st.Dev, nil
 }
 
-// allocatedBytes is the disk space the files under path occupy, holes
-// excluded.
+// allocatedBytes is the disk space the file at path occupies, holes
+// excluded, or 0 when it is missing.
 func allocatedBytes(path string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(path, func(path string, _ fs.DirEntry, err error) error {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var stat unix.Stat_t
-		if err := unix.Lstat(path, &stat); err != nil {
-			if errors.Is(err, unix.ENOENT) {
-				return nil
-			}
-			return fmt.Errorf("stat %s: %w", path, err)
-		}
-		total += stat.Blocks * 512
-		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("measure %s: %w", path, err)
+	var stat unix.Stat_t
+	if err := unix.Stat(path, &stat); err != nil && !errors.Is(err, unix.ENOENT) {
+		return 0, fmt.Errorf("stat %s: %w", path, err)
 	}
-	return total, nil
+	return stat.Blocks * 512, nil
 }
 
 // processArgs is pid's command line, nil when no such process runs.

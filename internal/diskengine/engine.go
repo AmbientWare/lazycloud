@@ -24,9 +24,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
@@ -36,14 +35,9 @@ var (
 	// disk: a malformed id, size, generation or store, or a call out of
 	// order.
 	ErrInvalid = errors.New("invalid disk request")
-	// ErrNotAttached marks an operation that needs the disk mounted here.
-	ErrNotAttached = errors.New("disk is not attached")
 	// ErrNoLocalState marks a disk this host never attached, as after a
 	// failed attach: it holds nothing to publish.
 	ErrNoLocalState = errors.New("disk has no local state")
-	// ErrCredentialsExpired marks store credentials the callback returned
-	// already expired.
-	ErrCredentialsExpired = errors.New("storage credentials expired")
 	// ErrAttachmentLost marks an attached disk whose daemon, device, mount
 	// or served generation had gone. Seal releases what remained and seals
 	// what had reached the head, so the disk is detached and its writes
@@ -69,16 +63,6 @@ type AttachRequest struct {
 	Mountpoint string
 }
 
-// AttachResult describes an attached disk.
-type AttachResult struct {
-	// Generation is the newest published generation the disk holds.
-	Generation int64
-	// Reused is true when the local stack already held Generation.
-	Reused bool
-	// Formatted is true when this attach created the filesystem.
-	Formatted bool
-}
-
 // Published is an uploaded generation awaiting CommitPublished.
 type Published struct {
 	Generation  int64
@@ -90,13 +74,8 @@ type Published struct {
 
 // LocalDisk is a disk kept under the root.
 type LocalDisk struct {
-	DiskID     string
-	Attached   bool
-	LocalBytes int64
-	LastUsedAt time.Time
-	// Unpublished is true while the disk may hold writes no committed
-	// generation contains, so evicting it would lose them.
-	Unpublished bool
+	DiskID   string
+	Attached bool
 }
 
 // Engine operates the disks under one root directory.
@@ -152,10 +131,8 @@ func Check() error {
 	return nil
 }
 
-var diskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
-
 func (e *Engine) paths(diskID string) (diskPaths, error) {
-	if !diskIDPattern.MatchString(diskID) {
+	if !imagefs.DiskID(diskID) {
 		return diskPaths{}, fmt.Errorf("%w: disk id %q must be 1-128 letters, digits, underscores or hyphens", ErrInvalid, diskID)
 	}
 	return diskPaths{root: e.root, id: diskID}, nil

@@ -14,6 +14,10 @@ const (
 	// 335 MiB/s on an 8-vCPU host, faster than a gp3 data volume's 125 MiB/s
 	// baseline writes, so a disk stays within it.
 	DiskDirtyBytes = 4 << 30
+	// DiskBlockBytes divides every disk's size, and is the block size of
+	// its filesystem; MaxDiskBytes bounds a disk.
+	DiskBlockBytes = 4096
+	MaxDiskBytes   = 1 << 40
 )
 
 // DiskSlots is how many disks a data volume of volumeBytes holds room for

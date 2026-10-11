@@ -5,20 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
-const (
-	// DiskBlockBytes divides every disk size.
-	DiskBlockBytes = 4096
-	// MaxDiskBytes bounds a disk, and so its frame table.
-	MaxDiskBytes  = 1 << 40
-	maxDiskFrames = MaxDiskBytes / FrameSize
-)
+// maxDiskFrames bounds a disk's frame table.
+const maxDiskFrames = hostproto.MaxDiskBytes / FrameSize
 
 // DiskIndex is one published generation of a durable disk: frame i holds
 // the disk's bytes [i*FrameSize, (i+1)*FrameSize). The schema is
@@ -44,6 +41,12 @@ func (f DiskFrame) Zero() bool { return f.Size == 0 }
 
 // Name is where the frame is stored under its disk's prefix.
 func (f DiskFrame) Name() string { return "frames/" + hex.EncodeToString(f.Digest[:]) }
+
+var diskID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+// DiskID reports whether id may name a disk's objects and local files: a
+// letter or digit, then up to 127 letters, digits, underscores or hyphens.
+func DiskID(id string) bool { return diskID.MatchString(id) }
 
 // DiskPrefix holds every object of disk id in its workspace bucket.
 func DiskPrefix(id string) string { return "disks/" + id + "/" }
@@ -116,7 +119,7 @@ func UnmarshalDisk(b []byte) (DiskIndex, error) {
 }
 
 func (d DiskIndex) validate() error {
-	if d.Size <= 0 || d.Size%DiskBlockBytes != 0 || d.Size > MaxDiskBytes {
+	if d.Size <= 0 || d.Size%hostproto.DiskBlockBytes != 0 || d.Size > hostproto.MaxDiskBytes {
 		return fmt.Errorf("disk of %d bytes", d.Size)
 	}
 	if len(d.Frames) != DiskFrames(d.Size) {

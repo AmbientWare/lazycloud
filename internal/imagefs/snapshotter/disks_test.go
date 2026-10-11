@@ -73,16 +73,18 @@ func (ts *testStore) putRoot(t *testing.T, key string, body []byte) {
 }
 
 // serveDisks mounts a disk directory over a cache of bound bytes.
-func serveDisks(t *testing.T, transport http.RoundTripper, bound int64) *disks {
+func serveDisks(t *testing.T, transport http.RoundTripper) *disks {
 	t.Helper()
 	if os.Geteuid() != 0 {
 		t.Fatal("the snapshotter tests mount FUSE filesystems and run as root")
 	}
-	c := newTestCache(t, transport, bound)
+	c := newTestCache(t, transport, 64*imagefs.FrameSize)
 	d := newDisks(t.TempDir(), c, &http.Client{Transport: transport}, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() {
-		if err := d.close(); err != nil {
-			t.Error(err)
+		if d.server != nil {
+			if err := d.server.Unmount(); err != nil {
+				t.Error(err)
+			}
 		}
 	})
 	return d
@@ -122,7 +124,7 @@ func TestDiskReadsFetchOnlyTheTouchedFrames(t *testing.T) {
 	frames[3] = append(frames[3], make([]byte, imagefs.FrameSize/2)...)
 	stored := ts.disk(t, "d1", frames, nil)
 	counting := &countingTransport{}
-	d := serveDisks(t, counting, 64*imagefs.FrameSize)
+	d := serveDisks(t, counting)
 	d.grantTest(t, ts, stored.id)
 	g, err := d.serve(t.Context(), stored.serveRequest(t, false))
 	if err != nil {
@@ -170,7 +172,7 @@ func TestDiskServePrefetchesAndTraces(t *testing.T) {
 	}
 	stored := ts.disk(t, "d2", frames, []uint32{4, 1})
 	counting := &countingTransport{}
-	d := serveDisks(t, counting, 64*imagefs.FrameSize)
+	d := serveDisks(t, counting)
 	d.grantTest(t, ts, stored.id)
 	g, err := d.serve(t.Context(), stored.serveRequest(t, true))
 	if err != nil {
@@ -222,7 +224,7 @@ func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
 	ts := newTestStore(t)
 	frames := [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize), nil, bytes.Repeat([]byte{2}, imagefs.FrameSize)}
 	stored := ts.disk(t, "d4", frames, nil)
-	d := serveDisks(t, &countingTransport{}, 64*imagefs.FrameSize)
+	d := serveDisks(t, &countingTransport{})
 	d.grantTest(t, ts, stored.id)
 	g, err := d.serve(t.Context(), stored.serveRequest(t, true))
 	if err != nil {
@@ -269,7 +271,7 @@ func TestDiskReleaseStopsItsPrefetch(t *testing.T) {
 	}
 	stored := ts.disk(t, "d3", frames, start)
 	slow := &delayedTransport{delay: 100 * time.Millisecond}
-	d := serveDisks(t, slow, 64*imagefs.FrameSize)
+	d := serveDisks(t, slow)
 	d.grantTest(t, ts, stored.id)
 	for range 2 {
 		if _, err := d.serve(t.Context(), stored.serveRequest(t, true)); err != nil {

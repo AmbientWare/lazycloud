@@ -15,15 +15,12 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// Disk size bounds. Sizes are whole 4 KiB blocks.
-const (
-	MinDiskBytes   = 1 << 30
-	MaxDiskBytes   = 1 << 40
-	diskBlockBytes = 4096
-)
+// MinDiskBytes is the smallest disk; hostproto bounds the rest.
+const MinDiskBytes = 1 << 30
 
 // ErrStaleLease means a disk call came from a container that no longer
 // holds the disk, or whose container has stopped.
@@ -83,7 +80,6 @@ type DiskLease struct {
 	// Newest is the newest published generation; nil for a disk never
 	// published.
 	Newest *DiskGeneration
-	Bucket string
 }
 
 // DiskGrowth is what declaring disks would do to a workspace's disks.
@@ -123,15 +119,15 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 	if err != nil {
 		return DiskLease{}, fmt.Errorf("read declared disk: %w", err)
 	}
-	if declared.SizeBytes < MinDiskBytes || declared.SizeBytes > MaxDiskBytes || declared.SizeBytes%diskBlockBytes != 0 {
+	if declared.SizeBytes < MinDiskBytes || declared.SizeBytes > hostproto.MaxDiskBytes || declared.SizeBytes%hostproto.DiskBlockBytes != 0 {
 		return DiskLease{}, invalid("disk %s size %d is not a multiple of 4096 between 1Gi and 1Ti", name, declared.SizeBytes)
 	}
 	workspace := identity.WorkspaceID(declared.WorkspaceID)
-	store, err := s.workspaceStore(ctx, workspace)
-	if err != nil {
+	// The disk's objects go to the workspace's bucket, made on first use.
+	if _, err := s.workspaceStore(ctx, workspace); err != nil {
 		return DiskLease{}, err
 	}
-	lease := DiskLease{Workspace: workspace, Bucket: store.name}
+	lease := DiskLease{Workspace: workspace}
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
 		// Creating or growing a disk is held to the plan's disk allowance.

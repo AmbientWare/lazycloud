@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
@@ -132,20 +133,6 @@ func (d *disks) mount() error {
 	return nil
 }
 
-// close unmounts the directory, if mounted. Files still open fail their
-// reads.
-func (d *disks) close() error {
-	d.mountMu.Lock()
-	defer d.mountMu.Unlock()
-	if d.server == nil {
-		return nil
-	}
-	if err := d.server.Unmount(); err != nil {
-		return fmt.Errorf("unmount the disk directory: %w", err)
-	}
-	return nil
-}
-
 func (d *disks) lookup(id string) *disk {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -225,7 +212,7 @@ func (g *diskGrant) get(ctx context.Context, key string, limit int64) ([]byte, e
 // serve serves a generation and returns its file, reading its index the
 // first time. With prefetch it begins the disk's start trace and fetches
 // the index's start and recent frames in the background.
-func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (*diskGeneration, error) {
+func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (*diskGeneration, error) { //nolint:contextcheck // a prefetch lives with the cache, not the call
 	k := d.lookup(req.GetDiskId())
 	if k == nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "disk %s has no grant", req.GetDiskId())
@@ -248,7 +235,7 @@ func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (
 		var life context.Context
 		prefetch := g.stopPrefetch == nil
 		if prefetch {
-			life, g.stopPrefetch = context.WithTimeout(d.cache.life, prefetchLife) //nolint:contextcheck // a prefetch lives with the cache, not the call
+			life, g.stopPrefetch = context.WithTimeout(d.cache.life, prefetchLife)
 		}
 		stop := g.stopPrefetch
 		k.mu.Unlock()
@@ -321,7 +308,7 @@ func (d *disks) index(ctx context.Context, k *disk, req *imagefsproto.ServeDiskR
 	}
 	if fetched {
 		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		if err := os.WriteFile(tmp, raw, 0o600); err != nil { //nolint:gosec // As the read above.
 			return nil, fmt.Errorf("keep the index of disk %s: %w", k.id, err)
 		}
 		if err := os.Rename(tmp, path); err != nil {
@@ -501,7 +488,7 @@ func (f *diskFile) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrO
 	out.Mode = syscall.S_IFREG | 0o400
 	out.Nlink = 1
 	out.Size = uint64(f.gen.index.Size) //nolint:gosec // sizes are validated positive
-	out.Blksize = imagefs.DiskBlockBytes
+	out.Blksize = hostproto.DiskBlockBytes
 	return 0
 }
 
@@ -579,14 +566,14 @@ type diskSources struct {
 }
 
 func (s diskSources) GrantDisk(_ context.Context, req *imagefsproto.GrantDiskRequest) (*imagefsproto.GrantDiskResponse, error) {
-	if !diskIDPattern(req.GetDiskId()) {
+	if !imagefs.DiskID(req.GetDiskId()) {
 		return nil, status.Error(codes.InvalidArgument, "disk_id is not a disk id")
 	}
 	return &imagefsproto.GrantDiskResponse{}, s.disks.grant(req.GetDiskId(), req.GetGrant())
 }
 
 func (s diskSources) ServeDisk(ctx context.Context, req *imagefsproto.ServeDiskRequest) (*imagefsproto.ServeDiskResponse, error) {
-	if !diskIDPattern(req.GetDiskId()) || req.GetGeneration() <= 0 || !filepath.IsAbs(req.GetIndexPath()) {
+	if !imagefs.DiskID(req.GetDiskId()) || req.GetGeneration() <= 0 || !filepath.IsAbs(req.GetIndexPath()) {
 		return nil, status.Error(codes.InvalidArgument, "a served generation needs a disk id, a number and an absolute index path")
 	}
 	g, err := s.disks.serve(ctx, req)
@@ -603,12 +590,4 @@ func (s diskSources) ReleaseDisk(_ context.Context, req *imagefsproto.ReleaseDis
 
 func (s diskSources) DiskReads(_ context.Context, req *imagefsproto.DiskReadsRequest) (*imagefsproto.DiskReadsResponse, error) {
 	return s.disks.reads(req.GetDiskId())
-}
-
-// diskIDPattern reports whether id may name a disk's prefix and files: 1 to
-// 128 letters, digits, underscores or hyphens.
-func diskIDPattern(id string) bool {
-	return id != "" && len(id) <= 128 && !slices.ContainsFunc([]byte(id), func(b byte) bool {
-		return (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9') && b != '_' && b != '-'
-	})
 }

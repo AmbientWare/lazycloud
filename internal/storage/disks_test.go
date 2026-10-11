@@ -38,7 +38,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lease.SizeBytes != 2<<30 || lease.Newest != nil || lease.Bucket == "" {
+	if lease.SizeBytes != 2<<30 || lease.Newest != nil {
 		t.Fatalf("first lease: %+v", lease)
 	}
 	again, err := s.AcquireDisk(ctx, f.host, first, "root")
@@ -149,18 +149,22 @@ func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	read, err := s.GrantDiskRead(ctx, f.host, first, lease.Disk, lease.Token)
+	if err != nil || read.Bucket == "" || read.AccessKeyID == "" {
+		t.Fatalf("read grant of the holder: %+v err=%v", read, err)
+	}
 	prefix := "disks/" + lease.Disk.String() + "/"
 	sum := fmt.Sprintf("%064x", 9)
 	oldManifest := indexKey(lease.Disk, 1)
 	chunk := prefix + "frames/" + sum
 	other := "disks/" + uuid.NewString() + "/frames/" + sum
 	for _, key := range []string{oldManifest, chunk, other} {
-		if _, err := storagetest.Client().PutObject(ctx, &s3.PutObjectInput{Bucket: &lease.Bucket, Key: aws.String(key), Body: strings.NewReader("x")}); err != nil {
+		if _, err := storagetest.Client().PutObject(ctx, &s3.PutObjectInput{Bucket: &read.Bucket, Key: aws.String(key), Body: strings.NewReader("x")}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	present := func(key string) bool {
-		_, err := storagetest.Client().HeadObject(ctx, &s3.HeadObjectInput{Bucket: &lease.Bucket, Key: aws.String(key)})
+		_, err := storagetest.Client().HeadObject(ctx, &s3.HeadObjectInput{Bucket: &read.Bucket, Key: aws.String(key)})
 		return err == nil
 	}
 
@@ -172,10 +176,6 @@ func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
 	}
 	if !present(other) {
 		t.Fatal("a refused collection deleted another disk's frame")
-	}
-	read, err := s.GrantDiskRead(ctx, f.host, first, lease.Disk, lease.Token)
-	if err != nil || read.Bucket != lease.Bucket || read.AccessKeyID == "" {
-		t.Fatalf("read grant of the holder: %+v err=%v", read, err)
 	}
 
 	// Once the disk changed hands, the old holder deletes nothing.

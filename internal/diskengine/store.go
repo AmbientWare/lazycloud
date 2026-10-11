@@ -67,8 +67,8 @@ func openStore(store Store) (*objectStore, error) {
 		}
 		if !current.ExpiresAt.IsZero() {
 			if !time.Now().Before(current.ExpiresAt) {
-				return aws.Credentials{}, fmt.Errorf("%w at %s and were not replaced",
-					ErrCredentialsExpired, current.ExpiresAt.UTC().Format(time.RFC3339))
+				return aws.Credentials{}, fmt.Errorf("storage credentials expired at %s and were not replaced",
+					current.ExpiresAt.UTC().Format(time.RFC3339))
 			}
 			credentials.CanExpire = true
 			credentials.Expires = current.ExpiresAt
