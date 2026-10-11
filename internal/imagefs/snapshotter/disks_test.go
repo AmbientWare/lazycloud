@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -247,6 +248,34 @@ func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
 	reads, err := d.reads(stored.id)
 	if err != nil || !slices.Equal(reads.GetStartFrames(), []uint32{0}) {
 		t.Fatalf("the disk reports %+v, %v; want a start trace of frame 0", reads, err)
+	}
+}
+
+// A snapshotter that died serving disks leaves their directory a mount whose
+// connection is gone; the next one detaches it and starts.
+func TestStaleDiskDirectoryIsDetached(t *testing.T) {
+	ts := newTestStore(t)
+	stored := ts.disk(t, "d5", [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize)}, nil)
+	root := t.TempDir()
+	transport := &countingTransport{}
+	d := newDisks(filepath.Join(root, disksDir), newTestCache(t, transport, 64*imagefs.FrameSize), &http.Client{Transport: transport}, slog.New(slog.DiscardHandler))
+	d.grantTest(t, ts, stored.id)
+	if _, err := d.serve(t.Context(), stored.serveRequest(t, false)); err != nil {
+		t.Fatal(err)
+	}
+	var st unix.Stat_t
+	if err := unix.Stat(d.dir, &st); err != nil {
+		t.Fatal(err)
+	}
+	abort := fmt.Sprintf("/sys/fs/fuse/connections/%d/abort", unix.Minor(st.Dev))
+	if err := os.WriteFile(abort, []byte("1"), 0o200); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearStale(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Stat(d.dir, &st); err != nil {
+		t.Fatalf("the disk directory after detaching: %v", err)
 	}
 }
 

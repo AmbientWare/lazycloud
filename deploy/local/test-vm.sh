@@ -12,7 +12,8 @@
 #                     .lazycloud/, create or start the VM, set it up once,
 #                     and install this tree's snapshotter while no
 #                     container runs
-#   test ARGS         go test ARGS as root in this tree
+#   test ARGS         go test ARGS as root in this tree, on a host freed
+#                     of what earlier runs left while no container runs
 #   acceptance ARGS   acceptance.sh prepare here, then acceptance.sh run
 #                     ARGS as root in the VM
 #   down              stop the VM
@@ -70,8 +71,10 @@ setup() {
   mount_checkout
   node_image
   # The node recipe removes the compiler, which -race needs;
-  # install-snapshotter.sh writes a polkit rule.
-  shell sh -c "command -v gcc >/dev/null && test -d /etc/polkit-1/rules.d || dnf install -y -q gcc polkit"
+  # install-snapshotter.sh writes a polkit rule; the disk engine's tests
+  # write through qemu-io, which the node recipe does not build.
+  shell sh -c "command -v gcc >/dev/null && command -v qemu-io >/dev/null && test -d /etc/polkit-1/rules.d ||
+    dnf install -y -q gcc polkit qemu-img"
   go=$(sed -n 's/^toolchain //p' go.mod)
   if [ "$(shell sh -c 'head -1 /usr/local/go/VERSION 2>/dev/null' || true)" != "$go" ]; then
     archive=$go.linux-amd64.tar.gz
@@ -98,6 +101,17 @@ run() {
     PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin GOFLAGS=-buildvcs=false "$@"
 }
 
+# fresh gives the tests the host a CI runner starts from while no container
+# runs. Earlier runs here leave Docker's build cache, platform image
+# mirrors and dangling images holding layers tests expect to pull fresh,
+# and snapshotter grants naming test buckets since deleted.
+fresh() {
+  [ -z "$(shell docker ps --quiet)" ] || return 0
+  shell docker builder prune --all --force >/dev/null
+  shell sh -c "ctr -n moby images ls -q | grep -E '/lazycloud/|^moby-dangling@' | xargs -r ctr -n moby images rm --sync >/dev/null"
+  shell systemctl restart lazycloud-snapshotter
+}
+
 ready() {
   [ "$("$limactl" list --format '{{.Status}}' "$vm" 2>/dev/null)" = Running ] && return 0
   echo "the test VM is not running; deploy/local/test-vm.sh up starts it" >&2
@@ -116,6 +130,7 @@ mountType: virtiofs"
   test)
     shift
     ready
+    fresh
     run go test "$@"
     ;;
   acceptance)
