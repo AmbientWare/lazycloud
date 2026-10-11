@@ -100,17 +100,6 @@ func (s *Storage) storeOf(ctx context.Context, name, region string, connection *
 	return b, nil
 }
 
-// endpointOf is the S3 endpoint of the platform's buckets, or of a
-// connected account's: AWS S3 in the bucket's region unless compute names
-// another. The platform's own store, such as Garage or R2, never holds a
-// connected account's bucket.
-func (s *Storage) endpointOf(connection *uuid.UUID) string {
-	if connection == nil {
-		return s.config.Endpoint
-	}
-	return s.connections.S3Endpoint()
-}
-
 // expectOwner makes every request but CreateBucket name account as the
 // owner of its bucket, so S3 refuses a bucket of the same name that
 // another account holds. Presigned URLs carry it as a query parameter. It

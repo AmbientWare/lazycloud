@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -42,8 +43,8 @@ func (s *Storage) grant(ctx context.Context, host compute.HostID, store bucketCl
 		}
 	}
 	// Hosts address the bucket as the server's own client does.
-	endpoint := s.endpointOf(store.connection)
-	location, err := locate(endpoint, store.region, store.name, endpoint != "")
+	o := store.client.Options()
+	location, err := locate(aws.ToString(o.BaseEndpoint), store.region, store.name, o.UsePathStyle)
 	if err != nil {
 		return Grant{}, fmt.Errorf("locate workspace bucket: %w", err)
 	}
