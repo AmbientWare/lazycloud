@@ -32,11 +32,13 @@ set instance_type = @instance_type, region = @region, availability_zone = @avail
 where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
 -- name: HostWaiters :many
--- The placement each pending container waiting for a host asks for. A
--- build has no release and takes any region on Spot.
+-- The placement each pending container waiting for a host asks for, and
+-- the disks it attaches. A build has no release and takes any region on
+-- Spot.
 select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible
+       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
+       coalesce(jsonb_array_length(r.spec -> 'disks'), 0)::int as disks
 from containers c
 left join releases r on r.id = c.release_id
 where c.state = 'pending' and c.capacity_host_id = @host_id;

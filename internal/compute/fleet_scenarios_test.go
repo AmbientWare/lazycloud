@@ -161,8 +161,10 @@ type sim struct {
 	// knowQuota.
 	quotas    map[QuotaKey]int64
 	knowQuota bool
-	// recent is the largest recent shape per market the planner reads.
-	recent map[ReserveMarket]FleetCapacity
+	// recent is the largest recent shape per market the planner reads, and
+	// recentDisks the most disks one attached.
+	recent      map[ReserveMarket]FleetCapacity
+	recentDisks map[ReserveMarket]int
 	// floorShortSince carries each market's reserve shortfall from one pass
 	// to the next, as the published plan does.
 	floorShortSince map[ReserveMarket]time.Time
@@ -395,7 +397,9 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 			tolerant = tolerant.Plus(reservedShape(c.need))
 		}
 	}
-	fh.Lent = lent(h.Market, tolerant)
+	if h.Market == MarketOnDemand {
+		fh.Lent = tolerant
+	}
 	return fh
 }
 
@@ -474,7 +478,7 @@ func (s *sim) plan() time.Duration {
 	if s.prices != nil {
 		s.in.Spot = s.prices(s.now)
 	}
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: builds, Arrived: arrived, Offers: s.in, BatchWait: s.batchWait()}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, RecentDisks: s.recentDisks, Builds: builds, Arrived: arrived, Offers: s.in, BatchWait: s.batchWait()}
 	snapshot.Offers.Now = s.now
 	// The scheduler refreshes Spot quotes far more often than they age out.
 	snapshot.Offers.Spot = slices.Clone(s.in.Spot)
@@ -703,7 +707,7 @@ func (s *sim) apply(plan FleetPlan) {
 			for _, w := range plan.Waits {
 				if w.Action != nil && *w.Action == i {
 					c := s.pending[slices.IndexFunc(s.pending, func(c *simContainer) bool { return c.id == w.Container })]
-					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible})
+					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible, Disks: int32(c.need.Disks)})
 				}
 			}
 			if id, ok := s.launch(a, a.Kind == ActionBuyReserve, waiters); ok {
@@ -1239,8 +1243,8 @@ func (r simResult) gpuRow(name string) string {
 // reserve, the first start after a quiet week as well, and runs on-demand
 // only while every Spot pool of every model it accepts refuses it, when it
 // borrows the on-demand reserve work that cannot run on Spot keeps; with
-// one model refusing it resumes the next one's. Work that attaches more
-// disks than the Spot reserve has slots for buys a host with enough.
+// one model refusing it resumes the next one's. Work that attaches disks
+// resumes a reserve with a slot for each.
 func TestGPUWorkStartsOnAReserveOfItsMarket(t *testing.T) {
 	t.Parallel()
 	spot := Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 4000, MemoryBytes: 16 * gib}
@@ -1278,14 +1282,14 @@ func TestGPUWorkStartsOnAReserveOfItsMarket(t *testing.T) {
 		{"L4 Spot work, every L4 Spot pool refused", []Requirement{l4, pinned}, jobs(l4), "all", true, true},
 		{"quiet week, then a Spot start", nil, jobs(spot)[:1], "", true, false},
 		{"work that cannot run on Spot", []Requirement{pinned}, jobs(pinned), "", true, false},
-		{"Spot work with three disks", []Requirement{disks}, jobs(disks), "", false, false},
+		{"Spot work with three disks", []Requirement{disks}, jobs(disks), "", true, false},
 	} {
 		s := newSim(t, DefaultPolicy())
 		s.tick = simLongTick
-		s.recent = map[ReserveMarket]FleetCapacity{}
+		s.recent, s.recentDisks = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]int{}
 		for _, need := range c.recent {
 			m := ReserveMarket{Preemptible: need.Preemptible, GPU: need.GPUs[0]}
-			s.recent[m] = reservedShape(need)
+			s.recent[m], s.recentDisks[m] = reservedShape(need), need.Disks
 		}
 		short := shortSpot(s.in.Spot)
 		switch c.refuses {

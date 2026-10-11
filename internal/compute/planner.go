@@ -326,9 +326,9 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			held++
 		}
 	}
-	recent, builds, arrived := shapesByMarket(ps.r.recent)
+	recent, builds, arrived, disks := shapesByMarket(ps.r.recent)
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Arrived: arrived, Offers: in,
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Builds: builds, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 	}
 	s.FloorShortSince, s.Peaks = ps.carried()

@@ -76,8 +76,9 @@ order by 4, 5, 6, 2 desc, 3 desc;
 
 -- name: RecentShapes :many
 -- By purchase market and GPU model: the largest CPU, memory and GPUs placed
--- platform containers reserved among the newest containers created within
--- the window, up to the sample (recent); the same among the build
+-- platform containers reserved, and the most disks one attached, among the
+-- newest containers created within the window, up to the sample (recent);
+-- the same among the build
 -- containers that stopped within the build window (build), since a running
 -- build's host holds its slot once it ends; and what the placed
 -- Spot-tolerant platform CPU containers of the sample created within the
@@ -89,11 +90,17 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- most sample_size containers and the scan's builds whatever the history;
 -- the subqueries make their bounds constants the indexes can use.
 with recent as (
-    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
-    from containers c
-    where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
-    order by c.id desc
-    limit @sample_size
+    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+           coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks
+    from (
+        select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+               c.release_id
+        from containers c
+        where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
+        order by c.id desc
+        limit @sample_size
+    ) c
+    left join releases r on r.id = c.release_id
 ), builds as (
     select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
     from image_builds b
@@ -103,17 +110,18 @@ with recent as (
       and c.stopped_at > now() - make_interval(secs => @build_window_seconds::float8)
 )
 select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
-       max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
+       max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
+       max(disks)::int as disks
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
 select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
-       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0
 from builds
 group by 2, 3
 union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0
+select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0
 from (
     select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (

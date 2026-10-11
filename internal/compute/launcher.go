@@ -295,8 +295,8 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 // fallbackPool is the cheapest pool, of those not refused and with a node
 // image, that still holds what h was bought for: what the planner bought it
 // to hold, or without that its capacity, its GPU model in its market, its
-// reserve's sleep mode, and the placement each container waiting for it
-// asks for.
+// reserve's sleep mode and disk slots, and the placement and disk slots
+// the containers waiting for it ask for.
 // Pools are priced as the planner buys: a reserve by what it costs to keep
 // stopped, any other host by what it costs to serve. A rightsize moves only
 // to a pool that costs less than the host it replaces.
@@ -312,7 +312,11 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	if h.GpuType != "" {
 		need.GPUs = []string{h.GpuType}
 	}
+	if t, ok := CatalogTypeNamed(h.InstanceType); ok && h.ReserveMode != nil {
+		need.Disks = t.DiskSlots()
+	}
 	for _, w := range waiters {
+		need.Disks += int(w.Disks)
 		need.Preemptible = need.Preemptible || w.Preemptible
 		need.Region, need.Zone = cmp.Or(need.Region, w.Region), cmp.Or(need.Zone, w.Zone)
 	}

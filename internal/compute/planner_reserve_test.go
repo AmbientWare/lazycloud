@@ -419,7 +419,7 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(markets) != 8 {
-		t.Fatalf("%d published markets, want Spot and on-demand CPU and three cards", len(markets))
+		t.Fatalf("%d published markets, want CPU and three cards, each on Spot and on-demand", len(markets))
 	}
 	for _, m := range markets {
 		if d := m.ExpiresAt.Sub(m.GeneratedAt); d != 5*time.Minute {
@@ -690,6 +690,25 @@ where reserve_mode is not null and market = $1 and gpu_count = 0`, string(market
 	}
 	if r := plan(t, o); r != (compute.PlanResult{}) {
 		t.Fatalf("the settled fleet's next pass %+v, want nothing to do", r)
+	}
+}
+
+// The large-shape reserve has a disk slot for each disk recent work
+// attached: after a container with twelve disks the Spot market's reserve
+// is a type of at least twelve cores.
+func TestTheLargeShapeReserveHoldsTheDisksRecentWorkAttached(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	spotPrices(t, o)
+	ws := newWorkspace(t, o.pool, "dev", newUser(t, o.pool, "alice@example.com"))
+	disks := strings.TrimSuffix(strings.Repeat("{}, ", 12), ", ")
+	release := newRelease(t, o.pool, ws, `{"disks": [`+disks+`]}`)
+	run(t, o.pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, rate_class, billing_owner,
+    assigned_at, ready_at, stopped_at)
+values ($1, $2, 'stopped', 1, 1000, 1 << 30, 'auto', 'platform_fleet', now(), now(), now())`, ws, release)
+	plan(t, o)
+	if cpus := scan[int64](t, o.pool, `select coalesce(max(cpu_millis), 0) from hosts
+where reserve_mode is not null and market = 'spot' and gpu_count = 0`); cpus < 12000 {
+		t.Fatalf("largest Spot reserve %d millicpus, want twelve cores for twelve disks", cpus)
 	}
 }
 

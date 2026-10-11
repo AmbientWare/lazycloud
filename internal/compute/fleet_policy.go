@@ -137,19 +137,22 @@ type MarketReserve struct {
 
 // LargestShape sizes the reserve that fits a market's largest shape: the
 // largest CPU, memory and GPUs its containers reserved within Window,
-// capped at Cap. A CPU market without such containers keeps one of
+// capped at Cap, and the most disks one attached, capped at CapDisks, a
+// disk slot each. A CPU market without such containers keeps one of
 // Default, a Spot GPU market one of SpotGPU, so the first start after a
 // quiet window resumes, and an on-demand GPU market none. Cap also bounds
 // a warm slot.
 type LargestShape struct {
 	Window                time.Duration
 	Default, SpotGPU, Cap FleetCapacity
+	CapDisks              int
 }
 
-// of is the shape market m's reserve fits, given the largest its containers
-// reserved; empty for none. A GPU reserve holds one card; a CPU reserve
+// of is the shape market m's reserve fits and the disks it holds, given
+// the largest shape its containers reserved and the most disks one
+// attached; empty for none. A GPU reserve holds one card; a CPU reserve
 // fits at least the default.
-func (s LargestShape) of(m ReserveMarket, largest FleetCapacity) FleetCapacity {
+func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int) (FleetCapacity, int) {
 	switch {
 	case m.GPU == "":
 		largest = largest.Upper(s.Default)
@@ -158,9 +161,9 @@ func (s LargestShape) of(m ReserveMarket, largest FleetCapacity) FleetCapacity {
 	case m.Preemptible:
 		largest = s.SpotGPU
 	default:
-		return FleetCapacity{}
+		return FleetCapacity{}, 0
 	}
-	return largest.Lower(s.Cap)
+	return largest.Lower(s.Cap), min(disks, s.CapDisks)
 }
 
 // GPUReserve is the headroom one GPU model keeps for Spot-tolerant work
@@ -242,20 +245,22 @@ func DefaultPolicy() Policy {
 		gpus[model] = GPUReserve{Spot: spotCard, OnDemand: card}
 	}
 	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; what
-	// one of 4 CPU and 32 GiB with a card offers, room for every GPU
-	// function recorded (4 CPU and 16 GiB at most); and the cap, what one
-	// of 16 CPU and 64 GiB offers, with one card.
+	// one of 4 CPU and 32 GiB with a card offers, so a Spot GPU floor fits a
+	// function of 4 CPU and 16 GiB; and the cap, what one of 16 CPU and
+	// 64 GiB offers, with one card, and its disk slots.
 	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
 	oneCard := CatalogType{Topology: twoPerCore(8), MemoryBytes: 32 * gib, GPUCount: 1}.Usable(0)
-	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
+	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}
 	return Policy{
 		MarginPercent:    30,
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
 		Spot:             spotMarket, OnDemand: cpuMarket,
-		GPU:             gpus,
-		LargestShape:    LargestShape{Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit},
+		GPU: gpus,
+		LargestShape: LargestShape{
+			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
+		},
 		BuildWindow:     time.Hour,
 		LongestBuild:    time.Hour,
 		ArrivalWindow:   2 * time.Minute,

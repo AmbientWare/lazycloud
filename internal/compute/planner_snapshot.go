@@ -166,12 +166,18 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 // asked again, so retention drains it.
 func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetHost {
 	market := marketOf(h.Market)
+	// Spot-tolerant work on an on-demand host is lent to the Spot market of
+	// the host's GPU model, or of CPU.
+	var lent FleetCapacity
+	if market == MarketOnDemand {
+		lent = FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}
+	}
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
-		Lent:       lent(market, FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}),
+		Lent:       lent,
 		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
 		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
@@ -188,16 +194,6 @@ func busySince(h PlannerHostsRow) *time.Time {
 		return nil
 	}
 	return &h.BusySince
-}
-
-// lent is what Spot-tolerant work holds on a host: on an on-demand host it
-// is lent to the Spot market of the host's GPU model, or of CPU, and on a
-// Spot host nothing.
-func lent(market Market, tolerant FleetCapacity) FleetCapacity {
-	if market != MarketOnDemand {
-		return FleetCapacity{}
-	}
-	return tolerant
 }
 
 // onRelease reports whether version is the agent release a host should run:
@@ -268,12 +264,13 @@ const (
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
-// containers reserved and the largest its finished builds did, and what
-// arrived within the arrival window. GPU work belongs to its model's
+// containers reserved and the most disks one attached, the largest its
+// finished builds reserved, and what arrived within the arrival window. GPU work belongs to its model's
 // market of its tolerance, as its demand does; GPU work without a model
 // belongs to none.
-func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
+func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
 	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
 		var m ReserveMarket
 		switch {
@@ -287,14 +284,14 @@ func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[Reserve
 		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
 		switch shapeKind(r.Kind) {
 		case shapeRecent:
-			recent[m] = recent[m].Upper(shape)
+			recent[m], disks[m] = recent[m].Upper(shape), max(disks[m], int(r.Disks))
 		case shapeBuild:
 			builds[m] = builds[m].Upper(shape)
 		case shapeArrived:
 			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, builds, arrived
+	return recent, builds, arrived, disks
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

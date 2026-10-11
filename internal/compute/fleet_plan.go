@@ -124,11 +124,13 @@ type FleetSnapshot struct {
 	Hosts   []FleetHost
 	Pending []DemandGroup
 	// Recent is the largest shape each market's placed containers reserved
-	// within the policy's LargestShape window, and Builds the largest its
-	// finished build containers reserved within its BuildWindow; Arrived is
-	// what the CPU Spot market's placed containers created within the
-	// ArrivalWindow reserve, less their largest batch.
+	// within the policy's LargestShape window, and RecentDisks the most
+	// disks one of them attached; Builds is the largest its finished build
+	// containers reserved within its BuildWindow; Arrived is what the CPU
+	// Spot market's placed containers created within the ArrivalWindow
+	// reserve, less their largest batch.
 	Recent, Builds, Arrived map[ReserveMarket]FleetCapacity
+	RecentDisks             map[ReserveMarket]int
 	Offers                  OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
@@ -352,12 +354,14 @@ type marketView struct {
 	// peak is the market's load peak; while it holds, the reserves a burst
 	// bought or woke wait for the next one.
 	peak LoadPeak
-	// largest is the shape one of the market's reserves fits; empty for
-	// none. loaded is set while the share of load, not the floor beside
-	// the largest shape, sets the stopped target.
-	largest FleetCapacity
-	loaded  bool
-	retired map[HostID]bool
+	// largest is the shape one of the market's reserves fits, with a disk
+	// slot for each of largestDisks; empty for none. loaded is set while
+	// the share of load, not the floor beside the largest shape, sets the
+	// stopped target.
+	largest      FleetCapacity
+	largestDisks int
+	loaded       bool
+	retired      map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover, and
 	// warmReason and stoppedReason why.
 	shortfall, stoppedShort   FleetCapacity
@@ -444,11 +448,11 @@ func (ps *pass) views(items []coverItem) []*marketView {
 	for _, m := range markets {
 		v := &marketView{m: m, retired: map[HostID]bool{}}
 		v.load = ps.marketLoad(m)
-		largest := ps.s.Recent[m]
+		largest, disks := ps.s.Recent[m], ps.s.RecentDisks[m]
 		for _, it := range items {
 			if it.market == m {
 				v.load = v.load.Plus(reservedShape(it.need))
-				largest = largest.Upper(reservedShape(it.need))
+				largest, disks = largest.Upper(reservedShape(it.need)), max(disks, it.need.Disks)
 			}
 		}
 		r := ps.p.Reserve(m)
@@ -465,7 +469,7 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		v.peak = ps.s.Peaks[m].after(v.load, ps.s.Now, ps.p.CostHorizon)
 		v.stopped, v.peakShare = r.Stopped.Of(v.load), r.Stopped.Of(v.peak.Load)
 		if r.FitLargest {
-			v.largest = ps.p.LargestShape.of(m, largest)
+			v.largest, v.largestDisks = ps.p.LargestShape.of(m, largest, disks)
 			floor := r.Stopped.Floor.Plus(v.largest)
 			v.loaded = !floor.Covers(v.stopped)
 			v.stopped, v.peakShare = v.stopped.Upper(floor), v.peakShare.Upper(floor)
@@ -796,13 +800,14 @@ func (ps *pass) demandMarket(need Requirement) ReserveMarket {
 	return m
 }
 
-// spotOffered reports whether a Spot offer of a GPU model need accepts can
+// spotOffered reports whether a Spot offer of a GPU model need may buy can
 // host it now: none while every such pool cools after refusals or its
 // quota is full.
 func (ps *pass) spotOffered(need Requirement) bool {
-	shape := reservedShape(need)
-	return slices.ContainsFunc(ps.classOffers(need), func(o FleetOffer) bool {
-		return o.Market == MarketSpot && o.Usable.Covers(shape) && o.Type.DiskSlots() >= need.Disks
+	shape, offers := reservedShape(need), ps.classOffers(need)
+	models := ps.gpuModels(need, offers)
+	return slices.ContainsFunc(offers, func(o FleetOffer) bool {
+		return o.Market == MarketSpot && slices.Contains(models, o.Type.GPU) && o.Usable.Covers(shape) && o.Type.DiskSlots() >= need.Disks
 	})
 }
 
@@ -924,13 +929,14 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 		}
 		return true
 	}
+	spotWork := slices.ContainsFunc(items, func(it coverItem) bool { return !it.slot && it.need.Preemptible })
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
 		if !ps.ready(*h) {
 			continue
 		}
 		onDemand := h.Market == MarketOnDemand
-		lendsCPU := onDemand && h.GPU == "" && ps.lendable(*h)
+		lendsCPU := spotWork && onDemand && h.GPU == "" && ps.lendable(*h)
 		lends := func(need Requirement) bool { return !onDemand || lendsCPU || h.GPU != "" && !ps.spotOffered(need) }
 		b := bin{host: h, room: h.capacity()}
 		var taken []int
@@ -973,7 +979,20 @@ func (ps *pass) ready(h FleetHost) bool {
 // hold one that fits its largest shape, where h fits it.
 func (ps *pass) leavesLarge(h FleetHost) bool {
 	v := ps.byMarket[h.market()]
-	return !h.Usable.Covers(v.largest) || ps.holdsLargest(v, h.ID)
+	return !ps.fitsLargest(v, h) || ps.holdsLargest(v, h.ID)
+}
+
+// fitsLargest reports whether host h fits market v's largest shape, with a
+// disk slot for each of its disks.
+func (ps *pass) fitsLargest(v *marketView, h FleetHost) bool {
+	t, _ := ps.typeNamed(h.InstanceType)
+	return v.fits(h.Usable, t)
+}
+
+// fits reports whether a host of type t with usable room fits the
+// market's largest shape and its disks.
+func (v *marketView) fits(usable FleetCapacity, t CatalogType) bool {
+	return usable.Covers(v.largest) && t.DiskSlots() >= v.largestDisks
 }
 
 // retention orders idle hosts by what keeping them costs, cheapest and
@@ -1323,7 +1342,7 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 // hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	t, catalogued := ps.typeNamed(h.InstanceType)
-	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (h.Usable.Covers(v.largest) && !ps.holdsLargest(v, HostID{})) ||
+	short := !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.stopped) || (ps.fitsLargest(v, *h) && !ps.holdsLargest(v, HostID{})) ||
 		h.Slept && !ps.floor(v, HostID{}, FleetHost.reserve).Covers(v.peakShare)
 	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short {
 		mode := ReserveStop
@@ -1349,32 +1368,32 @@ func (ps *pass) floor(v *marketView, skip HostID, keep func(FleetHost) bool) Fle
 }
 
 // holdsLargest reports whether a reserve of the market other than skip, or
-// one this pass buys, fits the market's largest shape.
+// one this pass buys, fits the market's largest shape and its disks.
 func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 	if v.largest.Empty() {
 		return true
 	}
 	for _, h := range ps.inMarket(v.m, FleetHost.reserve) {
-		if h.ID != skip && !h.Protected && !v.retired[h.ID] && h.Usable.Covers(v.largest) {
+		if h.ID != skip && !h.Protected && !v.retired[h.ID] && ps.fitsLargest(v, *h) {
 			return true
 		}
 	}
 	return slices.ContainsFunc(ps.planned, func(n plannedHost) bool {
-		return n.market == v.m && n.reserve && n.offer.Usable.Covers(v.largest)
+		return n.market == v.m && n.reserve && v.fits(n.offer.Usable, n.offer.Type)
 	})
 }
 
 // returning reports whether market v waits for hosts to return to the
-// reserve before it buys what the reserve lacks, short in total and a host
-// that fits item: while any host could return and the reserve has lacked
-// it for less than the return wait or the market awaits returns, or while
-// hosts due back soon cover it. A host could return when EC2 can stop it
-// and it serves or starts. It is due
-// back soon when it starts, became ready within the return wait,
-// as a reserve resumed for a burst does, or idles holding no warm slot,
-// slots a cheaper type will take over, or only a build's slot with room for
-// the largest shape, which it holds warm until the slot lapses.
-func (ps *pass) returning(v *marketView, short, item FleetCapacity) bool {
+// reserve before it buys what the reserve lacks, short in total and, with
+// lacksLargest, a host that fits the largest shape: while any host could
+// return and the reserve has lacked it for less than the return wait or
+// the market awaits returns, or while hosts due back soon cover it. A host
+// could return when EC2 can stop it and it serves or starts. It is due
+// back soon when it starts, became ready within the return wait, as a
+// reserve resumed for a burst does, or idles holding no warm slot, slots a
+// cheaper type will take over, or only a build's slot with room for the
+// largest shape, which it holds warm until the slot lapses.
+func (ps *pass) returning(v *marketView, short FleetCapacity, lacksLargest bool) bool {
 	leaving := ps.leavers(v)
 	could := ps.inMarket(v.m, func(h FleetHost) bool {
 		_, catalogued := ps.typeNamed(h.InstanceType)
@@ -1386,12 +1405,12 @@ func (ps *pass) returning(v *marketView, short, item FleetCapacity) bool {
 	soon := slices.DeleteFunc(could, func(h *FleetHost) bool {
 		replaced, _ := ps.replacement(v, *h)
 		_, idle := ps.plan.IdleSince[h.ID]
-		holdsLargest := idle && !ps.holds(h.ID, slotFloor, slotLoad) && !v.largest.Empty() && h.Usable.Covers(v.largest)
+		holdsLargest := idle && !ps.holds(h.ID, slotFloor, slotLoad) && !v.largest.Empty() && ps.fitsLargest(v, *h)
 		return !starting(*h) && ps.s.Now.Sub(h.PhaseAt) >= ps.p.ReturnWait && replaced == nil && !holdsLargest &&
 			!slices.ContainsFunc(leaving, func(l *FleetHost) bool { return l.ID == h.ID })
 	})
 	return totalOf(soon, func(h *FleetHost) FleetCapacity { return h.Usable }).Covers(short) &&
-		(item.Empty() || slices.ContainsFunc(soon, func(h *FleetHost) bool { return h.Usable.Covers(item) }))
+		(!lacksLargest || slices.ContainsFunc(soon, func(h *FleetHost) bool { return ps.fitsLargest(v, *h) }))
 }
 
 // reserves keeps market v's stopped target, among it a reserve that fits
@@ -1418,7 +1437,7 @@ func (ps *pass) reserves(v *marketView) {
 	case v.stoppedShort.Empty():
 	case ps.waiting[v.m]:
 		v.stoppedReason = ReasonDemand
-	case ps.returning(v, short, item):
+	case ps.returning(v, short, !item.Empty()):
 		v.stoppedReason = ReasonReturning
 	case ps.batching():
 		v.stoppedReason = ReasonBatch
@@ -1431,7 +1450,7 @@ func (ps *pass) reserves(v *marketView) {
 		// memory and cost about what small ones do to keep stopped.
 		need := CoverNeed{Aggregate: short}
 		if !item.Empty() {
-			need = CoverNeed{Items: []CoverItem{{Shape: item, Count: 1}}, Aggregate: short.Minus(item).Clamp()}
+			need = CoverNeed{Items: []CoverItem{{Shape: item, Disks: v.largestDisks, Count: 1}}, Aggregate: short.Minus(item).Clamp()}
 		}
 		var least FleetCapacity
 		if v.m.spotCPU() {
@@ -1449,7 +1468,7 @@ func (ps *pass) reserves(v *marketView) {
 		var supplied FleetCapacity
 		unmet := false
 		if !item.Empty() {
-			result := ps.buyReserves(v, CoverNeed{Items: []CoverItem{{Shape: item, Count: 1}}}, item, FleetCapacity{})
+			result := ps.buyReserves(v, CoverNeed{Items: []CoverItem{{Shape: item, Disks: v.largestDisks, Count: 1}}}, item, FleetCapacity{})
 			for _, node := range result.Nodes {
 				supplied = supplied.Plus(node.Offer.Usable)
 			}

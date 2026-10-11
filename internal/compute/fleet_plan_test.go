@@ -924,27 +924,20 @@ func TestGPUWorkResumesAReserveOfItsMarket(t *testing.T) {
 	}
 }
 
-// Spot-tolerant GPU work borrows the on-demand reserve only while every
-// Spot pool of its model refuses it; otherwise it buys Spot and the
-// reserve stays stopped.
-func TestSpotGPUWorkBorrowsTheOnDemandReserveOnlyWhileSpotRefuses(t *testing.T) {
-	for _, refusing := range []bool{false, true} {
-		s := gpuPlanSnapshot(t, gpuReserve(t, 2, MarketOnDemand))
-		if refusing {
-			s.Offers.Cooldowns = spotCooled("L4")
-		}
-		g, _ := pendingOne(Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}, nil)
-		s.Pending = []DemandGroup{g}
-		plan := PlanFleet(gpuPolicy(), s)
-		resumed := hostsOf(actionsOf(plan, ActionResume))
-		var bought []Market
-		for _, a := range actionsOf(plan, ActionBuy) {
-			bought = append(bought, a.Offer.Market)
-		}
-		if refusing && (!slices.Equal(resumed, []HostID{{2}}) || len(bought) > 0) ||
-			!refusing && (len(resumed) > 0 || !slices.Equal(bought, []Market{MarketSpot})) {
-			t.Errorf("Spot refusing %t: resumed %v, bought %v", refusing, resumed, bought)
-		}
+// Spot-tolerant work for any card borrows the on-demand reserve once the
+// Spot pools of every reserved card refuse it: a Spot offer of a card it
+// would not buy, as L40S, keeps none of it on Spot.
+func TestAnyCardSpotWorkBorrowsWhileEveryReservedCardsSpotRefuses(t *testing.T) {
+	s := gpuPlanSnapshot(t, gpuReserve(t, 2, MarketOnDemand))
+	s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "g6e.xlarge", HourlyMicros: 300_000, ObservedAt: offerNow})
+	for _, model := range []string{"T4", "A10G", "L4"} {
+		s.Offers.Cooldowns = append(s.Offers.Cooldowns, spotCooled(model)...)
+	}
+	g, _ := pendingOne(Requirement{Preemptible: true, GPUs: []string{GPUAny}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}, nil)
+	s.Pending = []DemandGroup{g}
+	plan := PlanFleet(gpuPolicy(), s)
+	if resumed := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(resumed, []HostID{{2}}) {
+		t.Fatalf("resumed %v, bought %v, want the on-demand L4 reserve", resumed, boughtForWork(plan))
 	}
 }
 

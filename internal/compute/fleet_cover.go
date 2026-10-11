@@ -169,8 +169,7 @@ func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) 
 		_, limited := limits.VCPUs[o.Quota]
 		n := slices.IndexFunc(out, func(c FleetOffer) bool {
 			_, cLimited := limits.VCPUs[c.Quota]
-			return c.Usable == o.Usable && c.Type.DiskSlots() == o.Type.DiskSlots() && (!marketed || c.Market == o.Market) &&
-				(!limited && !cLimited || c.Quota == o.Quota)
+			return c.Usable == o.Usable && (!marketed || c.Market == o.Market) && (!limited && !cLimited || c.Quota == o.Quota)
 		})
 		switch {
 		case n < 0:
