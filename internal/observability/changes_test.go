@@ -197,8 +197,9 @@ func TestClaimsPublishStartedTasksOffTheClaimTransaction(t *testing.T) {
 	}
 }
 
-// Volumes and metered usage publish too: a created, measured or deleted
-// volume, and one usage change per workspace for each batch of charges.
+// Volumes, disks and metered usage publish too: a created, measured or deleted
+// volume, a created disk or its holder's failure, and one usage change per
+// workspace for each batch of charges.
 func TestVolumeAndUsageChangesArePublished(t *testing.T) {
 	f := newFixture(t, `{}`)
 	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
@@ -218,6 +219,20 @@ func TestVolumeAndUsageChangesArePublished(t *testing.T) {
 	f.exec1("update volumes set state = 'deleting', deleted_at = now() where id = $1", volume)
 	if _, event = nextEvent(t, sub); event.Changes[0].Change != apitypes.ChangeKindDeleted {
 		t.Fatalf("volume deleted %+v", event)
+	}
+
+	var disk uuid.UUID
+	if err := f.pool.QueryRow(t.Context(), "insert into disks (workspace_id, name, size_bytes) values ($1, 'root', 1 << 30) returning id", uuid.UUID(f.workspace)).Scan(&disk); err != nil {
+		t.Fatal(err)
+	}
+	if _, event = nextEvent(t, sub); event.Changes[0].Topic != apitypes.ChangeTopicStorageDisks || event.Changes[0].Change != apitypes.ChangeKindCreated {
+		t.Fatalf("disk created %+v", event)
+	}
+	f.exec1("update disks set generation = 1, stored_bytes = 4096 where id = $1", disk)
+	f.exec1("update disks set failed_operation = 'publish', failure_message = 'the store refused it', failed_at = now() where id = $1", disk)
+	if _, event = nextEvent(t, sub); event.Changes[0].Topic != apitypes.ChangeTopicStorageDisks || event.Changes[0].Change != apitypes.ChangeKindUpdated ||
+		*event.Changes[0].ResourceId != disk.String() {
+		t.Fatalf("disk failure %+v, want it published and the generation alone not", event)
 	}
 
 	f.exec1(`insert into ledger_entries (source_kind, source_id, started_at, ended_at, user_id, workspace_id, billing_owner, rate_class,

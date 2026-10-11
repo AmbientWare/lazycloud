@@ -269,9 +269,10 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 }
 
 // WakePod asks for a container of an active pod now, as a connection or a
-// devbox start does, and retries its release if it stopped starting.
-func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) (StartRetry, error) {
-	retry := StartRetry{Outcome: StartAllowed}
+// devbox start does, and retries its release if it stopped starting. It
+// returns the Failure RetryStarts holds the release on, or nil.
+func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) (*Failure, error) {
+	var held *Failure
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		row, _, err := e.lockPod(ctx, q, workspace, workload)
@@ -292,13 +293,13 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 		if err != nil {
 			return err
 		}
-		retry = retries[release]
+		held = retries[release]
 		return database.Notify(ctx, tx, database.ChannelExecution, release.String())
 	})
 	if err != nil {
-		return StartRetry{}, fmt.Errorf("wake pod: %w", err)
+		return nil, fmt.Errorf("wake pod: %w", err)
 	}
-	return retry, nil
+	return held, nil
 }
 
 // ParkPod stops a pod's serve containers, starting ones included, and keeps

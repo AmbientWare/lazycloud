@@ -137,16 +137,16 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 
-	objectStore, err := objectStoreFromEnv()
+	fleet, err := compute.LoadFleet(ctx, os.Getenv)
+	if err != nil {
+		return err
+	}
+	objectStore, err := objectStoreFromEnv(fleet)
 	if err != nil {
 		return err
 	}
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
-	fleet, err := compute.LoadFleet(ctx, os.Getenv)
-	if err != nil {
-		return err
-	}
 	// Cloud instances reach the server across a network, so they always
 	// dial with TLS.
 	// The scheduler ships with the server, so the server serves the agent
@@ -457,8 +457,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 }
 
 // objectStoreFromEnv reads the object store the server uses; the sweeper
-// deletes bytes there.
-func objectStoreFromEnv() (storage.Config, error) {
+// deletes bytes there. Workspace buckets are named as the fleet says.
+func objectStoreFromEnv(fleet compute.Fleet) (storage.Config, error) {
 	cfg := storage.Config{
 		Endpoint:        os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"),
 		Region:          os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
@@ -468,8 +468,8 @@ func objectStoreFromEnv() (storage.Config, error) {
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
-			Prefix:           cmp.Or(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"), "lazycloud-ws"),
-			AccountID:        os.Getenv("LAZYCLOUD_FLEET_ACCOUNT_ID"),
+			Prefix:           fleet.BucketPrefix,
+			AccountID:        fleet.AccountID,
 			GarageAdminURL:   os.Getenv("LAZYCLOUD_GARAGE_ADMIN_URL"),
 			GarageAdminToken: os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN"),
 			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),

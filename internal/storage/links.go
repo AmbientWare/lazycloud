@@ -54,11 +54,11 @@ func (s *Storage) linkURL(ctx context.Context, b bucketClient, l link) (string, 
 	if s.config.Links.URL == "" || len(s.config.Links.Key) == 0 {
 		return "", errors.New("download links are not configured")
 	}
-	etag, err := s.objectETag(ctx, b, l.Key)
-	if err != nil {
+	o, err := head(ctx, b, l.Key)
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return "", err
 	}
-	l.Bucket, l.ETag = b.name, etag
+	l.Bucket, l.ETag = b.name, o.ETag
 	payload, err := json.Marshal(l)
 	if err != nil {
 		return "", fmt.Errorf("encode link: %w", err)
@@ -73,10 +73,10 @@ func (s *Storage) linkMAC(body string) []byte {
 	return mac.Sum(nil)
 }
 
-// OpenLink returns a short-lived presigned GET, or HEAD when head is set,
+// OpenLink returns a short-lived presigned GET, or HEAD when headOnly is set,
 // of the object token names. A token this server did not sign, or one past
 // its expiry, is ErrNotFound.
-func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string, error) {
+func (s *Storage) OpenLink(ctx context.Context, token string, headOnly bool) (string, error) {
 	body, signature, ok := strings.Cut(token, ".")
 	mac, err := base64.RawURLEncoding.DecodeString(signature)
 	if !ok || err != nil || len(s.config.Links.Key) == 0 || !hmac.Equal(mac, s.linkMAC(body)) {
@@ -100,11 +100,11 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 	}
 	// The object must still be the one the link was made for. It could be
 	// replaced in the moments before the client follows the redirect.
-	etag, err := s.objectETag(ctx, b, l.Key)
+	o, err := head(ctx, b, l.Key)
 	if err != nil {
 		return "", err
 	}
-	if etag == "" || etag != l.ETag {
+	if o.ETag != l.ETag {
 		return "", ErrNotFound
 	}
 	lifetime, err := s.signedLifetime(ctx, b.client, min(linkRedirect, left))
@@ -112,7 +112,7 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 		return "", err
 	}
 	expires := s3.WithPresignExpires(lifetime)
-	if head {
+	if headOnly {
 		r, err := b.presign.PresignHeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.name), Key: aws.String(l.Key)}, expires)
 		if err != nil {
 			return "", fmt.Errorf("presign link head: %w", err)
@@ -136,8 +136,8 @@ func (s *Storage) OpenLink(ctx context.Context, token string, head bool) (string
 // linkBucket is the bucket a link names: the platform bucket or a
 // workspace bucket. A workspace bucket that is gone is ErrNotFound.
 func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, error) {
-	if name == s.bucket {
-		return s.platformBucket(), nil
+	if name == s.platform.name {
+		return s.platform, nil
 	}
 	row, err := s.queries.BucketByName(ctx, name)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -146,21 +146,7 @@ func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, er
 	if err != nil {
 		return bucketClient{}, fmt.Errorf("read link bucket: %w", err)
 	}
-	store, err := s.storeOf(row.Bucket, row.Region, row.ConnectionID)
-	return store.bucketClient, err
-}
-
-// objectETag is the ETag of key in b, or "" when nothing is there.
-func (s *Storage) objectETag(ctx context.Context, b bucketClient, key string) (string, error) {
-	head, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.name), Key: aws.String(key)})
-	// HEAD has no body, so a missing bucket is NotFound too.
-	if isNotFound(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("head %s: %w", key, err)
-	}
-	return aws.ToString(head.ETag), nil
+	return s.storeOf(ctx, row.Bucket, row.Region, row.ConnectionID)
 }
 
 // signedLifetime is want, capped at how long client's credentials, which

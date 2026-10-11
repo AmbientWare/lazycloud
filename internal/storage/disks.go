@@ -269,14 +269,14 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 			return invalid("base generation %d is past the recorded generation %d", base, row.Generation)
 		}
 		if len(keys) > 0 {
-			store, ok, err := s.storeAt(row.Bucket, row.Region, row.ConnectionID)
+			if row.Bucket == nil || row.Region == nil {
+				return invalid("disk %s has no workspace bucket", disk)
+			}
+			store, err := s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID)
 			if err != nil {
 				return err
 			}
-			if !ok {
-				return invalid("disk %s has no workspace bucket", disk)
-			}
-			if err := s.deleteKeys(ctx, store.bucketClient, keys); err != nil {
+			if err := s.deleteKeys(ctx, store, keys); err != nil {
 				return fmt.Errorf("delete collected objects: %w", err)
 			}
 		}

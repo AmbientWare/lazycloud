@@ -4105,9 +4105,9 @@ export interface components {
             /** @default false */
             force_path_style?: boolean;
             /** @description The workspace secret holding the access key id. */
-            access_key_secret?: components["schemas"]["SecretName"];
+            access_key_secret: components["schemas"]["SecretName"];
             /** @description The workspace secret holding the secret access key. */
-            secret_key_secret?: components["schemas"]["SecretName"];
+            secret_key_secret: components["schemas"]["SecretName"];
         };
         Volume: {
             /** Format: uuid */
@@ -4888,7 +4888,7 @@ export interface components {
          * @description requests: endpoint or ASGI requests were recorded. A requests change counts one deployment's requests and names no resource.
          * @enum {string}
          */
-        ChangeTopic: "apps" | "deployments" | "tasks" | "requests" | "containers" | "storage.secrets" | "storage.volumes" | "usage";
+        ChangeTopic: "apps" | "deployments" | "tasks" | "requests" | "containers" | "storage.secrets" | "storage.volumes" | "storage.disks" | "usage";
         /** @enum {string} */
         ChangeKind: "created" | "updated" | "deleted";
         /** @description The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id. */
@@ -11629,7 +11629,7 @@ export const domainErrorCodeValues: ReadonlyArray<FlattenedDeepRequired<componen
 export const previewStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewState"]> = ["starting", "ready", "stopped"];
 export const previewKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreviewKind"]> = ["function", "endpoint", "asgi", "realtime"];
 export const containerLogEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ContainerLogEntry"]["stream"]> = ["stdout", "stderr", "system"];
-export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "requests", "containers", "storage.secrets", "storage.volumes", "usage"];
+export const changeTopicValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeTopic"]> = ["apps", "deployments", "tasks", "requests", "containers", "storage.secrets", "storage.volumes", "storage.disks", "usage"];
 export const changeKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeKind"]> = ["created", "updated", "deleted"];
 export const changeResetReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeResetReason"]> = ["behind", "missed", "unknown_cursor"];
 export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LifecycleStageKind"]> = ["placement", "conversion", "image", "source", "disk", "create", "runtime", "draining"];

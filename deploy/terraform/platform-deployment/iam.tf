@@ -66,10 +66,17 @@ locals {
 }
 
 data "aws_iam_policy_document" "control_plane" {
+  # Bucket names are global: every statement on these buckets holds only
+  # while the platform's account owns them.
   statement {
     sid       = "Objects"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
     resources = ["${local.objects_arn}/*", "${local.workspace_bucket_arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:ResourceAccount"
+      values   = [local.account_id]
+    }
   }
 
   # The server sets the dashboard's CORS rule on every bucket it presigns
@@ -78,6 +85,11 @@ data "aws_iam_policy_document" "control_plane" {
     sid       = "Buckets"
     actions   = ["s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:PutBucketCORS"]
     resources = [local.objects_arn, local.workspace_bucket_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:ResourceAccount"
+      values   = [local.account_id]
+    }
   }
 
   # Layer pairs: presigned uploads and reads, the server's own checks of
@@ -109,6 +121,11 @@ data "aws_iam_policy_document" "control_plane" {
     sid       = "WorkspaceBucketLifetime"
     actions   = ["s3:CreateBucket", "s3:PutLifecycleConfiguration", "s3:DeleteBucket"]
     resources = [local.workspace_bucket_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:ResourceAccount"
+      values   = [local.account_id]
+    }
   }
 
   statement {

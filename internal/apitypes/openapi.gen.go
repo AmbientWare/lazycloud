@@ -436,6 +436,7 @@ const (
 	ChangeTopicContainers     ChangeTopic = "containers"
 	ChangeTopicDeployments    ChangeTopic = "deployments"
 	ChangeTopicRequests       ChangeTopic = "requests"
+	ChangeTopicStorageDisks   ChangeTopic = "storage.disks"
 	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
 	ChangeTopicStorageVolumes ChangeTopic = "storage.volumes"
 	ChangeTopicTasks          ChangeTopic = "tasks"
@@ -452,6 +453,8 @@ func (e ChangeTopic) Valid() bool {
 	case ChangeTopicDeployments:
 		return true
 	case ChangeTopicRequests:
+		return true
+	case ChangeTopicStorageDisks:
 		return true
 	case ChangeTopicStorageSecrets:
 		return true
@@ -2776,8 +2779,8 @@ type CheckpointSpec struct {
 // CloudBucketSpec defines model for CloudBucketSpec.
 type CloudBucketSpec struct {
 	// AccessKeySecret The workspace secret holding the access key id.
-	AccessKeySecret *SecretName `json:"access_key_secret,omitempty"`
-	Bucket          string      `json:"bucket"`
+	AccessKeySecret SecretName `json:"access_key_secret"`
+	Bucket          string     `json:"bucket"`
 
 	// Endpoint An S3-compatible endpoint URL; AWS S3 when absent.
 	Endpoint       *string `json:"endpoint,omitempty"`
@@ -2788,7 +2791,7 @@ type CloudBucketSpec struct {
 	Region *string `json:"region,omitempty"`
 
 	// SecretKeySecret The workspace secret holding the secret access key.
-	SecretKeySecret *SecretName `json:"secret_key_secret,omitempty"`
+	SecretKeySecret SecretName `json:"secret_key_secret"`
 }
 
 // CollectionName A queue or map name; any characters except control characters.

@@ -1,12 +1,16 @@
 package storage_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -51,8 +55,16 @@ type connectedStorage struct {
 	role       string
 	externalID string
 
+	// s3 stands in for AWS S3, in front of the test Garage.
+	s3 *httptest.Server
+
 	mu    sync.Mutex
 	calls []assumed
+	// unowned counts requests to s3 that named no expected bucket owner,
+	// other than CreateBucket, which takes none; owners counts the ones
+	// that did, by owner.
+	unowned int
+	owners  map[string]int
 }
 
 func newConnectedStorage(t *testing.T) *connectedStorage {
@@ -60,11 +72,30 @@ func newConnectedStorage(t *testing.T) *connectedStorage {
 	c := &connectedStorage{t: t, pool: dbtest.New(t), account: storagetest.ConnectedAccount(t)}
 	sts := httptest.NewServer(http.HandlerFunc(c.assumeRole))
 	t.Cleanup(sts.Close)
+	c.cfg = withLinks(t, func() *Storage { return c.storage })
+	garage, err := url.Parse(c.cfg.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.owners = map[string]int{}
+	c.s3 = httptest.NewServer(&httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(garage)
+		r.Out.Host = r.In.Host
+		owner := cmp.Or(r.In.Header.Get("X-Amz-Expected-Bucket-Owner"), r.In.URL.Query().Get("x-amz-expected-bucket-owner"))
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		switch {
+		case owner != "":
+			c.owners[owner]++
+		case r.In.Method != http.MethodPut || r.In.URL.RawQuery != "" || strings.Count(strings.Trim(r.In.URL.Path, "/"), "/") > 0:
+			c.unowned++
+		}
+	}})
+	t.Cleanup(c.s3.Close)
 	c.compute = compute.NewCompute(c.pool, nil, compute.Config{Fleet: compute.Fleet{
 		AWS:       aws.Config{Region: "us-east-2", Credentials: credentials.NewStaticCredentialsProvider("AKIAPLATFORM0000TEST", "platform-secret", "")},
-		Endpoints: compute.Endpoints{STS: sts.URL},
+		Endpoints: compute.Endpoints{STS: sts.URL, S3: c.s3.URL},
 	}})
-	c.cfg = withLinks(t, func() *Storage { return c.storage })
 	c.storage = NewStorage(c.pool, c.cfg, c.compute)
 
 	var user uuid.UUID
@@ -139,7 +170,7 @@ func (c *connectedStorage) accountClient() *s3.Client {
 // bucketRow is the workspace's recorded bucket.
 func (c *connectedStorage) bucketRow(ws identity.WorkspaceID) (bucket, region string, connection *uuid.UUID) {
 	c.t.Helper()
-	if err := c.pool.QueryRow(c.t.Context(), `select bucket, region, connection_id from workspace_buckets where workspace_id = $1`,
+	if err := c.pool.QueryRow(c.t.Context(), `select b.bucket, b.region, w.connection_id from workspace_buckets b join workspaces w on w.id = b.workspace_id where b.workspace_id = $1`,
 		uuid.UUID(ws)).Scan(&bucket, &region, &connection); err != nil {
 		c.t.Fatal(err)
 	}
@@ -155,7 +186,7 @@ func (c *connectedStorage) deleteWorkspace(ws identity.WorkspaceID) {
 		c.t.Fatal(err)
 	}
 	for n := 0; ; n++ {
-		empty, err := c.storage.DeleteWorkspaceStorage(ctx, ws)
+		empty, err := c.storage.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), ws)
 		if err != nil {
 			c.t.Fatalf("delete workspace storage: %v", err)
 		}
@@ -172,13 +203,15 @@ func (c *connectedStorage) deleteWorkspace(ws identity.WorkspaceID) {
 }
 
 // A workspace in a connected account keeps its volumes in a bucket of that
-// account, named for the account and in the connection's region: the
-// connection role creates it, host grants assume that role with the
-// external ID and a session policy for the bucket alone, and the API's
-// uploads and download links are signed with the role's credentials. The
-// platform's own key cannot reach the bucket. Disconnecting is refused
-// while the workspace lives there; deleting the workspace empties and
-// deletes the bucket, after which the account can be disconnected.
+// account, named for the account and in the connection's region, at AWS
+// S3 rather than the platform's store: the connection role creates it,
+// host grants assume that role with the external ID and a session policy
+// for the bucket alone, and the API's uploads and download links are
+// signed with the role's credentials. Every request names the account as
+// the bucket's owner. The platform's own key cannot reach the bucket.
+// Disconnecting is refused while the workspace lives there; deleting the
+// workspace empties and deletes the bucket, after which the account can
+// be disconnected.
 func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 	ctx := t.Context()
 	c := newConnectedStorage(t)
@@ -198,6 +231,9 @@ func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 	}
 	if grant.Bucket != bucket || grant.Region != region || grant.AccessKeyID != c.account.AccessKeyID {
 		t.Fatalf("grant %s in %s with key %s, want the connection role's for %s in %s", grant.Bucket, grant.Region, grant.AccessKeyID, bucket, region)
+	}
+	if grant.Endpoint != c.s3.URL || !grant.PathStyle {
+		t.Fatalf("grant at %s (path-style %v), want AWS S3 at %s, not the platform's store", grant.Endpoint, grant.PathStyle, c.s3.URL)
 	}
 	var hostCall bool
 	for _, call := range c.assumedCalls() {
@@ -244,6 +280,11 @@ func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 	if _, err := c.compute.Disconnect(ctx, c.user); err != nil {
 		t.Fatalf("disconnect after the workspace went: %v", err)
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.unowned != 0 || len(c.owners) != 1 || c.owners[customerAccount] == 0 {
+		t.Fatalf("AWS S3 got %d requests naming no owner and %v by owner, want all naming %s", c.unowned, c.owners, customerAccount)
+	}
 }
 
 // A workspace on the platform's compute keeps its bucket in the platform's
@@ -282,17 +323,95 @@ func TestPlatformWorkspaceKeepsItsStorageInThePlatformAccount(t *testing.T) {
 	}
 }
 
-// A connection without an active authorization cannot hold a workspace's
-// storage: the refusal is a typed conflict that fails the container
-// needing it, not an error the host retries.
-func TestConnectionWithoutAuthorizationRefusesStorage(t *testing.T) {
+// A workspace whose connected account no longer authorizes the platform
+// is still deleted: its bucket, with the data in it, stays in the
+// customer's account, and the account can then be disconnected.
+func TestWorkspaceDeletionOutlivesItsAccountsAuthorization(t *testing.T) {
+	ctx := t.Context()
 	c := newConnectedStorage(t)
 	ws := c.workspace(&c.connection)
-	if _, err := c.pool.Exec(t.Context(), `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
+	if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); err != nil {
 		t.Fatal(err)
 	}
-	var refused *ConflictError
-	if _, err := c.storage.HostGrant(context.WithoutCancel(t.Context()), compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {
-		t.Fatalf("grant without an authorization: %v, want a conflict", err)
+	bucket, _, _ := c.bucketRow(ws)
+	if _, err := c.accountClient().PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("volumes/x/kept"), Body: strings.NewReader("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.pool.Exec(ctx, `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
+		t.Fatal(err)
+	}
+	// The scheduler deletes workspaces with storage of its own, which holds
+	// no credentials of the connection yet.
+	c.storage = NewStorage(c.pool, c.cfg, c.compute)
+	c.deleteWorkspace(ws)
+	if _, err := c.accountClient().HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String("volumes/x/kept")}); err != nil {
+		t.Fatalf("the customer's data left their account: %v", err)
+	}
+	if _, err := c.compute.Disconnect(ctx, c.user); err != nil {
+		t.Fatalf("disconnect after the workspace went: %v", err)
+	}
+}
+
+// A connection's credentials are assumed once for its buckets in every
+// region.
+func TestAConnectionsRegionsShareItsCredentials(t *testing.T) {
+	c := newConnectedStorage(t)
+	ctx := t.Context()
+	near, far := c.workspace(&c.connection), c.workspace(&c.connection)
+	if _, err := c.pool.Exec(ctx, `insert into workspace_buckets (workspace_id, bucket, region) values ($1, 'far-away', 'ap-south-1')`, uuid.UUID(far)); err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range []identity.WorkspaceID{near, far} {
+		if _, err := c.storage.CreateVolume(ctx, ws, "data"); err != nil {
+			t.Fatal(err)
+		}
+		// The far bucket is not in the test store; only the signing matters.
+		_, _ = c.storage.ListVolumeFiles(ctx, ws, "data", "", "", 10)
+	}
+	sessions := 0
+	for _, call := range c.assumedCalls() {
+		if call.session == "lazycloud-storage" {
+			sessions++
+		}
+	}
+	if sessions != 1 {
+		t.Fatalf("the connection's role was assumed %d times for two regions, want once", sessions)
+	}
+}
+
+// Servers that create a workspace's bucket at once use the bucket the
+// first one recorded.
+func TestAWorkspaceUsesTheBucketRecordedFirst(t *testing.T) {
+	c := newConnectedStorage(t)
+	ws := c.workspace(nil)
+	ctx := t.Context()
+	if _, err := c.pool.Exec(ctx, `insert into workspace_buckets (workspace_id, bucket, region) values ($1, 'recorded-first', 'elsewhere')`, uuid.UUID(ws)); err != nil {
+		t.Fatal(err)
+	}
+	bucket, region, err := CreateWorkspaceBucket(ctx, c.storage, ws)
+	if err != nil || bucket != "recorded-first" || region != "elsewhere" {
+		t.Fatalf("created bucket %s in %s (%v), want the recorded recorded-first in elsewhere", bucket, region, err)
+	}
+}
+
+// A connection without an active authorization cannot hold a workspace's
+// storage, whether its bucket exists yet or not: the refusal is a typed
+// conflict that fails the container needing it, not an error the host
+// retries.
+func TestConnectionWithoutAuthorizationRefusesStorage(t *testing.T) {
+	c := newConnectedStorage(t)
+	ctx := context.WithoutCancel(t.Context())
+	fresh, used := c.workspace(&c.connection), c.workspace(&c.connection)
+	if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), used); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.pool.Exec(ctx, `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
+		t.Fatal(err)
+	}
+	for name, ws := range map[string]identity.WorkspaceID{"new": fresh, "existing": used} {
+		var refused *ConflictError
+		if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {
+			t.Errorf("grant on the %s bucket without an authorization: %v, want a conflict", name, err)
+		}
 	}
 }

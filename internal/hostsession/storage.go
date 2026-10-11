@@ -29,7 +29,7 @@ const (
 )
 
 // storageRefusal is storage a start needs that the storage owner refused:
-// its volume mounts or the workspace's storage grant. The container fails
+// a cloud bucket or the workspace's storage grant. The container fails
 // with reason; the host's other containers and its session are unaffected.
 type storageRefusal struct {
 	reason string
@@ -40,8 +40,8 @@ func (e *storageRefusal) Error() string { return e.err.Error() }
 
 func (e *storageRefusal) Unwrap() error { return e.err }
 
-// refusal returns err as a *storageRefusal of what, such as "volumes" or
-// "cloud bucket at /data", when it is one of the storage owner's typed
+// refusal returns err as a *storageRefusal of what, such as "storage grant"
+// or "cloud bucket at /data", when it is one of the storage owner's typed
 // refusals, with the cause its owner is shown. Any other error, such as the
 // database's or the object store's failure, is returned as it is, so the
 // start is tried again.
@@ -69,15 +69,29 @@ func refusal(what string, err error) error {
 	return &storageRefusal{reason: what + " unavailable: " + cause, err: fmt.Errorf("%s: %w", what, err)}
 }
 
+// bucketKeys names the workspace secrets holding the keys of the spec's
+// cloud buckets.
+func bucketKeys(spec apitypes.WorkloadSpec) []string {
+	var names []string
+	if spec.Volumes != nil {
+		for _, v := range *spec.Volumes {
+			if b := v.CloudBucket; b != nil {
+				names = append(names, b.AccessKeySecret, b.SecretKeySecret)
+			}
+		}
+	}
+	return names
+}
+
 // volumeMounts records the container's volume mounts and returns them as the
-// host sees them.
-func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand) ([]*hostproto.VolumeMount, error) {
+// host sees them, each cloud bucket with its keys from secrets.
+func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand, secrets map[string]string) ([]*hostproto.VolumeMount, error) {
 	if start.Spec.Volumes == nil || len(*start.Spec.Volumes) == 0 {
 		return nil, nil
 	}
 	mounts, err := s.storage.MountVolumes(ctx, start.Workspace, uuid.UUID(start.Container), *start.Spec.Volumes)
 	if err != nil {
-		return nil, refusal("volumes", err)
+		return nil, err
 	}
 	out := make([]*hostproto.VolumeMount, len(mounts))
 	for n, m := range mounts {
@@ -87,21 +101,14 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 				VolumeId: m.Volume.String(), WorkspaceId: start.Workspace.String(), Prefix: m.Prefix,
 			}}
 		} else {
-			// The keys come from the workspace secrets the bucket names; a
-			// missing one fails the start like a missing release secret.
 			b := m.CloudBucket
-			access, secret := deref(b.AccessKeySecret), deref(b.SecretKeySecret)
-			keys, err := s.config.Secrets.Resolve(ctx, start.Workspace, []string{access, secret})
-			if err != nil {
-				return nil, err
-			}
 			loc, err := storage.CloudBucketLocation(*b)
 			if err != nil {
 				return nil, refusal("cloud bucket at "+m.MountPath, err)
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
 				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
-				ForcePathStyle: loc.PathStyle, AccessKeyId: keys[access], SecretAccessKey: keys[secret],
+				ForcePathStyle: loc.PathStyle, AccessKeyId: secrets[b.AccessKeySecret], SecretAccessKey: secrets[b.SecretKeySecret],
 			}}
 		}
 		out[n] = mount
