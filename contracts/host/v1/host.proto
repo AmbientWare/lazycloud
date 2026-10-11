@@ -890,17 +890,9 @@ message GrantDiskReadRequest {
   bytes lease_token = 3;
 }
 
-// GrantDiskReadResponse reads the objects under disks/<disk id>/ of the
-// workspace bucket until expires_at.
 message GrantDiskReadResponse {
-  string endpoint = 1;
-  string region = 2;
-  string bucket = 3;
-  bool force_path_style = 4;
-  string access_key_id = 5;
-  string secret_access_key = 6;
-  string session_token = 7;
-  google.protobuf.Timestamp expires_at = 8;
+  // Reads the disk's objects in the workspace bucket.
+  lazycloud.imagefs.v1.DiskGrant grant = 1;
 }
 
 message ReleaseDiskRequest {

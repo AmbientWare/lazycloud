@@ -252,7 +252,7 @@ func (s *snapshotter) prepareLazy(ctx context.Context, key, parent string, label
 		if !ok {
 			return errNoGrant
 		}
-		raw, ix, err = imagefs.FetchIndex(ctx, s.cache.http, g.indexURL)
+		raw, ix, err = imagefs.FetchIndex(ctx, s.cache.http, g.index)
 		if err == nil && ix.Layer != digest {
 			err = fmt.Errorf("%w: the index granted for layer %s is layer %s's", imagefs.ErrInvalidIndex, digest, ix.Layer)
 		}

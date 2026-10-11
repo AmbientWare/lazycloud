@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"iter"
 	"log/slog"
@@ -21,8 +20,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
@@ -53,15 +52,21 @@ type disks struct {
 	root    *gofs.Inode
 	server  *fuse.Server
 
+	// grants reads each disk's objects; a disk without one is not served.
+	grants grants[string, imagefs.Bucket]
+
 	mu   sync.Mutex
 	byID map[string]*disk
 }
 
-// disk is one disk the agent granted: its credential, the generations
-// served, and its reads.
+// disk is one served disk: its generations and its start trace.
 type disk struct {
-	id    string
-	grant atomic.Pointer[diskGrant]
+	id     string
+	grants *grants[string, imagefs.Bucket]
+	// traceGen counts the start traces begun. A frame whose generation's
+	// stamp holds it was recorded since the latest began, so reading it
+	// again takes no lock.
+	traceGen atomic.Uint32
 
 	mu          sync.Mutex
 	generations map[int64]*diskGeneration
@@ -72,13 +77,6 @@ type disk struct {
 	traced     map[uint32]bool
 }
 
-// diskGrant reads one disk's objects until expires.
-type diskGrant struct {
-	client  *s3.Client
-	bucket  string
-	expires time.Time
-}
-
 // diskGeneration is one served generation of a disk.
 type diskGeneration struct {
 	disk       *disk
@@ -86,6 +84,8 @@ type diskGeneration struct {
 	index      imagefs.DiskIndex
 	name       string
 	cache      *frameCache
+	// traced stamps each frame with the disk's traceGen once recorded.
+	traced []atomic.Uint32
 	// stopPrefetch ends the generation's prefetch; nil until one starts.
 	// Guarded by disk.mu.
 	stopPrefetch context.CancelFunc
@@ -144,79 +144,41 @@ func (d *disks) grant(id string, g *imagefsproto.DiskGrant) error {
 	if g.GetEndpoint() == "" || g.GetRegion() == "" || g.GetBucket() == "" || g.GetAccessKeyId() == "" || g.GetExpiresAt() == nil {
 		return status.Error(codes.InvalidArgument, "a disk grant needs an endpoint, a region, a bucket, a key and an expiry")
 	}
-	next := &diskGrant{
-		bucket: g.GetBucket(), expires: g.GetExpiresAt().AsTime(),
-		client: s3.New(s3.Options{
-			Region: g.GetRegion(), BaseEndpoint: aws.String(g.GetEndpoint()), UsePathStyle: g.GetForcePathStyle(),
-			Credentials:                aws.NewCredentialsCache(aws.CredentialsProviderFunc(staticCredentials(g))),
-			RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
-			ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
-			HTTPClient:                 d.http,
-			RetryMaxAttempts:           1,
-		}),
-	}
-	d.mu.Lock()
-	k := d.byID[id]
-	if k == nil {
-		k = &disk{id: id, generations: map[int64]*diskGeneration{}, traced: map[uint32]bool{}}
-		d.byID[id] = k
-	}
-	d.mu.Unlock()
-	for {
-		current := k.grant.Load()
-		if current != nil && current.expires.After(next.expires) || k.grant.CompareAndSwap(current, next) {
-			return nil
-		}
-	}
-}
-
-func staticCredentials(g *imagefsproto.DiskGrant) func(context.Context) (aws.Credentials, error) {
-	return func(context.Context) (aws.Credentials, error) {
-		return aws.Credentials{
+	expires := g.GetExpiresAt().AsTime()
+	d.grants.put(id, expires, func() imagefs.Bucket {
+		creds := aws.Credentials{
 			AccessKeyID: g.GetAccessKeyId(), SecretAccessKey: g.GetSecretAccessKey(), SessionToken: g.GetSessionToken(),
-			CanExpire: true, Expires: g.GetExpiresAt().AsTime(),
-		}, nil
-	}
-}
-
-// liveGrant returns the disk's grant if it has not expired.
-func (k *disk) liveGrant() (*diskGrant, error) {
-	g := k.grant.Load()
-	if g == nil || !time.Now().Before(g.expires) {
-		return nil, fmt.Errorf("disk %s: %w", k.id, errNoGrant)
-	}
-	return g, nil
-}
-
-// get reads the object at key, at most limit bytes.
-func (g *diskGrant) get(ctx context.Context, key string, limit int64) ([]byte, error) {
-	out, err := g.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &g.bucket, Key: &key})
-	if err != nil {
-		var missing *types.NoSuchKey
-		if errors.As(err, &missing) {
-			return nil, fmt.Errorf("%w: s3://%s/%s is missing", imagefs.ErrInvalidIndex, g.bucket, key)
+			CanExpire: true, Expires: expires,
 		}
-		return nil, fmt.Errorf("get s3://%s/%s: %w", g.bucket, key, err)
+		return imagefs.NewBucket(g.GetEndpoint(), g.GetRegion(), g.GetBucket(), g.GetForcePathStyle(), credentials.StaticCredentialsProvider{Value: creds},
+			func(o *s3.Options) { o.HTTPClient, o.RetryMaxAttempts = d.http, 1 })
+	})
+	return nil
+}
+
+// liveGrant returns the disk's bucket while its grant has not expired.
+func (k *disk) liveGrant() (imagefs.Bucket, error) {
+	b, ok := k.grants.lookup(k.id)
+	if !ok {
+		return imagefs.Bucket{}, fmt.Errorf("disk %s: %w", k.id, errNoGrant)
 	}
-	defer func() { _ = out.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(out.Body, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read s3://%s/%s: %w", g.bucket, key, err)
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%w: s3://%s/%s is larger than %d bytes", imagefs.ErrInvalidIndex, g.bucket, key, limit)
-	}
-	return data, nil
+	return b, nil
 }
 
 // serve serves a generation and returns its file, reading its index the
 // first time. With prefetch it begins the disk's start trace and fetches
 // the index's start and recent frames in the background.
 func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (*diskGeneration, error) { //nolint:contextcheck // a prefetch lives with the cache, not the call
-	k := d.lookup(req.GetDiskId())
-	if k == nil {
+	if _, ok := d.grants.lookup(req.GetDiskId()); !ok {
 		return nil, status.Errorf(codes.FailedPrecondition, "disk %s has no grant", req.GetDiskId())
 	}
+	d.mu.Lock()
+	k := d.byID[req.GetDiskId()]
+	if k == nil {
+		k = &disk{id: req.GetDiskId(), grants: &d.grants, generations: map[int64]*diskGeneration{}, traced: map[uint32]bool{}}
+		d.byID[k.id] = k
+	}
+	d.mu.Unlock()
 	k.mu.Lock()
 	g := k.generations[req.GetGeneration()]
 	k.mu.Unlock()
@@ -230,6 +192,7 @@ func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (
 		k.mu.Lock()
 		k.traceStart, k.trace = time.Now(), nil
 		clear(k.traced)
+		k.traceGen.Add(1)
 		// A generation served again, as by a repeated attach, keeps its
 		// prefetch.
 		var life context.Context
@@ -266,7 +229,7 @@ func (d *disks) open(ctx context.Context, k *disk, req *imagefsproto.ServeDiskRe
 		return nil, status.Errorf(codes.InvalidArgument, "index of disk %s generation %d: %v", k.id, req.GetGeneration(), err)
 	}
 	g := &diskGeneration{disk: k, generation: req.GetGeneration(), index: ix, cache: d.cache,
-		name: k.id + "-" + strconv.FormatInt(req.GetGeneration(), 10)}
+		name: k.id + "-" + strconv.FormatInt(req.GetGeneration(), 10), traced: make([]atomic.Uint32, len(ix.Frames))}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if served := k.generations[g.generation]; served != nil {
@@ -293,7 +256,7 @@ func (d *disks) index(ctx context.Context, k *disk, req *imagefsproto.ServeDiskR
 			if err != nil {
 				return err
 			}
-			raw, err = grant.get(ctx, key, imagefs.MaxIndexSize)
+			raw, err = grant.Get(ctx, key, imagefs.MaxIndexSize)
 			return err
 		})
 	}
@@ -319,10 +282,11 @@ func (d *disks) index(ctx context.Context, k *disk, req *imagefsproto.ServeDiskR
 }
 
 // release stops serving every generation of the disk but keep, and forgets
-// a disk left with none.
+// a disk left with none, and its grant.
 func (d *disks) release(id string, keep int64) {
 	k := d.lookup(id)
 	if k == nil {
+		d.grants.drop(id)
 		return
 	}
 	k.mu.Lock()
@@ -349,6 +313,7 @@ func (d *disks) release(id string, keep int64) {
 		d.mu.Lock()
 		if d.byID[id] == k {
 			delete(d.byID, id)
+			d.grants.drop(id)
 		}
 		d.mu.Unlock()
 	}
@@ -410,14 +375,20 @@ func (d *disks) reads(id string) (*imagefsproto.DiskReadsResponse, error) {
 }
 
 // record counts a read of frame in the disk's start trace.
-func (k *disk) record(frame uint32) {
-	now := time.Now()
+func (g *diskGeneration) record(frame int) {
+	k := g.disk
+	gen := k.traceGen.Load()
+	if g.traced[frame].Load() == gen {
+		return
+	}
+	n := uint32(frame) //nolint:gosec // frames are below maxDiskFrames
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if !k.traceStart.IsZero() && now.Sub(k.traceStart) < diskTraceWindow && !k.traced[frame] && len(k.trace) < imagefs.MaxTraceReads {
-		k.traced[frame] = true
-		k.trace = append(k.trace, frame)
+	if time.Since(k.traceStart) < diskTraceWindow && !k.traced[n] && len(k.trace) < imagefs.MaxTraceReads {
+		k.traced[n] = true
+		k.trace = append(k.trace, n)
 	}
+	g.traced[frame].Store(gen)
 }
 
 func (g *diskGeneration) key(frame int) frameKey {
@@ -458,7 +429,7 @@ func (g *diskGeneration) fetch(ctx context.Context, frame int) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		packed, err := grant.get(ctx, imagefs.DiskPrefix(g.disk.id)+f.Name(), f.Size)
+		packed, err := grant.Get(ctx, imagefs.DiskPrefix(g.disk.id)+f.Name(), f.Size)
 		if err != nil {
 			return err
 		}
@@ -524,7 +495,7 @@ func (f *diskFile) Read(ctx context.Context, fh gofs.FileHandle, dest []byte, of
 			continue
 		}
 		if !quiet {
-			g.disk.record(uint32(frame)) //nolint:gosec // frames are below maxDiskFrames
+			g.record(frame)
 		}
 		if _, _, err := g.cache.read(g, frame, part, within); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
 			g.cache.log.ErrorContext(ctx, "disk read failed", "disk_id", g.disk.id, "generation", g.generation, "offset", pos, "error", err)

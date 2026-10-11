@@ -5944,20 +5944,12 @@ func (x *GrantDiskReadRequest) GetLeaseToken() []byte {
 	return nil
 }
 
-// GrantDiskReadResponse reads the objects under disks/<disk id>/ of the
-// workspace bucket until expires_at.
 type GrantDiskReadResponse struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Endpoint        string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	Region          string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
-	Bucket          string                 `protobuf:"bytes,3,opt,name=bucket,proto3" json:"bucket,omitempty"`
-	ForcePathStyle  bool                   `protobuf:"varint,4,opt,name=force_path_style,json=forcePathStyle,proto3" json:"force_path_style,omitempty"`
-	AccessKeyId     string                 `protobuf:"bytes,5,opt,name=access_key_id,json=accessKeyId,proto3" json:"access_key_id,omitempty"`
-	SecretAccessKey string                 `protobuf:"bytes,6,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
-	SessionToken    string                 `protobuf:"bytes,7,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
-	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Reads the disk's objects in the workspace bucket.
+	Grant         *imagefsproto.DiskGrant `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GrantDiskReadResponse) Reset() {
@@ -5990,58 +5982,9 @@ func (*GrantDiskReadResponse) Descriptor() ([]byte, []int) {
 	return file_host_v1_host_proto_rawDescGZIP(), []int{69}
 }
 
-func (x *GrantDiskReadResponse) GetEndpoint() string {
+func (x *GrantDiskReadResponse) GetGrant() *imagefsproto.DiskGrant {
 	if x != nil {
-		return x.Endpoint
-	}
-	return ""
-}
-
-func (x *GrantDiskReadResponse) GetRegion() string {
-	if x != nil {
-		return x.Region
-	}
-	return ""
-}
-
-func (x *GrantDiskReadResponse) GetBucket() string {
-	if x != nil {
-		return x.Bucket
-	}
-	return ""
-}
-
-func (x *GrantDiskReadResponse) GetForcePathStyle() bool {
-	if x != nil {
-		return x.ForcePathStyle
-	}
-	return false
-}
-
-func (x *GrantDiskReadResponse) GetAccessKeyId() string {
-	if x != nil {
-		return x.AccessKeyId
-	}
-	return ""
-}
-
-func (x *GrantDiskReadResponse) GetSecretAccessKey() string {
-	if x != nil {
-		return x.SecretAccessKey
-	}
-	return ""
-}
-
-func (x *GrantDiskReadResponse) GetSessionToken() string {
-	if x != nil {
-		return x.SessionToken
-	}
-	return ""
-}
-
-func (x *GrantDiskReadResponse) GetExpiresAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.ExpiresAt
+		return x.Grant
 	}
 	return nil
 }
@@ -7779,17 +7722,9 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x17\n" +
 	"\adisk_id\x18\x02 \x01(\tR\x06diskId\x12\x1f\n" +
 	"\vlease_token\x18\x03 \x01(\fR\n" +
-	"leaseToken\"\xbd\x02\n" +
-	"\x15GrantDiskReadResponse\x12\x1a\n" +
-	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x16\n" +
-	"\x06region\x18\x02 \x01(\tR\x06region\x12\x16\n" +
-	"\x06bucket\x18\x03 \x01(\tR\x06bucket\x12(\n" +
-	"\x10force_path_style\x18\x04 \x01(\bR\x0eforcePathStyle\x12\"\n" +
-	"\raccess_key_id\x18\x05 \x01(\tR\vaccessKeyId\x12*\n" +
-	"\x11secret_access_key\x18\x06 \x01(\tR\x0fsecretAccessKey\x12#\n" +
-	"\rsession_token\x18\a \x01(\tR\fsessionToken\x129\n" +
-	"\n" +
-	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"q\n" +
+	"leaseToken\"N\n" +
+	"\x15GrantDiskReadResponse\x125\n" +
+	"\x05grant\x18\x01 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x05grant\"q\n" +
 	"\x12ReleaseDiskRequest\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x17\n" +
 	"\adisk_id\x18\x02 \x01(\tR\x06diskId\x12\x1f\n" +
@@ -8075,6 +8010,7 @@ var file_host_v1_host_proto_goTypes = []any{
 	(*imagefsproto.FrameRead)(nil),          // 107: lazycloud.imagefs.v1.FrameRead
 	(*timestamppb.Timestamp)(nil),           // 108: google.protobuf.Timestamp
 	(*imagefsproto.LayerGrant)(nil),         // 109: lazycloud.imagefs.v1.LayerGrant
+	(*imagefsproto.DiskGrant)(nil),          // 110: lazycloud.imagefs.v1.DiskGrant
 }
 var file_host_v1_host_proto_depIdxs = []int32{
 	14,  // 0: lazycloud.host.v1.EnrollRequest.capacity:type_name -> lazycloud.host.v1.Capacity
@@ -8170,7 +8106,7 @@ var file_host_v1_host_proto_depIdxs = []int32{
 	73,  // 90: lazycloud.host.v1.AcquireDiskResponse.generation:type_name -> lazycloud.host.v1.DiskGeneration
 	73,  // 91: lazycloud.host.v1.RecordDiskGenerationRequest.generation:type_name -> lazycloud.host.v1.DiskGeneration
 	73,  // 92: lazycloud.host.v1.RecordDiskGenerationResponse.orphans:type_name -> lazycloud.host.v1.DiskGeneration
-	108, // 93: lazycloud.host.v1.GrantDiskReadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	110, // 93: lazycloud.host.v1.GrantDiskReadResponse.grant:type_name -> lazycloud.imagefs.v1.DiskGrant
 	9,   // 94: lazycloud.host.v1.DiskFailure.operation:type_name -> lazycloud.host.v1.DiskOperation
 	82,  // 95: lazycloud.host.v1.RecordDiskFailureRequest.failure:type_name -> lazycloud.host.v1.DiskFailure
 	86,  // 96: lazycloud.host.v1.APIRequest.head:type_name -> lazycloud.host.v1.APIRequestHead

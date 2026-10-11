@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"slices"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
@@ -72,7 +72,7 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store, final 
 	return pending.published(), nil
 }
 
-func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, objects *objectStore, final bool) (*pendingPublish, error) {
+func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, objects imagefs.Bucket, final bool) (*pendingPublish, error) {
 	base, err := loadBase(p, state)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	}
 	sum := sha256.Sum256(raw)
 	digest := hex.EncodeToString(sum[:])
-	if err := objects.put(ctx, imagefs.DiskIndexKey(p.id, generation, digest), raw); err != nil {
+	if err := objects.Put(ctx, imagefs.DiskIndexKey(p.id, generation, digest), raw); err != nil {
 		return nil, err
 	}
 	if err := writeFileAtomic(p.pendingIndex(), raw); err != nil {
@@ -267,7 +267,7 @@ func dirtyFrames(ctx context.Context, p diskPaths, sealed []layer) ([]mappedExte
 // generation's bytes at basePath under the sealed layers' writes, and
 // stores those the bucket lacks, filling their entries in next. It returns
 // the bytes stored.
-func storeFrames(ctx context.Context, p diskPaths, objects *objectStore, sealed []layer, extents []mappedExtent,
+func storeFrames(ctx context.Context, p diskPaths, objects imagefs.Bucket, sealed []layer, extents []mappedExtent,
 	base imagefs.DiskIndex, basePath string, dirty []uint32, next *imagefs.DiskIndex,
 ) (int64, error) {
 	var err error
@@ -337,7 +337,7 @@ func storeFrames(ctx context.Context, p diskPaths, objects *objectStore, sealed 
 			}
 			mu.Unlock()
 			u.once.Do(func() {
-				if u.err = objects.put(groupCtx, imagefs.DiskPrefix(p.id)+f.Name(), packed); u.err == nil {
+				if u.err = objects.Put(groupCtx, imagefs.DiskPrefix(p.id)+f.Name(), packed); u.err == nil {
 					added.Add(f.Size)
 				}
 			})
@@ -505,9 +505,8 @@ func collectOrphans(ctx context.Context, p diskPaths, state *diskState, store St
 	}
 	for _, o := range state.Collect.Orphans {
 		key := imagefs.DiskIndexKey(p.id, o.Generation, o.IndexSHA256)
-		raw, err := objects.get(ctx, key, imagefs.MaxIndexSize)
-		var missing *types.NoSuchKey
-		if err != nil && !errors.As(err, &missing) {
+		raw, err := objects.Get(ctx, key, imagefs.MaxIndexSize)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 		if ix, err := imagefs.UnmarshalDisk(raw); err == nil {

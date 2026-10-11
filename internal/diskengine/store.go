@@ -1,15 +1,15 @@
 package diskengine
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 )
 
 // Credentials sign requests to a workspace bucket. A zero ExpiresAt never
@@ -42,14 +42,9 @@ const credentialMargin = 2 * time.Minute
 // the most one Remover call is given.
 const deleteBatchSize = 1000
 
-type objectStore struct {
-	client *s3.Client
-	bucket string
-}
-
-func openStore(store Store) (*objectStore, error) {
+func openStore(store Store) (imagefs.Bucket, error) {
 	if store.Endpoint == "" || store.Region == "" || store.Bucket == "" || store.Credentials == nil {
-		return nil, fmt.Errorf("%w: a store needs an endpoint, a region, a bucket and credentials", ErrInvalid)
+		return imagefs.Bucket{}, fmt.Errorf("%w: a store needs an endpoint, a region, a bucket and credentials", ErrInvalid)
 	}
 	fetch := store.Credentials
 	provider := aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
@@ -75,49 +70,7 @@ func openStore(store Store) (*objectStore, error) {
 		}
 		return credentials, nil
 	})
-	options := s3.Options{
-		Region: store.Region,
-		Credentials: aws.NewCredentialsCache(provider, func(o *aws.CredentialsCacheOptions) {
-			o.ExpiryWindow = credentialMargin
-		}),
-		UsePathStyle: store.ForcePathStyle,
-		// Compute checksums only where S3 requires them. S3-compatible stores
-		// reject the streaming trailers the SDK otherwise adds to every upload.
-		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
-		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
-		RetryMaxAttempts:           5,
-		BaseEndpoint:               aws.String(store.Endpoint),
-	}
-	return &objectStore{client: s3.New(options), bucket: store.Bucket}, nil
-}
-
-// get reads an object of at most limit bytes.
-func (s *objectStore) get(ctx context.Context, key string, limit int64) ([]byte, error) {
-	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
-	if err != nil {
-		return nil, fmt.Errorf("get s3://%s/%s: %w", s.bucket, key, err)
-	}
-	defer func() { _ = output.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(output.Body, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read s3://%s/%s: %w", s.bucket, key, err)
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("s3://%s/%s is larger than %d bytes", s.bucket, key, limit)
-	}
-	return data, nil
-}
-
-func (s *objectStore) put(ctx context.Context, key string, body []byte) error {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:        &s.bucket,
-		Key:           &key,
-		Body:          bytes.NewReader(body),
-		ContentLength: aws.Int64(int64(len(body))),
-		ContentType:   aws.String("application/octet-stream"),
-	})
-	if err != nil {
-		return fmt.Errorf("put s3://%s/%s: %w", s.bucket, key, err)
-	}
-	return nil
+	cache := aws.NewCredentialsCache(provider, func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = credentialMargin })
+	return imagefs.NewBucket(store.Endpoint, store.Region, store.Bucket, store.ForcePathStyle, cache,
+		func(o *s3.Options) { o.RetryMaxAttempts = 5 }), nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -328,11 +329,11 @@ func (s *Server) GrantDiskRead(ctx context.Context, req *hostproto.GrantDiskRead
 	if err != nil {
 		return nil, s.diskError(ctx, err)
 	}
-	return &hostproto.GrantDiskReadResponse{
+	return &hostproto.GrantDiskReadResponse{Grant: &imagefsproto.DiskGrant{
 		Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
 		AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
 		ExpiresAt: timestamppb.New(grant.ExpiresAt),
-	}, nil
+	}}, nil
 }
 
 // ReleaseDisk ends a lease.

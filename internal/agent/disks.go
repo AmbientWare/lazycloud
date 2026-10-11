@@ -189,11 +189,7 @@ func (a *Agent) grantRead(ctx context.Context, container string, d *heldDisk) er
 		if err != nil {
 			return fmt.Errorf("grant reads of disk %s: %w", d.Name, err)
 		}
-		d.read = &imagefsproto.DiskGrant{
-			Endpoint: g.GetEndpoint(), Region: g.GetRegion(), Bucket: g.GetBucket(), ForcePathStyle: g.GetForcePathStyle(),
-			AccessKeyId: g.GetAccessKeyId(), SecretAccessKey: g.GetSecretAccessKey(), SessionToken: g.GetSessionToken(),
-			ExpiresAt: g.GetExpiresAt(),
-		}
+		d.read = g.GetGrant()
 	}
 	return a.layers.client.GrantDisk(ctx, d.ID, d.read) //nolint:wrapcheck // The client names the call.
 }

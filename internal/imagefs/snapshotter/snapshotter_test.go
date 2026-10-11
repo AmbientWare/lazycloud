@@ -650,7 +650,9 @@ func TestReadsOutliveClose(t *testing.T) {
 
 // grantTo grants the stored layer to c and returns an unmounted layer of it.
 func (l storedLayer) grantTo(c *frameCache) *layer {
-	c.grants.put([]grant{{layer: l.index.Layer, indexURL: l.grant.GetIndexUrl(), dataURL: l.grant.GetDataUrl(), expires: l.grant.GetExpiresAt().AsTime()}})
+	c.grants.put(l.index.Layer, l.grant.GetExpiresAt().AsTime(), func() layerURLs {
+		return layerURLs{index: l.grant.GetIndexUrl(), data: l.grant.GetDataUrl()}
+	})
 	return c.newLayer(l.index)
 }
 

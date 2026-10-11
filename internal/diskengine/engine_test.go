@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -399,14 +400,17 @@ func TestDetachDropsTheGrantOfADiskNeverServed(t *testing.T) {
 	h := newHost(t, 64*frame)
 	diskID := uuid.NewString()
 	h.grant(t, testStore(t), diskID)
-	if _, _, err := h.bases.DiskReads(t.Context(), diskID); err != nil {
-		t.Fatalf("a granted disk's reads: %v", err)
+	// A generation never stored: serving it reads the store through the grant.
+	never := Generation{Generation: 1, IndexSHA256: strings.Repeat("0", 64)}
+	index := filepath.Join(t.TempDir(), "index")
+	if _, err := h.engine.serveBase(t.Context(), diskID, never, index, nil); status.Code(err) == codes.FailedPrecondition {
+		t.Fatalf("a granted disk is refused: %v", err)
 	}
 	if err := h.engine.Detach(t.Context(), diskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.bases.DiskReads(t.Context(), diskID); status.Code(err) != codes.NotFound {
-		t.Fatalf("after the detach the snapshotter answers %v, want NotFound", err)
+	if _, err := h.engine.serveBase(t.Context(), diskID, never, index, nil); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("after the detach the snapshotter answers %v, want FailedPrecondition", err)
 	}
 }
 

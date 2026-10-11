@@ -77,7 +77,7 @@ type frameCache struct {
 	fillBytes int64
 	http      *http.Client
 	log       *slog.Logger
-	grants    *grants
+	grants    grants[imagefs.Digest, layerURLs]
 	// traces records the frames read through mounts for the agent, and
 	// starts sums them into the traces of the starts that read them.
 	traces *tracer
@@ -131,7 +131,6 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 	}
 	return &frameCache{
 		dir: dir, limit: cfg.CacheBytes, reserve: cfg.ReserveBytes, fillBytes: cfg.FillBytes, http: cfg.HTTP, log: cfg.Logger, reader: reader,
-		grants:     &grants{byLayer: make(map[imagefs.Digest]grant)},
 		traces:     &tracer{traces: make(map[string]*trace)},
 		starts:     &startTraces{tracer: cfg.Tracer, byName: map[string]*startTrace{}, byLayer: map[imagefs.Digest]*startTrace{}},
 		slots:      make(chan struct{}, cfg.Fetches),
@@ -152,7 +151,7 @@ func (c *frameCache) newLayer(ix imagefs.Index) *layer {
 		index:  ix,
 		data: imagefs.HTTPObject(c.http, func() string {
 			g, _ := c.grants.lookup(ix.Layer)
-			return g.dataURL
+			return g.data
 		}),
 		cache:  c,
 		traced: make([]atomic.Uint32, len(ix.Frames)),
@@ -373,7 +372,8 @@ func retry(ctx context.Context, attempt func() error) error {
 // error, a store error, or a refused credential the agent may have
 // refreshed.
 func retryable(err error) bool {
-	if errors.Is(err, errNoGrant) || errors.Is(err, imagefs.ErrInvalidIndex) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, errNoGrant) || errors.Is(err, imagefs.ErrInvalidIndex) || errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var status *imagefs.StatusError
