@@ -58,6 +58,11 @@ const (
 	// mounterConcurrency bounds the mounters of one container that start
 	// or stop at once.
 	mounterConcurrency = 4
+	// mounterFlushSeconds bounds how long a stopping mounter has to store
+	// what it still holds before Docker kills it. GeeseFS finishes renames
+	// in the background, and renaming a file of gigabytes is a server-side
+	// copy that runs for minutes.
+	mounterFlushSeconds = 600
 	// grantMargin is how long a stored key must still be valid to mount.
 	grantMargin = time.Minute
 )
@@ -444,9 +449,14 @@ func (v *volumes) release(ctx context.Context, container string) {
 	mounts, ok := v.mounts[container]
 	delete(v.mounts, container)
 	v.mu.Unlock()
-	if !ok {
-		return
+	if ok {
+		v.stopAll(ctx, mounts, v.a.workloadSlice(container))
 	}
+}
+
+// stopAll stops mounts and deletes their keys, then stops slices, which
+// would kill a mount still storing what its workload left.
+func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...string) {
 	var stops errgroup.Group
 	stops.SetLimit(mounterConcurrency)
 	for _, m := range mounts {
@@ -461,8 +471,8 @@ func (v *volumes) release(ctx context.Context, container string) {
 		})
 	}
 	_ = stops.Wait()
-	if err := v.stopSlices(ctx, v.a.workloadSlice(container)); err != nil {
-		v.a.log.Warn("stopping a container's slice failed", "container", container, "error", err)
+	if err := v.stopSlices(ctx, slices...); err != nil {
+		v.a.log.Warn("stopping slices failed", "slices", slices, "error", err)
 	}
 }
 
@@ -680,9 +690,10 @@ func (v *volumes) markExited(m *mounter) bool {
 }
 
 // stop removes m's binds, stops m's container, whose script unmounts on
-// SIGTERM, then removes it and its directory, which only goes when nothing
-// is mounted on it and it is empty. No later mount uses the name, so binds
-// or a directory left behind are only logged.
+// SIGTERM and waits for GeeseFS to store what it holds, then removes it and
+// its directory, which only goes when nothing is mounted on it and it is
+// empty. No later mount uses the name, so binds or a directory left behind
+// are only logged.
 func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	v.mu.Lock()
 	m.stopping = true
@@ -690,7 +701,7 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	if err := unbind(filepath.Join(v.bindsDir(), m.name)); err != nil {
 		v.a.log.Warn("removing a mount's binds failed", "mount", m.name, "error", err)
 	}
-	if err := v.a.stopDocker(ctx, m.name, stopKillSeconds); err != nil {
+	if err := v.a.stopDocker(ctx, m.name, mounterFlushSeconds); err != nil {
 		return err
 	}
 	if err := v.a.removeContainer(ctx, m.name); err != nil {
@@ -772,24 +783,23 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			c.failVolume(ctx, "a volume mount of this container stopped while the agent was away")
 		}
 	}
-	for _, m := range dead {
-		if err := v.stop(ctx, m); err != nil {
-			v.a.log.Warn("removing a volume mount the agent did not adopt failed", "mount", m.name, "error", err)
-		}
-	}
-	if err := v.stopSlices(ctx, orphans...); err != nil {
-		return err
-	}
+	// A mount the agent did not adopt may still be storing what its
+	// workload left, so it stops without holding up the start.
+	v.a.goOwned(func(ctx context.Context) { v.stopAll(ctx, dead, orphans...) })
 	// Starts and stops cut short leave keys, binds and directories no
 	// mounter has. A directory goes only when nothing is mounted on it and
 	// it is empty.
+	stopping := map[string]bool{}
+	for _, m := range dead {
+		stopping[m.name] = true
+	}
 	for dir, remove := range map[string]func(string) error{v.bucketKeys(""): os.RemoveAll, v.bindsDir(): unbind, v.mountDir(): os.Remove} {
 		entries, err := os.ReadDir(dir)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("list %s: %w", dir, err)
 		}
 		for _, entry := range entries {
-			if path := filepath.Join(dir, entry.Name()); live[entry.Name()] == nil {
+			if path := filepath.Join(dir, entry.Name()); live[entry.Name()] == nil && !stopping[entry.Name()] {
 				if err := remove(path); err != nil {
 					v.a.log.Warn("removing what no volume mount uses failed", "path", path, "error", err)
 				}
