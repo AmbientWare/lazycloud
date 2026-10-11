@@ -11,18 +11,16 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
-// RetryStarts applies an explicit user action, such as a resume, a deploy,
-// a task or a request, to releases in tx. Background restarts stop at the
-// start failure limit; only these actions start a stopped release again.
-// A release stopped by a load error or the start failure limit gets one
-// fresh start: its load error is cleared and its count left one short of
-// the limit, so a failure stops it again at once. The exception is a
-// release whose newest container stopped within the backoff of a release
-// at the limit: the action is held and fails with that start's Failure,
-// which bounds user retries to one per window however much traffic
-// arrives. The returned map holds the held releases; the action goes ahead
-// on the rest. The row lock lets one concurrent action retry; the rest see
-// the fresh count and wait for that start.
+// RetryStarts applies a user action, such as a resume, deploy, task or
+// request, to releases in tx. Background restarts stop at the start failure
+// limit; only these actions start a stopped release again. A release
+// stopped by a load error or the limit gets one fresh start: its load error
+// is cleared and its count set one short of the limit, so another failure
+// stops it at once. A release whose newest container stopped within the
+// backoff at the limit is held instead, with that start's Failure, so
+// traffic retries it at most once per window. The returned map holds the
+// held releases. The row lock lets one concurrent action retry; the rest
+// see the fresh count and wait for that start.
 func RetryStarts(ctx context.Context, tx pgx.Tx, releases []uuid.UUID) (map[uuid.UUID]*Failure, error) {
 	held := map[uuid.UUID]*Failure{}
 	q := New(tx)

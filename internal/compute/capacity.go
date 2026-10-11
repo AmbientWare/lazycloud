@@ -132,9 +132,9 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // on Spot, then the tightest fit, whose free CPU and memory as fractions
 // of its size sum lowest after placement, which keeps large holes for
 // large containers. r's preferred host wins among hosts that borrow alike.
-// Spot-tolerant work borrows an on-demand platform CPU
-// host only while one of them still keeps floor free afterwards, so work
-// that cannot run on Spot starts at once.
+// Spot-tolerant work borrows an on-demand platform CPU host only while one
+// of them still keeps floor free afterwards, so work that cannot run on
+// Spot starts at once.
 func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 	holders := 0
 	if r.Preemptible && !floor.Empty() {

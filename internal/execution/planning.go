@@ -198,7 +198,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	q := e.queries.WithTx(tx)
 	minimum := 0
 	// A release that cannot start keeps no warm minimum; admitting a task
-	// retried it or failed the task at once.
+	// retries it or fails the task at once.
 	if release.Active && !release.LoadFailed && release.StartFailures < startFailureLimit {
 		minimum = int(release.MinContainers)
 	}

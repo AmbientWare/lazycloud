@@ -85,9 +85,9 @@ type Engine struct {
 	log   *slog.Logger
 }
 
-// New returns an engine for the disks under root, whose published
-// generations bases, the host's snapshotter, serves. Unix socket paths
-// under root are limited to 107 bytes, so root must be short.
+// New returns an engine for the disks under root. bases, the host's
+// snapshotter, serves their published generations. Unix socket paths under
+// root are limited to 107 bytes, so root must be short.
 func New(root string, bases imagefsproto.DiskSourcesClient, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)

@@ -103,9 +103,9 @@ func (v *volumes) storageDir(workspace string) string {
 
 func (v *volumes) mountDir() string { return filepath.Join(v.a.cfg.StateDir, "mounts") }
 
-// newMounter is the mount container name, serving container. Each mounts in
-// its own directory directly in the mount directory, so no mount lies inside
-// another's.
+// newMounter returns the mount container name, which serves container. Each
+// mounts in its own directory directly in the mount directory, so no mount
+// lies inside another's.
 func (v *volumes) newMounter(name, container string) *mounter {
 	return &mounter{name: name, dir: filepath.Join(v.mountDir(), name), container: container, exited: make(chan struct{})}
 }
@@ -734,7 +734,8 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 		if s.Labels[labelKind] != "" || s.State != containertypes.StateRunning || v.a.lookup(id) == nil {
 			continue
 		}
-		// Workloads an earlier release started bind the mount directory.
+		// Workloads an earlier agent release started bind the mount directory
+		// itself rather than binds/.
 	points:
 		for _, point := range s.Mounts {
 			for _, dir := range []string{v.bindsDir(), v.mountDir()} {

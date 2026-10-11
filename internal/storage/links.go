@@ -150,8 +150,8 @@ func (s *Storage) linkBucket(ctx context.Context, name string) (bucketClient, er
 }
 
 // signedLifetime is want, capped at how long client's credentials, which
-// sign a presigned URL, now stay valid, a minute spared. Expiring credentials come
-// from the default chain's cache, which reports them credentialWindow
+// sign a presigned URL, stay valid, less a minute. Expiring credentials
+// come from the default chain's cache, which reports them credentialWindow
 // before they expire and renews them then, so a URL lasts at least the
 // window less that minute.
 func (s *Storage) signedLifetime(ctx context.Context, client *s3.Client, want time.Duration) (time.Duration, error) {

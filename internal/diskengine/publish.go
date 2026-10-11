@@ -373,11 +373,10 @@ func overlay(data []byte, off int64, extents []mappedExtent, files []*os.File) e
 
 // CommitPublished makes generation, the pending upload, the disk's base
 // once the control plane has recorded it, and keeps the orphans it named
-// for Collect. An attached disk's running stack
-// moves onto the generation's file, with the frames it replaced cached
-// first, and the snapshotter stops serving older generations. The layers
-// it holds are deleted. Committing the committed generation again
-// succeeds.
+// for Collect. An attached disk's running stack moves onto the
+// generation's file, with the frames it replaced cached first, and the
+// snapshotter stops serving older generations. The layers it holds are
+// deleted. Committing the committed generation again succeeds.
 func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation int64, orphans []Generation) error {
 	return e.withDisk(ctx, diskID, requireState, func(p diskPaths, state *diskState) error {
 		if state.Pending == nil || state.Pending.Generation != generation {
