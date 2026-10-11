@@ -179,10 +179,34 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 	if err != nil {
 		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
 	}
-	if lease.Read, err = s.diskReadGrant(ctx, host, store, declared.WorkspaceID, lease.Disk); err != nil {
+	if lease.Read, err = s.grant(ctx, host, store, declared.WorkspaceID, diskPrefix(lease.Disk)); err != nil {
 		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
 	}
 	return lease, nil
+}
+
+// GrantDiskRead issues the host holding disk under the lease a credential
+// that reads the disk's objects, its generations' indexes and frames, and
+// nothing else. The host's snapshotter serves the disk's generations with
+// it. Garage keys cannot be scoped to a prefix, so there it reads the
+// workspace bucket. The object store's refusal is a *StoreRefusedError.
+func (s *Storage) GrantDiskRead(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte) (Grant, error) {
+	var row LockLeasedDiskRow
+	err := s.withDiskLease(ctx, host, container, disk, token, func(_ *Queries, locked LockLeasedDiskRow) error {
+		row = locked
+		return nil
+	})
+	if err != nil {
+		return Grant{}, fmt.Errorf("grant disk reads: %w", err)
+	}
+	if row.Bucket == nil || row.Region == nil {
+		return Grant{}, invalid("disk %s has no workspace bucket", disk)
+	}
+	store, err := s.storeOf(ctx, *row.Bucket, *row.Region, row.ConnectionID)
+	if err != nil {
+		return Grant{}, err
+	}
+	return s.grant(ctx, host, store, row.WorkspaceID, diskPrefix(disk))
 }
 
 // diskLease holds a fenced lease for the length of fn.
@@ -332,9 +356,6 @@ type DiskFailure struct {
 func (s *Storage) RecordDiskFailure(ctx context.Context, container, disk uuid.UUID, token []byte, failure *DiskFailure) error {
 	params := SetDiskFailureParams{ID: disk, ContainerID: &container, LeaseToken: token}
 	if failure != nil {
-		if !failure.Operation.Valid() {
-			return invalid("unknown disk operation %q", failure.Operation)
-		}
 		message := strings.ToValidUTF8(failure.Message[:min(len(failure.Message), maxFailureMessage)], "")
 		params.Operation, params.Message = (*string)(&failure.Operation), &message
 	}

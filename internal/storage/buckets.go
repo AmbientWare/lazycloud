@@ -81,12 +81,11 @@ type bucketProvider interface {
 	// ensureBucket creates the store's bucket if it is missing and lets
 	// the store's client use it.
 	ensureBucket(ctx context.Context, store bucketClient) error
-	// issue returns a credential for bucket alone. revocable means the key
-	// must be deleted after it expires.
-	issue(ctx context.Context, bucket, name string, lifetime time.Duration) (creds aws.Credentials, revocable bool, err error)
-	// issueRead returns a credential that reads the objects under prefix
-	// in bucket, or where the store cannot scope it, the bucket.
-	issueRead(ctx context.Context, bucket, prefix, name string, lifetime time.Duration) (creds aws.Credentials, revocable bool, err error)
+	// issue returns a credential for bucket alone, or with readPrefix one
+	// that reads the objects under it, or the bucket where the store cannot
+	// scope a key to a prefix. revocable means the key must be deleted after
+	// it expires.
+	issue(ctx context.Context, bucket, readPrefix, name string, lifetime time.Duration) (creds aws.Credentials, revocable bool, err error)
 	revoke(ctx context.Context, accessKeyID string) error
 }
 
@@ -251,12 +250,7 @@ func (g *garageBuckets) ensureBucket(ctx context.Context, store bucketClient) er
 	return g.allow(ctx, id, g.platformKey, garagePerms{Read: true, Write: true, Owner: true})
 }
 
-func (g *garageBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
-	return g.issueWith(ctx, bucket, name, lifetime, garagePerms{Read: true, Write: true})
-}
-
-// issueWith creates a key expiring after lifetime with perms on bucket.
-func (g *garageBuckets) issueWith(ctx context.Context, bucket, name string, lifetime time.Duration, perms garagePerms) (aws.Credentials, bool, error) {
+func (g *garageBuckets) issue(ctx context.Context, bucket, readPrefix, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
 	id, err := g.bucketID(ctx, bucket)
 	if err != nil {
 		return aws.Credentials{}, false, err
@@ -271,7 +265,7 @@ func (g *garageBuckets) issueWith(ctx context.Context, bucket, name string, life
 	}, &key); err != nil {
 		return aws.Credentials{}, false, err
 	}
-	if err := g.allow(ctx, id, key.AccessKeyID, perms); err != nil {
+	if err := g.allow(ctx, id, key.AccessKeyID, garagePerms{Read: true, Write: readPrefix == ""}); err != nil {
 		// The key reaches nothing yet; delete it now rather than at expiry.
 		return aws.Credentials{}, false, errors.Join(err, g.revoke(context.WithoutCancel(ctx), key.AccessKeyID))
 	}
@@ -314,17 +308,16 @@ func (a *awsBuckets) ensureBucket(ctx context.Context, store bucketClient) error
 	return nil
 }
 
-func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
-	policy, err := json.Marshal(hostPolicy(bucket, a.account))
+func (a *awsBuckets) issue(ctx context.Context, bucket, readPrefix, name string, lifetime time.Duration) (aws.Credentials, bool, error) {
+	policy := hostPolicy(bucket, a.account)
+	if readPrefix != "" {
+		policy = readPolicy(bucket, readPrefix, a.account)
+	}
+	encoded, err := json.Marshal(policy)
 	if err != nil {
 		return aws.Credentials{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
-	return a.issueWith(ctx, bucket, name, string(policy), lifetime)
-}
-
-// issueWith assumes the role for bucket under the session policy.
-func (a *awsBuckets) issueWith(ctx context.Context, bucket, name, policy string, lifetime time.Duration) (aws.Credentials, bool, error) {
-	creds, err := a.assume(ctx, name, policy, lifetime)
+	creds, err := a.assume(ctx, name, string(encoded), lifetime)
 	if err != nil {
 		return aws.Credentials{}, false, fmt.Errorf("assume role for %s: %w", bucket, err)
 	}
@@ -371,5 +364,19 @@ func hostPolicy(bucket, account string) map[string]any {
 				"Condition": map[string]any{"StringEquals": owned},
 			},
 		},
+	}
+}
+
+// readPolicy is the STS session policy of a disk read grant: object reads
+// under prefix of account's bucket and nothing else.
+func readPolicy(bucket, prefix, account string) map[string]any {
+	return map[string]any{
+		"Version": "2012-10-17",
+		"Statement": []map[string]any{{
+			"Effect":    "Allow",
+			"Action":    []string{"s3:GetObject"},
+			"Resource":  []string{"arn:aws:s3:::" + bucket + "/" + prefix + "*"},
+			"Condition": map[string]any{"StringEquals": map[string]any{"s3:ResourceAccount": account}},
+		}},
 	}
 }
