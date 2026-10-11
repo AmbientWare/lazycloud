@@ -26,7 +26,7 @@ import (
 	"path/filepath"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
-	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 // Errors callers branch on. Others are wrapped failures.
@@ -81,14 +81,14 @@ type LocalDisk struct {
 // Engine operates the disks under one root directory.
 type Engine struct {
 	root  string
-	bases *layersource.Client
+	bases imagefsproto.DiskSourcesClient
 	log   *slog.Logger
 }
 
 // New returns an engine for the disks under root, whose published
 // generations bases, the host's snapshotter, serves. Unix socket paths
 // under root are limited to 107 bytes, so root must be short.
-func New(root string, bases *layersource.Client, logger *slog.Logger) *Engine {
+func New(root string, bases imagefsproto.DiskSourcesClient, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}

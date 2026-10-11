@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
@@ -384,7 +385,7 @@ func TestFinalPublishKeepsRecentFramesTheSnapshotterForgot(t *testing.T) {
 	if recent := readIndex(t, p).Recent; len(recent) != 2 {
 		t.Fatalf("the final publish recorded recent frames %v, want the two read", recent)
 	}
-	if err := h.bases.ReleaseDisk(ctx, diskID, 0); err != nil {
+	if _, err := h.bases.ReleaseDisk(ctx, &imagefsproto.ReleaseDiskRequest{DiskId: diskID}); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := h.engine.Publish(ctx, diskID, store, true); err != nil || again != nil {

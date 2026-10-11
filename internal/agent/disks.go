@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/moby/moby/api/types/mount"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -92,13 +93,7 @@ func (a *Agent) diskStore(workspace string) (diskengine.Store, error) {
 	}
 	return diskengine.Store{
 		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.PathStyle,
-		Credentials: func(context.Context) (diskengine.Credentials, error) {
-			c, err := a.volumes.credentials(workspace)
-			if err != nil {
-				return diskengine.Credentials{}, err
-			}
-			return diskengine.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, ExpiresAt: c.expires}, nil
-		},
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return a.volumes.credentials(workspace) }),
 	}, nil
 }
 
@@ -195,7 +190,10 @@ func (a *Agent) grantRead(ctx context.Context, container string, d *heldDisk, al
 	if !renew && !always {
 		return nil
 	}
-	return a.layers.client.GrantDisk(ctx, d.ID, d.read) //nolint:wrapcheck // The client names the call.
+	if _, err := a.layers.client.Disks.GrantDisk(ctx, &imagefsproto.GrantDiskRequest{DiskId: d.ID, Grant: d.read}); err != nil {
+		return fmt.Errorf("grant reads of disk %s to the snapshotter: %w", d.Name, err)
+	}
+	return nil
 }
 
 // acquire takes a lease, waiting while another container still holds the

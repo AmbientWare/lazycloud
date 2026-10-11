@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sys/unix"
@@ -33,9 +34,7 @@ func testStore(t *testing.T) Store {
 	cfg := storagetest.Config(t)
 	return Store{
 		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
-		Credentials: func(context.Context) (Credentials, error) {
-			return Credentials{AccessKeyID: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey}, nil
-		},
+		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
 	}
 }
 
@@ -103,7 +102,7 @@ func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // host runs them.
 type host struct {
 	engine *Engine
-	bases  *layersource.Client
+	bases  imagefsproto.DiskSourcesClient
 	store  *countingTransport
 	// stop ends the snapshotter; its FUSE mounts go with it.
 	stop func()
@@ -150,20 +149,20 @@ func newHost(t *testing.T, cacheBytes int64) *host {
 		_ = unix.Unmount(filepath.Join(cfg.Root, "disks"), unix.MNT_DETACH)
 	}
 	t.Cleanup(stop)
-	return &host{engine: New(filepath.Join(dir, "d"), client, logger), bases: client, store: counting, stop: stop}
+	return &host{engine: New(filepath.Join(dir, "d"), client.Disks, logger), bases: client.Disks, store: counting, stop: stop}
 }
 
 // grant gives the host's snapshotter the test store's credentials for disk.
 func (h *host) grant(t *testing.T, store Store, diskID string) {
 	t.Helper()
-	creds, err := store.Credentials(t.Context())
+	creds, err := store.Credentials.Retrieve(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.bases.GrantDisk(t.Context(), diskID, &imagefsproto.DiskGrant{
+	if _, err := h.bases.GrantDisk(t.Context(), &imagefsproto.GrantDiskRequest{DiskId: diskID, Grant: &imagefsproto.DiskGrant{
 		Endpoint: store.Endpoint, Region: store.Region, Bucket: store.Bucket, ForcePathStyle: store.ForcePathStyle,
 		AccessKeyId: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 }

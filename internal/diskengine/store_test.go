@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // One engine call can outlast one grant, so the store asks for credentials
@@ -16,12 +18,12 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 	var calls atomic.Int32
 	// Held credentials count as due a credentialMargin before they expire.
 	due := time.Now().Add(700 * time.Millisecond)
-	store.Credentials = func(ctx context.Context) (Credentials, error) {
+	store.Credentials = aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 		calls.Add(1)
-		current, err := fetch(ctx)
-		current.ExpiresAt = due.Add(credentialMargin)
+		current, err := fetch.Retrieve(ctx)
+		current.CanExpire, current.Expires = true, due.Add(credentialMargin)
 		return current, err
-	}
+	})
 	objects, err := openStore(store)
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +45,11 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 		t.Fatalf("asked for credentials %d times, want a second request within the margin", got)
 	}
 
-	store.Credentials = func(ctx context.Context) (Credentials, error) {
-		current, err := fetch(ctx)
-		current.ExpiresAt = time.Now().Add(-time.Second)
+	store.Credentials = aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+		current, err := fetch.Retrieve(ctx)
+		current.CanExpire, current.Expires = true, time.Now().Add(-time.Second)
 		return current, err
-	}
+	})
 	expired, err := openStore(store)
 	if err != nil {
 		t.Fatal(err)

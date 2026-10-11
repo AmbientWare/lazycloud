@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	systemd "github.com/coreos/go-systemd/v22/dbus"
 	"github.com/google/uuid"
 	containertypes "github.com/moby/moby/api/types/container"
@@ -763,32 +764,29 @@ func (v *volumes) adoptGrants() {
 			continue
 		}
 		c, err := v.credentials(workspace)
-		if _, statErr := os.Stat(filepath.Join(v.storageDir(workspace), "location.json")); err == nil && statErr == nil && time.Until(c.expires) > grantMargin {
+		if _, statErr := os.Stat(filepath.Join(v.storageDir(workspace), "location.json")); err == nil && statErr == nil && time.Until(c.Expires) > grantMargin {
 			v.markGranted(workspace)
 		}
 	}
 }
 
-// storedCredentials is a workspace's current key with its expiry parsed.
-type storedCredentials struct {
-	processCredentials
-	expires time.Time
-}
-
 // credentials reads the workspace's current key.
-func (v *volumes) credentials(workspace string) (storedCredentials, error) {
-	var c storedCredentials
+func (v *volumes) credentials(workspace string) (aws.Credentials, error) {
+	var c processCredentials
 	data, err := os.ReadFile(filepath.Join(v.storageDir(workspace), "credentials.json"))
 	if err != nil {
-		return c, fmt.Errorf("read storage credentials: %w", err)
+		return aws.Credentials{}, fmt.Errorf("read storage credentials: %w", err)
 	}
-	if err := json.Unmarshal(data, &c.processCredentials); err != nil {
-		return c, fmt.Errorf("decode storage credentials: %w", err)
+	if err := json.Unmarshal(data, &c); err != nil {
+		return aws.Credentials{}, fmt.Errorf("decode storage credentials: %w", err)
 	}
-	if c.expires, err = time.Parse(time.RFC3339, c.Expiration); err != nil {
-		return c, fmt.Errorf("storage credential expiry: %w", err)
+	expires, err := time.Parse(time.RFC3339, c.Expiration)
+	if err != nil {
+		return aws.Credentials{}, fmt.Errorf("storage credential expiry: %w", err)
 	}
-	return c, nil
+	return aws.Credentials{
+		AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, CanExpire: true, Expires: expires,
+	}, nil
 }
 
 func isUUID(s string) bool {

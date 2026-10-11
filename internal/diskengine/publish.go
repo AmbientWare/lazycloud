@@ -39,37 +39,30 @@ const frameWorkers = 16
 // cache holds for it, and returns nil when neither changed. The upload stays
 // pending until CommitPublished; until then a retry returns it.
 func (e *Engine) Publish(ctx context.Context, diskID string, store Store, final bool) (*Published, error) {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return nil, err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil {
-		return nil, err
-	}
-	if state.Pending != nil {
-		return state.Pending.published(), nil
-	}
-	objects, err := openStore(store)
-	if err != nil {
-		return nil, err
-	}
-	ctx, span := telemetry.Start(ctx, "diskengine.publish", trace.WithAttributes(attribute.Int("lazycloud.layers", len(state.sealed()))))
-	pending, err := e.publish(ctx, p, state, objects, final)
-	if pending != nil {
-		span.SetAttributes(attribute.Int64("lazycloud.bytes", pending.AddedBytes))
-	}
-	telemetry.Fail(span, err)
-	if err != nil || pending == nil {
-		return nil, err
-	}
-	e.log.InfoContext(ctx, "disk generation uploaded", "disk_id", p.id, "generation", pending.Generation, "added_bytes", pending.AddedBytes)
-	return pending.published(), nil
+	var out *Published
+	err := e.withDisk(ctx, diskID, requireState, func(p diskPaths, state *diskState) error {
+		if state.Pending != nil {
+			out = state.Pending.published()
+			return nil
+		}
+		objects, err := openStore(store)
+		if err != nil {
+			return err
+		}
+		ctx, span := telemetry.Start(ctx, "diskengine.publish", trace.WithAttributes(attribute.Int("lazycloud.layers", len(state.sealed()))))
+		pending, err := e.publish(ctx, p, state, objects, final)
+		if pending != nil {
+			span.SetAttributes(attribute.Int64("lazycloud.bytes", pending.AddedBytes))
+		}
+		telemetry.Fail(span, err)
+		if err != nil || pending == nil {
+			return err
+		}
+		e.log.InfoContext(ctx, "disk generation uploaded", "disk_id", p.id, "generation", pending.Generation, "added_bytes", pending.AddedBytes)
+		out = pending.published()
+		return nil
+	})
+	return out, err
 }
 
 func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, objects imagefs.Bucket, final bool) (*pendingPublish, error) {
@@ -82,17 +75,17 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	copy(next.Frames, base.Frames)
 	// A disk the snapshotter does not serve, as after a detach or its
 	// restart, has no reads to report and keeps those recorded.
-	start, recent, err := e.bases.DiskReads(ctx, p.id)
+	reads, err := e.bases.DiskReads(ctx, &imagefsproto.DiskReadsRequest{DiskId: p.id})
 	switch {
 	case status.Code(err) == codes.NotFound:
 	case err != nil:
-		return nil, err
+		return nil, fmt.Errorf("read the disk's reads: %w", err)
 	default:
-		if len(start) > 0 {
-			next.Start = start
+		if len(reads.GetStartFrames()) > 0 {
+			next.Start = reads.GetStartFrames()
 		}
 		if final {
-			next.Recent = recent
+			next.Recent = reads.GetRecentFrames()
 		}
 	}
 	sealed := state.sealed()
@@ -191,13 +184,13 @@ func loadBase(p diskPaths, state *diskState) (imagefs.DiskIndex, error) {
 // keeps at index, and returns its file, first moving into its cache the
 // frames in the frames directory, if any.
 func (e *Engine) serveBase(ctx context.Context, diskID string, g Generation, index, frames string) (string, error) {
-	path, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
+	served, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
 		DiskId: diskID, Generation: g.Generation, IndexSha256: g.IndexSHA256, IndexPath: index, FramesDir: frames,
 	})
 	if err != nil {
 		return "", fmt.Errorf("serve the base generation: %w", err)
 	}
-	return path, nil
+	return served.GetPath(), nil
 }
 
 // mappedExtent is one range of `qemu-img map --output=json`.
@@ -394,26 +387,15 @@ func overlay(data []byte, off int64, extents []mappedExtent, files []*os.File) e
 // it holds are deleted. Committing the committed generation again
 // succeeds.
 func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation int64, orphans []Generation) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil {
-		return err
-	}
-	if state.Pending == nil || state.Pending.Generation != generation {
-		if state.Pending == nil && generationOf(state.Base) == generation {
-			return nil
+	return e.withDisk(ctx, diskID, requireState, func(p diskPaths, state *diskState) error {
+		if state.Pending == nil || state.Pending.Generation != generation {
+			if state.Pending == nil && generationOf(state.Base) == generation {
+				return nil
+			}
+			return fmt.Errorf("%w: disk %s has no uploaded generation %d awaiting commit", ErrInvalid, p.id, generation)
 		}
-		return fmt.Errorf("%w: disk %s has no uploaded generation %d awaiting commit", ErrInvalid, p.id, generation)
-	}
-	return e.commit(ctx, p, state, orphans)
+		return e.commit(ctx, p, state, orphans)
+	})
 }
 
 func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState, orphans []Generation) error {
@@ -446,7 +428,7 @@ func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState, orph
 	if err := os.RemoveAll(p.framesDir()); err != nil {
 		return fmt.Errorf("remove the frames directory: %w", err)
 	}
-	if err := e.bases.ReleaseDisk(ctx, p.id, next.Generation); err != nil {
+	if _, err := e.bases.ReleaseDisk(ctx, &imagefsproto.ReleaseDiskRequest{DiskId: p.id, Keep: next.Generation}); err != nil {
 		return fmt.Errorf("release older generations: %w", err)
 	}
 	return nil
@@ -462,43 +444,35 @@ type Remover func(ctx context.Context, generation int64, keys []string, bytes in
 // names, and orphans' indexes and the frames only they name, which it reads
 // from store. A batch removed stays removed when a later one fails.
 func (e *Engine) Collect(ctx context.Context, diskID string, store Store, remove Remover) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil || state.Collect == nil {
-		return err
-	}
-	if len(state.Collect.Orphans) > 0 && state.Pending == nil {
-		if err := collectOrphans(ctx, p, state, store); err != nil {
-			return err
+	return e.withDisk(ctx, diskID, requireState, func(p diskPaths, state *diskState) error {
+		if state.Collect == nil {
+			return nil
 		}
-	}
-	for len(state.Collect.Keys) > 0 {
-		batch := state.Collect.Keys[:min(len(state.Collect.Keys), deleteBatchSize)]
-		keys := make([]string, len(batch))
-		var bytes int64
-		for i, k := range batch {
-			keys[i], bytes = k.Key, bytes+k.Bytes
+		if len(state.Collect.Orphans) > 0 && state.Pending == nil {
+			if err := collectOrphans(ctx, p, state, store); err != nil {
+				return err
+			}
 		}
-		if err := remove(ctx, state.Collect.Generation, keys, bytes); err != nil {
-			return fmt.Errorf("collect disk %s: %w", p.id, err)
+		for len(state.Collect.Keys) > 0 {
+			batch := state.Collect.Keys[:min(len(state.Collect.Keys), deleteBatchSize)]
+			keys := make([]string, len(batch))
+			var bytes int64
+			for i, k := range batch {
+				keys[i], bytes = k.Key, bytes+k.Bytes
+			}
+			if err := remove(ctx, state.Collect.Generation, keys, bytes); err != nil {
+				return fmt.Errorf("collect disk %s: %w", p.id, err)
+			}
+			state.Collect.Keys = state.Collect.Keys[len(batch):]
+			if err := saveState(p, state); err != nil {
+				return err
+			}
 		}
-		state.Collect.Keys = state.Collect.Keys[len(batch):]
-		if err := saveState(p, state); err != nil {
-			return err
+		if len(state.Collect.Orphans) == 0 {
+			state.Collect = nil
 		}
-	}
-	if len(state.Collect.Orphans) == 0 {
-		state.Collect = nil
-	}
-	return saveState(p, state)
+		return saveState(p, state)
+	})
 }
 
 // collectOrphans adds to the collection each orphan's index and the frames

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -19,34 +20,23 @@ import (
 // unsealed writes is sealed without a daemon. Sealing a disk with nothing
 // new succeeds without change.
 func (e *Engine) Seal(ctx context.Context, diskID string) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil {
-		return err
-	}
-	if state.Attachment == nil {
-		if state.HeadFresh {
-			return nil
+	return e.withDisk(ctx, diskID, requireState, func(p diskPaths, state *diskState) error {
+		if state.Attachment == nil {
+			if state.HeadFresh {
+				return nil
+			}
+			return sealOrphanedHead(ctx, p, state)
 		}
-		return sealOrphanedHead(ctx, p, state)
-	}
-	if lost := attachmentLost(p, state); lost != nil {
-		mountpoint := state.Attachment.Mountpoint
-		if err := releaseAttachment(ctx, p, state); err != nil {
-			return errors.Join(lost, err)
+		if lost := attachmentLost(p, state); lost != nil {
+			mountpoint := state.Attachment.Mountpoint
+			if err := releaseAttachment(ctx, p, state); err != nil {
+				return errors.Join(lost, err)
+			}
+			e.log.WarnContext(ctx, "disk attachment lost; sealed what reached it", "disk_id", p.id, "cause", lost)
+			return fmt.Errorf("disk %s at %s: %w", p.id, mountpoint, lost)
 		}
-		e.log.WarnContext(ctx, "disk attachment lost; sealed what reached it", "disk_id", p.id, "cause", lost)
-		return fmt.Errorf("disk %s at %s: %w", p.id, mountpoint, lost)
-	}
-	return telemetry.Step(ctx, "diskengine.seal", func(ctx context.Context) error { return seal(ctx, p, state) })
+		return telemetry.Step(ctx, "diskengine.seal", func(ctx context.Context) error { return seal(ctx, p, state) })
+	})
 }
 
 // attachmentLost says what of a recorded attachment is gone, as an
@@ -101,31 +91,20 @@ func (e *Engine) Status(diskID string) (dirty int64, stalled bool, err error) {
 // disk, so its writers wait while it holds all the unpublished writes its
 // budget allows. Seal and Publish work on a stalled disk; Detach thaws it.
 func (e *Engine) Stall(ctx context.Context, diskID string, stall bool) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := requireState(p)
-	if err != nil {
-		return err
-	}
-	if state.Stalled == stall || state.Attachment == nil || !state.Attachment.Mounted {
-		return nil
-	}
-	// Recorded first: a thaw of a filesystem not frozen succeeds.
-	state.Stalled = stall
-	if err := saveState(p, state); err != nil {
-		return err
-	}
-	if stall {
-		return freezeFilesystem(state.Attachment.Mountpoint)
-	}
-	return thawIfFrozen(state.Attachment.Mountpoint)
+	return e.withDisk(ctx, diskID, requireState, func(p diskPaths, state *diskState) error {
+		if state.Stalled == stall || state.Attachment == nil || !state.Attachment.Mounted {
+			return nil
+		}
+		// Recorded first: a thaw of a filesystem not frozen succeeds.
+		state.Stalled = stall
+		if err := saveState(p, state); err != nil {
+			return err
+		}
+		if stall {
+			return freezeFilesystem(state.Attachment.Mountpoint)
+		}
+		return thawIfFrozen(state.Attachment.Mountpoint)
+	})
 }
 
 // seal flushes the mounted filesystem and, when the head took writes, freezes
@@ -134,14 +113,7 @@ func (e *Engine) Stall(ctx context.Context, diskID string, stall bool) error {
 // reach the device in the flush, so an idle disk is never frozen. A stalled
 // disk is frozen already and stays so.
 func seal(ctx context.Context, p diskPaths, state *diskState) error {
-	client, err := dialQMP(ctx, p.qmpSocket())
-	if err != nil {
-		return err
-	}
-	err = func() error {
-		if err := reconcileHead(ctx, p, state, client); err != nil {
-			return err
-		}
+	return withMonitor(ctx, p, state, func(client *qmpClient) error {
 		if state.Stalled {
 			_, err := sealFrozen(ctx, p, state, client)
 			return err
@@ -162,8 +134,7 @@ func seal(ctx context.Context, p diskPaths, state *diskState) error {
 		}
 		_, err = sealFrozen(ctx, p, state, client)
 		return errors.Join(err, thawFilesystem(mountpoint))
-	}()
-	return errors.Join(err, client.close())
+	})
 }
 
 // sealFrozen runs while nothing writes to the head. It reports whether it
@@ -218,28 +189,17 @@ func sealFrozen(ctx context.Context, p diskPaths, state *diskState, client *qmpC
 // so a release publishes before detaching. Detaching a detached disk
 // succeeds.
 func (e *Engine) Detach(ctx context.Context, diskID string) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := loadState(p)
-	if err != nil {
-		return err
-	}
-	if state != nil {
-		if err := teardown(ctx, p, state); err != nil {
-			return err
+	return e.withDisk(ctx, diskID, loadState, func(p diskPaths, state *diskState) error {
+		if state != nil {
+			if err := teardown(ctx, p, state); err != nil {
+				return err
+			}
 		}
-	}
-	if err := e.bases.ReleaseDisk(ctx, p.id, 0); err != nil {
-		return fmt.Errorf("release the served generations: %w", err)
-	}
-	return nil
+		if _, err := e.bases.ReleaseDisk(ctx, &imagefsproto.ReleaseDiskRequest{DiskId: p.id}); err != nil {
+			return fmt.Errorf("release the served generations: %w", err)
+		}
+		return nil
+	})
 }
 
 // Recover releases whatever an attachment from a previous agent still holds,
@@ -250,28 +210,20 @@ func (e *Engine) Detach(ctx context.Context, diskID string) error {
 // starts. A disk with no local state, or detached with a head known to be
 // empty, needs nothing.
 func (e *Engine) Recover(ctx context.Context, diskID string) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := loadState(p)
-	if err != nil || state == nil || (state.Attachment == nil && state.HeadFresh) {
-		return err
-	}
-	if state.Attachment != nil {
-		if err := releaseAttachment(ctx, p, state); err != nil {
+	return e.withDisk(ctx, diskID, loadState, func(p diskPaths, state *diskState) error {
+		if state == nil || (state.Attachment == nil && state.HeadFresh) {
+			return nil
+		}
+		if state.Attachment != nil {
+			if err := releaseAttachment(ctx, p, state); err != nil {
+				return err
+			}
+		} else if err := sealOrphanedHead(ctx, p, state); err != nil {
 			return err
 		}
-	} else if err := sealOrphanedHead(ctx, p, state); err != nil {
-		return err
-	}
-	e.log.InfoContext(ctx, "disk recovered", "disk_id", p.id, "sealed_layers", len(state.sealed()))
-	return nil
+		e.log.InfoContext(ctx, "disk recovered", "disk_id", p.id, "sealed_layers", len(state.sealed()))
+		return nil
+	})
 }
 
 // releaseAttachment tears down an attachment whose holder is gone or broken
@@ -317,27 +269,16 @@ func layerHoldsData(ctx context.Context, p diskPaths, l layer) (bool, error) {
 // holds are lost; List reports which disks have them. It waits for the
 // disk's other operations.
 func (e *Engine) Evict(diskID string) error {
-	p, err := e.paths(diskID)
-	if err != nil {
-		return err
-	}
-	lock, err := lockDisk(context.Background(), p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	state, err := loadState(p)
-	if err != nil {
-		return err
-	}
-	if state != nil && state.Attachment != nil {
-		return fmt.Errorf("%w: disk %s is attached at %s; detach it first", ErrInvalid, p.id, state.Attachment.Mountpoint)
-	}
-	if err := os.RemoveAll(p.dir()); err != nil {
-		return fmt.Errorf("evict disk %s: %w", p.id, err)
-	}
-	e.log.Info("disk evicted", "disk_id", p.id)
-	return nil
+	return e.withDisk(context.Background(), diskID, loadState, func(p diskPaths, state *diskState) error {
+		if state != nil && state.Attachment != nil {
+			return fmt.Errorf("%w: disk %s is attached at %s; detach it first", ErrInvalid, p.id, state.Attachment.Mountpoint)
+		}
+		if err := os.RemoveAll(p.dir()); err != nil {
+			return fmt.Errorf("evict disk %s: %w", p.id, err)
+		}
+		e.log.Info("disk evicted", "disk_id", p.id)
+		return nil
+	})
 }
 
 // List describes every disk kept under the root, for recovering them at

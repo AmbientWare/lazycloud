@@ -354,18 +354,25 @@ func reconcileHead(ctx context.Context, p diskPaths, state *diskState, client *q
 	return removeIfExists(p.layerPath(head))
 }
 
-func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (bool, error) {
+func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (written bool, err error) {
+	err = withMonitor(ctx, p, state, func(client *qmpClient) error {
+		written, err = headWritten(ctx, client, state.head().node())
+		return err
+	})
+	return written, err
+}
+
+// withMonitor runs fn on a connection to the disk's daemon monitor once the
+// recorded head is the one the daemon exports.
+func withMonitor(ctx context.Context, p diskPaths, state *diskState, fn func(*qmpClient) error) error {
 	client, err := dialQMP(ctx, p.qmpSocket())
 	if err != nil {
-		return false, err
+		return err
 	}
-	written, err := func() (bool, error) {
-		if err := reconcileHead(ctx, p, state, client); err != nil {
-			return false, err
-		}
-		return headWritten(ctx, client, state.head().node())
-	}()
-	return written, errors.Join(err, client.close())
+	if err = reconcileHead(ctx, p, state, client); err == nil {
+		err = fn(client)
+	}
+	return errors.Join(err, client.close())
 }
 
 // namedNodes lists the nodes the daemon holds by name.
@@ -390,14 +397,7 @@ func namedNodes(ctx context.Context, client *qmpClient) (map[string]bool, error)
 // the switch alone. A rebase interrupted part way finishes when run again.
 func rebase(ctx context.Context, p diskPaths, state *diskState, path string) error {
 	pending := state.Pending
-	client, err := dialQMP(ctx, p.qmpSocket())
-	if err != nil {
-		return err
-	}
-	err = func() error {
-		if err := reconcileHead(ctx, p, state, client); err != nil {
-			return err
-		}
+	return withMonitor(ctx, p, state, func(client *qmpClient) error {
 		names, err := namedNodes(ctx, client)
 		if err != nil {
 			return err
@@ -429,6 +429,5 @@ func rebase(ctx context.Context, p diskPaths, state *diskState, path string) err
 			}
 		}
 		return nil
-	}()
-	return errors.Join(err, client.close())
+	})
 }

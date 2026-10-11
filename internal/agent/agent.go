@@ -390,7 +390,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = snapshotter.Close() }()
 	a.layers = newLayerSources(snapshotter)
-	a.diskEngine = diskengine.New(layersource.DiskRoot, snapshotter, a.log.With("component", "disk"))
+	a.diskEngine = diskengine.New(layersource.DiskRoot, snapshotter.Disks, a.log.With("component", "disk"))
 	if a.diskErr = diskErr; a.diskErr != nil {
 		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
 	}

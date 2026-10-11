@@ -61,8 +61,6 @@ func removeIfExists(path string) error {
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func sha256Pattern(s string) bool { return sha256Hex.MatchString(s) }
-
 // served returns the path of a file the snapshotter serves and the device
 // of the mount serving it, which a restarted snapshotter changes.
 func served(path string) (string, uint64, error) {

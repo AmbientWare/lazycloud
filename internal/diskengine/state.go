@@ -301,6 +301,21 @@ func tryLockFile(path string) (*fileLock, error) {
 // lock file holds no data a failed close could lose.
 func (l *fileLock) release() { _ = l.file.Close() }
 
-func lockDisk(ctx context.Context, p diskPaths) (*fileLock, error) {
-	return lockFile(ctx, p.lockPath())
+// withDisk runs fn on the disk's paths and the state load returns, holding
+// the disk's lock.
+func (e *Engine) withDisk(ctx context.Context, diskID string, load func(diskPaths) (*diskState, error), fn func(diskPaths, *diskState) error) error {
+	p, err := e.paths(diskID)
+	if err != nil {
+		return err
+	}
+	lock, err := lockFile(ctx, p.lockPath())
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	state, err := load(p)
+	if err != nil {
+		return err
+	}
+	return fn(p, state)
 }

@@ -45,7 +45,8 @@ const (
 type Client struct {
 	conn    *grpc.ClientConn
 	sources imagefsproto.LayerSourcesClient
-	disks   imagefsproto.DiskSourcesClient
+	// Disks serves disks' published generations.
+	Disks imagefsproto.DiskSourcesClient
 }
 
 // Dial returns a client of the snapshotter at socket. It connects on first
@@ -55,43 +56,7 @@ func Dial(socket string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshotter client: %w", err)
 	}
-	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn), disks: imagefsproto.NewDiskSourcesClient(conn)}, nil
-}
-
-// GrantDisk gives the snapshotter the credential it reads disk's objects
-// with.
-func (c *Client) GrantDisk(ctx context.Context, disk string, grant *imagefsproto.DiskGrant) error {
-	if _, err := c.disks.GrantDisk(ctx, &imagefsproto.GrantDiskRequest{DiskId: disk, Grant: grant}); err != nil {
-		return fmt.Errorf("grant disk %s to the snapshotter: %w", disk, err)
-	}
-	return nil
-}
-
-// ServeDisk serves a disk generation and returns its file.
-func (c *Client) ServeDisk(ctx context.Context, req *imagefsproto.ServeDiskRequest) (string, error) {
-	served, err := c.disks.ServeDisk(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("serve disk %s generation %d: %w", req.GetDiskId(), req.GetGeneration(), err)
-	}
-	return served.GetPath(), nil
-}
-
-// ReleaseDisk stops serving every generation of disk but keep, 0 for none.
-func (c *Client) ReleaseDisk(ctx context.Context, disk string, keep int64) error {
-	if _, err := c.disks.ReleaseDisk(ctx, &imagefsproto.ReleaseDiskRequest{DiskId: disk, Keep: keep}); err != nil {
-		return fmt.Errorf("release disk %s from the snapshotter: %w", disk, err)
-	}
-	return nil
-}
-
-// DiskReads returns disk's start trace, empty until its first minute has
-// passed, and the frames the cache holds for it, most recent first.
-func (c *Client) DiskReads(ctx context.Context, disk string) (start, recent []uint32, err error) {
-	reads, err := c.disks.DiskReads(ctx, &imagefsproto.DiskReadsRequest{DiskId: disk})
-	if err != nil {
-		return nil, nil, fmt.Errorf("read disk %s's reads: %w", disk, err)
-	}
-	return reads.GetStartFrames(), reads.GetRecentFrames(), nil
+	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn), Disks: imagefsproto.NewDiskSourcesClient(conn)}, nil
 }
 
 // Grant gives the snapshotter grants. Each replaces its layer's current

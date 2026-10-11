@@ -25,67 +25,51 @@ import (
 // the same mountpoint and size succeeds without change. A disk grows to
 // SizeBytes but never shrinks. The host must pass Check.
 func (e *Engine) Attach(ctx context.Context, req AttachRequest) error {
-	p, err := e.paths(req.DiskID)
-	if err != nil {
-		return err
-	}
 	if req.SizeBytes <= 0 || req.SizeBytes%hostproto.DiskBlockBytes != 0 {
 		return fmt.Errorf("%w: size must be a positive multiple of %d, got %d", ErrInvalid, hostproto.DiskBlockBytes, req.SizeBytes)
 	}
 	if !filepath.IsAbs(req.Mountpoint) {
 		return fmt.Errorf("%w: mountpoint must be absolute, got %q", ErrInvalid, req.Mountpoint)
 	}
-	if b := req.Base; b != nil && (b.Generation <= 0 || !sha256Pattern(b.IndexSHA256)) {
+	if b := req.Base; b != nil && (b.Generation <= 0 || !sha256Hex.MatchString(b.IndexSHA256)) {
 		return fmt.Errorf("%w: generation %d needs a positive number and a sha256 index digest", ErrInvalid, b.Generation)
 	}
-	if err := p.checkSocketPaths(); err != nil {
-		return err
-	}
 	target := filepath.Clean(req.Mountpoint)
-
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-
-	state, err := loadState(p)
-	if err != nil {
-		return err
-	}
-	if state != nil && state.Attachment != nil {
-		if attachmentLost(p, state) == nil {
-			if state.Attachment.Mountpoint != target {
-				return fmt.Errorf("%w: disk %s is already attached at %s", ErrInvalid, p.id, state.Attachment.Mountpoint)
+	return e.withDisk(ctx, req.DiskID, loadState, func(p diskPaths, state *diskState) error {
+		if state != nil && state.Attachment != nil {
+			if attachmentLost(p, state) == nil {
+				if state.Attachment.Mountpoint != target {
+					return fmt.Errorf("%w: disk %s is already attached at %s", ErrInvalid, p.id, state.Attachment.Mountpoint)
+				}
+				if state.SizeBytes != req.SizeBytes {
+					return fmt.Errorf("%w: disk %s is attached at %d bytes; detach it before attaching at %d",
+						ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
+				}
+				return nil
 			}
-			if state.SizeBytes != req.SizeBytes {
-				return fmt.Errorf("%w: disk %s is attached at %d bytes; detach it before attaching at %d",
-					ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
+			// An agent that died left this attachment; its daemon or device is gone.
+			if err := teardown(ctx, p, state); err != nil {
+				return fmt.Errorf("release the previous attachment: %w", err)
 			}
-			return nil
 		}
-		// An agent that died left this attachment; its daemon or device is gone.
-		if err := teardown(ctx, p, state); err != nil {
-			return fmt.Errorf("release the previous attachment: %w", err)
+		if err := stopUnrecordedDaemon(ctx, p); err != nil {
+			return err
 		}
-	}
-	if err := stopUnrecordedDaemon(ctx, p); err != nil {
-		return err
-	}
 
-	state, err = e.start(ctx, p, state, req, target)
-	if err != nil {
-		return err
-	}
-	formats := state.Unformatted
-	err = telemetry.Step(ctx, "diskengine.connect_and_mount", func(ctx context.Context) error { return connectAndMount(ctx, p, state) },
-		attribute.Bool("lazycloud.format", formats))
-	if err != nil {
-		return errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
-	}
-	e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", generationOf(state.Base),
-		"formatted", formats, "device", state.Attachment.Device)
-	return nil
+		state, err := e.start(ctx, p, state, req, target)
+		if err != nil {
+			return err
+		}
+		formats := state.Unformatted
+		err = telemetry.Step(ctx, "diskengine.connect_and_mount", func(ctx context.Context) error { return connectAndMount(ctx, p, state) },
+			attribute.Bool("lazycloud.format", formats))
+		if err != nil {
+			return errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
+		}
+		e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", generationOf(state.Base),
+			"formatted", formats, "device", state.Attachment.Device)
+		return nil
+	})
 }
 
 // start makes the local stack sit on req.Base, has the snapshotter serve
@@ -124,17 +108,17 @@ func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req A
 	basePath, baseSize := "", int64(0)
 	if req.Base != nil {
 		err := telemetry.Step(ctx, "diskengine.serve_base", func(ctx context.Context) error {
-			path, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
+			served, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
 				DiskId: p.id, Generation: req.Base.Generation, IndexSha256: req.Base.IndexSHA256, IndexPath: p.baseIndex(), Prefetch: true,
 			})
 			if err != nil {
 				return fmt.Errorf("serve the base generation: %w", err)
 			}
-			info, err := os.Stat(path)
+			info, err := os.Stat(served.GetPath())
 			if err != nil {
 				return fmt.Errorf("stat the base generation: %w", err)
 			}
-			basePath, baseSize = path, info.Size()
+			basePath, baseSize = served.GetPath(), info.Size()
 			return nil
 		}, attribute.Int64("lazycloud.generation", req.Base.Generation))
 		if err != nil {
