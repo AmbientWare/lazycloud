@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 )
@@ -394,6 +396,23 @@ func TestFinalPublishKeepsRecentFramesTheSnapshotterForgot(t *testing.T) {
 	}
 	if again, err := h.engine.Publish(ctx, diskID, store, true); err != nil || again != nil {
 		t.Fatalf("a final publish with nothing new returned %+v, %v", again, err)
+	}
+}
+
+// Detaching a disk whose attach kept nothing, as one that failed before
+// serving it, has the snapshotter drop the disk's grant.
+func TestDetachDropsTheGrantOfADiskNeverServed(t *testing.T) {
+	h := newHost(t, 64*frame)
+	diskID := uuid.NewString()
+	h.grant(t, testStore(t), diskID)
+	if _, _, err := h.bases.DiskReads(t.Context(), diskID); err != nil {
+		t.Fatalf("a granted disk's reads: %v", err)
+	}
+	if err := h.engine.Detach(t.Context(), diskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.bases.DiskReads(t.Context(), diskID); status.Code(err) != codes.NotFound {
+		t.Fatalf("after the detach the snapshotter answers %v, want NotFound", err)
 	}
 }
 

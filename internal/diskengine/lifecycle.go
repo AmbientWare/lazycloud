@@ -176,9 +176,11 @@ func sealFrozen(ctx context.Context, p diskPaths, state *diskState, client *qmpC
 }
 
 // Detach unmounts the disk, disconnects its device, stops its daemon and
-// has the snapshotter stop serving its generations. The local stack stays
-// for the next attach, holding any writes no Publish sealed, so a release
-// publishes before detaching. Detaching a detached disk succeeds.
+// has the snapshotter stop serving its generations and forget its grant,
+// even for a disk whose attach failed before anything was kept. The local
+// stack stays for the next attach, holding any writes no Publish sealed,
+// so a release publishes before detaching. Detaching a detached disk
+// succeeds.
 func (e *Engine) Detach(ctx context.Context, diskID string) error {
 	p, err := e.paths(diskID)
 	if err != nil {
@@ -190,11 +192,13 @@ func (e *Engine) Detach(ctx context.Context, diskID string) error {
 	}
 	defer lock.release()
 	state, err := loadState(p)
-	if err != nil || state == nil {
+	if err != nil {
 		return err
 	}
-	if err := teardown(ctx, p, state); err != nil {
-		return err
+	if state != nil {
+		if err := teardown(ctx, p, state); err != nil {
+			return err
+		}
 	}
 	if err := e.bases.ReleaseDisk(ctx, p.id, 0); err != nil {
 		return fmt.Errorf("release the served generations: %w", err)

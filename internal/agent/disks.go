@@ -369,9 +369,10 @@ func fenced(err error) bool { return status.Code(err) == codes.FailedPreconditio
 // release publishes d's last generation, with the frames the host's cache
 // holds for it, detaches it, ends its lease and deletes its local copy,
 // which then holds nothing unpublished. A disk this host never attached has
-// nothing to publish. A lease the server already ended, as after host loss,
-// counts as released, and the local copy, which may hold writes the disk's
-// next holder never saw, is deleted too.
+// nothing to publish, but is detached so the snapshotter drops its grant. A
+// lease the server already ended, as after host loss, counts as released,
+// and the local copy, which may hold writes the disk's next holder never
+// saw, is deleted too.
 func (a *Agent) release(ctx context.Context, container string, d *heldDisk) error {
 	// A host that cannot attach disks never attached this one.
 	local := false
@@ -380,13 +381,11 @@ func (a *Agent) release(ctx context.Context, container string, d *heldDisk) erro
 		if local, err = a.hasLocalDisk(ctx, d.ID); err != nil {
 			return err
 		}
-	}
-	lost := false
-	if local {
-		err := a.publish(ctx, container, d, true)
-		lost = fenced(err)
-		if lost || errors.Is(err, diskengine.ErrNoLocalState) || errors.Is(err, diskengine.ErrAttachmentLost) {
-			err = nil
+		if local {
+			err = a.publish(ctx, container, d, true)
+			if fenced(err) || errors.Is(err, diskengine.ErrNoLocalState) || errors.Is(err, diskengine.ErrAttachmentLost) {
+				err = nil
+			}
 		}
 		if err == nil {
 			err = a.diskEngine.Detach(ctx, d.ID)
