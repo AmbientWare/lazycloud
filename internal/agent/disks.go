@@ -358,17 +358,22 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk, fina
 		return fmt.Errorf("publish: %w", err)
 	}
 	if published != nil {
-		if _, err := a.host.RecordDiskGeneration(ctx, &hostproto.RecordDiskGenerationRequest{
+		recorded, err := a.host.RecordDiskGeneration(ctx, &hostproto.RecordDiskGenerationRequest{
 			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, AddedBytes: published.AddedBytes,
 			Generation: &hostproto.DiskGeneration{Generation: published.Generation, IndexSha256: published.IndexSHA256},
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("record generation %d: %w", published.Generation, err)
 		}
-		if err := a.diskEngine.CommitPublished(ctx, d.ID, published.Generation); err != nil {
+		orphans := make([]diskengine.Generation, len(recorded.GetOrphans()))
+		for i, o := range recorded.GetOrphans() {
+			orphans[i] = diskengine.Generation{Generation: o.GetGeneration(), IndexSHA256: o.GetIndexSha256()}
+		}
+		if err := a.diskEngine.CommitPublished(ctx, d.ID, published.Generation, orphans); err != nil {
 			return fmt.Errorf("commit generation %d: %w", published.Generation, err)
 		}
 	}
-	err = a.diskEngine.Collect(ctx, d.ID, func(ctx context.Context, generation int64, keys []string, bytes int64) error {
+	err = a.diskEngine.Collect(ctx, d.ID, store, func(ctx context.Context, generation int64, keys []string, bytes int64) error {
 		_, err := a.host.CollectDisk(ctx, &hostproto.CollectDiskRequest{
 			ContainerId: container, DiskId: d.ID, LeaseToken: d.Token, Generation: generation, Keys: keys, RemovedBytes: bytes,
 		})

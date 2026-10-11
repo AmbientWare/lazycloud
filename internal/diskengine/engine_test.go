@@ -15,11 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 const (
@@ -64,13 +66,13 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 	if got := reload(t, p).Pending.Dirty; !slices.Equal(got, []uint32{1, 2}) {
 		t.Fatalf("generation 1 replaced frames %v, want the two written", got)
 	}
-	if err := first.engine.CommitPublished(ctx, diskID, 1); err != nil {
+	if err := first.engine.CommitPublished(ctx, diskID, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.engine.CommitPublished(ctx, diskID, 1); err != nil {
+	if err := first.engine.CommitPublished(ctx, diskID, 1, nil); err != nil {
 		t.Fatalf("committing the committed generation again: %v", err)
 	}
-	if err := first.engine.CommitPublished(ctx, diskID, 5); !errors.Is(err, ErrInvalid) {
+	if err := first.engine.CommitPublished(ctx, diskID, 5, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("committing a generation never uploaded returned %v", err)
 	}
 	if n := frameCount(t, store, diskID); n != 2 {
@@ -99,7 +101,7 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 		}
 		writing <- err
 	}()
-	if err := first.engine.CommitPublished(ctx, diskID, two.Generation); err != nil {
+	if err := first.engine.CommitPublished(ctx, diskID, two.Generation, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-writing; err != nil {
@@ -124,7 +126,7 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 		t.Fatal("did not seal the writes made during the rebase")
 	}
 	three := publishAndCommit(t, first.engine, diskID, store, false)
-	if err := first.engine.Collect(ctx, diskID, storeRemover(store)); err != nil {
+	if err := first.engine.Collect(ctx, diskID, store, storeRemover(store)); err != nil {
 		t.Fatal(err)
 	}
 	if n := frameCount(t, store, diskID); n != 4 {
@@ -452,6 +454,52 @@ func TestStalledDiskWritesWaitUntilResumed(t *testing.T) {
 	}
 	if err := <-wrote; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A generation a host uploaded after another took the disk is collected by
+// the holder: its index and the frames only it names go, and the frames the
+// holder's generation names stay.
+func TestHolderCollectsASupersededUpload(t *testing.T) {
+	requireTools(t, toolDaemon, toolImage, toolRunUnit, "qemu-io")
+	ctx := t.Context()
+	store := testStore(t)
+	diskID := uuid.NewString()
+	req := AttachRequest{DiskID: diskID, SizeBytes: testDiskBytes, Mountpoint: "/unused"}
+	first := newHost(t, 64*frame)
+	p, state, _ := attachUnmounted(t, first, store, req)
+	writeExport(t, p, 0, frame, 0x11)
+	sealUnmounted(t, p, state)
+	base := publishAndCommit(t, first.engine, diskID, store, false)
+	state = reload(t, p)
+	writeExport(t, p, frame, frame, 0x22)
+	sealUnmounted(t, p, state)
+	lost, err := first.engine.Publish(ctx, diskID, store, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := newHost(t, 64*frame)
+	req.Base = baseOf(base)
+	q, qstate, _ := attachUnmounted(t, second, store, req)
+	writeExport(t, q, 2*frame, frame, 0x33)
+	sealUnmounted(t, q, qstate)
+	own, err := second.engine.Publish(ctx, diskID, store, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.engine.CommitPublished(ctx, diskID, own.Generation, []Generation{*baseOf(lost)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.engine.Collect(ctx, diskID, store, storeRemover(store)); err != nil {
+		t.Fatal(err)
+	}
+	if n := frameCount(t, store, diskID); n != 2 {
+		t.Fatalf("after collecting the lost upload the disk stores %d frames, want the holder's 2", n)
+	}
+	lostIndex := imagefs.DiskIndexKey(diskID, lost.Generation, lost.IndexSHA256)
+	if _, err := storagetest.Client().HeadObject(ctx, &s3.HeadObjectInput{Bucket: &store.Bucket, Key: &lostIndex}); err == nil {
+		t.Fatal("the lost upload's index outlived its collection")
 	}
 }
 

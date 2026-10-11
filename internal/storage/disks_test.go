@@ -49,21 +49,21 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 		t.Fatalf("undeclared disk: %v", err)
 	}
 
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(1), 100); err != nil {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(1), 100); err != nil {
 		t.Fatal(err)
 	}
 	// A replay of the recorded generation is accepted; a skip is not.
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(1), 100); err != nil {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(1), 100); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
 	var out *ConflictError
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(3), 100); !errors.As(err, &out) {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(3), 100); !errors.As(err, &out) {
 		t.Fatalf("skipped generation: %v", err)
 	}
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, []byte("forged"), generation(2), 100); !errors.Is(err, ErrStaleLease) {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, []byte("forged"), generation(2), 100); !errors.Is(err, ErrStaleLease) {
 		t.Fatalf("forged token: %v", err)
 	}
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(2), 100); err != nil {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(2), 100); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,13 +89,13 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	}
 	// A stopped holder publishes its final generation, then releases; after
 	// that it publishes no more.
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(3), 100); err != nil {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(3), 100); err != nil {
 		t.Fatalf("final publish after stop: %v", err)
 	}
 	if err := s.ReleaseDisk(ctx, first, lease.Disk, lease.Token); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(4), 100); !errors.Is(err, ErrStaleLease) {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(4), 100); !errors.Is(err, ErrStaleLease) {
 		t.Fatalf("publish after release: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 		t.Fatalf("release by a replaced holder: %v", err)
 	}
 
-	if err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(4), 100); err != nil {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(4), 100); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 4, nil, 150); err != nil {
@@ -145,7 +145,7 @@ func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := int64(1); n <= 2; n++ {
-		if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(n), 100); err != nil {
+		if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(n), 100); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -218,7 +218,7 @@ func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
 	if err != nil || disk.Failure == nil || disk.Failure.Operation != apitypes.DiskOperationPublish || disk.Failure.Message != "chunk upload refused" {
 		t.Fatalf("disk after a failed publish: %+v err=%v", disk.Failure, err)
 	}
-	if err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(3), 100); err != nil {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(3), 100); err != nil {
 		t.Fatal(err)
 	}
 	if disk, _ := s.GetDisk(ctx, f.ws, "root"); disk.Failure != nil {

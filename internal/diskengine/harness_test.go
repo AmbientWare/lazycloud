@@ -259,7 +259,7 @@ func publishAndCommit(t *testing.T, e *Engine, diskID string, store Store, final
 	if published == nil {
 		t.Fatal("nothing was published")
 	}
-	if err := e.CommitPublished(t.Context(), diskID, published.Generation); err != nil {
+	if err := e.CommitPublished(t.Context(), diskID, published.Generation, nil); err != nil {
 		t.Fatal(err)
 	}
 	return published

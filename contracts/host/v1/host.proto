@@ -32,7 +32,8 @@ service HostService {
   // ABORTED means another container still holds it; the host retries.
   rpc AcquireDisk(AcquireDiskRequest) returns (AcquireDiskResponse);
   // RecordDiskGeneration records an uploaded generation under the lease. A
-  // stale lease returns FAILED_PRECONDITION.
+  // stale lease returns FAILED_PRECONDITION, and the upload is left for the
+  // disk's holder to collect.
   rpc RecordDiskGeneration(RecordDiskGenerationRequest) returns (RecordDiskGenerationResponse);
   // CollectDisk deletes objects of the disk the generation it names no
   // longer reads. The server deletes them while it holds the lease, so a
@@ -861,7 +862,11 @@ message RecordDiskGenerationRequest {
   int64 added_bytes = 5;
 }
 
-message RecordDiskGenerationResponse {}
+message RecordDiskGenerationResponse {
+  // Generations former holders uploaded after losing the disk. The holder
+  // deletes, with CollectDisk, their indexes and the frames they alone name.
+  repeated DiskGeneration orphans = 1;
+}
 
 message CollectDiskRequest {
   string container_id = 1;
@@ -870,8 +875,8 @@ message CollectDiskRequest {
   // The disk's newest recorded generation. Generations below it are
   // forgotten.
   int64 generation = 4;
-  // At most 1000 keys under disks/<disk id>/: indexes of generations below
-  // generation, and frames generation does not name.
+  // At most 1000 keys under disks/<disk id>/: indexes other than
+  // generation's, and frames generation does not name.
   repeated string keys = 5;
   // The bytes of the frames among keys.
   int64 removed_bytes = 6;

@@ -194,8 +194,11 @@ func (s *Storage) tryDeleteKeys(ctx context.Context, b bucketClient, keys []stri
 		if err != nil {
 			return nil, fmt.Errorf("delete objects: %w", err)
 		}
+		// Garage reports a key already gone, which S3 counts as deleted.
 		for _, e := range out.Errors {
-			failed[aws.ToString(e.Key)] = aws.ToString(e.Message)
+			if aws.ToString(e.Code) != "NoSuchKey" {
+				failed[aws.ToString(e.Key)] = aws.ToString(e.Message)
+			}
 		}
 	}
 	return failed, nil

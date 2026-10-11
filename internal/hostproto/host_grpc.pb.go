@@ -65,7 +65,8 @@ type HostServiceClient interface {
 	// ABORTED means another container still holds it; the host retries.
 	AcquireDisk(ctx context.Context, in *AcquireDiskRequest, opts ...grpc.CallOption) (*AcquireDiskResponse, error)
 	// RecordDiskGeneration records an uploaded generation under the lease. A
-	// stale lease returns FAILED_PRECONDITION.
+	// stale lease returns FAILED_PRECONDITION, and the upload is left for the
+	// disk's holder to collect.
 	RecordDiskGeneration(ctx context.Context, in *RecordDiskGenerationRequest, opts ...grpc.CallOption) (*RecordDiskGenerationResponse, error)
 	// CollectDisk deletes objects of the disk the generation it names no
 	// longer reads. The server deletes them while it holds the lease, so a
@@ -304,7 +305,8 @@ type HostServiceServer interface {
 	// ABORTED means another container still holds it; the host retries.
 	AcquireDisk(context.Context, *AcquireDiskRequest) (*AcquireDiskResponse, error)
 	// RecordDiskGeneration records an uploaded generation under the lease. A
-	// stale lease returns FAILED_PRECONDITION.
+	// stale lease returns FAILED_PRECONDITION, and the upload is left for the
+	// disk's holder to collect.
 	RecordDiskGeneration(context.Context, *RecordDiskGenerationRequest) (*RecordDiskGenerationResponse, error)
 	// CollectDisk deletes objects of the disk the generation it names no
 	// longer reads. The server deletes them while it holds the lease, so a

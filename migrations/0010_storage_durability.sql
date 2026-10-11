@@ -64,6 +64,12 @@ alter table disks
     add column index_sha256 text check (index_sha256 ~ '^[0-9a-f]{64}$'),
     add check ((generation = 0) = (index_sha256 is null));
 
+-- Generations a former holder uploaded after the disk changed hands, as
+-- <generation as 12 digits>-<index sha256>, which the holder that records
+-- the next generation collects. Past 16 they stay until the disk goes.
+alter table disks add column orphaned_indexes text[] not null default '{}'
+    check (cardinality(orphaned_indexes) <= 16);
+
 -- The disks a host holds at once, as its agent offers them: its data
 -- volume keeps room for each one's unpublished writes.
 alter table hosts add column disk_slots int not null default 0 check (disk_slots >= 0);

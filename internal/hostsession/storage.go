@@ -294,10 +294,15 @@ func (s *Server) RecordDiskGeneration(ctx context.Context, req *hostproto.Record
 		return nil, err
 	}
 	g := storage.DiskGeneration{Generation: req.GetGeneration().GetGeneration(), IndexSHA256: req.GetGeneration().GetIndexSha256()}
-	if err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), g, req.GetAddedBytes()); err != nil {
+	orphans, err := s.storage.RecordDiskGeneration(ctx, hostFrom(ctx), container, disk, req.GetLeaseToken(), g, req.GetAddedBytes())
+	if err != nil {
 		return nil, s.diskError(ctx, err)
 	}
-	return &hostproto.RecordDiskGenerationResponse{}, nil
+	out := &hostproto.RecordDiskGenerationResponse{}
+	for _, o := range orphans {
+		out.Orphans = append(out.Orphans, &hostproto.DiskGeneration{Generation: o.Generation, IndexSha256: o.IndexSHA256})
+	}
+	return out, nil
 }
 
 // CollectDisk deletes a disk's unreachable objects under the lease.

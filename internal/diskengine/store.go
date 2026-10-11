@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -88,6 +89,23 @@ func openStore(store Store) (*objectStore, error) {
 		BaseEndpoint:               aws.String(store.Endpoint),
 	}
 	return &objectStore{client: s3.New(options), bucket: store.Bucket}, nil
+}
+
+// get reads an object of at most limit bytes.
+func (s *objectStore) get(ctx context.Context, key string, limit int64) ([]byte, error) {
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil {
+		return nil, fmt.Errorf("get s3://%s/%s: %w", s.bucket, key, err)
+	}
+	defer func() { _ = output.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(output.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read s3://%s/%s: %w", s.bucket, key, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("s3://%s/%s is larger than %d bytes", s.bucket, key, limit)
+	}
+	return data, nil
 }
 
 func (s *objectStore) put(ctx context.Context, key string, body []byte) error {

@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestGenerationsNameTheirIndexBySHA256(t *testing.T) {
 	}
 	var bad *InvalidError
 	g := DiskGeneration{Generation: 1, IndexSHA256: "../../volumes/x"}
-	if err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g, 1); !errors.As(err, &bad) {
+	if _, err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g, 1); !errors.As(err, &bad) {
 		t.Fatalf("an index named by a path: %v", err)
 	}
 }
@@ -98,5 +99,49 @@ func TestDeletingTheHolderContainerEndsTheLease(t *testing.T) {
 	}
 	if disk, err := f.storage.GetDisk(ctx, f.ws, "root"); err != nil || disk.Status != apitypes.Detached || disk.HolderContainerId != nil {
 		t.Fatalf("disk after its holder was deleted: %+v err=%v", disk, err)
+	}
+}
+
+// TestSupersededUploadsGoToTheHolder: a generation a container uploads after
+// losing the disk is handed to the holder that records the next one, which
+// may collect its index; the recorded index stays uncollectable.
+func TestSupersededUploadsGoToTheHolder(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t, diskSpec)
+	s := f.storage
+	first := f.container()
+	lease, err := s.AcquireDisk(ctx, f.host, first, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(1), 100); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(first, "host_lost")
+	second := f.container()
+	next, err := s.AcquireDisk(ctx, f.host, second, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := DiskGeneration{Generation: 2, IndexSHA256: fmt.Sprintf("%064x", 0xbad)}
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, lost, 100); !errors.Is(err, ErrStaleLease) {
+		t.Fatalf("an upload after losing the disk: %v", err)
+	}
+	orphans, err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(2), 100)
+	if err != nil || !slices.Equal(orphans, []DiskGeneration{lost}) {
+		t.Fatalf("the holder's next generation returned orphans %v, %v; want the lost upload", orphans, err)
+	}
+	key := func(g DiskGeneration) string {
+		return fmt.Sprintf("disks/%s/manifests/%012d-%s", next.Disk, g.Generation, g.IndexSHA256)
+	}
+	var bad *InvalidError
+	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 2, []string{key(generation(2))}, 0); !errors.As(err, &bad) {
+		t.Fatalf("collecting the recorded index: %v", err)
+	}
+	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 2, []string{key(lost)}, 0); err != nil {
+		t.Fatalf("collecting the orphaned index: %v", err)
+	}
+	if orphans, err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, generation(3), 100); err != nil || len(orphans) != 0 {
+		t.Fatalf("a later generation returned orphans %v, %v", orphans, err)
 	}
 }

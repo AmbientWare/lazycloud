@@ -80,7 +80,7 @@ func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveD
 
 const advanceDisk = `-- name: AdvanceDisk :exec
 update disks
-set generation = $1, index_sha256 = $2, stored_bytes = stored_bytes + $3,
+set generation = $1, index_sha256 = $2, stored_bytes = stored_bytes + $3, orphaned_indexes = '{}',
     failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = $4
 `
@@ -375,7 +375,7 @@ func (q *Queries) LockActiveDisk(ctx context.Context, arg LockActiveDiskParams) 
 }
 
 const lockLeasedDisk = `-- name: LockLeasedDisk :one
-select d.id, d.generation, d.index_sha256, d.workspace_id, b.bucket, b.region, w.connection_id
+select d.id, d.generation, d.index_sha256, d.orphaned_indexes, d.workspace_id, b.bucket, b.region, w.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
@@ -395,13 +395,14 @@ type LockLeasedDiskParams struct {
 }
 
 type LockLeasedDiskRow struct {
-	ID           uuid.UUID
-	Generation   int64
-	IndexSha256  *string
-	WorkspaceID  uuid.UUID
-	Bucket       *string
-	Region       *string
-	ConnectionID *uuid.UUID
+	ID              uuid.UUID
+	Generation      int64
+	IndexSha256     *string
+	OrphanedIndexes []string
+	WorkspaceID     uuid.UUID
+	Bucket          *string
+	Region          *string
+	ConnectionID    *uuid.UUID
 }
 
 // The disk only while container holds it with token: it has not stopped,
@@ -419,6 +420,7 @@ func (q *Queries) LockLeasedDisk(ctx context.Context, arg LockLeasedDiskParams) 
 		&i.ID,
 		&i.Generation,
 		&i.IndexSha256,
+		&i.OrphanedIndexes,
 		&i.WorkspaceID,
 		&i.Bucket,
 		&i.Region,
@@ -433,6 +435,33 @@ update disks set state = 'deleting', deleted_at = now(), updated_at = now() wher
 
 func (q *Queries) MarkDiskDeleting(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markDiskDeleting, id)
+	return err
+}
+
+const recordOrphanedIndex = `-- name: RecordOrphanedIndex :exec
+update disks d set orphaned_indexes = array_append(d.orphaned_indexes, $1::text)
+from containers c
+where d.id = $2 and d.state = 'active' and c.id = $3 and c.host_id = $4
+  and c.workspace_id = d.workspace_id
+  and not $1::text = any(d.orphaned_indexes) and cardinality(d.orphaned_indexes) < 16
+`
+
+type RecordOrphanedIndexParams struct {
+	Name        string
+	ID          uuid.UUID
+	ContainerID uuid.UUID
+	HostID      *uuid.UUID
+}
+
+// An index a container on host uploaded for a disk of its workspace after
+// losing the disk's lease.
+func (q *Queries) RecordOrphanedIndex(ctx context.Context, arg RecordOrphanedIndexParams) error {
+	_, err := q.db.Exec(ctx, recordOrphanedIndex,
+		arg.Name,
+		arg.ID,
+		arg.ContainerID,
+		arg.HostID,
+	)
 	return err
 }
 

@@ -198,12 +198,16 @@ func (s *Storage) withDiskLease(ctx context.Context, host compute.HostID, contai
 }
 
 // RecordDiskGeneration accepts the next generation from the lease holder,
-// whose new frames hold addedBytes. A replay of the recorded generation
-// with the same index succeeds, so the host can retry after a lost reply.
-func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g DiskGeneration, addedBytes int64) error {
+// whose new frames hold addedBytes, and returns the generations former
+// holders uploaded after losing the disk, which the holder collects. A
+// replay of the recorded generation with the same index succeeds, so the
+// host can retry after a lost reply. A container that lost the disk has its
+// upload recorded for the holder to collect.
+func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, g DiskGeneration, addedBytes int64) ([]DiskGeneration, error) {
 	if !sha256Hex.MatchString(g.IndexSHA256) {
-		return invalid("index sha256 %q is not 64 lowercase hex digits", g.IndexSHA256)
+		return nil, invalid("index sha256 %q is not 64 lowercase hex digits", g.IndexSHA256)
 	}
+	var orphans []DiskGeneration
 	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
 		if g.Generation == row.Generation && row.IndexSha256 != nil && *row.IndexSha256 == g.IndexSHA256 {
 			return nil
@@ -211,35 +215,51 @@ func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID,
 		if g.Generation != row.Generation+1 {
 			return conflict("generation %d does not follow the recorded %d", g.Generation, row.Generation)
 		}
+		for _, name := range row.OrphanedIndexes {
+			number, sha, _ := strings.Cut(name, "-")
+			if n, err := strconv.ParseInt(number, 10, 64); err == nil {
+				orphans = append(orphans, DiskGeneration{Generation: n, IndexSHA256: sha})
+			}
+		}
 		return q.AdvanceDisk(ctx, AdvanceDiskParams{ID: disk, Generation: g.Generation, IndexSha256: &g.IndexSHA256, AddedBytes: max(addedBytes, 0)})
 	})
-	if err != nil {
-		return fmt.Errorf("record disk generation: %w", err)
+	if errors.Is(err, ErrStaleLease) {
+		if recordErr := s.queries.RecordOrphanedIndex(ctx, RecordOrphanedIndexParams{
+			ID: disk, ContainerID: container, HostID: hostRef(host), Name: indexName(g),
+		}); recordErr != nil {
+			err = errors.Join(err, fmt.Errorf("record the orphaned index: %w", recordErr))
+		}
 	}
-	return nil
+	if err != nil {
+		return nil, fmt.Errorf("record disk generation: %w", err)
+	}
+	return orphans, nil
 }
+
+// indexName is where g's index is under its disk's prefix's manifests/.
+func indexName(g DiskGeneration) string { return fmt.Sprintf("%012d-%s", g.Generation, g.IndexSHA256) }
 
 // maxCollectKeys bounds the keys one CollectDisk call deletes.
 const maxCollectKeys = 1000
 
 // CollectDisk deletes keys, objects of the disk that generation, a recorded
-// one, no longer reads. The keys are deleted
-// while the lease's row lock is held: no other container can take the disk
-// or record a generation until they are gone, and a holder that lost the
-// lease deletes nothing. Keys outside the disk's indexes below generation
-// and its frames are refused.
+// one, no longer reads. The keys are deleted while the lease's row lock is
+// held: no other container can take the disk or record a generation until
+// they are gone, and a holder that lost the lease deletes nothing. Keys
+// other than the disk's frames and its indexes but the recorded one are
+// refused.
 func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, container, disk uuid.UUID, token []byte, base int64, keys []string, removedBytes int64) error {
 	if len(keys) > maxCollectKeys {
 		return invalid("collect at most %d keys at once, got %d", maxCollectKeys, len(keys))
 	}
-	for _, key := range keys {
-		if !collectable(disk, base, key) {
-			return invalid("key %q is not an index below generation %d or a frame of disk %s", key, base, disk)
-		}
-	}
 	err := s.withDiskLease(ctx, host, container, disk, token, func(q *Queries, row LockLeasedDiskRow) error {
 		if base > row.Generation {
 			return invalid("generation %d is past the recorded generation %d", base, row.Generation)
+		}
+		for _, key := range keys {
+			if !collectable(disk, row, key) {
+				return invalid("key %q is not a frame or a former index of disk %s", key, disk)
+			}
 		}
 		if len(keys) > 0 {
 			if row.Bucket == nil || row.Region == nil {
@@ -263,20 +283,19 @@ func (s *Storage) CollectDisk(ctx context.Context, host compute.HostID, containe
 
 var (
 	sha256Hex    = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	collectIndex = regexp.MustCompile(`^manifests/(\d{12})-[0-9a-f]{64}$`)
+	collectIndex = regexp.MustCompile(`^\d{12}-[0-9a-f]{64}$`)
 	collectFrame = regexp.MustCompile(`^frames/[0-9a-f]{64}$`)
 )
 
-// collectable reports whether key names an index of disk below base or one
-// of its frames, as the disk engine stores them.
-func collectable(disk uuid.UUID, base int64, key string) bool {
+// collectable reports whether key names one of the disk's frames or an
+// index other than its recorded one, as the disk engine stores them.
+func collectable(disk uuid.UUID, row LockLeasedDiskRow, key string) bool {
 	rest, ok := strings.CutPrefix(key, diskPrefix(disk))
 	if !ok {
 		return false
 	}
-	if m := collectIndex.FindStringSubmatch(rest); m != nil {
-		generation, err := strconv.ParseInt(m[1], 10, 64)
-		return err == nil && generation < base
+	if name, ok := strings.CutPrefix(rest, "manifests/"); ok && collectIndex.MatchString(name) {
+		return row.IndexSha256 == nil || name != indexName(DiskGeneration{Generation: row.Generation, IndexSHA256: *row.IndexSha256})
 	}
 	return collectFrame.MatchString(rest)
 }

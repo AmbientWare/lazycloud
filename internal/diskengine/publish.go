@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
@@ -374,12 +376,13 @@ func overlay(data []byte, off int64, extents []mappedExtent, files []*os.File) e
 }
 
 // CommitPublished makes generation, the pending upload, the disk's base
-// once the control plane has recorded it. An attached disk's running stack
+// once the control plane has recorded it, and keeps the orphans it named
+// for Collect. An attached disk's running stack
 // moves onto the generation's file, with the frames it replaced cached
 // first, and the snapshotter stops serving older generations. The layers
 // it holds are deleted. Committing the committed generation again
 // succeeds.
-func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation int64) error {
+func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation int64, orphans []Generation) error {
 	p, err := e.paths(diskID)
 	if err != nil {
 		return err
@@ -399,10 +402,10 @@ func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation 
 		}
 		return fmt.Errorf("%w: disk %s has no uploaded generation %d awaiting commit", ErrInvalid, p.id, generation)
 	}
-	return e.commit(ctx, p, state)
+	return e.commit(ctx, p, state, orphans)
 }
 
-func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState) error {
+func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState, orphans []Generation) error {
 	next := state.Pending.generation()
 	if a := state.Attachment; a != nil && daemonAlive(p, a.DaemonPID) {
 		path, err := e.serveBase(ctx, p.id, next, p.pendingIndex(), state.Pending.Dirty)
@@ -420,6 +423,7 @@ func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState) erro
 	if err != nil {
 		return err
 	}
+	state.Collect.Orphans = append(state.Collect.Orphans, orphans...)
 	if err := saveState(p, state); err != nil {
 		return err
 	}
@@ -440,9 +444,10 @@ func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState) erro
 type Remover func(ctx context.Context, generation int64, keys []string, bytes int64) error
 
 // Collect deletes, through remove, the objects the committed generations
-// no longer read: the indexes they replaced and frames no later generation
-// names. A batch removed stays removed when a later one fails.
-func (e *Engine) Collect(ctx context.Context, diskID string, remove Remover) error {
+// no longer read: the indexes they replaced, frames no later generation
+// names, and orphans' indexes and the frames only they name, which it reads
+// from store. A batch removed stays removed when a later one fails.
+func (e *Engine) Collect(ctx context.Context, diskID string, store Store, remove Remover) error {
 	p, err := e.paths(diskID)
 	if err != nil {
 		return err
@@ -455,6 +460,11 @@ func (e *Engine) Collect(ctx context.Context, diskID string, remove Remover) err
 	state, err := requireState(p)
 	if err != nil || state.Collect == nil {
 		return err
+	}
+	if len(state.Collect.Orphans) > 0 && state.Pending == nil {
+		if err := collectOrphans(ctx, p, state, store); err != nil {
+			return err
+		}
 	}
 	for len(state.Collect.Keys) > 0 {
 		batch := state.Collect.Keys[:min(len(state.Collect.Keys), deleteBatchSize)]
@@ -471,6 +481,45 @@ func (e *Engine) Collect(ctx context.Context, diskID string, remove Remover) err
 			return err
 		}
 	}
-	state.Collect = nil
+	if len(state.Collect.Orphans) == 0 {
+		state.Collect = nil
+	}
+	return saveState(p, state)
+}
+
+// collectOrphans adds to the collection each orphan's index and the frames
+// it names that the base does not. Their bytes were never counted as the
+// disk's. An index gone or unreadable names no frames.
+func collectOrphans(ctx context.Context, p diskPaths, state *diskState, store Store) error {
+	objects, err := openStore(store)
+	if err != nil {
+		return err
+	}
+	base, err := loadBase(p, state)
+	if err != nil {
+		return err
+	}
+	named := map[string]bool{}
+	for _, f := range base.Frames {
+		named[f.Name()] = true
+	}
+	for _, o := range state.Collect.Orphans {
+		key := imagefs.DiskIndexKey(p.id, o.Generation, o.IndexSHA256)
+		raw, err := objects.get(ctx, key, imagefs.MaxIndexSize)
+		var missing *types.NoSuchKey
+		if err != nil && !errors.As(err, &missing) {
+			return err
+		}
+		if ix, err := imagefs.UnmarshalDisk(raw); err == nil {
+			for _, f := range ix.Frames {
+				if !f.Zero() && !named[f.Name()] {
+					named[f.Name()] = true
+					state.Collect.Keys = append(state.Collect.Keys, collectKey{Key: imagefs.DiskPrefix(p.id) + f.Name()})
+				}
+			}
+		}
+		state.Collect.Keys = append(state.Collect.Keys, collectKey{Key: key})
+	}
+	state.Collect.Orphans = nil
 	return saveState(p, state)
 }

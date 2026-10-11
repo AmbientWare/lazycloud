@@ -36,7 +36,7 @@ where id = @id;
 -- The disk only while container holds it with token: it has not stopped,
 -- or it stopped on a live host and has not released the disk yet, which is
 -- when its host publishes the final generation.
-select d.id, d.generation, d.index_sha256, d.workspace_id, b.bucket, b.region, w.connection_id
+select d.id, d.generation, d.index_sha256, d.orphaned_indexes, d.workspace_id, b.bucket, b.region, w.connection_id
 from disks d
 join containers c on c.id = d.holder_container_id
 join hosts h on h.id = c.host_id
@@ -49,9 +49,18 @@ for update of d;
 
 -- name: AdvanceDisk :exec
 update disks
-set generation = @generation, index_sha256 = @index_sha256, stored_bytes = stored_bytes + @added_bytes,
+set generation = @generation, index_sha256 = @index_sha256, stored_bytes = stored_bytes + @added_bytes, orphaned_indexes = '{}',
     failed_operation = null, failure_message = null, failed_at = null, updated_at = now()
 where id = @id;
+
+-- name: RecordOrphanedIndex :exec
+-- An index a container on host uploaded for a disk of its workspace after
+-- losing the disk's lease.
+update disks d set orphaned_indexes = array_append(d.orphaned_indexes, @name::text)
+from containers c
+where d.id = @id and d.state = 'active' and c.id = @container_id and c.host_id = @host_id
+  and c.workspace_id = d.workspace_id
+  and not @name::text = any(d.orphaned_indexes) and cardinality(d.orphaned_indexes) < 16;
 
 -- name: ReleaseDisk :execrows
 update disks

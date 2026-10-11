@@ -90,6 +90,9 @@ type collectKey struct {
 type collection struct {
 	Generation int64        `json:"generation"`
 	Keys       []collectKey `json:"keys"`
+	// Orphans are generations former holders uploaded after losing the
+	// disk, whose indexes and the frames they alone name join Keys.
+	Orphans []Generation `json:"orphans,omitempty"`
 }
 
 // pendingPublish is an upload whose generation the control plane has not
