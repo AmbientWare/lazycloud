@@ -3,15 +3,9 @@ package agent
 import (
 	"cmp"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"io"
-	"math/big"
 	"net"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -443,25 +437,6 @@ func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
 	})
 }
 
-// otherCA is a CA certificate that signed none of the test's servers.
-func otherCA(t *testing.T) []byte {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "another CA"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-}
-
 // TestVolumesMountThroughAnHTTPSStore: a mount verifies its store's
 // certificate against the host's trust bundle. A store the bundle does not
 // trust fails the start with GeeseFS's own words and leaves no mount; once
@@ -477,10 +452,8 @@ func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
 	proxy := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
 	t.Cleanup(proxy.Close)
 	store.endpoint = proxy.URL
-	bundle := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(bundle, otherCA(t), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// A CA that signed none of the store's certificates.
+	bundle, _, _ := writeCertificate(t)
 	e := newEnv(t)
 	t.Cleanup(e.stopMounts)
 	e.geesefs = geesefs
