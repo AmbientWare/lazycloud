@@ -71,18 +71,24 @@ func run(args []string) int {
 	// Every fetch slot keeps its connection to the store between frames.
 	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
 	transport.MaxIdleConnsPerHost = fetches
-	// Each disk's writes stall at its dirty budget, so the cache keeps
-	// every disk slot's budget free for them.
+	// Each disk's writes stall at its dirty budget, so the cache keeps the
+	// budget of every disk slot the volume's free space holds free for
+	// them. The cache starts empty; what else the volume holds, such as
+	// disks' writes or, off a data volume, the host's own files, stays.
 	var volume unix.Statfs_t
+	if err := os.RemoveAll(layersource.CacheDir); err != nil {
+		logger.Error("clearing the frame cache failed", "error", err)
+		return 1
+	}
 	if err := os.MkdirAll(layersource.CacheDir, 0o700); err != nil {
 		logger.Error("creating the frame cache directory failed", "error", err)
 		return 1
 	}
 	if err := unix.Statfs(layersource.CacheDir, &volume); err != nil {
-		logger.Error("reading the data volume's size failed", "error", err)
+		logger.Error("reading the data volume's free space failed", "error", err)
 		return 1
 	}
-	reserve := hostproto.DiskSlots(int64(volume.Blocks)*volume.Bsize) * hostproto.DiskDirtyBytes //nolint:gosec // Block counts fit an int64.
+	reserve := hostproto.DiskSlots(int64(volume.Bavail)*volume.Bsize) * hostproto.DiskDirtyBytes //nolint:gosec // Block counts fit an int64.
 	cfg := snapshotter.Config{
 		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: hostproto.FrameCacheBytes,
 		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes,
