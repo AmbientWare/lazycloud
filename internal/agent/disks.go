@@ -58,8 +58,7 @@ type heldDisk struct {
 	// reported is true while the server holds no failure this agent
 	// recorded for the lease.
 	reported bool
-	// read is the disk's read grant, which the snapshotter is given again
-	// before each use, since it keeps grants in memory.
+	// read is the disk's read grant.
 	read *imagefsproto.DiskGrant
 }
 
@@ -160,7 +159,7 @@ func (c *container) attachDisk(ctx context.Context, name string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	held := &heldDisk{ID: lease.GetDiskId(), Name: name, Workspace: lease.GetWorkspaceId(), Token: lease.GetLeaseToken()}
+	held := &heldDisk{ID: lease.GetDiskId(), Name: name, Workspace: lease.GetWorkspaceId(), Token: lease.GetLeaseToken(), read: lease.GetRead()}
 	c.disks.mu.Lock()
 	c.disks.disks = append(c.disks.disks, held)
 	err = c.a.saveLeases(c.id, c.disks.disks)
@@ -168,7 +167,7 @@ func (c *container) attachDisk(ctx context.Context, name string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	if err := c.a.grantRead(ctx, c.id, held); err != nil {
+	if err := c.a.grantRead(ctx, c.id, held, true); err != nil {
 		return "", err
 	}
 	request := diskengine.AttachRequest{DiskID: held.ID, SizeBytes: lease.GetSizeBytes(), Mountpoint: c.a.diskMount(c.id, held.ID)}
@@ -181,15 +180,20 @@ func (c *container) attachDisk(ctx context.Context, name string) (string, error)
 	return request.Mountpoint, nil
 }
 
-// grantRead gives the snapshotter d's read-only grant, first fetching a
-// new one when it is near expiry.
-func (a *Agent) grantRead(ctx context.Context, container string, d *heldDisk) error {
-	if d.read == nil || time.Until(d.read.GetExpiresAt().AsTime()) < readGrantRenew {
+// grantRead gives the snapshotter d's read-only grant when it renews one
+// near expiry, or with always regardless, as before each use of the disk:
+// the snapshotter keeps grants in memory and forgets them when it restarts.
+func (a *Agent) grantRead(ctx context.Context, container string, d *heldDisk, always bool) error {
+	renew := d.read == nil || time.Until(d.read.GetExpiresAt().AsTime()) < readGrantRenew
+	if renew {
 		g, err := a.host.GrantDiskRead(ctx, &hostproto.GrantDiskReadRequest{ContainerId: container, DiskId: d.ID, LeaseToken: d.Token})
 		if err != nil {
 			return fmt.Errorf("grant reads of disk %s: %w", d.Name, err)
 		}
 		d.read = g.GetGrant()
+	}
+	if !renew && !always {
+		return nil
 	}
 	return a.layers.client.GrantDisk(ctx, d.ID, d.read) //nolint:wrapcheck // The client names the call.
 }
@@ -315,7 +319,7 @@ func (c *container) tendDisk(ctx context.Context, d *heldDisk, now bool) bool {
 		if dirty, stalled, err = c.a.diskEngine.Status(d.ID); err != nil {
 			return true
 		}
-	} else if err := c.a.grantRead(ctx, c.id, d); err != nil {
+	} else if err := c.a.grantRead(ctx, c.id, d, false); err != nil {
 		c.log.Warn("granting a disk's reads failed", "disk", d.Name, "error", err)
 	}
 	// A stopping container's writers must finish for it to stop.
@@ -342,7 +346,7 @@ func (a *Agent) publish(ctx context.Context, container string, d *heldDisk, fina
 		return err
 	}
 	// The snapshotter reads the frames a publish rewrites part of.
-	if err := a.grantRead(ctx, container, d); err != nil {
+	if err := a.grantRead(ctx, container, d, true); err != nil {
 		return err
 	}
 	sealErr := a.diskEngine.Seal(ctx, d.ID)

@@ -209,8 +209,8 @@ func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (
 			})
 		}
 	}
-	if len(req.GetWarm()) > 0 {
-		d.cache.loadEach(ctx, g.frames(req.GetWarm()))
+	if dir := req.GetFramesDir(); dir != "" {
+		d.cache.take(dir, "disk:")
 	}
 	return g, nil
 }

@@ -38,7 +38,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lease.SizeBytes != 2<<30 || lease.Newest != nil {
+	if lease.SizeBytes != 2<<30 || lease.Newest != nil || lease.Read.Bucket == "" || lease.Read.AccessKeyID == "" {
 		t.Fatalf("first lease: %+v", lease)
 	}
 	again, err := s.AcquireDisk(ctx, f.host, first, "root")
@@ -150,7 +150,7 @@ func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
 		}
 	}
 	read, err := s.GrantDiskRead(ctx, f.host, first, lease.Disk, lease.Token)
-	if err != nil || read.Bucket == "" || read.AccessKeyID == "" {
+	if err != nil || read.Bucket != lease.Read.Bucket || read.AccessKeyID == "" {
 		t.Fatalf("read grant of the holder: %+v err=%v", read, err)
 	}
 	prefix := "disks/" + lease.Disk.String() + "/"

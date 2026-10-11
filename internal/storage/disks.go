@@ -71,7 +71,8 @@ type DiskGeneration struct {
 	IndexSHA256 string
 }
 
-// DiskLease is a container's hold on a disk. Token fences every publish.
+// DiskLease is a container's hold on a disk. Token fences every publish,
+// and Read reads the disk's objects.
 type DiskLease struct {
 	Disk      uuid.UUID
 	Workspace identity.WorkspaceID
@@ -80,6 +81,7 @@ type DiskLease struct {
 	// Newest is the newest published generation; nil for a disk never
 	// published.
 	Newest *DiskGeneration
+	Read   Grant
 }
 
 // DiskGrowth is what declaring disks would do to a workspace's disks.
@@ -107,10 +109,11 @@ func DeclaredDiskGrowth(ctx context.Context, db DBTX, workspace uuid.UUID, decla
 	return DiskGrowth(row), nil
 }
 
-// AcquireDisk gives container the disk its release declares by name,
-// creating the disk on first use and growing it to the declared size. The
-// same container acquiring again gets its lease back. Another holder that
-// still keeps the disk is a conflict; the host retries.
+// AcquireDisk gives container the disk its release declares by name, with
+// a read grant of its objects as GrantDiskRead issues, creating the disk on
+// first use and growing it to the declared size. The same container
+// acquiring again gets its lease back. Another holder that still keeps the
+// disk is a conflict; the host retries.
 func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, container uuid.UUID, name string) (DiskLease, error) {
 	declared, err := s.queries.DeclaredDisk(ctx, DeclaredDiskParams{ContainerID: container, HostID: hostRef(host), Name: name})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -124,7 +127,8 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 	}
 	workspace := identity.WorkspaceID(declared.WorkspaceID)
 	// The disk's objects go to the workspace's bucket, made on first use.
-	if _, err := s.workspaceStore(ctx, workspace); err != nil {
+	store, err := s.workspaceStore(ctx, workspace)
+	if err != nil {
 		return DiskLease{}, err
 	}
 	lease := DiskLease{Workspace: workspace}
@@ -173,6 +177,9 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 		return nil
 	})
 	if err != nil {
+		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
+	}
+	if lease.Read, err = s.diskReadGrant(ctx, host, store, declared.WorkspaceID, lease.Disk); err != nil {
 		return DiskLease{}, fmt.Errorf("acquire disk %s: %w", name, err)
 	}
 	return lease, nil

@@ -32,6 +32,10 @@ func (p diskPaths) pidFile() string   { return filepath.Join(p.runDir(), "qsd.pi
 // pendingIndex that of the generation awaiting commit.
 func (p diskPaths) baseIndex() string    { return filepath.Join(p.dir(), "base.index") }
 func (p diskPaths) pendingIndex() string { return filepath.Join(p.dir(), "pending.index") }
+
+// framesDir holds the frames the pending generation stored, for the
+// snapshotter's cache, each at its imagefs.DiskFrame.Name.
+func (p diskPaths) framesDir() string { return filepath.Join(p.dir(), "frames") }
 func (p diskPaths) layerPath(l layer) string {
 	return filepath.Join(p.layerDir(), l.file())
 }
@@ -103,9 +107,6 @@ type pendingPublish struct {
 	AddedBytes  int64  `json:"added_bytes"`
 	// Through is the newest layer the generation holds.
 	Through int `json:"through"`
-	// Dirty are the frames the generation replaced, cached before the live
-	// stack moves onto it.
-	Dirty []uint32 `json:"dirty"`
 	// Collect is what the committed generation no longer reads.
 	Collect []collectKey `json:"collect"`
 }

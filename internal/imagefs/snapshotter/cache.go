@@ -3,6 +3,8 @@ package snapshotter
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -88,6 +92,8 @@ type frameCache struct {
 	fetches singleflight.Group
 	slots   chan struct{}
 	reader  *imagefs.FrameReader
+	// taken numbers the frames take moved in, naming their files.
+	taken atomic.Uint64
 	// filling bounds the background fetches in flight: fills, prefetches
 	// and warms. They hold at most half of slots, so containers' reads
 	// always find a slot free.
@@ -104,6 +110,9 @@ type frameCache struct {
 
 	mu   sync.Mutex
 	used int64
+	// free is the volume's free space as trim last read it, less what the
+	// cache stored since and plus what it removed.
+	free int64
 	// idle and held list the stored frames, most recently used first. A
 	// frame whose file an eviction failed to delete stays listed, and
 	// counted, without a key in frames.
@@ -129,7 +138,7 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the decoder names itself
 	}
-	return &frameCache{
+	c := &frameCache{
 		dir: dir, limit: cfg.CacheBytes, reserve: cfg.ReserveBytes, fillBytes: cfg.FillBytes, http: cfg.HTTP, log: cfg.Logger, reader: reader,
 		traces:     &tracer{traces: make(map[string]*trace)},
 		starts:     &startTraces{tracer: cfg.Tracer, byName: map[string]*startTrace{}, byLayer: map[imagefs.Digest]*startTrace{}},
@@ -141,7 +150,9 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 		holds:      make(map[frameKey]int),
 		live:       make(map[imagefs.Digest]*layer),
 		mountWake:  make(chan struct{}),
-	}, nil
+	}
+	c.free = c.freeBytes()
+	return c, nil
 }
 
 // newLayer returns a layer ix describes, read through its current grant.
@@ -191,11 +202,25 @@ func (c *frameCache) unmount(l *layer) {
 	l.stopFill()
 }
 
+// holdBatch bounds the keys hold counts under one lock, so reads wait
+// little behind a large disk's hold.
+const holdBatch = 1024
+
 // hold counts a hold on each of keys, or with -1 drops one.
 func (c *frameCache) hold(keys iter.Seq[frameKey], delta int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.holdLocked(keys, delta)
+	batch := make([]frameKey, 0, holdBatch)
+	flush := func() {
+		c.mu.Lock()
+		c.holdLocked(slices.Values(batch), delta)
+		c.mu.Unlock()
+		batch = batch[:0]
+	}
+	for k := range keys {
+		if batch = append(batch, k); len(batch) == holdBatch {
+			flush()
+		}
+	}
+	flush()
 }
 
 // holdLocked counts delta holds on each of keys, moving a stored frame that
@@ -383,9 +408,8 @@ func retryable(err error) bool {
 	return true
 }
 
-// store writes a fetched frame to a new file, lists it in place of any
-// copy, and evicts down to the bounds. The frame's bytes reach their
-// readers whether or not it is stored.
+// store writes a fetched frame to a new file and keeps it. The frame's
+// bytes reach their readers whether or not it is stored.
 func (c *frameCache) store(k frameKey, data []byte) error {
 	file, err := os.CreateTemp(c.dir, "frame-")
 	if err != nil {
@@ -399,23 +423,54 @@ func (c *frameCache) store(k frameKey, data []byte) error {
 		_ = os.Remove(file.Name())
 		return fmt.Errorf("store frame: %w", err)
 	}
+	c.keep(k, file.Name(), int64(len(data)), int64(len(data)))
+	return nil
+}
+
+// take moves into the cache each frame in dir, a directory on the cache's
+// volume whose files are named by the hex sha256 of their bytes, keyed by
+// prefix and its name. What it cannot move is left.
+func (c *frameCache) take(dir, prefix string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		c.log.Warn("reading frames to cache failed", "dir", dir, "error", err)
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		info, err := entry.Info()
+		if digest, hexErr := hex.DecodeString(name); err != nil || hexErr != nil || len(digest) != sha256.Size || !info.Mode().IsRegular() {
+			continue
+		}
+		path := filepath.Join(c.dir, "frame-"+name+"-"+strconv.FormatUint(c.taken.Add(1), 10))
+		if err := os.Rename(filepath.Join(dir, name), path); err != nil {
+			c.log.Warn("moving a frame into the cache failed", "frame", name, "error", err)
+			continue
+		}
+		c.keep(frameKey{object: prefix + name}, path, info.Size(), 0)
+	}
+}
+
+// keep lists the frame of size bytes at path in place of any copy, counts
+// written bytes of the volume as used, and evicts down to the bounds.
+func (c *frameCache) keep(k frameKey, path string, size, written int64) {
 	c.mu.Lock()
 	var victims []*cachedFrame
 	if e, ok := c.frames[k]; ok {
 		victims = append(victims, c.unlinkLocked(e))
 	}
-	c.linkLocked(&cachedFrame{key: k, path: file.Name(), size: int64(len(data))}, true)
+	c.linkLocked(&cachedFrame{key: k, path: path, size: size}, true)
+	c.free -= written
 	victims = c.evictLocked(victims)
 	c.mu.Unlock()
 	c.remove(victims)
-	return nil
 }
 
 // evictLocked unlists frames, least recently used first, until the cache
 // is within its bound and the volume has reserve free, and returns them
 // with victims for remove.
 func (c *frameCache) evictLocked(victims []*cachedFrame) []*cachedFrame {
-	short := c.reserve - c.freeBytes()
+	short := c.reserve - c.free
 	for c.used > c.limit || short > 0 {
 		from := &c.idle
 		if from.Len() == 0 {
@@ -453,7 +508,9 @@ func (c *frameCache) trim(ctx context.Context) {
 			return
 		case <-tick.C:
 		}
+		free := c.freeBytes()
 		c.mu.Lock()
+		c.free = free
 		victims := c.evictLocked(nil)
 		c.mu.Unlock()
 		c.remove(victims)
@@ -463,13 +520,24 @@ func (c *frameCache) trim(ctx context.Context) {
 // remove deletes the files of unlisted frames. A file it cannot delete is
 // listed and counted again, oldest, so the next eviction tries it first.
 func (c *frameCache) remove(frames []*cachedFrame) {
+	var freed int64
+	var kept []*cachedFrame
 	for _, f := range frames {
 		if err := os.Remove(f.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			c.log.Warn("evicting a cached frame failed", "object", f.key.object, "frame", f.key.frame, "error", err)
-			c.mu.Lock()
-			c.linkLocked(f, false)
-			c.mu.Unlock()
+			kept = append(kept, f)
+			continue
 		}
+		freed += f.size
+	}
+	if len(frames) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.free += freed
+	for _, f := range kept {
+		c.linkLocked(f, false)
 	}
 }
 

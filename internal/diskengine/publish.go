@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -61,14 +62,13 @@ func (e *Engine) Publish(ctx context.Context, diskID string, store Store, final 
 	ctx, span := telemetry.Start(ctx, "diskengine.publish", trace.WithAttributes(attribute.Int("lazycloud.layers", len(state.sealed()))))
 	pending, err := e.publish(ctx, p, state, objects, final)
 	if pending != nil {
-		span.SetAttributes(attribute.Int64("lazycloud.bytes", pending.AddedBytes), attribute.Int("lazycloud.frames", len(pending.Dirty)))
+		span.SetAttributes(attribute.Int64("lazycloud.bytes", pending.AddedBytes))
 	}
 	telemetry.Fail(span, err)
 	if err != nil || pending == nil {
 		return nil, err
 	}
-	e.log.InfoContext(ctx, "disk generation uploaded", "disk_id", p.id, "generation", pending.Generation,
-		"frames", len(pending.Dirty), "added_bytes", pending.AddedBytes)
+	e.log.InfoContext(ctx, "disk generation uploaded", "disk_id", p.id, "generation", pending.Generation, "added_bytes", pending.AddedBytes)
 	return pending.published(), nil
 }
 
@@ -110,7 +110,7 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	}
 	basePath := ""
 	if state.Base != nil {
-		if basePath, err = e.serveBase(ctx, p.id, *state.Base, p.baseIndex(), nil); err != nil {
+		if basePath, err = e.serveBase(ctx, p.id, *state.Base, p.baseIndex(), ""); err != nil {
 			return nil, err
 		}
 	}
@@ -157,7 +157,7 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	}
 	state.Pending = &pendingPublish{
 		Generation: generation, IndexSHA256: digest, AddedBytes: added,
-		Through: sealedThrough(state), Dirty: dirty, Collect: collect,
+		Through: sealedThrough(state), Collect: collect,
 	}
 	if err := saveState(p, state); err != nil {
 		return nil, err
@@ -188,10 +188,11 @@ func loadBase(p diskPaths, state *diskState) (imagefs.DiskIndex, error) {
 }
 
 // serveBase has the snapshotter serve generation g, whose index the engine
-// keeps at index, and returns its file, caching warm first.
-func (e *Engine) serveBase(ctx context.Context, diskID string, g Generation, index string, warm []uint32) (string, error) {
+// keeps at index, and returns its file, first moving into its cache the
+// frames in the frames directory, if any.
+func (e *Engine) serveBase(ctx context.Context, diskID string, g Generation, index, frames string) (string, error) {
 	path, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
-		DiskId: diskID, Generation: g.Generation, IndexSha256: g.IndexSHA256, IndexPath: index, Warm: warm,
+		DiskId: diskID, Generation: g.Generation, IndexSha256: g.IndexSHA256, IndexPath: index, FramesDir: frames,
 	})
 	if err != nil {
 		return "", fmt.Errorf("serve the base generation: %w", err)
@@ -264,12 +265,19 @@ func dirtyFrames(ctx context.Context, p diskPaths, sealed []layer) ([]mappedExte
 }
 
 // storeFrames reads each dirty frame as the sealed stack shows it, the base
-// generation's bytes at basePath under the sealed layers' writes, and
-// stores those the bucket lacks, filling their entries in next. It returns
-// the bytes stored.
+// generation's bytes at basePath under the sealed layers' writes, stores
+// those the bucket lacks, filling their entries in next, and keeps each in
+// the disk's frames directory for the snapshotter's cache. It returns the
+// bytes stored.
 func storeFrames(ctx context.Context, p diskPaths, objects imagefs.Bucket, sealed []layer, extents []mappedExtent,
 	base imagefs.DiskIndex, basePath string, dirty []uint32, next *imagefs.DiskIndex,
 ) (int64, error) {
+	if err := os.RemoveAll(p.framesDir()); err != nil {
+		return 0, fmt.Errorf("clear the frames directory: %w", err)
+	}
+	if err := os.Mkdir(p.framesDir(), 0o700); err != nil {
+		return 0, fmt.Errorf("create the frames directory: %w", err)
+	}
 	var err error
 	files := make([]*os.File, len(sealed))
 	defer func() {
@@ -302,7 +310,7 @@ func storeFrames(ctx context.Context, p diskPaths, objects imagefs.Bucket, seale
 		return 0, err //nolint:wrapcheck // The encoder names itself.
 	}
 	var added atomic.Int64
-	// Frames of equal bytes upload once.
+	// Frames of equal bytes are kept and upload once.
 	type upload struct {
 		once sync.Once
 		err  error
@@ -326,7 +334,7 @@ func storeFrames(ctx context.Context, p diskPaths, objects imagefs.Bucket, seale
 			}
 			f, packed := encoder.Encode(data)
 			next.Frames[i] = f
-			if f.Zero() || stored[f.Digest] {
+			if f.Zero() {
 				return nil
 			}
 			mu.Lock()
@@ -337,6 +345,9 @@ func storeFrames(ctx context.Context, p diskPaths, objects imagefs.Bucket, seale
 			}
 			mu.Unlock()
 			u.once.Do(func() {
+				if u.err = os.WriteFile(filepath.Join(p.dir(), f.Name()), data, 0o600); u.err != nil || stored[f.Digest] {
+					return
+				}
 				if u.err = objects.Put(groupCtx, imagefs.DiskPrefix(p.id)+f.Name(), packed); u.err == nil {
 					added.Add(f.Size)
 				}
@@ -408,7 +419,7 @@ func (e *Engine) CommitPublished(ctx context.Context, diskID string, generation 
 func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState, orphans []Generation) error {
 	next := state.Pending.generation()
 	if a := state.Attachment; a != nil && daemonAlive(p, a.DaemonPID) {
-		path, err := e.serveBase(ctx, p.id, next, p.pendingIndex(), state.Pending.Dirty)
+		path, err := e.serveBase(ctx, p.id, next, p.pendingIndex(), p.framesDir())
 		if err != nil {
 			return err
 		}
@@ -431,6 +442,9 @@ func (e *Engine) commit(ctx context.Context, p diskPaths, state *diskState, orph
 		if err := removeIfExists(p.layerPath(l)); err != nil {
 			return err
 		}
+	}
+	if err := os.RemoveAll(p.framesDir()); err != nil {
+		return fmt.Errorf("remove the frames directory: %w", err)
 	}
 	if err := e.bases.ReleaseDisk(ctx, p.id, next.Generation); err != nil {
 		return fmt.Errorf("release older generations: %w", err)

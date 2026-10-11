@@ -33,6 +33,12 @@ func (s *Storage) GrantDiskRead(ctx context.Context, host compute.HostID, contai
 	if err != nil {
 		return Grant{}, err
 	}
+	return s.diskReadGrant(ctx, host, store, row.WorkspaceID, disk)
+}
+
+// diskReadGrant issues host a credential that reads disk's objects in
+// store, the bucket of workspace.
+func (s *Storage) diskReadGrant(ctx context.Context, host compute.HostID, store bucketClient, workspace, disk uuid.UUID) (Grant, error) {
 	provider, err := s.providerOf(ctx, store)
 	if err != nil {
 		return Grant{}, err
@@ -43,7 +49,7 @@ func (s *Storage) GrantDiskRead(ctx context.Context, host compute.HostID, contai
 	}
 	if revocable {
 		if err := s.queries.InsertStorageGrant(ctx, InsertStorageGrantParams{
-			AccessKeyID: creds.AccessKeyID, WorkspaceID: row.WorkspaceID, HostID: uuid.UUID(host), ExpiresAt: creds.Expires,
+			AccessKeyID: creds.AccessKeyID, WorkspaceID: workspace, HostID: uuid.UUID(host), ExpiresAt: creds.Expires,
 		}); err != nil {
 			return Grant{}, fmt.Errorf("record storage grant: %w", err)
 		}

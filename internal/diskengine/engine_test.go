@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -64,9 +63,6 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 	if retried, err := first.engine.Publish(ctx, diskID, store, false); err != nil || *retried != *one {
 		t.Fatalf("a retried publish returned %+v, %v; the first %+v", retried, err, one)
 	}
-	if got := reload(t, p).Pending.Dirty; !slices.Equal(got, []uint32{1, 2}) {
-		t.Fatalf("generation 1 replaced frames %v, want the two written", got)
-	}
 	if err := first.engine.CommitPublished(ctx, diskID, 1, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -91,9 +87,6 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reload(t, p).Pending.Dirty; !slices.Equal(got, []uint32{9}) {
-		t.Fatalf("generation 2 replaced frames %v, want [9]", got)
-	}
 	writing := make(chan error, 1)
 	go func() {
 		out, err := exec.CommandContext(ctx, "qemu-io", "-f", "raw", "-c", fmt.Sprintf("write -P 0xc3 %d %d", 12*frame, 3*frame), nbdURI(p)).CombinedOutput()
@@ -102,8 +95,13 @@ func TestPublishedGenerationRestoresOnAnotherHost(t *testing.T) {
 		}
 		writing <- err
 	}()
+	// The frames the publish stored pass to the cache without a fetch.
+	fetched := first.store.requests.Load()
 	if err := first.engine.CommitPublished(ctx, diskID, two.Generation, nil); err != nil {
 		t.Fatal(err)
+	}
+	if n := first.store.requests.Load() - fetched; n != 0 {
+		t.Fatalf("committing generation 2 sent %d requests", n)
 	}
 	if err := <-writing; err != nil {
 		t.Fatal(err)
@@ -403,13 +401,13 @@ func TestDetachDropsTheGrantOfADiskNeverServed(t *testing.T) {
 	// A generation never stored: serving it reads the store through the grant.
 	never := Generation{Generation: 1, IndexSHA256: strings.Repeat("0", 64)}
 	index := filepath.Join(t.TempDir(), "index")
-	if _, err := h.engine.serveBase(t.Context(), diskID, never, index, nil); status.Code(err) == codes.FailedPrecondition {
+	if _, err := h.engine.serveBase(t.Context(), diskID, never, index, ""); status.Code(err) == codes.FailedPrecondition {
 		t.Fatalf("a granted disk is refused: %v", err)
 	}
 	if err := h.engine.Detach(t.Context(), diskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.engine.serveBase(t.Context(), diskID, never, index, nil); status.Code(err) != codes.FailedPrecondition {
+	if _, err := h.engine.serveBase(t.Context(), diskID, never, index, ""); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("after the detach the snapshotter answers %v, want FailedPrecondition", err)
 	}
 }

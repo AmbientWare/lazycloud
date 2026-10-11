@@ -281,6 +281,7 @@ func (s *Server) AcquireDisk(ctx context.Context, req *hostproto.AcquireDiskRequ
 	}
 	out := &hostproto.AcquireDiskResponse{
 		DiskId: lease.Disk.String(), WorkspaceId: lease.Workspace.String(), SizeBytes: lease.SizeBytes, LeaseToken: lease.Token,
+		Read: diskGrant(lease.Read),
 	}
 	if g := lease.Newest; g != nil {
 		out.Generation = &hostproto.DiskGeneration{Generation: g.Generation, IndexSha256: g.IndexSHA256}
@@ -329,11 +330,15 @@ func (s *Server) GrantDiskRead(ctx context.Context, req *hostproto.GrantDiskRead
 	if err != nil {
 		return nil, s.diskError(ctx, err)
 	}
-	return &hostproto.GrantDiskReadResponse{Grant: &imagefsproto.DiskGrant{
-		Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
-		AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
-		ExpiresAt: timestamppb.New(grant.ExpiresAt),
-	}}, nil
+	return &hostproto.GrantDiskReadResponse{Grant: diskGrant(grant)}, nil
+}
+
+func diskGrant(g storage.Grant) *imagefsproto.DiskGrant {
+	return &imagefsproto.DiskGrant{
+		Endpoint: g.Endpoint, Region: g.Region, Bucket: g.Bucket, ForcePathStyle: g.PathStyle,
+		AccessKeyId: g.AccessKeyID, SecretAccessKey: g.SecretAccessKey, SessionToken: g.SessionToken,
+		ExpiresAt: timestamppb.New(g.ExpiresAt),
+	}
 }
 
 // ReleaseDisk ends a lease.

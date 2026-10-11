@@ -111,8 +111,7 @@ service DiskSources {
   // replacing the disk's current one unless that expires later.
   rpc GrantDisk(GrantDiskRequest) returns (GrantDiskResponse);
   // ServeDisk serves a generation and returns its file. Serving a served
-  // generation again returns the same file. It returns once the frames in
-  // warm are cached or the call's deadline passes.
+  // generation again returns the same file.
   rpc ServeDisk(ServeDiskRequest) returns (ServeDiskResponse);
   // ReleaseDisk stops serving every generation of the disk but keep, 0 for
   // none. A file still open keeps reading.
@@ -154,8 +153,10 @@ message ServeDiskRequest {
   // then its recent_frames, in the background, bounded by the cache's size
   // and a time limit. An attach sets it.
   bool prefetch = 5;
-  // Frames to cache before the call returns.
-  repeated uint32 warm = 6;
+  // A directory of frames, each named by the hex sha256 of its bytes, on
+  // the cache's volume, which the snapshotter moves into its cache before
+  // the call returns, as a publish leaves the frames it stored.
+  string frames_dir = 6;
 }
 
 message ServeDiskResponse {

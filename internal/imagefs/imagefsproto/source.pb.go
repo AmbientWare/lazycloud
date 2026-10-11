@@ -812,8 +812,10 @@ type ServeDiskRequest struct {
 	// then its recent_frames, in the background, bounded by the cache's size
 	// and a time limit. An attach sets it.
 	Prefetch bool `protobuf:"varint,5,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
-	// Frames to cache before the call returns.
-	Warm          []uint32 `protobuf:"varint,6,rep,packed,name=warm,proto3" json:"warm,omitempty"`
+	// A directory of frames, each named by the hex sha256 of its bytes, on
+	// the cache's volume, which the snapshotter moves into its cache before
+	// the call returns, as a publish leaves the frames it stored.
+	FramesDir     string `protobuf:"bytes,6,opt,name=frames_dir,json=framesDir,proto3" json:"frames_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -883,11 +885,11 @@ func (x *ServeDiskRequest) GetPrefetch() bool {
 	return false
 }
 
-func (x *ServeDiskRequest) GetWarm() []uint32 {
+func (x *ServeDiskRequest) GetFramesDir() string {
 	if x != nil {
-		return x.Warm
+		return x.FramesDir
 	}
-	return nil
+	return ""
 }
 
 type ServeDiskResponse struct {
@@ -1172,7 +1174,7 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x10GrantDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x125\n" +
 	"\x05grant\x18\x02 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x05grant\"\x13\n" +
-	"\x11GrantDiskResponse\"\xbd\x01\n" +
+	"\x11GrantDiskResponse\"\xc8\x01\n" +
 	"\x10ServeDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x1e\n" +
 	"\n" +
@@ -1181,8 +1183,9 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\findex_sha256\x18\x03 \x01(\tR\vindexSha256\x12\x1d\n" +
 	"\n" +
 	"index_path\x18\x04 \x01(\tR\tindexPath\x12\x1a\n" +
-	"\bprefetch\x18\x05 \x01(\bR\bprefetch\x12\x12\n" +
-	"\x04warm\x18\x06 \x03(\rR\x04warm\"'\n" +
+	"\bprefetch\x18\x05 \x01(\bR\bprefetch\x12\x1d\n" +
+	"\n" +
+	"frames_dir\x18\x06 \x01(\tR\tframesDir\"'\n" +
 	"\x11ServeDiskResponse\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"A\n" +
 	"\x12ReleaseDiskRequest\x12\x17\n" +

@@ -843,6 +843,8 @@ message AcquireDiskResponse {
   bytes lease_token = 4;
   // The newest published generation; absent for a disk never published.
   DiskGeneration generation = 5;
+  // Reads the disk's objects, as GrantDiskRead renews it.
+  lazycloud.imagefs.v1.DiskGrant read = 6;
 }
 
 // DiskGeneration is one published generation: the sha256 of its stored
