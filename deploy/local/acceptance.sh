@@ -36,7 +36,7 @@ case "${1:-}" in
     log=$(mktemp)
     trap 'rm -f "$log"' EXIT
     root=()
-    if [ "$(id -u)" -ne 0 ]; then root=(sudo --preserve-env=HOME,GOPATH,GOCACHE,GOMODCACHE,GOTOOLCHAIN,LAZYCLOUD_OTLP_ENDPOINT,LAZYCLOUD_OTLP_INSECURE); fi
+    if [ "$(id -u)" -ne 0 ]; then root=(sudo "--preserve-env=HOME,GOPATH,GOCACHE,GOMODCACHE,GOTOOLCHAIN,LAZYCLOUD_OTLP_ENDPOINT,LAZYCLOUD_OTLP_INSECURE"); fi
     "${root[@]}" env PATH="$PATH" LAZYCLOUD_TEST_OCI_RUNTIME=runsc LAZYCLOUD_TEST_OLD_AGENT="$previous" \
       go test -race -timeout 60m -v ./acceptance "$@" 2>&1 | tee "$log"
     if grep -- '--- SKIP' "$log"; then
