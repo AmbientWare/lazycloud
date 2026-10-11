@@ -297,19 +297,11 @@ func (e *Engine) List(ctx context.Context) ([]LocalDisk, error) {
 		if !entry.IsDir() || !imagefs.DiskID(entry.Name()) {
 			continue
 		}
-		disk, err := describeDisk(diskPaths{root: e.root, id: entry.Name()})
+		state, err := loadState(diskPaths{root: e.root, id: entry.Name()})
 		if err != nil {
 			return nil, fmt.Errorf("describe disk %s: %w", entry.Name(), err)
 		}
-		disks = append(disks, disk)
+		disks = append(disks, LocalDisk{DiskID: entry.Name(), Attached: state != nil && state.Attachment != nil})
 	}
 	return disks, nil
-}
-
-func describeDisk(p diskPaths) (LocalDisk, error) {
-	state, err := loadState(p)
-	if err != nil {
-		return LocalDisk{}, err
-	}
-	return LocalDisk{DiskID: p.id, Attached: state != nil && state.Attachment != nil}, nil
 }

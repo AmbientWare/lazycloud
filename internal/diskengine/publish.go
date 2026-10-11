@@ -148,22 +148,14 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 			return isFrame && err == nil && len(sum) == sha256.Size && held[[sha256.Size]byte(sum)]
 		})
 	}
-	state.Pending = &pendingPublish{
-		Generation: generation, IndexSHA256: digest, AddedBytes: added,
-		Through: sealedThrough(state), Collect: collect,
+	state.Pending = &pendingPublish{Generation: generation, IndexSHA256: digest, AddedBytes: added, Collect: collect}
+	if len(sealed) > 0 {
+		state.Pending.Through = sealed[len(sealed)-1].Seq
 	}
 	if err := saveState(p, state); err != nil {
 		return nil, err
 	}
 	return state.Pending, nil
-}
-
-// sealedThrough is the newest sealed layer, or 0 when none is.
-func sealedThrough(state *diskState) int {
-	if sealed := state.sealed(); len(sealed) > 0 {
-		return sealed[len(sealed)-1].Seq
-	}
-	return 0
 }
 
 // loadBase returns the index of the generation the stack is on, which the
