@@ -89,6 +89,9 @@ type diskGeneration struct {
 	index      imagefs.DiskIndex
 	name       string
 	cache      *frameCache
+	// stopPrefetch ends the generation's prefetch; nil until one starts.
+	// Guarded by disk.mu.
+	stopPrefetch context.CancelFunc
 }
 
 func newDisks(dir string, cache *frameCache, client *http.Client, log *slog.Logger) *disks {
@@ -244,8 +247,21 @@ func (d *disks) serve(ctx context.Context, req *imagefsproto.ServeDiskRequest) (
 		k.mu.Lock()
 		k.traceStart, k.trace = time.Now(), nil
 		clear(k.traced)
+		// A generation served again, as by a repeated attach, keeps its
+		// prefetch.
+		var life context.Context
+		prefetch := g.stopPrefetch == nil
+		if prefetch {
+			life, g.stopPrefetch = context.WithTimeout(d.cache.life, prefetchLife) //nolint:contextcheck // a prefetch lives with the cache, not the call
+		}
+		stop := g.stopPrefetch
 		k.mu.Unlock()
-		d.cache.background.Go(func() { d.prefetch(g) }) //nolint:contextcheck // a prefetch lives with the cache, not the call
+		if prefetch {
+			d.cache.background.Go(func() {
+				defer stop()
+				d.prefetch(life, g)
+			})
+		}
 	}
 	if len(req.GetWarm()) > 0 {
 		d.cache.loadEach(ctx, g.frames(req.GetWarm()))
@@ -308,6 +324,9 @@ func (d *disks) release(id string, keep int64) {
 	var gone []*diskGeneration
 	for n, g := range k.generations {
 		if n != keep {
+			if g.stopPrefetch != nil {
+				g.stopPrefetch()
+			}
 			gone = append(gone, g)
 			delete(k.generations, n)
 		}
@@ -331,10 +350,8 @@ func (d *disks) release(id string, keep int64) {
 }
 
 // prefetch fetches g's start frames, then its recent ones, at most a
-// quarter of the cache, until prefetchLife has passed.
-func (d *disks) prefetch(g *diskGeneration) {
-	ctx, cancel := context.WithTimeout(d.cache.life, prefetchLife)
-	defer cancel()
+// quarter of the cache, until ctx ends.
+func (d *disks) prefetch(ctx context.Context, g *diskGeneration) {
 	began := time.Now()
 	order := slices.Concat(g.index.Start, g.index.Recent)
 	seen := make(map[uint32]bool, len(order))

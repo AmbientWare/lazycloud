@@ -198,3 +198,38 @@ func TestDiskServePrefetchesAndTraces(t *testing.T) {
 		t.Fatalf("a released generation's file: %v", err)
 	}
 }
+
+// delayedTransport counts requests and holds each for delay first.
+type delayedTransport struct {
+	countingTransport
+	delay time.Duration
+}
+
+func (d *delayedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	time.Sleep(d.delay)
+	return d.countingTransport.RoundTrip(r)
+}
+
+// Releasing a generation stops its prefetch, and serving it again to attach
+// starts no second one.
+func TestDiskReleaseStopsItsPrefetch(t *testing.T) {
+	ts := newTestStore(t)
+	frames, start := make([][]byte, 16), make([]uint32, 16)
+	for i := range frames {
+		frames[i], start[i] = bytes.Repeat([]byte{byte(i + 1)}, imagefs.FrameSize), uint32(i) //nolint:gosec // A test's frame numbers.
+	}
+	stored := ts.disk(t, "d3", frames, start)
+	slow := &delayedTransport{delay: 100 * time.Millisecond}
+	d := serveDisks(t, slow, 64*imagefs.FrameSize)
+	d.grantTest(t, ts, stored.id)
+	for range 2 {
+		if _, err := d.serve(t.Context(), &imagefsproto.ServeDiskRequest{DiskId: stored.id, Generation: 1, IndexKey: stored.key, IndexSha256: stored.sum, Prefetch: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.release(stored.id, 0)
+	d.cache.background.Wait()
+	if n := slow.requests.Load(); n > int64(len(frames))/2 {
+		t.Fatalf("the released disk sent %d requests for its index and %d start frames", n, len(frames))
+	}
+}
