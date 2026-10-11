@@ -365,9 +365,10 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	vault := secrets.NewSecrets(pool, masterKey)
 	p.images = newImages(pool, p.execution, vault, p.storage)
 	p.secrets = vault
+	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
 	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
 	if err != nil {
@@ -379,7 +380,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	}
 	hosts := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
-		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
+		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
 	}, logger)
 	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)

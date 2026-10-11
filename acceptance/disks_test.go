@@ -63,25 +63,31 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 			t.Fatalf("start the devbox: %d", status)
 		}
 	}
+	// stop stops the devbox and waits until its host saved and released
+	// the disk.
+	stop := func() {
+		t.Helper()
+		if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/dev/workloads/pod/box/devbox/stop", nil, nil); status != http.StatusOK {
+			t.Fatalf("stop the devbox: %d", status)
+		}
+		for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
+			var released bool
+			if err := p.pool.QueryRow(ctx, "select released_at is not null from disks where name = 'box'").Scan(&released); err != nil {
+				t.Fatal(err)
+			}
+			if released {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the stopped devbox did not save its disk within five minutes")
+			}
+		}
+	}
 	start()
 
 	first, firstHost := p.readyDevbox(uuid.Nil)
 	written := p.shell(first, "head -c 33554432 /dev/urandom > /root/moved && sha256sum /root/moved")
-	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/dev/workloads/pod/box/devbox/stop", nil, nil); status != http.StatusOK {
-		t.Fatalf("stop the devbox: %d", status)
-	}
-	for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
-		var released bool
-		if err := p.pool.QueryRow(ctx, "select released_at is not null from disks where name = 'box'").Scan(&released); err != nil {
-			t.Fatal(err)
-		}
-		if released {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the stopped devbox did not save its disk within five minutes")
-		}
-	}
+	stop()
 	if _, err := p.pool.Exec(ctx, "update hosts set capacity_state = 'cordoned' where id = $1", firstHost); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +96,7 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 	if read := p.shell(second, "sha256sum /root/moved"); read != written {
 		t.Fatalf("the moved disk holds %s, written %s", read, written)
 	}
+	stop()
 }
 
 // readyDevbox waits for the devbox's container to be ready on a host other
