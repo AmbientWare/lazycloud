@@ -120,23 +120,23 @@ func UnmarshalDisk(b []byte) (DiskIndex, error) {
 
 func (d DiskIndex) validate() error {
 	if d.Size <= 0 || d.Size%hostproto.DiskBlockBytes != 0 || d.Size > hostproto.MaxDiskBytes {
-		return fmt.Errorf("disk of %d bytes", d.Size)
+		return fmt.Errorf("disk size %d is not a positive multiple of %d up to %d", d.Size, hostproto.DiskBlockBytes, int64(hostproto.MaxDiskBytes))
 	}
 	if len(d.Frames) != DiskFrames(d.Size) {
 		return fmt.Errorf("%d frames for a %d byte disk", len(d.Frames), d.Size)
 	}
 	for i, f := range d.Frames {
 		if f.Size < 0 || f.Size > maxPackedFrame {
-			return fmt.Errorf("frame %d of %d bytes", i, f.Size)
+			return fmt.Errorf("frame %d stores %d bytes, outside 0 to %d", i, f.Size, maxPackedFrame)
 		}
 	}
 	if len(d.Start) > MaxTraceReads {
-		return fmt.Errorf("%d start frames", len(d.Start))
+		return fmt.Errorf("%d start frames, at most %d", len(d.Start), MaxTraceReads)
 	}
 	for _, list := range [][]uint32{d.Start, d.Recent} {
 		for _, i := range list {
 			if int(i) >= len(d.Frames) {
-				return fmt.Errorf("frame %d of %d named for prefetch", i, len(d.Frames))
+				return fmt.Errorf("prefetch names frame %d of a disk with %d frames", i, len(d.Frames))
 			}
 		}
 	}
@@ -158,8 +158,8 @@ func NewDiskFrameEncoder(concurrency int) (*DiskFrameEncoder, error) {
 	return &DiskFrameEncoder{enc: enc}, nil
 }
 
-// Encode returns the frame data is and its stored copy; a frame of zeros
-// has none.
+// Encode returns data's frame and its stored copy; a frame of zeros has
+// none.
 func (e *DiskFrameEncoder) Encode(data []byte) (DiskFrame, []byte) {
 	if len(data) == 0 || data[0] == 0 && bytes.Equal(data[1:], data[:len(data)-1]) {
 		return DiskFrame{}, nil
