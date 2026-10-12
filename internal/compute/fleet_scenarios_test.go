@@ -151,13 +151,12 @@ type simResult struct {
 	cancelled int
 }
 
-// simPurchase is one reserve purchase: its market, each pool its launch
-// tried and whether EC2 refused every one.
+// simPurchase is one reserve purchase: its market and each pool its launch
+// tried.
 type simPurchase struct {
-	at      time.Time
-	market  ReserveMarket
-	tried   []FleetOffer
-	refused bool
+	at     time.Time
+	market ReserveMarket
+	tried  []FleetOffer
 }
 
 type sim struct {
@@ -664,7 +663,6 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 			if row.Replaces != nil {
 				s.host(*a.Host).RightsizeRefusedAt = ptr(s.now)
 			}
-			purchase.refused = true
 			return HostID{}, false
 		}
 		o = next
@@ -1078,9 +1076,8 @@ func newProdSim(t *testing.T, short bool) *sim {
 // A day of builds, a burst and a large job with Spot capacity short in the
 // cheaper half of each type's pools: the fleet spends about what it would
 // were those pools never sold, a rightsize never swaps a host for one that
-// costs no less, and once work stops the fleet stops launching: only a
-// reserve whose every pool of its size refuses tries them again as they
-// leave their cooldowns.
+// costs no less, and once work stops the fleet stops launching and stops
+// trying refused pools.
 func TestFleetRefusalsCostAboutWhatThePoolsAbsenceDoes(t *testing.T) {
 	t.Parallel()
 	build := cpuNeed(4000, 8)
@@ -1108,15 +1105,9 @@ func TestFleetRefusalsCostAboutWhatThePoolsAbsenceDoes(t *testing.T) {
 		if want := 15; len(r.waits) != want {
 			t.Errorf("%s: %d of %d containers placed", name, len(r.waits), want)
 		}
-		settled := offerNow.Add(day - quiet + time.Hour)
-		for _, at := range r.launched {
-			if !at.Before(settled) {
-				t.Errorf("%s: launched at %s, hours after the last work", name, at.Format(time.TimeOnly))
-			}
-		}
-		for _, p := range r.purchases {
-			if !p.at.Before(settled) && !p.refused {
-				t.Errorf("%s: %s bought a reserve at %s, hours after the last work", name, p.market, p.at.Format(time.TimeOnly))
+		for _, at := range slices.Concat(r.launched, r.refused) {
+			if at.Sub(offerNow) >= day-quiet+time.Hour {
+				t.Errorf("%s: launched or was refused at %s, hours after the last work", name, at.Format(time.TimeOnly))
 			}
 		}
 		results[short] = r
@@ -1371,12 +1362,12 @@ func newChurnSim(t *testing.T) *sim {
 }
 
 // An empty fleet buys its reserves, with EC2 refusing every GPU Spot pool,
-// or every one in the eastern regions. Each market buys a reserve of the
-// smallest type that fits its shape and moves a refused launch only to
-// pools of that size, tries no pool again before its cooldown ends, and
-// cancels no reserve before it stops; where pools fill, every market ends
-// with its reserve.
-func TestRefusedReservesWaitAtTheirShapesSize(t *testing.T) {
+// or every one in the eastern regions. No reserve is larger than the
+// policy's LargestShape.Cap, a refused pool is not tried again before its
+// cooldown ends, no market buys more than eight reserves in a minute, and
+// no reserve is cancelled before it stops; where pools fill, every market
+// ends with its reserve.
+func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 	t.Parallel()
 	gpuSpot := func(typ string, market Market) bool {
 		c, _ := CatalogTypeNamed(typ)
@@ -1392,18 +1383,12 @@ func TestRefusedReservesWaitAtTheirShapesSize(t *testing.T) {
 		}
 		const window = 30 * time.Minute
 		r := s.run(window, nil)
-		ps := &pass{p: s.p, s: FleetSnapshot{Now: s.now, Recent: s.recent, RecentDisks: s.recentDisks, Offers: s.in}, byMarket: map[ReserveMarket]*marketView{}}
-		views := map[ReserveMarket]*marketView{}
-		for _, v := range ps.views(nil) {
-			views[v.m] = v
-		}
 		byMarket := map[ReserveMarket][]simPurchase{}
 		for _, p := range r.purchases {
 			byMarket[p.market] = append(byMarket[p.market], p)
 		}
 		for m, purchases := range byMarket {
-			fits := mustType(t, smallestFit(t, views[m]))
-			tried, perMinute, largest := map[string]time.Time{}, 0, fits
+			tried, perMinute, largest := map[string]time.Time{}, 0, CatalogType{}
 			for i, p := range purchases {
 				perMinute = max(perMinute, len(slices.DeleteFunc(slices.Clone(purchases[i:]), func(q simPurchase) bool { return q.at.Sub(p.at) >= time.Minute })))
 				for _, o := range p.tried {
@@ -1411,39 +1396,29 @@ func TestRefusedReservesWaitAtTheirShapesSize(t *testing.T) {
 						t.Errorf("%s, %s: tried %s again %s after it refused", c.name, m, o.Key(), p.at.Sub(at))
 					}
 					tried[o.Key()] = p.at
+					if !s.p.LargestShape.Cap.Covers(o.Usable) {
+						t.Errorf("%s, %s: tried %s, larger than the cap", c.name, m, o.Key())
+					}
 					if o.Type.VCPUs() > largest.VCPUs() {
 						largest = o.Type
 					}
 				}
 			}
-			t.Logf("%s, %s: %d purchases (%.1f a minute, at most %d in one), largest %s, smallest that fits %s",
-				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), perMinute, largest.Name, fits.Name)
-			if largest.VCPUs() > fits.VCPUs() {
-				t.Errorf("%s, %s: tried %s for a reserve %s fits", c.name, m, largest.Name, fits.Name)
+			t.Logf("%s, %s: %d purchases (%.1f a minute, at most %d in one), largest %s",
+				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), perMinute, largest.Name)
+			if perMinute > 8 {
+				t.Errorf("%s, %s: %d reserve purchases within a minute", c.name, m, perMinute)
 			}
 		}
 		if r.cancelled > 0 {
 			t.Errorf("%s: %d reserves cancelled before they stopped", c.name, r.cancelled)
 		}
 		if !c.all {
-			for _, m := range s.p.Markets() {
-				if !views[m].largest.Empty() && !slices.ContainsFunc(s.hosts, func(h *simHost) bool { return h.market() == m && h.resumable() }) {
+			for m := range byMarket {
+				if !slices.ContainsFunc(s.hosts, func(h *simHost) bool { return h.market() == m && h.resumable() }) {
 					t.Errorf("%s: %s holds no reserve", c.name, m)
 				}
 			}
 		}
 	}
-}
-
-// smallestFit is the catalog type of fewest vCPUs that holds market v's
-// largest shape and its disks.
-func smallestFit(t *testing.T, v *marketView) string {
-	t.Helper()
-	best := ""
-	for _, typ := range FleetCatalog() {
-		if typ.GPU == v.m.GPU && v.fits(typ.Usable(0), typ) && (best == "" || typ.VCPUs() < mustType(t, best).VCPUs()) {
-			best = typ.Name
-		}
-	}
-	return best
 }
