@@ -98,6 +98,27 @@ func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
 	}
 }
 
+// CPU work that can move fills the spare room of a fleet GPU instance
+// running GPU work ahead of a CPU host, and none of one running none. Work
+// that cannot move stays off it.
+func TestMovableCPUWorkFillsAFleetGPUInstanceOnlyWhileItRunsGPUWork(t *testing.T) {
+	o := newOwners(t, compute.Config{})
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	gpuHost := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 8000, Memory: 32 * gib, GPUType: "T4", GPUCount: 1})
+	cpuHost := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 8000, Memory: 32 * gib})
+	const moves, stays = `{"kind": "function"}`, `{"kind": "pod"}`
+	if got := constrained(t, o, dev, moves); !on(got[0], cpuHost) {
+		t.Fatalf("CPU work went to %v, want the CPU host while the GPU instance runs no GPU work", got[0])
+	}
+	if got := constrained(t, o, dev, `{"kind": "function", "resources": {"gpu": ["T4"]}}`); !on(got[0], gpuHost) {
+		t.Fatalf("GPU work went to %v, want the GPU instance", got[0])
+	}
+	if got := constrained(t, o, dev, moves, stays); !on(got[0], gpuHost) || !on(got[1], cpuHost) {
+		t.Fatalf("CPU work that can move went to %v and a pod to %v; want the GPU instance, then the CPU host", got[0], got[1])
+	}
+}
+
 func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")

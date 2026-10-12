@@ -430,3 +430,41 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 		t.Fatalf("connection estimate %v µ$/h, want %d", summary.HourlyMicros, want)
 	}
 }
+
+// CPU work never keeps a fleet GPU host up: once its GPU work ends, the
+// host hands that work back and leaves on its idle timeout, evicting what
+// still runs there, whose task is preempted and queued again. Until then
+// the work counts as the CPU Spot market's load.
+func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	host := newHost(t, o.pool, hostSpec{
+		Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 4000, Memory: 28 * gib, GPUType: "T4", GPUCount: 1,
+		Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", InstanceID: "i-gpu",
+	})
+	run(t, o.pool, "update hosts set instance_type = 'g4dn.2xlarge', idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	w := runningAttempt(t, o.pool, dev, newRelease(t, o.pool, dev, `{"kind": "function"}`), host)
+
+	plan(t, o)
+	var phase, container, attempt, task string
+	var preemptions int
+	var load []byte
+	if err := o.pool.QueryRow(t.Context(), `
+select h.phase, c.state, a.state, t.status, t.preemptions, m.plan -> 'load'
+from attempts a
+join containers c on c.id = a.container_id
+join hosts h on h.id = c.host_id
+join tasks t on t.id = a.task_id
+join fleet_markets m on m.market = 'spot:cpu'
+where a.id = $1`, w.attempt).Scan(&phase, &container, &attempt, &task, &preemptions, &load); err != nil {
+		t.Fatal(err)
+	}
+	if phase != string(compute.PhaseDraining) || container != "stopped" || attempt != "lost" || task != "queued" || preemptions != 1 {
+		t.Errorf("host %s, container %s, attempt %s, task %s after %d preemptions; want draining, stopped, lost, queued after one",
+			phase, container, attempt, task, preemptions)
+	}
+	if string(load) != `{"gpus": 0, "cpu_millis": 1000, "memory_bytes": 268435456}` {
+		t.Errorf("CPU Spot market load %s, want the packed work", load)
+	}
+}

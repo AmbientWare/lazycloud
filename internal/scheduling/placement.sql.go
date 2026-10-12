@@ -80,14 +80,61 @@ func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersPara
 	return items, nil
 }
 
+const packedContainers = `-- name: PackedContainers :many
+select c.id, c.host_id::uuid as host_id, c.cpu_millis, c.memory_bytes
+from containers c
+left join releases r on r.id = c.release_id
+left join lateral (
+    select min(a.started_at) as started_at from attempts a where a.container_id = c.id and a.state = 'running'
+) run on true
+where c.host_id = any($1::uuid[]) and c.state <> 'stopped' and c.evicted_at is null
+  and c.image_build_id is null and coalesce(release_gpus(r.spec), 0) = 0
+order by c.host_id, run.started_at is not null, run.started_at desc, c.id
+`
+
+type PackedContainersRow struct {
+	ID          uuid.UUID
+	HostID      uuid.UUID
+	CpuMillis   cpu.Millis
+	MemoryBytes int64
+}
+
+// The live CPU containers on the fleet GPU hosts given, which GPU work
+// placed there evicts for room: idle ones first, then the busy ones whose
+// oldest running attempt started latest, which lose the least work.
+func (q *Queries) PackedContainers(ctx context.Context, hostIds []uuid.UUID) ([]PackedContainersRow, error) {
+	rows, err := q.db.Query(ctx, packedContainers, hostIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PackedContainersRow
+	for rows.Next() {
+		var i PackedContainersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
+			&i.CpuMillis,
+			&i.MemoryBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pendingContainers = `-- name: PendingContainers :many
 select q.id, q.workspace_id, q.release_id, q.cpu_millis, q.memory_bytes, q.connection_id,
        q.machine, q.region, q.zone, q.preemptible, q.gpus, q.gpu_count, q.disks, q.disk_host,
-       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes, q.moves
 from (
     select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
            p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host,
-           p.volumes, p.turn, p.created_at
+           p.volumes, p.turn, p.created_at, p.moves
     from (
         select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
                cw.connection_id,
@@ -110,6 +157,7 @@ from (
                array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)))::text[] as gpus,
                coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
                r.spec -> 'volumes' as volumes,
+               coalesce(c.purpose = 'serve' and release_moves(r.spec), false)::bool as moves,
                row_number() over (partition by c.workspace_id order by c.created_at, c.id) as turn
         from containers c
         left join releases r on r.id = c.release_id
@@ -157,6 +205,7 @@ type PendingContainersRow struct {
 	DiskHost     *uuid.UUID
 	ReadRegion   *string
 	ReadBytes    int64
+	Moves        bool
 }
 
 // Pending containers that fit the largest free host in each resource and
@@ -166,7 +215,8 @@ type PendingContainersRow struct {
 // else the platform; a mirror build always runs on the platform. Reads the
 // containers_pending partial index. Each container of the batch reads
 // its workspace bucket's region and the measured bytes of the platform
-// volumes its release mounts, which its start reads from there.
+// volumes its release mounts, which its start reads from there, and
+// whether it can move to another host (release_moves).
 func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersParams) ([]PendingContainersRow, error) {
 	rows, err := q.db.Query(ctx, pendingContainers,
 		arg.DiskWarmSeconds,
@@ -199,6 +249,7 @@ func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersPa
 			&i.DiskHost,
 			&i.ReadRegion,
 			&i.ReadBytes,
+			&i.Moves,
 		); err != nil {
 			return nil, err
 		}

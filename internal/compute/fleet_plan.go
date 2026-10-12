@@ -33,8 +33,12 @@ type FleetHost struct {
 	State        FleetState
 	// Load is what its live containers reserve; Lent, on an on-demand
 	// host, what those that could run on Spot reserve, which counts as the
-	// load of the Spot market of its GPU model, or of CPU.
-	Load, Lent FleetCapacity
+	// load of the Spot market of its GPU model, or of CPU; Packed, on a GPU
+	// host, what CPU work reserves, which counts as the load of the CPU
+	// Spot market and which GPU work evicts.
+	Load, Lent, Packed FleetCapacity
+	// Containers counts the live containers that keep it up: on a GPU host,
+	// its GPU work.
 	Containers int
 	// UsedDisks counts the disks its live containers attach.
 	UsedDisks int
@@ -56,7 +60,7 @@ type FleetHost struct {
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
 	// IdleSince is when the serving host became idle, as last recorded;
-	// BusySince when its newest live container was placed.
+	// BusySince when the newest container Containers counts was placed.
 	IdleSince, BusySince *time.Time
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
@@ -69,8 +73,9 @@ type FleetHost struct {
 	// a reserve, or one resumed from it.
 	Slept bool
 	// HandsBack is set on an on-demand host that hands Spot-tolerant work
-	// back to Spot. Moves are what each of its containers that could move
-	// to a Spot host needs; Stays is set while one of them could not.
+	// back to Spot, or a GPU host that hands its CPU work back. Moves are
+	// what each of its containers that could move to a Spot host needs;
+	// Stays is set while one of them could not.
 	HandsBack bool
 	Moves     []Requirement
 	Stays     bool
@@ -105,6 +110,7 @@ func (h FleetHost) capacity() HostCapacity {
 		Market: h.Market, GPUType: h.GPU, GPUCount: h.Usable.GPUs,
 		CPUMillis: h.Usable.CPUMillis, MemoryBytes: h.Usable.MemoryBytes,
 		FreeCPUMillis: free.CPUMillis, FreeMemoryBytes: free.MemoryBytes, FreeGPUs: free.GPUs, HandsBack: h.HandsBack,
+		Packed: h.Packed,
 	}
 	if t, ok := CatalogTypeNamed(h.InstanceType); ok && !h.UpdateDue {
 		room.FreeDiskSlots = max(0, t.DiskSlots()-h.UsedDisks)
@@ -505,17 +511,21 @@ func (ps *pass) views(items []coverItem) []*marketView {
 }
 
 // marketLoad is what market m's work holds on running hosts: its hosts'
-// containers, less what Spot-tolerant work borrows on them, and for a Spot
-// market what its work borrows on on-demand hosts of its GPU model, or of
-// CPU.
+// containers, less what Spot-tolerant work borrows on them and CPU work
+// packs on them, for a Spot market what its work borrows on on-demand
+// hosts of its GPU model, or of CPU, and for the CPU Spot market what its
+// work packs on GPU hosts.
 func (ps *pass) marketLoad(m ReserveMarket) FleetCapacity {
 	var load FleetCapacity
 	for _, h := range ps.hosts {
 		switch {
 		case h.market() == m:
-			load = load.Plus(h.Load.Minus(h.Lent))
+			load = load.Plus(h.Load.Minus(h.Lent).Minus(h.Packed))
 		case m == reserveMarketOf(MarketSpot, h.GPU):
 			load = load.Plus(h.Lent)
+		}
+		if m.spotCPU() {
+			load = load.Plus(h.Packed)
 		}
 	}
 	return load
@@ -880,15 +890,20 @@ func (ps *pass) spotOffered(need Requirement) bool {
 // back once a Spot offer can host each of its containers and no Spot pool
 // of its region and kind cools after a refusal; it lends again once Spot
 // cannot host one of them. A host that runs work that cannot move stays up
-// for it, so its spare room costs nothing and it lends.
+// for it, so its spare room costs nothing and it lends. A GPU host that
+// runs no GPU work hands its CPU work back, so it leaves on its own timer,
+// and lends again once GPU work returns.
 func (ps *pass) handBack() {
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
-		if h.Market != MarketOnDemand || h.State != FleetServing {
+		if h.Market != MarketOnDemand && h.GPU == "" || h.State != FleetServing {
 			continue
 		}
-		offered := !slices.ContainsFunc(h.Moves, func(need Requirement) bool { return !ps.spotOffered(need) })
-		back := offered && !h.Stays && (h.HandsBack || len(h.Moves) > 0 && !ps.spotCooling(*h))
+		back := h.GPU != "" && h.Containers == 0 && (h.HandsBack || !h.Packed.Empty())
+		if h.Market == MarketOnDemand && !back {
+			offered := !slices.ContainsFunc(h.Moves, func(need Requirement) bool { return !ps.spotOffered(need) })
+			back = offered && !h.Stays && (h.HandsBack || len(h.Moves) > 0 && !ps.spotCooling(*h))
+		}
 		if back == h.HandsBack {
 			continue
 		}

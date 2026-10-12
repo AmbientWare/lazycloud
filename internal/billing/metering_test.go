@@ -221,3 +221,33 @@ func abs(n int64) int64 {
 	}
 	return n
 }
+
+// The platform absorbs the attempts an eviction preempts: while CPU work
+// packed on a fleet GPU host runs an attempt, its entries wait at the
+// attempt's start, and once GPU work evicts it, it bills up to there and
+// no further.
+func TestMeteringAbsorbsTheAttemptAnEvictionPreempted(t *testing.T) {
+	f := newFixture(t)
+	ws := f.workspace(f.user())
+	rel := f.release(ws)
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	ready, started := base.Add(5*time.Minute), base.Add(20*time.Minute)
+	host := f.host(time.Now())
+	f.exec("update hosts set provider = 'aws', gpu_type = 'T4', gpu_count = 1 where id = $1", host)
+	c := f.container(containerSpec{workspace: ws, host: host, release: &rel.id, ready: ready, cpuMillis: 1000, memoryBytes: 1 << 30})
+	f.exec(`with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
+              values ($1, $2, $3, 'running', 1, 1, $5) returning id)
+insert into attempts (task_id, number, container_id, state, started_at, deadline_at)
+select id, 1, $4, 'running', $5, now() + interval '1 hour' from task`, ws, rel.workload, rel.id, c, started)
+
+	f.meter()
+	if got := f.ledger(c); len(got) != 1 || !got[0].start.Equal(ready) || !got[0].end.Equal(base.Add(15*time.Minute)) {
+		t.Fatalf("while its attempt runs, entries %+v; want [%s, %s), the quarter-hours before the attempt", got, ready, base.Add(15*time.Minute))
+	}
+	f.exec("update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now(), evicted_at = now() where id = $1", c)
+	f.exec("update attempts set state = 'lost', finished_at = now() where container_id = $1", c)
+	f.meter()
+	if got := f.ledger(c); len(got) != 2 || !got[1].end.Equal(started) {
+		t.Fatalf("evicted, entries %+v; want them to end at %s, where the preempted attempt started", got, started)
+	}
+}

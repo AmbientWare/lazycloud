@@ -89,6 +89,40 @@ func (e *Execution) WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []
 	return database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases))
 }
 
+// EvictContainers gives GPU work the room of CPU containers packed on its
+// fleet GPU host, in tx. An evicted container claims nothing more: an idle
+// one leaves its host as hand-back moves work, draining once planning's
+// replacement is ready; a busy one stops now and its attempts are
+// preempted and retried. It locks the containers in id order before
+// finishing any attempt.
+func (e *Execution) EvictContainers(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	q := e.queries.WithTx(tx)
+	locked, err := q.LockContainersToEvict(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("lock containers to evict: %w", err)
+	}
+	evicted, err := q.EvictContainers(ctx, locked)
+	if err != nil {
+		return fmt.Errorf("evict containers: %w", err)
+	}
+	var replace []string
+	for _, c := range evicted {
+		if !c.Busy {
+			if c.ReleaseID != nil {
+				replace = append(replace, c.ReleaseID.String())
+			}
+			continue
+		}
+		if err := e.containerExited(ctx, tx, ContainerID(c.ID), ContainerExit{Reason: StopRequested, Message: "evicted for GPU work"}); err != nil {
+			return fmt.Errorf("stop container %s: %w", c.ID, err)
+		}
+	}
+	return database.NotifyAll(ctx, tx, database.ChannelExecution, replace)
+}
+
 // StoppedAmong returns the containers of ids that are stopped. A host
 // session asks about the containers its host still runs, so a stop decided
 // elsewhere reaches the host.

@@ -105,6 +105,11 @@ type meteredContainer struct {
 	// replacedAt is when the first of its replacements was ready, where its
 	// billing ends.
 	replacedAt *time.Time
+	// heldFrom, on CPU work packed on a fleet GPU host, is when its oldest
+	// running attempt started, which GPU work may evict: entries wait past
+	// it. On one GPU work evicted it is when the first attempt the eviction
+	// preempted started, where its billing ends.
+	heldFrom *time.Time
 }
 
 // Meter advances every metered source's cursor: stopped containers get
@@ -282,7 +287,7 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
-			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt, heldFrom: r.HeldFrom,
 			shape: Shape{
 				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
 				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
@@ -296,7 +301,7 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
-			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt, heldFrom: r.HeldFrom,
 			shape: Shape{
 				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
 				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
@@ -310,10 +315,13 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // accrued cost at now. A container is billed from ready to stopped; one on a
 // lost host ends at the host's last report, and a live one is never billed
 // past it. One a replacement took over from ends once the replacement was
-// ready, so the two never bill the same instant. Entries price measured
-// use, so a period is written only once its use is complete at measured,
-// observability's watermark; until then it is accrued. A build reserves at
-// most buildBilledMemoryBytes as billing sees it.
+// ready, so the two never bill the same instant. The platform absorbs the
+// attempts an eviction preempts: an evicted container ends where the first
+// of them started, and a packed one writes nothing past its oldest running
+// attempt. Entries price measured use, so a period is written only once
+// its use is complete at measured, observability's watermark; until then
+// it is accrued. A build reserves at most buildBilledMemoryBytes as
+// billing sees it.
 func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (sourcePlan, error) {
 	shape, category := c.shape, ""
 	if c.build {
@@ -339,6 +347,13 @@ func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (so
 	}
 	if c.replacedAt != nil && !c.replacedAt.After(end) {
 		end, ended = *c.replacedAt, true
+	}
+	switch {
+	case c.heldFrom == nil:
+	case c.stoppedAt != nil:
+		end = minTime(end, *c.heldFrom)
+	default:
+		measured = minTime(measured, *c.heldFrom)
 	}
 	if ended && !measured.Before(end) {
 		entries, err := b.entries(src, start, end)

@@ -260,7 +260,7 @@ select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.mem
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
-       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at
+       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at, held.started_at as held_from
 from containers c
 left join lateral (
     select rc.ready_at from containers rc
@@ -269,6 +269,11 @@ left join lateral (
 ) replaced on true
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
+left join attempts held on held.id = (
+    select a.id from attempts a
+    where a.container_id = c.id and a.state = 'running' and c.gpu_count = 0 and h.provider = 'aws' and h.gpu_count > 0
+    order by a.started_at limit 1
+)
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
@@ -297,12 +302,14 @@ type LiveMeteredContainersRow struct {
 	BilledThrough *time.Time
 	Complete      bool
 	ReplacedAt    *time.Time
+	HeldFrom      *time.Time
 }
 
 // Ready and draining containers: the live set, read through its partial
 // indexes rather than the container history. A mirror build's container
 // is the platform's and bills no one. replaced_at is when the first of its
-// replacements was ready.
+// replacements was ready; held_from, on CPU work packed on a fleet GPU
+// host, when its oldest running attempt started, which GPU work may evict.
 func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredContainersRow, error) {
 	rows, err := q.db.Query(ctx, liveMeteredContainers)
 	if err != nil {
@@ -333,6 +340,7 @@ func (q *Queries) LiveMeteredContainers(ctx context.Context) ([]LiveMeteredConta
 			&i.BilledThrough,
 			&i.Complete,
 			&i.ReplacedAt,
+			&i.HeldFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -708,7 +716,7 @@ select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.mem
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
-       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at
+       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at, held.started_at as held_from
 from containers c
 left join lateral (
     select rc.ready_at from containers rc
@@ -717,6 +725,11 @@ left join lateral (
 ) replaced on true
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
+left join attempts held on held.id = (
+    select a.id from attempts a
+    where a.container_id = c.id and a.state = 'lost' and c.evicted_at is not null
+    order by a.started_at limit 1
+)
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
@@ -745,11 +758,13 @@ type StoppedMeteredContainersRow struct {
 	BilledThrough *time.Time
 	Complete      bool
 	ReplacedAt    *time.Time
+	HeldFrom      *time.Time
 }
 
 // Containers that stopped since the look-back began and still owe their
-// last entries, with when the first of their replacements was ready.
-// Mirror builds' containers bill no one.
+// last entries, with when the first of their replacements was ready and,
+// on one GPU work evicted, when the first attempt the eviction preempted
+// started. Mirror builds' containers bill no one.
 func (q *Queries) StoppedMeteredContainers(ctx context.Context, since *time.Time) ([]StoppedMeteredContainersRow, error) {
 	rows, err := q.db.Query(ctx, stoppedMeteredContainers, since)
 	if err != nil {
@@ -780,6 +795,7 @@ func (q *Queries) StoppedMeteredContainers(ctx context.Context, since *time.Time
 			&i.BilledThrough,
 			&i.Complete,
 			&i.ReplacedAt,
+			&i.HeldFrom,
 		); err != nil {
 			return nil, err
 		}

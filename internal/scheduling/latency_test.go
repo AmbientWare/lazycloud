@@ -19,7 +19,7 @@ func BenchmarkPlanAndPlace(b *testing.B) {
 	pool := dbtest.New(b)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e := execution.NewExecution(pool)
-	s := NewScheduling(pool, logger)
+	s := NewScheduling(pool, e, logger)
 	r := newRelease(b, pool)
 	exec(b, pool, `update releases set spec = '{"resources": {"cpu_millis": 1000, "memory_mib": 1024}, "autoscaler": {"max_containers": 50}}' where id = $1`, r.id)
 	exec(b, pool, "update workloads set active_release_id = $1 where id = (select workload_id from releases where id = $1)", r.id)

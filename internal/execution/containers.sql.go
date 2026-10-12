@@ -57,7 +57,7 @@ func (q *Queries) FailQueuedTasksOfRelease(ctx context.Context, arg FailQueuedTa
 }
 
 const lockContainer = `-- name: LockContainer :one
-select id, release_id, image_build_id, state, host_id from containers where id = $1 for update
+select id, release_id, image_build_id, state, host_id, evicted_at from containers where id = $1 for update
 `
 
 type LockContainerRow struct {
@@ -66,6 +66,7 @@ type LockContainerRow struct {
 	ImageBuildID *uuid.UUID
 	State        string
 	HostID       *uuid.UUID
+	EvictedAt    *time.Time
 }
 
 func (q *Queries) LockContainer(ctx context.Context, id uuid.UUID) (LockContainerRow, error) {
@@ -77,6 +78,7 @@ func (q *Queries) LockContainer(ctx context.Context, id uuid.UUID) (LockContaine
 		&i.ImageBuildID,
 		&i.State,
 		&i.HostID,
+		&i.EvictedAt,
 	)
 	return i, err
 }

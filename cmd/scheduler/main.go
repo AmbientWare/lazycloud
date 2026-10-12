@@ -146,7 +146,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	exec := execution.NewExecution(pool)
-	sched := scheduling.NewScheduling(pool, logger)
+	sched := scheduling.NewScheduling(pool, exec, logger)
 	// Cloud instances reach the server across a network, so they always
 	// dial with TLS.
 	// The scheduler ships with the server, so the server serves the agent

@@ -4,7 +4,8 @@ select release_id::uuid as release_id from containers where id = @id and host_id
 -- name: LockContainerForClaim :one
 -- Claims of one container run one at a time, so its slot count holds.
 -- Container transitions wait for the claim to commit.
-select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec, c.traceparent
+select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec, c.traceparent,
+       (c.evicted_at is not null)::bool as evicted
 from containers c
 join releases r on r.id = c.release_id
 where c.id = @id

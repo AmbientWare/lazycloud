@@ -34,7 +34,7 @@ func newOwners(t *testing.T, config compute.Config) owners {
 	e := execution.NewExecution(pool)
 	return owners{
 		pool: pool, compute: compute.NewCompute(pool, e, config), execution: e,
-		scheduling: scheduling.NewScheduling(pool, discard()),
+		scheduling: scheduling.NewScheduling(pool, e, discard()),
 	}
 }
 

@@ -676,6 +676,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			ps.note("reserve resuming", "host_id", id)
 		}
 	}
+	if err := ps.evictLeaving(ctx, tx, q); err != nil {
+		return err
+	}
 	if len(ps.w.returns) > 0 {
 		returned, err := q.ReturnToReserve(ctx, ReturnToReserveParams{Ids: ps.w.returns, HibernateIds: ps.w.hibernate})
 		if err != nil {
@@ -770,6 +773,29 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		return database.Notify(ctx, tx, ChannelCompute, string(KindPlatform))
 	}
 	return nil
+}
+
+// evictLeaving evicts the CPU work packed on the GPU hosts that leave,
+// which never keeps one up; each leaves once nothing runs on it.
+func (ps *fleetPass) evictLeaving(ctx context.Context, tx pgx.Tx, q *Queries) error {
+	var hosts []uuid.UUID
+	for _, id := range slices.Concat(ps.w.returns, ps.w.drains) {
+		if len(ps.rows[HostID(id)].PackedIds) > 0 {
+			hosts = append(hosts, id)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	locked, err := q.LockLeavingGPUHosts(ctx, hosts)
+	if err != nil {
+		return fmt.Errorf("lock leaving GPU hosts: %w", err)
+	}
+	var ids []uuid.UUID
+	for _, id := range locked {
+		ids = append(ids, ps.rows[HostID(id)].PackedIds...)
+	}
+	return ps.c.containers.EvictContainers(ctx, tx, ids)
 }
 
 // writeWaits records every batch container's wait in one statement, in id

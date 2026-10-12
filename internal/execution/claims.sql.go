@@ -153,7 +153,8 @@ func (q *Queries) CountRunningAttemptsOnContainer(ctx context.Context, container
 }
 
 const lockContainerForClaim = `-- name: LockContainerForClaim :one
-select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec, c.traceparent
+select c.state, c.host_id, c.slots, c.purpose, c.release_id::uuid as release_id, r.spec, c.traceparent,
+       (c.evicted_at is not null)::bool as evicted
 from containers c
 join releases r on r.id = c.release_id
 where c.id = $1
@@ -168,6 +169,7 @@ type LockContainerForClaimRow struct {
 	ReleaseID   uuid.UUID
 	Spec        []byte
 	Traceparent *string
+	Evicted     bool
 }
 
 // Claims of one container run one at a time, so its slot count holds.
@@ -183,6 +185,7 @@ func (q *Queries) LockContainerForClaim(ctx context.Context, id uuid.UUID) (Lock
 		&i.ReleaseID,
 		&i.Spec,
 		&i.Traceparent,
+		&i.Evicted,
 	)
 	return i, err
 }

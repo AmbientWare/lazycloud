@@ -52,6 +52,70 @@ func (q *Queries) DrainContainersOnHost(ctx context.Context, arg DrainContainers
 	return items, nil
 }
 
+const evictContainers = `-- name: EvictContainers :many
+update containers c
+set evicted_at = now()
+where c.id = any($1::uuid[])
+returning c.id, c.release_id, exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')::bool as busy
+`
+
+type EvictContainersRow struct {
+	ID        uuid.UUID
+	ReleaseID *uuid.UUID
+	Busy      bool
+}
+
+// The locked containers are evicted, each with whether it runs attempts.
+// This statement's snapshot follows the locks, so it sees any attempt a
+// claim committed before them.
+func (q *Queries) EvictContainers(ctx context.Context, ids []uuid.UUID) ([]EvictContainersRow, error) {
+	rows, err := q.db.Query(ctx, evictContainers, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvictContainersRow
+	for rows.Next() {
+		var i EvictContainersRow
+		if err := rows.Scan(&i.ID, &i.ReleaseID, &i.Busy); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockContainersToEvict = `-- name: LockContainersToEvict :many
+select id from containers
+where id = any($1::uuid[]) and state <> 'stopped' and evicted_at is null
+order by id
+for update
+`
+
+// The live containers among the ids not evicted yet, locked in id order.
+func (q *Queries) LockContainersToEvict(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, lockContainersToEvict, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const movableReleasesOnHosts = `-- name: MovableReleasesOnHosts :many
 select distinct r.id
 from containers c

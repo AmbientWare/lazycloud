@@ -13,10 +13,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
 func newScheduling(pool *pgxpool.Pool) *Scheduling {
-	return NewScheduling(pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewScheduling(pool, execution.NewExecution(pool), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func exec(t testing.TB, pool *pgxpool.Pool, sql string, args ...any) {
@@ -202,7 +203,7 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 		{ID: uuid.New(), CpuMillis: 2000, MemoryBytes: 2 * gib},
 		{ID: uuid.New(), CpuMillis: 9000, MemoryBytes: gib},
 	}
-	ids, hosts := pack([]compute.HostCapacity{roomy, tight}, pending)
+	ids, hosts, _ := pack([]compute.HostCapacity{roomy, tight}, pending, nil)
 	if len(ids) != 2 || hosts[0] != uuid.UUID(tight.Host) || hosts[1] != uuid.UUID(roomy.Host) {
 		t.Fatalf("placed %v on %v; want the first on the tight host, the second on the roomy one and the oversized one nowhere", ids, hosts)
 	}
@@ -246,7 +247,7 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 		{"no borrowing the last free floor for a disk's host", []compute.HostCapacity{onDemand, spot},
 			[]PendingContainersRow{diskOn(onDemand)}, []int{1}},
 	} {
-		ids, hosts := pack(c.hosts, c.pending)
+		ids, hosts, _ := pack(c.hosts, c.pending, nil)
 		placed := map[uuid.UUID]uuid.UUID{}
 		for i, id := range ids {
 			placed[id] = hosts[i]
@@ -364,5 +365,93 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 	}
 	if result.Assigned != 0 || state != "pending" || assigned != nil {
 		t.Fatalf("assigned %d; container %s on %v, want pending off the lost host", result.Assigned, state, assigned)
+	}
+}
+
+// GPU work placed on a GPU host whose CPU work holds the room it needs
+// evicts that work in the same pass until it fits: idle containers first,
+// which hold no room while they wait to be replaced, then the busy one
+// whose attempt started last, which stops with its task preempted and
+// queued again. CPU work it need not evict keeps running.
+func TestGPUWorkEvictsIdleCPUWorkFirstThenBusyAndFits(t *testing.T) {
+	pool := dbtest.New(t)
+	s := newScheduling(pool)
+	host := newHost(t, pool, 4000, 16*gib, 0)
+	exec(t, pool, "update hosts set provider = 'aws', market = 'spot', gpu_type = 'T4', gpu_count = 2 where id = $1", host)
+	cpuWork, gpuWork := newRelease(t, pool), newRelease(t, pool)
+	exec(t, pool, `update releases set spec = case when id = $1 then '{"kind": "function", "resources": {"cpu_millis": 1000, "memory_mib": 2048}, "autoscaler": {"max_containers": 3}}'::jsonb
+	else '{"kind": "function", "resources": {"cpu_millis": 1000, "memory_mib": 2048, "gpu": ["T4"]}, "autoscaler": {"max_containers": 2}}'::jsonb end where id in ($1, $2)`, cpuWork.id, gpuWork.id)
+	// live is a ready CPU container on the host, running an attempt that
+	// started ago before now unless ago is zero.
+	live := func(ago time.Duration) (container, task uuid.UUID) {
+		t.Helper()
+		if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 1000, 2 << 30, now(), now()) returning id`, cpuWork.workspace, cpuWork.id, host).Scan(&container); err != nil {
+			t.Fatal(err)
+		}
+		if ago == 0 {
+			return container, uuid.Nil
+		}
+		var attempt uuid.UUID
+		if err := pool.QueryRow(t.Context(), `
+with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
+              select $1, workload_id, id, 'running', 1, 1, now() from releases where id = $2 returning id)
+insert into attempts (task_id, number, container_id, state, started_at, deadline_at)
+select task.id, 1, $3, 'running', now() - make_interval(secs => $4), now() + interval '1 hour' from task returning task_id, id`,
+			cpuWork.workspace, cpuWork.id, container, ago.Seconds()).Scan(&task, &attempt); err != nil {
+			t.Fatal(err)
+		}
+		exec(t, pool, "update tasks set current_attempt_id = $1 where id = $2", attempt, task)
+		return container, task
+	}
+	idle, _ := live(0)
+	longer, _ := live(10 * time.Minute)
+	newest, retried := live(time.Minute)
+	// 1000m is free: the first needs the idle container's room as well, the
+	// second the newest busy one's.
+	first := pendingContainer(t, pool, gpuWork, 2000, 4*gib, 2*time.Minute)
+	second := pendingContainer(t, pool, gpuWork, 1000, 2*gib, time.Minute)
+
+	if result := place(t, s); result.Assigned != 2 {
+		t.Fatalf("assigned %d of the two GPU containers", result.Assigned)
+	}
+	for _, c := range []struct {
+		id              uuid.UUID
+		state           string
+		evicted, onHost bool
+	}{
+		{first, "starting", false, true}, {second, "starting", false, true},
+		{idle, "ready", true, true}, {newest, "stopped", true, true}, {longer, "ready", false, true},
+	} {
+		var state string
+		var evicted bool
+		var on *uuid.UUID
+		if err := pool.QueryRow(t.Context(), "select state, evicted_at is not null, host_id from containers where id = $1", c.id).Scan(&state, &evicted, &on); err != nil {
+			t.Fatal(err)
+		}
+		if state != c.state || evicted != c.evicted || on == nil || *on != host {
+			t.Errorf("container %s is %s on %v, evicted %v; want %s, evicted %v", c.id, state, on, evicted, c.state, c.evicted)
+		}
+	}
+	var status string
+	var preemptions, maxAttempts int
+	if err := pool.QueryRow(t.Context(), "select status, preemptions, max_attempts from tasks where id = $1", retried).Scan(&status, &preemptions, &maxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || preemptions != 1 || maxAttempts != 2 {
+		t.Errorf("the evicted task is %s after %d preemptions with %d attempts; want queued after one, its retry not spent", status, preemptions, maxAttempts)
+	}
+	// Planning replaces the idle one, which drains once its replacement is
+	// ready.
+	if _, err := execution.NewExecution(pool).Plan(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	var replacements int
+	if err := pool.QueryRow(t.Context(), "select count(*) from containers where replaces = $1 and state = 'pending'", idle).Scan(&replacements); err != nil {
+		t.Fatal(err)
+	}
+	if replacements != 1 {
+		t.Errorf("%d pending replacements of the evicted idle container, want 1", replacements)
 	}
 }

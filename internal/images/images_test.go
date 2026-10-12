@@ -284,7 +284,7 @@ func TestConcurrentBuildRequestsJoinOneBuild(t *testing.T) {
 // placement and reports it ready.
 func placeAndStart(t *testing.T, f fixture, host compute.HostID) execution.ContainerID {
 	t.Helper()
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(t.Context()); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(t.Context(), host)
@@ -550,7 +550,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	}
 
 	host := f.host(t)
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(ctx, host)
@@ -638,7 +638,7 @@ values ('c6a', sha256(gen_random_uuid()::text::bytea), 'online', $1, $2, now()) 
 	if _, err := f.images.Build(ctx, f.workspace(t, "a"), numpy(), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(ctx, host)
@@ -676,7 +676,7 @@ func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
 	}
 	place := func() {
 		t.Helper()
-		if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+		if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
