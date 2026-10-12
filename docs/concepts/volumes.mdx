@@ -158,8 +158,8 @@ dot always goes in the path. The bucket must already exist.
 
 A container runs one mounter for all its volumes, plus one per distinct cloud
 bucket. Cloud buckets that differ only in `prefix` share one. Each mounter
-reserves 512 MiB of memory on top of the container's `memory`, billed as memory,
-so a function with two volumes and one cloud bucket reserves 1 GiB beyond what
+reserves 768 MiB of memory on top of the container's `memory`, billed as memory,
+so a function with two volumes and one cloud bucket reserves 1.5 GiB beyond what
 it asks for.
 
 ## Delete stored data

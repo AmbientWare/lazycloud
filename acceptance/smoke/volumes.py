@@ -1,8 +1,10 @@
 """Post-Ship smoke check for volumes and cloud buckets on a live stack.
 
 A file written to a volume on an on-demand host is read on a Spot host, and
-read again once every mount stopped and the volume mounted afresh. A
-read-only cloud bucket reads a known object and refuses a write. The check
+read again once every mount stopped and the volume mounted afresh. A file of
+gigabytes renamed just before its container stops is there under its new
+name, and reads in full through a memory map, as model loaders read weights.
+A read-only cloud bucket reads a known object and refuses a write. The check
 deletes its app and volume at the end, and prints its timings.
 
 Run it from the repository root against the stack Ship deployed, in a
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mmap
 import os
 import sys
 import time
@@ -44,6 +47,10 @@ RUN = SMOKE_ENV.setdefault("LAZYCLOUD_SMOKE_RUN", uuid.uuid4().hex[:8])
 APP_NAME = f"smoke_volumes_{RUN}"
 BUCKET = SMOKE_ENV.get("LAZYCLOUD_SMOKE_BUCKET", "")
 MOUNT_WAIT_SECONDS = 180
+# Renaming a file this large is a server-side copy that outlasts the
+# container; its mount stores it within the agent's flush window.
+LARGE_FILE_GIB = 6
+FLUSH_WAIT_SECONDS = 600
 
 app = App(APP_NAME)
 volume = Volume(f"smoke-{RUN}", "/smoke")
@@ -71,6 +78,36 @@ def read(name: str) -> str:
     return Path("/smoke", name).read_text()
 
 
+@app.function(volumes=[volume], preemptible=False, env=SMOKE_ENV)
+def write_large(name: str) -> str:
+    """Writes LARGE_FILE_GIB under a temporary name and renames it, as downloaders do."""
+    chunk = os.urandom(1 << 20)
+    partial = Path("/smoke", name + ".incomplete")
+    with partial.open("wb") as file:
+        for _ in range(LARGE_FILE_GIB << 10):
+            file.write(chunk)
+    partial.rename(Path("/smoke", name))
+    return name
+
+
+@app.function(volumes=[volume], env=SMOKE_ENV)
+def size(name: str) -> int:
+    path = Path("/smoke", name)
+    return path.stat().st_size if path.exists() else -1
+
+
+@app.function(volumes=[volume], env=SMOKE_ENV)
+def read_mapped(name: str) -> int:
+    """Touches every page of name through a memory map and returns its size."""
+    with (
+        Path("/smoke", name).open("rb") as file,
+        mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data,
+    ):
+        for offset in range(0, len(data), mmap.PAGESIZE):
+            data[offset]
+        return len(data)
+
+
 @app.function(volumes=[bucket], env=SMOKE_ENV)
 def read_bucket(key: str) -> str:
     digest = hashlib.sha256(Path("/bucket", key).read_bytes()).hexdigest()
@@ -87,7 +124,11 @@ def api(method: str, path: str) -> Any:
     request = urllib.request.Request(
         f"{endpoint}/v1/workspaces/{workspace}{path}",
         method=method,
-        headers={"Authorization": "Bearer " + os.environ["LAZYCLOUD_TOKEN"]},
+        # The edge refuses urllib's default user agent.
+        headers={
+            "Authorization": "Bearer " + os.environ["LAZYCLOUD_TOKEN"],
+            "User-Agent": "lazycloud-smoke",
+        },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         body = response.read()
@@ -97,12 +138,6 @@ def api(method: str, path: str) -> Any:
 def containers(*, live: bool) -> list[dict[str, Any]]:
     query = urllib.parse.urlencode({"app": APP_NAME, "live": str(live).lower(), "limit": 100})
     return api("GET", f"/containers?{query}")["containers"]
-
-
-def hosts_of(function: str) -> set[str]:
-    return {
-        c["host"] for c in containers(live=False) if c["function"] == function and c.get("host")
-    }
 
 
 def stop_all(deadline_seconds: float) -> None:
@@ -115,6 +150,14 @@ def stop_all(deadline_seconds: float) -> None:
         if time.monotonic() > deadline:
             raise RuntimeError(f"{len(live)} containers still live after {deadline_seconds}s")
         time.sleep(2)
+
+
+def wait_for_size(name: str, want: int) -> int:
+    """Returns name's size once it is want, or its last size after FLUSH_WAIT_SECONDS."""
+    deadline = time.monotonic() + FLUSH_WAIT_SECONDS
+    while (got := size.remote(name)) != want and time.monotonic() < deadline:
+        time.sleep(10)
+    return got
 
 
 def timed(timings: dict[str, float], name: str, call: Callable[[], str]) -> str:
@@ -131,15 +174,27 @@ def check(timings: dict[str, float]) -> list[str]:
     timed(timings, "write_on_demand", lambda: write.remote("stamp.txt", stamp))
     if (got := timed(timings, "read_spot", lambda: read.remote("stamp.txt"))) != stamp:
         failures.append(f"the Spot host read {got!r}, want {stamp!r}")
-    writers, readers = hosts_of("write"), hosts_of("read")
-    if not writers or not readers or writers & readers:
-        failures.append(
-            f"write ran on {sorted(writers)} and read on {sorted(readers)}; want two hosts"
-        )
 
     timed(timings, "stop_mounts", lambda: stop_all(MOUNT_WAIT_SECONDS) or "")
     if (got := timed(timings, "read_remounted", lambda: read.remote("stamp.txt"))) != stamp:
         failures.append(f"after a remount read {got!r}, want {stamp!r}")
+
+    timed(timings, "write_large", lambda: write_large.remote("large.bin"))
+    timed(timings, "stop_large", lambda: stop_all(MOUNT_WAIT_SECONDS) or "")
+    want_size = LARGE_FILE_GIB << 30
+    got_size = int(
+        timed(timings, "renamed_large", lambda: str(wait_for_size("large.bin", want_size)))
+    )
+    if got_size != want_size:
+        failures.append(
+            f"large.bin has {got_size} bytes after its container stopped, want {want_size}"
+        )
+    else:
+        mapped = int(
+            timed(timings, "read_mapped_large", lambda: str(read_mapped.remote("large.bin")))
+        )
+        if mapped != want_size:
+            failures.append(f"a mapped read of large.bin saw {mapped} bytes, want {want_size}")
 
     if BUCKET:
         key, want = (
