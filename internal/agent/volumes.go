@@ -54,7 +54,7 @@ const (
 	// reads past the cache, and a failed read of a mapped file is SIGBUS.
 	// Readahead of 1 MiB per file and 32 MiB in 8 MiB parts per long
 	// sequential read keeps a 2 GiB mapped read at full speed and holds 128
-	// readers plus 8 streams of 256 MiB under 550 MiB, inside
+	// readers plus 8 streams of 256 MiB near 610 MiB, inside
 	// hostproto.MounterMemoryBytes; GeeseFS's defaults reached 2 GiB.
 	geesefsMemoryMiB        = 128
 	geesefsGoMemoryMiB      = 320
