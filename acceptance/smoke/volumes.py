@@ -3,7 +3,8 @@
 A file written to a volume on an on-demand host is read on a Spot host, and
 read again once every mount stopped and the volume mounted afresh. A file of
 gigabytes renamed just before its container stops is there under its new
-name. A read-only cloud bucket reads a known object and refuses a write. The check
+name, and reads in full through a memory map, as model loaders read weights.
+A read-only cloud bucket reads a known object and refuses a write. The check
 deletes its app and volume at the end, and prints its timings.
 
 Run it from the repository root against the stack Ship deployed, in a
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mmap
 import os
 import sys
 import time
@@ -92,6 +94,18 @@ def write_large(name: str) -> str:
 def size(name: str) -> int:
     path = Path("/smoke", name)
     return path.stat().st_size if path.exists() else -1
+
+
+@app.function(volumes=[volume], env=SMOKE_ENV)
+def read_mapped(name: str) -> int:
+    """Touches every page of name through a memory map and returns its size."""
+    with (
+        Path("/smoke", name).open("rb") as file,
+        mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data,
+    ):
+        for offset in range(0, len(data), mmap.PAGESIZE):
+            data[offset]
+        return len(data)
 
 
 @app.function(volumes=[bucket], env=SMOKE_ENV)
@@ -175,6 +189,12 @@ def check(timings: dict[str, float]) -> list[str]:
         failures.append(
             f"large.bin has {got_size} bytes after its container stopped, want {want_size}"
         )
+    else:
+        mapped = int(
+            timed(timings, "read_mapped_large", lambda: str(read_mapped.remote("large.bin")))
+        )
+        if mapped != want_size:
+            failures.append(f"a mapped read of large.bin saw {mapped} bytes, want {want_size}")
 
     if BUCKET:
         key, want = (

@@ -47,14 +47,21 @@ const (
 	mountWait = 30 * time.Second
 	// mountPoll is how often a start looks for its new mount.
 	mountPoll = 100 * time.Millisecond
-	// GeeseFS reserves its buffers before reading and stays under
-	// geesefsMemoryMiB (--use-enomem), and its runtime collects garbage
-	// before geesefsGoMemoryMiB. Without the reservation, readahead in
-	// flight grows with the readers: 256 parallel 32 MiB reads took 2.4 GiB.
-	// With it they peak near 410 MiB, inside hostproto.MounterMemoryBytes.
-	geesefsMemoryMiB   = 192
-	geesefsGoMemoryMiB = 320
-	mounterPidsLimit   = 1024
+	// GeeseFS reads ahead of every reader and holds what it read in a cache
+	// of geesefsMemoryMiB, and its runtime collects garbage before
+	// geesefsGoMemoryMiB. Its memory grows with the readers' readahead,
+	// which a read never waits for: the alternative, --use-enomem, fails
+	// reads past the cache, and a failed read of a mapped file is SIGBUS.
+	// Readahead of 1 MiB per file and 32 MiB in 8 MiB parts per long
+	// sequential read keeps a 2 GiB mapped read at full speed and holds 128
+	// readers plus 8 streams of 256 MiB under 550 MiB, inside
+	// hostproto.MounterMemoryBytes; GeeseFS's defaults reached 2 GiB.
+	geesefsMemoryMiB        = 128
+	geesefsGoMemoryMiB      = 320
+	geesefsReadAheadKiB     = 1 << 10
+	geesefsReadAheadBigKiB  = 32 << 10
+	geesefsReadAheadPartKiB = 8 << 10
+	mounterPidsLimit        = 1024
 	// mounterConcurrency bounds the mounters of one container that start
 	// or stop at once.
 	mounterConcurrency = 4
@@ -564,7 +571,8 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 	args := []string{
 		"-f", "-o", "allow_other", "--uid", "0", "--gid", "0", "--dir-mode", "0777", "--file-mode", "0666",
 		"--fsync-on-close", "--stat-cache-ttl", "1s", "--no-preload-dir",
-		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--use-enomem",
+		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--read-ahead", strconv.Itoa(geesefsReadAheadKiB),
+		"--read-ahead-large", strconv.Itoa(geesefsReadAheadBigKiB), "--read-ahead-parallel", strconv.Itoa(geesefsReadAheadPartKiB),
 	}
 	args = append(args, "--endpoint", spec.endpoint)
 	if spec.region != "" {
