@@ -385,10 +385,10 @@ type marketView struct {
 	largest      FleetCapacity
 	largestDisks int
 	loaded       bool
-	// sized is the most vCPUs a reserve of the market has: those of the
-	// smallest offer that holds its largest shape, whatever cools or a
-	// quota holds back; nil without a largest shape or such an offer.
-	sized   *int64
+	// size is the most vCPUs a reserve of the market has, once its reserve
+	// offers are ranked; nil without a largest shape or an offer that holds
+	// it.
+	size    *int64
 	retired map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover, and
 	// warmReason and stoppedReason why.
@@ -498,7 +498,6 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		v.stopped, v.peakShare = r.Stopped.Of(v.load), r.Stopped.Of(v.peak.Load)
 		if r.FitLargest {
 			v.largest, v.largestDisks = ps.p.LargestShape.of(m, largest, disks)
-			v.sized = ps.sizeOf(v)
 			floor := r.Stopped.Floor.Plus(v.largest)
 			v.loaded = !floor.Covers(v.stopped)
 			v.stopped, v.peakShare = v.stopped.Upper(floor), v.peakShare.Upper(floor)
@@ -561,8 +560,9 @@ func reservedShape(r Requirement) FleetCapacity {
 }
 
 // marketOffers are the offers a market's own growth buys from, priced with
-// the read its recent work makes; its reserves buy none larger than their
-// size.
+// the read its recent work makes. Its reserves buy none larger than the
+// smallest offer that holds its largest shape and disks, cooldowns aside,
+// so a refusal never moves a reserve to a larger type.
 func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
 	key := m.String() + "/" + boolKey(reserve)
 	if offers, ok := ps.offers[key]; ok {
@@ -570,33 +570,33 @@ func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
 	}
 	need := marketNeed(m)
 	need.Read = ps.s.Offers.marketRead(m)
-	offers := slices.DeleteFunc(RankOffers(ps.p, need, reserve, ps.s.Offers), func(o FleetOffer) bool {
-		return o.Market != m.buyMarket() || o.Type.GPU != m.GPU || reserve && !ps.byMarket[m].sizes(o)
+	in := ps.s.Offers
+	if reserve {
+		in.Cooldowns = nil
+	}
+	offers := slices.DeleteFunc(RankOffers(ps.p, need, reserve, in), func(o FleetOffer) bool {
+		return o.Market != m.buyMarket() || o.Type.GPU != m.GPU
 	})
+	if v := ps.byMarket[m]; reserve && !v.largest.Empty() {
+		for _, o := range offers {
+			if v.fits(o.Usable, o.Type) && (v.size == nil || o.Type.VCPUs() < *v.size) {
+				v.size = ptr(o.Type.VCPUs())
+			}
+		}
+		offers = slices.DeleteFunc(offers, func(o FleetOffer) bool {
+			return v.size != nil && o.Type.VCPUs() > *v.size || cooled(ps.s.Offers.Cooldowns, ps.s.Now, o.Region, o.ZoneID, o.Type.Name, o.Market)
+		})
+	}
 	ps.offers[key] = offers
 	return offers
 }
 
-// sizeOf is the vCPUs of the smallest reserve offer of market v that holds
-// its largest shape and its disks, ranked without cooldowns or quotas so a
-// refusal or a filling quota never raises it; nil for none.
-func (ps *pass) sizeOf(v *marketView) *int64 {
-	if v.largest.Empty() {
-		return nil
-	}
-	in := ps.s.Offers
-	in.Cooldowns, in.Quotas = nil, nil
-	var size *int64
-	for _, o := range RankOffers(ps.p, marketNeed(v.m), true, in) {
-		if o.Market == v.m.buyMarket() && o.Type.GPU == v.m.GPU && v.fits(o.Usable, o.Type) && (size == nil || o.Type.VCPUs() < *size) {
-			size = ptr(o.Type.VCPUs())
-		}
-	}
-	return size
+// sized reports whether offer o is no larger than market m's reserves.
+func (ps *pass) sized(m ReserveMarket, o FleetOffer) bool {
+	ps.marketOffers(m, true)
+	v := ps.byMarket[m]
+	return v.size == nil || o.Type.VCPUs() <= *v.size
 }
-
-// sizes reports whether offer o is no larger than the market's reserves.
-func (v *marketView) sizes(o FleetOffer) bool { return v.sized == nil || o.Type.VCPUs() <= *v.sized }
 
 // misplaced reports a region outside the one market v's starts read from,
 // while the market's cheapest reserve that holds its largest shape lies in
@@ -1398,7 +1398,7 @@ func (ps *pass) shortReason(m ReserveMarket, shape FleetCapacity, reserve bool) 
 		in := ps.s.Offers
 		relax(&in)
 		return slices.ContainsFunc(RankOffers(ps.p, need, reserve, in), func(o FleetOffer) bool {
-			return o.Market == m.buyMarket() && o.Type.GPU == m.GPU && (!reserve || ps.byMarket[m].sizes(o))
+			return o.Market == m.buyMarket() && o.Type.GPU == m.GPU && (!reserve || ps.sized(m, o))
 		})
 	}
 	switch {
