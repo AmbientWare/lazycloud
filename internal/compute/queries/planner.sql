@@ -205,11 +205,13 @@ order by cc.id;
 
 -- name: InsertRequestedHosts :exec
 -- Hosts to buy, for the launcher. The planner names each id, so container
--- waits can point at a host bought in the same statement.
+-- waits can point at a host bought in the same statement. A host's name
+-- ends with its id's random last group, unique where the id's leading,
+-- time-ordered digits are not.
 insert into hosts (id, name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
                    gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
                    hourly_micros, reserve_mode, replaces, holds_cpu_millis, holds_memory_bytes)
-select v.id, 'lazycloud-' || v.instance_type, 'offline', v.kind, 'aws', v.connection_id, 'requested',
+select v.id, 'lazycloud-' || split_part(v.id::text, '-', 5), 'offline', v.kind, 'aws', v.connection_id, 'requested',
        'Waiting for the machine to be launched', v.cpu_millis, v.memory_bytes, v.gpu_type, v.gpu_count, v.region,
        v.availability_zone, v.availability_zone_id, v.instance_type, v.market, v.hourly_micros, v.reserve_mode,
        v.replaces, v.holds_cpu_millis, v.holds_memory_bytes

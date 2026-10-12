@@ -241,6 +241,10 @@ func TestConcurrentCapacityPassesBuyEachHostOnce(t *testing.T) {
 join hosts h on h.id = c.capacity_host_id and h.phase = 'requested'`); n != 3 {
 		t.Fatalf("concurrent passes bought %d hosts for the containers, want 3, one per container", n)
 	}
+	// Hosts bought together, of one type, still go by names of their own.
+	if same := scan[int](t, o.pool, "select count(*) - count(distinct name) from hosts where phase = 'requested'"); same != 0 {
+		t.Fatalf("%d hosts bought share a name", same)
+	}
 	if result := plan(t, o); result.Requested != 0 {
 		t.Fatalf("a pass after the concurrent ones %+v, want nothing more bought", result)
 	}

@@ -14,7 +14,7 @@ where h.id in (
     limit @batch_size
     for update skip locked
 )
-returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
+returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
           h.holds_cpu_millis, h.holds_memory_bytes,
           (select r.hourly_micros from hosts r where r.id = h.replaces) as replaces_hourly_micros;

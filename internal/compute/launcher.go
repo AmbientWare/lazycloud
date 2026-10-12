@@ -400,7 +400,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 	tags := []ec2types.Tag{
 		{Key: aws.String(tagFleet), Value: aws.String(c.fleet.Name)},
 		{Key: aws.String(tagHost), Value: aws.String(h.ID.String())},
-		{Key: aws.String("Name"), Value: aws.String("lazycloud-" + h.ID.String()[:8])},
+		{Key: aws.String("Name"), Value: aws.String(h.Name)},
 	}
 	input := &ec2.RunInstancesInput{
 		ClientToken:  aws.String(launchToken(h)),
