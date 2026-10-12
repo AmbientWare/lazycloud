@@ -110,6 +110,11 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 	l, client := testLayerSources(t)
 	log := slog.New(slog.DiscardHandler)
 	base := testDigest()
+	// A traced start ends as its container's waiter ends it once it exits.
+	exit := func(container string) {
+		l.release(t.Context(), log, container)
+		l.await(t.Context(), log, container, make(chan struct{}))
+	}
 
 	if tracing, err := l.start(t.Context(), log, "c1", startingWith(base, testDigest())); err != nil || !tracing {
 		t.Fatalf("the first start traces %v: %v", tracing, err)
@@ -125,7 +130,7 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 	if tracing, err := l.start(t.Context(), log, "ends", startingWith(testDigest())); err != nil || !tracing {
 		t.Fatalf("a start alone on its layers traces %v: %v", tracing, err)
 	}
-	l.release(t.Context(), log, "ends")
+	exit("ends")
 	if running, _ := traceRunning(t, client, "ends"); running {
 		t.Fatal("an ended start left its trace running")
 	}
@@ -139,7 +144,7 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 
 	// The snapshotter leaves complete a trace whose layers another start or
 	// a platform image was granted, unmounted, before it began.
-	l.release(t.Context(), log, "c1")
+	exit("c1")
 	traced := startingWith(base, testDigest())
 
 	l.begin("a", layersOf(traced.GetLayers()))
