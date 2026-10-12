@@ -52,6 +52,35 @@ func (q *Queries) DrainContainersOnHost(ctx context.Context, arg DrainContainers
 	return items, nil
 }
 
+const movableReleasesOnHosts = `-- name: MovableReleasesOnHosts :many
+select distinct r.id
+from containers c
+join releases r on r.id = c.release_id
+where c.host_id = any($1::uuid[]) and c.state <> 'stopped' and c.purpose = 'serve' and release_moves(r.spec)
+`
+
+// The releases with live serve containers on the hosts that could move to
+// Spot.
+func (q *Queries) MovableReleasesOnHosts(ctx context.Context, hostIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, movableReleasesOnHosts, hostIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const stoppedContainersAmong = `-- name: StoppedContainersAmong :many
 select id from containers where id = any($1::uuid[]) and state = 'stopped'
 `

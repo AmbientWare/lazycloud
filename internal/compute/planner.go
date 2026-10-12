@@ -179,6 +179,7 @@ type pendingTrace struct {
 // fleetWrites are a pass's intents, each written by one statement.
 type fleetWrites struct {
 	stuck, drains, retirePreparing, retires, returns, hibernate []uuid.UUID
+	handBacks, lends                                            []uuid.UUID
 	buys                                                        []requestedHost
 	resumes                                                     []uuid.UUID
 	idle                                                        []idleRow
@@ -273,7 +274,7 @@ func (ps *fleetPass) offerInputs(networks map[string]Network, owner string, host
 	}
 	return OfferInputs{
 		Now: ps.r.now, Catalog: ps.catalog, Networks: networks, Spot: ps.r.spot, Cooldowns: offerCooldowns(ps.r.cooldowns, owner),
-		ReportedMemory: ps.reported, ZoneHosts: zones, ZoneTypes: ps.r.zoneTypes,
+		ReportedMemory: ps.reported, ZoneHosts: zones, ZoneTypes: ps.r.zoneTypes, StorageRegion: ps.c.fleet.StorageRegion,
 	}
 }
 
@@ -304,7 +305,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		}
 	}
 	in := ps.offerInputs(ps.c.fleet.Networks, ownerPlatform, hosts)
-	in.Rates, in.Quotas = ps.rates, vcpuQuotas(ps.r.quotas)
+	in.Rates, in.Quotas, in.ReadBytes = ps.rates, vcpuQuotas(ps.r.quotas), readsByMarket(ps.r.recent)
 	// The offer of a host that could not prove a stop cools, so this pass
 	// does not buy its replacement from it.
 	var unproven []OfferCooldown
@@ -326,9 +327,9 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			held++
 		}
 	}
-	recent, builds, arrived := shapesByMarket(ps.r.recent)
+	recent, builds, arrived, disks := shapesByMarket(ps.r.recent)
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Arrived: arrived, Offers: in,
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Builds: builds, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 	}
 	s.FloorShortSince, s.Peaks = ps.carried()
@@ -464,6 +465,10 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 			}
 		case ActionDrain:
 			ps.w.drains = append(ps.w.drains, uuid.UUID(*a.Host))
+		case ActionHandBack:
+			ps.w.handBacks = append(ps.w.handBacks, uuid.UUID(*a.Host))
+		case ActionLend:
+			ps.w.lends = append(ps.w.lends, uuid.UUID(*a.Host))
 		case ActionRetireReserve:
 			switch Phase(ps.rows[*a.Host].Phase) {
 			case PhaseStopped, PhaseRequested:
@@ -498,7 +503,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 		h.ReserveMode = a.Mode
 	case ActionRightsize:
 		h.Replaces = ptr(uuid.UUID(*a.Host))
-	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve:
+	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionHandBack, ActionLend:
 	}
 	return h
 }
@@ -697,6 +702,23 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		ps.result.Drained += len(drained)
 		moved = moved || len(drained) > 0
+	}
+	if len(ps.w.handBacks)+len(ps.w.lends) > 0 {
+		changed, err := q.SetHandsBack(ctx, SetHandsBackParams{BackIds: ps.w.handBacks, LendIds: ps.w.lends})
+		if err != nil {
+			return fmt.Errorf("set hosts handing work back: %w", err)
+		}
+		for _, id := range changed {
+			msg := "host lending to Spot-tolerant work"
+			if slices.Contains(ps.w.handBacks, id) {
+				msg = "host handing Spot-tolerant work back"
+			}
+			ps.note(msg, "host_id", id)
+		}
+		if err := ps.c.containers.WakeReleasesOnHosts(ctx, tx, changed); err != nil {
+			return err
+		}
+		moved = moved || len(changed) > 0
 	}
 	if len(ps.w.retires) > 0 {
 		retired, err := q.RetireReserves(ctx, ps.w.retires)

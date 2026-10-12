@@ -75,6 +75,20 @@ func (e *Execution) drainHost(ctx context.Context, tx pgx.Tx, host compute.HostI
 	return nil
 }
 
+// WakeReleasesOnHosts wakes planning for the releases whose containers on
+// hosts could move to Spot, as when a host starts or stops handing
+// Spot-tolerant work back.
+func (e *Execution) WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error {
+	if len(hosts) == 0 {
+		return nil
+	}
+	releases, err := e.queries.WithTx(tx).MovableReleasesOnHosts(ctx, hosts)
+	if err != nil {
+		return fmt.Errorf("read releases on hosts: %w", err)
+	}
+	return database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases))
+}
+
 // StoppedAmong returns the containers of ids that are stopped. A host
 // session asks about the containers its host still runs, so a stop decided
 // elsewhere reaches the host.

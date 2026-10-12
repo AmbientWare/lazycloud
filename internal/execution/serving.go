@@ -191,79 +191,56 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		return errors.New("release spec has no resources")
 	}
 	q := e.queries.WithTx(tx)
-	active := int(row.Pending + row.Starting + row.Ready)
-	live := active + int(row.Draining)
-	desired := servingDesired(row, active)
-	switch {
-	case active < desired:
-		count := min(desired-active, int(row.MaxContainers)-live)
-		if row.Preview {
-			count = min(desired-active, 1-live)
-		}
-		if count <= 0 || plan.holdStart(row.StartFailures, row.LastStoppedAt) {
-			return nil
-		}
-		grant, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount),
-			GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,
-		})
-		if refusedToWait(err) {
-			// Requests wait and time out; the edge refuses new ones.
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("admit containers: %w", err)
-		}
-		if count = grant.Start; count == 0 {
-			return nil
-		}
-		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, live == 0 && row.Demand == 0 && row.Peak == 0)
-		if err != nil {
-			return err
-		}
-		defer span.End()
-		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{
-			WorkspaceID: row.WorkspaceID,
-			ReleaseID:   row.ReleaseID,
-			Slots:       row.Slots,
-			CpuMillis:   cpu.Millis(row.CpuMillis),
-			MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters),
-			GpuCount:    row.GpuCount,
-			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
-			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
-			Traceparent: traceparent(ctx),
-		})
-		if err != nil {
-			return fmt.Errorf("create containers: %w", err)
-		}
-		plan.created = created
-	case active > desired:
-		excess := active - desired
-		if pending := min(excess, int(row.Pending)); pending > 0 {
-			stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
-				ReleaseID: row.ReleaseID, Count: int32(pending), //nolint:gosec // Bounded by live containers.
-			})
-			if err != nil {
-				return fmt.Errorf("stop pending containers: %w", err)
-			}
-			plan.stopped = stopped
-			excess -= len(stopped)
-		}
-		if excess <= 0 {
-			return nil
-		}
-		drained, err := q.DrainNewestContainers(ctx, DrainNewestContainersParams{
-			ReleaseID: row.ReleaseID, Count: int32(excess), //nolint:gosec // Bounded by live containers.
-		})
-		if err != nil {
-			return fmt.Errorf("drain containers: %w", err)
-		}
-		for _, d := range drained {
-			plan.drained = append(plan.drained, drainedContainer{id: d.ID, host: d.HostID})
-		}
-		return notifyHosts(ctx, tx, plan.drained)
+	leave, err := e.leaving(ctx, tx, plan, row.Leaving)
+	if err != nil {
+		return err
 	}
-	return nil
+	active, live := leave.counts(row.Pending, row.Starting, row.Ready, row.Draining)
+	desired := servingDesired(row, active)
+	room := int(row.MaxContainers) - live
+	if row.Preview {
+		room = 1 - live
+	}
+	pairs, grow := leave.starts(active, desired, room)
+	if pairs+grow > 0 {
+		if plan.holdStart(row.StartFailures, row.LastStoppedAt) {
+			return nil
+		}
+		return e.start(ctx, tx, plan, leave.unpaired[:pairs], pairs+grow, live == 0 && row.Demand == 0 && row.Peak == 0,
+			billing.Request{
+				Workspace: row.WorkspaceID, GPUs: int(row.GpuCount),
+				GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,
+			},
+			CreatePendingContainersParams{
+				WorkspaceID: row.WorkspaceID, ReleaseID: row.ReleaseID, Slots: row.Slots,
+				CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters),
+				GpuCount: row.GpuCount, RateClass: string(billing.RateClassFor(row.Pinned, row.Preemptible)),
+			})
+	}
+	if active <= desired {
+		return nil
+	}
+	excess := active - desired
+	if pending := min(excess, int(row.Pending)); pending > 0 {
+		stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
+			ReleaseID: row.ReleaseID, Count: int32(pending), //nolint:gosec // Bounded by live containers.
+		})
+		if err != nil {
+			return fmt.Errorf("stop pending containers: %w", err)
+		}
+		plan.stopped = stopped
+		excess -= len(stopped)
+	}
+	if excess <= 0 {
+		return nil
+	}
+	rows, err := q.DrainNewestContainers(ctx, DrainNewestContainersParams{
+		ReleaseID: row.ReleaseID, Count: int32(excess), //nolint:gosec // Bounded by live containers.
+	})
+	if err != nil {
+		return fmt.Errorf("drain containers: %w", err)
+	}
+	return plan.record(ctx, tx, len(rows), func(n int) drainedContainer { return drainedContainer{rows[n].ID, rows[n].HostID} })
 }
 
 // servingDesired is how many active containers the release should have,

@@ -1,7 +1,6 @@
 package compute
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
@@ -26,7 +25,7 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 		{"GPU markets keep a share without a floor", ReserveMarket{GPU: "T4"}, FleetCapacity{}, FleetCapacity{}, FleetCapacity{}},
 		{"loaded GPU market", ReserveMarket{GPU: "L4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{CPUMillis: 1000, GPUs: 1}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 		{"other cards keep none", ReserveMarket{GPU: "H100"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
-		{"Spot GPU work keeps none", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
+		{"Spot GPU work keeps a stopped share and nothing warm", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 	}
 	for _, c := range cases {
 		r := p.Reserve(c.market)
@@ -36,32 +35,27 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 	}
 }
 
-func TestFleetMarketsAreSpotOnDemandAndTheReservedCards(t *testing.T) {
-	want := []ReserveMarket{{Preemptible: true}, {}, {GPU: "A10G"}, {GPU: "L4"}, {GPU: "T4"}}
-	if got := DefaultPolicy().Markets(); !slices.Equal(got, want) {
-		t.Fatalf("markets %v", got)
-	}
-}
-
 // A CPU market's large-shape reserve fits at least the default, so small
 // recent work can't shrink it below what an 8 CPU request needs; recent
-// work only raises it, up to the cap.
+// work only raises it, and the disks it holds, up to the cap.
 func TestLargeShapeReserveFitsAtLeastTheDefault(t *testing.T) {
 	s := DefaultPolicy().LargestShape
 	spot := ReserveMarket{Preemptible: true}
 	cases := []struct {
-		name   string
-		recent FleetCapacity
-		want   FleetCapacity
+		name      string
+		recent    FleetCapacity
+		disks     int
+		want      FleetCapacity
+		wantDisks int
 	}{
-		{"no recent work", FleetCapacity{}, s.Default},
-		{"small recent work", cpuGiB(1000, 1), s.Default},
-		{"larger recent work", cpuGiB(12000, 48), cpuGiB(12000, 48).Upper(s.Default).Lower(s.Cap)},
-		{"beyond the cap", cpuGiB(32000, 256), cpuGiB(32000, 256).Lower(s.Cap)},
+		{"no recent work", FleetCapacity{}, 0, s.Default, 0},
+		{"small recent work", cpuGiB(1000, 1), 3, s.Default, 3},
+		{"larger recent work", cpuGiB(12000, 48), 0, cpuGiB(12000, 48).Upper(s.Default).Lower(s.Cap), 0},
+		{"beyond the cap", cpuGiB(32000, 256), 64, cpuGiB(32000, 256).Lower(s.Cap), s.CapDisks},
 	}
 	for _, c := range cases {
-		if got := s.of(spot, c.recent); got != c.want {
-			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		if got, disks := s.of(spot, c.recent, c.disks); got != c.want || disks != c.wantDisks {
+			t.Errorf("%s: %+v with %d disks, want %+v with %d", c.name, got, disks, c.want, c.wantDisks)
 		}
 	}
 }

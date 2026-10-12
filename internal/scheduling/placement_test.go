@@ -163,6 +163,37 @@ values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.wor
 	}
 }
 
+// A container that mounts platform volumes goes to a host in its
+// workspace bucket's region before a tighter one elsewhere; one that
+// mounts none takes the tightest fit.
+func TestVolumesPlaceWorkInTheirBucketsRegion(t *testing.T) {
+	pool := dbtest.New(t)
+	s := newScheduling(pool)
+	west := newHost(t, pool, 4000, 4*gib, 0)
+	east := newHost(t, pool, 8000, 8*gib, 0)
+	exec(t, pool, "update hosts set region = 'us-west-2' where id = $1", west)
+	exec(t, pool, "update hosts set region = 'us-east-1' where id = $1", east)
+	mounts, plain := newRelease(t, pool), newRelease(t, pool)
+	exec(t, pool, `update releases set spec = '{"volumes":[{"name":"models","mount_path":"/models"}]}' where id = $1`, mounts.id)
+	exec(t, pool, "insert into workspace_buckets (workspace_id, bucket, region) select id, 'ws-' || id, 'us-east-1' from workspaces where id = $1", mounts.workspace)
+	exec(t, pool, "insert into volumes (workspace_id, name, size_bytes) values ($1, 'models', 16000000000)", mounts.workspace)
+	reads := pendingContainer(t, pool, mounts, 2000, gib, time.Minute)
+	other := pendingContainer(t, pool, plain, 2000, gib, time.Minute)
+
+	if result := place(t, s); result.Assigned != 2 {
+		t.Fatalf("assigned %d, want 2", result.Assigned)
+	}
+	for id, want := range map[uuid.UUID]uuid.UUID{reads: east, other: west} {
+		var host *uuid.UUID
+		if err := pool.QueryRow(t.Context(), "select host_id from containers where id = $1", id).Scan(&host); err != nil {
+			t.Fatal(err)
+		}
+		if host == nil || *host != want {
+			t.Errorf("container %s went to %v, want %v", id, host, want)
+		}
+	}
+}
+
 func TestPackChoosesTheTightestFit(t *testing.T) {
 	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
 	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}

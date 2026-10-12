@@ -42,9 +42,10 @@ func (q *Queries) CancelQueuedTasks(ctx context.Context, ids []uuid.UUID) ([]uui
 }
 
 const createPendingContainers = `-- name: CreatePendingContainers :many
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent)
-select $1, $2::uuid, 'pending', $3, $4, $5, $6, $7, $8::text
-from generate_series(1, $9::int)
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
+select $1, $2::uuid, 'pending', $3, $4, $5, $6, $7, $8::text,
+       ($9::uuid[])[n]
+from generate_series(1, $10::int) n
 returning id
 `
 
@@ -57,10 +58,12 @@ type CreatePendingContainersParams struct {
 	GpuCount    int32
 	RateClass   string
 	Traceparent *string
+	Replaces    []uuid.UUID
 	Count       int32
 }
 
-// Placement records the GPU model and whose machine a container got.
+// Placement records the GPU model and whose machine a container got. The
+// first containers replace those @replaces names, one each.
 func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePendingContainersParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, createPendingContainers,
 		arg.WorkspaceID,
@@ -71,6 +74,7 @@ func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePending
 		arg.GpuCount,
 		arg.RateClass,
 		arg.Traceparent,
+		arg.Replaces,
 		arg.Count,
 	)
 	if err != nil {
@@ -168,6 +172,45 @@ func (q *Queries) DrainIdleContainers(ctx context.Context, arg DrainIdleContaine
 	return items, nil
 }
 
+const drainLeavingContainers = `-- name: DrainLeavingContainers :many
+update containers
+set state = 'draining', drain_started_at = now()
+where id in (
+    select d.id from containers d
+    where d.id = any($1::uuid[]) and d.state in ('starting', 'ready')
+    for update skip locked
+)
+  and state in ('starting', 'ready')
+returning id, host_id
+`
+
+type DrainLeavingContainersRow struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+// Leaving containers stop claiming; attempts running on them finish there.
+// SKIP LOCKED passes over one a claim holds; the next pass drains it.
+func (q *Queries) DrainLeavingContainers(ctx context.Context, ids []uuid.UUID) ([]DrainLeavingContainersRow, error) {
+	rows, err := q.db.Query(ctx, drainLeavingContainers, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DrainLeavingContainersRow
+	for rows.Next() {
+		var i DrainLeavingContainersRow
+		if err := rows.Scan(&i.ID, &i.HostID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const hasLiveWork = `-- name: HasLiveWork :one
 select ((select 1 from tasks where status = 'queued' order by release_id limit 1) is not null
         or (select 1 from tasks where status = 'running' order by release_id limit 1) is not null
@@ -184,6 +227,56 @@ func (q *Queries) HasLiveWork(ctx context.Context) (bool, error) {
 	var live bool
 	err := row.Scan(&live)
 	return live, err
+}
+
+const leavingContainers = `-- name: LeavingContainers :many
+select c.id,
+       (select count(*) from attempts a where a.container_id = c.id and a.state = 'running')::int as running,
+       coalesce(rc.replaced, false)::bool as replaced, coalesce(rc.ready, false)::bool as replacement_ready
+from containers c
+join releases r on r.id = c.release_id
+left join lateral (
+    select bool_or(x.state in ('pending', 'starting')) as replaced, bool_or(x.ready_at is not null) as ready
+    from containers x where x.replaces = c.id
+) rc on true
+where c.release_id = $1::uuid and c.state in ('starting', 'ready') and c.purpose = 'serve'
+  and container_leaves(c.id, c.host_id, r.spec)
+order by c.created_at, c.id
+`
+
+type LeavingContainersRow struct {
+	ID               uuid.UUID
+	Running          int32
+	Replaced         bool
+	ReplacementReady bool
+}
+
+// The release's starting and ready serve containers that leave their host,
+// oldest first, with the attempts each runs, and whether a replacement of
+// it starts or is ready.
+func (q *Queries) LeavingContainers(ctx context.Context, releaseID uuid.UUID) ([]LeavingContainersRow, error) {
+	rows, err := q.db.Query(ctx, leavingContainers, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LeavingContainersRow
+	for rows.Next() {
+		var i LeavingContainersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Running,
+			&i.Replaced,
+			&i.ReplacementReady,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockIdleContainers = `-- name: LockIdleContainers :many
@@ -304,6 +397,7 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
+       coalesce(c.leaving, false)::bool as leaving,
        (r.load_error is not null)::bool as load_failed,
        r.start_failures,
        last_stop.stopped_at as last_stopped_at
@@ -327,13 +421,20 @@ cross join lateral (
     ) capped
 ) q
 cross join lateral (
-    select count(*) as running from tasks t where t.release_id = r.id and t.status = 'running'
+    select count(*) as running from tasks t
+    where t.release_id = r.id and t.status = 'running'
+      and not exists (
+          select 1 from attempts a
+          join containers ac on ac.id = a.container_id
+          where a.id = t.current_attempt_id and ac.state = 'draining' and container_leaves(ac.id, ac.host_id, r.spec)
+      )
 ) run
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
-           count(*) filter (where c.state = 'draining') as draining
+           count(*) filter (where c.state = 'draining') as draining,
+           bool_or(c.state in ('starting', 'ready') and container_leaves(c.id, c.host_id, r.spec)) as leaving
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id
@@ -369,6 +470,7 @@ type PlanningReleasesRow struct {
 	Starting          int32
 	Ready             int32
 	Draining          int32
+	Leaving           bool
 	LoadFailed        bool
 	StartFailures     int32
 	LastStoppedAt     *time.Time
@@ -382,6 +484,8 @@ type PlanningReleasesRow struct {
 // The newest serve container's stop paces the next start after failed ones.
 // Demand past max_containers * tasks_per_container changes no decision, so
 // the count stops there and a deep backlog reads a bounded prefix.
+// A task running on a container that drains as it leaves its host
+// finishes there; it asks for no other container.
 func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesParams) ([]PlanningReleasesRow, error) {
 	rows, err := q.db.Query(ctx, planningReleases, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -416,6 +520,7 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			&i.Starting,
 			&i.Ready,
 			&i.Draining,
+			&i.Leaving,
 			&i.LoadFailed,
 			&i.StartFailures,
 			&i.LastStoppedAt,

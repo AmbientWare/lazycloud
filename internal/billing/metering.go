@@ -102,6 +102,9 @@ type meteredContainer struct {
 	stopReason           *string
 	lastSeenAt           *time.Time
 	billedThrough        *time.Time
+	// replacedAt is when the first of its replacements was ready, where its
+	// billing ends.
+	replacedAt *time.Time
 }
 
 // Meter advances every metered source's cursor: stopped containers get
@@ -181,14 +184,14 @@ func (b *Billing) Meter(ctx context.Context) (MeterResult, error) {
 			b.logger.ErrorContext(ctx, "price container usage", "container_id", c.id, "error", err)
 			continue
 		}
-		if c.stoppedAt == nil || p.accrued > 0 {
+		if live := c.stoppedAt == nil && c.replacedAt == nil; live || p.accrued > 0 {
 			a := accrued[c.owner]
 			if a == nil {
 				a = &accrual{}
 				accrued[c.owner] = a
 			}
 			a.nanos += p.accrued
-			if c.stoppedAt == nil {
+			if live {
 				a.live++
 			}
 		}
@@ -273,13 +276,13 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 	}
 	out := make([]meteredContainer, 0, len(live)+len(stopped))
 	for _, r := range live {
-		if stoppedIDs[r.ID] {
+		if stoppedIDs[r.ID] || r.Complete {
 			continue
 		}
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
-			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt,
 			shape: Shape{
 				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
 				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
@@ -293,7 +296,7 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
-			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt,
 			shape: Shape{
 				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
 				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
@@ -306,10 +309,11 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // planContainer decides one container's entries, its new cursor and its
 // accrued cost at now. A container is billed from ready to stopped; one on a
 // lost host ends at the host's last report, and a live one is never billed
-// past it. Entries price measured use, so a period is written only once
-// its use is complete at measured, observability's watermark; until then
-// it is accrued. A build reserves at most buildBilledMemoryBytes as billing
-// sees it.
+// past it. One a replacement took over from ends once the replacement was
+// ready, so the two never bill the same instant. Entries price measured
+// use, so a period is written only once its use is complete at measured,
+// observability's watermark; until then it is accrued. A build reserves at
+// most buildBilledMemoryBytes as billing sees it.
 func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (sourcePlan, error) {
 	shape, category := c.shape, ""
 	if c.build {
@@ -323,25 +327,27 @@ func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (so
 	if c.billedThrough != nil && c.billedThrough.After(start) {
 		start = *c.billedThrough
 	}
-	if c.stoppedAt != nil {
-		end := *c.stoppedAt
+	end, ended := start, false
+	switch {
+	case c.stoppedAt != nil:
+		end, ended = *c.stoppedAt, true
 		if c.stopReason != nil && *c.stopReason == stopHostLost && c.lastSeenAt != nil && c.lastSeenAt.Before(end) {
 			end = *c.lastSeenAt
 		}
-		if !measured.Before(end) {
-			entries, err := b.entries(src, start, end)
-			if err != nil {
-				return sourcePlan{}, err
-			}
-			return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
+	case c.lastSeenAt != nil:
+		end = maxTime(start, minTime(now, *c.lastSeenAt))
+	}
+	if c.replacedAt != nil && !c.replacedAt.After(end) {
+		end, ended = *c.replacedAt, true
+	}
+	if ended && !measured.Before(end) {
+		entries, err := b.entries(src, start, end)
+		if err != nil {
+			return sourcePlan{}, err
 		}
-		return b.planOpen(src, start, end, measured)
+		return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
 	}
-	horizon := start
-	if c.lastSeenAt != nil {
-		horizon = maxTime(start, minTime(now, *c.lastSeenAt))
-	}
-	return b.planOpen(src, start, horizon, measured)
+	return b.planOpen(src, start, end, measured)
 }
 
 // planOpen writes the periods of [start, horizon) whose use is complete at

@@ -173,6 +173,7 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
+       coalesce(c.leaving, false)::bool as leaving,
        r.start_failures,
        last_stop.stopped_at as last_stopped_at
 from batch
@@ -194,7 +195,8 @@ cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
-           count(*) filter (where c.state = 'draining') as draining
+           count(*) filter (where c.state = 'draining') as draining,
+           bool_or(c.state in ('starting', 'ready') and container_leaves(c.id, c.host_id, r.spec)) as leaving
     from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id
@@ -234,6 +236,7 @@ type ServingReleasesRow struct {
 	Starting          int32
 	Ready             int32
 	Draining          int32
+	Leaving           bool
 	StartFailures     int32
 	LastStoppedAt     *time.Time
 }
@@ -280,6 +283,7 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 			&i.Starting,
 			&i.Ready,
 			&i.Draining,
+			&i.Leaving,
 			&i.StartFailures,
 			&i.LastStoppedAt,
 		); err != nil {

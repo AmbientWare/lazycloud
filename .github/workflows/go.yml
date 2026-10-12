@@ -74,8 +74,15 @@ jobs:
         run: deploy/local/fetch-geesefs.sh
       - run: go test -race ./internal/imagefs ./internal/imagefs/layersource
       # The agent binds volumes and the snapshotter mounts FUSE and overlay
-      # filesystems as root, as on hosts, and a join installs as root.
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race ./internal/agent/... ./internal/imagefs/snapshotter
+      # filesystems as root, as on hosts, and a join installs as root. A
+      # skipped volume mount test fails the job.
+      - run: |
+          set -o pipefail
+          sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -v ./internal/agent/... ./internal/imagefs/snapshotter 2>&1 | tee "$RUNNER_TEMP/agent.log"
+          if grep -- 'volume mounts need GeeseFS' "$RUNNER_TEMP/agent.log"; then
+            echo "volume mount tests skipped" >&2
+            exit 1
+          fi
       - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |

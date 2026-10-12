@@ -30,6 +30,7 @@ select h.id,
        (h.memory_bytes - coalesce(used.memory, 0))::bigint as free_memory_bytes,
        (h.gpu_count - coalesce(used.gpus, 0))::int as free_gpus,
        (h.disk_slots - coalesce(used.disks, 0))::int as free_disk_slots,
+       (h.hands_back_at is not null)::bool as hands_back,
        array(select hw.workspace_id from host_workspaces hw where hw.host_id = h.id order by hw.workspace_id)::uuid[] as workspaces
 from hosts h
 left join lateral (
@@ -66,6 +67,7 @@ type AvailableCapacityRow struct {
 	FreeMemoryBytes  int64
 	FreeGpus         int32
 	FreeDiskSlots    int32
+	HandsBack        bool
 	Workspaces       []uuid.UUID
 }
 
@@ -100,6 +102,7 @@ func (q *Queries) AvailableCapacity(ctx context.Context, timeoutSeconds float64)
 			&i.FreeMemoryBytes,
 			&i.FreeGpus,
 			&i.FreeDiskSlots,
+			&i.HandsBack,
 			&i.Workspaces,
 		); err != nil {
 			return nil, err

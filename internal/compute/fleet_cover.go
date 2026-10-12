@@ -9,12 +9,14 @@ import (
 // coverWidth bounds the partial covers kept after each added node.
 const coverWidth = 128
 
-// CoverItem is Count requests of one shape; each goes whole onto one node,
-// of Market when it is set. An item that Rides takes only room left on a
-// node that holds an item that does not, and a cover is complete without
-// it, so it never makes a cover larger or costlier.
+// CoverItem is Count requests of one shape, each attaching Disks disks; each
+// goes whole onto one node, of Market when it is set, and takes a disk slot
+// of its node per disk. An item that Rides takes only room left on a node
+// that holds an item that does not, and a cover is complete without it, so
+// it never makes a cover larger or costlier.
 type CoverItem struct {
 	Shape  FleetCapacity
+	Disks  int
 	Count  int
 	Market *Market
 	Rides  bool
@@ -22,6 +24,15 @@ type CoverItem struct {
 
 // takes reports whether a node of offer o may hold the item.
 func (i CoverItem) takes(o FleetOffer) bool { return i.Market == nil || *i.Market == o.Market }
+
+// fits is how many of the item, up to limit, fit in free room and free disk
+// slots.
+func (i CoverItem) fits(free FleetCapacity, disks, limit int) int {
+	if i.Disks > 0 {
+		limit = min(limit, disks/i.Disks)
+	}
+	return free.fits(i.Shape, limit)
+}
 
 // CoverNeed is what a set of new nodes must supply: items placed whole and
 // aggregate room beyond the items.
@@ -150,7 +161,9 @@ func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) 
 	marketed := slices.ContainsFunc(need.Items, func(i CoverItem) bool { return i.Market != nil })
 	var out []FleetOffer
 	for _, o := range offers {
-		if need.Aggregate.Empty() && !slices.ContainsFunc(need.Items, func(i CoverItem) bool { return i.takes(o) && o.Usable.Covers(i.Shape) }) {
+		if need.Aggregate.Empty() && !slices.ContainsFunc(need.Items, func(i CoverItem) bool {
+			return i.takes(o) && i.fits(o.Usable, o.Type.DiskSlots(), 1) > 0
+		}) {
 			continue
 		}
 		_, limited := limits.VCPUs[o.Quota]
@@ -170,18 +183,19 @@ func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) 
 
 // add places what it can on one more node of offer c.
 func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order []int, total int) (coverState, bool) {
-	free := o.Usable
+	free, disks := o.Usable, o.Type.DiskSlots()
 	placed := make([]int, len(need.Items))
 	remaining := slices.Clone(s.remaining)
 	moved, holds := false, false
 	for _, rides := range []bool{false, true} {
 		for _, i := range order {
-			if item := need.Items[i]; item.Rides != rides || rides && !holds || !item.takes(o) {
+			item := need.Items[i]
+			if item.Rides != rides || rides && !holds || !item.takes(o) {
 				continue
 			}
-			if n := free.fits(need.Items[i].Shape, remaining[i]); n > 0 {
+			if n := item.fits(free, disks, remaining[i]); n > 0 {
 				placed[i], remaining[i] = n, remaining[i]-n
-				free = free.Minus(need.Items[i].Shape.Times(n))
+				free, disks = free.Minus(item.Shape.Times(n)), disks-n*item.Disks
 				moved, holds = true, holds || !rides
 			}
 		}

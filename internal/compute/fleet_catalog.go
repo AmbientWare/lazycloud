@@ -2,6 +2,7 @@ package compute
 
 import (
 	"slices"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -128,43 +129,56 @@ func FleetArchitectures() []string {
 	return architectures
 }
 
-// regionRates are a region's gp3, public IPv4 and transfer rates in USD
-// micros: a GiB and a MiB/s provisioned over the baseline for a month, an
-// address for an hour, and a GB moved between the region and storageRegion.
+// regionRates are a region's gp3 and public IPv4 rates in USD micros: a
+// GiB and a MiB/s provisioned over the baseline for a month, and an address
+// for an hour.
 type regionRates struct {
-	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour, transferGB int64
+	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour int64
 }
 
 func ratesIn(region string) regionRates {
-	switch region {
-	case storageRegion:
-		return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
-	case "us-east-2":
-		return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000, transferGB: 10_000}
-	case "us-west-1":
-		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000, transferGB: 20_000}
+	if region == "us-west-1" {
+		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000}
 	}
-	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000, transferGB: 20_000}
+	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
 }
 
-// storageRegion holds the registry and the object store. A host in another
-// region pays AWS inter-region transfer on what it moves to and from them:
-// registry pulls and pushes, layer reads, and volume and disk restores.
-const storageRegion = "us-east-1"
+// transferMicrosPerGB is what AWS charges, in USD micros, for a GB moved
+// from one region to another: nothing within a region, $0.01 between
+// us-east-1 and us-east-2 and $0.02 between any other two US regions.
+func transferMicrosPerGB(from, to string) int64 {
+	switch {
+	case from == to:
+		return 0
+	case from+" "+to == "us-east-1 us-east-2" || from+" "+to == "us-east-2 us-east-1":
+		return 10_000
+	}
+	return 20_000
+}
 
 // transferMilliGBPerCoreHour is the policy estimate of what a running host
-// moves to and from storageRegion, in thousandths of a GB per core-hour. A
-// cold start reads about 2 GB of layers for a torch image and 0.1 GB for a
-// python one, a build pushes and converts about what it pulled, and volume
-// and disk restores are rarer than starts. Host caches absorb repeated
-// images, so a host averages about one torch-sized cold read per four
-// core-hours.
+// moves to and from the platform's storage region, in thousandths of a GB
+// per core-hour: registry pulls and pushes, layer reads and disk restores.
+// A cold start reads about 2 GB of layers for a torch image and 0.1 GB for
+// a python one, a build pushes and converts about what it pulled, and disk
+// restores are rarer than starts. Host caches absorb repeated images, so a
+// host averages about one torch-sized cold read per four core-hours.
+// Volume reads are priced per start (readMicros).
 const transferMilliGBPerCoreHour = 500
 
 // transferMicros is the expected hourly transfer cost of a running host of
-// t in region.
-func transferMicros(region string, t CatalogType) int64 {
-	return int64(t.Topology.Cores) * transferMilliGBPerCoreHour * ratesIn(region).transferGB / 1000
+// t in region, with the platform's storage in storageRegion.
+func transferMicros(storageRegion, region string, t CatalogType) int64 {
+	return int64(t.Topology.Cores) * transferMilliGBPerCoreHour * transferMicrosPerGB(storageRegion, region) / 1000
+}
+
+// readMicros is what a start's read costs a host in region, spread over the
+// cost horizon as an hourly cost; nothing without one.
+func readMicros(p Policy, read *VolumeRead, region string) int64 {
+	if read == nil {
+		return 0
+	}
+	return read.Bytes * transferMicrosPerGB(read.Region, region) / 1e9 * int64(time.Hour/time.Second) / int64(p.CostHorizon/time.Second)
 }
 
 // Root throughput in MiB/s. gp3 gives baselineMiBps; a type that can hold

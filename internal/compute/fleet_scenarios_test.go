@@ -36,6 +36,14 @@ const (
 	simBoot      = 15 * time.Second
 	simPrepare   = 147 * time.Second
 	simStop      = time.Minute
+	// GPU hosts, from prod and the real EC2 check: a Spot L4 launch serves
+	// its first container about 158 s after placement, a stopped g4dn.xlarge
+	// Spot reserve runs 62 s after its start and mounts its reformatted
+	// instance store 5 s into boot, and a stop takes 6 m 46 s, which EC2
+	// bills as stopped. simGPUBoot adds the CPU hosts' join time to the start.
+	simGPUProvision = 150 * time.Second
+	simGPUBoot      = 70 * time.Second
+	simGPUStop      = 406 * time.Second
 	// simCooldown is how long a refusal cools its pool, the fleet's
 	// default CapacityCooldown.
 	simCooldown = 10 * time.Minute
@@ -52,7 +60,29 @@ type simHost struct {
 	// failAt, when set, is when the host fails without serving, as one whose
 	// bootstrap timed out.
 	failAt *time.Time
+	// resumed is set on a host resumed from the reserve to serve.
+	resumed bool
+	// unbilledFrom, on a GPU reserve being made, is when EC2 begins
+	// stopping it, which it bills as stopped.
+	unbilledFrom time.Time
 }
+
+// billed reports whether EC2 bills h as running.
+func (s *sim) billed(h *simHost) bool {
+	return !h.resumable() && (h.unbilledFrom.IsZero() || s.now.Before(h.unbilledFrom))
+}
+
+// startKind is how a start found its host.
+type startKind string
+
+const (
+	// startWarm found it serving when the container arrived.
+	startWarm startKind = "warm"
+	// startResumed found a reserve resumed for it.
+	startResumed startKind = "resumed"
+	// startBought found a host bought for it.
+	startBought startKind = "bought"
+)
 
 type simContainer struct {
 	id      uuid.UUID
@@ -108,6 +138,13 @@ type simResult struct {
 	// fleetCPUSec running hosts' CPU seconds there.
 	windowMicros int64
 	fleetCPUSec  float64
+	// starts counts the starts by how they found their host.
+	starts map[startKind]int
+	// gpuMicros is what GPU hosts cost, in µ$·s; spotGPUSec the seconds
+	// Spot GPU instances ran, which reclaims reach, and borrowedSec those
+	// on-demand GPU hosts ran Spot-tolerant work.
+	gpuMicros               int64
+	spotGPUSec, borrowedSec float64
 }
 
 type sim struct {
@@ -123,8 +160,10 @@ type sim struct {
 	// knowQuota.
 	quotas    map[QuotaKey]int64
 	knowQuota bool
-	// recent is the largest recent shape per market the planner reads.
-	recent map[ReserveMarket]FleetCapacity
+	// recent is the largest recent shape per market the planner reads, and
+	// recentDisks the most disks one attached.
+	recent      map[ReserveMarket]FleetCapacity
+	recentDisks map[ReserveMarket]int
 	// floorShortSince carries each market's reserve shortfall from one pass
 	// to the next, as the published plan does.
 	floorShortSince map[ReserveMarket]time.Time
@@ -190,7 +229,10 @@ func newSim(t *testing.T, p Policy) *sim {
 	}}}
 	return &sim{
 		t: t, p: p, now: offerNow, start: offerNow, maxHosts: 40, tick: simTick, provision: simProvision,
-		in: OfferInputs{Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks)},
+		in: OfferInputs{
+			Now: offerNow, Catalog: FleetCatalog(), Networks: networks, Rates: fleetRates(t), Spot: spotSnapshot(t, offerNow, networks),
+			StorageRegion: "us-east-1",
+		},
 	}
 }
 
@@ -313,6 +355,17 @@ func (s *sim) place() {
 		if c.need.GPUsNeeded() > 0 {
 			c.market = ReserveMarket{GPU: best.offer.Type.GPU}
 		}
+		kind := startBought
+		switch {
+		case !best.PhaseAt.After(c.arrived):
+			kind = startWarm
+		case best.resumed:
+			kind = startResumed
+		}
+		if s.r.starts == nil {
+			s.r.starts = map[startKind]int{}
+		}
+		s.r.starts[kind]++
 		best.containers, best.served = append(best.containers, c), true
 		s.placedLog = append(s.placedLog, c)
 		wait := s.now.Sub(c.arrived)
@@ -335,18 +388,20 @@ func (s *sim) load(h *simHost) HostCapacity {
 
 func (s *sim) fleetHost(h *simHost) FleetHost {
 	fh := h.FleetHost
-	fh.Load, fh.Lent, fh.Containers, fh.BusySince = FleetCapacity{}, FleetCapacity{}, len(h.containers), nil
+	fh.Load, fh.Lent, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, len(h.containers), nil, 0
 	var tolerant FleetCapacity
 	for _, c := range h.containers {
 		if fh.BusySince == nil || c.started.After(*fh.BusySince) {
 			fh.BusySince = ptr(c.started)
 		}
-		fh.Load = fh.Load.Plus(reservedShape(c.need))
+		fh.Load, fh.UsedDisks = fh.Load.Plus(reservedShape(c.need)), fh.UsedDisks+c.need.Disks
 		if c.need.Preemptible {
 			tolerant = tolerant.Plus(reservedShape(c.need))
 		}
 	}
-	fh.Lent = lent(h.Market, h.Usable.GPUs, tolerant)
+	if h.Market == MarketOnDemand {
+		fh.Lent = tolerant
+	}
 	return fh
 }
 
@@ -425,7 +480,7 @@ func (s *sim) plan() time.Duration {
 	if s.prices != nil {
 		s.in.Spot = s.prices(s.now)
 	}
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Builds: builds, Arrived: arrived, Offers: s.in, BatchWait: s.batchWait()}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, RecentDisks: s.recentDisks, Builds: builds, Arrived: arrived, Offers: s.in, BatchWait: s.batchWait()}
 	snapshot.Offers.Now = s.now
 	// The scheduler refreshes Spot quotes far more often than they age out.
 	snapshot.Offers.Spot = slices.Clone(s.in.Spot)
@@ -615,10 +670,17 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
 		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
 	}}
-	h.until = s.now.Add(s.provision)
+	provision := s.provision
+	if o.Type.GPU != "" {
+		provision = simGPUProvision
+	}
+	h.until = s.now.Add(provision)
 	if reserve {
 		h.State, h.ReserveMode, h.Current, h.Slept = FleetPreparing, a.Mode, false, true
-		h.until = s.now.Add(s.provision + simPrepare)
+		h.until = s.now.Add(provision + simPrepare)
+		if o.Type.GPU != "" {
+			h.unbilledFrom, h.until = h.until, h.until.Add(simGPUStop)
+		}
 		s.r.reserveBought = append(s.r.reserveBought, s.now)
 	}
 	if !reserve && o.Market == MarketOnDemand {
@@ -647,7 +709,7 @@ func (s *sim) apply(plan FleetPlan) {
 			for _, w := range plan.Waits {
 				if w.Action != nil && *w.Action == i {
 					c := s.pending[slices.IndexFunc(s.pending, func(c *simContainer) bool { return c.id == w.Container })]
-					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible})
+					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible, Disks: int32(c.need.Disks)})
 				}
 			}
 			if id, ok := s.launch(a, a.Kind == ActionBuyReserve, waiters); ok {
@@ -655,18 +717,39 @@ func (s *sim) apply(plan FleetPlan) {
 			}
 		case ActionResume:
 			h := s.host(*a.Host)
-			h.until = s.now.Add(simBoot)
-			if h.State == FleetImageSaved {
-				h.until = s.now.Add(simResume)
+			if s.refuses != nil && s.refuses(h.Region, h.ZoneID, h.InstanceType, h.Market) {
+				// EC2 refusing the start retires the reserve and cools its
+				// zone, as the actuator does.
+				s.r.refusals++
+				s.r.refused = append(s.r.refused, s.now)
+				s.in.Cooldowns = append(s.in.Cooldowns, OfferCooldown{
+					Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market, Until: s.now.Add(simCooldown),
+				})
+				s.hosts = slices.DeleteFunc(s.hosts, func(r *simHost) bool { return r == h })
+				continue
 			}
-			h.State, h.ReserveMode = FleetStarting, nil
+			switch {
+			case h.State == FleetImageSaved:
+				h.until = s.now.Add(simResume)
+			case h.GPU != "":
+				h.until = s.now.Add(simGPUBoot)
+			default:
+				h.until = s.now.Add(simBoot)
+			}
+			h.State, h.ReserveMode, h.resumed, h.unbilledFrom = FleetStarting, nil, true, time.Time{}
 			s.r.resumes++
 		case ActionReturnToReserve:
 			h := s.host(*a.Host)
 			h.State, h.ReserveMode, h.Current, h.Slept, h.until = FleetPreparing, a.Mode, false, true, s.now.Add(simStop)
+			h.HandsBack = false
+			if h.GPU != "" {
+				h.unbilledFrom, h.until = h.until, h.until.Add(simGPUStop)
+			}
 			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB, baselineMiBps)
 		case ActionDrain:
-			s.host(*a.Host).State = FleetDraining
+			s.host(*a.Host).State, s.host(*a.Host).HandsBack = FleetDraining, false
+		case ActionHandBack, ActionLend:
+			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
 		case ActionRetireReserve:
 			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
 			s.r.retired = append(s.r.retired, s.now)
@@ -695,7 +778,10 @@ func (s *sim) account() {
 	secs := int64(s.tick / time.Second)
 	window := s.now.Before(s.until)
 	for _, h := range s.hosts {
-		if h.State == FleetStopped || h.State == FleetImageSaved || h.State == FleetHibernateUnverified {
+		if h.GPU != "" {
+			s.accountGPU(h, secs)
+		}
+		if !s.billed(h) {
 			s.r.spendMicros += h.offer.StoppedMicros * secs
 			s.r.reserveMicros += h.offer.StoppedMicros * secs
 			if window {
@@ -708,6 +794,21 @@ func (s *sim) account() {
 			s.r.fleetCPUSec += float64(h.Usable.CPUMillis) / 1000 * float64(secs)
 		}
 		s.r.spendMicros += h.offer.HourlyMicros * secs
+	}
+}
+
+// accountGPU adds a tick of GPU host h to the GPU measures.
+func (s *sim) accountGPU(h *simHost, secs int64) {
+	if !s.billed(h) {
+		s.r.gpuMicros += h.offer.StoppedMicros * secs
+		return
+	}
+	s.r.gpuMicros += h.offer.HourlyMicros * secs
+	switch {
+	case h.Market == MarketSpot:
+		s.r.spotGPUSec += float64(secs)
+	case slices.ContainsFunc(h.containers, func(c *simContainer) bool { return c.need.Preemptible }):
+		s.r.borrowedSec += float64(secs)
 	}
 }
 
@@ -819,7 +920,7 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 			want += a.Offer.HourlyMicros
 		case ActionBuyReserve:
 			want += a.Offer.StoppedMicros
-		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize:
+		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
 			t.Fatalf("an empty fleet's first pass %s", a.Kind)
 		}
 	}
@@ -861,10 +962,10 @@ func TestFleetQuotaScenario(t *testing.T) {
 }
 
 // Each CPU market keeps a floor reserve and one beside it that fits its
-// largest recent shape, and each GPU model work used keeps one, through a
-// burst of 8 CPU work and the quiet hours after; a model nobody used keeps
-// none.
-func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
+// largest recent shape, each GPU model keeps one on Spot, and on-demand
+// one for each model work that cannot run on Spot used, through a burst
+// of 8 CPU work and the quiet hours after.
+func TestReservesHoldALargeHostPerMarketAndOnePerGPUModel(t *testing.T) {
 	s := newSim(t, DefaultPolicy())
 	s.recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
 	eight := cpuNeed(8_000, 16)
@@ -878,7 +979,10 @@ func TestReservesHoldALargeHostPerMarketAndOnePerUsedGPUModel(t *testing.T) {
 	if len(r.waits) != 4 || len(r.violations) > 0 {
 		t.Fatalf("placed %d of 4, violations %v", len(r.waits), r.violations)
 	}
-	want := map[ReserveMarket]int{{Preemptible: true}: 2, {}: 2, {GPU: "T4"}: 1}
+	want := map[ReserveMarket]int{
+		{Preemptible: true}: 2, {}: 2, {GPU: "T4"}: 1,
+		{Preemptible: true, GPU: "T4"}: 1, {Preemptible: true, GPU: "A10G"}: 1, {Preemptible: true, GPU: "L4"}: 1,
+	}
 	held := map[ReserveMarket][]string{}
 	large := map[ReserveMarket]bool{}
 	for _, h := range s.hosts {
@@ -1122,6 +1226,101 @@ func TestASpotRampStartsWarmOnLargeHosts(t *testing.T) {
 			if w > simTick {
 				t.Errorf("ramp to %d: work that cannot run on Spot waited %s", n, w)
 			}
+		}
+	}
+}
+
+// gpuRow prints a GPU scenario: how its starts found their host, how long
+// they waited, what GPU hosts cost, what all reserves cost, the profit of
+// its GPU work over the GPU hosts' cost, the hours Spot GPU instances ran,
+// which reclaims reach, and the hours Spot-tolerant work ran on on-demand
+// GPU hosts.
+func (r simResult) gpuRow(name string) string {
+	waits := r.fnWaits["gpu"]
+	gpu := float64(r.gpuMicros) / 3600 / 1e6
+	return fmt.Sprintf("%-46s warm %d resumed %d bought %d  p50 %6s p95 %6s  GPU $%.2f  reserves $%.3f/h  profit $%.2f  Spot GPU %.2fh  borrowed %.2fh",
+		name, r.starts[startWarm], r.starts[startResumed], r.starts[startBought], quantile(waits, 0.5), quantile(waits, 0.95),
+		gpu, float64(r.reserveMicros)/3600/1e6/r.hours, float64(r.revenueNanos)/1e9-gpu, r.spotGPUSec/3600, r.borrowedSec/3600)
+}
+
+// GPU work starts on a reserve of its market over six hours after the
+// fleet settles. Spot-tolerant work resumes a stopped Spot
+// reserve, the first start after a quiet week as well, and runs on-demand
+// only while every Spot pool of every model it accepts refuses it, when it
+// borrows the on-demand reserve work that cannot run on Spot keeps; with
+// one model refusing it resumes the next one's. Work that attaches disks
+// resumes a reserve with a slot for each.
+func TestGPUWorkStartsOnAReserveOfItsMarket(t *testing.T) {
+	t.Parallel()
+	spot := Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 4000, MemoryBytes: 16 * gib}
+	l4 := spot
+	l4.GPUs = []string{"L4"}
+	pinned := l4
+	pinned.Preemptible = false
+	disks := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib, Disks: 3}
+	jobs := func(need Requirement) []simArrival {
+		return []simArrival{
+			{at: time.Hour, need: need, count: 1, runs: 10 * time.Minute, fn: "gpu"},
+			{at: 3 * time.Hour, need: need, count: 2, runs: 10 * time.Minute, fn: "gpu"},
+			{at: 5 * time.Hour, need: need, count: 1, runs: 10 * time.Minute, fn: "gpu"},
+		}
+	}
+	l4Spot := func(typ string, market Market) bool {
+		c, _ := CatalogTypeNamed(typ)
+		return market == MarketSpot && c.GPU == "L4"
+	}
+	for _, c := range []struct {
+		name string
+		// recent are the work whose shape ran within the largest-shape
+		// window, each in its market.
+		recent   []Requirement
+		arrivals []simArrival
+		// refuses names the L4 Spot pools EC2 refuses: none, the cheaper
+		// half, or all.
+		refuses string
+		resumes bool
+		borrows bool
+	}{
+		{"Spot work, Spot healthy", []Requirement{spot}, jobs(spot), "", true, false},
+		{"Spot work, cheaper half of L4 Spot refused", []Requirement{spot}, jobs(spot), "half", true, false},
+		{"Spot work, every L4 Spot pool refused", []Requirement{spot}, jobs(spot), "all", true, false},
+		{"L4 Spot work, every L4 Spot pool refused", []Requirement{l4, pinned}, jobs(l4), "all", true, true},
+		{"quiet week, then a Spot start", nil, jobs(spot)[:1], "", true, false},
+		{"work that cannot run on Spot", []Requirement{pinned}, jobs(pinned), "", true, false},
+		{"Spot work with three disks", []Requirement{disks}, jobs(disks), "", true, false},
+	} {
+		s := newSim(t, DefaultPolicy())
+		s.tick = simLongTick
+		s.recent, s.recentDisks = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]int{}
+		for _, need := range c.recent {
+			m := ReserveMarket{Preemptible: need.Preemptible, GPU: need.GPUs[0]}
+			s.recent[m], s.recentDisks[m] = reservedShape(need), need.Disks
+		}
+		short := shortSpot(s.in.Spot)
+		switch c.refuses {
+		case "half":
+			s.refuses = func(region, zoneID, typ string, market Market) bool {
+				return l4Spot(typ, market) && short[region+"/"+zoneID+"/"+typ]
+			}
+		case "all":
+			s.refuses = func(_, _, typ string, market Market) bool { return l4Spot(typ, market) }
+		}
+		s.run(2*time.Hour, nil)
+		s.start, s.until, s.r = s.now, time.Time{}, simResult{}
+		r := s.run(6*time.Hour, c.arrivals)
+		t.Log(r.gpuRow(c.name))
+		want := 0
+		for _, a := range c.arrivals {
+			want += a.count
+		}
+		if len(r.fnWaits["gpu"]) != want || len(r.violations) > 0 {
+			t.Errorf("%s: placed %d of %d, violations %v", c.name, len(r.fnWaits["gpu"]), want, r.violations)
+		}
+		if resumed := r.starts[startResumed] > 0; resumed != c.resumes {
+			t.Errorf("%s: %d starts resumed a reserve", c.name, r.starts[startResumed])
+		}
+		if borrowed := r.borrowedSec > 0; borrowed != c.borrows {
+			t.Errorf("%s: Spot-tolerant work ran %.2f h on on-demand GPU hosts", c.name, r.borrowedSec/3600)
 		}
 	}
 }

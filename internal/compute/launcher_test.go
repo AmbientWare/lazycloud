@@ -310,6 +310,39 @@ returning id`, int64(usable.CPUMillis), usable.MemoryBytes, 8*gib)
 	}
 }
 
+// A refused launch moves only to a pool with a disk slot for each disk the
+// containers waiting for it attach, however much cheaper a smaller type is.
+func TestARefusedLaunchMovesToAPoolWithSlotsForItsWaitersDisks(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	run(t, o.pool, `
+insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+values ('us-east-2', 'use2-az1', 'c6a.4xlarge', 100000, now(), now()), ('us-east-2', 'use2-az2', 'c6a.2xlarge', 120000, now(), now()),
+       ('us-east-2', 'use2-az2', 'c6a.4xlarge', 200000, now(), now())`)
+	large, _ := compute.CatalogTypeNamed("c6a.4xlarge")
+	usable := large.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
+    instance_type, market, holds_cpu_millis, holds_memory_bytes)
+values ('w', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'c6a.4xlarge', 'spot', 2000, $3)
+returning id`, int64(usable.CPUMillis), usable.MemoryBytes, 4*gib)
+	ws := newWorkspace(t, o.pool, "dev", newUser(t, o.pool, "alice@example.com"))
+	release := newRelease(t, o.pool, ws, `{"disks": [{}, {}, {}, {}, {}, {}]}`)
+	run(t, o.pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, rate_class, capacity_host_id)
+values ($1, $2, 'pending', 1, 2000, 4 << 30, 'auto', $3)`, ws, release, host)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host in its next pool", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 2 || calls[1].Form.Get("InstanceType") != "c6a.4xlarge" {
+		var pools []string
+		for _, c := range calls {
+			pools = append(pools, pool(c))
+		}
+		t.Fatalf("launches %v, want c6a.4xlarge, with six disk slots, after the refusal", pools)
+	}
+}
+
 // A refused rightsize moves only to a pool that costs less than the host
 // it replaces; with none left the launch fails and rightsize leaves the
 // host for a while.

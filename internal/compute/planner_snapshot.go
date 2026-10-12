@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,11 +46,7 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
 	}
-	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
-		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
-	}); err != nil {
+	if r.recent, err = q.RecentShapes(ctx, recentShapesParams(p)); err != nil {
 		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
 	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
@@ -166,18 +163,33 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 // asked again, so retention drains it.
 func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetHost {
 	market := marketOf(h.Market)
+	// Spot-tolerant work on an on-demand host is lent to the Spot market of
+	// the host's GPU model, or of CPU.
+	var lent FleetCapacity
+	if market == MarketOnDemand {
+		lent = FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}
+	}
+	moves := make([]Requirement, len(h.MoveCpu))
+	for n := range moves {
+		moves[n] = Requirement{Region: h.MoveRegion[n], Preemptible: true, GPUCount: int(h.MoveGpuCount[n]),
+			CPUMillis: cpu.Millis(h.MoveCpu[n]), MemoryBytes: h.MoveMemory[n]}
+		if h.MoveGpus[n] != "" {
+			moves[n].GPUs = strings.Split(h.MoveGpus[n], ",")
+		}
+	}
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
-		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
+		Lent:       lent,
 		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
 		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
 		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
+		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays,
 	}
 }
 
@@ -188,15 +200,6 @@ func busySince(h PlannerHostsRow) *time.Time {
 		return nil
 	}
 	return &h.BusySince
-}
-
-// lent is what Spot-tolerant work holds on a host: on an on-demand CPU host
-// it is lent to the Spot market, and elsewhere nothing.
-func lent(market Market, gpus int, tolerant FleetCapacity) FleetCapacity {
-	if market != MarketOnDemand || gpus > 0 {
-		return FleetCapacity{}
-	}
-	return tolerant
 }
 
 // onRelease reports whether version is the agent release a host should run:
@@ -244,6 +247,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		g := pendingGroup{connection: r.ConnectionID, group: DemandGroup{Need: Requirement{
 			Region: r.Region, Zone: r.Zone, Preemptible: r.Preemptible, GPUs: gpus, GPUCount: int(r.GpuCount),
 			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, Disks: int(r.Disks),
+			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes),
 		}}}
 		for n, id := range r.Ids {
 			c := PendingContainer{ID: id}
@@ -257,6 +261,40 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 	return out, nil
 }
 
+func recentShapesParams(p Policy) RecentShapesParams {
+	return RecentShapesParams{
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
+	}
+}
+
+// market is the market a RecentShapes row measures: GPU work belongs to
+// its model's market of its tolerance, as its demand does, and GPU work
+// without a model to none.
+func (r RecentShapesRow) market() (ReserveMarket, bool) {
+	switch {
+	case r.GpuType != "":
+		return ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}, true
+	case r.Gpus > 0:
+		return ReserveMarket{}, false
+	}
+	return ReserveMarket{Preemptible: r.Preemptible}, true
+}
+
+// readsByMarket is what a start of each market read from its workspace's
+// bucket on average over its recent starts, for the markets whose starts
+// read any.
+func readsByMarket(rows []RecentShapesRow) map[ReserveMarket]int64 {
+	reads := map[ReserveMarket]int64{}
+	for _, r := range rows {
+		if m, ok := r.market(); ok && shapeKind(r.Kind) == shapeRecent && r.ReadBytes > 0 && r.Starts > 0 {
+			reads[m] = r.ReadBytes / int64(r.Starts)
+		}
+	}
+	return reads
+}
+
 // shapeKind is what a RecentShapes row measures.
 type shapeKind string
 
@@ -267,33 +305,27 @@ const (
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
-// containers reserved and the largest its finished builds did, and what
-// arrived within the arrival window. GPU work belongs to the on-demand
-// market of its model, as its demand does; GPU work without a model
-// belongs to none.
-func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
+// containers reserved and the most disks one attached, the largest its
+// finished builds reserved, and what arrived within the arrival window.
+func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
 	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
-		var m ReserveMarket
-		switch {
-		case r.GpuType != "":
-			m = ReserveMarket{GPU: r.GpuType}
-		case r.Gpus > 0:
+		m, ok := r.market()
+		if !ok {
 			continue
-		default:
-			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
 		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
 		switch shapeKind(r.Kind) {
 		case shapeRecent:
-			recent[m] = recent[m].Upper(shape)
+			recent[m], disks[m] = recent[m].Upper(shape), max(disks[m], int(r.Disks))
 		case shapeBuild:
 			builds[m] = builds[m].Upper(shape)
 		case shapeArrived:
 			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, builds, arrived
+	return recent, builds, arrived, disks
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

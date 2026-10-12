@@ -89,6 +89,22 @@ type OfferInputs struct {
 	// OwnerPays is set for a connected account's offers: the account pays
 	// its own hosts, so no purchase margin applies.
 	OwnerPays bool
+	// StorageRegion holds the platform's registry, object store and
+	// workspace buckets, and ReadBytes is what a start of each market reads
+	// from its workspace's bucket, on average over the market's starts
+	// within the LargestShape window.
+	StorageRegion string
+	ReadBytes     map[ReserveMarket]int64
+}
+
+// marketRead is what a start of market m reads, nil when its starts read
+// nothing.
+func (in OfferInputs) marketRead(m ReserveMarket) *VolumeRead {
+	bytes, ok := in.ReadBytes[m]
+	if !ok {
+		return nil
+	}
+	return &VolumeRead{Region: in.StorageRegion, Bytes: bytes}
 }
 
 // FleetOffer is one way to buy a host: a type in a zone and market.
@@ -106,10 +122,11 @@ type FleetOffer struct {
 	// disk alone, what a stopped reserve costs.
 	HourlyMicros  int64
 	StoppedMicros int64
-	// TransferMicros is the expected hourly transfer to and from
-	// storageRegion of a host serving from the offer. It is an estimate, so
-	// only ranking weighs it.
-	TransferMicros int64
+	// TransferMicros is the expected hourly transfer to and from the
+	// platform's storage region of a host serving from the offer, and
+	// ReadMicros what the start it serves reads from its bucket, spread over
+	// the cost horizon. They are estimates, so only ranking weighs them.
+	TransferMicros, ReadMicros int64
 	// PlacementPenalty is the percent a Spot offer ranks above its cost for
 	// its pool's placement score, placementPenaltyPercent for each point
 	// below the best pool of its shape. A pool of a scored shape without a
@@ -138,8 +155,8 @@ func (o FleetOffer) Key() string {
 func (o FleetOffer) ranked(micros int64) int64 { return micros * (100 + o.PlacementPenalty) / 100 }
 
 // running is micros an hour of a host serving from the offer, with its
-// expected transfer.
-func (o FleetOffer) running() int64 { return o.HourlyMicros + o.TransferMicros }
+// expected transfer and read.
+func (o FleetOffer) running() int64 { return o.HourlyMicros + o.TransferMicros + o.ReadMicros }
 
 // servingCost ranks a host bought to serve over the cost horizon.
 func servingCost(p Policy) func(FleetOffer) int64 {
@@ -147,11 +164,11 @@ func servingCost(p Policy) func(FleetOffer) int64 {
 }
 
 // reserveCost ranks a reserve: held stopped over the cost horizon, after
-// running while it is prepared. Preparing serves nothing, so it moves no
-// image or volume bytes.
+// running while it is prepared, and the read of the start it serves.
+// Preparing serves nothing, so it moves no image or volume bytes.
 func reserveCost(p Policy) func(FleetOffer) int64 {
 	return func(o FleetOffer) int64 {
-		return o.ranked(o.StoppedMicros*int64(p.CostHorizon/time.Second) + o.HourlyMicros*int64(p.Provision/time.Second))
+		return o.ranked((o.StoppedMicros+o.ReadMicros)*int64(p.CostHorizon/time.Second) + o.HourlyMicros*int64(p.Provision/time.Second))
 	}
 }
 
@@ -271,12 +288,13 @@ func placementPenalty(ranges map[string]scoreRange, shape string, score int) int
 // RankOffers lists the offers that can host need, best first. A reserve
 // offer prices the root disk a hibernating reserve needs. It keeps offers
 // sold in the region, in a market the need allows, not cooling, with a
-// complete cost, whose usable capacity covers the need, whose GPUs the need
+// complete cost, whose usable capacity and disk slots cover the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and, unless the owner pays, whose
 // GPU model the platform fleet offers and that keep the purchase margin. A
 // reserve offer hibernates where hibernates allows.
 // Order: the need's GPU preference, hourly cost with expected transfer and
-// its placement penalty, fewest hosts in the zone, key. An offer whose host would exceed a known vCPU quota is skipped.
+// read and its placement penalty, fewest hosts in the zone, key. An offer
+// whose host would exceed a known vCPU quota is skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
 	scores := placementRanges(p, in)
@@ -307,7 +325,7 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					continue
 				}
 				usable := t.Usable(in.ReportedMemory[t.Name])
-				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) {
+				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) || t.DiskSlots() < need.Disks {
 					continue
 				}
 				for _, market := range markets {
@@ -330,7 +348,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					o := FleetOffer{
 						Type: t, Region: region, Zone: subnet.Zone, ZoneID: subnet.ZoneID, Market: market, Usable: usable,
 						Hibernate: hibernate, HourlyMicros: compute + disk + ratesIn(region).ipv4Hour, StoppedMicros: disk,
-						TransferMicros: transferMicros(region, t), PlacementPenalty: penalty, Quota: quota,
+						TransferMicros: transferMicros(in.StorageRegion, region, t), ReadMicros: readMicros(p, need.Read, region),
+						PlacementPenalty: penalty, Quota: quota,
 					}
 					if _, rejected := marginRejection(p, rates, o, need); rejected && !in.OwnerPays {
 						continue

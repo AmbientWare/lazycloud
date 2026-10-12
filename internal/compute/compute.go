@@ -61,6 +61,9 @@ type Containers interface {
 	DrainHostContainers(ctx context.Context, tx pgx.Tx, host HostID) error
 	// DrainHostWorkspaces drains the host's containers of workspaces.
 	DrainHostWorkspaces(ctx context.Context, tx pgx.Tx, host HostID, workspaces []uuid.UUID) error
+	// WakeReleasesOnHosts wakes planning for the releases whose containers
+	// on hosts could move to Spot.
+	WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error
 }
 
 // Config is what compute needs to tell hosts how to reach the platform.
@@ -115,7 +118,8 @@ func isUniqueViolation(err error) bool {
 // CheckFleet refuses a configuration that would launch instances unable to
 // reach the platform: with fleet networks or connections enabled, instances
 // download the agent from InstallURL over HTTPS and dial ServerAddress with
-// TLS, so neither may be empty or on loopback.
+// TLS, so neither may be empty or on loopback. With fleet networks it needs
+// the storage region, which prices the fleet's transfer.
 func (c Config) CheckFleet() error {
 	if len(c.Fleet.Networks) == 0 && c.Fleet.PrincipalARN == "" {
 		return nil
@@ -126,6 +130,9 @@ func (c Config) CheckFleet() error {
 	}
 	if c.ServerAddress == "" || PlaintextAgents(c.ServerAddress, false) || c.ServerPlaintext {
 		return errors.New("LAZYCLOUD_AGENT_SERVER_ADDR must be the public host:port cloud instances dial with TLS")
+	}
+	if len(c.Fleet.Networks) > 0 && c.Fleet.StorageRegion == "" {
+		return errors.New("LAZYCLOUD_OBJECT_STORE_REGION must name the region of the object store, which prices the fleet's transfer")
 	}
 	return nil
 }

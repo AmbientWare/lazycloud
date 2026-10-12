@@ -40,6 +40,26 @@ type Requirement struct {
 	// Prefer is the host whose frame cache likely holds one of the disks;
 	// nil for none.
 	Prefer *HostID
+	// Read is what the container reads from its workspace's bucket as it
+	// starts; nil when it mounts no platform volume.
+	Read *VolumeRead
+}
+
+// VolumeRead is a start's read of its platform volumes from its
+// workspace's bucket: the bucket's region and the volumes' measured size,
+// taken as read whole.
+type VolumeRead struct {
+	Region string
+	Bytes  int64
+}
+
+// VolumeReadOf is the read of a container that mounts platform volumes
+// from a bucket in region, nil without one.
+func VolumeReadOf(region *string, bytes int64) *VolumeRead {
+	if region == nil {
+		return nil
+	}
+	return &VolumeRead{Region: *region, Bytes: bytes}
 }
 
 // GPUsNeeded is how many GPUs the container reserves: a model list without a
@@ -75,6 +95,9 @@ type HostCapacity struct {
 	FreeMemoryBytes int64
 	FreeGPUs        int
 	FreeDiskSlots   int
+	// HandsBack is set on an on-demand host that hands Spot-tolerant work
+	// back to Spot, which lends that work no room.
+	HandsBack bool
 }
 
 // Accepts reports whether the host may run a container with r, ignoring
@@ -100,7 +123,7 @@ func (h HostCapacity) Accepts(r Requirement) bool {
 	if r.Zone != "" && h.Zone != r.Zone && h.ZoneID != r.Zone {
 		return false
 	}
-	if !r.Preemptible && h.Market == MarketSpot {
+	if !r.Preemptible && h.Market == MarketSpot || r.Preemptible && h.HandsBack {
 		return false
 	}
 	if n := r.GPUsNeeded(); n > 0 {
@@ -131,7 +154,9 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // that fits it, a Spot host before an on-demand one for work that can run
 // on Spot, then the tightest fit, whose free CPU and memory as fractions
 // of its size sum lowest after placement, which keeps large holes for
-// large containers. r's preferred host wins among hosts that borrow alike.
+// large containers. r's preferred host wins among hosts that borrow alike,
+// then a host in the region r's volumes are read from, which it reads
+// without transfer.
 // Spot-tolerant work borrows an on-demand platform CPU host only while one
 // of them still keeps floor free afterwards, so work that cannot run on
 // Spot starts at once.
@@ -144,7 +169,7 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			}
 		}
 	}
-	best, bestBorrows, bestPreferred, bestScore := -1, false, false, 0.0
+	best, bestBorrows, bestPreferred, bestLocal, bestScore := -1, false, false, false, 0.0
 	for i, h := range hosts {
 		if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || !h.Fits(r) {
 			continue
@@ -161,10 +186,12 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			}
 		}
 		preferred := r.Prefer != nil && h.Host == *r.Prefer
+		local := r.Read != nil && h.Region == r.Read.Region
 		score := float64(h.FreeCPUMillis-r.CPUMillis)/float64(h.CPUMillis) + float64(h.FreeMemoryBytes-r.MemoryBytes)/float64(h.MemoryBytes)
 		if best < 0 || bestBorrows && !borrows ||
-			borrows == bestBorrows && (preferred && !bestPreferred || preferred == bestPreferred && score < bestScore) {
-			best, bestBorrows, bestPreferred, bestScore = i, borrows, preferred, score
+			borrows == bestBorrows && (preferred && !bestPreferred ||
+				preferred == bestPreferred && (local && !bestLocal || local == bestLocal && score < bestScore)) {
+			best, bestBorrows, bestPreferred, bestLocal, bestScore = i, borrows, preferred, local, score
 		}
 	}
 	return best
@@ -250,6 +277,7 @@ func AvailableCapacity(ctx context.Context, tx pgx.Tx) ([]HostCapacity, error) {
 			FreeMemoryBytes: row.FreeMemoryBytes,
 			FreeGPUs:        int(row.FreeGpus),
 			FreeDiskSlots:   int(row.FreeDiskSlots),
+			HandsBack:       row.HandsBack,
 		})
 	}
 	return hosts, nil

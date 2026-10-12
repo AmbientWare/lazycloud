@@ -347,9 +347,13 @@ func (q *Queries) FleetRegions(ctx context.Context) ([]FleetRegionsRow, error) {
 const hostWaiters = `-- name: HostWaiters :many
 select coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible
+       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
+       coalesce(jsonb_array_length(r.spec -> 'disks'), 0)::int as disks,
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes
 from containers c
 left join releases r on r.id = c.release_id
+cross join lateral (select volume_read_bytes(c.workspace_id, r.spec -> 'volumes') as bytes) vb
+left join workspace_buckets sb on sb.workspace_id = c.workspace_id and vb.bytes is not null
 where c.state = 'pending' and c.capacity_host_id = $1
 `
 
@@ -357,10 +361,15 @@ type HostWaitersRow struct {
 	Region      string
 	Zone        string
 	Preemptible bool
+	Disks       int32
+	ReadRegion  *string
+	ReadBytes   int64
 }
 
-// The placement each pending container waiting for a host asks for. A
-// build has no release and takes any region on Spot.
+// The placement each pending container waiting for a host asks for, the
+// disks it attaches, and the bucket region and measured bytes of the
+// platform volumes its start reads. A build has no release and takes any
+// region on Spot.
 func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWaitersRow, error) {
 	rows, err := q.db.Query(ctx, hostWaiters, hostID)
 	if err != nil {
@@ -370,7 +379,14 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 	var items []HostWaitersRow
 	for rows.Next() {
 		var i HostWaitersRow
-		if err := rows.Scan(&i.Region, &i.Zone, &i.Preemptible); err != nil {
+		if err := rows.Scan(
+			&i.Region,
+			&i.Zone,
+			&i.Preemptible,
+			&i.Disks,
+			&i.ReadRegion,
+			&i.ReadBytes,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

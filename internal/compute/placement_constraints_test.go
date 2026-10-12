@@ -163,6 +163,20 @@ func TestNonPreemptibleWorkNeverRunsOnSpot(t *testing.T) {
 	}
 }
 
+// An on-demand host handing Spot-tolerant work back lends that work no room
+// and still takes work that cannot run on Spot.
+func TestAHostHandingWorkBackTakesOnlyWorkThatCannotRunOnSpot(t *testing.T) {
+	o := newOwners(t, compute.Config{})
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	onDemand := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketOnDemand, Region: "us-east-2"})
+	run(t, o.pool, "update hosts set hands_back_at = now() where id = $1", uuid.UUID(onDemand))
+	got := constrained(t, o, dev, `{"placement": {"preemptible": false}}`, `{}`)
+	if !on(got[0], onDemand) || got[1] != nil {
+		t.Fatalf("work that cannot run on Spot went to %v, Spot-tolerant work to %v; want the host, and none", got[0], got[1])
+	}
+}
+
 func TestRegionAndZonePinsChooseTheHost(t *testing.T) {
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")

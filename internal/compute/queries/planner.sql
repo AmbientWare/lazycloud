@@ -10,18 +10,24 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 
 -- name: PlannerHosts :many
 -- Every cloud host the fleet holds or is buying, with what its live
--- containers reserve, what those that could run on Spot reserve, and
--- whether its agent must move to the target release first.
+-- containers reserve, what those that could run on Spot reserve, what each
+-- of those that could move to a Spot host needs, whether one of them could
+-- not, and whether its agent must move to the target release first.
 select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
        h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
-       h.rightsize_refused_at,
+       h.rightsize_refused_at, h.hands_back_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
+       coalesce(used.tolerant_gpus, 0)::int as tolerant_gpus,
+       coalesce(used.stays, false)::bool as stays,
+       coalesce(used.move_cpu, '{}')::bigint[] as move_cpu, coalesce(used.move_memory, '{}')::bigint[] as move_memory,
+       coalesce(used.move_gpu_count, '{}')::int[] as move_gpu_count, coalesce(used.move_gpus, '{}')::text[] as move_gpus,
+       coalesce(used.move_region, '{}')::text[] as move_region,
        coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
@@ -29,11 +35,23 @@ left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
            sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_cpu,
            sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_memory,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           sum(m.gpus) as gpus, sum(m.gpus) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
+           bool_or(not m.moves) as stays,
+           array_agg(c.cpu_millis) filter (where m.moves) as move_cpu,
+           array_agg(c.memory_bytes) filter (where m.moves) as move_memory,
+           array_agg(m.gpus) filter (where m.moves) as move_gpu_count,
+           -- The GPU models each accepts, comma-separated.
+           array_agg(array_to_string(array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb))), ','))
+               filter (where m.moves) as move_gpus,
+           array_agg(coalesce(r.spec -> 'placement' ->> 'region', '')) filter (where m.moves) as move_region,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
            count(*) as containers, max(c.assigned_at) as busy_since
     from containers c
     left join releases r on r.id = c.release_id
+    cross join lateral (
+        select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
+               case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
+    ) m
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.provider = 'aws' and h.phase not in ('deleted', 'failed')
@@ -60,6 +78,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(b.image_build_id), '[]'::jsonb)::jsonb as gpus,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -68,29 +87,39 @@ from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
 left join releases r on r.id = b.release_id
-group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+cross join lateral (select volume_read_bytes(b.workspace_id, r.spec -> 'volumes') as bytes) vb
+left join workspace_buckets sb on sb.workspace_id = b.workspace_id and vb.bytes is not null
+group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
 order by 4, 5, 6, 2 desc, 3 desc;
 
 -- name: RecentShapes :many
 -- By purchase market and GPU model: the largest CPU, memory and GPUs placed
--- platform containers reserved among the newest containers created within
--- the window, up to the sample (recent); the same among the build
--- containers that stopped within the build window (build), since a running
--- build's host holds its slot once it ends; and what the placed
--- Spot-tolerant platform CPU containers of the sample created within the
--- arrival window reserve, less their largest batch (arrived): a steady rate
--- of work, which a single burst is not. A batch is arrivals less than
+-- platform containers reserved, the most disks one attached, and the bytes
+-- of platform volumes they read with how many started, among the newest
+-- containers created within the window, up to the sample (recent); the
+-- same among the build containers that stopped within the build window
+-- (build), since a running build's host holds its slot once it ends; and
+-- what the placed Spot-tolerant platform CPU containers of the sample
+-- created within the arrival window reserve, less their largest batch
+-- (arrived): a steady rate of work, which a single burst is not. A batch is arrivals less than
 -- batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
 -- builds read are those created within build_scan, the window and the
 -- longest a build runs. Both reads follow primary keys, so they read at
 -- most sample_size containers and the scan's builds whatever the history;
 -- the subqueries make their bounds constants the indexes can use.
 with recent as (
-    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at
-    from containers c
-    where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
-    order by c.id desc
-    limit @sample_size
+    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+           coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks,
+           coalesce(volume_read_bytes(c.workspace_id, r.spec -> 'volumes'), 0) as read_bytes
+    from (
+        select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+               c.release_id, c.workspace_id
+        from containers c
+        where c.id > (select uuidv7(- make_interval(secs => @window_seconds::float8)))
+        order by c.id desc
+        limit @sample_size
+    ) c
+    left join releases r on r.id = c.release_id
 ), builds as (
     select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
     from image_builds b
@@ -100,17 +129,18 @@ with recent as (
       and c.stopped_at > now() - make_interval(secs => @build_window_seconds::float8)
 )
 select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
-       max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus
+       max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
+       max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
 select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
-       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
 from builds
 group by 2, 3
 union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0
+select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
     select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
@@ -237,7 +267,7 @@ returning id;
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any(@hibernate_ids::uuid[]) then 'hibernate' else 'stop' end,
-    idle_since = null, updated_at = now()
+    idle_since = null, hands_back_at = null, updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id;
@@ -247,10 +277,18 @@ returning h.id;
 -- termination; a host that took a container since the snapshot stays.
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = @reason, reserve_mode = null,
-    idle_since = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id;
+
+-- name: SetHandsBack :many
+-- Serving on-demand hosts start handing Spot-tolerant work back, those of
+-- @back_ids, or lend to it again; one that started keeps its time.
+update hosts
+set hands_back_at = case when id = any(@back_ids::uuid[]) then coalesce(hands_back_at, now()) end, updated_at = now()
+where id = any(@back_ids::uuid[] || @lend_ids::uuid[]) and phase = 'ready' and market = 'on_demand'
+returning id;
 
 -- name: RetireReserves :many
 -- Stopped reserves terminate; a reserve not launched yet is removed.

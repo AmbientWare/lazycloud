@@ -26,7 +26,7 @@ func fleetRates(t *testing.T) []billing.ComputeRate {
 
 func offerInputs(t *testing.T) OfferInputs {
 	return OfferInputs{
-		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t),
+		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t), StorageRegion: "us-east-1",
 		Networks: map[string]Network{"us-east-2": oneZone("us-east-2a", "use2-az1")},
 	}
 }
@@ -364,5 +364,19 @@ func TestOffersSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
 	want := []string{"us-east-1/use1-az6/m7i.large/on_demand", "us-east-2/use2-az1/m7i.large/on_demand"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("offers %v, want %v", got, want)
+	}
+}
+
+// A container's disks take a disk slot each, so only types with a slot
+// for every disk host it.
+func TestOffersHoldEveryDiskTheWorkAttaches(t *testing.T) {
+	offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 500, MemoryBytes: gib, Disks: 5}, false, offerInputs(t))
+	if len(offers) == 0 {
+		t.Fatal("no offer holds five disks")
+	}
+	for _, o := range offers {
+		if o.Type.DiskSlots() < 5 {
+			t.Errorf("%s offered with %d disk slots", o.Key(), o.Type.DiskSlots())
+		}
 	}
 }

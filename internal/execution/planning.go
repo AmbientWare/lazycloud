@@ -196,6 +196,10 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		return errors.New("release spec has no resources")
 	}
 	q := e.queries.WithTx(tx)
+	leave, err := e.leaving(ctx, tx, plan, release.Leaving)
+	if err != nil {
+		return err
+	}
 	minimum := 0
 	// A release that cannot start keeps no warm minimum; admitting a task
 	// retries it or fails the task at once.
@@ -203,55 +207,28 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		minimum = int(release.MinContainers)
 	}
 	desired := desiredContainers(
-		int(release.QueuedAvailable)+int(release.Running),
+		int(release.QueuedAvailable)+int(release.Running)-leave.running,
 		int(release.TasksPerContainer), minimum, int(release.MaxContainers),
 	)
-	// Draining containers still hold resources and count against the
-	// maximum until their hosts stop them.
-	active := int(release.Pending + release.Starting + release.Ready)
-	live := active + int(release.Draining)
+	active, live := leave.counts(release.Pending, release.Starting, release.Ready, release.Draining)
 
-	switch {
-	case active < desired:
-		count := min(desired-active, int(release.MaxContainers)-live)
-		if count <= 0 || plan.holdStart(release.StartFailures, release.LastStoppedAt) {
+	pairs, grow := leave.starts(active, desired, int(release.MaxContainers)-live)
+	if pairs+grow > 0 {
+		if plan.holdStart(release.StartFailures, release.LastStoppedAt) {
 			return nil
 		}
-		grant, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: release.WorkspaceID, Start: count, GPUs: int(release.GpuCount),
-			GPUModels: billingModels(release.GpuModels), Pinned: release.Pinned, Machine: release.Machine,
-		})
-		if refusedToWait(err) {
-			// Its tasks wait; submission refuses new ones.
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("admit containers: %w", err)
-		}
-		if count = grant.Start; count == 0 {
-			return nil
-		}
-		ctx, span, err := e.scaleUp(ctx, q, release.ReleaseID, count, live == 0 && release.QueuedAvailable+release.Running == 0)
-		if err != nil {
-			return err
-		}
-		defer span.End()
-		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{
-			WorkspaceID: release.WorkspaceID,
-			ReleaseID:   release.ReleaseID,
-			Slots:       release.Slots,
-			CpuMillis:   cpu.Millis(release.CpuMillis),
-			MemoryBytes: release.MemoryBytes + mountReserve(release.Mounters),
-			GpuCount:    release.GpuCount,
-			RateClass:   string(billing.RateClassFor(release.Pinned, release.Preemptible)),
-			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
-			Traceparent: traceparent(ctx),
-		})
-		if err != nil {
-			return fmt.Errorf("create containers: %w", err)
-		}
-		plan.created = created
-	case active > desired:
+		return e.start(ctx, tx, plan, leave.unpaired[:pairs], pairs+grow, live == 0 && release.QueuedAvailable+release.Running == 0,
+			billing.Request{
+				Workspace: release.WorkspaceID, GPUs: int(release.GpuCount),
+				GPUModels: billingModels(release.GpuModels), Pinned: release.Pinned, Machine: release.Machine,
+			},
+			CreatePendingContainersParams{
+				WorkspaceID: release.WorkspaceID, ReleaseID: release.ReleaseID, Slots: release.Slots,
+				CpuMillis: cpu.Millis(release.CpuMillis), MemoryBytes: release.MemoryBytes + mountReserve(release.Mounters),
+				GpuCount: release.GpuCount, RateClass: string(billing.RateClassFor(release.Pinned, release.Preemptible)),
+			})
+	}
+	if active > desired {
 		excess := active - desired
 		if pending := min(excess, int(release.Pending)); pending > 0 {
 			stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
@@ -268,6 +245,123 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		}
 	}
 	return nil
+}
+
+// leaving is a release's containers that leave their host
+// (container_leaves). One that runs attempts, which finish there, and one
+// with a ready replacement drain now; an idle one claims until its
+// replacement is ready. drained counts those drained now and running the
+// attempts they run; replacing counts replacements not ready yet; unpaired
+// are idle ones without one, oldest first.
+type leaving struct {
+	drained, running, replacing int
+	unpaired                    []uuid.UUID
+}
+
+// leaving reads the release's leaving containers when may says it has any,
+// and drains those that drain now.
+func (e *Execution) leaving(ctx context.Context, tx pgx.Tx, plan *releasePlan, may bool) (leaving, error) {
+	var l leaving
+	if !may {
+		return l, nil
+	}
+	rows, err := e.queries.WithTx(tx).LeavingContainers(ctx, plan.release.ReleaseID)
+	if err != nil {
+		return l, fmt.Errorf("read leaving containers: %w", err)
+	}
+	var drain []uuid.UUID
+	for _, r := range rows {
+		switch {
+		case r.ReplacementReady || r.Running > 0:
+			drain = append(drain, r.ID)
+			l.running += int(r.Running)
+		case r.Replaced:
+			l.replacing++
+		default:
+			l.unpaired = append(l.unpaired, r.ID)
+		}
+	}
+	l.drained = len(drain)
+	return l, e.drainLeaving(ctx, tx, plan, drain)
+}
+
+// counts are the release's active containers, which take its demand, and
+// its live ones, which its maximum holds. A leaving container and its
+// replacement are one of either: the leaving one bills until the
+// replacement is ready. Draining containers hold resources, so they count
+// against the maximum until their hosts stop them.
+func (l leaving) counts(pending, starting, ready, draining int32) (active, live int) {
+	n := int(pending + starting + ready)
+	return n - l.drained - l.replacing, n + int(draining) - l.replacing
+}
+
+// starts are how many containers to start: pairs replace the unpaired
+// leaving containers demand still needs, and grow are new ones the room
+// under the maximum allows.
+func (l leaving) starts(active, desired, room int) (pairs, grow int) {
+	pairs = min(len(l.unpaired), max(desired-active+len(l.unpaired), 0))
+	return pairs, max(min(desired-active, room), 0)
+}
+
+// start admits and creates count containers of the release, the first of
+// them replacing replaces. The leaving containers the account admits no
+// replacement for drain, so their replacements start once they stop.
+func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, replaces []uuid.UUID, count int, rollout bool,
+	admit billing.Request, create CreatePendingContainersParams,
+) error {
+	admit.Start = count
+	grant, err := billing.Admit(ctx, tx, admit)
+	if refusedToWait(err) {
+		// Its work waits; submission refuses new work.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("admit containers: %w", err)
+	}
+	if paired := min(grant.Start, len(replaces)); paired < len(replaces) {
+		if err := e.drainLeaving(ctx, tx, plan, replaces[paired:]); err != nil {
+			return err
+		}
+		replaces = replaces[:paired]
+	}
+	if grant.Start == 0 {
+		return nil
+	}
+	q := e.queries.WithTx(tx)
+	ctx, span, err := e.scaleUp(ctx, q, create.ReleaseID, grant.Start, rollout)
+	if err != nil {
+		return err
+	}
+	defer span.End()
+	create.Count, create.Replaces, create.Traceparent = int32(grant.Start), replaces, traceparent(ctx) //nolint:gosec // Bounded by max_containers.
+	created, err := q.CreatePendingContainers(ctx, create)
+	if err != nil {
+		return fmt.Errorf("create containers: %w", err)
+	}
+	plan.created = created
+	return nil
+}
+
+func (e *Execution) drainLeaving(ctx context.Context, tx pgx.Tx, plan *releasePlan, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := e.queries.WithTx(tx).DrainLeavingContainers(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("drain leaving containers: %w", err)
+	}
+	return plan.record(ctx, tx, len(rows), func(n int) drainedContainer { return drainedContainer{rows[n].ID, rows[n].HostID} })
+}
+
+// record adds n drained containers, row gives each, to p and wakes their
+// hosts.
+func (p *releasePlan) record(ctx context.Context, tx pgx.Tx, n int, row func(int) drainedContainer) error {
+	drained := make([]drainedContainer, n)
+	for i := range drained {
+		drained[i] = row(i)
+	}
+	p.drained = append(p.drained, drained...)
+	return notifyHosts(ctx, tx, drained)
 }
 
 // refusedToWait reports an admission refusal planning waits out rather
@@ -303,14 +397,11 @@ func (e *Execution) drainIdle(ctx context.Context, tx pgx.Tx, plan *releasePlan,
 	if len(locked) == 0 {
 		return nil
 	}
-	drained, err := q.DrainIdleContainers(ctx, DrainIdleContainersParams{Ids: locked, KeepWarmSeconds: keepWarm})
+	rows, err := q.DrainIdleContainers(ctx, DrainIdleContainersParams{Ids: locked, KeepWarmSeconds: keepWarm})
 	if err != nil {
 		return fmt.Errorf("drain idle containers: %w", err)
 	}
-	for _, row := range drained {
-		plan.drained = append(plan.drained, drainedContainer{id: row.ID, host: row.HostID})
-	}
-	return notifyHosts(ctx, tx, plan.drained)
+	return plan.record(ctx, tx, len(rows), func(n int) drainedContainer { return drainedContainer{rows[n].ID, rows[n].HostID} })
 }
 
 // stopRelease winds down a release whose workload is stopped or whose app is

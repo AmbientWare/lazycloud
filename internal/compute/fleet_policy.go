@@ -74,8 +74,7 @@ func totalOf[T any](items []T, f func(T) FleetCapacity) FleetCapacity {
 }
 
 // ReserveMarket is a purchase market the fleet keeps headroom in: Spot or
-// on-demand CPU capacity, or one GPU model. GPU headroom is kept on-demand;
-// Spot GPU work keeps none.
+// on-demand CPU capacity, or one GPU model on Spot or on-demand.
 type ReserveMarket struct {
 	Preemptible bool
 	GPU         string
@@ -131,31 +130,45 @@ type MarketReserve struct {
 	// market's largest recent shape (Policy.LargestShape), and one of the
 	// machines that hold the target must fit that shape.
 	FitLargest bool
+	// AwaitReturn holds the market's reserve purchases while any host that
+	// could return to the reserve serves or starts, past the return wait.
+	AwaitReturn bool
 }
 
 // LargestShape sizes the reserve that fits a market's largest shape: the
 // largest CPU, memory and GPUs its containers reserved within Window,
-// capped at Cap. A CPU market without such containers keeps one of
-// Default; a GPU market keeps none. Cap also bounds a warm slot.
+// capped at Cap, and the most disks one attached, capped at CapDisks, a
+// disk slot each. A CPU market without such containers keeps one of
+// Default, a Spot GPU market one of SpotGPU, so the first start after a
+// quiet window resumes, and an on-demand GPU market none. Cap also bounds
+// a warm slot.
 type LargestShape struct {
-	Window       time.Duration
-	Default, Cap FleetCapacity
+	Window                time.Duration
+	Default, SpotGPU, Cap FleetCapacity
+	CapDisks              int
 }
 
-// of is the shape market m's reserve fits, given the largest its containers
-// reserved; empty for none. A GPU reserve holds one card; a CPU reserve
+// of is the shape market m's reserve fits and the disks it holds, given
+// the largest shape its containers reserved and the most disks one
+// attached; empty for none. A GPU reserve holds one card; a CPU reserve
 // fits at least the default.
-func (s LargestShape) of(m ReserveMarket, largest FleetCapacity) FleetCapacity {
+func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int) (FleetCapacity, int) {
 	switch {
-	case m.GPU != "" && largest.GPUs == 0:
-		return FleetCapacity{}
-	case m.GPU != "":
-		largest.GPUs = 1
-	default:
+	case m.GPU == "":
 		largest = largest.Upper(s.Default)
+	case largest.GPUs > 0:
+		largest.GPUs = 1
+	case m.Preemptible:
+		largest = s.SpotGPU
+	default:
+		return FleetCapacity{}, 0
 	}
-	return largest.Lower(s.Cap)
+	return largest.Lower(s.Cap), min(disks, s.CapDisks)
 }
+
+// GPUReserve is the headroom one GPU model keeps for Spot-tolerant work
+// and for work that cannot run on Spot.
+type GPUReserve struct{ Spot, OnDemand MarketReserve }
 
 // BatchWindow holds purchases while containers arrive: until Quiet passes
 // without an arrival, and at most Max after the first.
@@ -177,9 +190,9 @@ type Policy struct {
 	// one pass; the rest wait for the next pass.
 	MaxGrowthActions int
 	Spot, OnDemand   MarketReserve
-	// GPU is the on-demand reserve per GPU model; a model left out keeps
-	// none.
-	GPU          map[string]MarketReserve
+	// GPU is the reserve per GPU model in each market; a model left out
+	// keeps none.
+	GPU          map[string]GPUReserve
 	LargestShape LargestShape
 	// BuildWindow is how long a build placed in a CPU market keeps a warm slot
 	// of its shape there once it ends.
@@ -222,18 +235,32 @@ func DefaultPolicy() Policy {
 	spotMarket := cpuMarket
 	spotMarket.Stopped.LoadPercent = 0
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
-	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; and
-	// the cap, what one of 16 CPU and 64 GiB offers, with one card.
+	// Spot GPU work keeps nothing warm: an idle Spot GPU host costs more
+	// than the starts it speeds up over resuming a stopped one. Nor does it
+	// buy a reserve while one it resumed serves: the purchase runs about
+	// five minutes of a GPU host for the next concurrent start alone.
+	spotCard := MarketReserve{Stopped: card.Stopped, FitLargest: true, AwaitReturn: true}
+	gpus := map[string]GPUReserve{}
+	for _, model := range []string{"T4", "A10G", "L4"} {
+		gpus[model] = GPUReserve{Spot: spotCard, OnDemand: card}
+	}
+	// What a host of 8 CPU and 32 GiB, a size that hibernates, offers; what
+	// one of 4 CPU and 32 GiB with a card offers, so a Spot GPU floor fits a
+	// function of 4 CPU and 16 GiB; and the cap, what one of 16 CPU and
+	// 64 GiB offers, with one card, and its disk slots.
 	fits := CatalogType{Topology: twoPerCore(16), MemoryBytes: 32 * gib}.Usable(0)
-	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}.Usable(0)
+	oneCard := CatalogType{Topology: twoPerCore(8), MemoryBytes: 32 * gib, GPUCount: 1}.Usable(0)
+	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}
 	return Policy{
 		MarginPercent:    30,
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,
 		Spot:             spotMarket, OnDemand: cpuMarket,
-		GPU:             map[string]MarketReserve{"T4": card, "A10G": card, "L4": card},
-		LargestShape:    LargestShape{Window: 7 * 24 * time.Hour, Default: fits, Cap: limit},
+		GPU: gpus,
+		LargestShape: LargestShape{
+			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
+		},
 		BuildWindow:     time.Hour,
 		LongestBuild:    time.Hour,
 		ArrivalWindow:   2 * time.Minute,
@@ -250,9 +277,9 @@ func DefaultPolicy() Policy {
 func (p Policy) Reserve(m ReserveMarket) MarketReserve {
 	switch {
 	case m.GPU != "" && m.Preemptible:
-		return MarketReserve{}
+		return p.GPU[m.GPU].Spot
 	case m.GPU != "":
-		return p.GPU[m.GPU]
+		return p.GPU[m.GPU].OnDemand
 	case m.Preemptible:
 		return p.Spot
 	}
@@ -325,7 +352,7 @@ func (p Policy) Markets() []ReserveMarket {
 	}
 	slices.Sort(cards)
 	for _, card := range cards {
-		markets = append(markets, ReserveMarket{GPU: card})
+		markets = append(markets, ReserveMarket{Preemptible: true, GPU: card}, ReserveMarket{GPU: card})
 	}
 	return markets
 }
