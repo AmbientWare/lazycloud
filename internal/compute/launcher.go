@@ -30,9 +30,6 @@ const (
 	launchLease = 2 * time.Minute
 	// maxLaunchAttempts bounds launches that keep failing without an answer.
 	maxLaunchAttempts = 5
-	// maxLaunchPools bounds the pools one launch tries while EC2 refuses
-	// them for capacity, quota or price.
-	maxLaunchPools = 3
 	// rootVolumeGiB is each instance's encrypted root disk; a host launched
 	// able to hibernate adds its RAM for the hibernation image.
 	rootVolumeGiB = 100
@@ -63,10 +60,10 @@ type launchTarget struct {
 // Launch starts instances for requested hosts. Each launch is claimed with
 // a lease and runs outside any transaction; RunInstances takes the host id,
 // numbered by each refused pool the launch moved past, as its client token,
-// so a retry after a lost answer returns the same instance. A refusal for capacity, quota or price cools the
-// refused pool and moves the host to the next ranked pool that still holds
-// what it was bought for, up to maxLaunchPools; a host left without one
-// fails, so the planner buys again on its next pass.
+// so a retry after a lost answer returns the same instance. A refusal for
+// capacity, quota or price cools the refused pool and moves the host to the
+// next pool that still holds what it was bought for, until one launches
+// or every such pool is cooling and the host fails.
 func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) {
 	if c.config.ServedRelease != "" {
 		release, err := c.TargetRelease(ctx)
@@ -112,23 +109,21 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	return started, err
 }
 
-// launchPools launches h in its pool, then in each next pool while EC2
-// refuses the last for capacity, quota or price, up to maxLaunchPools.
+// launchPools launches h in its pool, then in each next pool that holds
+// what h was claimed to hold while EC2 refuses the last for capacity, quota
+// or price. Each refused pool cools before the next is picked, so the walk
+// ends.
 func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow, pools poolInputs) (bool, error) {
+	bought := h
 	for {
 		started, refusal, err := c.launchHost(ctx, logger, h)
 		if refusal == nil {
 			return started, err
 		}
 		cool := refusal.cooldown()
-		var next FleetOffer
-		var ok bool
-		if h.LaunchPools+1 < maxLaunchPools {
-			if next, ok, err = c.nextPool(ctx, h, pools, cool); err != nil {
-				return false, err
-			}
-		} else {
-			pools.cool(c, h, cool)
+		next, ok, err := c.nextPool(ctx, bought, h, pools, cool)
+		if err != nil {
+			return false, err
 		}
 		if !ok {
 			return false, c.failLaunch(ctx, h, refusal.message(), &cool)
@@ -276,8 +271,9 @@ func (p poolInputs) inputs(ctx context.Context, c *Compute, h ClaimLaunchesRow) 
 }
 
 // nextPool cools h's refused pool and returns the pool its launch moves
-// to, as fallbackPool picks it from the owner's current offer inputs.
-func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolInputs, cool poolCooldown) (FleetOffer, bool, error) {
+// to, as fallbackPool picks it for bought, the row h was claimed as, from
+// the owner's current offer inputs.
+func (c *Compute) nextPool(ctx context.Context, bought, h ClaimLaunchesRow, pools poolInputs, cool poolCooldown) (FleetOffer, bool, error) {
 	if h.Market == nil {
 		return FleetOffer{}, false, nil
 	}
@@ -290,7 +286,7 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 	if err != nil {
 		return FleetOffer{}, false, fmt.Errorf("read the containers waiting for the host: %w", err)
 	}
-	next, ok := fallbackPool(c.policy(), h, waiters, *in, func(region string, gpu bool) bool {
+	next, ok := fallbackPool(c.policy(), bought, waiters, *in, func(region string, gpu bool) bool {
 		_, imaged := c.nodeImage(region, gpu)
 		return imaged
 	})

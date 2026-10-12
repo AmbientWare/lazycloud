@@ -131,9 +131,10 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 	}
 }
 
-// A host every pool refuses fails after three pools, each cooled, and the
-// next pass buys from none of them.
-func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
+// A host every pool refuses tries each pool that holds what it was bought
+// for once, cooling each, and fails; the next pass buys no replacement
+// while they cool.
+func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", func(call awsCall) awsReply {
 		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity",
@@ -151,15 +152,11 @@ func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
 		t.Fatalf("refused host is %s, want failed", phase)
 	}
 	cooled := scan[[]string](t, o.pool, "select array_agg(region || '/' || availability_zone_id || '/' || instance_type || '/' || market) from capacity_cooldowns where until > now()")
-	if tried := len(emulator.calls("RunInstances")); tried != 3 || len(cooled) != tried || !slices.Contains(cooled, offer) {
-		t.Fatalf("%d pools tried, cooldowns on %v, want three including the bought offer %s", tried, cooled, offer)
+	if tried := len(emulator.calls("RunInstances")); tried < 2 || len(cooled) != tried || !slices.Contains(cooled, offer) {
+		t.Fatalf("%d pools tried, cooldowns on %v, want one on each including the bought offer %s", tried, cooled, offer)
 	}
-	if result := planCapacity(t, o); result.Requested != 1 {
-		t.Fatalf("next pass %+v, want another host for the container", result)
-	}
-	next := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type || '/' || market from hosts where phase = 'requested'")
-	if slices.Contains(cooled, next) {
-		t.Fatalf("next pass bought the cooling offer %s again", next)
+	if result := planCapacity(t, o); result.Requested != 0 {
+		t.Fatalf("next pass %+v, want no host while every pool cools", result)
 	}
 }
 

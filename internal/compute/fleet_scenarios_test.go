@@ -152,11 +152,12 @@ type simResult struct {
 }
 
 // simPurchase is one reserve purchase: its market and each pool its launch
-// tried.
+// tried, and whether it launched.
 type simPurchase struct {
-	at     time.Time
-	market ReserveMarket
-	tried  []FleetOffer
+	at       time.Time
+	market   ReserveMarket
+	tried    []FleetOffer
+	launched bool
 }
 
 type sim struct {
@@ -623,7 +624,7 @@ func (s *sim) host(id HostID) *simHost {
 // launch starts a host for a purchase. EC2 refuses it when it would exceed
 // its vCPU quota, cooling the offer or with quotas known its whole class,
 // or when refuses names its pool, cooling the pool's zone; a refused launch
-// moves on to the pool fallbackPool picks, up to maxLaunchPools.
+// moves on to the pool fallbackPool picks.
 func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (HostID, bool) {
 	o := *a.Offer
 	row := ClaimLaunchesRow{
@@ -640,7 +641,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		row.ReserveMode = ptr(string(*a.Mode))
 		defer func() { s.r.purchases = append(s.r.purchases, purchase) }()
 	}
-	for pools := 0; ; pools++ {
+	for {
 		purchase.tried = append(purchase.tried, o)
 		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, Until: s.now.Add(simCooldown)}
 		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
@@ -653,12 +654,9 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		s.r.refusals++
 		s.r.refused = append(s.r.refused, s.now)
 		s.in.Cooldowns = append(s.in.Cooldowns, cool)
-		next, ok := FleetOffer{}, false
-		if pools+1 < maxLaunchPools {
-			in := s.in
-			in.Now = s.now
-			next, ok = fallbackPool(s.p, row, waiters, in, func(string, bool) bool { return true })
-		}
+		in := s.in
+		in.Now = s.now
+		next, ok := fallbackPool(s.p, row, waiters, in, func(string, bool) bool { return true })
 		if !ok {
 			if row.Replaces != nil {
 				s.host(*a.Host).RightsizeRefusedAt = ptr(s.now)
@@ -666,7 +664,6 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 			return HostID{}, false
 		}
 		o = next
-		row.InstanceType, row.Region, row.AvailabilityZone = o.Type.Name, o.Region, o.Zone
 	}
 	if a.Kind == ActionRightsize {
 		if replaced := s.host(*a.Host); o.running() >= replaced.offer.running() {
@@ -700,6 +697,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 	if !reserve && o.Market == MarketOnDemand {
 		s.r.onDemand++
 	}
+	purchase.launched = true
 	s.hosts = append(s.hosts, h)
 	s.r.launches++
 	s.r.launched = append(s.r.launched, s.now)
@@ -1361,12 +1359,13 @@ func newChurnSim(t *testing.T) *sim {
 	return s
 }
 
-// An empty fleet buys its reserves, with EC2 refusing every GPU Spot pool,
-// or every one in the eastern regions. No reserve is larger than the
-// policy's LargestShape.Cap, a refused pool is not tried again before its
-// cooldown ends, no market buys more than eight reserves in a minute, and
-// no reserve is cancelled before it stops; where pools fill, every market
-// ends with its reserve.
+// An empty fleet buys its reserves over four cooldowns, with EC2 refusing
+// every GPU Spot pool, or every one in the eastern regions. A refused
+// purchase tries every pool its reserve fits, so its market buys again only
+// once those pools' cooldowns end. No reserve is larger than the policy's
+// LargestShape.Cap, a refused pool is not tried again before its cooldown
+// ends, and no reserve is cancelled before it stops; where pools fill,
+// every market ends with its reserve.
 func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 	t.Parallel()
 	gpuSpot := func(typ string, market Market) bool {
@@ -1381,16 +1380,25 @@ func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 		s.refuses = func(region, _, typ string, market Market) bool {
 			return gpuSpot(typ, market) && (c.all || region == "us-east-1" || region == "us-east-2")
 		}
-		const window = 30 * time.Minute
-		r := s.run(window, nil)
+		r := s.run(4*simCooldown, nil)
 		byMarket := map[ReserveMarket][]simPurchase{}
 		for _, p := range r.purchases {
 			byMarket[p.market] = append(byMarket[p.market], p)
 		}
 		for m, purchases := range byMarket {
-			tried, perMinute, largest := map[string]time.Time{}, 0, CatalogType{}
+			tried, largest := map[string]time.Time{}, CatalogType{}
+			perMinute, perCooldown := map[time.Duration]int{}, map[time.Duration]int{}
+			ready, calls := "never", 0
 			for i, p := range purchases {
-				perMinute = max(perMinute, len(slices.DeleteFunc(slices.Clone(purchases[i:]), func(q simPurchase) bool { return q.at.Sub(p.at) >= time.Minute })))
+				if i > 0 && !purchases[i-1].launched && p.at.Sub(purchases[i-1].at) < simCooldown {
+					t.Errorf("%s, %s: bought again %s after a refused purchase", c.name, m, p.at.Sub(purchases[i-1].at))
+				}
+				calls += len(p.tried)
+				perMinute[p.at.Sub(s.start).Truncate(time.Minute)] += len(p.tried)
+				perCooldown[p.at.Sub(s.start).Truncate(simCooldown)] += len(p.tried)
+				if p.launched && ready == "never" {
+					ready = p.at.Sub(s.start).String()
+				}
 				for _, o := range p.tried {
 					if at, ok := tried[o.Key()]; ok && p.at.Sub(at) < simCooldown {
 						t.Errorf("%s, %s: tried %s again %s after it refused", c.name, m, o.Key(), p.at.Sub(at))
@@ -1404,11 +1412,8 @@ func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("%s, %s: %d purchases (%.1f a minute, at most %d in one), largest %s",
-				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), perMinute, largest.Name)
-			if perMinute > 8 {
-				t.Errorf("%s, %s: %d reserve purchases within a minute", c.name, m, perMinute)
-			}
+			t.Logf("%s, %s: %d purchases, %d EC2 calls, at most %d a minute and %d a cooldown, largest %s, reserve launched at %s",
+				c.name, m, len(purchases), calls, slices.Max(slices.Collect(maps.Values(perMinute))), slices.Max(slices.Collect(maps.Values(perCooldown))), largest.Name, ready)
 		}
 		if r.cancelled > 0 {
 			t.Errorf("%s: %d reserves cancelled before they stopped", c.name, r.cancelled)
