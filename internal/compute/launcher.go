@@ -300,13 +300,12 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools poolIn
 // fallbackPool is the cheapest pool, of those not refused and with a node
 // image, that still holds what h was bought for: what the planner bought it
 // to hold, or without that its capacity, its GPU model in its market, its
-// reserve's sleep mode and disk slots, and the placement and disk slots
-// the containers waiting for it ask for. Their volume reads, or a
-// reserve's market's, weigh in its cost. A reserve moves only to a type no
-// larger than its own, which the planner sized to its shape.
-// Pools are priced as the planner buys, a reserve by reserveCost and any
-// other host by servingCost. A rightsize moves only to a pool that costs
-// less than the host it replaces.
+// reserve's sleep mode and its type's size, which the planner chose for its
+// shape and disks, and the placement and disk slots the containers waiting
+// for it ask for. Their volume reads, or a reserve's market's, weigh in its
+// cost. Pools are priced by what they cost to serve, as the planner buys.
+// A rightsize moves only to a pool that costs less than the host it
+// replaces.
 func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) (FleetOffer, bool) {
 	if h.Replaces != nil && h.ReplacesHourlyMicros == nil {
 		return FleetOffer{}, false
@@ -318,11 +317,6 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	}
 	if h.GpuType != "" {
 		need.GPUs = []string{h.GpuType}
-	}
-	own, catalogued := CatalogTypeNamed(h.InstanceType)
-	sized := catalogued && h.ReserveMode != nil
-	if sized {
-		need.Disks = own.DiskSlots()
 	}
 	// A reserve serves its market's next start, which reads what its recent
 	// work read.
@@ -336,9 +330,11 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 		need.Read = cmp.Or(need.Read, VolumeReadOf(w.ReadRegion, w.ReadBytes))
 	}
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
+	own, catalogued := CatalogTypeNamed(h.InstanceType)
 	offers := slices.DeleteFunc(RankOffers(p, need, h.ReserveMode != nil, in), func(o FleetOffer) bool {
 		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
-			h.Replaces != nil && o.HourlyMicros >= *h.ReplacesHourlyMicros || sized && o.Type.VCPUs() > own.VCPUs() ||
+			h.Replaces != nil && o.HourlyMicros >= *h.ReplacesHourlyMicros ||
+			h.ReserveMode != nil && catalogued && o.Type.VCPUs() != own.VCPUs() ||
 			slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
 				return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
 			})
@@ -347,9 +343,6 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 		return FleetOffer{}, false
 	}
 	cost := servingCost(p)
-	if h.ReserveMode != nil {
-		cost = reserveCost(p)
-	}
 	return slices.MinFunc(offers, func(a, b FleetOffer) int { return cmp.Compare(cost(a), cost(b)) }), true
 }
 

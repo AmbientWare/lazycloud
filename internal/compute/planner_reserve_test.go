@@ -1046,35 +1046,3 @@ func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
 		t.Fatalf("on-demand warm target %+v, want the floor alone: builds run in the Spot market", od.WarmTarget)
 	}
 }
-
-// A Spot T4 reserve that failed, as one EC2 refused in every pool its
-// launch tried, holds its market's next purchase for ReserveRetry while
-// the other GPU markets buy theirs; once the retry passes it buys again.
-func TestAFailedReserveHoldsItsMarketsNextPurchase(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{}))
-	spotPrices(t, o)
-	run(t, o.pool, `
-insert into hosts (name, state, kind, provider, phase, phase_at, cpu_millis, memory_bytes, gpu_type, gpu_count, region,
-    availability_zone, instance_type, market, reserve_mode)
-values ('t4', 'retired', 'platform', 'aws', 'failed', now(), 4000, 27::bigint << 30, 'T4', 1, 'us-east-2', 'us-east-2a', 'g4dn.2xlarge',
-    'spot', 'stop')`)
-	spotGPU := func() map[string]int {
-		bought := map[string]int{}
-		for _, h := range requested(t, o) {
-			if f := strings.Fields(h); len(f) == 5 && f[1] == "spot" {
-				bought[f[4]]++
-			}
-		}
-		return bought
-	}
-	plan(t, o)
-	if bought := spotGPU(); bought["T4"] != 0 || bought["A10G"] != 1 || bought["L4"] != 1 {
-		t.Fatalf("Spot GPU reserves bought %v, want A10G and L4 but no T4", bought)
-	}
-	run(t, o.pool, `update hosts set phase_at = now() - make_interval(secs => $1) where name = 't4'`,
-		(compute.DefaultPolicy().ReserveRetry + time.Second).Seconds())
-	plan(t, o)
-	if bought := spotGPU(); bought["T4"] != 1 {
-		t.Fatalf("after the retry, Spot GPU reserves bought %v, want a T4 one", bought)
-	}
-}

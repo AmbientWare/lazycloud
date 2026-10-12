@@ -118,8 +118,9 @@ type FleetOffer struct {
 	// Hibernate is set on a reserve offer whose host hibernates.
 	Hibernate bool
 	// HourlyMicros is compute, root disk and public IPv4 while running, the
-	// price a host bought from the offer records; StoppedMicros is the root
-	// disk alone, what a stopped reserve costs.
+	// price a host bought from the offer records and what reserves are
+	// priced by too, since a reserve is bought to serve; StoppedMicros is
+	// the root disk alone, what a stopped reserve costs.
 	HourlyMicros  int64
 	StoppedMicros int64
 	// TransferMicros is the expected hourly transfer to and from the
@@ -161,15 +162,6 @@ func (o FleetOffer) running() int64 { return o.HourlyMicros + o.TransferMicros +
 // servingCost ranks a host bought to serve over the cost horizon.
 func servingCost(p Policy) func(FleetOffer) int64 {
 	return func(o FleetOffer) int64 { return o.ranked(o.running() * int64(p.CostHorizon/time.Second)) }
-}
-
-// reserveCost ranks a reserve by what it costs once it serves, as
-// servingCost ranks a purchase, after running while it is prepared. Its
-// stopped cost is a part of its hourly price, so a type larger than the
-// start it serves needs never ranks as cheap as one that fits.
-func reserveCost(p Policy) func(FleetOffer) int64 {
-	serving := servingCost(p)
-	return func(o FleetOffer) int64 { return serving(o) + o.ranked(o.HourlyMicros*int64(p.Provision/time.Second)) }
 }
 
 // purchaseRejection says why the margin check refused an offer.

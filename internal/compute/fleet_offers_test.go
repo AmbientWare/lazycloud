@@ -380,36 +380,3 @@ func TestOffersHoldEveryDiskTheWorkAttaches(t *testing.T) {
 		}
 	}
 }
-
-// A refused L4 reserve moves to the next pool of its own size, not to a
-// larger type that runs for less: g6.8xlarge quotes below g6.xlarge in the
-// next zone, and a stopped GPU reserve costs its root at either size.
-func TestARefusedReserveMovesOnlyToATypeNoLargerThanItsOwn(t *testing.T) {
-	t.Parallel()
-	in := offerInputs(t)
-	in.Networks = map[string]Network{"us-east-2": {Subnets: []Subnet{
-		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"},
-	}}}
-	for _, q := range []SpotQuote{
-		{ZoneID: "use2-az1", InstanceType: "g6.xlarge", HourlyMicros: 400_000},
-		{ZoneID: "use2-az2", InstanceType: "g6.xlarge", HourlyMicros: 420_000},
-		{ZoneID: "use2-az2", InstanceType: "g6.8xlarge", HourlyMicros: 300_000},
-	} {
-		q.Region, q.ObservedAt = "us-east-2", offerNow
-		in.Spot = append(in.Spot, q)
-	}
-	in.Cooldowns = []OfferCooldown{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "g6.xlarge", Market: MarketSpot, Until: offerNow.Add(time.Hour)}}
-	usable := mustType(t, "g6.xlarge").Usable(0)
-	h := ClaimLaunchesRow{
-		Market: ptr(string(MarketSpot)), GpuType: "L4", GpuCount: 1, CpuMillis: usable.CPUMillis, MemoryBytes: usable.MemoryBytes,
-		HoldsCpuMillis: ptr(cpu.Millis(2000)), HoldsMemoryBytes: ptr(12 * gib), InstanceType: "g6.xlarge", Region: "us-east-2",
-		AvailabilityZone: "us-east-2a", ReserveMode: ptr(string(ReserveStop)),
-	}
-	if o, ok := fallbackPool(DefaultPolicy(), h, nil, in, func(string, bool) bool { return true }); !ok || o.Key() != "us-east-2/use2-az2/g6.xlarge/spot" {
-		t.Fatalf("the refused reserve moves to %s, want g6.xlarge in use2-az2", o.Key())
-	}
-	h.ReserveMode = nil
-	if o, ok := fallbackPool(DefaultPolicy(), h, nil, in, func(string, bool) bool { return true }); !ok || o.Type.Name != "g6.8xlarge" {
-		t.Fatalf("a refused host bought to serve moves to %s, want the cheaper g6.8xlarge", o.Key())
-	}
-}

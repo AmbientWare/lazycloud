@@ -151,12 +151,12 @@ type simResult struct {
 	cancelled int
 }
 
-// simPurchase is one reserve purchase: its market, the type of each pool
-// its launch tried and whether EC2 refused every one.
+// simPurchase is one reserve purchase: its market, each pool its launch
+// tried and whether EC2 refused every one.
 type simPurchase struct {
 	at      time.Time
 	market  ReserveMarket
-	tried   []string
+	tried   []FleetOffer
 	refused bool
 }
 
@@ -181,8 +181,6 @@ type sim struct {
 	// to the next, as the published plan does.
 	floorShortSince map[ReserveMarket]time.Time
 	peaks           map[ReserveMarket]LoadPeak
-	// reserveFailed is when each market's newest reserve purchase failed.
-	reserveFailed map[ReserveMarket]time.Time
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
 	// maxHosts is the fleet limit; tick is the step, simTick unless a long
@@ -530,7 +528,7 @@ func (s *sim) plan() time.Duration {
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
-	snapshot.FloorShortSince, snapshot.Peaks, snapshot.ReserveFailed = s.floorShortSince, s.peaks, s.reserveFailed
+	snapshot.FloorShortSince, snapshot.Peaks = s.floorShortSince, s.peaks
 	plan := PlanFleet(s.p, snapshot)
 	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
 	for _, mp := range plan.Markets {
@@ -579,9 +577,6 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 		}
 		reserve := a.Kind == ActionBuyReserve
 		cost := servingCost(s.p)
-		if reserve {
-			cost = reserveCost(s.p)
-		}
 		need := Requirement{CPUMillis: a.Offer.Usable.CPUMillis, MemoryBytes: a.Offer.Usable.MemoryBytes}
 		for _, o := range RankOffers(s.p, need, reserve, in) {
 			if o.Type.Name == a.Offer.Type.Name && o.Market == MarketOnDemand && cost(o) < cost(*a.Offer) {
@@ -647,7 +642,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		defer func() { s.r.purchases = append(s.r.purchases, purchase) }()
 	}
 	for pools := 0; ; pools++ {
-		purchase.tried = append(purchase.tried, o.Type.Name)
+		purchase.tried = append(purchase.tried, o)
 		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, Until: s.now.Add(simCooldown)}
 		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
 			cool.Quota = s.knowQuota
@@ -669,13 +664,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 			if row.Replaces != nil {
 				s.host(*a.Host).RightsizeRefusedAt = ptr(s.now)
 			}
-			if reserve {
-				purchase.refused = true
-				if s.reserveFailed == nil {
-					s.reserveFailed = map[ReserveMarket]time.Time{}
-				}
-				s.reserveFailed[a.Market] = s.now
-			}
+			purchase.refused = true
 			return HostID{}, false
 		}
 		o = next
@@ -1090,8 +1079,8 @@ func newProdSim(t *testing.T, short bool) *sim {
 // cheaper half of each type's pools: the fleet spends about what it would
 // were those pools never sold, a rightsize never swaps a host for one that
 // costs no less, and once work stops the fleet stops launching: only a
-// reserve whose every pool of its size refuses tries them again, no sooner
-// than ReserveRetry apart.
+// reserve whose every pool of its size refuses tries them again as they
+// leave their cooldowns.
 func TestFleetRefusalsCostAboutWhatThePoolsAbsenceDoes(t *testing.T) {
 	t.Parallel()
 	build := cpuNeed(4000, 8)
@@ -1125,15 +1114,10 @@ func TestFleetRefusalsCostAboutWhatThePoolsAbsenceDoes(t *testing.T) {
 				t.Errorf("%s: launched at %s, hours after the last work", name, at.Format(time.TimeOnly))
 			}
 		}
-		tried := map[ReserveMarket]time.Time{}
 		for _, p := range r.purchases {
-			if p.at.Before(settled) {
-				continue
-			}
-			if !p.refused || p.at.Sub(tried[p.market]) < s.p.ReserveRetry {
+			if !p.at.Before(settled) && !p.refused {
 				t.Errorf("%s: %s bought a reserve at %s, hours after the last work", name, p.market, p.at.Format(time.TimeOnly))
 			}
-			tried[p.market] = p.at
 		}
 		results[short] = r
 	}
@@ -1387,11 +1371,10 @@ func newChurnSim(t *testing.T) *sim {
 }
 
 // An empty fleet buys its reserves, with EC2 refusing every GPU Spot pool,
-// or every one in the eastern regions. Each market buys a
-// reserve of the smallest type that fits its shape and moves a refused
-// launch only to pools of that size; after a purchase EC2 refused in every
-// pool it tried, the market waits ReserveRetry before the next; no reserve
-// is cancelled before it stops; and where pools fill, every market ends
+// or every one in the eastern regions. Each market buys a reserve of the
+// smallest type that fits its shape and moves a refused launch only to
+// pools of that size, tries no pool again before its cooldown ends, and
+// cancels no reserve before it stops; where pools fill, every market ends
 // with its reserve.
 func TestRefusedReservesWaitAtTheirShapesSize(t *testing.T) {
 	t.Parallel()
@@ -1409,43 +1392,34 @@ func TestRefusedReservesWaitAtTheirShapesSize(t *testing.T) {
 		}
 		const window = 30 * time.Minute
 		r := s.run(window, nil)
-		byMarket := map[ReserveMarket][]simPurchase{}
-		for _, p := range r.purchases {
-			byMarket[p.market] = append(byMarket[p.market], p)
-		}
 		ps := &pass{p: s.p, s: FleetSnapshot{Now: s.now, Recent: s.recent, RecentDisks: s.recentDisks, Offers: s.in}, byMarket: map[ReserveMarket]*marketView{}}
 		views := map[ReserveMarket]*marketView{}
 		for _, v := range ps.views(nil) {
 			views[v.m] = v
 		}
-		for _, m := range slices.SortedFunc(maps.Keys(byMarket), func(a, b ReserveMarket) int { return cmp.Compare(a.String(), b.String()) }) {
-			purchases := byMarket[m]
-			perMinute, largest, refused := 0, "", 0
+		byMarket := map[ReserveMarket][]simPurchase{}
+		for _, p := range r.purchases {
+			byMarket[p.market] = append(byMarket[p.market], p)
+		}
+		for m, purchases := range byMarket {
+			fits := mustType(t, smallestFit(t, views[m]))
+			tried, perMinute, largest := map[string]time.Time{}, 0, fits
 			for i, p := range purchases {
-				n := 0
-				for _, q := range purchases[i:] {
-					if q.at.Sub(p.at) < time.Minute {
-						n++
+				perMinute = max(perMinute, len(slices.DeleteFunc(slices.Clone(purchases[i:]), func(q simPurchase) bool { return q.at.Sub(p.at) >= time.Minute })))
+				for _, o := range p.tried {
+					if at, ok := tried[o.Key()]; ok && p.at.Sub(at) < simCooldown {
+						t.Errorf("%s, %s: tried %s again %s after it refused", c.name, m, o.Key(), p.at.Sub(at))
 					}
-				}
-				perMinute = max(perMinute, n)
-				if p.refused {
-					refused++
-					if i+1 < len(purchases) && purchases[i+1].at.Sub(p.at) < s.p.ReserveRetry {
-						t.Errorf("%s, %s: bought again %s after a refused purchase", c.name, m, purchases[i+1].at.Sub(p.at))
-					}
-				}
-				for _, typ := range p.tried {
-					if largest == "" || mustType(t, typ).VCPUs() > mustType(t, largest).VCPUs() {
-						largest = typ
+					tried[o.Key()] = p.at
+					if o.Type.VCPUs() > largest.VCPUs() {
+						largest = o.Type
 					}
 				}
 			}
-			fits := smallestFit(t, views[m])
-			t.Logf("%s, %s: %d purchases (%.1f a minute), %d refused everywhere, at most %d in a minute, largest %s, smallest that fits %s",
-				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), refused, perMinute, largest, fits)
-			if mustType(t, largest).VCPUs() > mustType(t, fits).VCPUs() {
-				t.Errorf("%s, %s: tried %s for a reserve %s fits", c.name, m, largest, fits)
+			t.Logf("%s, %s: %d purchases (%.1f a minute, at most %d in one), largest %s, smallest that fits %s",
+				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), perMinute, largest.Name, fits.Name)
+			if largest.VCPUs() > fits.VCPUs() {
+				t.Errorf("%s, %s: tried %s for a reserve %s fits", c.name, m, largest.Name, fits.Name)
 			}
 		}
 		if r.cancelled > 0 {
