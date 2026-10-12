@@ -232,49 +232,41 @@ func (l *layerSources) start(ctx context.Context, log *slog.Logger, container st
 	return tracing, nil
 }
 
-// await waits until served closes, at most traceWindow from container's
-// start, then ends its trace as end does. It returns nil at once if the
-// container does not trace, exits or ctx ends.
+// await ends the trace of container, whose start traces, once served
+// closes, at most traceWindow from the start, and returns it when the
+// snapshotter counts every read in it as this start's. It alone ends the
+// trace: a container that exits ends it unreported unless it was served
+// first, as a pod whose command ends exits right after. It returns nil at
+// once if ctx ends.
 func (l *layerSources) await(ctx context.Context, log *slog.Logger, container string, served <-chan struct{}) *hostproto.ImageTrace {
 	l.smu.Lock()
 	s, ok := l.startups[container]
-	if !ok || !s.tracing {
-		l.smu.Unlock()
-		return nil
-	}
-	began, released := s.began, s.released
 	l.smu.Unlock()
-	timer := time.NewTimer(time.Until(began.Add(traceWindow)))
-	defer timer.Stop()
-	select {
-	case <-served:
-	case <-timer.C:
-	case <-released:
-		return nil
-	case <-ctx.Done():
-		return nil
-	}
-	return l.end(ctx, log, container)
-}
-
-// end ends container's trace and returns it when the snapshotter counts
-// every read in it as this start's, or nil.
-func (l *layerSources) end(ctx context.Context, log *slog.Logger, container string) *hostproto.ImageTrace {
-	l.smu.Lock()
-	s, ok := l.startups[container]
-	tracing := ok && s.tracing
-	if tracing {
-		s.tracing = false
-	}
-	l.smu.Unlock()
-	if !tracing {
-		return nil
+	report := ok
+	if ok {
+		timer := time.NewTimer(time.Until(s.began.Add(traceWindow)))
+		defer timer.Stop()
+		select {
+		case <-served:
+		case <-timer.C:
+		case <-s.released:
+			select {
+			case <-served:
+			default:
+				report = false
+			}
+		case <-ctx.Done():
+			return nil
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
 	reads, complete, err := l.client.EndTrace(ctx, container)
 	if err != nil {
 		log.Warn("ending the startup read trace failed", "error", err)
+		return nil
+	}
+	if !report {
 		return nil
 	}
 	// A start that began while the trace ended shares it too.
@@ -287,31 +279,24 @@ func (l *layerSources) end(ctx context.Context, log *slog.Logger, container stri
 	return &hostproto.ImageTrace{Reads: reads}
 }
 
-// release forgets container once it exited or failed to start, and stops
-// its prefetch and trace.
+// release forgets container once it exited or failed to start, stops its
+// prefetch and lets await end its trace.
 func (l *layerSources) release(ctx context.Context, log *slog.Logger, container string) {
 	l.smu.Lock()
 	s, ok := l.startups[container]
 	delete(l.startups, container)
-	prefetching, tracing := false, false
+	prefetching := false
 	if ok {
 		close(s.released)
-		prefetching, tracing = s.prefetching, s.tracing
+		prefetching = s.prefetching
 	}
 	l.smu.Unlock()
-	if !prefetching && !tracing {
+	if !prefetching {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	if prefetching {
-		if err := l.client.StopPrefetch(ctx, container); err != nil {
-			log.Warn("stopping the prefetch failed", "error", err)
-		}
-	}
-	if tracing {
-		if _, _, err := l.client.EndTrace(ctx, container); err != nil {
-			log.Warn("ending the startup read trace failed", "error", err)
-		}
+	if err := l.client.StopPrefetch(ctx, container); err != nil {
+		log.Warn("stopping the prefetch failed", "error", err)
 	}
 }
