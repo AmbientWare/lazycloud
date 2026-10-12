@@ -572,19 +572,20 @@ func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
 }
 
 // misplaced reports a region outside the one market v's starts read from,
-// while a reserve offer there would save more on a start's expected read
-// than it costs to prepare. A reserve there holds none of the stopped
-// target, so the market buys one in the read region and retires it once
-// that is ready; a host there does not return to the reserve.
+// while the market's cheapest reserve that holds its largest shape lies in
+// the read region and buying it costs less than a start's read from the
+// region saves. A reserve there holds none of the stopped target, so the
+// market buys one in the read region and retires it once that is ready; a
+// host there does not return to the reserve.
 func (ps *pass) misplaced(v *marketView, region string) bool {
 	r := ps.s.Offers.marketRead(v.m)
 	if r == nil || region == r.Region {
 		return false
 	}
+	offers := preferHibernating(ps.marketOffers(v.m, true), v.largest, v.largestDisks)
+	i := slices.IndexFunc(offers, func(o FleetOffer) bool { return v.fits(o.Usable, o.Type) })
 	saved := readMicros(ps.p, r, region) * int64(ps.p.CostHorizon/time.Second)
-	return slices.ContainsFunc(ps.marketOffers(v.m, true), func(o FleetOffer) bool {
-		return o.Region == r.Region && o.HourlyMicros*int64(ps.p.Provision/time.Second) < saved
-	})
+	return i >= 0 && offers[i].Region == r.Region && offers[i].HourlyMicros*int64(ps.p.Provision/time.Second) < saved
 }
 
 // placed is a reserve of market v that holds its stopped target.
@@ -1579,7 +1580,8 @@ func (ps *pass) reserves(v *marketView) {
 		ps.reserveReason(v, item)
 	default:
 		// At the floor, the reserve that fits the largest shape hibernates
-		// where it can; the rest of the target takes the cheapest room.
+		// where it can; the rest of the target beyond that reserve takes the
+		// cheapest room, so smaller hosts never stand in for it.
 		var supplied FleetCapacity
 		unmet := false
 		if !item.Empty() {
@@ -1589,7 +1591,7 @@ func (ps *pass) reserves(v *marketView) {
 			}
 			unmet = len(result.UnmetItems) > 0
 		}
-		if rest := short.Minus(supplied).Clamp(); !rest.Empty() {
+		if rest := short.Minus(supplied.Upper(item)).Clamp(); !rest.Empty() {
 			supplied = supplied.Plus(ps.buyReserves(v, CoverNeed{Aggregate: rest}, FleetCapacity{}, FleetCapacity{}).Supplied)
 		}
 		v.stoppedShort = short.Minus(supplied).Clamp()
@@ -1625,12 +1627,13 @@ func (ps *pass) reserveReason(v *marketView, item FleetCapacity) {
 }
 
 // buyReserves buys the cheapest reserves that cover need, ones that
-// hibernate wherever one fits shape, each holding least where it can: what
-// those cannot cover, under a quota or a cooldown, any offer covers.
+// hibernate wherever one fits shape and the largest shape's disks, each
+// holding least where it can: what those cannot cover, under a quota
+// or a cooldown, any offer covers.
 func (ps *pass) buyReserves(v *marketView, need CoverNeed, shape, least FleetCapacity) CoverResult {
 	offers := ps.marketOffers(v.m, true)
 	if !shape.Empty() {
-		offers = preferHibernating(offers, shape)
+		offers = preferHibernating(offers, shape, v.largestDisks)
 	}
 	sized := slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return !o.Usable.Covers(least) })
 	if least.Empty() || len(sized) == 0 {
@@ -1659,11 +1662,11 @@ func (ps *pass) coverReserves(v *marketView, need CoverNeed, offers []FleetOffer
 	return result
 }
 
-// preferHibernating drops the offers that fit shape without hibernating
-// while one that hibernates fits it, so the reserve that fits resumes from
-// memory.
-func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
-	fits := func(o FleetOffer) bool { return o.Usable.Covers(shape) }
+// preferHibernating drops the offers that fit shape and disks without
+// hibernating while one that hibernates fits them, so the reserve that fits
+// resumes from memory.
+func preferHibernating(offers []FleetOffer, shape FleetCapacity, disks int) []FleetOffer {
+	fits := func(o FleetOffer) bool { return o.Usable.Covers(shape) && o.Type.DiskSlots() >= disks }
 	if !slices.ContainsFunc(offers, func(o FleetOffer) bool { return o.Hibernate && fits(o) }) {
 		return offers
 	}

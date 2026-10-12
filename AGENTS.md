@@ -67,7 +67,10 @@ constraints.
   implementations. A change that replaces a path deletes the old one: no
   adapters, dead helpers or mixed-version code.
 - Fix a defect where the wrong decision is made, then look for the same
-  pattern elsewhere. Do not add defaults or guards where it surfaces.
+  pattern elsewhere. Correct, simplify or delete the rule that makes it rather
+  than stacking defaults, guards, special cases or retries on top; guard only
+  causes outside our code. A fix leaves code and tests no larger than the
+  corrected behavior needs, with one test proving that behavior.
 - SDK and runner remain independent of backend implementations. Cross-language
   contracts are language-neutral; Python code serialization stays explicit.
 

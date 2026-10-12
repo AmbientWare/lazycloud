@@ -291,10 +291,12 @@ func placementPenalty(ranges map[string]scoreRange, shape string, score int) int
 // complete cost, whose usable capacity and disk slots cover the need, whose GPUs the need
 // accepts (GPU hosts only for GPU work), and, unless the owner pays, whose
 // GPU model the platform fleet offers and that keep the purchase margin. A
-// reserve offer hibernates where hibernates allows.
-// Order: the need's GPU preference, hourly cost with expected transfer and
-// read and its placement penalty, fewest hosts in the zone, key. An offer
-// whose host would exceed a known vCPU quota is skipped.
+// reserve offer hibernates where hibernates allows and is no larger than
+// the policy's LargestShape.Cap.
+// Order: the need's GPU preference, a reserve's reserveCost, hourly cost
+// with expected transfer and read and its placement penalty, fewest hosts
+// in the zone, key. An offer whose host would exceed a known vCPU quota is
+// skipped.
 func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
 	rates := indexRates(in.Rates)
 	scores := placementRanges(p, in)
@@ -325,7 +327,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					continue
 				}
 				usable := t.Usable(in.ReportedMemory[t.Name])
-				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) || t.DiskSlots() < need.Disks {
+				if !usable.Covers(FleetCapacity{CPUMillis: need.CPUMillis, MemoryBytes: need.MemoryBytes, GPUs: gpus}) || t.DiskSlots() < need.Disks ||
+					reserve && !p.LargestShape.Cap.Covers(usable) {
 					continue
 				}
 				for _, market := range markets {
@@ -363,18 +366,21 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 	// n log n times and every argument of cmp.Or is evaluated.
 	type rankedOffer struct {
 		gpu, zoneHosts int
-		cost           int64
+		kept, cost     int64
 		key            string
 	}
 	ranks := make([]rankedOffer, len(offers))
 	order := make([]int, len(offers))
 	for i, o := range offers {
 		ranks[i] = rankedOffer{gpu: GPURank(need.GPUs, o.Type.GPU), zoneHosts: in.ZoneHosts[o.ZoneID], cost: o.ranked(o.running()), key: o.Key()}
+		if reserve {
+			ranks[i].kept = reserveCost(p)(o)
+		}
 		order[i] = i
 	}
 	slices.SortStableFunc(order, func(a, b int) int {
 		ra, rb := ranks[a], ranks[b]
-		return cmp.Or(cmp.Compare(ra.gpu, rb.gpu), cmp.Compare(ra.cost, rb.cost), cmp.Compare(ra.zoneHosts, rb.zoneHosts),
+		return cmp.Or(cmp.Compare(ra.gpu, rb.gpu), cmp.Compare(ra.kept, rb.kept), cmp.Compare(ra.cost, rb.cost), cmp.Compare(ra.zoneHosts, rb.zoneHosts),
 			strings.Compare(ra.key, rb.key))
 	})
 	sorted := make([]FleetOffer, len(offers))

@@ -145,6 +145,18 @@ type simResult struct {
 	// on-demand GPU hosts ran Spot-tolerant work.
 	gpuMicros               int64
 	spotGPUSec, borrowedSec float64
+	// purchases are the reserve purchases, and cancelled counts reserves
+	// retired before they first stopped.
+	purchases []simPurchase
+	cancelled int
+}
+
+// simPurchase is one reserve purchase: its market and each pool its launch
+// tried.
+type simPurchase struct {
+	at     time.Time
+	market ReserveMarket
+	tried  []FleetOffer
 }
 
 type sim struct {
@@ -564,9 +576,6 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 		}
 		reserve := a.Kind == ActionBuyReserve
 		cost := servingCost(s.p)
-		if reserve {
-			cost = reserveCost(s.p)
-		}
 		need := Requirement{CPUMillis: a.Offer.Usable.CPUMillis, MemoryBytes: a.Offer.Usable.MemoryBytes}
 		for _, o := range RankOffers(s.p, need, reserve, in) {
 			if o.Type.Name == a.Offer.Type.Name && o.Market == MarketOnDemand && cost(o) < cost(*a.Offer) {
@@ -621,14 +630,18 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		Market: ptr(string(o.Market)), GpuType: o.Type.GPU, GpuCount: int32(o.Type.GPUCount),
 		CpuMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		HoldsCpuMillis: ptr(a.Holds.CPUMillis), HoldsMemoryBytes: ptr(a.Holds.MemoryBytes),
+		InstanceType: o.Type.Name, Region: o.Region, AvailabilityZone: o.Zone,
 	}
 	if a.Kind == ActionRightsize {
 		row.Replaces, row.ReplacesHourlyMicros = ptr(uuid.UUID(*a.Host)), ptr(s.host(*a.Host).offer.HourlyMicros)
 	}
+	purchase := simPurchase{at: s.now, market: a.Market}
 	if reserve {
 		row.ReserveMode = ptr(string(*a.Mode))
+		defer func() { s.r.purchases = append(s.r.purchases, purchase) }()
 	}
 	for pools := 0; ; pools++ {
+		purchase.tried = append(purchase.tried, o)
 		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, Until: s.now.Add(simCooldown)}
 		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
 			cool.Quota = s.knowQuota
@@ -653,6 +666,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 			return HostID{}, false
 		}
 		o = next
+		row.InstanceType, row.Region, row.AvailabilityZone = o.Type.Name, o.Region, o.Zone
 	}
 	if a.Kind == ActionRightsize {
 		if replaced := s.host(*a.Host); o.running() >= replaced.offer.running() {
@@ -751,6 +765,9 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionHandBack, ActionLend:
 			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
 		case ActionRetireReserve:
+			if s.host(*a.Host).State == FleetPreparing {
+				s.r.cancelled++
+			}
 			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
 			s.r.retired = append(s.r.retired, s.now)
 		}
@@ -1321,6 +1338,87 @@ func TestGPUWorkStartsOnAReserveOfItsMarket(t *testing.T) {
 		}
 		if borrowed := r.borrowedSec > 0; borrowed != c.borrows {
 			t.Errorf("%s: Spot-tolerant work ran %.2f h on on-demand GPU hosts", c.name, r.borrowedSec/3600)
+		}
+	}
+}
+
+// newChurnSim is the platform fleet empty in its four regions, with the
+// shapes and reads prod's containers recorded in the week to 2026-10-12:
+// Spot CPU work up to 12 CPU, on-demand CPU work up to 4 CPU with a disk,
+// and Spot L4 work of 2 CPU and 12.75 GiB that read 23.7 GB a start from a
+// us-east-1 bucket.
+func newChurnSim(t *testing.T) *sim {
+	s := newSim(t, DefaultPolicy())
+	s.in.Networks = prodNetworks()
+	readTestJSON(t, "zones.json", &s.in.ZoneTypes)
+	s.in.Spot = spotSnapshot(t, offerNow, s.in.Networks)
+	spotCPU, spotL4 := ReserveMarket{Preemptible: true}, ReserveMarket{Preemptible: true, GPU: "L4"}
+	s.recent = map[ReserveMarket]FleetCapacity{
+		spotCPU: cpuGiB(12000, 24), {}: {CPUMillis: 4000, MemoryBytes: 8704 << 20}, spotL4: {CPUMillis: 2000, MemoryBytes: 13056 << 20, GPUs: 1},
+	}
+	s.recentDisks = map[ReserveMarket]int{{}: 1}
+	s.in.ReadBytes = map[ReserveMarket]int64{spotCPU: 237_316_103_662 / 1916, spotL4: 118_657_750_100 / 5}
+	return s
+}
+
+// An empty fleet buys its reserves, with EC2 refusing every GPU Spot pool,
+// or every one in the eastern regions. No reserve is larger than the
+// policy's LargestShape.Cap, a refused pool is not tried again before its
+// cooldown ends, no market buys more than eight reserves in a minute, and
+// no reserve is cancelled before it stops; where pools fill, every market
+// ends with its reserve.
+func TestRefusedReservesStayWithinTheCap(t *testing.T) {
+	t.Parallel()
+	gpuSpot := func(typ string, market Market) bool {
+		c, _ := CatalogTypeNamed(typ)
+		return market == MarketSpot && c.GPU != ""
+	}
+	for _, c := range []struct {
+		name string
+		all  bool
+	}{{"every GPU Spot pool refuses", true}, {"every GPU Spot pool in us-east-1 and us-east-2 refuses", false}} {
+		s := newChurnSim(t)
+		s.refuses = func(region, _, typ string, market Market) bool {
+			return gpuSpot(typ, market) && (c.all || region == "us-east-1" || region == "us-east-2")
+		}
+		const window = 30 * time.Minute
+		r := s.run(window, nil)
+		byMarket := map[ReserveMarket][]simPurchase{}
+		for _, p := range r.purchases {
+			byMarket[p.market] = append(byMarket[p.market], p)
+		}
+		for m, purchases := range byMarket {
+			tried, perMinute, largest := map[string]time.Time{}, 0, CatalogType{}
+			for i, p := range purchases {
+				perMinute = max(perMinute, len(slices.DeleteFunc(slices.Clone(purchases[i:]), func(q simPurchase) bool { return q.at.Sub(p.at) >= time.Minute })))
+				for _, o := range p.tried {
+					if at, ok := tried[o.Key()]; ok && p.at.Sub(at) < simCooldown {
+						t.Errorf("%s, %s: tried %s again %s after it refused", c.name, m, o.Key(), p.at.Sub(at))
+					}
+					tried[o.Key()] = p.at
+					if !s.p.LargestShape.Cap.Covers(o.Usable) {
+						t.Errorf("%s, %s: tried %s, larger than the cap", c.name, m, o.Key())
+					}
+					if o.Type.VCPUs() > largest.VCPUs() {
+						largest = o.Type
+					}
+				}
+			}
+			t.Logf("%s, %s: %d purchases (%.1f a minute, at most %d in one), largest %s",
+				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), perMinute, largest.Name)
+			if perMinute > 8 {
+				t.Errorf("%s, %s: %d reserve purchases within a minute", c.name, m, perMinute)
+			}
+		}
+		if r.cancelled > 0 {
+			t.Errorf("%s: %d reserves cancelled before they stopped", c.name, r.cancelled)
+		}
+		if !c.all {
+			for m := range byMarket {
+				if !slices.ContainsFunc(s.hosts, func(h *simHost) bool { return h.market() == m && h.resumable() }) {
+					t.Errorf("%s: %s holds no reserve", c.name, m)
+				}
+			}
 		}
 	}
 }

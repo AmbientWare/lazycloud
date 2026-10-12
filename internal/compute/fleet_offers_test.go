@@ -340,7 +340,7 @@ func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing
 // plainly on the plain root.
 func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
 	in := offerInputs(t)
-	for name, want := range map[string]bool{"m7i.2xlarge": true, "m6a.4xlarge": false, "r6a.4xlarge": false, "m7i.8xlarge": false} {
+	for name, want := range map[string]bool{"m7i.2xlarge": true, "c6a.4xlarge": true, "m6a.4xlarge": false} {
 		typ := mustType(t, name)
 		in.Catalog = []CatalogType{typ}
 		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
