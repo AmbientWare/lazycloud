@@ -331,6 +331,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	s := FleetSnapshot{
 		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Builds: builds, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
+		ReserveFailed: ps.r.failed,
 	}
 	s.FloorShortSince, s.Peaks = ps.carried()
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)

@@ -216,6 +216,17 @@ from capacity_cooldowns
 where until > now()
 order by connection_key, region, availability_zone_id, instance_type, market;
 
+-- name: FailedReserves :many
+-- When each market's newest platform reserve failed within the window, as
+-- one EC2 refused in every pool its launch tried; hosts_failed_reserves
+-- bounds the read to the window whatever the history.
+select h.market, h.gpu_type, max(h.phase_at)::timestamptz as failed_at
+from hosts h
+where h.provider = 'aws' and h.kind = 'platform' and h.phase = 'failed' and h.reserve_mode is not null
+  and h.phase_at > now() - make_interval(secs => @window_seconds::float8)
+group by h.market, h.gpu_type
+order by h.market, h.gpu_type;
+
 -- name: FleetMarkets :many
 -- The published markets. An expired plan is no plan; readers compare
 -- expires_at with their clock. The cast gives sqlc a row type apart from

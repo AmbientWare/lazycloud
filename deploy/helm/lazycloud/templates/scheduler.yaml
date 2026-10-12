@@ -6,13 +6,11 @@ metadata:
     {{- include "lazycloud.labels" (list . "scheduler") | nindent 4 }}
 spec:
   replicas: {{ .Values.scheduler.replicas }}
-  # Replicas share work through advisory locks; a rollout replaces one at a
-  # time without a surge.
+  # Replicas share work through advisory locks, so two releases running at
+  # once take turns planning the fleet and each undoes the other's
+  # purchases. A rollout stops every old replica before a new one starts.
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 0
-      maxUnavailable: 1
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: scheduler

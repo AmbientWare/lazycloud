@@ -150,6 +150,9 @@ type FleetSnapshot struct {
 	FloorShortSince map[ReserveMarket]time.Time
 	// Peaks are each market's peak load, from the published plans.
 	Peaks map[ReserveMarket]LoadPeak
+	// ReserveFailed is when each market's newest reserve failed, within the
+	// policy's ReserveRetry.
+	ReserveFailed map[ReserveMarket]time.Time
 }
 
 // FleetActionKind is what an action asks for.
@@ -385,7 +388,15 @@ type marketView struct {
 	largest      FleetCapacity
 	largestDisks int
 	loaded       bool
-	retired      map[HostID]bool
+	// sized is the most vCPUs a reserve of the market has: those of the
+	// smallest offer that holds its largest shape, whatever cools or a
+	// quota holds back; nil without a largest shape or such an offer.
+	sized *int64
+	// best is the cheapest reserve offer that holds the largest shape, once
+	// bestReserveOffer has looked; nil for none.
+	best    *FleetOffer
+	bested  bool
+	retired map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover, and
 	// warmReason and stoppedReason why.
 	shortfall, stoppedShort   FleetCapacity
@@ -494,6 +505,7 @@ func (ps *pass) views(items []coverItem) []*marketView {
 		v.stopped, v.peakShare = r.Stopped.Of(v.load), r.Stopped.Of(v.peak.Load)
 		if r.FitLargest {
 			v.largest, v.largestDisks = ps.p.LargestShape.of(m, largest, disks)
+			v.sized = ps.sizeOf(v)
 			floor := r.Stopped.Floor.Plus(v.largest)
 			v.loaded = !floor.Covers(v.stopped)
 			v.stopped, v.peakShare = v.stopped.Upper(floor), v.peakShare.Upper(floor)
@@ -571,20 +583,70 @@ func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
 	return offers
 }
 
+// sizeOf is the vCPUs of the smallest reserve offer of market v that holds
+// its largest shape and its disks, ranked without cooldowns or quotas so a
+// refusal or a filling quota never raises it; nil for none.
+func (ps *pass) sizeOf(v *marketView) *int64 {
+	if v.largest.Empty() {
+		return nil
+	}
+	in := ps.s.Offers
+	in.Cooldowns, in.Quotas = nil, nil
+	var size *int64
+	for _, o := range RankOffers(ps.p, marketNeed(v.m), true, in) {
+		if o.Market == v.m.buyMarket() && o.Type.GPU == v.m.GPU && v.fits(o.Usable, o.Type) && (size == nil || o.Type.VCPUs() < *size) {
+			size = ptr(o.Type.VCPUs())
+		}
+	}
+	return size
+}
+
+// sizes reports whether offer o is no larger than the market's reserves.
+func (v *marketView) sizes(o FleetOffer) bool { return v.sized == nil || o.Type.VCPUs() <= *v.sized }
+
+// reserveOffers are the offers market v's reserves buy from, none larger
+// than its reserves' size.
+func (ps *pass) reserveOffers(v *marketView) []FleetOffer {
+	key := v.m.String() + "/reserve"
+	if offers, ok := ps.offers[key]; ok {
+		return offers
+	}
+	offers := slices.DeleteFunc(slices.Clone(ps.marketOffers(v.m, true)), func(o FleetOffer) bool { return !v.sizes(o) })
+	ps.offers[key] = offers
+	return offers
+}
+
+// bestReserveOffer is the cheapest reserve offer of market v that holds its
+// largest shape and its disks, the one a purchase of that reserve buys.
+func (ps *pass) bestReserveOffer(v *marketView) *FleetOffer {
+	if !v.bested {
+		cost := reserveCost(ps.p)
+		for _, o := range ps.reserveOffers(v) {
+			if v.fits(o.Usable, o.Type) && (v.best == nil || cost(o) < cost(*v.best)) {
+				v.best = &o
+			}
+		}
+		v.bested = true
+	}
+	return v.best
+}
+
 // misplaced reports a region outside the one market v's starts read from,
-// while a reserve offer there would save more on a start's expected read
-// than it costs to prepare. A reserve there holds none of the stopped
-// target, so the market buys one in the read region and retires it once
-// that is ready; a host there does not return to the reserve.
+// while the market would buy its reserve in the read region and that
+// purchase costs less to prepare than it saves on a start's expected read.
+// A reserve there holds none of the stopped target, so the market buys one
+// in the read region and retires it once that is ready; a host there does
+// not return to the reserve. Where the cheapest purchase lies outside the
+// read region, as while the read region's pools cool, nothing is misplaced,
+// so what the market buys holds its target.
 func (ps *pass) misplaced(v *marketView, region string) bool {
 	r := ps.s.Offers.marketRead(v.m)
 	if r == nil || region == r.Region {
 		return false
 	}
+	best := ps.bestReserveOffer(v)
 	saved := readMicros(ps.p, r, region) * int64(ps.p.CostHorizon/time.Second)
-	return slices.ContainsFunc(ps.marketOffers(v.m, true), func(o FleetOffer) bool {
-		return o.Region == r.Region && o.HourlyMicros*int64(ps.p.Provision/time.Second) < saved
-	})
+	return best != nil && best.Region == r.Region && best.HourlyMicros*int64(ps.p.Provision/time.Second) < saved
 }
 
 // placed is a reserve of market v that holds its stopped target.
@@ -1370,7 +1432,7 @@ func (ps *pass) shortReason(m ReserveMarket, shape FleetCapacity, reserve bool) 
 		in := ps.s.Offers
 		relax(&in)
 		return slices.ContainsFunc(RankOffers(ps.p, need, reserve, in), func(o FleetOffer) bool {
-			return o.Market == m.buyMarket() && o.Type.GPU == m.GPU
+			return o.Market == m.buyMarket() && o.Type.GPU == m.GPU && (!reserve || ps.byMarket[m].sizes(o))
 		})
 	}
 	switch {
@@ -1554,6 +1616,8 @@ func (ps *pass) reserves(v *marketView) {
 		v.stoppedReason = ReasonDemand
 	case ps.returning(v, short, !item.Empty()):
 		v.stoppedReason = ReasonReturning
+	case ps.s.Now.Sub(ps.s.ReserveFailed[v.m]) < ps.p.ReserveRetry:
+		v.stoppedReason = ReasonCooldown
 	case ps.batching():
 		v.stoppedReason = ReasonBatch
 	case v.loaded:
@@ -1562,7 +1626,7 @@ func (ps *pass) reserves(v *marketView) {
 		// CPU Spot market each reserve holds the target up to the default
 		// largest shape, the size that still hibernates, so a target growing
 		// a little each pass buys a few large reserves that resume from
-		// memory and cost about what small ones do to keep stopped.
+		// memory rather than many small ones.
 		need := CoverNeed{Aggregate: short}
 		if !item.Empty() {
 			need = CoverNeed{Items: []CoverItem{{Shape: item, Disks: v.largestDisks, Count: 1}}, Aggregate: short.Minus(item).Clamp()}
@@ -1579,7 +1643,8 @@ func (ps *pass) reserves(v *marketView) {
 		ps.reserveReason(v, item)
 	default:
 		// At the floor, the reserve that fits the largest shape hibernates
-		// where it can; the rest of the target takes the cheapest room.
+		// where it can; the rest of the target beyond that reserve takes the
+		// cheapest room, so smaller hosts never stand in for it.
 		var supplied FleetCapacity
 		unmet := false
 		if !item.Empty() {
@@ -1589,7 +1654,7 @@ func (ps *pass) reserves(v *marketView) {
 			}
 			unmet = len(result.UnmetItems) > 0
 		}
-		if rest := short.Minus(supplied).Clamp(); !rest.Empty() {
+		if rest := short.Minus(supplied.Upper(item)).Clamp(); !rest.Empty() {
 			supplied = supplied.Plus(ps.buyReserves(v, CoverNeed{Aggregate: rest}, FleetCapacity{}, FleetCapacity{}).Supplied)
 		}
 		v.stoppedShort = short.Minus(supplied).Clamp()
@@ -1625,12 +1690,17 @@ func (ps *pass) reserveReason(v *marketView, item FleetCapacity) {
 }
 
 // buyReserves buys the cheapest reserves that cover need, ones that
-// hibernate wherever one fits shape, each holding least where it can: what
-// those cannot cover, under a quota or a cooldown, any offer covers.
+// hibernate wherever one fits shape and the disks need's items attach,
+// each holding least where it can: what those cannot cover, under a quota
+// or a cooldown, any offer covers.
 func (ps *pass) buyReserves(v *marketView, need CoverNeed, shape, least FleetCapacity) CoverResult {
-	offers := ps.marketOffers(v.m, true)
+	offers := ps.reserveOffers(v)
 	if !shape.Empty() {
-		offers = preferHibernating(offers, shape)
+		disks := 0
+		for _, item := range need.Items {
+			disks = max(disks, item.Disks)
+		}
+		offers = preferHibernating(offers, shape, disks)
 	}
 	sized := slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return !o.Usable.Covers(least) })
 	if least.Empty() || len(sized) == 0 {
@@ -1659,11 +1729,11 @@ func (ps *pass) coverReserves(v *marketView, need CoverNeed, offers []FleetOffer
 	return result
 }
 
-// preferHibernating drops the offers that fit shape without hibernating
-// while one that hibernates fits it, so the reserve that fits resumes from
-// memory.
-func preferHibernating(offers []FleetOffer, shape FleetCapacity) []FleetOffer {
-	fits := func(o FleetOffer) bool { return o.Usable.Covers(shape) }
+// preferHibernating drops the offers that fit shape and disks without
+// hibernating while one that hibernates fits them, so the reserve that fits
+// resumes from memory.
+func preferHibernating(offers []FleetOffer, shape FleetCapacity, disks int) []FleetOffer {
+	fits := func(o FleetOffer) bool { return o.Usable.Covers(shape) && o.Type.DiskSlots() >= disks }
 	if !slices.ContainsFunc(offers, func(o FleetOffer) bool { return o.Hibernate && fits(o) }) {
 		return offers
 	}

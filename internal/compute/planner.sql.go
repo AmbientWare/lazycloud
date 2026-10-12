@@ -190,6 +190,44 @@ func (q *Queries) FailPreparing(ctx context.Context, arg FailPreparingParams) ([
 	return items, nil
 }
 
+const failedReserves = `-- name: FailedReserves :many
+select h.market, h.gpu_type, max(h.phase_at)::timestamptz as failed_at
+from hosts h
+where h.provider = 'aws' and h.kind = 'platform' and h.phase = 'failed' and h.reserve_mode is not null
+  and h.phase_at > now() - make_interval(secs => $1::float8)
+group by h.market, h.gpu_type
+order by h.market, h.gpu_type
+`
+
+type FailedReservesRow struct {
+	Market   *string
+	GpuType  string
+	FailedAt time.Time
+}
+
+// When each market's newest platform reserve failed within the window, as
+// one EC2 refused in every pool its launch tried; hosts_failed_reserves
+// bounds the read to the window whatever the history.
+func (q *Queries) FailedReserves(ctx context.Context, windowSeconds float64) ([]FailedReservesRow, error) {
+	rows, err := q.db.Query(ctx, failedReserves, windowSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FailedReservesRow
+	for rows.Next() {
+		var i FailedReservesRow
+		if err := rows.Scan(&i.Market, &i.GpuType, &i.FailedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const fleetMarkets = `-- name: FleetMarkets :many
 select market::text as market, plan, generated_at, expires_at
 from fleet_markets

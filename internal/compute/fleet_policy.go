@@ -215,6 +215,12 @@ type Policy struct {
 	// the reserve, as one resumed for a burst or a build does, before it
 	// buys what the reserve lacks.
 	ReturnWait time.Duration
+	// ReserveRetry is how long a market waits after one of its reserves
+	// failed, as one EC2 refused in every pool its launch tried, before it
+	// buys another. The refused pools cool for longer, so the next purchase
+	// tries others, and once every pool of the reserve's size cools the
+	// market waits for the cooldowns.
+	ReserveRetry time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
@@ -268,6 +274,7 @@ func DefaultPolicy() Policy {
 		IdleTimeout:     2 * time.Minute,
 		SpotIdleTimeout: 30 * time.Second,
 		ReturnWait:      5 * time.Minute,
+		ReserveRetry:    time.Minute,
 		FloorHold:       time.Minute,
 		SpotPriceAge:    time.Hour,
 	}

@@ -163,13 +163,13 @@ func servingCost(p Policy) func(FleetOffer) int64 {
 	return func(o FleetOffer) int64 { return o.ranked(o.running() * int64(p.CostHorizon/time.Second)) }
 }
 
-// reserveCost ranks a reserve: held stopped over the cost horizon, after
-// running while it is prepared, and the read of the start it serves.
-// Preparing serves nothing, so it moves no image or volume bytes.
+// reserveCost ranks a reserve by what it costs once it serves, as
+// servingCost ranks a purchase, after running while it is prepared. Its
+// stopped cost is a part of its hourly price, so a type larger than the
+// start it serves needs never ranks as cheap as one that fits.
 func reserveCost(p Policy) func(FleetOffer) int64 {
-	return func(o FleetOffer) int64 {
-		return o.ranked((o.StoppedMicros+o.ReadMicros)*int64(p.CostHorizon/time.Second) + o.HourlyMicros*int64(p.Provision/time.Second))
-	}
+	serving := servingCost(p)
+	return func(o FleetOffer) int64 { return serving(o) + o.ranked(o.HourlyMicros*int64(p.Provision/time.Second)) }
 }
 
 // purchaseRejection says why the margin check refused an offer.

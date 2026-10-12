@@ -22,7 +22,10 @@ type fleetRead struct {
 	pending   []PendingDemandRow
 	recent    []RecentShapesRow
 	cooldowns []PlannerCooldownsRow
-	markets   map[string]FleetMarketsRow
+	// failed is when each market's newest platform reserve failed within
+	// the policy's ReserveRetry.
+	failed  map[ReserveMarket]time.Time
+	markets map[string]FleetMarketsRow
 	// release is the target agent release; nil when none is published.
 	release     *AgentRelease
 	connections []HostingConnectionsRow
@@ -67,6 +70,14 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
 		return r, fmt.Errorf("read cooldowns: %w", err)
+	}
+	failed, err := q.FailedReserves(ctx, p.ReserveRetry.Seconds())
+	if err != nil {
+		return r, fmt.Errorf("read failed reserves: %w", err)
+	}
+	r.failed = map[ReserveMarket]time.Time{}
+	for _, f := range failed {
+		r.failed[reserveMarketOf(marketOf(f.Market), f.GpuType)] = f.FailedAt
 	}
 	markets, err := q.FleetMarkets(ctx)
 	if err != nil {
