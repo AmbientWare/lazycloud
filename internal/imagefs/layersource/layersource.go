@@ -61,7 +61,10 @@ const (
 // executable with no snapshotter beside it installs nothing.
 func Install(executable string) (bool, error) {
 	exe, err := filepath.EvalSymlinks(executable)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
 		return false, fmt.Errorf("resolve the agent executable: %w", err)
 	}
 	release, err := os.ReadFile(filepath.Join(filepath.Dir(exe), Executable)) //nolint:gosec // The agent's own release.

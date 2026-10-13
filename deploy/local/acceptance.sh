@@ -25,8 +25,7 @@ case "${1:-}" in
       trap 'rm -rf "$tree"' EXIT
       git archive "$base" | tar -x -C "$tree"
       rm -rf "$previous"
-      CGO_ENABLED=0 go build -C "$tree" -trimpath -ldflags "-X main.version=previous-${base:0:12}" \
-        -o "$previous/lazycloud-agent" ./cmd/agent
+      CGO_ENABLED=0 go build -C "$tree" -trimpath -o "$previous/lazycloud-agent" ./cmd/agent
       CGO_ENABLED=0 go build -C "$tree" -trimpath -o "$previous/supervisor" ./cmd/supervisor
       echo "previous-${base:0:12}" >"$previous/VERSION"
       echo "$base" >"$previous/base"

@@ -60,12 +60,13 @@ type volumes struct {
 	// addr is the endpoint's address, empty on a host that does not cache
 	// volumes; set before the first call.
 	addr string
-	// heads makes concurrent reads of one object share one HEAD, and
-	// fills one whole fetch of a version.
-	heads, fills singleflight.Group
+	// heads makes concurrent reads of one object share one HEAD.
+	heads singleflight.Group
 
 	mu      sync.Mutex
 	buckets map[string]*bucket
+	// filling names the versions being fetched whole.
+	filling map[string]bool
 }
 
 // bucket is one workspace's granted bucket: its grant, the key requests
@@ -101,7 +102,7 @@ func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger) *volum
 	v := &volumes{
 		cache: cache, http: client, log: log,
 		signer:  v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true }),
-		buckets: map[string]*bucket{},
+		buckets: map[string]*bucket{}, filling: map[string]bool{},
 	}
 	// Forwarding has no deadline: a server-side copy of gigabytes runs for
 	// minutes.
@@ -172,25 +173,20 @@ func grantCredentials(g *imagefsproto.BucketGrant) (aws.Credentials, error) {
 // granted returns the bucket's live grant if r signs with its key.
 func (v *volumes) granted(name string, r *http.Request) (volumeGrant, bool) {
 	_, credential, _ := strings.Cut(r.Header.Get("Authorization"), "Credential=")
-	key, _, _ := strings.Cut(credential, "/")
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	b := v.buckets[name]
-	if b == nil || !time.Now().Before(b.grant.creds.Expires) || subtle.ConstantTimeCompare([]byte(key), []byte(b.key)) != 1 {
-		return volumeGrant{}, false
-	}
-	return b.grant, true
+	signed, _, _ := strings.Cut(credential, "/")
+	g, key, ok := v.live(name)
+	return g, ok && subtle.ConstantTimeCompare([]byte(signed), []byte(key)) == 1
 }
 
-// live returns the bucket's grant while it lasts.
-func (v *volumes) live(name string) (volumeGrant, bool) {
+// live returns the bucket's grant while it lasts, and its key.
+func (v *volumes) live(name string) (volumeGrant, string, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	b := v.buckets[name]
 	if b == nil || !time.Now().Before(b.grant.creds.Expires) {
-		return volumeGrant{}, false
+		return volumeGrant{}, "", false
 	}
-	return b.grant, true
+	return b.grant, b.key, true
 }
 
 // forwarded is what a forwarded request carries to rewrite and observe:
@@ -439,7 +435,7 @@ func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarde
 		return false
 	}
 	if ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
-		v.cache.background.Go(func() { v.fill(v.cache.life, ver) })
+		v.fill(ver) //nolint:contextcheck // a fill runs under the cache's life, not the read's
 	}
 	buf := make([]byte, min(maxRead, last-first+1))
 	for pos, started := first, false; pos <= last; {
@@ -501,19 +497,31 @@ func s3Error(w http.ResponseWriter, code int, s3Code string) {
 	_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code></Error>`, s3Code)
 }
 
-// fill fetches the frames of a version the cache lacks, behind reads,
-// until ctx ends or the store refuses one because the object changed. A
-// fill of the version already running is joined.
-func (v *volumes) fill(ctx context.Context, ver objectVersion) {
-	_, _, _ = v.fills.Do(ver.key(0).object, func() (any, error) {
-		ctx, cancel := context.WithCancel(ctx)
+// fill fetches the frames of a version the cache lacks in the background,
+// behind reads, until the cache's life ends or the store refuses one
+// because the object changed, unless a fill of the version runs.
+func (v *volumes) fill(ver objectVersion) {
+	name := ver.key(0).object
+	v.mu.Lock()
+	running := v.filling[name]
+	v.filling[name] = true
+	v.mu.Unlock()
+	if running {
+		return
+	}
+	v.cache.background.Go(func() {
+		defer func() {
+			v.mu.Lock()
+			delete(v.filling, name)
+			v.mu.Unlock()
+		}()
+		ctx, cancel := context.WithCancel(v.cache.life)
 		defer cancel()
 		ver.changed = cancel
 		began := time.Now()
 		fetched := v.cache.loadEach(ctx, ver.frames())
 		v.log.Info("volume object filled", "bucket", ver.bucket, "key", ver.name, "bytes", ver.size, "fetched_frames", fetched,
 			"seconds", time.Since(began).Seconds(), "error", ctx.Err())
-		return nil, nil
 	})
 }
 
@@ -550,7 +558,7 @@ func (o objectVersion) fetch(ctx context.Context, frame int) ([]byte, error) {
 	p := make([]byte, o.frameLen(frame))
 	off := int64(frame) * volumeFrame
 	err := retry(ctx, func() error {
-		g, ok := o.v.live(o.bucket)
+		g, _, ok := o.v.live(o.bucket)
 		if !ok {
 			return fmt.Errorf("bucket %s: %w", o.bucket, errNoGrant)
 		}
