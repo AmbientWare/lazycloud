@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,8 +21,9 @@ import (
 const stopGrace = 10 * time.Second
 
 // Serve runs the snapshotter on a Unix socket only root reaches, serving
-// containerd's snapshotter API and LayerSources, until ctx ends. ready
-// runs once the socket accepts calls.
+// containerd's snapshotter API, LayerSources, DiskSources and
+// VolumeSources, and the volumes' S3 endpoint on cfg.VolumeAddr, until ctx
+// ends. ready runs once both accept calls.
 func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	s, err := newSnapshotter(ctx, cfg)
 	if err != nil {
@@ -47,18 +49,27 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	snapshotsapi.RegisterSnapshotsServer(server, snapshotservice.FromSnapshotter(s))
 	imagefsproto.RegisterLayerSourcesServer(server, layerSources{cache: s.cache})
 	imagefsproto.RegisterDiskSourcesServer(server, diskSources{disks: s.disks})
-	served := make(chan error, 1)
+	imagefsproto.RegisterVolumeSourcesServer(server, volumeSources{volumes: s.volumes})
+	endpoint, err := lc.Listen(ctx, "tcp", cfg.VolumeAddr)
+	if err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("listen on %s: %w", cfg.VolumeAddr, err)
+	}
+	// Forwarded writes and reads run as long as they take.
+	volumes := &http.Server{Handler: s.volumes, ReadHeaderTimeout: stopGrace}
+	served := make(chan error, 2)
 	go func() { served <- server.Serve(listener) }()
+	go func() { served <- volumes.Serve(endpoint) }()
 	ready()
 	select {
-	case err := <-served:
-		return fmt.Errorf("serve snapshotter: %w", err)
+	case err = <-served:
+		err = fmt.Errorf("serve snapshotter: %w", err)
 	case <-ctx.Done():
 	}
 	// Stop ends a graceful stop still waiting at the grace.
 	force := time.AfterFunc(stopGrace, server.Stop)
 	server.GracefulStop()
 	force.Stop()
-	<-served
-	return nil
+	_ = volumes.Close()
+	return err
 }

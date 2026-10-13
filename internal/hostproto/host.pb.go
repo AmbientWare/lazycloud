@@ -5513,7 +5513,7 @@ type AcquireDiskResponse struct {
 	// The newest published generation; absent for a disk never published.
 	Generation *DiskGeneration `protobuf:"bytes,5,opt,name=generation,proto3" json:"generation,omitempty"`
 	// Reads the disk's objects, as GrantDiskRead renews it.
-	Read          *imagefsproto.DiskGrant `protobuf:"bytes,6,opt,name=read,proto3" json:"read,omitempty"`
+	Read          *imagefsproto.BucketGrant `protobuf:"bytes,6,opt,name=read,proto3" json:"read,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5583,7 +5583,7 @@ func (x *AcquireDiskResponse) GetGeneration() *DiskGeneration {
 	return nil
 }
 
-func (x *AcquireDiskResponse) GetRead() *imagefsproto.DiskGrant {
+func (x *AcquireDiskResponse) GetRead() *imagefsproto.BucketGrant {
 	if x != nil {
 		return x.Read
 	}
@@ -5956,7 +5956,7 @@ func (x *GrantDiskReadRequest) GetLeaseToken() []byte {
 type GrantDiskReadResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Reads the disk's objects in the workspace bucket.
-	Grant         *imagefsproto.DiskGrant `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	Grant         *imagefsproto.BucketGrant `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5991,7 +5991,7 @@ func (*GrantDiskReadResponse) Descriptor() ([]byte, []int) {
 	return file_host_v1_host_proto_rawDescGZIP(), []int{69}
 }
 
-func (x *GrantDiskReadResponse) GetGrant() *imagefsproto.DiskGrant {
+func (x *GrantDiskReadResponse) GetGrant() *imagefsproto.BucketGrant {
 	if x != nil {
 		return x.Grant
 	}
@@ -7688,7 +7688,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x12AppendLogsResponse\"K\n" +
 	"\x12AcquireDiskRequest\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x89\x02\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x8b\x02\n" +
 	"\x13AcquireDiskResponse\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12!\n" +
 	"\fworkspace_id\x18\x02 \x01(\tR\vworkspaceId\x12\x1d\n" +
@@ -7698,8 +7698,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"leaseToken\x12A\n" +
 	"\n" +
 	"generation\x18\x05 \x01(\v2!.lazycloud.host.v1.DiskGenerationR\n" +
-	"generation\x123\n" +
-	"\x04read\x18\x06 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x04read\"S\n" +
+	"generation\x125\n" +
+	"\x04read\x18\x06 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x04read\"S\n" +
 	"\x0eDiskGeneration\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x03R\n" +
@@ -7732,9 +7732,9 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x17\n" +
 	"\adisk_id\x18\x02 \x01(\tR\x06diskId\x12\x1f\n" +
 	"\vlease_token\x18\x03 \x01(\fR\n" +
-	"leaseToken\"N\n" +
-	"\x15GrantDiskReadResponse\x125\n" +
-	"\x05grant\x18\x01 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x05grant\"q\n" +
+	"leaseToken\"P\n" +
+	"\x15GrantDiskReadResponse\x127\n" +
+	"\x05grant\x18\x01 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\"q\n" +
 	"\x12ReleaseDiskRequest\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x17\n" +
 	"\adisk_id\x18\x02 \x01(\tR\x06diskId\x12\x1f\n" +
@@ -8020,7 +8020,7 @@ var file_host_v1_host_proto_goTypes = []any{
 	(*imagefsproto.FrameRead)(nil),          // 107: lazycloud.imagefs.v1.FrameRead
 	(*timestamppb.Timestamp)(nil),           // 108: google.protobuf.Timestamp
 	(*imagefsproto.LayerGrant)(nil),         // 109: lazycloud.imagefs.v1.LayerGrant
-	(*imagefsproto.DiskGrant)(nil),          // 110: lazycloud.imagefs.v1.DiskGrant
+	(*imagefsproto.BucketGrant)(nil),        // 110: lazycloud.imagefs.v1.BucketGrant
 }
 var file_host_v1_host_proto_depIdxs = []int32{
 	14,  // 0: lazycloud.host.v1.EnrollRequest.capacity:type_name -> lazycloud.host.v1.Capacity
@@ -8114,10 +8114,10 @@ var file_host_v1_host_proto_depIdxs = []int32{
 	8,   // 88: lazycloud.host.v1.LogLine.stream:type_name -> lazycloud.host.v1.LogStream
 	108, // 89: lazycloud.host.v1.LogLine.time:type_name -> google.protobuf.Timestamp
 	73,  // 90: lazycloud.host.v1.AcquireDiskResponse.generation:type_name -> lazycloud.host.v1.DiskGeneration
-	110, // 91: lazycloud.host.v1.AcquireDiskResponse.read:type_name -> lazycloud.imagefs.v1.DiskGrant
+	110, // 91: lazycloud.host.v1.AcquireDiskResponse.read:type_name -> lazycloud.imagefs.v1.BucketGrant
 	73,  // 92: lazycloud.host.v1.RecordDiskGenerationRequest.generation:type_name -> lazycloud.host.v1.DiskGeneration
 	73,  // 93: lazycloud.host.v1.RecordDiskGenerationResponse.orphans:type_name -> lazycloud.host.v1.DiskGeneration
-	110, // 94: lazycloud.host.v1.GrantDiskReadResponse.grant:type_name -> lazycloud.imagefs.v1.DiskGrant
+	110, // 94: lazycloud.host.v1.GrantDiskReadResponse.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
 	9,   // 95: lazycloud.host.v1.DiskFailure.operation:type_name -> lazycloud.host.v1.DiskOperation
 	82,  // 96: lazycloud.host.v1.RecordDiskFailureRequest.failure:type_name -> lazycloud.host.v1.DiskFailure
 	86,  // 97: lazycloud.host.v1.APIRequest.head:type_name -> lazycloud.host.v1.APIRequestHead

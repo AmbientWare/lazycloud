@@ -121,8 +121,9 @@ service DiskSources {
   rpc DiskReads(DiskReadsRequest) returns (DiskReadsResponse);
 }
 
-// DiskGrant reads the objects under disks/<disk id>/ of one bucket.
-message DiskGrant {
+// BucketGrant is a short-lived credential for objects of one bucket: a
+// disk's, read-only under disks/<disk id>/, or a workspace's volumes.
+message BucketGrant {
   string endpoint = 1;
   string region = 2;
   string bucket = 3;
@@ -135,7 +136,7 @@ message DiskGrant {
 
 message GrantDiskRequest {
   string disk_id = 1;
-  DiskGrant grant = 2;
+  BucketGrant grant = 2;
 }
 
 message GrantDiskResponse {}
@@ -183,3 +184,39 @@ message DiskReadsResponse {
   // used first, at most as many as a prefetch fetches.
   repeated uint32 recent_frames = 2;
 }
+
+// VolumeSources serves workspaces' platform volumes through the frame cache.
+// The snapshotter answers S3 requests on a loopback address for the buckets
+// granted to it, addressed path-style, and signs each request it forwards to
+// the bucket's store with the bucket's grant. A GET with no query string of
+// an object of 1 MiB or more is served from the cache, by the object's
+// version: its ETag, as a HEAD answered at most a second earlier reported
+// it. Every frame of a version is fetched with If-Match on that ETag, so a
+// cached version never mixes bytes of two. Any other request is forwarded
+// unchanged, and a PUT, POST or DELETE makes the next read of every object
+// of the workspace ask the store for its version again.
+service VolumeSources {
+  // GrantVolumes records the read-write credential of a workspace's bucket,
+  // replacing the bucket's current one unless that expires later. Requests
+  // for a bucket without a live grant are refused.
+  rpc GrantVolumes(GrantVolumesRequest) returns (GrantVolumesResponse);
+  // WarmVolumes fills the objects under prefixes of the workspace's granted
+  // bucket into the cache in the background, behind containers' reads,
+  // within a share of the cache. A request naming no prefix warms nothing.
+  rpc WarmVolumes(WarmVolumesRequest) returns (WarmVolumesResponse);
+}
+
+message GrantVolumesRequest {
+  string workspace_id = 1;
+  BucketGrant grant = 2;
+}
+
+message GrantVolumesResponse {}
+
+message WarmVolumesRequest {
+  string workspace_id = 1;
+  // Key prefixes, each a volume's, ending in "/".
+  repeated string prefixes = 2;
+}
+
+message WarmVolumesResponse {}

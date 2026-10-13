@@ -60,7 +60,7 @@ type heldDisk struct {
 	// recorded for the lease.
 	reported bool
 	// read is the disk's read grant.
-	read *imagefsproto.DiskGrant
+	read *imagefsproto.BucketGrant
 }
 
 // diskSet is a container's leased disks.

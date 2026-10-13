@@ -19,9 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
@@ -140,19 +137,12 @@ func (d *disks) lookup(id string) *disk {
 }
 
 // grant records a disk's credential unless the current one expires later.
-func (d *disks) grant(id string, g *imagefsproto.DiskGrant) error {
-	if g.GetEndpoint() == "" || g.GetRegion() == "" || g.GetBucket() == "" || g.GetAccessKeyId() == "" || g.GetExpiresAt() == nil {
-		return status.Error(codes.InvalidArgument, "a disk grant needs an endpoint, a region, a bucket, a key and an expiry")
+func (d *disks) grant(id string, g *imagefsproto.BucketGrant) error {
+	creds, err := grantCredentials(g)
+	if err != nil {
+		return err
 	}
-	expires := g.GetExpiresAt().AsTime()
-	d.grants.put(id, expires, func() imagefs.Bucket {
-		creds := aws.Credentials{
-			AccessKeyID: g.GetAccessKeyId(), SecretAccessKey: g.GetSecretAccessKey(), SessionToken: g.GetSessionToken(),
-			CanExpire: true, Expires: expires,
-		}
-		return imagefs.NewBucket(g.GetEndpoint(), g.GetRegion(), g.GetBucket(), g.GetForcePathStyle(), credentials.StaticCredentialsProvider{Value: creds},
-			func(o *s3.Options) { o.HTTPClient, o.RetryMaxAttempts = d.http, 1 })
-	})
+	d.grants.put(id, creds.Expires, func() imagefs.Bucket { return grantBucket(d.http, g, creds) })
 	return nil
 }
 

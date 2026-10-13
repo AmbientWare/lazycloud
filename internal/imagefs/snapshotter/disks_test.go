@@ -94,7 +94,7 @@ func serveDisks(t *testing.T, transport http.RoundTripper) *disks {
 func (d *disks) grantTest(t *testing.T, ts *testStore, id string) {
 	t.Helper()
 	cfg := storagetest.Config(t)
-	if err := d.grant(id, &imagefsproto.DiskGrant{
+	if err := d.grant(id, &imagefsproto.BucketGrant{
 		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: ts.bucket, ForcePathStyle: true,
 		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	}); err != nil {

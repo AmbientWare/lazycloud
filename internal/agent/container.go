@@ -340,6 +340,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 		}
 	}
 
+	c.a.volumes.warm(spec)
 	began := time.Now()
 	tracing, err := c.a.layers.start(ctx, c.log, c.id, spec)
 	if err != nil {

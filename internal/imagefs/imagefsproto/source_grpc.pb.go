@@ -555,3 +555,177 @@ var DiskSources_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "imagefs/v1/source.proto",
 }
+
+const (
+	VolumeSources_GrantVolumes_FullMethodName = "/lazycloud.imagefs.v1.VolumeSources/GrantVolumes"
+	VolumeSources_WarmVolumes_FullMethodName  = "/lazycloud.imagefs.v1.VolumeSources/WarmVolumes"
+)
+
+// VolumeSourcesClient is the client API for VolumeSources service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// VolumeSources serves workspaces' platform volumes through the frame cache.
+// The snapshotter answers S3 requests on a loopback address for the buckets
+// granted to it, addressed path-style, and signs each request it forwards to
+// the bucket's store with the bucket's grant. A GET with no query string of
+// an object of 1 MiB or more is served from the cache, by the object's
+// version: its ETag, as a HEAD answered at most a second earlier reported
+// it. Every frame of a version is fetched with If-Match on that ETag, so a
+// cached version never mixes bytes of two. Any other request is forwarded
+// unchanged, and a PUT, POST or DELETE makes the next read of every object
+// of the workspace ask the store for its version again.
+type VolumeSourcesClient interface {
+	// GrantVolumes records the read-write credential of a workspace's bucket,
+	// replacing the bucket's current one unless that expires later. Requests
+	// for a bucket without a live grant are refused.
+	GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error)
+	// WarmVolumes fills the objects under prefixes of the workspace's granted
+	// bucket into the cache in the background, behind containers' reads,
+	// within a share of the cache. A request naming no prefix warms nothing.
+	WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error)
+}
+
+type volumeSourcesClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewVolumeSourcesClient(cc grpc.ClientConnInterface) VolumeSourcesClient {
+	return &volumeSourcesClient{cc}
+}
+
+func (c *volumeSourcesClient) GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_GrantVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeSourcesClient) WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_WarmVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// VolumeSourcesServer is the server API for VolumeSources service.
+// All implementations must embed UnimplementedVolumeSourcesServer
+// for forward compatibility.
+//
+// VolumeSources serves workspaces' platform volumes through the frame cache.
+// The snapshotter answers S3 requests on a loopback address for the buckets
+// granted to it, addressed path-style, and signs each request it forwards to
+// the bucket's store with the bucket's grant. A GET with no query string of
+// an object of 1 MiB or more is served from the cache, by the object's
+// version: its ETag, as a HEAD answered at most a second earlier reported
+// it. Every frame of a version is fetched with If-Match on that ETag, so a
+// cached version never mixes bytes of two. Any other request is forwarded
+// unchanged, and a PUT, POST or DELETE makes the next read of every object
+// of the workspace ask the store for its version again.
+type VolumeSourcesServer interface {
+	// GrantVolumes records the read-write credential of a workspace's bucket,
+	// replacing the bucket's current one unless that expires later. Requests
+	// for a bucket without a live grant are refused.
+	GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error)
+	// WarmVolumes fills the objects under prefixes of the workspace's granted
+	// bucket into the cache in the background, behind containers' reads,
+	// within a share of the cache. A request naming no prefix warms nothing.
+	WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error)
+	mustEmbedUnimplementedVolumeSourcesServer()
+}
+
+// UnimplementedVolumeSourcesServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedVolumeSourcesServer struct{}
+
+func (UnimplementedVolumeSourcesServer) GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) mustEmbedUnimplementedVolumeSourcesServer() {}
+func (UnimplementedVolumeSourcesServer) testEmbeddedByValue()                       {}
+
+// UnsafeVolumeSourcesServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to VolumeSourcesServer will
+// result in compilation errors.
+type UnsafeVolumeSourcesServer interface {
+	mustEmbedUnimplementedVolumeSourcesServer()
+}
+
+func RegisterVolumeSourcesServer(s grpc.ServiceRegistrar, srv VolumeSourcesServer) {
+	// If the following call panics, it indicates UnimplementedVolumeSourcesServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&VolumeSources_ServiceDesc, srv)
+}
+
+func _VolumeSources_GrantVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).GrantVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_GrantVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).GrantVolumes(ctx, req.(*GrantVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeSources_WarmVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).WarmVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_WarmVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).WarmVolumes(ctx, req.(*WarmVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// VolumeSources_ServiceDesc is the grpc.ServiceDesc for VolumeSources service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var VolumeSources_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lazycloud.imagefs.v1.VolumeSources",
+	HandlerType: (*VolumeSourcesServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GrantVolumes",
+			Handler:    _VolumeSources_GrantVolumes_Handler,
+		},
+		{
+			MethodName: "WarmVolumes",
+			Handler:    _VolumeSources_WarmVolumes_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "imagefs/v1/source.proto",
+}

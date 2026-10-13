@@ -22,16 +22,21 @@ import (
 	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // A container's platform volumes share one mount container, which mounts the
 // volumes/ prefix of its workspace bucket; each cloud bucket it names gets
-// one more. GeeseFS holds the credentials there, and the workload binds each
-// volume's own directory of the mount, never the credentials or other
-// volumes, through a bind the agent makes of it, which needs root.
+// one more. On a host that caches volumes the mount addresses the
+// snapshotter's endpoint, which holds the workspace's credential; elsewhere
+// GeeseFS holds it. The workload binds each volume's own directory of the
+// mount, never the credentials or other volumes, through a bind the agent
+// makes of it, which needs root.
 // A mount container shares its mount with the host through a
 // shared-propagation bind of the mount directory, so it outlives agent
 // restarts, like its workload.
@@ -87,6 +92,11 @@ type volumes struct {
 	mounts map[string][]*mounter
 	// bus reaches systemd, which runs the slices.
 	bus *systemd.Conn
+
+	// sources is the snapshotter's VolumeSources, and cached whether
+	// platform volumes mount through it; set before the first session.
+	sources imagefsproto.VolumeSourcesClient
+	cached  bool
 }
 
 // mounter is one mount container.
@@ -184,8 +194,9 @@ func writeCredentials(dir string, creds processCredentials) error {
 	return nil
 }
 
-// grant stores a workspace's credentials where its mounts read them.
-func (v *volumes) grant(g *hostproto.StorageGrant) error {
+// grant stores a workspace's credentials where its mounts read them, and
+// on a host that caches volumes, with the snapshotter.
+func (v *volumes) grant(ctx context.Context, g *hostproto.StorageGrant) error {
 	workspace := g.GetWorkspaceId()
 	if !isUUID(workspace) {
 		return fmt.Errorf("storage grant for %q: not a workspace id", workspace)
@@ -209,10 +220,57 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err := writeFileAtomic(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
 		return fmt.Errorf("write bucket location: %w", err)
 	}
+	if err := v.grantCache(ctx, workspace, &imagefsproto.BucketGrant{
+		Endpoint: g.GetEndpoint(), Region: g.GetRegion(), Bucket: g.GetBucket(), ForcePathStyle: g.GetForcePathStyle(),
+		AccessKeyId: g.GetAccessKeyId(), SecretAccessKey: g.GetSecretAccessKey(), SessionToken: g.GetSessionToken(), ExpiresAt: g.GetExpiresAt(),
+	}); err != nil {
+		return err
+	}
 	v.mu.Lock()
 	v.markGranted(workspace)
 	v.mu.Unlock()
 	return nil
+}
+
+// grantCache hands a workspace's grant to the snapshotter on a host that
+// caches volumes.
+func (v *volumes) grantCache(ctx context.Context, workspace string, g *imagefsproto.BucketGrant) error {
+	if !v.cached {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	if _, err := v.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{WorkspaceId: workspace, Grant: g}); err != nil {
+		return fmt.Errorf("grant volumes to the snapshotter: %w", err)
+	}
+	return nil
+}
+
+// warm has the snapshotter fill the platform volumes a start mounts on a
+// host that caches volumes, once their workspace's grant is here, while the
+// start pulls its image.
+func (v *volumes) warm(spec *hostproto.StartContainer) {
+	if !v.cached {
+		return
+	}
+	prefixes := map[string][]string{}
+	for _, m := range spec.GetVolumes() {
+		if p := m.GetVolume(); p != nil {
+			prefixes[p.GetWorkspaceId()] = append(prefixes[p.GetWorkspaceId()], p.GetPrefix())
+		}
+	}
+	for workspace, list := range prefixes {
+		v.a.goOwned(func(ctx context.Context) {
+			if err := v.waitGrant(ctx, workspace); err != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+			defer cancel()
+			if _, err := v.sources.WarmVolumes(ctx, &imagefsproto.WarmVolumesRequest{WorkspaceId: workspace, Prefixes: list}); err != nil {
+				v.a.log.Warn("warming volumes failed", "workspace_id", workspace, "error", err)
+			}
+		})
+	}
 }
 
 // bucketLocation is where a workspace's bucket is, kept beside its
@@ -445,10 +503,14 @@ func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount
 	if err != nil {
 		return mountSpec{}, nil, err
 	}
-	return mountSpec{
+	spec := mountSpec{
 		what: "the mount of the workspace's volumes", creds: v.storageDir(workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region,
 		pathStyle: loc.PathStyle,
-	}, dirs, nil
+	}
+	if v.cached {
+		spec.creds, spec.endpoint, spec.pathStyle = "", "http://"+layersource.VolumeEndpoint, true
+	}
+	return spec, dirs, nil
 }
 
 // release stops the container's mounts, deletes their keys and stops its
@@ -529,7 +591,7 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 // mountSpec is what one GeeseFS mount container mounts.
 type mountSpec struct {
 	// what names the mount in errors; creds holds its credential_process
-	// files.
+	// files, empty for the snapshotter's endpoint, which signs for it.
 	what, creds string
 	// source is bucket:prefix.
 	source, endpoint, region string
@@ -607,17 +669,30 @@ exit 1`, target, strings.Join(quoted, " "))
 	labels[labelKind] = kindMount
 	labels[labelContainer] = m.container
 	pids := int64(mounterPidsLimit)
+	env := []string{"GOMEMLIMIT=" + strconv.Itoa(geesefsGoMemoryMiB) + "MiB"}
+	binds := []mount.Mount{
+		{Type: mount.TypeBind, Source: v.a.cfg.GeeseFSPath, Target: "/opt/lazycloud/bin/geesefs", ReadOnly: true},
+		{Type: mount.TypeBind, Source: v.a.cfg.TrustBundle, Target: "/etc/ssl/certs/ca-certificates.crt", ReadOnly: true},
+		{
+			Type: mount.TypeBind, Source: v.mountDir(), Target: "/mnt",
+			BindOptions: &mount.BindOptions{Propagation: mount.PropagationRShared},
+		},
+	}
+	if spec.creds != "" {
+		env = append(env, "AWS_SDK_LOAD_CONFIG=1", "AWS_CONFIG_FILE=/creds/config")
+		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: spec.creds, Target: "/creds", ReadOnly: true})
+	} else {
+		// GeeseFS signs every request; the endpoint replaces the signature.
+		env = append(env, "AWS_ACCESS_KEY_ID=lazycloud", "AWS_SECRET_ACCESS_KEY=lazycloud")
+	}
 	var err error
 	m.id, err = v.a.createContainer(ctx, m.name, client.ContainerCreateOptions{
 		Name: m.name,
 		Config: &containertypes.Config{
 			Image:      image,
 			Entrypoint: []string{"/bin/sh", "-c", script},
-			Env: []string{
-				"AWS_SDK_LOAD_CONFIG=1", "AWS_CONFIG_FILE=/creds/config",
-				"GOMEMLIMIT=" + strconv.Itoa(geesefsGoMemoryMiB) + "MiB",
-			},
-			Labels: labels,
+			Env:        env,
+			Labels:     labels,
 		},
 		HostConfig: &containertypes.HostConfig{
 			NetworkMode: "host",
@@ -631,15 +706,7 @@ exit 1`, target, strings.Join(quoted, " "))
 				MemorySwap: hostproto.MounterMemoryBytes,
 				PidsLimit:  &pids,
 			},
-			Mounts: []mount.Mount{
-				{Type: mount.TypeBind, Source: v.a.cfg.GeeseFSPath, Target: "/opt/lazycloud/bin/geesefs", ReadOnly: true},
-				{Type: mount.TypeBind, Source: v.a.cfg.TrustBundle, Target: "/etc/ssl/certs/ca-certificates.crt", ReadOnly: true},
-				{Type: mount.TypeBind, Source: spec.creds, Target: "/creds", ReadOnly: true},
-				{
-					Type: mount.TypeBind, Source: v.mountDir(), Target: "/mnt",
-					BindOptions: &mount.BindOptions{Propagation: mount.PropagationRShared},
-				},
-			},
+			Mounts: binds,
 		},
 	})
 	if err != nil {
@@ -817,7 +884,6 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			}
 		}
 	}
-	v.adoptGrants()
 	return nil
 }
 
@@ -837,24 +903,37 @@ func (v *volumes) removeAll(ctx context.Context) error {
 	return nil
 }
 
-// adoptGrants counts each stored grant as received while its key is valid;
-// otherwise starts wait for the fresh one the server sends.
-func (v *volumes) adoptGrants() {
+// adoptGrants counts each stored grant as received while its key is valid,
+// once the snapshotter holds it on a host that caches volumes; otherwise
+// starts wait for the fresh one the server sends.
+func (v *volumes) adoptGrants(ctx context.Context) {
 	entries, err := os.ReadDir(filepath.Join(v.a.cfg.StateDir, "storage"))
 	if err != nil {
 		return
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	for _, entry := range entries {
 		workspace := entry.Name()
 		if !isUUID(workspace) {
 			continue
 		}
 		c, err := v.credentials(workspace)
-		if _, statErr := os.Stat(filepath.Join(v.storageDir(workspace), "location.json")); err == nil && statErr == nil && time.Until(c.Expires) > grantMargin {
-			v.markGranted(workspace)
+		if err != nil || time.Until(c.Expires) <= grantMargin {
+			continue
 		}
+		loc, err := v.location(workspace)
+		if err != nil {
+			continue
+		}
+		if err := v.grantCache(ctx, workspace, &imagefsproto.BucketGrant{
+			Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.PathStyle,
+			AccessKeyId: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, ExpiresAt: timestamppb.New(c.Expires),
+		}); err != nil {
+			v.a.log.Warn("handing a stored grant to the snapshotter failed", "workspace_id", workspace, "error", err)
+			continue
+		}
+		v.mu.Lock()
+		v.markGranted(workspace)
+		v.mu.Unlock()
 	}
 }
 

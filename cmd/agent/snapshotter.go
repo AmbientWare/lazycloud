@@ -14,17 +14,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AmbientWare/lazycloud/internal/agent"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 const (
-	snapshotterExecutable = "lazycloud-snapshotter"
-	snapshotterUnitName   = "lazycloud-snapshotter.service"
-	// snapshotterBinary is a copy outside the agent's releases, which
-	// updates replace and prune while the snapshotter keeps running.
-	snapshotterBinary = "/usr/local/lib/lazycloud/" + snapshotterExecutable
-	containerdConfig  = "/etc/containerd/config.toml"
-	dockerConfig      = "/etc/docker/daemon.json"
+	containerdConfig = "/etc/containerd/config.toml"
+	dockerConfig     = "/etc/docker/daemon.json"
 	// minDockerMajor is the first Docker with the containerd image store
 	// and its snapshotter as storage driver.
 	minDockerMajor = 25
@@ -40,7 +36,7 @@ Before=containerd.service docker.service
 
 [Service]
 Type=notify
-ExecStart=` + snapshotterBinary + `
+ExecStart=` + layersource.Binary + `
 Restart=always
 RestartSec=2
 KillMode=process
@@ -74,7 +70,7 @@ func installSnapshotter(executable string, out io.Writer) error {
 	if _, err := os.Stat("/run/containerd/containerd.sock"); err != nil {
 		return fmt.Errorf("the snapshotter needs Docker on the system containerd at /run/containerd/containerd.sock: %w", err)
 	}
-	active := exec.CommandContext(context.Background(), "systemctl", "is-active", "--quiet", snapshotterUnitName).Run() == nil //nolint:gosec // a fixed unit name
+	active := exec.CommandContext(context.Background(), "systemctl", "is-active", "--quiet", layersource.Unit).Run() == nil //nolint:gosec // a fixed unit name
 	if active {
 		_, _ = fmt.Fprintln(out, "lazycloud-snapshotter is running and keeps its version; it changes on a drained host")
 	} else {
@@ -82,15 +78,15 @@ func installSnapshotter(executable string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		binary, err := os.ReadFile(filepath.Join(filepath.Dir(exe), snapshotterExecutable)) //nolint:gosec // the snapshotter inside the agent's own release
+		binary, err := os.ReadFile(filepath.Join(filepath.Dir(exe), agent.SnapshotterExecutable)) //nolint:gosec // the snapshotter inside the agent's own release
 		if err != nil {
 			return fmt.Errorf("read the snapshotter from the agent release: %w", err)
 		}
-		if _, err := writeIfChanged(snapshotterBinary, binary, 0o755); err != nil {
+		if _, err := writeIfChanged(layersource.Binary, binary, 0o755); err != nil {
 			return err
 		}
 	}
-	if _, err := writeIfChanged(filepath.Join(systemdUnits, snapshotterUnitName), []byte(snapshotterUnit), 0o644); err != nil {
+	if _, err := writeIfChanged(filepath.Join(systemdUnits, layersource.Unit), []byte(snapshotterUnit), 0o644); err != nil {
 		return err
 	}
 	containerdChanged, err := addContainerdProxy(containerdConfig)
@@ -101,9 +97,9 @@ func installSnapshotter(executable string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	commands := [][]string{{"daemon-reload"}, {"enable", snapshotterUnitName}}
+	commands := [][]string{{"daemon-reload"}, {"enable", layersource.Unit}}
 	if !active {
-		commands = append(commands, []string{"start", snapshotterUnitName})
+		commands = append(commands, []string{"start", layersource.Unit})
 	}
 	if containerdChanged {
 		commands = append(commands, []string{"restart", "containerd.service"})

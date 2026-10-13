@@ -27,7 +27,7 @@ import (
 
 // An installed agent lives in a root directory:
 //
-//	releases/<version>/{lazycloud-agent,supervisor,runtime/<python>}
+//	releases/<version>/{lazycloud-agent,lazycloud-snapshotter,supervisor,runtime/<python>}
 //	current  -> releases/<version>
 //	previous -> releases/<version>
 //	agent-service.sh, the service's start wrapper
@@ -37,8 +37,10 @@ import (
 // to previous when the new release starts three times without opening a
 // session.
 const (
-	// AgentExecutable is the agent's name inside a release.
-	AgentExecutable = "lazycloud-agent"
+	// AgentExecutable is the agent's name inside a release, and
+	// SnapshotterExecutable the snapshotter's.
+	AgentExecutable       = "lazycloud-agent"
+	SnapshotterExecutable = "lazycloud-snapshotter"
 	// TrialFile in the state directory names a release on trial; the wrapper
 	// appends a line per start.
 	TrialFile = "update-trial"
