@@ -362,14 +362,20 @@ func walkPools(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in OfferI
 		need.Read = cmp.Or(need.Read, VolumeReadOf(w.ReadRegion, w.ReadBytes))
 	}
 	hibernate, reserve := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate, h.ReserveMode != nil
-	offers := slices.DeleteFunc(RankOffers(p, need, reserve, in), func(o FleetOffer) bool {
-		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
-			slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
-				return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
-			})
-	})
-	refs, available := sizeRefs(p, need, reserve, in), slices.Clone(offers)
-	keeps := func(o FleetOffer) bool { return p.sized(o, reservedShape(need), need.Disks, refs, available) }
+	walkable := func(in OfferInputs) []FleetOffer {
+		return slices.DeleteFunc(RankOffers(p, need, reserve, in), func(o FleetOffer) bool {
+			return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
+				slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
+					return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
+				})
+		})
+	}
+	offers, refs := walkable(in), sizeRefs(p, need, reserve, in)
+	soon := offers
+	if refs != nil {
+		soon = walkable(availableSoon(p, in))
+	}
+	keeps := func(o FleetOffer) bool { return p.sized(o, reservedShape(need), need.Disks, refs, soon) }
 	return slices.DeleteFunc(offers, func(o FleetOffer) bool { return !keeps(o) }), keeps
 }
 
@@ -482,7 +488,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimLa
 			// the request is tagged for cleanup and cancelled first.
 			// EC2 refuses a persistent request whose instance would
 			// terminate itself, so a guest shutdown stops it, and
-			// reconcile retires a reserve that stopped unasked.
+			// reconcile ends a host that stopped unasked.
 			spot.SpotInstanceType = ec2types.SpotInstanceTypePersistent
 			spot.InstanceInterruptionBehavior = ec2types.InstanceInterruptionBehaviorStop
 			input.InstanceInitiatedShutdownBehavior = ec2types.ShutdownBehaviorStop
@@ -578,18 +584,23 @@ type launchOptions struct {
 // launchOptionsFor sizes a launch. Its root has the throughput its type is
 // priced with. A platform host bought for the reserve hibernates when it
 // asks to and its catalog type can, with its root grown for the image. A
-// Spot reserve keeps its request across stops. Serving and connection
-// hosts launch with the plain root.
+// platform Spot reserve keeps its request across stops, and so does a
+// platform Spot GPU host, which returns to the reserve when its market's
+// reserves fall short as it leaves. Serving and connection hosts launch
+// with the plain root.
 func launchOptionsFor(h ClaimLaunchesRow) launchOptions {
 	t, _ := CatalogTypeNamed(h.InstanceType)
 	opts := launchOptions{
 		rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps()), //nolint:gosec // At most buildMiBps.
 		dataGiB: int32(t.DataVolumeGiB()), //nolint:gosec // At most a few TiB.
 	}
-	if h.ReserveMode == nil || HostKind(h.Kind) != KindPlatform {
+	if HostKind(h.Kind) != KindPlatform {
 		return opts
 	}
-	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot
+	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot && (h.ReserveMode != nil || h.GpuCount > 0)
+	if h.ReserveMode == nil {
+		return opts
+	}
 	opts.hibernate = ReserveMode(*h.ReserveMode) == ReserveHibernate && t.Hibernates
 	opts.rootGiB = int32(t.RootGiB(opts.hibernate)) //nolint:gosec // At most 250: only types under 150 GiB of RAM hibernate.
 	return opts
@@ -623,8 +634,8 @@ func blockDevices(opts launchOptions) []ec2types.BlockDeviceMapping {
 }
 
 // persistentRequest is the Spot request a host must cancel before it
-// terminates: a reserve's persistent one. A one-time request ends with its
-// instance, and cancelling it is neither needed nor allowed.
+// terminates: a persistent one. A one-time request ends with its instance,
+// and cancelling it is neither needed nor allowed.
 func persistentRequest(opts launchOptions, instance ec2types.Instance) *string {
 	if !opts.persistent {
 		return nil

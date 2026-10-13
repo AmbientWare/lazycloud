@@ -412,17 +412,6 @@ type marketView struct {
 	floorShortSince *time.Time
 }
 
-// inMarkets are the hosts keep selects.
-func (ps *pass) inMarkets(keep func(FleetHost) bool) []*FleetHost {
-	var out []*FleetHost
-	for i := range ps.hosts {
-		if keep(ps.hosts[i]) {
-			out = append(out, &ps.hosts[i])
-		}
-	}
-	return out
-}
-
 func (ps *pass) inMarket(m ReserveMarket, keep func(FleetHost) bool) []*FleetHost {
 	var out []*FleetHost
 	for i := range ps.hosts {
@@ -603,6 +592,9 @@ func (ps *pass) marketRanking(m ReserveMarket, reserve bool) ranking {
 	need := marketNeed(m)
 	need.Read = ps.s.Offers.marketRead(m)
 	r := ranking{refs: sizeRefs(ps.p, need, reserve, ps.s.Offers)}
+	if r.refs != nil {
+		r.soon = RankOffers(ps.p, need, reserve, availableSoon(ps.p, ps.s.Offers))
+	}
 	r.offers = slices.DeleteFunc(RankOffers(ps.p, need, reserve, ps.s.Offers), func(o FleetOffer) bool {
 		return o.Market != m.buyMarket() || o.Type.GPU != m.GPU
 	})
@@ -611,8 +603,8 @@ func (ps *pass) marketRanking(m ReserveMarket, reserve bool) ranking {
 }
 
 // ranking is the offers for one need, best first, and what the size rule
-// sizes them against.
-type ranking struct{ offers, refs []FleetOffer }
+// sizes them against: the sizes of GPU offers and those available soon.
+type ranking struct{ offers, refs, soon []FleetOffer }
 
 // misplaced reports a region outside the one market v's starts read from,
 // while the market's cheapest reserve that holds its largest shape lies in
@@ -683,7 +675,7 @@ func (ps *pass) batching() bool {
 // for what it holds against r.
 func (ps *pass) limits(nodes int, r ranking) CoverLimits {
 	return CoverLimits{Nodes: nodes, VCPUs: quotaRoom(ps.s.Offers.Quotas, ps.quotaUsed), Sized: func(o FleetOffer, holds FleetCapacity, disks int) bool {
-		return ps.p.sized(o, holds, disks, r.refs, r.offers)
+		return ps.p.sized(o, holds, disks, r.refs, r.soon)
 	}}
 }
 
@@ -888,8 +880,10 @@ func (ps *pass) cover(items []coverItem) {
 	// A purchase EC2 has not launched yet that nothing waits for any longer,
 	// as when its container stopped, is not launched; a rightsize's waits
 	// for its slots to move.
-	for _, h := range ps.inMarkets(func(h FleetHost) bool { return h.Requested && !h.reserve() && h.Replaces == nil && !ps.claimed[h.ID] }) {
-		ps.act(FleetAction{Kind: ActionCancel, Market: h.market(), Host: ptr(h.ID)})
+	for _, h := range ps.hosts {
+		if h.Requested && !h.reserve() && h.Replaces == nil && !ps.claimed[h.ID] {
+			ps.act(FleetAction{Kind: ActionCancel, Market: h.market(), Host: ptr(h.ID)})
+		}
 	}
 }
 
@@ -939,7 +933,7 @@ func (ps *pass) spotOffered(need Requirement) bool {
 	models := ps.gpuModels(need, r.offers)
 	offered := slices.ContainsFunc(r.offers, func(o FleetOffer) bool {
 		return o.Market == MarketSpot && (key.shape.GPUs == 0 || slices.Contains(models, o.Type.GPU)) && o.Usable.Covers(key.shape) &&
-			o.Type.DiskSlots() >= need.Disks && ps.p.sized(o, key.shape, need.Disks, r.refs, r.offers)
+			o.Type.DiskSlots() >= need.Disks && ps.p.sized(o, key.shape, need.Disks, r.refs, r.soon)
 	})
 	ps.spotOffers[key] = offered
 	return offered
@@ -1002,6 +996,9 @@ func (ps *pass) classOffers(need Requirement) ranking {
 		return r
 	}
 	r := ranking{offers: RankOffers(ps.p, c, false, ps.s.Offers), refs: sizeRefs(ps.p, c, false, ps.s.Offers)}
+	if r.refs != nil {
+		r.soon = RankOffers(ps.p, c, false, availableSoon(ps.p, ps.s.Offers))
+	}
 	ps.offers[key] = r
 	return r
 }

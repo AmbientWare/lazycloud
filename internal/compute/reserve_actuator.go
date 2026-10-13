@@ -99,8 +99,9 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 					err = c.startReserve(ctx, logger, client, h, instance, requestActive, &result)
 				}
 			case PhaseTerminating:
-				// A vanished instance is reconcile's to mark deleted.
-				if seen && instance.State.Name != ec2types.InstanceStateNameTerminated {
+				// A vanished instance is reconcile's to mark deleted, and one
+				// shutting down is ending already.
+				if seen && instance.State.Name != ec2types.InstanceStateNameTerminated && instance.State.Name != ec2types.InstanceStateNameShuttingDown {
 					if err = c.terminate(ctx, scope, region, deref(h.InstanceID)); err == nil {
 						result.Terminated++
 					}
