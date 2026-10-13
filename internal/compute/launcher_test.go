@@ -419,47 +419,32 @@ values ($1, $2, 'pending', 1, 2000, 4 << 30, 'auto', $3)`, ws, release, host)
 	}
 }
 
-// A refused rightsize moves only to a pool that costs less than the host
-// it replaces; with none left the launch fails and rightsize leaves the
-// host for a while.
-func TestARefusedRightsizeMovesOnlyToACheaperPool(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		next      int64
-		launched  bool
-		backedOff bool
-	}{{"cheaper pool", 90000, true, false}, {"no cheaper pool", 300000, false, true}} {
-		o, emulator, _ := launchFleet(t, compute.Fleet{})
-		emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
-		run(t, o.pool, `
-insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
-values ('us-east-2', 'use2-az1', 'c6a.2xlarge', 80000, now(), now()), ('us-east-2', 'use2-az2', 'c6a.2xlarge', $1, now(), now())`, c.next)
-		small, _ := compute.CatalogTypeNamed("c6a.2xlarge")
-		usable := small.Usable(0)
-		replaced := scan[uuid.UUID](t, o.pool, `
+// A refused rightsize tries no other pool: the launch fails, the host it
+// would replace stays, and rightsize leaves that host for a while.
+func TestARefusedRightsizeKeepsTheHostItWouldReplace(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	spotPrices(t, o)
+	small, _ := compute.CatalogTypeNamed("c6a.2xlarge")
+	usable := small.Usable(0)
+	replaced := scan[uuid.UUID](t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
     instance_type, market, hourly_micros)
 values ('old', 'online', 'platform', 'aws', 'ready', 16000, $1, 'us-west-1', 'us-west-1b', 'usw1-az1', 'c6i.8xlarge', 'spot', 200000)
 returning id`, 64*gib)
-		run(t, o.pool, `
+	run(t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
     instance_type, market, replaces, holds_cpu_millis, holds_memory_bytes)
 values ('new', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'c6a.2xlarge', 'spot', $3, 4000, $4)`,
-			int64(usable.CPUMillis), usable.MemoryBytes, replaced, 8*gib)
-		if n := launch(t, o); (n == 1) != c.launched {
-			t.Fatalf("%s: launched %d", c.name, n)
-		}
-		calls := emulator.calls("RunInstances")
-		if c.launched && (len(calls) != 2 || calls[1].Form.Get("SubnetId") != "subnet-east-b") || !c.launched && len(calls) != 1 {
-			var pools []string
-			for _, call := range calls {
-				pools = append(pools, pool(call))
-			}
-			t.Fatalf("%s: launches %v", c.name, pools)
-		}
-		if backedOff := scan[bool](t, o.pool, "select rightsize_refused_at is not null from hosts where id = $1", replaced); backedOff != c.backedOff {
-			t.Fatalf("%s: rightsize refused recorded %v, want %v", c.name, backedOff, c.backedOff)
-		}
+		int64(usable.CPUMillis), usable.MemoryBytes, replaced, 8*gib)
+	if n := launch(t, o); n != 0 || len(emulator.calls("RunInstances")) != 1 {
+		t.Fatalf("launched %d after %d calls, want one refused call", n, len(emulator.calls("RunInstances")))
+	}
+	if phase, _ := hostPhase(t, o.pool, compute.HostID(replaced)); phase != "ready" {
+		t.Fatalf("replaced host is %s, want it kept", phase)
+	}
+	if !scan[bool](t, o.pool, "select rightsize_refused_at is not null from hosts where id = $1", replaced) {
+		t.Fatal("rightsize refusal not recorded")
 	}
 }
 

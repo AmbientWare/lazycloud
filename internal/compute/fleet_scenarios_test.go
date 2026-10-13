@@ -641,7 +641,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		InstanceType: o.Type.Name, Region: o.Region, AvailabilityZone: o.Zone,
 	}
 	if a.Kind == ActionRightsize {
-		row.Replaces, row.ReplacesHourlyMicros = ptr(uuid.UUID(*a.Host)), ptr(s.host(*a.Host).offer.HourlyMicros)
+		row.Replaces = ptr(uuid.UUID(*a.Host))
 	}
 	purchase := simPurchase{at: s.now, market: a.Market}
 	if reserve {

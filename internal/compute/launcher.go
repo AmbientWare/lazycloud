@@ -364,10 +364,10 @@ func (c *Compute) nextPool(ctx context.Context, bought, h ClaimLaunchesRow, pool
 // the containers waiting for it ask for. Their volume reads, or a
 // reserve's market's, weigh in its cost.
 // Pools are priced as the planner buys: a reserve by what it costs to keep
-// stopped, any other host by what it costs to serve. A rightsize moves only
-// to a pool that costs less than the host it replaces.
+// stopped, any other host by what it costs to serve. A rightsize has none:
+// it is an optional move, so its refusal keeps the host it would replace.
 func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) (FleetOffer, bool) {
-	if h.Replaces != nil && h.ReplacesHourlyMicros == nil {
+	if h.Replaces != nil {
 		return FleetOffer{}, false
 	}
 	market := Market(*h.Market)
@@ -395,7 +395,6 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate
 	offers := slices.DeleteFunc(RankOffers(p, need, h.ReserveMode != nil, in), func(o FleetOffer) bool {
 		return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
-			h.Replaces != nil && o.running() >= *h.ReplacesHourlyMicros ||
 			slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
 				return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
 			})
