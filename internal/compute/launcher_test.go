@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,6 +158,84 @@ func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	}
 	if result := planCapacity(t, o); result.Requested != 0 {
 		t.Fatalf("next pass %+v, want no host while every pool cools", result)
+	}
+}
+
+// A pool EC2 refuses again on the retry after its cooldown ends cools twice
+// as long, and a launch there ends the run.
+func TestARepeatedRefusalCoolsThePoolLongerUntilALaunchThere(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	refuse := func(awsCall) awsReply {
+		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "There is no Spot capacity available that matches your request.")
+	}
+	emulator.on("RunInstances", refuse)
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	pool := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type from hosts where id = $1", uuid.UUID(host))
+	cooling := func() float64 {
+		return scan[float64](t, o.pool, `select coalesce(max(extract(epoch from until - now())), 0)::float8 from capacity_cooldowns
+where region || '/' || availability_zone_id || '/' || instance_type = $1`, pool)
+	}
+	retry := func() {
+		t.Helper()
+		run(t, o.pool, "update capacity_cooldowns set until = now()")
+		if result := planCapacity(t, o); result.Requested != 1 {
+			t.Fatalf("pass after the cooldowns %+v, want a host", result)
+		}
+		launch(t, o)
+	}
+	launch(t, o)
+	if first := cooling(); first < 590 || first > 600 {
+		t.Fatalf("first refusal cools %.0fs, want ten minutes", first)
+	}
+	retry()
+	if second := cooling(); second < 1190 || second > 1200 {
+		t.Fatalf("second refusal cools %.0fs, want twenty minutes", second)
+	}
+	emulator.on("RunInstances", launched(t))
+	retry()
+	if left := cooling(); left != 0 {
+		t.Fatalf("pool still cools %.0fs after a launch there", left)
+	}
+}
+
+// A host claimed beside a reserve that EC2 refuses everywhere launches
+// without waiting for the reserve's walk through its pools.
+func TestALaunchDoesNotWaitForAnotherHostsRefusedPools(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	spotPrices(t, o)
+	succeed := launched(t)
+	served := make(chan struct{})
+	var once sync.Once
+	var waited atomic.Bool
+	emulator.on("RunInstances", func(call awsCall) awsReply {
+		if call.Form.Get("InstanceType") == "m7i.large" {
+			once.Do(func() { close(served) })
+			return succeed(call)
+		}
+		select {
+		case <-served:
+		case <-time.After(5 * time.Second):
+			waited.Store(true)
+		}
+		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "There is no Spot capacity available that matches your request.")
+	})
+	gpu, _ := compute.CatalogTypeNamed("g4dn.xlarge")
+	cpu, _ := compute.CatalogTypeNamed("m7i.large")
+	run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market, reserve_mode, gpu_type, gpu_count)
+values ('reserve', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'g4dn.xlarge', 'spot', 'stop', 'T4', 1)`,
+		int64(gpu.Usable(0).CPUMillis), gpu.Usable(0).MemoryBytes)
+	run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`,
+		int64(cpu.Usable(0).CPUMillis), cpu.Usable(0).MemoryBytes)
+
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the m7i.large host", n)
+	}
+	if waited.Load() {
+		t.Fatal("the m7i.large host launched only after the reserve's refused pools")
 	}
 }
 

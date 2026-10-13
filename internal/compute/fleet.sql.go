@@ -162,6 +162,32 @@ func (q *Queries) ClaimTerminations(ctx context.Context, reclaimGraceSeconds flo
 	return items, nil
 }
 
+const clearCooldown = `-- name: ClearCooldown :exec
+delete from capacity_cooldowns
+where connection_key = $1 and region = $2 and availability_zone_id = $3
+  and instance_type = $4 and market = $5
+`
+
+type ClearCooldownParams struct {
+	ConnectionKey      string
+	Region             string
+	AvailabilityZoneID string
+	InstanceType       string
+	Market             string
+}
+
+// A launch in a zone ends the run of refusals of its pool.
+func (q *Queries) ClearCooldown(ctx context.Context, arg ClearCooldownParams) error {
+	_, err := q.db.Exec(ctx, clearCooldown,
+		arg.ConnectionKey,
+		arg.Region,
+		arg.AvailabilityZoneID,
+		arg.InstanceType,
+		arg.Market,
+	)
+	return err
+}
+
 const connectionScope = `-- name: ConnectionScope :one
 select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
        a.node_role_arn, cc.phase
@@ -398,11 +424,18 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
+with p as (select $7::float8 as seconds, $8::float8 as max_seconds)
 insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason)
-values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::float8),
-        $7)
+select $1, $2, $3, $4, $5, now() + make_interval(secs => p.seconds), $6
+from p
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason
+do update set
+    refusals = case when capacity_cooldowns.until > now() - make_interval(secs => (select max_seconds from p))
+                    then capacity_cooldowns.refusals + 1 else 1 end,
+    until = case when capacity_cooldowns.until > now() - make_interval(secs => (select max_seconds from p))
+                 then now() + make_interval(secs => (select least(seconds * 2 ^ capacity_cooldowns.refusals, max_seconds) from p))
+                 else excluded.until end,
+    reason = excluded.reason
 `
 
 type InsertCooldownParams struct {
@@ -411,11 +444,14 @@ type InsertCooldownParams struct {
 	AvailabilityZoneID string
 	InstanceType       string
 	Market             string
-	Seconds            float64
 	Reason             string
+	Seconds            float64
+	MaxSeconds         float64
 }
 
-// Cools an offer in one zone, or in its whole region for the zone ”.
+// Cools an offer in one zone, or in its whole region for the zone ”. An
+// offer refused again within max_seconds of the end of its last cooldown
+// cools twice as long as that one did, up to max_seconds.
 func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) error {
 	_, err := q.db.Exec(ctx, insertCooldown,
 		arg.ConnectionKey,
@@ -423,8 +459,9 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 		arg.AvailabilityZoneID,
 		arg.InstanceType,
 		arg.Market,
-		arg.Seconds,
 		arg.Reason,
+		arg.Seconds,
+		arg.MaxSeconds,
 	)
 	return err
 }

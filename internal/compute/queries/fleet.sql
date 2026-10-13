@@ -71,12 +71,27 @@ where id = @id and phase = @from_phase;
 update hosts set rightsize_refused_at = now(), updated_at = now() where id = @id;
 
 -- name: InsertCooldown :exec
--- Cools an offer in one zone, or in its whole region for the zone ''.
+-- Cools an offer in one zone, or in its whole region for the zone ''. An
+-- offer refused again within max_seconds of the end of its last cooldown
+-- cools twice as long as that one did, up to max_seconds.
+with p as (select @seconds::float8 as seconds, @max_seconds::float8 as max_seconds)
 insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason)
-values (@connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => @seconds::float8),
-        @reason)
+select @connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => p.seconds), @reason
+from p
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason;
+do update set
+    refusals = case when capacity_cooldowns.until > now() - make_interval(secs => (select max_seconds from p))
+                    then capacity_cooldowns.refusals + 1 else 1 end,
+    until = case when capacity_cooldowns.until > now() - make_interval(secs => (select max_seconds from p))
+                 then now() + make_interval(secs => (select least(seconds * 2 ^ capacity_cooldowns.refusals, max_seconds) from p))
+                 else excluded.until end,
+    reason = excluded.reason;
+
+-- name: ClearCooldown :exec
+-- A launch in a zone ends the run of refusals of its pool.
+delete from capacity_cooldowns
+where connection_key = @connection_key and region = @region and availability_zone_id = @availability_zone_id
+  and instance_type = @instance_type and market = @market;
 
 -- name: DrainConnectionHosts :many
 -- A disconnecting account's hosts stop taking work.
