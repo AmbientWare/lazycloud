@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
@@ -935,11 +936,7 @@ func TestALargeRenameLandsAcrossAStop(t *testing.T) {
 	sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "640"]}`)))
 	s.send(t, stopCommand(id, 10))
 	s.phase(t, id, exited)
-	for deadline := time.Now().Add(mounterFlushSeconds * time.Second); len(e.mounters(true, id)) > 0; time.Sleep(time.Second) {
-		if time.Now().After(deadline) {
-			t.Fatal("the mount did not stop within its flush window")
-		}
-	}
+	e.mountStops(id)
 	object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/model.bin")})
 	if err != nil {
 		t.Fatalf("the renamed file is not in the bucket: %v", err)
@@ -951,5 +948,62 @@ func TestALargeRenameLandsAcrossAStop(t *testing.T) {
 	}
 	if got := `"` + hex.EncodeToString(digest.Sum(nil)) + `"`; got != sum {
 		t.Fatalf("the bucket holds %s, written %s", got, sum)
+	}
+}
+
+// mountStops waits until container's mounts stopped, within their flush
+// window.
+func (e *env) mountStops(container string) {
+	e.t.Helper()
+	for deadline := time.Now().Add(mounterFlushSeconds * time.Second); len(e.mounters(true, container)) > 0; time.Sleep(time.Second) {
+		if time.Now().After(deadline) {
+			e.t.Fatal("the mount did not stop within its flush window")
+		}
+	}
+}
+
+// TestSmallFilesWrittenJustBeforeAStopAreStored: a container that writes
+// many small files and stops at once leaves every one in the bucket once
+// its mount stopped, though storing them takes a while.
+func TestSmallFilesWrittenJustBeforeAStopAreStored(t *testing.T) {
+	e, s, store := volumeEnv(t)
+	target, err := url.Parse(store.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward := httputil.NewSingleHostReverseProxy(target)
+	// Uploads take as long as from another region; the writes do not wait
+	// for them.
+	distant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			time.Sleep(200 * time.Millisecond)
+		}
+		forward.ServeHTTP(w, r)
+	}))
+	t.Cleanup(distant.Close)
+	store.endpoint = distant.URL
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	id := e.startVolume(s, serveSource(t, "testdata/volumes"), workspace, volume)
+	const files = 2000
+	if got := result(t, e.completion(e.task(id, `{"args": ["many", "/volumes/data/shards", "2000"]}`))); got != strconv.Itoa(files) {
+		t.Fatalf("wrote %s files", got)
+	}
+	s.send(t, stopCommand(id, 1))
+	s.phase(t, id, exited)
+	e.mountStops(id)
+	stored := 0
+	pages := s3.NewListObjectsV2Paginator(storagetest.Client(), &s3.ListObjectsV2Input{
+		Bucket: aws.String(store.bucket), Prefix: aws.String("volumes/" + volume + "/shards/f"),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored += len(page.Contents)
+	}
+	if stored != files {
+		t.Fatalf("%d of %d files written before the stop are in the bucket", stored, files)
 	}
 }

@@ -688,11 +688,14 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 		quoted[n] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 	}
 	// GeeseFS cannot unmount itself here and leaves a dead mount when it
-	// exits. On stop the script lets it flush, then detaches the mount so
-	// it exits; after any exit it unmounts what remains.
+	// exits, and it exits without storing what it holds once its mount
+	// goes. On stop the script has it store everything, which an fsync of
+	// the mount's root waits for, then stops it, which ends one that never
+	// mounted, and detaches the mount so it exits; after any exit it
+	// unmounts what remains.
 	script := fmt.Sprintf(`/opt/lazycloud/bin/geesefs %[2]s &
 pid=$!
-stop() { kill -TERM $pid 2>/dev/null; sleep 1; umount -l %[1]s; }
+stop() { fsync %[1]s; kill -TERM $pid 2>/dev/null; umount -l %[1]s; }
 trap stop TERM INT
 wait $pid
 while kill -0 $pid 2>/dev/null; do wait $pid; done

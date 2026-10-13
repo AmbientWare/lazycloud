@@ -32,6 +32,13 @@ def handle(action, path, text=None):
                 f.write(hashlib.sha256(str(n).encode()).digest() * (1 << 15))
         os.rename(partial, path)
         return digest(path)
+    if action == "many":
+        # Writes text files of 64 KiB into the directory path.
+        os.makedirs(path, exist_ok=True)
+        for n in range(int(text)):
+            with open(os.path.join(path, f"f{n:05d}"), "wb") as f:
+                f.write(os.urandom(1 << 16))
+        return len(os.listdir(path))
     if action == "sum":
         return digest(path)
     if action == "symlink":
