@@ -230,10 +230,13 @@ type Policy struct {
 // purchase, 13-15 s after a stopped CPU reserve's resume, about 150 s
 // after a Spot L4 purchase and about 70 s after a stopped g4dn.xlarge Spot
 // reserve's start. EC2 starts a stopped Spot instance only once it
-// disables the persistent request, 38-90 s after the stop and 66 s on
-// average (2026-10-13); a request active past SpotDisableMax is stuck.
+// disables the persistent request, 38-165 s after the stop and 66 s on
+// average (2026-10-13); past SpotDisableMax work stops waiting for it.
+// Update is what a reserve stopped on an older agent build adds to its
+// resume: it downloads, verifies and unpacks the 153 MB release in 5.2 s
+// (an m7i.large in us-east-2, 2026-10-13), then restarts into it.
 type StartTimes struct {
-	Launch, GPULaunch, Resume, GPUResume, SpotDisable, SpotDisableMax time.Duration
+	Launch, GPULaunch, Resume, GPUResume, SpotDisable, SpotDisableMax, Update time.Duration
 }
 
 // DefaultPolicy is the policy the planner runs.
@@ -285,7 +288,7 @@ func DefaultPolicy() Policy {
 		SpotPriceAge:    time.Hour,
 		Starts: StartTimes{
 			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
-			SpotDisable: 66 * time.Second, SpotDisableMax: 90 * time.Second,
+			SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second, Update: 10 * time.Second,
 		},
 	}
 }

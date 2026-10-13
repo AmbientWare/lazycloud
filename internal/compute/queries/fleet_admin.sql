@@ -4,7 +4,8 @@
 select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at,
        (h.token_hash is not null)::bool as enrolled, h.instance_id::text as instance_id, h.region, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.agent_version, h.reserve_mode,
-       h.image_evidence, h.prepared_agent_version, h.rollout_bucket,
+       h.image_evidence, on_target(h.rollout_bucket, h.agent_version)::bool as agent_current,
+       on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers
 from hosts h
@@ -23,13 +24,14 @@ limit @max_rows;
 
 -- name: FleetRollout :many
 -- Live platform hosts by where they stand on the agent release: connected
--- serving or draining hosts on it (current) or on another (updating),
+-- serving or draining hosts that run what they should (current) or not
+-- (updating),
 -- reserves, and other enrolled hosts (offline). Draining and serving match
 -- fleetStateOf.
 select (case
     when h.phase = 'draining' or (h.phase = 'ready' and (h.capacity_state <> 'available'
         or (h.state = 'online' and coalesce(h.last_seen_at > @live_after::timestamptz, false))))
-        then case when h.agent_version = @version::text then 'current' else 'updating' end
+        then case when on_target(h.rollout_bucket, h.agent_version) then 'current' else 'updating' end
     when h.phase in ('preparing', 'stopping', 'stopped') then 'reserve'
     when h.token_hash is not null then 'offline'
     else ''

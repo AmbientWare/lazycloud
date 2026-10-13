@@ -121,13 +121,14 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 	}
 }
 
-// A reserve prepared for an older agent release never resumes: it retires
-// and the target it held is bought again, and work it would fit buys a
-// host instead.
-func TestPlanRetiresAStaleReserveAndBuysItsTargetAgain(t *testing.T) {
+// A reserve prepared on an older agent build holds none of the stopped
+// target: a replacement is bought and the stale one stays until the
+// replacement is ready, while one the target does not need retires. CPU
+// work it would fit buys a host, which serves sooner than a resume and an
+// agent update.
+func TestPlanReplacesAStaleReserveBeforeRetiringIt(t *testing.T) {
 	stale := planHost(1, planSmall, FleetStopped)
 	stale.Current = false
-	needed := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, stale))
 	kinds := func(plan FleetPlan) []FleetActionKind {
 		var out []FleetActionKind
 		for _, a := range plan.Actions {
@@ -135,18 +136,17 @@ func TestPlanRetiresAStaleReserveAndBuysItsTargetAgain(t *testing.T) {
 		}
 		return out
 	}
-	if got := kinds(needed); !slices.Equal(got, []FleetActionKind{ActionRetireReserve, ActionBuyReserve}) || *needed.Actions[0].Host != stale.ID {
+	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, stale))); !slices.Equal(got, []FleetActionKind{ActionBuyReserve}) {
 		t.Fatalf("needed: %v", got)
 	}
-	surplus := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), planSnapshot(t, stale))
-	if got := kinds(surplus); !slices.Equal(got, []FleetActionKind{ActionRetireReserve}) {
-		t.Fatalf("surplus: %v", got)
+	replaced := planHost(2, planSmall, FleetStopped)
+	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, stale, replaced))); !slices.Equal(got, []FleetActionKind{ActionRetireReserve}) {
+		t.Fatalf("replaced: %v", got)
 	}
 	snapshot := planSnapshot(t, stale)
 	snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New()}}}}
-	work := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot)
-	if slices.Contains(kinds(work), ActionResume) {
-		t.Fatalf("work resumed a stale reserve: %v", kinds(work))
+	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot)); slices.Contains(got, ActionResume) {
+		t.Fatalf("CPU work resumed a stale reserve: %v", got)
 	}
 }
 
@@ -1032,5 +1032,24 @@ func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
 		if (len(bought) == 0) != gpu {
 			t.Errorf("%s bought reserves %+v while its host serves", m, bought)
 		}
+	}
+}
+
+// An offer cools only when the host bought from it is too small ever to
+// take its container: a full host whose container a starting host covers
+// cools nothing, a host of a type smaller than its container does.
+func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
+	full := planHost(1, planLarge, FleetServing)
+	full.Load, full.Containers = full.Usable, 1
+	coming := planHost(2, planLarge, FleetStarting)
+	tiny := planHost(3, planSmall, FleetServing)
+	s := planSnapshot(t, full, coming, tiny)
+	s.Pending = []DemandGroup{
+		{Need: Requirement{CPUMillis: 4000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Host: &full.ID}}},
+		{Need: Requirement{CPUMillis: 16000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Host: &tiny.ID}}},
+	}
+	_, cools := planOwner(planPolicy(FleetCapacity{}, FleetCapacity{}), s, time.Minute)
+	if len(cools) != 1 || cools[0].InstanceType != planSmall.Name {
+		t.Fatalf("cooled %+v, want only the offer of the host too small for its container", cools)
 	}
 }

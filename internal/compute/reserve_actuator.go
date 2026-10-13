@@ -150,7 +150,7 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 	}
 	if instance.InstanceLifecycle == ec2types.InstanceLifecycleTypeSpot && h.SpotRequestID == nil {
 		// A one-time Spot instance cannot stop; it was bought to serve.
-		return c.retireReserve(ctx, logger, h, PhaseStopping, "A one-time Spot instance cannot stop into the reserve", nil)
+		return c.retireReserve(ctx, logger, h, "A one-time Spot instance cannot stop into the reserve", nil)
 	}
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
@@ -225,48 +225,80 @@ func (c *Compute) stopRefused(ctx context.Context, logger *slog.Logger, h ClaimP
 	if transientAWS(err) {
 		return err
 	}
-	return c.retireReserve(ctx, logger, h, PhaseStopping, truncate("Stop refused: "+describeAWSError(err)), err)
+	return c.retireReserve(ctx, logger, h, truncate("Stop refused: "+describeAWSError(err)), err)
 }
 
-// retireReserve sends a stopping or resuming host to terminating. A
-// provider refusal, when given, cools the host's offer so the planner buys
-// its replacement elsewhere, and a quota refusal records the quota full.
-func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, from Phase, message string,
-	refusal error) error {
-	if err := transition(from, PhaseTerminating); err != nil {
+// retireReserve sends a stopping host to terminating. A provider
+// refusal, when given, cools the host's offer so the planner buys its
+// replacement elsewhere.
+func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, message string, refusal error) error {
+	if err := transition(PhaseStopping, PhaseTerminating); err != nil {
 		return err
 	}
-	logger.WarnContext(ctx, "retiring reserve", "host_id", h.ID, "phase", from, "reason", message)
+	logger.WarnContext(ctx, "retiring reserve", "host_id", h.ID, "reason", message)
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
-		n, err := q.RetireReserve(ctx, RetireReserveParams{ID: h.ID, FromPhase: string(from), Message: message})
+		n, err := q.RetireReserve(ctx, RetireReserveParams{ID: h.ID, Message: message})
 		if err != nil {
 			return fmt.Errorf("retire reserve: %w", err)
 		}
 		if n == 0 {
 			return nil
 		}
-		if refusal != nil && h.Market != nil {
-			// A start refused for capacity cools its zone alone.
-			zone := ""
-			if code := awsCode(refusal); capacityRefusal(code) && !quotaRefusal(code) {
-				zone = h.AvailabilityZoneID
-			}
-			if err := q.InsertCooldown(ctx, InsertCooldownParams{
-				ConnectionKey: string(KindPlatform), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
-				Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
-				Reason: truncate(describeAWSError(refusal)),
-			}); err != nil {
-				return fmt.Errorf("insert cooldown: %w", err)
-			}
-			if quotaRefusal(awsCode(refusal)) {
-				if err := c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market)); err != nil {
-					return err
-				}
-			}
+		if err := c.coolRefusal(ctx, q, h, refusal); err != nil {
+			return err
 		}
 		return notifyMachines(ctx, tx, h.ID)
 	})
+}
+
+// refuseStart returns a resuming host whose start EC2 refused for capacity
+// to the reserve, which waits out the capacity cooldown before it resumes
+// again. The refusal cools its zone's pool.
+func (c *Compute) refuseStart(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, refusal error) error {
+	if err := transition(PhaseResuming, PhaseStopped); err != nil {
+		return err
+	}
+	logger.WarnContext(ctx, "reserve start refused", "host_id", h.ID, "error", describeAWSError(refusal))
+	return inTx(ctx, c, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		n, err := q.ReturnStartToReserve(ctx, ReturnStartToReserveParams{ID: h.ID, Message: truncate("Start refused: " + describeAWSError(refusal))})
+		if err != nil {
+			return fmt.Errorf("return the reserve to stopped: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		if err := c.coolRefusal(ctx, q, h, refusal); err != nil {
+			return err
+		}
+		return notifyMachines(ctx, tx, h.ID)
+	})
+}
+
+// coolRefusal cools the offer of a host EC2 refused, if it did: its zone
+// for capacity, its region and quota class for quota, which also records
+// the quota full.
+func (c *Compute) coolRefusal(ctx context.Context, q *Queries, h ClaimProviderActionsRow, refusal error) error {
+	if refusal == nil || h.Market == nil {
+		return nil
+	}
+	code := awsCode(refusal)
+	zone := ""
+	if capacityRefusal(code) && !quotaRefusal(code) {
+		zone = h.AvailabilityZoneID
+	}
+	if err := q.InsertCooldown(ctx, InsertCooldownParams{
+		ConnectionKey: string(KindPlatform), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
+		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
+		Reason: truncate(describeAWSError(refusal)),
+	}); err != nil {
+		return fmt.Errorf("insert cooldown: %w", err)
+	}
+	if quotaRefusal(code) {
+		return c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market))
+	}
+	return nil
 }
 
 func (c *Compute) recordStop(ctx context.Context, host uuid.UUID, evidence ImageEvidence, forced bool) error {
@@ -321,18 +353,15 @@ func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason str
 }
 
 // startReserve starts a resuming host's stopped instance once EC2 has
-// disabled its Spot request; a request active past SpotDisableMax is
-// stuck, and the host retires so its work buys. EC2 refusing the start
-// for capacity retires the host and cools its offer, so the planner buys
-// elsewhere; the host's session moves it on once the agent says Hello.
+// disabled its Spot request, however long that takes; reconcile ends a
+// reserve that never resumes. EC2 refusing the start for capacity returns
+// the host to the reserve; the host's session moves it on once the agent
+// says Hello.
 func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
 	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
 		if requestActive {
-			if h.StoppedAt != nil && time.Since(*h.StoppedAt) > c.policy().Starts.SpotDisableMax {
-				return c.retireReserve(ctx, logger, h, PhaseResuming, "The Spot request stayed active after its instance stopped", nil)
-			}
 			return nil
 		}
 	case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning:
@@ -354,7 +383,7 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 	if !capacityRefusal(awsCode(err)) {
 		return fmt.Errorf("start instance: %w", err)
 	}
-	return c.retireReserve(ctx, logger, h, PhaseResuming, truncate("Start refused: "+describeAWSError(err)), err)
+	return c.refuseStart(ctx, logger, h, err)
 }
 
 func (c *Compute) recordStart(ctx context.Context, host uuid.UUID) error {

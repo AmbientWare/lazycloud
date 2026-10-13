@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the agent release archives the install script and self-update
 # download: <out_dir>/<version>/lazycloud-agent-linux-<arch>.tar.gz, each
-# holding lazycloud-agent, lazycloud-snapshotter, supervisor,
+# holding VERSION, lazycloud-agent, lazycloud-snapshotter, supervisor,
 # runtime/<python> and, on amd64, geesefs at its root. Prints one
 # "<arch> <sha256>" line per archive.
 #
@@ -45,15 +45,18 @@ for arch in "${arch_list[@]}"; do
   esac
   stage="$work/$arch"
   mkdir -p "$stage/runtime"
+  # The binaries carry no version, so a release that changes no host code
+  # archives the same bytes but VERSION.
+  printf '%s\n' "$version" >"$stage/VERSION"
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
-    -ldflags "-s -w -X main.version=$version" -o "$stage/lazycloud-agent" ./cmd/agent)
+    -ldflags "-s -w" -o "$stage/lazycloud-agent" ./cmd/agent)
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
     -o "$stage/supervisor" ./cmd/supervisor)
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
     -o "$stage/lazycloud-snapshotter" ./cmd/snapshotter)
   # shellcheck disable=SC2086 # the Python versions are separate words
   LAZYCLOUD_RUNTIME_PLATFORM="$platform" "$root/deploy/local/build-runtime.sh" "$stage/runtime" $pythons
-  files=(lazycloud-agent lazycloud-snapshotter supervisor runtime)
+  files=(VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime)
   # GeeseFS mounts volumes; its pinned release exists for amd64.
   if [[ "$arch" == amd64 ]]; then
     "$root/deploy/local/fetch-geesefs.sh"
@@ -61,7 +64,7 @@ for arch in "${arch_list[@]}"; do
     files+=(geesefs)
   fi
   archive="$out/$version/lazycloud-agent-linux-$arch.tar.gz"
-  tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$archive.tmp" "${files[@]}"
+  tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive.tmp" "${files[@]}"
   mv "$archive.tmp" "$archive"
   echo "$arch $(sha256sum "$archive" | cut -d' ' -f1)"
 done

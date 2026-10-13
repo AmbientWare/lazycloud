@@ -13,55 +13,27 @@ import (
 	"github.com/google/uuid"
 )
 
-const alignCooldowns = `-- name: AlignCooldowns :one
-with walk as (
-    select unnest($1::text[]) as region, unnest($2::text[]) as zone_id,
-           unnest($3::text[]) as instance_type, unnest($4::text[]) as market
-), cooled as (
-    select cd.region, cd.availability_zone_id, cd.instance_type, cd.market, cd.until
-    from capacity_cooldowns cd
-    join walk w on (cd.region, cd.availability_zone_id, cd.instance_type, cd.market) = (w.region, w.zone_id, w.instance_type, w.market)
-    where cd.connection_key = $5
-    order by cd.region, cd.availability_zone_id, cd.instance_type, cd.market
-    for update of cd
-), shared as (
-    select greatest(max(until), $6::timestamptz) as until from cooled
-), aligned as (
-    update capacity_cooldowns cd set until = greatest(cd.until, shared.until)
-    from cooled, shared
-    where cd.connection_key = $5
-      and (cd.region, cd.availability_zone_id, cd.instance_type, cd.market)
-        = (cooled.region, cooled.availability_zone_id, cooled.instance_type, cooled.market)
+const alignWalk = `-- name: AlignWalk :exec
+with walked as (
+    select connection_key, region, availability_zone_id, instance_type, market, until
+    from capacity_cooldowns
+    where capacity_cooldowns.walk = $1::uuid
+    order by connection_key, region, availability_zone_id, instance_type, market
+    for update
 )
-select until::timestamptz from shared
+update capacity_cooldowns cd set until = (select max(until) from walked)
+from walked w
+where (cd.connection_key, cd.region, cd.availability_zone_id, cd.instance_type, cd.market)
+    = (w.connection_key, w.region, w.availability_zone_id, w.instance_type, w.market)
 `
 
-type AlignCooldownsParams struct {
-	Regions       []string
-	ZoneIds       []string
-	InstanceTypes []string
-	Markets       []string
-	ConnectionKey string
-	WalkUntil     *time.Time
-}
-
-// The pools one launch walk refused end their cooldowns together, at the
-// latest of their ends and walk_until, the end its earlier passes shared,
-// so the planner buys for them again once. No cooldown shortens, and the
-// rows lock in key order, so concurrent walks never deadlock here. It
-// returns the shared end.
-func (q *Queries) AlignCooldowns(ctx context.Context, arg AlignCooldownsParams) (time.Time, error) {
-	row := q.db.QueryRow(ctx, alignCooldowns,
-		arg.Regions,
-		arg.ZoneIds,
-		arg.InstanceTypes,
-		arg.Markets,
-		arg.ConnectionKey,
-		arg.WalkUntil,
-	)
-	var until time.Time
-	err := row.Scan(&until)
-	return until, err
+// Every pool one launch walk refused, in this pass or an earlier one,
+// cools until the latest of their ends, so the planner buys for them again
+// once. The rows lock in key order; a deadlock with another walk fails
+// this move, and the walk goes on next pass.
+func (q *Queries) AlignWalk(ctx context.Context, walk uuid.UUID) error {
+	_, err := q.db.Exec(ctx, alignWalk, walk)
+	return err
 }
 
 const cancelConnectionLaunches = `-- name: CancelConnectionLaunches :exec
@@ -92,7 +64,7 @@ where h.id in (
 )
 returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks, h.walk_cooled_until
+          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks
 `
 
 type ClaimLaunchesParams struct {
@@ -120,7 +92,6 @@ type ClaimLaunchesRow struct {
 	HoldsCpuMillis   *cpu.Millis
 	HoldsMemoryBytes *int64
 	HoldsDisks       *int16
-	WalkCooledUntil  *time.Time
 }
 
 // Requested hosts whose launch is not held by another launcher. The lease
@@ -155,7 +126,6 @@ func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([
 			&i.HoldsCpuMillis,
 			&i.HoldsMemoryBytes,
 			&i.HoldsDisks,
-			&i.WalkCooledUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -475,17 +445,17 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason)
-values ($1, $2, $3, $4, $5,
-        coalesce($6::timestamptz, now() + make_interval(secs => $7::float8)),
-        make_interval(secs => $7::float8), $8)
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, walk)
+values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::float8),
+        make_interval(secs => $6::float8), $7, $8)
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set
     cooled_for = case when capacity_cooldowns.until > now() then capacity_cooldowns.cooled_for
                       else least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => $9::float8)) end,
-    until = case when capacity_cooldowns.until > now() then greatest(capacity_cooldowns.until, excluded.until)
+    until = case when capacity_cooldowns.until > now() then capacity_cooldowns.until
                  else now() + least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => $9::float8)) end,
-    reason = excluded.reason
+    reason = excluded.reason,
+    walk = case when capacity_cooldowns.until > now() then coalesce(capacity_cooldowns.walk, excluded.walk) else excluded.walk end
 `
 
 type InsertCooldownParams struct {
@@ -494,17 +464,17 @@ type InsertCooldownParams struct {
 	AvailabilityZoneID string
 	InstanceType       string
 	Market             string
-	WalkUntil          *time.Time
 	Seconds            float64
 	Reason             string
+	Walk               *uuid.UUID
 	MaxSeconds         float64
 }
 
 // Cools an offer in one zone, or in its whole region for the zone ”, for
-// seconds, or until walk_until when a launch walk's earlier refusals set
-// the end its cooldowns share. Refused again while it cools, it cools at
-// least that long from now; refused after its cooldown ended, twice as
-// long as that cooldown lasted, up to max_seconds.
+// seconds, and records the launch walk that refused it, if any. Refused
+// again while it cools, it keeps its end and the walk that refused it
+// first, so no walk moves another walk's end; refused after its cooldown
+// ended, it cools twice as long as that cooldown lasted, up to max_seconds.
 func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) error {
 	_, err := q.db.Exec(ctx, insertCooldown,
 		arg.ConnectionKey,
@@ -512,9 +482,9 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 		arg.AvailabilityZoneID,
 		arg.InstanceType,
 		arg.Market,
-		arg.WalkUntil,
 		arg.Seconds,
 		arg.Reason,
+		arg.Walk,
 		arg.MaxSeconds,
 	)
 	return err
@@ -604,9 +574,9 @@ update hosts
 set instance_type = $1, region = $2, availability_zone = $3,
     availability_zone_id = $4, hourly_micros = $5,
     cpu_millis = $6, memory_bytes = $7, launch_pools = launch_pools + 1, launch_attempts = 0,
-    launch_lease_until = now() + make_interval(secs => $8::float8), walk_cooled_until = $9,
+    launch_lease_until = now() + make_interval(secs => $8::float8),
     updated_at = now()
-where id = $10 and phase = 'requested' and launch_pools = $11
+where id = $9 and phase = 'requested' and launch_pools = $10
 `
 
 type MoveLaunchPoolParams struct {
@@ -618,15 +588,13 @@ type MoveLaunchPoolParams struct {
 	CpuMillis          cpu.Millis
 	MemoryBytes        int64
 	LeaseSeconds       float64
-	WalkCooledUntil    *time.Time
 	ID                 uuid.UUID
 	LaunchPools        int16
 }
 
 // Moves a requested host whose pool EC2 refused to the next pool at that
-// pool's cost and capacity, with its attempts counted afresh there and the
-// end its walk's cooldowns share, and renews the launcher's lease for
-// lease_seconds, which 0 releases. Every
+// pool's cost and capacity, with its attempts counted afresh there, and
+// renews the launcher's lease for lease_seconds, which 0 releases. Every
 // pool it moves to holds what it was bought to hold. A host another
 // launcher moved on since it was claimed stays where that one put it.
 func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) (int64, error) {
@@ -639,7 +607,6 @@ func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) 
 		arg.CpuMillis,
 		arg.MemoryBytes,
 		arg.LeaseSeconds,
-		arg.WalkCooledUntil,
 		arg.ID,
 		arg.LaunchPools,
 	)

@@ -40,9 +40,6 @@ const (
 	exitUsage   = 2
 )
 
-// version is stamped by release builds with -ldflags "-X main.version=...".
-var version string //nolint:gochecknoglobals // set by the linker, never at run time
-
 const usage = `usage:
   lazycloud-agent join [flags]             run the agent in the foreground
   lazycloud-agent install-service [flags]  install and start the agent as a systemd service
@@ -289,9 +286,15 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// agentVersion is the release the agent runs: the VERSION file its release
+// archive holds beside the executable, so the binary is the same in every
+// release that changes no host code. A build outside a release reports its
+// revision.
 func agentVersion() string {
-	if version != "" {
-		return version
+	if exe, err := os.Executable(); err == nil {
+		if data, err := os.ReadFile(filepath.Join(filepath.Dir(exe), "VERSION")); err == nil && strings.TrimSpace(string(data)) != "" {
+			return strings.TrimSpace(string(data))
+		}
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

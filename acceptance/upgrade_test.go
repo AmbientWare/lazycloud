@@ -172,17 +172,19 @@ func buildRelease(t *testing.T, dist string) release {
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
 	r := release{version: "head-" + hex.EncodeToString(suffix), dir: t.TempDir()}
-	build := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-ldflags", "-X main.version="+r.version, //nolint:gosec // Fixed arguments.
-		"-o", filepath.Join(r.dir, "lazycloud-agent"), "../cmd/agent")
+	build := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", filepath.Join(r.dir, "lazycloud-agent"), "../cmd/agent")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build the agent: %v\n%s", err, out)
 	}
 	copyFile(t, supervisorBinary, filepath.Join(r.dir, "supervisor"))
+	if err := os.WriteFile(filepath.Join(r.dir, "VERSION"), []byte(r.version+"\n"), 0o644); err != nil { //nolint:gosec // The release's version.
+		t.Fatal(err)
+	}
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(gz)
-	for _, name := range []string{"lazycloud-agent", "supervisor"} {
+	for _, name := range []string{"VERSION", "lazycloud-agent", "supervisor"} {
 		data, err := os.ReadFile(filepath.Join(r.dir, name)) //nolint:gosec // The test's own build.
 		if err != nil {
 			t.Fatal(err)

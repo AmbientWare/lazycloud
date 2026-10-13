@@ -125,21 +125,17 @@ const (
 
 // AnswerReserve applies a host's answer for the current return to the
 // reserve. The host stops only on the agent release it should run (the
-// target, once the rollout reaches it), with every GPU
+// target or one of its build, once the rollout reaches it), with every GPU
 // it offers found through the driver and a passed preflight, and with no
 // container still assigned; otherwise it returns to ready.
 func (c *Compute) AnswerReserve(ctx context.Context, host HostID, answer ReserveAnswer) (ReserveVerdict, error) {
 	if answer.Updating {
 		return ReserveDeferred, nil
 	}
-	target, err := c.TargetRelease(ctx)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return "", err
-	}
 	verdict := ReserveStale
-	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
-		row, err := q.ReserveProofHost(ctx, uuid.UUID(host))
+		row, err := q.ReserveProofHost(ctx, ReserveProofHostParams{ID: uuid.UUID(host), AgentVersion: answer.AgentVersion})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnknownHost
 		}
@@ -153,11 +149,7 @@ func (c *Compute) AnswerReserve(ctx context.Context, host HostID, answer Reserve
 		if err != nil {
 			return fmt.Errorf("count live containers: %w", err)
 		}
-		want := ""
-		if target.Version != "" && int(row.RolloutBucket) < target.RolloutPercent {
-			want = target.Version
-		}
-		if reason := unproven(answer, want, row, live); reason != "" {
+		if reason := unproven(answer, row, live); reason != "" {
 			if err := transition(PhasePreparing, PhaseReady); err != nil {
 				return err
 			}
@@ -193,9 +185,8 @@ func (c *Compute) AnswerReserve(ctx context.Context, host HostID, answer Reserve
 	return verdict, nil
 }
 
-// unproven says why an answer does not let the host stop, or is empty. want
-// is the agent release the host should run, empty for any.
-func unproven(answer ReserveAnswer, want string, row ReserveProofHostRow, live int64) string {
+// unproven says why an answer does not let the host stop, or is empty.
+func unproven(answer ReserveAnswer, row ReserveProofHostRow, live int64) string {
 	var checks []PreflightCheck
 	if err := json.Unmarshal(row.Preflight, &checks); err != nil {
 		return "its preflight is unreadable"
@@ -203,8 +194,8 @@ func unproven(answer ReserveAnswer, want string, row ReserveProofHostRow, live i
 	switch {
 	case answer.Refused != "":
 		return answer.Refused
-	case want != "" && answer.AgentVersion != want:
-		return fmt.Sprintf("the agent runs %s, not the target release %s", answer.AgentVersion, want)
+	case !row.Current:
+		return fmt.Sprintf("the agent runs %s, not the target release's build", answer.AgentVersion)
 	case row.GpuCount > 0 && answer.GPUs < int(row.GpuCount):
 		return fmt.Sprintf("the driver found %d of %d GPUs", answer.GPUs, row.GpuCount)
 	case len(failedChecks(checks)) > 0:

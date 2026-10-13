@@ -1,7 +1,11 @@
 package compute_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -292,5 +296,64 @@ values ('h', 'offline', 'connection', 'aws', $1, 'requested', 1000, 1 << 30, 'us
 	}
 	if calls := emulator.calls("RunInstances"); len(calls) != 0 {
 		t.Fatalf("RunInstances called %d times, want none", len(calls))
+	}
+}
+
+// releaseArchive is a release archive holding version and an agent of
+// bytes agent.
+func releaseArchive(t *testing.T, version, agent string) *bytes.Buffer {
+	t.Helper()
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	for name, data := range map[string]string{compute.VersionFile: version + "\n", "lazycloud-agent": agent} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return &archive
+}
+
+// Releases whose archives differ only in their VERSION file are one build:
+// a host on the older one is on the target, so it is offered no update and
+// takes work. A release of another build updates it.
+func TestAReleaseOfTheSameBuildUpdatesNoHost(t *testing.T) {
+	ctx := t.Context()
+	o := newOwners(t, machineConfig())
+	build := func(version, agent string) string {
+		t.Helper()
+		b, err := compute.ReleaseBuild(map[string]io.Reader{"amd64": releaseArchive(t, version, agent)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	publishBuild := func(version, b string) {
+		t.Helper()
+		if err := o.compute.PublishAgentRelease(ctx, compute.AgentRelease{
+			Version: version, SHA256: map[string]string{"amd64": strings.Repeat(version[:1], 64)}, RolloutPercent: 100, Build: b,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if build("1.0.0", "agent") != build("2.0.0", "agent") || build("2.0.0", "agent") == build("3.0.0", "agent v3") {
+		t.Fatal("a release's build follows its VERSION file or misses a change of its agent")
+	}
+	publishBuild("1.0.0", build("1.0.0", "agent"))
+	host := newHost(t, o.pool, hostSpec{})
+	openAgent(t, o, host, "1.0.0", "")
+	publishBuild("2.0.0", build("2.0.0", "agent"))
+	if update, err := o.compute.UpdateFor(ctx, host); err != nil || update != nil {
+		t.Fatalf("update for a host of the target's build: %+v %v", update, err)
+	}
+	publishBuild("3.0.0", build("3.0.0", "agent v3"))
+	if update, err := o.compute.UpdateFor(ctx, host); err != nil || update == nil || update.Version != "3.0.0" {
+		t.Fatalf("update for a host of another build: %+v %v", update, err)
 	}
 }

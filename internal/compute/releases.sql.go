@@ -12,7 +12,7 @@ import (
 )
 
 const agentRelease = `-- name: AgentRelease :one
-select version, sha256_amd64, sha256_arm64, rollout_percent from agent_releases where version = $1
+select version, sha256_amd64, sha256_arm64, rollout_percent, build from agent_releases where version = $1
 `
 
 type AgentReleaseRow struct {
@@ -20,6 +20,7 @@ type AgentReleaseRow struct {
 	Sha256Amd64    *string
 	Sha256Arm64    *string
 	RolloutPercent int32
+	Build          *string
 }
 
 func (q *Queries) AgentRelease(ctx context.Context, version string) (AgentReleaseRow, error) {
@@ -30,6 +31,7 @@ func (q *Queries) AgentRelease(ctx context.Context, version string) (AgentReleas
 		&i.Sha256Amd64,
 		&i.Sha256Arm64,
 		&i.RolloutPercent,
+		&i.Build,
 	)
 	return i, err
 }
@@ -88,7 +90,7 @@ func (q *Queries) SetTargetRelease(ctx context.Context, version string) (int64, 
 }
 
 const targetRelease = `-- name: TargetRelease :one
-select version, sha256_amd64, sha256_arm64, rollout_percent from agent_releases where target
+select version, sha256_amd64, sha256_arm64, rollout_percent, build from agent_releases where target
 `
 
 type TargetReleaseRow struct {
@@ -96,6 +98,7 @@ type TargetReleaseRow struct {
 	Sha256Amd64    *string
 	Sha256Arm64    *string
 	RolloutPercent int32
+	Build          *string
 }
 
 func (q *Queries) TargetRelease(ctx context.Context) (TargetReleaseRow, error) {
@@ -106,13 +109,14 @@ func (q *Queries) TargetRelease(ctx context.Context) (TargetReleaseRow, error) {
 		&i.Sha256Amd64,
 		&i.Sha256Arm64,
 		&i.RolloutPercent,
+		&i.Build,
 	)
 	return i, err
 }
 
 const upsertAgentRelease = `-- name: UpsertAgentRelease :execrows
-insert into agent_releases (version, sha256_amd64, sha256_arm64, rollout_percent)
-values ($1, $2, $3, $4)
+insert into agent_releases (version, sha256_amd64, sha256_arm64, rollout_percent, build)
+values ($1, $2, $3, $4, $5)
 on conflict (version) do update
 set rollout_percent = excluded.rollout_percent
 where agent_releases.sha256_amd64 is not distinct from excluded.sha256_amd64
@@ -124,6 +128,7 @@ type UpsertAgentReleaseParams struct {
 	Sha256Amd64    *string
 	Sha256Arm64    *string
 	RolloutPercent int32
+	Build          *string
 }
 
 // A version is immutable: republishing it with other digests changes no row.
@@ -133,6 +138,7 @@ func (q *Queries) UpsertAgentRelease(ctx context.Context, arg UpsertAgentRelease
 		arg.Sha256Amd64,
 		arg.Sha256Arm64,
 		arg.RolloutPercent,
+		arg.Build,
 	)
 	if err != nil {
 		return 0, err

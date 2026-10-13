@@ -216,19 +216,42 @@ const retireReserve = `-- name: RetireReserve :execrows
 update hosts
 set phase = 'terminating', phase_message = $1, phase_at = now(), state = 'retired', token_hash = null,
     launch_lease_until = null, updated_at = now()
-where id = $2 and phase = $3 and phase in ('stopping', 'resuming')
+where id = $2 and phase = 'stopping'
 `
 
 type RetireReserveParams struct {
-	Message   string
-	ID        uuid.UUID
-	FromPhase string
+	Message string
+	ID      uuid.UUID
 }
 
-// EC2 refused to start a resuming host or to stop a stopping one: it
-// retires, and a purchase replaces it.
+// A stopping host that cannot stop, as when EC2 refused the stop, retires,
+// and a purchase replaces it.
 func (q *Queries) RetireReserve(ctx context.Context, arg RetireReserveParams) (int64, error) {
-	result, err := q.db.Exec(ctx, retireReserve, arg.Message, arg.ID, arg.FromPhase)
+	result, err := q.db.Exec(ctx, retireReserve, arg.Message, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const returnStartToReserve = `-- name: ReturnStartToReserve :execrows
+update hosts
+set phase = 'stopped', phase_message = $1, phase_at = now(), start_refused_at = now(),
+    reserve_mode = case when image_evidence in ('saved', 'unknown') then 'hibernate' else 'stop' end,
+    launch_lease_until = null, updated_at = now()
+where id = $2 and phase = 'resuming'
+`
+
+type ReturnStartToReserveParams struct {
+	Message string
+	ID      uuid.UUID
+}
+
+// EC2 refused to start a resuming host for capacity: it stops in the
+// reserve again, hibernated where its image may be saved, and records the
+// refusal.
+func (q *Queries) ReturnStartToReserve(ctx context.Context, arg ReturnStartToReserveParams) (int64, error) {
+	result, err := q.db.Exec(ctx, returnStartToReserve, arg.Message, arg.ID)
 	if err != nil {
 		return 0, err
 	}
