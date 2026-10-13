@@ -903,28 +903,31 @@ func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
 
 // After an agent release every reserve prepared for the older release
 // retires instead of resuming, and the reserves the targets need are bought
-// again.
-func TestAnAgentReleaseRetiresStaleReservesAndBuysThemAgain(t *testing.T) {
+// A release of the reserves' agent build leaves them in place. A release
+// of another build buys their replacements first and retires none of them
+// before those are ready.
+func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
+	release := func(version, build string) {
+		t.Helper()
+		if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
+			Version: version, RolloutPercent: 100, Build: build,
+			SHA256: map[string]string{"amd64": strings.Repeat(version[2:3], 64)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release("1.0.0", strings.Repeat("b", 64))
 	settledFleet(t, o)
-	stale := scan[[]uuid.UUID](t, o.pool, "select array_agg(id) from hosts where phase = 'stopped'")
-	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
-		Version: "1.1.0", RolloutPercent: 100,
-		SHA256: map[string]string{"amd64": strings.Repeat("a1", 32), "arm64": strings.Repeat("b2", 32)},
-	}); err != nil {
-		t.Fatal(err)
+	release("1.1.0", strings.Repeat("b", 64))
+	if r := plan(t, o); r.Retired != 0 || r.Requested != 0 {
+		t.Fatalf("plan after a release of the same build %+v, want nothing retired or bought", r)
 	}
-	if r := plan(t, o); r.Resumed != 0 || r.Retired != len(stale) || r.Requested == 0 {
-		t.Fatalf("plan %+v, want the %d stale reserves retired and reserves bought", r, len(stale))
+	release("1.2.0", strings.Repeat("c", 64))
+	if r := plan(t, o); r.Retired != 0 || r.Requested == 0 {
+		t.Fatalf("plan after a release of another build %+v, want replacements bought and nothing retired", r)
 	}
-	if n := scan[int](t, o.pool, "select count(*) from hosts where id = any($1) and phase = 'stopped'", stale); n != 0 {
-		t.Fatalf("%d stale reserves still stopped", n)
-	}
-	if n := scan[int](t, o.pool, "select count(*) from hosts where reserve_mode is not null and phase = 'requested'"); n == 0 {
-		t.Fatal("no reserve bought for the targets the stale ones held")
-	}
-
 }
 
 // Five 1 CPU starts in a burst leave at most two hosts: the warm host takes

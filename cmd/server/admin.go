@@ -128,6 +128,11 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 			if len(release.SHA256) == 0 {
 				return fmt.Errorf("no archive in %s", filepath.Join(*dist, *version))
 			}
+			build, err := releaseBuild(filepath.Join(*dist, *version), release.SHA256)
+			if err != nil {
+				return err
+			}
+			release.Build = build
 			if err := compute.NewCompute(pool, execution.NewExecution(pool), compute.Config{}).PublishAgentRelease(ctx, release); err != nil {
 				return err
 			}
@@ -145,6 +150,21 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 	return withPool(ctx, *dbURL, run)
+}
+
+// releaseBuild digests the archives in dir of the architectures digests
+// names, as compute.ReleaseBuild does.
+func releaseBuild(dir string, digests map[string]string) (string, error) {
+	archives := map[string]io.Reader{}
+	for arch := range digests {
+		f, err := os.Open(filepath.Join(dir, compute.ArchiveName(arch))) //nolint:gosec // An operator names the directory.
+		if err != nil {
+			return "", fmt.Errorf("open archive: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		archives[arch] = f
+	}
+	return compute.ReleaseBuild(archives)
 }
 
 func fileSHA256(path string) (string, error) {

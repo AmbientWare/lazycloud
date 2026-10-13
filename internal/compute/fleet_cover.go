@@ -49,10 +49,13 @@ type CoverNode struct {
 }
 
 // CoverLimits bound a cover: at most Nodes nodes, within the vCPUs each
-// known quota in VCPUs has left.
+// known quota in VCPUs has left, each node of an offer Sized admits for
+// what it holds: the items placed on it, the aggregate it supplies and the
+// disks they attach. A nil Sized admits any.
 type CoverLimits struct {
 	Nodes int
 	VCPUs map[QuotaKey]int64
+	Sized func(o FleetOffer, holds FleetCapacity, disks int) bool
 }
 
 // CoverResult is the chosen nodes and what they leave unmet.
@@ -116,7 +119,7 @@ func Cover(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) int64, lim
 				if q >= 0 && s.quota[q]+o.Type.VCPUs() > limits.VCPUs[o.Quota] {
 					continue
 				}
-				next, moved := s.add(c, o, cost(o), need, order, total)
+				next, moved := s.add(c, o, cost(o), need, order, total, limits.Sized)
 				if q >= 0 {
 					next.quota[q] += o.Type.VCPUs()
 				}
@@ -181,8 +184,10 @@ func coverCandidates(offers []FleetOffer, need CoverNeed, cost func(FleetOffer) 
 	return out
 }
 
-// add places what it can on one more node of offer c.
-func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order []int, total int) (coverState, bool) {
+// add places what it can on one more node of offer c; a node sized
+// rejects for what it would hold moves nothing.
+func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order []int, total int,
+	sized func(FleetOffer, FleetCapacity, int) bool) (coverState, bool) {
 	free, disks := o.Usable, o.Type.DiskSlots()
 	placed := make([]int, len(need.Items))
 	remaining := slices.Clone(s.remaining)
@@ -202,6 +207,9 @@ func (s coverState) add(c int, o FleetOffer, price int64, need CoverNeed, order 
 	}
 	supplied := s.supplied.Plus(free).Lower(need.Aggregate)
 	moved = moved || supplied != s.supplied
+	if sized != nil && moved && !sized(o, o.Usable.Minus(free).Plus(supplied.Minus(s.supplied)), o.Type.DiskSlots()-disks) {
+		moved = false
+	}
 	next := coverState{
 		cost: s.cost + price, remaining: remaining, supplied: supplied,
 		nodes: append(slices.Clone(s.nodes), c), placed: append(slices.Clone(s.placed), placed), quota: slices.Clone(s.quota),

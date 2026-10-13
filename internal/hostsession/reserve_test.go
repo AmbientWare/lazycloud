@@ -181,7 +181,7 @@ func TestReserveRefusesUnprovenHosts(t *testing.T) {
 		answer func(*hostproto.ReserveReady)
 		reason string
 	}{
-		{"old agent", nil, func(r *hostproto.ReserveReady) { r.AgentVersion = "v1" }, "not the target release v2"},
+		{"old agent", nil, func(r *hostproto.ReserveReady) { r.AgentVersion = "v1" }, "the agent runs v1, not the target release's build"},
 		{"missing GPU", func(host compute.HostID) {
 			h.exec("update hosts set gpu_count = 2, gpu_type = 'T4' where id = $1", uuid.UUID(host))
 		}, func(r *hostproto.ReserveReady) { r.Gpus = 1 }, "the driver found 1 of 2 GPUs"},

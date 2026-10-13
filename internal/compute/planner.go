@@ -266,17 +266,26 @@ func (ps *fleetPass) decide() error {
 	return ps.connections(groups)
 }
 
-func (ps *fleetPass) offerInputs(networks map[string]Network, owner string, hosts []FleetHost) OfferInputs {
+// offerInputs are what an owner's offers rank from: the platform's, with
+// its rates, quotas and market reads, or a connection's, which pays its own
+// hosts, in networks with hosts.
+func (ps *fleetPass) offerInputs(networks map[string]Network, connection *uuid.UUID, hosts []FleetHost) OfferInputs {
 	zones := map[string]int{}
 	for _, h := range hosts {
 		if h.State != FleetTerminating && h.ZoneID != "" {
 			zones[h.ZoneID]++
 		}
 	}
-	return OfferInputs{
-		Now: ps.r.now, Catalog: ps.catalog, Networks: networks, Spot: ps.r.spot, Cooldowns: offerCooldowns(ps.r.cooldowns, owner),
+	in := OfferInputs{
+		Now: ps.r.now, Catalog: ps.catalog, Networks: networks, Spot: ps.r.spot, Cooldowns: offerCooldowns(ps.r.cooldowns, ownerPlatform),
 		ReportedMemory: ps.reported, ZoneHosts: zones, ZoneTypes: ps.r.zoneTypes, StorageRegion: ps.c.fleet.StorageRegion,
 	}
+	if connection != nil {
+		in.Cooldowns, in.OwnerPays = offerCooldowns(ps.r.cooldowns, connection.String()), true
+	} else {
+		in.Rates, in.Quotas, in.ReadBytes = ps.rates, vcpuQuotas(ps.r.quotas), readsByMarket(ps.r.recent)
+	}
+	return in
 }
 
 // platform plans the platform fleet and publishes its plan.
@@ -297,7 +306,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		if refusedReserve(row) && row.Containers == 0 && now.Sub(row.PhaseAt) < ps.c.fleet.CapacityCooldown {
 			failed = append(failed, row)
 		}
-		hosts = append(hosts, fleetHostOf(row, now, ps.r.release))
+		hosts = append(hosts, fleetHostOf(row, now))
 	}
 	var pending []DemandGroup
 	for _, g := range groups {
@@ -305,8 +314,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			pending = append(pending, g.group)
 		}
 	}
-	in := ps.offerInputs(ps.c.fleet.Networks, ownerPlatform, hosts)
-	in.Rates, in.Quotas, in.ReadBytes = ps.rates, vcpuQuotas(ps.r.quotas), readsByMarket(ps.r.recent)
+	in := ps.offerInputs(ps.c.fleet.Networks, nil, hosts)
 	// The offer of a host that could not prove a stop cools, so this pass
 	// does not buy its replacement from it.
 	var unproven []OfferCooldown
@@ -356,7 +364,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		var hosts []FleetHost
 		for _, row := range ps.r.hosts {
 			if row.ConnectionID != nil && *row.ConnectionID == conn.ID {
-				hosts = append(hosts, fleetHostOf(row, ps.r.now, nil))
+				hosts = append(hosts, fleetHostOf(row, ps.r.now))
 			}
 		}
 		var pending []DemandGroup
@@ -372,8 +380,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		if err := json.Unmarshal(conn.Networks, &networks); err != nil {
 			return fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
 		}
-		in := ps.offerInputs(networks, conn.ID.String(), hosts)
-		in.OwnerPays = true
+		in := ps.offerInputs(networks, &conn.ID, hosts)
 		held := 0
 		for _, h := range hosts {
 			if !h.reserve() {
@@ -394,42 +401,25 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 	return nil
 }
 
-// planOwner runs PlanFleet, and once more with the offers cooled whose
-// bought host joined and still could not take its container: the offer did
-// not hold what it predicted, so buying it again would not help.
+// planOwner runs PlanFleet with the offers cooled whose bought host serves
+// and still cannot take the container bought for it: the offer did not
+// hold what it predicted, so buying it again would not help.
 func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []OfferCooldown) {
-	plan := PlanFleet(p, s)
-	bought := map[uuid.UUID]HostID{}
+	var cools []OfferCooldown
 	for _, g := range s.Pending {
 		for _, c := range g.Containers {
-			if c.Host != nil {
-				bought[c.ID] = *c.Host
+			i := slices.IndexFunc(s.Hosts, func(h FleetHost) bool { return c.Host != nil && h.ID == *c.Host && h.State == FleetServing })
+			if i < 0 {
+				continue
+			}
+			h := s.Hosts[i]
+			// A resumed reserve updating its agent takes the work once it has.
+			h.UpdateDue = false
+			missed := OfferCooldown{Region: h.Region, InstanceType: h.InstanceType, Market: h.Market, Until: s.Now.Add(cooldown)}
+			if !h.capacity().Fits(g.Need) && !slices.ContainsFunc(cools, func(o OfferCooldown) bool { return o == missed }) {
+				cools = append(cools, missed)
 			}
 		}
-	}
-	var cools []OfferCooldown
-	for _, w := range plan.Waits {
-		if w.Action == nil && (w.Wait == nil || *w.Wait != WaitLimit) {
-			continue
-		}
-		id, ok := bought[w.Container]
-		if !ok {
-			continue
-		}
-		i := slices.IndexFunc(s.Hosts, func(h FleetHost) bool { return h.ID == id && h.State == FleetServing })
-		if i < 0 {
-			continue
-		}
-		h := s.Hosts[i]
-		c := OfferCooldown{Region: h.Region, InstanceType: h.InstanceType, Market: h.Market, Until: s.Now.Add(cooldown)}
-		if !slices.ContainsFunc(cools, func(o OfferCooldown) bool {
-			return o.Region == c.Region && o.InstanceType == c.InstanceType && o.Market == c.Market
-		}) {
-			cools = append(cools, c)
-		}
-	}
-	if len(cools) == 0 {
-		return plan, nil
 	}
 	s.Offers.Cooldowns = append(slices.Clone(s.Offers.Cooldowns), cools...)
 	return PlanFleet(p, s), cools

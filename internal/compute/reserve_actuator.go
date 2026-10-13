@@ -321,18 +321,15 @@ func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason str
 }
 
 // startReserve starts a resuming host's stopped instance once EC2 has
-// disabled its Spot request; a request active past SpotDisableMax is
-// stuck, and the host retires so its work buys. EC2 refusing the start
-// for capacity retires the host and cools its offer, so the planner buys
-// elsewhere; the host's session moves it on once the agent says Hello.
+// disabled its Spot request, however long that takes; reconcile ends a
+// reserve that never resumes. EC2 refusing the start for capacity retires
+// the host and cools its offer, so the planner buys elsewhere; the host's
+// session moves it on once the agent says Hello.
 func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
 	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
 		if requestActive {
-			if h.StoppedAt != nil && time.Since(*h.StoppedAt) > c.policy().Starts.SpotDisableMax {
-				return c.retireReserve(ctx, logger, h, PhaseResuming, "The Spot request stayed active after its instance stopped", nil)
-			}
 			return nil
 		}
 	case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning:

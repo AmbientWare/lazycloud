@@ -195,7 +195,7 @@ func TestThePoolsOneWalkRefusesCoolUntilOneEnd(t *testing.T) {
 	for walk := range 2 {
 		requestedHost(t, o, ws, `{}`)
 		launchAll(t, o)
-		ends := scan[int](t, o.pool, "select count(distinct until)::int from capacity_cooldowns")
+		ends := scan[int](t, o.pool, "select count(distinct until)::int from capacity_cooldowns where until > now()")
 		if tried := len(emulator.calls("RunInstances")); tried <= 8*(walk+1) || ends != 1 {
 			t.Fatalf("walk %d: %d pools refused, whose cooldowns end at %d times; want more than a pass's 8, ending at one", walk+1, tried, ends)
 		}

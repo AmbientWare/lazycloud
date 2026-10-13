@@ -99,21 +99,29 @@ func (q *Queries) RecordResumeOutcome(ctx context.Context, arg RecordResumeOutco
 }
 
 const reserveProofHost = `-- name: ReserveProofHost :one
-select id, phase, phase_at, boot_id, gpu_count, preflight, rollout_bucket from hosts where id = $1 for update
+select id, phase, phase_at, boot_id, gpu_count, preflight, on_target(rollout_bucket, $1::text)::bool as current
+from hosts where id = $2 for update
 `
 
-type ReserveProofHostRow struct {
-	ID            uuid.UUID
-	Phase         string
-	PhaseAt       time.Time
-	BootID        string
-	GpuCount      int32
-	Preflight     []byte
-	RolloutBucket int32
+type ReserveProofHostParams struct {
+	AgentVersion string
+	ID           uuid.UUID
 }
 
-func (q *Queries) ReserveProofHost(ctx context.Context, id uuid.UUID) (ReserveProofHostRow, error) {
-	row := q.db.QueryRow(ctx, reserveProofHost, id)
+type ReserveProofHostRow struct {
+	ID        uuid.UUID
+	Phase     string
+	PhaseAt   time.Time
+	BootID    string
+	GpuCount  int32
+	Preflight []byte
+	Current   bool
+}
+
+// A preparing host and whether the release its agent runs is what it
+// should.
+func (q *Queries) ReserveProofHost(ctx context.Context, arg ReserveProofHostParams) (ReserveProofHostRow, error) {
+	row := q.db.QueryRow(ctx, reserveProofHost, arg.AgentVersion, arg.ID)
 	var i ReserveProofHostRow
 	err := row.Scan(
 		&i.ID,
@@ -122,7 +130,7 @@ func (q *Queries) ReserveProofHost(ctx context.Context, id uuid.UUID) (ReservePr
 		&i.BootID,
 		&i.GpuCount,
 		&i.Preflight,
-		&i.RolloutBucket,
+		&i.Current,
 	)
 	return i, err
 }

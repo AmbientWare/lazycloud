@@ -390,6 +390,43 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 	return sorted
 }
 
+// sizeRefs are, by market and type, a GPU offer that can host need with
+// cooldowns and quotas set aside: the sizes the size rule climbs.
+func sizeRefs(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetOffer {
+	if len(need.GPUs) == 0 {
+		return nil
+	}
+	in.Cooldowns, in.Quotas = nil, nil
+	var refs []FleetOffer
+	for _, o := range RankOffers(p, need, reserve, in) {
+		if !slices.ContainsFunc(refs, func(r FleetOffer) bool { return r.Type.Name == o.Type.Name && r.Market == o.Market }) {
+			refs = append(refs, o)
+		}
+	}
+	return refs
+}
+
+// sized is the size rule every purchase, reserve and launch fallback
+// keeps for a GPU offer o bought to hold holds and disks: o has the fewest
+// cards a type of its model and market among refs fits them with, lies
+// within the size cap where such a type does, and is larger than such a
+// type only while every pool of it is cooling or over quota, as available,
+// the offers that can host holds now, says. A larger type serves the work
+// when smaller ones refuse, and its spare room serves packed CPU work. CPU
+// types cost about the same per core at every size, so the cover sizes CPU
+// hosts to their work and headroom, and the cap bounds reserves
+// (RankOffers).
+func (p Policy) sized(o FleetOffer, holds FleetCapacity, disks int, refs, available []FleetOffer) bool {
+	limit := p.LargestShape.Cap.Upper(holds)
+	return o.Type.GPU == "" || !slices.ContainsFunc(refs, func(r FleetOffer) bool {
+		if r.Type.Name == o.Type.Name || r.Market != o.Market || r.Type.GPU != o.Type.GPU || !r.Usable.Covers(holds) || r.Type.DiskSlots() < disks {
+			return false
+		}
+		return r.Type.GPUCount < o.Type.GPUCount || limit.Covers(r.Usable) && !limit.Covers(o.Usable) ||
+			o.Usable.Covers(r.Usable) && slices.ContainsFunc(available, func(a FleetOffer) bool { return a.Type.Name == r.Type.Name && a.Market == r.Market })
+	})
+}
+
 // hibernationRAMLimit is the most RAM a reserve hibernates. EC2 writes it
 // to the gp3 root at 125 MiB/s: 32 GiB takes about 4.5 minutes of the
 // 10-minute providerDeadline, while 128 GiB would outlast it.

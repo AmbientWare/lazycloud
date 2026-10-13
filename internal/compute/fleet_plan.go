@@ -47,7 +47,7 @@ type FleetHost struct {
 	// Requested is set on a host EC2 has not launched yet, which its
 	// launch's walk through refused pools may still move.
 	Requested bool
-	// Current is set on a reserve prepared for the current agent release.
+	// Current is set on a reserve prepared on the target agent build.
 	Current bool
 	// UpdateDue is set on a host whose agent must move to the target
 	// release; until it does, placement gives it no work.
@@ -311,7 +311,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 	ps := &pass{
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{}, batched: map[ReserveMarket]bool{},
-		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string][]FleetOffer{}, byMarket: map[ReserveMarket]*marketView{},
+		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string]ranking{}, byMarket: map[ReserveMarket]*marketView{},
 		claimed: map[HostID]bool{}, holding: map[HostID][]warmSlot{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
 		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), spot: freshSpot(p, s.Offers.Spot, s.Now),
 		classReads: map[string]int64{}, spotOffers: map[spotNeed]bool{},
@@ -351,7 +351,7 @@ type pass struct {
 	// purchases wait for arrivals to settle.
 	waiting, limited, batched map[ReserveMarket]bool
 	hostRoom, reserveRoom     int
-	offers                    map[string][]FleetOffer
+	offers                    map[string]ranking
 	// classReads is the largest read pending work of each demand class
 	// makes, by class key.
 	classReads map[string]int64
@@ -573,18 +573,28 @@ func reservedShape(r Requirement) FleetCapacity {
 // marketOffers are the offers a market's own growth buys from, priced with
 // the read its recent work makes.
 func (ps *pass) marketOffers(m ReserveMarket, reserve bool) []FleetOffer {
+	return ps.marketRanking(m, reserve).offers
+}
+
+// marketRanking ranks market m's offers once per pass.
+func (ps *pass) marketRanking(m ReserveMarket, reserve bool) ranking {
 	key := m.String() + "/" + boolKey(reserve)
-	if offers, ok := ps.offers[key]; ok {
-		return offers
+	if r, ok := ps.offers[key]; ok {
+		return r
 	}
 	need := marketNeed(m)
 	need.Read = ps.s.Offers.marketRead(m)
-	offers := slices.DeleteFunc(RankOffers(ps.p, need, reserve, ps.s.Offers), func(o FleetOffer) bool {
+	r := ranking{refs: sizeRefs(ps.p, need, reserve, ps.s.Offers)}
+	r.offers = slices.DeleteFunc(RankOffers(ps.p, need, reserve, ps.s.Offers), func(o FleetOffer) bool {
 		return o.Market != m.buyMarket() || o.Type.GPU != m.GPU
 	})
-	ps.offers[key] = offers
-	return offers
+	ps.offers[key] = r
+	return r
 }
+
+// ranking is the offers for one need, best first, and what the size rule
+// sizes them against.
+type ranking struct{ offers, refs []FleetOffer }
 
 // misplaced reports a region outside the one market v's starts read from,
 // while the market's cheapest reserve that holds its largest shape lies in
@@ -604,10 +614,10 @@ func (ps *pass) misplaced(v *marketView, region string) bool {
 }
 
 // placed is a reserve of market v that holds its stopped target: one not
-// launched yet wherever its walk points, and a launched one only where it
-// is not misplaced.
+// stale, not launched yet wherever its walk points, and a launched one only
+// where it is not misplaced.
 func (ps *pass) placed(v *marketView) func(FleetHost) bool {
-	return func(h FleetHost) bool { return h.reserve() && (h.Requested || !ps.misplaced(v, h.Region)) }
+	return func(h FleetHost) bool { return h.reserve() && !stale(h) && (h.Requested || !ps.misplaced(v, h.Region)) }
 }
 
 func boolKey(b bool) string {
@@ -651,9 +661,12 @@ func (ps *pass) batching() bool {
 	return true
 }
 
-// limits bounds a cover to nodes and the quota room left.
-func (ps *pass) limits(nodes int) CoverLimits {
-	return CoverLimits{Nodes: nodes, VCPUs: quotaRoom(ps.s.Offers.Quotas, ps.quotaUsed)}
+// limits bounds a cover to nodes and the quota room left, each node sized
+// for what it holds against r.
+func (ps *pass) limits(nodes int, r ranking) CoverLimits {
+	return CoverLimits{Nodes: nodes, VCPUs: quotaRoom(ps.s.Offers.Quotas, ps.quotaUsed), Sized: func(o FleetOffer, holds FleetCapacity, disks int) bool {
+		return ps.p.sized(o, holds, disks, r.refs, r.offers)
+	}}
 }
 
 // quotaOf is the quota a host of type counts against, and its vCPUs.
@@ -783,7 +796,9 @@ func (ps *pass) cover(items []coverItem) {
 		case FleetServing:
 			ready = append(ready, bin{host: h, room: h.capacity()})
 		case FleetStarting:
-			coming = append(coming, bin{host: h, room: h.capacity()})
+			if !ps.stalled(*h) {
+				coming = append(coming, bin{host: h, room: h.capacity()})
+			}
 		case FleetDraining, FleetUnavailable, FleetTerminating, FleetPreparing, FleetStopping, FleetStopped,
 			FleetHibernateUnverified, FleetImageSaved:
 		}
@@ -833,6 +848,11 @@ func (ps *pass) cover(items []coverItem) {
 				ps.provisioning(it, ptr(coming[i].host.ID), nil)
 				continue
 			}
+			// A stale reserve resumed for it serves once its agent updates.
+			if i := slices.IndexFunc(ready, func(b bin) bool { return b.host.ID == *it.bought && b.host.UpdateDue }); i >= 0 {
+				ps.provisioning(it, ptr(ready[i].host.ID), nil)
+				continue
+			}
 		}
 		// CPU work packs only into a GPU host that serves, so it never
 		// waits on one booting.
@@ -865,7 +885,7 @@ func (ps *pass) demandMarket(need Requirement) ReserveMarket {
 		return m
 	}
 	m.GPU = GPUAny
-	if models := ps.gpuModels(need, ps.classOffers(need)); len(models) > 0 {
+	if models := ps.gpuModels(need, ps.classOffers(need).offers); len(models) > 0 {
 		m.GPU = models[0]
 	} else if i := slices.IndexFunc(need.GPUs, func(model string) bool { return model != GPUAny }); i >= 0 {
 		m.GPU = need.GPUs[i]
@@ -889,11 +909,11 @@ func (ps *pass) spotOffered(need Requirement) bool {
 	if offered, ok := ps.spotOffers[key]; ok {
 		return offered
 	}
-	offers := ps.classOffers(need)
-	models := ps.gpuModels(need, offers)
-	offered := slices.ContainsFunc(offers, func(o FleetOffer) bool {
+	r := ps.classOffers(need)
+	models := ps.gpuModels(need, r.offers)
+	offered := slices.ContainsFunc(r.offers, func(o FleetOffer) bool {
 		return o.Market == MarketSpot && (key.shape.GPUs == 0 || slices.Contains(models, o.Type.GPU)) && o.Usable.Covers(key.shape) &&
-			o.Type.DiskSlots() >= need.Disks
+			o.Type.DiskSlots() >= need.Disks && ps.p.sized(o, key.shape, need.Disks, r.refs, r.offers)
 	})
 	ps.spotOffers[key] = offered
 	return offered
@@ -950,14 +970,14 @@ func (ps *pass) classKey(need Requirement) (Requirement, string) {
 
 // classOffers ranks the offers for work of need's placement, GPUs and read
 // region, once per pass.
-func (ps *pass) classOffers(need Requirement) []FleetOffer {
+func (ps *pass) classOffers(need Requirement) ranking {
 	c, key := ps.classKey(need)
-	if offers, ok := ps.offers[key]; ok {
-		return offers
+	if r, ok := ps.offers[key]; ok {
+		return r
 	}
-	offers := RankOffers(ps.p, c, false, ps.s.Offers)
-	ps.offers[key] = offers
-	return offers
+	r := ranking{offers: RankOffers(ps.p, c, false, ps.s.Offers), refs: sizeRefs(ps.p, c, false, ps.s.Offers)}
+	ps.offers[key] = r
+	return r
 }
 
 // gpuModels are the GPU models work may buy, best first, among those an
@@ -1038,7 +1058,8 @@ func (ps *pass) resumeEach(items []coverItem, work bool) []coverItem {
 
 // bestReserve is the ready reserve to resume for items, and the items, by
 // index, it takes first fit, pending containers before slots: one of its
-// first item's market first, then a stopped one, then the one that takes
+// first item's market first, then one on the target agent build, then a
+// stopped one, then the one that takes
 // the most pending containers, then the one whose region they read least
 // across, then one that takes every pending container and every slot of
 // its market, so one resume does; then the smallest, the cheapest, and the
@@ -1098,7 +1119,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 			read += readMicros(ps.p, items[n].need.Read, h.Region)
 		}
 		if best == nil || cmp.Or(boolOrder(h.market() != items[taken[0]].market, best.market() != items[bestTaken[0]].market),
-			boolOrder(h.State == FleetStopping, best.State == FleetStopping), cmp.Compare(bestCount[0], count[0]), cmp.Compare(read, bestRead),
+			boolOrder(!h.Current, !best.Current), boolOrder(h.State == FleetStopping, best.State == FleetStopping), cmp.Compare(bestCount[0], count[0]), cmp.Compare(read, bestRead),
 			boolOrder(!all(h, taken), !all(best, bestTaken)), shapeOrder(h.Usable, best.Usable), ps.retention(h, best)) < 0 {
 			best, bestTaken, bestCount, bestRead = h, taken, count, read
 		}
@@ -1106,27 +1127,44 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 	return best, bestTaken
 }
 
-// ready reports whether reserve h, prepared for the current agent
-// release, can resume now: stopped, or for work stopping and sooner to
-// serve than a purchase. EC2 starts a stopping Spot reserve once it
-// disables the persistent request, SpotDisable after the stop on average;
-// a request active past SpotDisableMax is stuck. A stopping reserve's
+// ready reports whether reserve h can resume now: stopped and prepared
+// on the target agent build, or for work, stopped on an older build or
+// stopping, when it serves sooner than a purchase. A stopping reserve's
 // quota is counted already.
 func (ps *pass) ready(h FleetHost, work bool) bool {
-	st := ps.p.Starts
 	switch {
-	case !h.Current || h.Protected || ps.cooled(h):
+	case h.Protected:
 		return false
-	case h.resumable():
+	case h.resumable() && h.Current:
 		return ps.startable(h)
-	case !work || h.State != FleetStopping || h.StoppedAt == nil || ps.s.Now.Sub(*h.StoppedAt) > st.SpotDisableMax:
+	case !work, h.resumable() && !ps.startable(h), !h.resumable() && (h.State != FleetStopping || h.StoppedAt == nil || ps.stalled(h)):
 		return false
 	}
-	launch, resume := st.Launch, st.Resume
+	st := ps.p.Starts
+	launch, serves := st.Launch, st.Resume
 	if h.GPU != "" {
-		launch, resume = st.GPULaunch, st.GPUResume
+		launch, serves = st.GPULaunch, st.GPUResume
 	}
-	return max(0, h.StoppedAt.Add(st.SpotDisable).Sub(ps.s.Now))+resume < launch
+	if h.State == FleetStopping {
+		serves += max(0, h.StoppedAt.Add(st.SpotDisable).Sub(ps.s.Now))
+	}
+	if !h.Current {
+		serves += st.Update
+	}
+	return serves < launch
+}
+
+// stale reports a reserve stopped on an agent build other than the
+// target's: it updates its agent before it serves, so it holds none of the
+// stopped target and retires once a reserve on the target replaces it.
+func stale(h FleetHost) bool {
+	return (h.resumable() || h.State == FleetStopping) && !h.Current
+}
+
+// stalled reports a resumed Spot reserve whose start still waits for EC2
+// to disable its request past SpotDisableMax: work stops waiting for it.
+func (ps *pass) stalled(h FleetHost) bool {
+	return h.StoppedAt != nil && ps.s.Now.Sub(*h.StoppedAt) > ps.p.Starts.SpotDisableMax
 }
 
 // leavesLarge reports whether the reserves of h's market without h still
@@ -1204,7 +1242,8 @@ func (ps *pass) resumePays(h *FleetHost, items []coverItem, taken []int) bool {
 		need.Items = append(need.Items, CoverItem{Shape: shape, Disks: disks, Count: 1})
 	}
 	m := h.market()
-	result := Cover(ps.marketOffers(m, false), need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
+	r := ps.marketRanking(m, false)
+	result := Cover(r.offers, need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom), r))
 	if !result.Complete(need) {
 		return true
 	}
@@ -1336,15 +1375,15 @@ func (ps *pass) buyFor(items []coverItem) {
 // prices scale with size, so on-demand hosts hold what the cover needs.
 // GPU work buys its models in its preference order: Spot-tolerant work on
 // Spot, and on-demand only what no Spot offer of any model can host.
-func (ps *pass) buyClass(c *demandClass, offers []FleetOffer) {
-	m := c.market
+func (ps *pass) buyClass(c *demandClass, r ranking) {
+	m, offers := c.market, r.offers
 	if m.GPU != "" {
 		models := ps.gpuModels(c.need, offers)
 		buy := func(market Market, only func(itemGroup) bool) {
 			for _, model := range models {
 				ps.coverClass(c, ReserveMarket{Preemptible: m.Preemptible, GPU: model}, slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool {
 					return o.Type.GPU != model || o.Market != market
-				}), only)
+				}), r, only)
 			}
 		}
 		if !m.Preemptible {
@@ -1359,19 +1398,20 @@ func (ps *pass) buyClass(c *demandClass, offers []FleetOffer) {
 		least := v.warm.Lower(ps.p.LargestShape.Cap)
 		ps.coverClass(c, m, slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool {
 			return o.Market != MarketSpot || !o.Usable.Covers(least)
-		}), nil)
+		}), r, nil)
 	}
-	ps.coverClass(c, m, offers, nil)
+	ps.coverClass(c, m, offers, r, nil)
 }
 
 // coverClass buys from offers the cheapest cover of what is left of class
-// c's groups, of those only keeps when it is set.
-func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer, only func(itemGroup) bool) {
+// c's groups, of those only keeps when it is set, each host sized against
+// r for what it holds.
+func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer, r ranking, only func(itemGroup) bool) {
 	need, at := ps.coverNeed(c, only)
 	if len(at) == 0 {
 		return
 	}
-	result := Cover(offers, need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom)))
+	result := Cover(offers, need, servingCost(ps.p), ps.limits(min(ps.room(m), ps.hostRoom), r))
 	for _, node := range result.Nodes {
 		var taken []coverItem
 		for i, n := range node.Placed {
@@ -1646,11 +1686,11 @@ func (ps *pass) reserves(v *marketView) {
 	}
 }
 
-// retireUnresumable retires the market's stopped reserves that never
-// resume, so they hold none of the target: those that stopped after their
-// reclaim notice, and those prepared for an older agent release.
+// retireUnresumable retires the market's stopped reserves that stopped
+// after their reclaim notice: they never resume, so they hold none of the
+// target.
 func (ps *pass) retireUnresumable(v *marketView) {
-	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && (h.Protected || !h.Current) }) {
+	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && h.Protected }) {
 		v.retired[h.ID] = true
 		ps.reserveRoom++
 		ps.act(FleetAction{Kind: ActionRetireReserve, Market: v.m, Host: ptr(h.ID)})
@@ -1690,7 +1730,7 @@ func (ps *pass) buyReserves(v *marketView, need CoverNeed, shape, least FleetCap
 
 // coverReserves buys the cheapest reserves from offers that cover need.
 func (ps *pass) coverReserves(v *marketView, need CoverNeed, offers []FleetOffer) CoverResult {
-	result := Cover(offers, need, reserveCost(ps.p), ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom)))
+	result := Cover(offers, need, reserveCost(ps.p), ps.limits(min(ps.room(v.m), ps.reserveRoom, ps.hostRoom), ps.marketRanking(v.m, true)))
 	for _, node := range result.Nodes {
 		holds := node.Offer.Usable.Lower(need.Aggregate)
 		for i, n := range node.Placed {
@@ -1740,7 +1780,7 @@ func (ps *pass) retire(v *marketView) {
 			cmp.Compare(b.Usable.MemoryBytes, a.Usable.MemoryBytes), strings.Compare(a.ID.String(), b.ID.String()))
 	})
 	for _, h := range candidates {
-		if holding && growable(h) && (ready(*h) || h.State == FleetPreparing) {
+		if holding && growable(h) && !stale(*h) && (ready(*h) || h.State == FleetPreparing) {
 			continue
 		}
 		if !ps.floor(v, h.ID, ps.placed(v)).Covers(v.stopped) || !ps.floor(v, h.ID, ready).Covers(needReady) ||

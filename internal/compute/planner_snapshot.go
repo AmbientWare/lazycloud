@@ -3,28 +3,24 @@ package compute
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
 // fleetRead is what one planning pass reads, all in its transaction.
 type fleetRead struct {
-	now       time.Time
-	hosts     []PlannerHostsRow
-	pending   []PendingDemandRow
-	recent    []RecentShapesRow
-	cooldowns []PlannerCooldownsRow
-	markets   map[string]FleetMarketsRow
-	// release is the target agent release; nil when none is published.
-	release     *AgentRelease
+	now         time.Time
+	hosts       []PlannerHostsRow
+	pending     []PendingDemandRow
+	recent      []RecentShapesRow
+	cooldowns   []PlannerCooldownsRow
+	markets     map[string]FleetMarketsRow
 	connections []HostingConnectionsRow
 	spot        []SpotQuote
 	zoneTypes   map[string]map[string][]string
@@ -74,13 +70,6 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	}
 	for _, m := range markets {
 		r.markets[m.Market] = m
-	}
-	switch release, err := q.TargetRelease(ctx); {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return r, fmt.Errorf("read target release: %w", err)
-	default:
-		r.release = ptr(releaseOf(release.Version, release.Sha256Amd64, release.Sha256Arm64, release.RolloutPercent))
 	}
 	if slices.ContainsFunc(r.pending, func(g PendingDemandRow) bool { return g.ConnectionID != nil }) ||
 		slices.ContainsFunc(r.hosts, func(h PlannerHostsRow) bool { return h.ConnectionID != nil }) {
@@ -161,7 +150,7 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 // or a Spot host on a persistent request can stop. A host whose agent
 // refused to prove a stop serves with its reserve mode still set; it is not
 // asked again, so retention drains it.
-func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetHost {
+func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 	market := marketOf(h.Market)
 	// Spot-tolerant work on an on-demand host is lent to the Spot market of
 	// the host's GPU model, or of CPU.
@@ -185,7 +174,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Lent:       lent,
 		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
 		Requested: Phase(h.Phase) == PhaseRequested,
-		Current:   onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
+		Current:   h.PreparedCurrent, UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
@@ -202,17 +191,6 @@ func busySince(h PlannerHostsRow) *time.Time {
 		return nil
 	}
 	return &h.BusySince
-}
-
-// onRelease reports whether version is the agent release a host should run:
-// the target once the rollout reaches it, any release outside the rollout
-// or without a target. A reserve passes the release it last proved it could
-// stop on.
-func onRelease(bucket int32, version *string, release *AgentRelease) bool {
-	if release == nil || int(bucket) >= release.RolloutPercent {
-		return true
-	}
-	return version != nil && *version == release.Version
 }
 
 // refusedReserve reports a host serving after its agent refused to prove a

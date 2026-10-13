@@ -15,20 +15,19 @@ where h.id in (
 )
 returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks, h.walk_cooled_until;
+          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks;
 
 -- name: MoveLaunchPool :execrows
 -- Moves a requested host whose pool EC2 refused to the next pool at that
--- pool's cost and capacity, with its attempts counted afresh there and the
--- end its walk's cooldowns share, and renews the launcher's lease for
--- lease_seconds, which 0 releases. Every
+-- pool's cost and capacity, with its attempts counted afresh there, and
+-- renews the launcher's lease for lease_seconds, which 0 releases. Every
 -- pool it moves to holds what it was bought to hold. A host another
 -- launcher moved on since it was claimed stays where that one put it.
 update hosts
 set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
     availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros,
     cpu_millis = @cpu_millis, memory_bytes = @memory_bytes, launch_pools = launch_pools + 1, launch_attempts = 0,
-    launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), walk_cooled_until = @walk_cooled_until,
+    launch_lease_until = now() + make_interval(secs => @lease_seconds::float8),
     updated_at = now()
 where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
@@ -73,48 +72,36 @@ update hosts set rightsize_refused_at = now(), updated_at = now() where id = @id
 
 -- name: InsertCooldown :exec
 -- Cools an offer in one zone, or in its whole region for the zone '', for
--- seconds, or until walk_until when a launch walk's earlier refusals set
--- the end its cooldowns share. Refused again while it cools, it cools at
--- least that long from now; refused after its cooldown ended, twice as
--- long as that cooldown lasted, up to max_seconds.
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason)
-values (@connection_key, @region, @availability_zone_id, @instance_type, @market,
-        coalesce(sqlc.narg('walk_until')::timestamptz, now() + make_interval(secs => @seconds::float8)),
-        make_interval(secs => @seconds::float8), @reason)
+-- seconds, and records the walk that refused it, if any. Refused again
+-- while it cools, it cools at least that long from now; refused after its
+-- cooldown ended, twice as long as that cooldown lasted, up to max_seconds.
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, walk)
+values (@connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => @seconds::float8),
+        make_interval(secs => @seconds::float8), @reason, sqlc.narg('walk'))
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set
     cooled_for = case when capacity_cooldowns.until > now() then capacity_cooldowns.cooled_for
                       else least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => @max_seconds::float8)) end,
     until = case when capacity_cooldowns.until > now() then greatest(capacity_cooldowns.until, excluded.until)
                  else now() + least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => @max_seconds::float8)) end,
-    reason = excluded.reason;
+    reason = excluded.reason, walk = excluded.walk;
 
--- name: AlignCooldowns :one
--- The pools one launch walk refused end their cooldowns together, at the
--- latest of their ends and walk_until, the end its earlier passes shared,
--- so the planner buys for them again once. No cooldown shortens, and the
--- rows lock in key order, so concurrent walks never deadlock here. It
--- returns the shared end.
-with walk as (
-    select unnest(@regions::text[]) as region, unnest(@zone_ids::text[]) as zone_id,
-           unnest(@instance_types::text[]) as instance_type, unnest(@markets::text[]) as market
-), cooled as (
-    select cd.region, cd.availability_zone_id, cd.instance_type, cd.market, cd.until
-    from capacity_cooldowns cd
-    join walk w on (cd.region, cd.availability_zone_id, cd.instance_type, cd.market) = (w.region, w.zone_id, w.instance_type, w.market)
-    where cd.connection_key = @connection_key
-    order by cd.region, cd.availability_zone_id, cd.instance_type, cd.market
-    for update of cd
-), shared as (
-    select greatest(max(until), sqlc.narg('walk_until')::timestamptz) as until from cooled
-), aligned as (
-    update capacity_cooldowns cd set until = greatest(cd.until, shared.until)
-    from cooled, shared
-    where cd.connection_key = @connection_key
-      and (cd.region, cd.availability_zone_id, cd.instance_type, cd.market)
-        = (cooled.region, cooled.availability_zone_id, cooled.instance_type, cooled.market)
+-- name: AlignWalk :exec
+-- Every pool one launch walk refused, in this pass or an earlier one,
+-- cools until the latest of their ends, so the planner buys for them again
+-- once. The rows lock in key order, so concurrent walks never deadlock
+-- here.
+with walked as (
+    select connection_key, region, availability_zone_id, instance_type, market, until
+    from capacity_cooldowns
+    where capacity_cooldowns.walk = @walk::uuid
+    order by connection_key, region, availability_zone_id, instance_type, market
+    for update
 )
-select until::timestamptz from shared;
+update capacity_cooldowns cd set until = (select max(until) from walked)
+from walked w
+where (cd.connection_key, cd.region, cd.availability_zone_id, cd.instance_type, cd.market)
+    = (w.connection_key, w.region, w.availability_zone_id, w.instance_type, w.market);
 
 -- name: ClearCooldown :exec
 -- A launch in a zone ends the refusals of its pool there and in its region.

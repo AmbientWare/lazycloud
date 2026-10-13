@@ -19,59 +19,68 @@ func gpuSpot(typ string, market Market) bool {
 	return market == MarketSpot && c.GPU != ""
 }
 
-// oversized names an offer bought or tried to hold holds that has more
-// cards than a fitting type of its model, or that a smaller fitting type
-// undercuts in its cheapest pool, cooldowns and quotas aside.
-func oversized(p Policy, in OfferInputs, o FleetOffer, holds FleetCapacity) string {
-	in.Cooldowns, in.Quotas = nil, nil
-	need := Requirement{CPUMillis: holds.CPUMillis, MemoryBytes: holds.MemoryBytes, GPUCount: holds.GPUs, Preemptible: o.Market == MarketSpot}
-	if o.Type.GPU != "" {
-		need.GPUs = []string{o.Type.GPU}
-	}
-	cheapest := map[string]int64{}
-	for _, c := range RankOffers(p, need, false, in) {
-		if c.Market != o.Market {
-			continue
-		}
-		if price, ok := cheapest[c.Type.Name]; !ok || c.HourlyMicros < price {
-			cheapest[c.Type.Name] = c.HourlyMicros
-		}
-	}
-	for name, price := range cheapest {
-		t, _ := CatalogTypeNamed(name)
-		switch {
-		case t.GPUCount < o.Type.GPUCount:
-			return fmt.Sprintf("%s has %d cards where %s has %d", o.Key(), o.Type.GPUCount, name, t.GPUCount)
-		case name != o.Type.Name && o.Usable.Covers(t.Usable(0)) && price < o.HourlyMicros:
-			return fmt.Sprintf("%s costs %d µ$/h where the smaller %s costs %d", o.Key(), o.HourlyMicros, name, price)
-		}
+// oversized names an offer bought or tried for an L4 job that has more
+// than its one card or exceeds the size cap.
+func oversized(p Policy, o FleetOffer) string {
+	switch {
+	case o.Type.GPUCount != 1:
+		return fmt.Sprintf("%s has %d cards", o.Key(), o.Type.GPUCount)
+	case !p.LargestShape.Cap.Covers(o.Usable):
+		return fmt.Sprintf("%s exceeds the size cap", o.Key())
 	}
 	return ""
 }
 
-// Work purchases follow the size rule: with every L4 Spot pool refusing, as
-// on 2026-10-13, the 2 CPU / 12.75 GiB job neither buys nor walks to a
-// g6.8xlarge, a 4-card g6.12xlarge or a g6.16xlarge, and it still starts.
+// Work purchases follow the size rule: with every L4 Spot pool refusing,
+// as on 2026-10-13, the 2 CPU / 12.75 GiB job's purchases climb the
+// single-card sizes no further than the size cap, never to a g6.8xlarge,
+// a 4-card g6.12xlarge or an 8-card g6.48xlarge. Its margin keeps it off
+// on-demand, so it starts once Spot fills again.
 func TestIncidentAnL4JobBuysNoLargerHostThanItNeeds(t *testing.T) {
 	t.Parallel()
 	s := newChurnSim(t)
-	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) }
 	s.tick = simLongTick
+	refill := s.start.Add(time.Hour)
+	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) && s.now.Before(refill) }
 	s.run(30*time.Minute, nil)
 	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
-	r := s.run(time.Hour, []simArrival{{need: l4Job, count: 1, runs: 10 * time.Minute, fn: "gpu"}})
+	r := s.run(90*time.Minute, []simArrival{{need: l4Job, count: 1, runs: 10 * time.Minute, fn: "gpu"}})
 	for _, p := range r.bought {
-		if p.containers == 0 {
-			continue
-		}
 		for _, o := range p.tried {
-			if why := oversized(s.p, s.in, o, p.holds); why != "" {
+			if why := oversized(s.p, o); why != "" && p.containers > 0 {
 				t.Errorf("%s: %s", p.at.Format(time.TimeOnly), why)
 			}
 		}
 	}
 	if len(r.fnWaits["gpu"]) != 1 || len(r.violations) > 0 {
 		t.Errorf("placed %d of 1, violations %v", len(r.fnWaits["gpu"]), r.violations)
+	}
+}
+
+// The size rule steps up while smaller pools refuse: with every g6.xlarge
+// Spot pool refusing, the L4 job lands on a g6.2xlarge within one
+// cooldown.
+func TestAnL4JobStepsUpWhileTheSmallestSizeRefuses(t *testing.T) {
+	t.Parallel()
+	s := newChurnSim(t)
+	s.tick = simLongTick
+	s.refuses = func(_, _, typ string, market Market) bool { return typ == "g6.xlarge" && market == MarketSpot }
+	s.run(30*time.Minute, nil)
+	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
+	// The L4 reserve is busy, so the job buys.
+	for _, h := range s.hosts {
+		if h.market() == (ReserveMarket{Preemptible: true, GPU: "L4"}) {
+			h.Protected = true
+		}
+	}
+	r := s.run(30*time.Minute, []simArrival{{need: l4Job, count: 1, runs: 10 * time.Minute, fn: "gpu"}})
+	waits := r.fnWaits["gpu"]
+	if len(waits) != 1 || waits[0] > simCooldown || len(r.violations) > 0 {
+		t.Fatalf("waits %v, violations %v; want the job placed within a cooldown", waits, r.violations)
+	}
+	i := slices.IndexFunc(r.bought, func(p simPurchase) bool { return p.containers > 0 && p.launched })
+	if i < 0 || r.bought[i].tried[len(r.bought[i].tried)-1].Type.Name != "g6.2xlarge" {
+		t.Errorf("purchases %+v, want the job on a g6.2xlarge", r.bought)
 	}
 }
 
@@ -107,6 +116,7 @@ func TestIncidentADeployWithoutAnAgentChangeKeepsTheReserves(t *testing.T) {
 	s.run(time.Hour, nil)
 	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
 	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) }
+	s.startsFill = true
 	s.deploys = []simDeploy{{at: time.Minute}}
 	r := s.run(30*time.Minute, []simArrival{{at: 10 * time.Minute, need: l4Job, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
 	if len(r.retired) > 0 {
@@ -137,6 +147,28 @@ func TestIncidentADeployWithAnAgentChangeReplacesReservesFirst(t *testing.T) {
 	}
 }
 
+// A deploy that changes the agent while every GPU Spot pool refuses leaves
+// each GPU market its stale reserve: no replacement can be bought, so the
+// stale one stays, and the next L4 job resumes it, updates its agent and
+// runs there sooner than a purchase could serve it.
+func TestIncidentAnAgentChangeKeepsStaleReservesServing(t *testing.T) {
+	t.Parallel()
+	s := newChurnSim(t)
+	s.tick = simLongTick
+	s.run(time.Hour, nil)
+	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
+	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) }
+	s.startsFill = true
+	s.deploys = []simDeploy{{at: time.Minute, agent: true}}
+	r := s.run(30*time.Minute, []simArrival{{at: 10 * time.Minute, need: l4Job, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
+	if r.starts[startResumed] != 1 || len(r.violations) > 0 {
+		t.Errorf("the L4 job after the deploy: starts %v, violations %v", r.starts, r.violations)
+	}
+	if waits := r.fnWaits["gpu"]; len(waits) != 1 || waits[0] > s.p.Starts.GPULaunch {
+		t.Errorf("the L4 job waited %v, want less than a purchase's %s", waits, s.p.Starts.GPULaunch)
+	}
+}
+
 // EC2 holds a stopped Spot reserve's request active for up to 165 s. L4
 // work that waits for the reserve keeps it: nothing retires the reserve,
 // and the work starts once EC2 disables the request and the reserve
@@ -151,8 +183,8 @@ func TestIncidentASlowSpotDisableKeepsTheReserve(t *testing.T) {
 		s.disableGap = gap
 		at := stopped + 33*time.Second
 		r := s.run(at+20*time.Minute, []simArrival{{at: at, need: l4Job, count: 1, runs: time.Minute, fn: "gpu"}})
-		if r.stuckRetired > 0 || len(r.violations) > 0 {
-			t.Errorf("request active %s: %d reserves retired, violations %v", gap, r.stuckRetired, r.violations)
+		if len(r.retired) > 0 || len(r.violations) > 0 {
+			t.Errorf("request active %s: reserves retired at %v, violations %v", gap, r.retired, r.violations)
 		}
 		waits := r.fnWaits["gpu"]
 		if len(waits) != 1 {

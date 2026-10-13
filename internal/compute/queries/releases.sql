@@ -1,13 +1,13 @@
 -- name: TargetRelease :one
-select version, sha256_amd64, sha256_arm64, rollout_percent from agent_releases where target;
+select version, sha256_amd64, sha256_arm64, rollout_percent, build from agent_releases where target;
 
 -- name: AgentRelease :one
-select version, sha256_amd64, sha256_arm64, rollout_percent from agent_releases where version = @version;
+select version, sha256_amd64, sha256_arm64, rollout_percent, build from agent_releases where version = @version;
 
 -- name: UpsertAgentRelease :execrows
 -- A version is immutable: republishing it with other digests changes no row.
-insert into agent_releases (version, sha256_amd64, sha256_arm64, rollout_percent)
-values (@version, sqlc.narg(sha256_amd64), sqlc.narg(sha256_arm64), @rollout_percent)
+insert into agent_releases (version, sha256_amd64, sha256_arm64, rollout_percent, build)
+values (@version, sqlc.narg(sha256_amd64), sqlc.narg(sha256_arm64), @rollout_percent, sqlc.narg(build))
 on conflict (version) do update
 set rollout_percent = excluded.rollout_percent
 where agent_releases.sha256_amd64 is not distinct from excluded.sha256_amd64
