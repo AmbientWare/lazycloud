@@ -20,9 +20,8 @@ group) and `qemu-system-x86_64`, not root.
   way hosts join. The first one downloads Lima and the image into
   `.lazycloud/` and takes several minutes.
 - `down` stops the VM; `reset` deletes it.
-- Agent updates leave a running snapshotter alone. `up` replaces the VM's
-  snapshotter with this tree's build only while no container runs there;
-  otherwise `reset` gives a fresh host.
+- The agent replaces the VM's snapshotter with its release's when it starts
+  while no container runs there; otherwise `reset` gives a fresh host.
 - Lima's socket paths must stay short. In a deep checkout, point
   `LAZYCLOUD_LIMA_HOME` at a short directory.
 

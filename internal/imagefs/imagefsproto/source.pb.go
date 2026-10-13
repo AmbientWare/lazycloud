@@ -609,8 +609,9 @@ func (x *EndTraceResponse) GetComplete() bool {
 	return false
 }
 
-// DiskGrant reads the objects under disks/<disk id>/ of one bucket.
-type DiskGrant struct {
+// BucketGrant is a short-lived credential for objects of one bucket: a
+// disk's, read-only under disks/<disk id>/, or a workspace's volumes.
+type BucketGrant struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Endpoint        string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	Region          string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
@@ -624,20 +625,20 @@ type DiskGrant struct {
 	sizeCache       protoimpl.SizeCache
 }
 
-func (x *DiskGrant) Reset() {
-	*x = DiskGrant{}
+func (x *BucketGrant) Reset() {
+	*x = BucketGrant{}
 	mi := &file_imagefs_v1_source_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DiskGrant) String() string {
+func (x *BucketGrant) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DiskGrant) ProtoMessage() {}
+func (*BucketGrant) ProtoMessage() {}
 
-func (x *DiskGrant) ProtoReflect() protoreflect.Message {
+func (x *BucketGrant) ProtoReflect() protoreflect.Message {
 	mi := &file_imagefs_v1_source_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -649,61 +650,61 @@ func (x *DiskGrant) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DiskGrant.ProtoReflect.Descriptor instead.
-func (*DiskGrant) Descriptor() ([]byte, []int) {
+// Deprecated: Use BucketGrant.ProtoReflect.Descriptor instead.
+func (*BucketGrant) Descriptor() ([]byte, []int) {
 	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *DiskGrant) GetEndpoint() string {
+func (x *BucketGrant) GetEndpoint() string {
 	if x != nil {
 		return x.Endpoint
 	}
 	return ""
 }
 
-func (x *DiskGrant) GetRegion() string {
+func (x *BucketGrant) GetRegion() string {
 	if x != nil {
 		return x.Region
 	}
 	return ""
 }
 
-func (x *DiskGrant) GetBucket() string {
+func (x *BucketGrant) GetBucket() string {
 	if x != nil {
 		return x.Bucket
 	}
 	return ""
 }
 
-func (x *DiskGrant) GetForcePathStyle() bool {
+func (x *BucketGrant) GetForcePathStyle() bool {
 	if x != nil {
 		return x.ForcePathStyle
 	}
 	return false
 }
 
-func (x *DiskGrant) GetAccessKeyId() string {
+func (x *BucketGrant) GetAccessKeyId() string {
 	if x != nil {
 		return x.AccessKeyId
 	}
 	return ""
 }
 
-func (x *DiskGrant) GetSecretAccessKey() string {
+func (x *BucketGrant) GetSecretAccessKey() string {
 	if x != nil {
 		return x.SecretAccessKey
 	}
 	return ""
 }
 
-func (x *DiskGrant) GetSessionToken() string {
+func (x *BucketGrant) GetSessionToken() string {
 	if x != nil {
 		return x.SessionToken
 	}
 	return ""
 }
 
-func (x *DiskGrant) GetExpiresAt() *timestamppb.Timestamp {
+func (x *BucketGrant) GetExpiresAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ExpiresAt
 	}
@@ -713,7 +714,7 @@ func (x *DiskGrant) GetExpiresAt() *timestamppb.Timestamp {
 type GrantDiskRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
-	Grant         *DiskGrant             `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
+	Grant         *BucketGrant           `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -755,7 +756,7 @@ func (x *GrantDiskRequest) GetDiskId() string {
 	return ""
 }
 
-func (x *GrantDiskRequest) GetGrant() *DiskGrant {
+func (x *GrantDiskRequest) GetGrant() *BucketGrant {
 	if x != nil {
 		return x.Grant
 	}
@@ -1125,6 +1126,112 @@ func (x *DiskReadsResponse) GetRecentFrames() []uint32 {
 	return nil
 }
 
+type GrantVolumesRequest struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	Grant       *BucketGrant           `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
+	// The access key requests for the bucket sign with, 16 bytes or more.
+	Key           string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantVolumesRequest) Reset() {
+	*x = GrantVolumesRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantVolumesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantVolumesRequest) ProtoMessage() {}
+
+func (x *GrantVolumesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantVolumesRequest.ProtoReflect.Descriptor instead.
+func (*GrantVolumesRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *GrantVolumesRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *GrantVolumesRequest) GetGrant() *BucketGrant {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+func (x *GrantVolumesRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type GrantVolumesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// host:port
+	Endpoint      string `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantVolumesResponse) Reset() {
+	*x = GrantVolumesResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantVolumesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantVolumesResponse) ProtoMessage() {}
+
+func (x *GrantVolumesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantVolumesResponse.ProtoReflect.Descriptor instead.
+func (*GrantVolumesResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GrantVolumesResponse) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
 var File_imagefs_v1_source_proto protoreflect.FileDescriptor
 
 const file_imagefs_v1_source_proto_rawDesc = "" +
@@ -1160,8 +1267,8 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"e\n" +
 	"\x10EndTraceResponse\x125\n" +
 	"\x05reads\x18\x01 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x1a\n" +
-	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xb1\x02\n" +
-	"\tDiskGrant\x12\x1a\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xb3\x02\n" +
+	"\vBucketGrant\x12\x1a\n" +
 	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x16\n" +
 	"\x06bucket\x18\x03 \x01(\tR\x06bucket\x12(\n" +
@@ -1170,10 +1277,10 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x11secret_access_key\x18\x06 \x01(\tR\x0fsecretAccessKey\x12#\n" +
 	"\rsession_token\x18\a \x01(\tR\fsessionToken\x129\n" +
 	"\n" +
-	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"b\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"d\n" +
 	"\x10GrantDiskRequest\x12\x17\n" +
-	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x125\n" +
-	"\x05grant\x18\x02 \x01(\v2\x1f.lazycloud.imagefs.v1.DiskGrantR\x05grant\"\x13\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x127\n" +
+	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\"\x13\n" +
 	"\x11GrantDiskResponse\"\xc8\x01\n" +
 	"\x10ServeDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x1e\n" +
@@ -1196,7 +1303,13 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\"[\n" +
 	"\x11DiskReadsResponse\x12!\n" +
 	"\fstart_frames\x18\x01 \x03(\rR\vstartFrames\x12#\n" +
-	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames2\xde\x03\n" +
+	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"\x83\x01\n" +
+	"\x13GrantVolumesRequest\x12!\n" +
+	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x127\n" +
+	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\"2\n" +
+	"\x14GrantVolumesResponse\x12\x1a\n" +
+	"\bendpoint\x18\x01 \x01(\tR\bendpoint2\xde\x03\n" +
 	"\fLayerSources\x12P\n" +
 	"\x05Grant\x12\".lazycloud.imagefs.v1.GrantRequest\x1a#.lazycloud.imagefs.v1.GrantResponse\x12Y\n" +
 	"\bPrefetch\x12%.lazycloud.imagefs.v1.PrefetchRequest\x1a&.lazycloud.imagefs.v1.PrefetchResponse\x12e\n" +
@@ -1208,7 +1321,9 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\tGrantDisk\x12&.lazycloud.imagefs.v1.GrantDiskRequest\x1a'.lazycloud.imagefs.v1.GrantDiskResponse\x12\\\n" +
 	"\tServeDisk\x12&.lazycloud.imagefs.v1.ServeDiskRequest\x1a'.lazycloud.imagefs.v1.ServeDiskResponse\x12b\n" +
 	"\vReleaseDisk\x12(.lazycloud.imagefs.v1.ReleaseDiskRequest\x1a).lazycloud.imagefs.v1.ReleaseDiskResponse\x12\\\n" +
-	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
+	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponse2v\n" +
+	"\rVolumeSources\x12e\n" +
+	"\fGrantVolumes\x12).lazycloud.imagefs.v1.GrantVolumesRequest\x1a*.lazycloud.imagefs.v1.GrantVolumesResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
 
 var (
 	file_imagefs_v1_source_proto_rawDescOnce sync.Once
@@ -1222,7 +1337,7 @@ func file_imagefs_v1_source_proto_rawDescGZIP() []byte {
 	return file_imagefs_v1_source_proto_rawDescData
 }
 
-var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_imagefs_v1_source_proto_goTypes = []any{
 	(*LayerGrant)(nil),            // 0: lazycloud.imagefs.v1.LayerGrant
 	(*GrantRequest)(nil),          // 1: lazycloud.imagefs.v1.GrantRequest
@@ -1236,7 +1351,7 @@ var file_imagefs_v1_source_proto_goTypes = []any{
 	(*StartTraceResponse)(nil),    // 9: lazycloud.imagefs.v1.StartTraceResponse
 	(*EndTraceRequest)(nil),       // 10: lazycloud.imagefs.v1.EndTraceRequest
 	(*EndTraceResponse)(nil),      // 11: lazycloud.imagefs.v1.EndTraceResponse
-	(*DiskGrant)(nil),             // 12: lazycloud.imagefs.v1.DiskGrant
+	(*BucketGrant)(nil),           // 12: lazycloud.imagefs.v1.BucketGrant
 	(*GrantDiskRequest)(nil),      // 13: lazycloud.imagefs.v1.GrantDiskRequest
 	(*GrantDiskResponse)(nil),     // 14: lazycloud.imagefs.v1.GrantDiskResponse
 	(*ServeDiskRequest)(nil),      // 15: lazycloud.imagefs.v1.ServeDiskRequest
@@ -1245,38 +1360,43 @@ var file_imagefs_v1_source_proto_goTypes = []any{
 	(*ReleaseDiskResponse)(nil),   // 18: lazycloud.imagefs.v1.ReleaseDiskResponse
 	(*DiskReadsRequest)(nil),      // 19: lazycloud.imagefs.v1.DiskReadsRequest
 	(*DiskReadsResponse)(nil),     // 20: lazycloud.imagefs.v1.DiskReadsResponse
-	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
+	(*GrantVolumesRequest)(nil),   // 21: lazycloud.imagefs.v1.GrantVolumesRequest
+	(*GrantVolumesResponse)(nil),  // 22: lazycloud.imagefs.v1.GrantVolumesResponse
+	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
 }
 var file_imagefs_v1_source_proto_depIdxs = []int32{
-	21, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
+	23, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: lazycloud.imagefs.v1.GrantRequest.layers:type_name -> lazycloud.imagefs.v1.LayerGrant
 	3,  // 2: lazycloud.imagefs.v1.PrefetchRequest.reads:type_name -> lazycloud.imagefs.v1.FrameRead
 	3,  // 3: lazycloud.imagefs.v1.EndTraceResponse.reads:type_name -> lazycloud.imagefs.v1.FrameRead
-	21, // 4: lazycloud.imagefs.v1.DiskGrant.expires_at:type_name -> google.protobuf.Timestamp
-	12, // 5: lazycloud.imagefs.v1.GrantDiskRequest.grant:type_name -> lazycloud.imagefs.v1.DiskGrant
-	1,  // 6: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
-	4,  // 7: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
-	6,  // 8: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
-	8,  // 9: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
-	10, // 10: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
-	13, // 11: lazycloud.imagefs.v1.DiskSources.GrantDisk:input_type -> lazycloud.imagefs.v1.GrantDiskRequest
-	15, // 12: lazycloud.imagefs.v1.DiskSources.ServeDisk:input_type -> lazycloud.imagefs.v1.ServeDiskRequest
-	17, // 13: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:input_type -> lazycloud.imagefs.v1.ReleaseDiskRequest
-	19, // 14: lazycloud.imagefs.v1.DiskSources.DiskReads:input_type -> lazycloud.imagefs.v1.DiskReadsRequest
-	2,  // 15: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
-	5,  // 16: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
-	7,  // 17: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
-	9,  // 18: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
-	11, // 19: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
-	14, // 20: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
-	16, // 21: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
-	18, // 22: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
-	20, // 23: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
-	15, // [15:24] is the sub-list for method output_type
-	6,  // [6:15] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	23, // 4: lazycloud.imagefs.v1.BucketGrant.expires_at:type_name -> google.protobuf.Timestamp
+	12, // 5: lazycloud.imagefs.v1.GrantDiskRequest.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
+	12, // 6: lazycloud.imagefs.v1.GrantVolumesRequest.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
+	1,  // 7: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
+	4,  // 8: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
+	6,  // 9: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
+	8,  // 10: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
+	10, // 11: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
+	13, // 12: lazycloud.imagefs.v1.DiskSources.GrantDisk:input_type -> lazycloud.imagefs.v1.GrantDiskRequest
+	15, // 13: lazycloud.imagefs.v1.DiskSources.ServeDisk:input_type -> lazycloud.imagefs.v1.ServeDiskRequest
+	17, // 14: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:input_type -> lazycloud.imagefs.v1.ReleaseDiskRequest
+	19, // 15: lazycloud.imagefs.v1.DiskSources.DiskReads:input_type -> lazycloud.imagefs.v1.DiskReadsRequest
+	21, // 16: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:input_type -> lazycloud.imagefs.v1.GrantVolumesRequest
+	2,  // 17: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
+	5,  // 18: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
+	7,  // 19: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
+	9,  // 20: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
+	11, // 21: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
+	14, // 22: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
+	16, // 23: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
+	18, // 24: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
+	20, // 25: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
+	22, // 26: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:output_type -> lazycloud.imagefs.v1.GrantVolumesResponse
+	17, // [17:27] is the sub-list for method output_type
+	7,  // [7:17] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_imagefs_v1_source_proto_init() }
@@ -1290,9 +1410,9 @@ func file_imagefs_v1_source_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_imagefs_v1_source_proto_rawDesc), len(file_imagefs_v1_source_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   23,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_imagefs_v1_source_proto_goTypes,
 		DependencyIndexes: file_imagefs_v1_source_proto_depIdxs,

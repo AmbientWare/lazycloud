@@ -1053,3 +1053,26 @@ func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
 		t.Fatalf("cooled %+v, want only the offer of the host too small for its container", cools)
 	}
 }
+
+// A smaller size whose pools stop cooling within the batch window still
+// holds the size rule's step: with every g6.xlarge pool cooling for two
+// more seconds, the L4 job buys no g6.2xlarge or g6.4xlarge, and buys the
+// g6.xlarge once it frees.
+func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
+	in := offerInputs(t)
+	for _, typ := range []string{"g6.xlarge", "g6.2xlarge", "g6.4xlarge"} {
+		price, _ := mustType(t, typ).OnDemandMicros("us-east-2")
+		in.Spot = append(in.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ, HourlyMicros: price * 4 / 10, ObservedAt: offerNow})
+	}
+	in.Cooldowns = []OfferCooldown{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "g6.xlarge", Market: MarketSpot, Until: offerNow.Add(2 * time.Second)}}
+	s := FleetSnapshot{Now: offerNow, Offers: in, HostRoom: 10, ReserveRoom: 10,
+		Pending: []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4"}, CPUMillis: 2000, MemoryBytes: 13056 << 20},
+			Containers: []PendingContainer{{ID: uuid.New()}}}}}
+	if bought := boughtForWork(PlanFleet(demandOnly(), s)); len(bought) > 0 {
+		t.Fatalf("bought %v while g6.xlarge cools for two seconds", bought)
+	}
+	s.Now, s.Offers.Now = offerNow.Add(3*time.Second), offerNow.Add(3*time.Second)
+	if bought := boughtForWork(PlanFleet(demandOnly(), s)); !slices.Equal(bought, []string{"g6.xlarge"}) {
+		t.Fatalf("bought %v once g6.xlarge freed, want a g6.xlarge", bought)
+	}
+}

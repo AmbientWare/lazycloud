@@ -406,12 +406,21 @@ func sizeRefs(p Policy, need Requirement, reserve bool, in OfferInputs) []FleetO
 	return refs
 }
 
+// availableSoon are the offer inputs as of the end of the batch window,
+// which purchases already wait out: a pool whose cooldown ends within it,
+// seconds after another walk's, still counts as available, so the size
+// rule does not step up for the difference.
+func availableSoon(p Policy, in OfferInputs) OfferInputs {
+	in.Now = in.Now.Add(p.Batch.Max)
+	return in
+}
+
 // sized is the size rule every purchase, reserve and launch fallback
 // keeps for a GPU offer o bought to hold holds and disks: o has the fewest
 // cards a type of its model and market among refs fits them with, lies
 // within the size cap where such a type does, and is larger than such a
-// type only while every pool of it is cooling or over quota, as available,
-// the offers that can host holds now, says. A larger type serves the work
+// type only while every pool of it is cooling past the batch window or
+// over quota, as available, the offers that can host holds soon, says. A larger type serves the work
 // when smaller ones refuse, and its spare room serves packed CPU work. CPU
 // types cost about the same per core at every size, so the cover sizes CPU
 // hosts to their work and headroom, and the cap bounds reserves

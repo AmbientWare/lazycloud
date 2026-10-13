@@ -333,8 +333,8 @@ func (s *Server) GrantDiskRead(ctx context.Context, req *hostproto.GrantDiskRead
 	return &hostproto.GrantDiskReadResponse{Grant: diskGrant(grant)}, nil
 }
 
-func diskGrant(g storage.Grant) *imagefsproto.DiskGrant {
-	return &imagefsproto.DiskGrant{
+func diskGrant(g storage.Grant) *imagefsproto.BucketGrant {
+	return &imagefsproto.BucketGrant{
 		Endpoint: g.Endpoint, Region: g.Region, Bucket: g.Bucket, ForcePathStyle: g.PathStyle,
 		AccessKeyId: g.AccessKeyID, SecretAccessKey: g.SecretAccessKey, SessionToken: g.SessionToken,
 		ExpiresAt: timestamppb.New(g.ExpiresAt),

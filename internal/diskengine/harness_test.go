@@ -159,7 +159,7 @@ func (h *host) grant(t *testing.T, store Store, diskID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.bases.GrantDisk(t.Context(), &imagefsproto.GrantDiskRequest{DiskId: diskID, Grant: &imagefsproto.DiskGrant{
+	if _, err := h.bases.GrantDisk(t.Context(), &imagefsproto.GrantDiskRequest{DiskId: diskID, Grant: &imagefsproto.BucketGrant{
 		Endpoint: store.Endpoint, Region: store.Region, Bucket: store.Bucket, ForcePathStyle: store.ForcePathStyle,
 		AccessKeyId: creds.AccessKeyID, SecretAccessKey: creds.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	}}); err != nil {

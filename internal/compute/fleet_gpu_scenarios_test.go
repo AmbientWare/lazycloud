@@ -176,3 +176,20 @@ func TestAResumedReserveIsAwaitedNotBoughtAgain(t *testing.T) {
 		t.Errorf("starts %v, bought for the job %t, violations %v; want one resume and no purchase", r.starts, bought, r.violations)
 	}
 }
+
+// GPU capacity bought for work is kept: the L4 job that arrives before
+// its market holds a reserve buys a host, and once its work ends that host
+// returns to the reserve the market lacks; no reserve is bought.
+func TestAGPUWorkHostBecomesItsMarketsMissingReserve(t *testing.T) {
+	t.Parallel()
+	s := newChurnSim(t)
+	s.tick = simLongTick
+	l4 := ReserveMarket{Preemptible: true, GPU: "L4"}
+	r := s.run(time.Hour, []simArrival{{need: l4Job, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
+	if slices.ContainsFunc(r.purchases, func(p simPurchase) bool { return p.market == l4 }) {
+		t.Errorf("bought an L4 reserve while the job's host could return")
+	}
+	if !slices.ContainsFunc(s.hosts, func(h *simHost) bool { return h.market() == l4 && h.resumable() }) || len(r.fnWaits["gpu"]) != 1 {
+		t.Errorf("the L4 market ends without a reserve, or the job did not run (%d)", len(r.fnWaits["gpu"]))
+	}
+}

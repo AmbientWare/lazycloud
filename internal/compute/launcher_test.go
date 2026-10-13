@@ -845,3 +845,58 @@ func TestLaunchesWaitUntilTheTargetReleaseIsTheServedOne(t *testing.T) {
 		t.Fatalf("the launch did not install the served release: %v", err)
 	}
 }
+
+// A walk claimed in a pool the size rule no longer keeps, as one an older
+// release moved to a g6.16xlarge, launches in a pool that keeps it: a
+// g6.xlarge for its 2 CPU, 12.75 GiB L4 work. The pool it leaves was never
+// refused, so it does not cool.
+func TestAWalkLeavesAStoredPoolTheSizeRuleNoLongerKeeps(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	spotPrices(t, o)
+	emulator.on("RunInstances", launched(t))
+	large, _ := compute.CatalogTypeNamed("g6.16xlarge")
+	run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
+                   availability_zone_id, instance_type, market, holds_cpu_millis, holds_memory_bytes)
+values ('walking', 'offline', 'platform', 'aws', 'requested', $1, $2, 'L4', 1, 'us-east-2', 'us-east-2a', 'use2-az1', 'g6.16xlarge', 'spot',
+        2000, 13056 << 20)`, int64(large.Usable(0).CPUMillis), large.Usable(0).MemoryBytes)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 1 || calls[0].Form.Get("InstanceType") != "g6.xlarge" {
+		t.Fatalf("RunInstances %v, want one g6.xlarge", callTypes(calls))
+	}
+	if n := scan[int](t, o.pool, "select count(*)::int from capacity_cooldowns"); n != 0 {
+		t.Fatalf("%d cooldowns, want none for a pool never tried", n)
+	}
+}
+
+// callTypes are the instance types of RunInstances calls.
+func callTypes(calls []awsCall) []string {
+	var out []string
+	for _, c := range calls {
+		out = append(out, c.Form.Get("InstanceType"))
+	}
+	return out
+}
+
+// A purchase whose container stopped before EC2 launched it is removed at
+// the next pass and never launched: an L4 host no warm slot holds either.
+func TestAPurchaseWhoseDemandEndedIsNotLaunched(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{"resources": {"gpu": ["L4"]}}`)
+	run(t, o.pool, "update containers set state = 'stopped', stopped_at = now(), capacity_host_id = null where capacity_host_id = $1", uuid.UUID(host))
+	plan(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseDeleted) {
+		t.Fatalf("purchase whose container stopped is %s, want deleted", phase)
+	}
+	launch(t, o)
+	for _, c := range emulator.calls("RunInstances") {
+		if c.Form.Get("ClientToken") == uuid.UUID(host).String() {
+			t.Fatal("launched a purchase nothing waits for")
+		}
+	}
+}

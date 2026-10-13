@@ -99,6 +99,8 @@ func TestRealEC2Fleet(t *testing.T) {
 			{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveHibernate},
 			{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1},
 			{instanceType: "g4dn.xlarge", market: compute.MarketSpot, mode: compute.ReserveStop, gpus: 1},
+			// A Spot GPU host bought for work, which returns to the reserve.
+			{instanceType: "g4dn.xlarge", market: compute.MarketSpot, gpus: 1},
 		} {
 			cycles := runs
 			if c.gpus > 0 {
@@ -144,8 +146,10 @@ func (l *lifecycleTimings) add(path string, d time.Duration) {
 	l.byPath[path] = append(l.byPath[path], d.Round(time.Second))
 }
 
-// reserveCase is one reserve the lifecycle launches. Each case runs its
-// cycles one after another, so at most one instance per case lives.
+// reserveCase is one reserve the lifecycle launches, or without a mode a
+// host bought for work that returns to the reserve in stop mode. Each case
+// runs its cycles one after another, so at most one instance per case
+// lives.
 type reserveCase struct {
 	instanceType string
 	market       compute.Market
@@ -154,6 +158,9 @@ type reserveCase struct {
 }
 
 func (c reserveCase) name() string {
+	if c.mode == "" {
+		return c.instanceType + " " + string(c.market) + " work"
+	}
 	return c.instanceType + " " + string(c.market) + " " + string(c.mode)
 }
 
@@ -168,7 +175,7 @@ func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.N
 		host := scan[uuid.UUID](t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
                    instance_type, market, reserve_mode)
-values ('acceptance', 'offline', 'platform', 'aws', 'requested', $1, $2, $3, $4, $5, $6, $7, $8, $9)
+values ('acceptance', 'offline', 'platform', 'aws', 'requested', $1, $2, $3, $4, $5, $6, $7, $8, nullif($9, ''))
 returning id`, typ.CPUMillis(), typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion(), subnet.Zone,
 			c.instanceType, string(c.market), string(c.mode))
 		launched := time.Now()
@@ -277,8 +284,12 @@ func (r liveReserve) cycle(launched time.Time) {
 		r.reconcile()
 	}
 
-	// The session moves a proven host to stopping. The actuator waits out
-	// EC2's hibernation delay after the start.
+	// The session moves a proven host to stopping, a work host returning to
+	// the reserve in stop mode. The actuator waits out EC2's hibernation
+	// delay after the start.
+	if r.c.mode == "" {
+		run(t, r.o.pool, "update hosts set reserve_mode = 'stop' where id = $1", r.host)
+	}
 	r.move(compute.PhaseStopping)
 	deadline := time.Now().Add(6 * time.Minute)
 	for !scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
@@ -319,12 +330,12 @@ func (r liveReserve) cycle(launched time.Time) {
 	asked := time.Now()
 	r.act()
 	// Another reserve's actuator pass may hold this host's claim. EC2 may
-	// refuse the start for Spot capacity, which retires the reserve.
+	// refuse the start for Spot capacity, which returns it to the reserve.
 	refused := false
 	for scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
-		if r.phase() == string(compute.PhaseTerminating) {
+		if r.phase() == string(compute.PhaseStopped) {
 			refused = true
-			t.Logf("%s: start refused, retired: %s", r.c.name(), scan[string](t, r.o.pool, "select phase_message from hosts where id = $1", r.host))
+			t.Logf("%s: start refused, back in the reserve: %s", r.c.name(), scan[string](t, r.o.pool, "select phase_message from hosts where id = $1", r.host))
 			break
 		}
 		if time.Since(asked) > 3*time.Minute {

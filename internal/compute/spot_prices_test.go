@@ -139,3 +139,24 @@ func TestSpotPricesKeepTheLatestQuotePerZoneAndAFailedRegionKeepsItsPrices(t *te
 		}
 	}
 }
+
+// After the scheduler was down past the prices' age, the first pass
+// refreshes every region's Spot prices before it buys: the L4 job buys a
+// Spot g6.xlarge rather than waiting on prices it has none of.
+func TestThePassAfterAnOutageRefreshesStaleSpotPricesFirst(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	spotPrices(t, o)
+	run(t, o.pool, "update spot_prices set observed_at = now() - interval '5 hours'")
+	emulator.on("DescribeSpotPriceHistory", func(call awsCall) awsReply {
+		return spotPriceReply([4]string{"g6.xlarge", "0.400000", time.Now().UTC().Format(time.RFC3339), call.Form.Get("AvailabilityZoneId")})
+	})
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["L4"]}}`), 2000, 12*gib)
+	plan(t, o)
+	got := scan[*string](t, o.pool, `
+select h.instance_type || ' ' || h.market from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1`, container)
+	if got == nil || *got != "g6.xlarge spot" {
+		t.Fatalf("bought %v, want a Spot g6.xlarge priced by a refresh", got)
+	}
+}

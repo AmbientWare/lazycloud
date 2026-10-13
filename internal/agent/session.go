@@ -268,8 +268,21 @@ func (a *Agent) handle(command *hostproto.ServerMessage) bool {
 		}
 		a.platform.update(body.PlatformImages.GetImages())
 	case *hostproto.ServerMessage_StorageGrant:
+		workspace := body.StorageGrant.GetWorkspaceId()
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
-			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
+			a.log.Error("storing a storage grant failed", "workspace_id", workspace, "error", err)
+			return false
+		}
+		if a.volumes.endpoint != "" {
+			// The snapshotter takes the grant off the receive loop, which
+			// acknowledges it once it holds it.
+			a.goOwned(func(ctx context.Context) {
+				if err := a.volumes.grantCache(ctx, workspace); err != nil {
+					a.log.Error("handing a storage grant to the snapshotter failed", "workspace_id", workspace, "error", err)
+					return
+				}
+				a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: command.GetCommandId()}}})
+			})
 			return false
 		}
 	default:

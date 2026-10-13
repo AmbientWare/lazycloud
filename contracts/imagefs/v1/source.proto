@@ -121,8 +121,9 @@ service DiskSources {
   rpc DiskReads(DiskReadsRequest) returns (DiskReadsResponse);
 }
 
-// DiskGrant reads the objects under disks/<disk id>/ of one bucket.
-message DiskGrant {
+// BucketGrant is a short-lived credential for objects of one bucket: a
+// disk's, read-only under disks/<disk id>/, or a workspace's volumes.
+message BucketGrant {
   string endpoint = 1;
   string region = 2;
   string bucket = 3;
@@ -135,7 +136,7 @@ message DiskGrant {
 
 message GrantDiskRequest {
   string disk_id = 1;
-  DiskGrant grant = 2;
+  BucketGrant grant = 2;
 }
 
 message GrantDiskResponse {}
@@ -182,4 +183,32 @@ message DiskReadsResponse {
   // The newest served generation's frames the cache holds, most recently
   // used first, at most as many as a prefetch fetches.
   repeated uint32 recent_frames = 2;
+}
+
+// VolumeSources serves workspaces' platform volumes through the frame cache
+// on a host whose data volume is a large instance store. The snapshotter
+// answers path-style S3 requests on loopback for keys under volumes/ of the
+// granted buckets, signed with a bucket's key as access key, and forwards
+// them to the store signed with the bucket's grant. A plain GET of an object
+// of 1 MiB or more is served from the cache by the ETag a HEAD reported at
+// most a second earlier, every frame fetched with If-Match on it; a write of
+// an object makes its next read ask the store again.
+service VolumeSources {
+  // GrantVolumes records a workspace bucket's read-write grant and key,
+  // unless the current grant expires later with the same key. A request
+  // naming no workspace records nothing. The answer names the endpoint,
+  // empty on a host that does not cache volumes.
+  rpc GrantVolumes(GrantVolumesRequest) returns (GrantVolumesResponse);
+}
+
+message GrantVolumesRequest {
+  string workspace_id = 1;
+  BucketGrant grant = 2;
+  // The access key requests for the bucket sign with, 16 bytes or more.
+  string key = 3;
+}
+
+message GrantVolumesResponse {
+  // host:port
+  string endpoint = 1;
 }

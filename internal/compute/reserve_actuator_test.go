@@ -673,3 +673,50 @@ values ('platform', 'us-east-2', 'use2-az1', 'm7i.xlarge', 'on_demand', now() + 
 		t.Fatalf("plan after the refused start %+v, want a host bought and no resume", r)
 	}
 }
+
+// A terminating host whose instance EC2 is shutting down is ending
+// already: the actuator asks EC2 to terminate it no more.
+func TestAShuttingDownInstanceIsNotTerminatedAgain(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseTerminating, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000d201")
+	ec2.add(fakeInstance{ID: "i-0000000000000d201", State: "shutting-down"}, host.String())
+	for range 2 {
+		actuate(t, o)
+		expireLeases(t, o)
+	}
+	if n := len(emulator.calls("TerminateInstances")); n != 0 {
+		t.Fatalf("%d TerminateInstances calls on a shutting-down instance, want none", n)
+	}
+}
+
+// A Spot GPU host bought for work runs on a persistent request that stops
+// on interruption, so it can return to the reserve when it leaves; a Spot
+// CPU host stays on a one-time request.
+func TestSpotGPUWorkHostsLaunchOnPersistentRequests(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	insert := func(instanceType string, gpus int) compute.HostID {
+		return compute.HostID(scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, instance_type, market, gpu_type, gpu_count)
+values ('w', 'offline', 'platform', 'aws', 'requested', 2000, 8::bigint << 30, 'us-east-2', $1, 'spot', $2, $3) returning id`,
+			instanceType, map[int]string{0: "", 1: "T4"}[gpus], gpus))
+	}
+	gpu, cpuHost := insert("g4dn.xlarge", 1), insert("m7i.large", 0)
+	if n := launch(t, o); n != 2 {
+		t.Fatalf("launched %d, want 2", n)
+	}
+	calls := map[string]awsCall{}
+	for _, c := range emulator.calls("RunInstances") {
+		calls[c.Form.Get("ClientToken")] = c
+	}
+	if f := calls[gpu.String()].Form; f.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") != "persistent" ||
+		f.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior") != "stop" || f.Get("InstanceInitiatedShutdownBehavior") != "stop" {
+		t.Errorf("Spot GPU work launch %v, want a persistent request that stops", f)
+	}
+	if f := calls[cpuHost.String()].Form; f.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") != "one-time" {
+		t.Errorf("Spot CPU work launch %v, want a one-time request", f)
+	}
+	request := scan[*string](t, o.pool, "select spot_request_id from hosts where id = $1", uuid.UUID(gpu))
+	if instance := scan[string](t, o.pool, "select instance_id from hosts where id = $1", uuid.UUID(gpu)); request == nil || *request != ec2.get(instance).SpotRequest {
+		t.Fatalf("Spot GPU work host recorded request %v, want its persistent request", request)
+	}
+}

@@ -38,9 +38,11 @@ const (
 	simResume  = 12 * time.Second
 	simPrepare = 147 * time.Second
 	simStop    = time.Minute
-	// A GPU host's stop, from the real EC2 check, takes 6 m 46 s, which EC2
-	// bills as stopped.
-	simGPUStop = 406 * time.Second
+	// A GPU host's stop takes 392 s, the median of prod's GPU hosts and
+	// the 2026-10-13 EC2 trace (305-410 s), which EC2 bills as stopped. The
+	// guest powers off within 15 s; EC2 holds a GPU instance in stopping
+	// for the rest, on any image and when forced.
+	simGPUStop = 392 * time.Second
 	// simCooldown is how long a refusal cools its pool, the fleet's
 	// default CapacityCooldown.
 	simCooldown = 10 * time.Minute
@@ -838,7 +840,7 @@ func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	h := &simHost{offer: o, FleetHost: FleetHost{Replaces: a.Host,
 		ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, HourlyMicros: ptr(o.HourlyMicros),
-		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
+		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand || o.Type.GPU != "",
 	}}
 	if a.Kind != ActionRightsize {
 		h.Replaces = nil
@@ -863,7 +865,7 @@ func (s *sim) launchPass() {
 			continue
 		}
 		for tried := 1; ; tried++ {
-			done, moved := s.tryPool(h)
+			done, moved := s.tryPool(h, tried == 1)
 			if done || !moved || tried == passPools {
 				break
 			}
@@ -876,24 +878,34 @@ func (s *sim) launchPass() {
 // class, or when refuses names its pool, cooling the pool's zone. A
 // refused launch moves to the pool fallbackPool picks; without one the
 // host fails. It reports whether the walk ended and whether it moved.
-func (s *sim) tryPool(h *simHost) (bool, bool) {
+func (s *sim) tryPool(h *simHost, first bool) (bool, bool) {
 	w, o := h.walk, h.offer
-	w.purchase.tried = append(w.purchase.tried, o)
-	cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
-	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
-		cool.Quota = s.knowQuota
-	} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
-		cool.ZoneID = o.ZoneID
-	} else {
-		s.launched(h)
-		return true, false
+	all := func(string, bool) bool { return true }
+	// A GPU walk claimed in a pool the size rule no longer keeps moves on
+	// uncooled, as launchPools does.
+	stored := !first || o.Type.GPU == "" || w.row.Replaces != nil
+	if !stored {
+		_, keeps := walkPools(s.p, w.row, w.waiters, s.offers(), all)
+		stored = keeps(FleetOffer{Type: o.Type, Market: o.Market, Usable: o.Usable})
 	}
-	s.r.refusals++
-	s.r.refused = append(s.r.refused, s.now)
-	s.walkCool(h, cool)
+	if stored {
+		w.purchase.tried = append(w.purchase.tried, o)
+		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
+		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
+			cool.Quota = s.knowQuota
+		} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
+			cool.ZoneID = o.ZoneID
+		} else {
+			s.launched(h)
+			return true, false
+		}
+		s.r.refusals++
+		s.r.refused = append(s.r.refused, s.now)
+		s.walkCool(h, cool)
+	}
 	next, ok := FleetOffer{}, false
 	if w.row.Replaces == nil {
-		next, ok = fallbackPool(s.p, w.row, w.waiters, s.offers(), func(string, bool) bool { return true })
+		next, ok = fallbackPool(s.p, w.row, w.waiters, s.offers(), all)
 	}
 	if !ok {
 		if w.row.Replaces != nil {
@@ -961,7 +973,7 @@ func (s *sim) record(w *simWalk) {
 		s.r.purchases = append(s.r.purchases, *w.purchase)
 	case ActionBuy:
 		s.r.bought = append(s.r.bought, *w.purchase)
-	case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
+	case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionRightsize, ActionHandBack, ActionLend:
 	}
 }
 
@@ -1097,6 +1109,10 @@ func (s *sim) apply(plan FleetPlan) {
 			s.host(*a.Host).State, s.host(*a.Host).HandsBack = FleetDraining, false
 		case ActionHandBack, ActionLend:
 			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
+		case ActionCancel:
+			s.record(s.host(*a.Host).walk)
+			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
+			s.unwait(*a.Host)
 		case ActionRetireReserve:
 			if h := s.host(*a.Host); h.walk != nil {
 				s.record(h.walk)
@@ -1273,7 +1289,7 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 			want += a.Offer.HourlyMicros
 		case ActionBuyReserve:
 			want += a.Offer.StoppedMicros
-		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
+		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionRightsize, ActionHandBack, ActionLend:
 			t.Fatalf("an empty fleet's first pass %s", a.Kind)
 		}
 	}
@@ -1869,7 +1885,8 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 	for i, sc := range scenarios {
 		before, after := results[i][0], results[i][1]
 		off, on = off+profit(before), on+profit(after)
-		if p95 := func(r simResult) time.Duration { return quantile(r.fnWaits["gpu"], 0.95) }; p95(after) > p95(before) {
+		// The scenarios step by simLongTick, the waits' resolution.
+		if p95 := func(r simResult) time.Duration { return quantile(r.fnWaits["gpu"], 0.95) }; p95(after) > p95(before)+simLongTick {
 			t.Errorf("%s: GPU starts p95 %s, %s unpacked", sc.name, p95(after), p95(before))
 		}
 		// Placement ties break differently once hosts pack, so GPU hosts

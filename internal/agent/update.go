@@ -27,7 +27,7 @@ import (
 
 // An installed agent lives in a root directory:
 //
-//	releases/<version>/{lazycloud-agent,supervisor,runtime/<python>}
+//	releases/<version>/{lazycloud-agent,lazycloud-snapshotter,supervisor,runtime/<python>}
 //	current  -> releases/<version>
 //	previous -> releases/<version>
 //	agent-service.sh, the service's start wrapper

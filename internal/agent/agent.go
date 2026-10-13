@@ -390,6 +390,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = snapshotter.Close() }()
 	a.layers = newLayerSources(snapshotter)
+	a.volumes.sources = snapshotter.Volumes
 	a.diskEngine = diskengine.New(layersource.DiskRoot, snapshotter.Disks, a.log.With("component", "disk"))
 	if a.diskErr = diskErr; a.diskErr != nil {
 		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
@@ -416,6 +417,13 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}
+	if err := a.replaceSnapshotter(ctx); err != nil {
+		a.log.Warn("replacing the snapshotter failed", "error", err)
+	}
+	if a.volumes.endpoint, err = a.volumeEndpoint(ctx); err != nil {
+		a.log.Warn("the snapshotter did not answer for volumes; volumes mount from their buckets", "error", err)
+	}
+	a.volumes.adoptGrants()
 	a.recoverDisks(ctx)
 	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", a.capacity.GetCpuMillis(),
 		"memory_bytes", a.capacity.GetMemoryBytes(), "gpus", a.capacity.GetGpuCount(), "updatable", a.updatable)

@@ -143,7 +143,7 @@ where h.state = 'online' group by h.agent_version`).Scan(&version, &assigned); e
 }
 
 // release is an agent release: its version and a directory holding its
-// lazycloud-agent and supervisor.
+// VERSION, lazycloud-agent and supervisor.
 type release struct {
 	version string
 	dir     string
@@ -232,7 +232,7 @@ func (p *platform) installRelease(r release) (root, state string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Test files.
 		t.Fatal(err)
 	}
-	for _, name := range []string{"lazycloud-agent", "supervisor"} {
+	for _, name := range []string{"VERSION", "lazycloud-agent", "supervisor"} {
 		copyFile(t, filepath.Join(r.dir, name), filepath.Join(dir, name))
 	}
 	if err := os.Symlink(filepath.Join("releases", r.version), filepath.Join(root, "current")); err != nil {

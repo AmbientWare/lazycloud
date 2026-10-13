@@ -9,10 +9,20 @@
 // stacks the disk's local writes on, its frames read from the workspace
 // bucket. Both keep their frames in one bounded cache.
 //
+// Platform volumes are read through an S3 endpoint it serves on loopback,
+// which GeeseFS mounts address: it forwards their requests to the
+// workspace's bucket and answers reads of large objects from the same
+// cache, each object version in frames fetched with If-Match on its ETag.
+//
 // The process holding the FUSE mounts must outlive every container using
-// them, so it runs as its own service that agent updates never restart. It
-// has no database access. Its only store credentials are the read-only
-// grants, scoped to disks/<disk id>/, of the disks attached to its host.
+// them, so it runs as its own service that agent updates replace only on a
+// host that runs no container. It has no database access. It holds store
+// credentials in memory only: the read-only grants, scoped to
+// disks/<disk id>/, of the disks attached to its host, and the read-write
+// grants of the workspace buckets whose volumes its host mounts, which it
+// signs every request it forwards with. The endpoint answers a process on
+// the host's loopback, as the mount containers are, for a workspace's
+// bucket only when it signs with that workspace's key.
 package snapshotter
 
 import (
@@ -66,9 +76,12 @@ type Config struct {
 	// are all fetched in the background once it is mounted; zero fills
 	// none.
 	FillBytes int64
-	HTTP      *http.Client
-	Logger    *slog.Logger
-	Tracer    oteltrace.Tracer
+	// VolumeAddr is the loopback address the volumes' S3 endpoint listens
+	// on; empty serves none.
+	VolumeAddr string
+	HTTP       *http.Client
+	Logger     *slog.Logger
+	Tracer     oteltrace.Tracer
 }
 
 // snapshotter is a containerd snapshotter with lazy layers: the overlay
@@ -76,12 +89,13 @@ type Config struct {
 // owns the mounts (mounts.go).
 type snapshotter struct {
 	snapshots.Snapshotter
-	root   string
-	ms     *storage.MetaStore
-	cache  *frameCache
-	disks  *disks
-	log    *slog.Logger
-	cancel context.CancelFunc
+	root    string
+	ms      *storage.MetaStore
+	cache   *frameCache
+	disks   *disks
+	volumes *volumes
+	log     *slog.Logger
+	cancel  context.CancelFunc
 
 	requests chan func()
 	done     chan struct{}
@@ -127,7 +141,7 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
 	s := &snapshotter{
-		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, log: cfg.Logger, cancel: cancel,
+		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, volumes: newVolumes(cache, cfg.HTTP, cfg.Logger), log: cfg.Logger, cancel: cancel,
 		requests: make(chan func()),
 		done:     make(chan struct{}),
 		mounted:  make(map[string]*mountedLayer),

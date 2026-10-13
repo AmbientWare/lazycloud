@@ -3,6 +3,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	securerand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,16 +23,20 @@ import (
 	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // A container's platform volumes share one mount container, which mounts the
 // volumes/ prefix of its workspace bucket; each cloud bucket it names gets
-// one more. GeeseFS holds the credentials there, and the workload binds each
-// volume's own directory of the mount, never the credentials or other
-// volumes, through a bind the agent makes of it, which needs root.
+// one more. On a host that caches volumes the mount addresses the
+// snapshotter's endpoint, which holds the workspace's credential; elsewhere
+// GeeseFS holds it. The workload binds each volume's own directory of the
+// mount, never the credentials or other volumes, through a bind the agent
+// makes of it, which needs root.
 // A mount container shares its mount with the host through a
 // shared-propagation bind of the mount directory, so it outlives agent
 // restarts, like its workload.
@@ -52,16 +57,18 @@ const (
 	// geesefsGoMemoryMiB. Its memory grows with the readers' readahead,
 	// which a read never waits for: the alternative, --use-enomem, fails
 	// reads past the cache, and a failed read of a mapped file is SIGBUS.
-	// Readahead of 1 MiB per file and 32 MiB in 8 MiB parts per long
-	// sequential read keeps a 2 GiB mapped read at full speed and holds 128
-	// readers plus 8 streams of 256 MiB near 610 MiB, inside
+	// Readahead starts at 8 MiB per file and grows to 32 MiB in 8 MiB parts
+	// once a read passes 1 MiB, so a loader reading tensor by tensor gets
+	// full speed from its first read. Four large readers at once peak at 366
+	// MiB and 128 small readers plus 8 streams of 256 MiB at 707 MiB, inside
 	// hostproto.MounterMemoryBytes; GeeseFS's defaults reached 2 GiB.
-	geesefsMemoryMiB        = 128
-	geesefsGoMemoryMiB      = 320
-	geesefsReadAheadKiB     = 1 << 10
-	geesefsReadAheadBigKiB  = 32 << 10
-	geesefsReadAheadPartKiB = 8 << 10
-	mounterPidsLimit        = 1024
+	geesefsMemoryMiB          = 128
+	geesefsGoMemoryMiB        = 320
+	geesefsReadAheadKiB       = 8 << 10
+	geesefsReadAheadBigKiB    = 32 << 10
+	geesefsReadAheadPartKiB   = 8 << 10
+	geesefsLargeReadCutoffKiB = 1 << 10
+	mounterPidsLimit          = 1024
 	// mounterConcurrency bounds the mounters of one container that start
 	// or stop at once.
 	mounterConcurrency = 4
@@ -85,6 +92,12 @@ type volumes struct {
 	mounts map[string][]*mounter
 	// bus reaches systemd, which runs the slices.
 	bus *systemd.Conn
+
+	// sources is the snapshotter's VolumeSources, and endpoint the address
+	// platform volumes mount through, empty when they mount from their
+	// buckets; set before the first session.
+	sources  imagefsproto.VolumeSourcesClient
+	endpoint string
 }
 
 // mounter is one mount container.
@@ -182,7 +195,9 @@ func writeCredentials(dir string, creds processCredentials) error {
 	return nil
 }
 
-// grant stores a workspace's credentials where its mounts read them.
+// grant stores a workspace's credentials where its mounts read them. On a
+// host that caches volumes the grant counts once grantCache hands it to
+// the snapshotter.
 func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	workspace := g.GetWorkspaceId()
 	if !isUUID(workspace) {
@@ -207,10 +222,61 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err := writeFileAtomic(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
 		return fmt.Errorf("write bucket location: %w", err)
 	}
+	if v.endpoint != "" {
+		return nil
+	}
 	v.mu.Lock()
 	v.markGranted(workspace)
 	v.mu.Unlock()
 	return nil
+}
+
+// grantCache hands the stored grant of a workspace to the snapshotter of a
+// host that caches volumes, with the key its mounts sign with, and counts
+// the grant as received.
+func (v *volumes) grantCache(ctx context.Context, workspace string) error {
+	c, err := v.credentials(workspace)
+	if err != nil {
+		return err
+	}
+	loc, err := v.location(workspace)
+	if err != nil {
+		return err
+	}
+	key, err := v.endpointKey(workspace)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	if _, err := v.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{WorkspaceId: workspace, Key: key, Grant: &imagefsproto.BucketGrant{
+		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.PathStyle,
+		AccessKeyId: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, ExpiresAt: timestamppb.New(c.Expires),
+	}}); err != nil {
+		return fmt.Errorf("grant volumes to the snapshotter: %w", err)
+	}
+	v.mu.Lock()
+	v.markGranted(workspace)
+	v.mu.Unlock()
+	return nil
+}
+
+// endpointCreds holds the credential_process files a mount of a
+// workspace's volumes signs with on a host that caches volumes: a random
+// key of the workspace's, which the snapshotter checks.
+func (v *volumes) endpointCreds(workspace string) string {
+	return filepath.Join(v.storageDir(workspace), "endpoint")
+}
+
+// endpointKey returns the workspace's endpoint key, made on first use.
+func (v *volumes) endpointKey(workspace string) (string, error) {
+	var c processCredentials
+	data, err := os.ReadFile(filepath.Join(v.endpointCreds(workspace), "credentials.json"))
+	if err == nil && json.Unmarshal(data, &c) == nil && c.AccessKeyID != "" {
+		return c.AccessKeyID, nil
+	}
+	key := securerand.Text()
+	return key, writeCredentials(v.endpointCreds(workspace), processCredentials{Version: 1, AccessKeyID: key, SecretAccessKey: key})
 }
 
 // bucketLocation is where a workspace's bucket is, kept beside its
@@ -443,10 +509,18 @@ func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount
 	if err != nil {
 		return mountSpec{}, nil, err
 	}
-	return mountSpec{
+	spec := mountSpec{
 		what: "the mount of the workspace's volumes", creds: v.storageDir(workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region,
 		pathStyle: loc.PathStyle,
-	}, dirs, nil
+	}
+	if v.endpoint != "" {
+		// The snapshotter may have restarted since it last held the grant.
+		if err := v.grantCache(ctx, workspace); err != nil {
+			return mountSpec{}, nil, err
+		}
+		spec.creds, spec.endpoint, spec.pathStyle = v.endpointCreds(workspace), "http://"+v.endpoint, true
+	}
+	return spec, dirs, nil
 }
 
 // release stops the container's mounts, deletes their keys and stops its
@@ -573,6 +647,7 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 		"--fsync-on-close", "--stat-cache-ttl", "1s", "--no-preload-dir",
 		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--read-ahead", strconv.Itoa(geesefsReadAheadKiB),
 		"--read-ahead-large", strconv.Itoa(geesefsReadAheadBigKiB), "--read-ahead-parallel", strconv.Itoa(geesefsReadAheadPartKiB),
+		"--large-read-cutoff", strconv.Itoa(geesefsLargeReadCutoffKiB),
 	}
 	args = append(args, "--endpoint", spec.endpoint)
 	if spec.region != "" {
@@ -590,11 +665,14 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 		quoted[n] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 	}
 	// GeeseFS cannot unmount itself here and leaves a dead mount when it
-	// exits. On stop the script lets it flush, then detaches the mount so
-	// it exits; after any exit it unmounts what remains.
+	// exits, and it exits without storing what it holds once its mount
+	// goes. On stop the script has it store everything, which an fsync of
+	// the mount's root waits for, then stops it, which ends one that never
+	// mounted, and detaches the mount so it exits; after any exit it
+	// unmounts what remains.
 	script := fmt.Sprintf(`/opt/lazycloud/bin/geesefs %[2]s &
 pid=$!
-stop() { kill -TERM $pid 2>/dev/null; sleep 1; umount -l %[1]s; }
+stop() { fsync %[1]s; kill -TERM $pid 2>/dev/null; umount -l %[1]s; }
 trap stop TERM INT
 wait $pid
 while kill -0 $pid 2>/dev/null; do wait $pid; done
@@ -603,13 +681,15 @@ exit 1`, target, strings.Join(quoted, " "))
 	labels := v.a.hostLabels()
 	labels[labelKind] = kindMount
 	labels[labelContainer] = m.container
-	pids := int64(mounterPidsLimit)
+	pids, flushSeconds := int64(mounterPidsLimit), mounterFlushSeconds
 	var err error
 	m.id, err = v.a.createContainer(ctx, m.name, client.ContainerCreateOptions{
 		Name: m.name,
 		Config: &containertypes.Config{
 			Image:      image,
 			Entrypoint: []string{"/bin/sh", "-c", script},
+			// Docker's own stops, as at its shutdown, wait as long as ours.
+			StopTimeout: &flushSeconds,
 			Env: []string{
 				"AWS_SDK_LOAD_CONFIG=1", "AWS_CONFIG_FILE=/creds/config",
 				"GOMEMLIMIT=" + strconv.Itoa(geesefsGoMemoryMiB) + "MiB",
@@ -814,7 +894,6 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 			}
 		}
 	}
-	v.adoptGrants()
 	return nil
 }
 

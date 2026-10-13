@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 // serviceWrapper starts the current release and rolls back an update that
@@ -146,8 +147,8 @@ func renderUnit(root, state, wrapper string, args []string) string {
 	return strings.Join([]string{
 		"[Unit]",
 		"Description=LazyCloud agent",
-		"Wants=docker.service network-online.target " + snapshotterUnitName,
-		"After=docker.service network-online.target " + snapshotterUnitName,
+		"Wants=docker.service network-online.target " + layersource.Unit,
+		"After=docker.service network-online.target " + layersource.Unit,
 		"",
 		"[Service]",
 		"Type=simple",
