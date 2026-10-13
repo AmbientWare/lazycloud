@@ -52,16 +52,18 @@ const (
 	// geesefsGoMemoryMiB. Its memory grows with the readers' readahead,
 	// which a read never waits for: the alternative, --use-enomem, fails
 	// reads past the cache, and a failed read of a mapped file is SIGBUS.
-	// Readahead of 1 MiB per file and 32 MiB in 8 MiB parts per long
-	// sequential read keeps a 2 GiB mapped read at full speed and holds 128
-	// readers plus 8 streams of 256 MiB near 610 MiB, inside
+	// Readahead starts at 8 MiB per file and grows to 32 MiB in 8 MiB parts
+	// once a read passes 1 MiB, so a loader reading tensor by tensor gets
+	// full speed from its first read. Four large readers at once peak at 366
+	// MiB and 128 small readers plus 8 streams of 256 MiB at 707 MiB, inside
 	// hostproto.MounterMemoryBytes; GeeseFS's defaults reached 2 GiB.
-	geesefsMemoryMiB        = 128
-	geesefsGoMemoryMiB      = 320
-	geesefsReadAheadKiB     = 1 << 10
-	geesefsReadAheadBigKiB  = 32 << 10
-	geesefsReadAheadPartKiB = 8 << 10
-	mounterPidsLimit        = 1024
+	geesefsMemoryMiB          = 128
+	geesefsGoMemoryMiB        = 320
+	geesefsReadAheadKiB       = 8 << 10
+	geesefsReadAheadBigKiB    = 32 << 10
+	geesefsReadAheadPartKiB   = 8 << 10
+	geesefsLargeReadCutoffKiB = 1 << 10
+	mounterPidsLimit          = 1024
 	// mounterConcurrency bounds the mounters of one container that start
 	// or stop at once.
 	mounterConcurrency = 4
@@ -573,6 +575,7 @@ func (v *volumes) runMount(ctx context.Context, m *mounter, image string, spec m
 		"--fsync-on-close", "--stat-cache-ttl", "1s", "--no-preload-dir",
 		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--read-ahead", strconv.Itoa(geesefsReadAheadKiB),
 		"--read-ahead-large", strconv.Itoa(geesefsReadAheadBigKiB), "--read-ahead-parallel", strconv.Itoa(geesefsReadAheadPartKiB),
+		"--large-read-cutoff", strconv.Itoa(geesefsLargeReadCutoffKiB),
 	}
 	args = append(args, "--endpoint", spec.endpoint)
 	if spec.region != "" {
