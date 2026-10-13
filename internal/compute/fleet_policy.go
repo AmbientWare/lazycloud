@@ -231,9 +231,10 @@ type Policy struct {
 // launch about 150 s after placement and a stopped g4dn.xlarge Spot
 // reserve about 70 s after its start. EC2 starts a stopped Spot instance
 // only once it disables the persistent request, 38-90 s after the instance
-// stops, 66 s on average (2026-10-13).
+// stops, 66 s on average (2026-10-13); a request still active past the
+// longest, SpotDisableMax, is taken as stuck.
 type StartTimes struct {
-	Launch, GPULaunch, Resume, GPUResume, SpotDisable time.Duration
+	Launch, GPULaunch, Resume, GPUResume, SpotDisable, SpotDisableMax time.Duration
 }
 
 // of is a purchase's and a resume's start times in market m.
@@ -293,7 +294,7 @@ func DefaultPolicy() Policy {
 		SpotPriceAge:    time.Hour,
 		Starts: StartTimes{
 			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
-			SpotDisable: 66 * time.Second,
+			SpotDisable: 66 * time.Second, SpotDisableMax: 90 * time.Second,
 		},
 	}
 }

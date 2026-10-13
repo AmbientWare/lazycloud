@@ -92,8 +92,12 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 			if ctx.Err() != nil {
 				return result, err
 			}
+			// Unread requests count as active: their hosts wait a pass.
 			logger.ErrorContext(ctx, "describe reserve spot requests", "region", region, "error", err)
-			continue
+			active = map[string]bool{}
+			for _, r := range stopped {
+				active[r] = true
+			}
 		}
 		for _, h := range hosts {
 			instance, seen := instances[deref(h.InstanceID)]
@@ -339,13 +343,17 @@ func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason str
 }
 
 // startReserve starts a resuming host's stopped instance once EC2 has
-// disabled its Spot request. EC2 refusing it for capacity retires the host
-// and cools its offer, so the planner buys elsewhere; the host's session
-// moves it on once the agent says Hello.
+// disabled its Spot request; a request still active past SpotDisableMax
+// is stuck, and the host retires so its work buys. EC2 refusing the start
+// for capacity retires the host and cools its offer, so the planner buys
+// elsewhere; the host's session moves it on once the agent says Hello.
 func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
 	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
+		if requestActive && h.StoppedAt != nil && time.Since(*h.StoppedAt) > c.policy().Starts.SpotDisableMax {
+			return c.retireReserve(ctx, logger, h, PhaseResuming, "The Spot request stayed active after its instance stopped", nil)
+		}
 		if requestActive {
 			return nil
 		}

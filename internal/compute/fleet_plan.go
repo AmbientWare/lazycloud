@@ -1117,9 +1117,10 @@ func (ps *pass) ready(h FleetHost) bool {
 // than to buy: h's instance stopped while EC2 held its Spot request
 // active, and EC2 starts it once the request disables, so it serves after
 // what is left of the request's disable and a resume, sooner than a
-// purchase would.
+// purchase would. A request still active past SpotDisableMax is stuck.
 func (ps *pass) waitsFor(h FleetHost) bool {
-	if h.State != FleetStopping || h.StoppedAt == nil || !h.Current || h.Protected || ps.cooled(h) || !ps.startable(h) {
+	if h.State != FleetStopping || h.StoppedAt == nil || !h.Current || h.Protected || ps.cooled(h) || !ps.startable(h) ||
+		ps.s.Now.Sub(*h.StoppedAt) > ps.p.Starts.SpotDisableMax {
 		return false
 	}
 	launch, resume := ps.p.Starts.of(h.market())
