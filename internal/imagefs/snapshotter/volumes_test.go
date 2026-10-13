@@ -187,20 +187,22 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 	}
 }
 
-// Warming fills a volume's objects, each within a quarter of the cache and
-// all within half, so later reads of them reach no store.
+// Warming fills a volume's objects, each within a quarter of the cache,
+// smallest first within half, so later reads of them reach no store.
 func TestWarmedVolumesReadWithoutTheStore(t *testing.T) {
 	ts := newTestStore(t)
 	up := &upstream{}
 	v, base := volumeEndpoint(t, ts, up)
-	objects := map[string][]byte{"a": randomBytes(3, 6<<20), "b": randomBytes(4, 6<<20), "c": randomBytes(5, 6<<20), "small": randomBytes(6, 1000)}
+	// Smallest first, b and c fill half the cache, and a, listed first,
+	// does not.
+	objects := map[string][]byte{"a": randomBytes(3, 7<<20), "b": randomBytes(4, 5<<20), "c": randomBytes(5, 6<<20), "small": randomBytes(6, 1000)}
 	for name, body := range objects {
 		ts.put(t, "model/"+name, body)
 	}
 	g := v.buckets[ts.bucket].grant
 	v.warm(t.Context(), g, []string{ts.prefix + "model/"})
 	gets, _ := up.counts()
-	for _, name := range []string{"a", "b"} {
+	for _, name := range []string{"b", "c"} {
 		if resp, body := get(t, base+"model/"+name, ""); resp.StatusCode != http.StatusOK || !bytes.Equal(body, objects[name]) {
 			t.Fatalf("read of %s: %s", name, resp.Status)
 		}
@@ -208,8 +210,8 @@ func TestWarmedVolumesReadWithoutTheStore(t *testing.T) {
 	if after, _ := up.counts(); after != gets {
 		t.Fatalf("reads of warmed objects made %d store GETs", after-gets)
 	}
-	if resp, body := get(t, base+"model/c", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(body, objects["c"]) {
-		t.Fatalf("read of c: %s", resp.Status)
+	if resp, body := get(t, base+"model/a", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(body, objects["a"]) {
+		t.Fatalf("read of a: %s", resp.Status)
 	}
 	if after, _ := up.counts(); after == gets {
 		t.Fatal("warming filled past half the cache")

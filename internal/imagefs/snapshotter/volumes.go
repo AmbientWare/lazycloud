@@ -2,6 +2,7 @@ package snapshotter
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -196,10 +198,9 @@ func (v *volumes) granted(name string, r *http.Request) (volumeGrant, bool) {
 // forwarded is what a forwarded request carries to rewrite and observe.
 type forwarded struct {
 	grant volumeGrant
-	// key is the object's, empty for a bucket request; path is its
-	// s3Escape form with its leading slash.
-	key, path string
-	sent      time.Time
+	// key is the object's, empty for a bucket request.
+	key  string
+	sent time.Time
 }
 
 type forwardedKey struct{}
@@ -214,7 +215,7 @@ func (v *volumes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s3Error(w, http.StatusForbidden, "AccessDenied")
 		return
 	}
-	f := forwarded{grant: g, key: key, path: "/" + s3Escape(key), sent: time.Now()}
+	f := forwarded{grant: g, key: key, sent: time.Now()}
 	q := r.URL.Query()
 	switch {
 	case r.Method == http.MethodGet && key != "" && r.URL.RawQuery == "" && plainGet(r.Header):
@@ -288,7 +289,7 @@ func plainGet(h http.Header) bool {
 // rewrite points a forwarded request at its bucket's store and signs it.
 func (v *volumes) rewrite(pr *httputil.ProxyRequest) {
 	f := pr.In.Context().Value(forwardedKey{}).(forwarded) //nolint:forcetypeassert // ServeHTTP sets it
-	pr.Out.URL = f.grant.url(f.path, pr.In.URL.RawQuery)
+	pr.Out.URL = f.grant.url(f.key, pr.In.URL.RawQuery)
 	pr.Out.Host = ""
 	if err := v.sign(pr.Out, f.grant); err != nil {
 		v.log.Warn("signing a volume request failed", "bucket", f.grant.name, "error", err)
@@ -310,9 +311,9 @@ func s3Escape(key string) string {
 	return b.String()
 }
 
-// url is where path, an escaped object path with its leading slash, is
-// in the grant's store.
-func (g volumeGrant) url(path, query string) *url.URL {
+// url is where key is in the grant's store, its path escaped as the
+// signature's.
+func (g volumeGrant) url(key, query string) *url.URL {
 	u := *g.endpoint
 	raw := strings.TrimSuffix(u.EscapedPath(), "/")
 	if g.pathStyle {
@@ -320,7 +321,7 @@ func (g volumeGrant) url(path, query string) *url.URL {
 	} else {
 		u.Host = g.name + "." + u.Host
 	}
-	raw += path
+	raw += "/" + s3Escape(key)
 	u.Path, _ = url.PathUnescape(raw)
 	u.RawPath, u.RawQuery = raw, query
 	return &u
@@ -404,7 +405,7 @@ func (v *volumes) version(ctx context.Context, f forwarded) (observation, bool) 
 		f.sent = time.Now()
 		ctx, cancel := context.WithTimeout(context.WithValue(context.WithoutCancel(ctx), forwardedKey{}, f), fetchTimeout)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, f.grant.url(f.path, "").String(), nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, f.grant.url(f.key, "").String(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("ask an object's version: %w", err)
 		}
@@ -452,7 +453,7 @@ func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarde
 		return false
 	}
 	if ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
-		v.fill(ver)
+		v.cache.background.Go(func() { v.fill(v.cache.life, ver) })
 	}
 	buf := make([]byte, min(maxRead, last-first+1))
 	for pos, started := first, false; pos <= last; {
@@ -511,64 +512,63 @@ func s3Error(w http.ResponseWriter, code int, s3Code string) {
 	_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code></Error>`, s3Code)
 }
 
-// fill fetches a version whole in the background, unless that runs.
-func (v *volumes) fill(ver objectVersion) {
-	if v.claimFill(ver) {
-		v.cache.background.Go(func() { v.fillClaimed(v.cache.life, ver) })
-	}
-}
-
-func (v *volumes) claimFill(ver objectVersion) bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+// fill fetches the frames of a version the cache lacks, behind reads,
+// until ctx ends, unless another fill of it runs, and reports whether it
+// ran.
+func (v *volumes) fill(ctx context.Context, ver objectVersion) bool {
 	name := ver.key(0).object
-	if v.filling[name] {
+	v.mu.Lock()
+	running := v.filling[name]
+	v.filling[name] = true
+	v.mu.Unlock()
+	if running {
 		return false
 	}
-	v.filling[name] = true
-	return true
-}
-
-// fillClaimed fetches the frames of a version the cache lacks, behind
-// reads, until ctx ends.
-func (v *volumes) fillClaimed(ctx context.Context, ver objectVersion) {
 	defer func() {
 		v.mu.Lock()
-		delete(v.filling, ver.key(0).object)
+		delete(v.filling, name)
 		v.mu.Unlock()
 	}()
 	began := time.Now()
 	fetched := v.cache.loadEach(ctx, ver.frames())
 	v.log.Info("volume object filled", "bucket", ver.bucket, "key", ver.name, "bytes", ver.size, "fetched_frames", fetched,
 		"seconds", time.Since(began).Seconds(), "error", ctx.Err())
+	return true
 }
 
 // warm fills the objects of 1 MiB or more under prefixes of the
-// workspace's bucket, each within a quarter of the cache and all within
-// half, one after another, until ctx ends.
+// workspace's bucket, each within a quarter of the cache, smallest first
+// until they fill half of it, one after another, until ctx ends. Smallest
+// first, a large object nothing reads, such as a download's leftover, costs
+// no other object its fill.
 func (v *volumes) warm(ctx context.Context, g volumeGrant, prefixes []string) {
 	began := time.Now()
-	budget, objects := v.cache.limit/2, 0
+	budget := v.cache.limit / 2
+	var objects []imagefs.StoredObject
 	for _, prefix := range prefixes {
 		for o, err := range g.objects.List(ctx, prefix) {
 			if err != nil {
 				v.log.Warn("listing a volume to warm failed", "bucket", g.name, "prefix", prefix, "error", err)
 				break
 			}
-			if o.Size < minCachedObject || o.Size > v.cache.limit/4 {
-				continue
-			}
-			if budget -= o.Size; budget < 0 {
-				break
-			}
-			ver := objectVersion{v: v, workspace: g.workspace, bucket: g.name, name: o.Key, etag: o.ETag, size: o.Size}
-			if v.claimFill(ver) {
-				v.fillClaimed(ctx, ver)
-				objects++
+			if o.Size >= minCachedObject && o.Size <= v.cache.limit/4 && int64(len(objects)) < budget/minCachedObject {
+				objects = append(objects, o)
 			}
 		}
 	}
-	v.log.Info("volume warm ended", "bucket", g.name, "objects", objects, "seconds", time.Since(began).Seconds(), "error", ctx.Err())
+	slices.SortFunc(objects, func(a, b imagefs.StoredObject) int {
+		return cmp.Or(cmp.Compare(a.Size, b.Size), strings.Compare(a.Key, b.Key))
+	})
+	filled := 0
+	for _, o := range objects {
+		if budget -= o.Size; budget < 0 {
+			break
+		}
+		if v.fill(ctx, objectVersion{v: v, workspace: g.workspace, bucket: g.name, name: o.Key, etag: o.ETag, size: o.Size}) {
+			filled++
+		}
+	}
+	v.log.Info("volume warm ended", "bucket", g.name, "objects", filled, "seconds", time.Since(began).Seconds(), "error", ctx.Err())
 }
 
 // objectVersion is one version of a volume object, read by frames of

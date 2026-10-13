@@ -39,9 +39,6 @@ const (
 	// releases, which updates prune; Unit is its systemd unit.
 	Binary = "/usr/local/lib/lazycloud/lazycloud-snapshotter"
 	Unit   = "lazycloud-snapshotter.service"
-	// VolumeEndpoint is the loopback address of the snapshotter's S3
-	// endpoint for platform volumes.
-	VolumeEndpoint = "127.0.0.1:12121"
 	// LazyLabel marks a layer pulled lazily. The pull sets it on each layer
 	// descriptor; containerd passes it to the snapshotter's Prepare, which
 	// then mounts the layer from its grant and reports it present, so the
