@@ -72,6 +72,9 @@ type FleetHost struct {
 	Replaces *HostID
 	// RightsizeRefusedAt is when EC2 last refused a launch to replace it.
 	RightsizeRefusedAt *time.Time
+	// StoppedAt is when a reserve's instance stopped; a stopping Spot
+	// reserve has one while EC2 still holds its persistent request active.
+	StoppedAt *time.Time
 	// Slept is set on a host that has proved it can stop into the reserve:
 	// a reserve, or one resumed from it.
 	Slept bool
@@ -701,9 +704,12 @@ func (ps *pass) buy(m ReserveMarket, o FleetOffer, kind FleetActionKind, holds F
 }
 
 func (ps *pass) resume(m ReserveMarket, h *FleetHost, kind FleetActionKind, containers []uuid.UUID) int {
+	// A stopping reserve holds its host room already.
+	if h.State != FleetStopping {
+		ps.hostRoom--
+	}
 	h.State = FleetStarting
 	ps.start(h.Region, h.InstanceType, h.Market)
-	ps.hostRoom--
 	ps.reserveRoom++
 	return ps.act(FleetAction{Kind: kind, Market: m, Host: ptr(h.ID), Containers: containers})
 }
@@ -1030,13 +1036,14 @@ func (ps *pass) resumeEach(items []coverItem, work bool) []coverItem {
 	return items
 }
 
-// bestReserve is the ready reserve to resume for items, and the items, by
-// index, it takes first fit, pending containers before slots: one of its
-// first item's market first, then the one that takes the most pending
-// containers, then the one whose region they read least across, then one
-// that takes every pending container and every slot of its market, so one
-// resume does; then the smallest, the cheapest, and the one that takes the
-// most slots.
+// bestReserve is the ready reserve to resume for items, or for work a
+// stopping one it waits for, and the items, by index, it takes first fit,
+// pending containers before slots: one of its first item's market first,
+// then a ready one, then the one that takes the most pending containers,
+// then the one whose region they read least across, then one that takes
+// every pending container and every slot of its market, so one resume
+// does; then the smallest, the cheapest, and the one that takes the most
+// slots.
 // Spot work takes an on-demand reserve only while no Spot offer can host
 // it, and a CPU one only while it is lendable. Without work, only slots of
 // markets where no work waits, or slots that come with the work, take a
@@ -1059,7 +1066,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 	spotWork := slices.ContainsFunc(items, func(it coverItem) bool { return !it.slot && it.need.Preemptible })
 	for i := range ps.hosts {
 		h := &ps.hosts[i]
-		if !ps.ready(*h) {
+		if !ps.ready(*h) && (!work || !ps.waitsFor(*h)) {
 			continue
 		}
 		onDemand := h.Market == MarketOnDemand
@@ -1092,7 +1099,7 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 			read += readMicros(ps.p, items[n].need.Read, h.Region)
 		}
 		if best == nil || cmp.Or(boolOrder(h.market() != items[taken[0]].market, best.market() != items[bestTaken[0]].market),
-			cmp.Compare(bestCount[0], count[0]), cmp.Compare(read, bestRead),
+			boolOrder(h.State == FleetStopping, best.State == FleetStopping), cmp.Compare(bestCount[0], count[0]), cmp.Compare(read, bestRead),
 			boolOrder(!all(h, taken), !all(best, bestTaken)), shapeOrder(h.Usable, best.Usable), ps.retention(h, best)) < 0 {
 			best, bestTaken, bestCount, bestRead = h, taken, count, read
 		}
@@ -1104,6 +1111,19 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 // can resume now.
 func (ps *pass) ready(h FleetHost) bool {
 	return h.resumable() && h.Current && !h.Protected && !ps.cooled(h) && ps.startable(h)
+}
+
+// waitsFor reports whether work does better to wait for stopping reserve h
+// than to buy: h's instance stopped while EC2 held its Spot request
+// active, and EC2 starts it once the request disables, so it serves after
+// what is left of the request's disable and a resume, sooner than a
+// purchase would.
+func (ps *pass) waitsFor(h FleetHost) bool {
+	if h.State != FleetStopping || h.StoppedAt == nil || !h.Current || h.Protected || ps.cooled(h) || !ps.startable(h) {
+		return false
+	}
+	launch, resume := ps.p.Starts.of(h.market())
+	return max(0, h.StoppedAt.Add(ps.p.Starts.SpotDisable).Sub(ps.s.Now))+resume < launch
 }
 
 // leavesLarge reports whether the reserves of h's market without h still

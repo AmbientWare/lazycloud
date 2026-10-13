@@ -195,21 +195,38 @@ func TestAStoppingReserveIsRecheckedWithinSecondsOfItsStopCall(t *testing.T) {
 }
 
 // EC2 refuses to start a stopped Spot instance until it disables its
-// persistent request, so the reserve waits in stopping until then.
-func TestASpotReserveEntersTheReserveOnceEC2DisablesItsRequest(t *testing.T) {
-	o, _, ec2 := reserveFleet(t)
+// persistent request, so the reserve waits in stopping until then, with
+// its instance's stop recorded, and a resume asked meanwhile starts it
+// once EC2 allows.
+func TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c040")
 	ec2.add(fakeInstance{ID: "i-0000000000000c040", State: "stopped", SpotRequest: "sir-0000c040"}, host.String())
 	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c040", State: "active", Instance: "i-0000000000000c040"}, host.String())
 	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c040', stop_requested_at = now() where id = $1", uuid.UUID(host))
+	waiting := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c041")
+	ec2.add(fakeInstance{ID: "i-0000000000000c041", State: "stopped", SpotRequest: "sir-0000c041"}, waiting.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c041", State: "active", Instance: "i-0000000000000c041"}, waiting.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c041', stop_requested_at = now() where id = $1", uuid.UUID(waiting))
 
 	actuate(t, o)
-	if f := stopOf(t, o, host); f.Phase != "stopping" {
-		t.Fatalf("reserve with its Spot request still active %+v, want stopping", f)
+	for _, h := range []compute.HostID{host, waiting} {
+		if f := stopOf(t, o, h); f.Phase != "stopping" || !f.Stopped {
+			t.Fatalf("reserve with its Spot request still active %+v, want stopping with its instance's stop recorded", f)
+		}
 	}
-	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c040", State: "disabled", Instance: "i-0000000000000c040"}, host.String())
+	run(t, o.pool, "update hosts set phase = 'resuming' where id = $1", uuid.UUID(waiting))
 	expireLeases(t, o)
 	actuate(t, o)
+	if n := len(emulator.calls("StartInstances")); n != 0 {
+		t.Fatalf("%d StartInstances calls while EC2 holds the request active, want none", n)
+	}
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c040", State: "disabled", Instance: "i-0000000000000c040"}, host.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c041", State: "disabled", Instance: "i-0000000000000c041"}, waiting.String())
+	expireLeases(t, o)
+	if r := actuate(t, o); r.Started != 1 {
+		t.Fatalf("actuate %+v once the requests disabled, want the resumed reserve started", r)
+	}
 	if f := stopOf(t, o, host); f.Phase != "stopped" {
 		t.Fatalf("reserve with its Spot request disabled %+v, want stopped", f)
 	}

@@ -90,7 +90,7 @@ func (q *Queries) ClaimProviderActions(ctx context.Context, arg ClaimProviderAct
 
 const markReserveStopped = `-- name: MarkReserveStopped :execrows
 update hosts
-set phase = 'stopped', phase_message = 'Stopped in the reserve', phase_at = now(), stopped_at = now(),
+set phase = 'stopped', phase_message = 'Stopped in the reserve', phase_at = now(), stopped_at = coalesce(stopped_at, now()),
     image_evidence = case when image_evidence = 'unknown' then $1::text else image_evidence end,
     launch_lease_until = null, updated_at = now()
 where id = $2 and phase = 'stopping'
@@ -101,8 +101,8 @@ type MarkReserveStoppedParams struct {
 	ID                  uuid.UUID
 }
 
-// EC2 reports a stopping host's instance stopped. A hibernation still
-// unproven takes the evidence EC2's stop reason gives.
+// EC2 reports a stopping host's instance stopped and able to start. A
+// hibernation still unproven takes the evidence EC2's stop reason gives.
 func (q *Queries) MarkReserveStopped(ctx context.Context, arg MarkReserveStoppedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markReserveStopped, arg.HibernationEvidence, arg.ID)
 	if err != nil {
@@ -146,6 +146,28 @@ func (q *Queries) RecordHibernateRefused(ctx context.Context, id uuid.UUID) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const recordInstanceStopped = `-- name: RecordInstanceStopped :exec
+update hosts
+set stopped_at = now(),
+    image_evidence = case when image_evidence = 'unknown' then $1::text else image_evidence end,
+    updated_at = now()
+where id = $2 and phase = 'stopping' and stopped_at is null
+`
+
+type RecordInstanceStoppedParams struct {
+	HibernationEvidence string
+	ID                  uuid.UUID
+}
+
+// EC2 reports a stopping Spot host's instance stopped while it holds the
+// persistent request active, which it must disable before the host can
+// start. A hibernation still unproven takes the evidence EC2's stop reason
+// gives.
+func (q *Queries) RecordInstanceStopped(ctx context.Context, arg RecordInstanceStoppedParams) error {
+	_, err := q.db.Exec(ctx, recordInstanceStopped, arg.HibernationEvidence, arg.ID)
+	return err
 }
 
 const recordStartRequested = `-- name: RecordStartRequested :execrows

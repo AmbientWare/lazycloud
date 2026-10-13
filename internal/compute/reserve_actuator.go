@@ -82,7 +82,7 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 		}
 		var stopped []string
 		for _, h := range hosts {
-			if i, seen := instances[deref(h.InstanceID)]; seen && Phase(h.Phase) == PhaseStopping && h.SpotRequestID != nil &&
+			if i, seen := instances[deref(h.InstanceID)]; seen && Phase(h.Phase) != PhaseTerminating && h.SpotRequestID != nil &&
 				i.State.Name == ec2types.InstanceStateNameStopped {
 				stopped = append(stopped, *h.SpotRequestID)
 			}
@@ -105,7 +105,7 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 				}
 			case PhaseResuming:
 				if seen {
-					err = c.startReserve(ctx, logger, client, h, instance, &result)
+					err = c.startReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], &result)
 				}
 			case PhaseTerminating:
 				// A vanished instance is reconcile's to mark deleted.
@@ -148,7 +148,8 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 // hibernate. A stop still pending past providerDeadline is forced. The
 // host enters the reserve once EC2 can start it: a Spot instance reads
 // stopped 38-90 s before EC2 disables its persistent request, which stays
-// active until then, and EC2 refuses to start it in between.
+// active until then, and EC2 refuses to start it in between; the host
+// records when its instance stopped, so work may wait for it.
 func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
 	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	now := time.Now()
@@ -172,6 +173,11 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 			}
 		}
 		if requestActive {
+			if err := c.queries.RecordInstanceStopped(ctx, RecordInstanceStoppedParams{
+				ID: h.ID, HibernationEvidence: string(hibernationEvidence(stopReason(instance.StateReason))),
+			}); err != nil {
+				return fmt.Errorf("record instance stopped: %w", err)
+			}
 			return nil
 		}
 		return c.reserveStopped(ctx, h.ID, stopReason(instance.StateReason))
@@ -303,19 +309,25 @@ func stopReason(r *ec2types.StateReason) string {
 	return aws.ToString(r.Code)
 }
 
+// hibernationEvidence is what an unproven hibernation that EC2 stopped for
+// reason saved: the image when EC2 stopped it for the hibernation.
+func hibernationEvidence(reason string) ImageEvidence {
+	if reason == hibernatedReason {
+		return EvidenceSaved
+	}
+	return EvidenceFailed
+}
+
 // reserveStopped moves a stopping host whose instance EC2 reports stopped
-// for reason into the reserve. An unproven hibernation is saved when EC2
-// stopped it for the hibernation, and failed otherwise.
+// for reason into the reserve.
 func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason string) error {
 	if err := transition(PhaseStopping, PhaseStopped); err != nil {
 		return err
 	}
-	evidence := EvidenceFailed
-	if reason == hibernatedReason {
-		evidence = EvidenceSaved
-	}
 	return inTx(ctx, c, func(tx pgx.Tx) error {
-		n, err := c.queries.WithTx(tx).MarkReserveStopped(ctx, MarkReserveStoppedParams{ID: host, HibernationEvidence: string(evidence)})
+		n, err := c.queries.WithTx(tx).MarkReserveStopped(ctx, MarkReserveStoppedParams{
+			ID: host, HibernationEvidence: string(hibernationEvidence(reason)),
+		})
 		if err != nil {
 			return fmt.Errorf("mark reserve stopped: %w", err)
 		}
@@ -326,13 +338,17 @@ func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason str
 	})
 }
 
-// startReserve starts a resuming host's stopped instance. EC2 refusing it
-// for capacity retires the host and cools its offer, so the planner buys
-// elsewhere; the host's session moves it on once the agent says Hello.
+// startReserve starts a resuming host's stopped instance once EC2 has
+// disabled its Spot request. EC2 refusing it for capacity retires the host
+// and cools its offer, so the planner buys elsewhere; the host's session
+// moves it on once the agent says Hello.
 func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
-	instance ec2types.Instance, result *ActuateResult) error {
+	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
+		if requestActive {
+			return nil
+		}
 	case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning:
 		// Started already, by a call whose answer was lost.
 		return c.recordStart(ctx, h.ID)
