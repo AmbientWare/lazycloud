@@ -134,8 +134,6 @@ type simContainer struct {
 	// retry is set on work an eviction returned to pending, and packed on
 	// CPU work placed on a GPU host.
 	retry, packed bool
-	// abandon, when set, is how long it waits before its demand ends.
-	abandon time.Duration
 }
 
 type simArrival struct {
@@ -147,9 +145,6 @@ type simArrival struct {
 	// its market for the policy's BuildWindow.
 	build bool
 	fn    string
-	// abandon, when set, is how long its containers wait before their
-	// demand ends unplaced.
-	abandon time.Duration
 }
 
 type simResult struct {
@@ -361,7 +356,7 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 		for _, a := range arrivals {
 			if at := s.start.Add(a.at); !at.Before(s.now) && at.Before(s.now.Add(s.tick)) {
 				for range a.count {
-					s.pending = append(s.pending, &simContainer{id: uuid.New(), need: a.need, arrived: s.now, runs: a.runs, build: a.build, fn: a.fn, abandon: a.abandon})
+					s.pending = append(s.pending, &simContainer{id: uuid.New(), need: a.need, arrived: s.now, runs: a.runs, build: a.build, fn: a.fn})
 				}
 			}
 		}
@@ -374,7 +369,6 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				s.outage = at.Add(simOutage)
 			}
 		}
-		s.pending = slices.DeleteFunc(s.pending, func(c *simContainer) bool { return c.abandon > 0 && s.now.Sub(c.arrived) >= c.abandon })
 		s.place()
 		if s.now.Before(s.outage) {
 			s.account()
@@ -844,7 +838,7 @@ func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	h := &simHost{offer: o, FleetHost: FleetHost{Replaces: a.Host,
 		ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
 		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, HourlyMicros: ptr(o.HourlyMicros),
-		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
+		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand || o.Type.GPU != "",
 	}}
 	if a.Kind != ActionRightsize {
 		h.Replaces = nil
@@ -1889,7 +1883,8 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 	for i, sc := range scenarios {
 		before, after := results[i][0], results[i][1]
 		off, on = off+profit(before), on+profit(after)
-		if p95 := func(r simResult) time.Duration { return quantile(r.fnWaits["gpu"], 0.95) }; p95(after) > p95(before) {
+		// The scenarios step by simLongTick, the waits' resolution.
+		if p95 := func(r simResult) time.Duration { return quantile(r.fnWaits["gpu"], 0.95) }; p95(after) > p95(before)+simLongTick {
 			t.Errorf("%s: GPU starts p95 %s, %s unpacked", sc.name, p95(after), p95(before))
 		}
 		// Placement ties break differently once hosts pack, so GPU hosts
