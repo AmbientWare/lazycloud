@@ -80,13 +80,28 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 			logger.ErrorContext(ctx, "describe reserve instances", "region", region, "error", err)
 			continue
 		}
+		var stopped []string
+		for _, h := range hosts {
+			if i, seen := instances[deref(h.InstanceID)]; seen && Phase(h.Phase) == PhaseStopping && h.SpotRequestID != nil &&
+				i.State.Name == ec2types.InstanceStateNameStopped {
+				stopped = append(stopped, *h.SpotRequestID)
+			}
+		}
+		active, err := activeSpotRequests(ctx, client, stopped)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, err
+			}
+			logger.ErrorContext(ctx, "describe reserve spot requests", "region", region, "error", err)
+			continue
+		}
 		for _, h := range hosts {
 			instance, seen := instances[deref(h.InstanceID)]
 			var err error
 			switch Phase(h.Phase) {
 			case PhaseStopping:
 				if seen {
-					err = c.stopReserve(ctx, logger, client, h, instance, &result)
+					err = c.stopReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], &result)
 				}
 			case PhaseResuming:
 				if seen {
@@ -130,9 +145,12 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 // hibernates when the host sleeps that way and launched able to, no sooner
 // than EC2 allows after a start; refusals retry until providerDeadline,
 // then the host stops plainly, at once when EC2 says the instance cannot
-// hibernate. A stop still pending past providerDeadline is forced.
+// hibernate. A stop still pending past providerDeadline is forced. The
+// host enters the reserve once EC2 can start it: a Spot instance reads
+// stopped 38-90 s before EC2 disables its persistent request, which stays
+// active until then, and EC2 refuses to start it in between.
 func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
-	instance ec2types.Instance, result *ActuateResult) error {
+	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	now := time.Now()
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate && h.HibernationConfigured &&
 		instance.HibernationOptions != nil && aws.ToBool(instance.HibernationOptions.Configured)
@@ -152,6 +170,9 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 			if err := c.recordStop(ctx, h.ID, lostEvidence, false); err != nil {
 				return err
 			}
+		}
+		if requestActive {
+			return nil
 		}
 		return c.reserveStopped(ctx, h.ID, stopReason(instance.StateReason))
 	case ec2types.InstanceStateNameStopping:
@@ -359,6 +380,32 @@ func describeInstances(ctx context.Context, client *ec2.Client, ids []string) (m
 					out[aws.ToString(i.InstanceId)] = i
 				}
 			}
+		}
+	}
+	return out, nil
+}
+
+// activeSpotRequests reports which of requests EC2 holds active.
+func activeSpotRequests(ctx context.Context, client *ec2.Client, requests []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(requests) == 0 {
+		return out, nil
+	}
+	// A filter, unlike SpotInstanceRequestIds, leaves out an id EC2 no
+	// longer lists instead of failing the call.
+	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("spot-instance-request-id"), Values: requests},
+			{Name: aws.String("state"), Values: []string{string(ec2types.SpotInstanceStateActive)}},
+		},
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe spot requests: %w", err)
+		}
+		for _, r := range page.SpotInstanceRequests {
+			out[aws.ToString(r.SpotInstanceRequestId)] = true
 		}
 	}
 	return out, nil

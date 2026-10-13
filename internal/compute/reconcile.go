@@ -87,8 +87,6 @@ type observedInstance struct {
 	host  string
 	// started is when EC2 last started the instance.
 	started time.Time
-	// reason is EC2's code for the last state change.
-	reason string
 }
 
 func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, connection *uuid.UUID, region string) error {
@@ -115,7 +113,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		}
 		for _, r := range page.Reservations {
 			for _, i := range r.Instances {
-				o := observedInstance{state: i.State.Name, started: aws.ToTime(i.LaunchTime), reason: stopReason(i.StateReason)}
+				o := observedInstance{state: i.State.Name, started: aws.ToTime(i.LaunchTime)}
 				for _, t := range i.Tags {
 					if aws.ToString(t.Key) == tagHost {
 						o.host = aws.ToString(t.Value)
@@ -143,8 +141,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		updating := h.UpdatingUntil != nil && time.Now().Before(*h.UpdatingUntil)
 		phase := Phase(h.Phase)
 		// A reserve's instance stops because the fleet asked: stopping and
-		// stopped are expected, and a stop EC2 accepted completes here when
-		// the actuator has not seen it yet.
+		// stopped are expected, and the actuator completes the stop.
 		reserve := phase == PhaseStopping || phase == PhaseStopped || phase == PhaseResuming
 		// Every end is written from the phase read above: a host the session
 		// or actuator moved since keeps its new phase and its instance.
@@ -166,8 +163,6 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			_, err = c.hostGone(ctx, h.ID, phase, "", "")
 		case gone:
 			_, err = c.hostGone(ctx, h.ID, phase, FailureProviderGone, "The provider terminated the instance")
-		case phase == PhaseStopping && o.state == ec2types.InstanceStateNameStopped && h.StopRequestedAt != nil:
-			err = c.reserveStopped(ctx, h.ID, o.reason)
 		case phase == PhaseStopping && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
 			err = end(FailureUnknown, "The reserve did not stop in time")
 		case phase == PhaseResuming && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:

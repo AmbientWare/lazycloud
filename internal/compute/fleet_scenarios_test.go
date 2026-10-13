@@ -44,6 +44,10 @@ const (
 	simGPUProvision = 150 * time.Second
 	simGPUBoot      = 70 * time.Second
 	simGPUStop      = 406 * time.Second
+	// simSpotDisable is how long after a Spot reserve's instance stops EC2
+	// disables its persistent request and allows the start: 38-90 s, 66 s
+	// on average, on the real EC2 check of 2026-10-13.
+	simSpotDisable = 66 * time.Second
 	// simCooldown is how long a refusal cools its pool, the fleet's
 	// default CapacityCooldown.
 	simCooldown = 10 * time.Minute
@@ -65,6 +69,22 @@ type simHost struct {
 	// unbilledFrom, on a GPU reserve being made, is when EC2 begins
 	// stopping it, which it bills as stopped.
 	unbilledFrom time.Time
+}
+
+// stopAt has h, made a reserve, begin its stop at from: a GPU host's stop
+// takes simGPUStop, which EC2 bills as stopped, and a Spot one enters the
+// reserve simSpotDisable after its instance stops.
+func (h *simHost) stopAt(from time.Time) {
+	h.until = from
+	if h.GPU != "" {
+		h.unbilledFrom, h.until = from, from.Add(simGPUStop)
+	}
+	if h.Market == MarketSpot {
+		if h.unbilledFrom.IsZero() {
+			h.unbilledFrom = h.until
+		}
+		h.until = h.until.Add(simSpotDisable)
+	}
 }
 
 // billed reports whether EC2 bills h as running.
@@ -740,10 +760,7 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 	h.until = s.now.Add(provision)
 	if reserve {
 		h.State, h.ReserveMode, h.Current, h.Slept = FleetPreparing, a.Mode, false, true
-		h.until = s.now.Add(provision + simPrepare)
-		if o.Type.GPU != "" {
-			h.unbilledFrom, h.until = h.until, h.until.Add(simGPUStop)
-		}
+		h.stopAt(s.now.Add(provision + simPrepare))
 		s.r.reserveBought = append(s.r.reserveBought, s.now)
 	}
 	if !reserve && o.Market == MarketOnDemand {
@@ -842,11 +859,9 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionReturnToReserve:
 			h := s.host(*a.Host)
 			s.pending = append(s.pending, s.evict(h, func(HostCapacity) bool { return false })...)
-			h.State, h.ReserveMode, h.Current, h.Slept, h.until = FleetPreparing, a.Mode, false, true, s.now.Add(simStop)
+			h.State, h.ReserveMode, h.Current, h.Slept = FleetPreparing, a.Mode, false, true
+			h.stopAt(s.now.Add(simStop))
 			h.HandsBack = false
-			if h.GPU != "" {
-				h.unbilledFrom, h.until = h.until, h.until.Add(simGPUStop)
-			}
 			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB, baselineMiBps)
 		case ActionDrain:
 			s.pending = append(s.pending, s.evict(s.host(*a.Host), func(HostCapacity) bool { return false })...)
@@ -1428,6 +1443,30 @@ func TestGPUWorkStartsOnAReserveOfItsMarket(t *testing.T) {
 		}
 		if borrowed := r.borrowedSec > 0; borrowed != c.borrows {
 			t.Errorf("%s: Spot-tolerant work ran %.2f h on on-demand GPU hosts", c.name, r.borrowedSec/3600)
+		}
+	}
+}
+
+// EC2 starts a stopped Spot instance only once it disables the persistent
+// request, simSpotDisable after the instance stops, so a Spot reserve
+// enters the reserve then: work that arrives in between starts elsewhere
+// rather than waiting on it.
+func TestWorkArrivingAsASpotReserveStopsStartsElsewhere(t *testing.T) {
+	t.Parallel()
+	gpu := Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 12 * gib}
+	for _, c := range []struct {
+		need    Requirement
+		stopped time.Duration
+	}{
+		{Requirement{Preemptible: true, CPUMillis: 6000, MemoryBytes: 12 * gib}, simProvision + simPrepare},
+		{gpu, simGPUProvision + simPrepare + simGPUStop},
+	} {
+		s := newSim(t, DefaultPolicy())
+		at := c.stopped + simSpotDisable/2
+		r := s.run(at+10*time.Minute, []simArrival{{at: at, need: c.need, count: 1, runs: time.Minute, fn: "work"}})
+		t.Logf("%v work %v after the reserve's instance stopped: waited %v, %d resumes", c.need.GPUs, at-c.stopped, r.waits, r.resumes)
+		if len(r.waits) != 1 || r.resumes != 0 || len(r.violations) > 0 {
+			t.Errorf("%v work: placed %d of 1, %d resumes, violations %v; want none resumed", c.need.GPUs, len(r.waits), r.resumes, r.violations)
 		}
 	}
 }
