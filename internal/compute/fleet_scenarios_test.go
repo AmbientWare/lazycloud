@@ -1552,13 +1552,12 @@ func (r simResult) packRow(name string) string {
 // work, and arriving GPU work evicts it. Against the same load without
 // packing, profit rises, GPU starts wait no longer, GPU hosts run no
 // longer than placement's tie-breaks move them, and no retry is evicted
-// again.
+// again. GPU work of prod's L4 shape fills its host and packs nothing.
 func TestGPUHostsPackCPUWork(t *testing.T) {
 	t.Parallel()
 	t4 := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}
 	t4Large := t4
 	t4Large.CPUMillis, t4Large.MemoryBytes = 2000, 8*gib
-	l4 := Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 13056 << 20}
 	small := Requirement{Preemptible: true, Moves: true, CPUMillis: 1000, MemoryBytes: 2 * gib}
 	every := func(need Requirement, fn string, from, until, gap time.Duration, count int, runs time.Duration) []simArrival {
 		var out []simArrival
@@ -1567,55 +1566,56 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 		}
 		return out
 	}
-	// steady is a GPU job a minute running eight, and a burst of twelve CPU
+	// steady is a T4 job a minute running eight, and a burst of twelve CPU
 	// containers every half hour.
-	steady := func(gpu Requirement, until time.Duration) []simArrival {
-		return slices.Concat(every(gpu, "gpu", 0, until, time.Minute, 1, 8*time.Minute),
+	steady := func(until time.Duration) []simArrival {
+		return slices.Concat(every(t4, "gpu", 0, until, time.Minute, 1, 8*time.Minute),
 			every(small, "cpu", 5*time.Minute, 3*time.Hour, 30*time.Minute, 12, 10*time.Minute))
 	}
 	scenarios := []struct {
 		name     string
-		gpu      Requirement
 		arrivals []simArrival
 	}{
-		{"steady T4 jobs, CPU bursts", t4, steady(t4, 3*time.Hour)},
-		{"steady L4 jobs of prod's shape", l4, steady(l4, 3*time.Hour)},
-		{"2-CPU T4 bursts onto packed hosts", t4, slices.Concat(steady(t4, 3*time.Hour),
+		{"steady T4 jobs, CPU bursts", steady(3 * time.Hour)},
+		{"2-CPU T4 bursts onto packed hosts", slices.Concat(steady(3*time.Hour),
 			every(small, "cpu", 0, 3*time.Hour, time.Minute, 1, 5*time.Minute),
 			every(t4Large, "gpu", 70*time.Minute, 3*time.Hour, time.Hour, 6, 10*time.Minute))},
-		{"T4 jobs around a quiet hour", t4, slices.Concat(steady(t4, time.Hour),
+		{"T4 jobs around a quiet hour", slices.Concat(steady(time.Hour),
 			every(t4, "gpu", 2*time.Hour, 3*time.Hour, time.Minute, 1, 8*time.Minute))},
 	}
-	var off, on float64
-	for _, sc := range scenarios {
-		results := map[bool]simResult{}
-		for _, pack := range []bool{false, true} {
-			s := newSim(t, DefaultPolicy())
-			m := ReserveMarket{Preemptible: true, GPU: sc.gpu.GPUs[0]}
-			s.recent = map[ReserveMarket]FleetCapacity{m: reservedShape(sc.gpu)}
-			s.run(time.Hour, nil)
-			s.start, s.until, s.r = s.now, time.Time{}, simResult{}
-			arrivals := slices.Clone(sc.arrivals)
-			for i := range arrivals {
-				arrivals[i].need.Moves = pack && arrivals[i].need.Moves
+	results := make([][2]simResult, len(scenarios))
+	t.Run("runs", func(t *testing.T) {
+		for i, sc := range scenarios {
+			for n, name := range []string{sc.name + ", unpacked", sc.name + ", packed"} {
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					s := newSim(t, DefaultPolicy())
+					s.recent = map[ReserveMarket]FleetCapacity{{Preemptible: true, GPU: "T4"}: reservedShape(t4)}
+					s.tick = simLongTick
+					s.run(time.Hour, nil)
+					s.start, s.until, s.r = s.now, time.Time{}, simResult{}
+					arrivals := slices.Clone(sc.arrivals)
+					for a := range arrivals {
+						arrivals[a].need.Moves = n == 1 && arrivals[a].need.Moves
+					}
+					r := s.run(3*time.Hour+15*time.Minute, arrivals)
+					t.Log(r.packRow(name))
+					want := 0
+					for _, a := range arrivals {
+						want += a.count
+					}
+					if len(r.waits) != want || len(r.violations) > 0 {
+						t.Errorf("placed %d of %d, violations %v", len(r.waits), want, r.violations)
+					}
+					results[i][n] = r
+				})
 			}
-			r := s.run(4*time.Hour, arrivals)
-			name := sc.name + ", unpacked"
-			if pack {
-				name = sc.name + ", packed"
-			}
-			t.Log(r.packRow(name))
-			want := 0
-			for _, a := range arrivals {
-				want += a.count
-			}
-			if len(r.waits) != want || len(r.violations) > 0 {
-				t.Errorf("%s: placed %d of %d, violations %v", name, len(r.waits), want, r.violations)
-			}
-			results[pack] = r
 		}
-		before, after := results[false], results[true]
-		profit := func(r simResult) float64 { return float64(r.revenueNanos)/1e9 - float64(r.spendMicros)/3600/1e6 }
+	})
+	var off, on float64
+	profit := func(r simResult) float64 { return float64(r.revenueNanos)/1e9 - float64(r.spendMicros)/3600/1e6 }
+	for i, sc := range scenarios {
+		before, after := results[i][0], results[i][1]
 		off, on = off+profit(before), on+profit(after)
 		if p95 := func(r simResult) time.Duration { return quantile(r.fnWaits["gpu"], 0.95) }; p95(after) > p95(before) {
 			t.Errorf("%s: GPU starts p95 %s, %s unpacked", sc.name, p95(after), p95(before))
